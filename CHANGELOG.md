@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The public-release files of 2026-10-13.
+
+- `SECURITY.md`, `CONTRIBUTING.md` and two issue templates (bug report,
+  feature request) are new. CI is hardened: `actions/checkout` is pinned to a
+  commit id, the workflow's token is `contents: read`, and the runner is
+  `ubuntu-24.04`.
+
 The README of 2026-10-13.
 
 - `README.md` is rewritten from the plugin's files. New or longer: the first
