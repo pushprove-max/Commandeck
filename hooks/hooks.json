@@ -1,0 +1,97 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agent-startup-context.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/resume-context.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/opus-orchestrator-autonomy.sh\""}
+      ]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agent-awareness.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/context-line.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/ruling-log.sh\""}
+      ]}
+    ],
+    "PreToolUse": [
+      {"matcher": ".*", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/pane-budget-gate.sh\"", "onFailure": "block", "timeout": 30}
+      ]},
+      {"matcher": "WebFetch", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/web-fetch-blocker.sh\""}
+      ]},
+      {"matcher": "AskUserQuestion", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/worker-ask-guard.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/ask-records-decision.sh\"", "onFailure": "block", "timeout": 30}
+      ]},
+      {"matcher": "Agent|Task", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agent-model-guard.sh\""}
+      ]},
+      {"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/git-safety.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/bash-guardrails.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/no-poll-loops.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/duplicate-agent-guard.sh\"", "onFailure": "block", "timeout": 60},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/bash-symbols-before-read.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/symbols-before-read.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/suite-rerun-guard.sh\"", "onFailure": "block", "timeout": 60},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/dependency-addition-guard.sh\"", "onFailure": "block", "timeout": 60}
+      ]},
+      {"matcher": "Monitor", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/no-poll-loops.sh\"", "onFailure": "block", "timeout": 30}
+      ]},
+      {"matcher": "Edit|Write|MultiEdit", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/main-edit-guard.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/edit-content-tripwires.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/literal-secret-warning.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/test-skip-only-blocker.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/dependency-addition-guard.sh\"", "onFailure": "block", "timeout": 60},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/file-size-cop.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/write-existing-file-guard.sh\""}
+      ]},
+      {"matcher": "Write", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/new-test-file-guard.sh\""}
+      ]},
+      {"matcher": "Read|Grep|Glob|Edit|MultiEdit|Write", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/symbols-before-read.sh\"", "onFailure": "block", "timeout": 30}
+      ]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Write", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/git-ignore-warn.sh\""}
+      ]},
+      {"matcher": "AskUserQuestion", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/ruling-log.sh\""}
+      ]},
+      {"matcher": "Read", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/script-over-reads.sh\""}
+      ]},
+      {"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/read-tracker.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/script-over-reads.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/staged-index-warn.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/suite-rerun-guard.sh\" --record-complete"}
+      ]},
+      {"matcher": "mcp__serena__.*|mcp__codebase-memory__.*", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/read-tracker.sh\""}
+      ]},
+      {"matcher": ".*", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/batch-independent-looks.sh\""}
+      ]}
+    ],
+    "PostToolUseFailure": [
+      {"matcher": "mcp__serena__.*", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/read-tracker.sh\""}
+      ]}
+    ],
+    "Stop": [
+      {"hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/context-clear-stop.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/ask-stop-records-decision.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/cos-inbox-waiter-stop.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/opus-orchestrator-autonomy.sh\" --stop"}
+      ]}
+    ]
+  }
+}

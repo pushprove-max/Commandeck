@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# `codex` with every helper (MCP) server of the Codex home switched off for this
+# one run. builder-codex-pass.sh puts this folder first on PATH, so
+# the Codex plugin's `codex app-server` is this script: a read-only review gets
+# its diff in the prompt and needs no helper, and each reviewer otherwise starts
+# its own Serena, code graph and language servers and leaves them running.
+# Nothing in the Codex home changes; the names are read from its config at each
+# run, so a server added there later is off here too.
+# Self-test: bash scripts/__tests__/builder.test.sh
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# The real codex is the next one on PATH; with this folder left in, exec finds this script again.
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$HERE" | paste -sd: -)
+OFF=()
+while IFS= read -r name; do
+  [ -z "$name" ] || OFF+=(-c "mcp_servers.$name.enabled=false")
+done < <(python3 -c '
+import sys, tomllib
+print("\n".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "${CODEX_HOME:-$HOME/.codex}/config.toml")
+exec codex "$@" "${OFF[@]}"

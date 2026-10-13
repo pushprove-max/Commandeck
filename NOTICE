@@ -1,0 +1,63 @@
+Commandeck
+Copyright 2026 Max Goldfarb
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+
+BUNDLED THIRD-PARTY WORK
+
+One file in this repository was written by someone else.
+
+  templates/ponytail/SKILL.md
+    The Ponytail skill, by Dietrich Gebert.
+    https://github.com/DietrichGebert/ponytail
+    MIT License, Copyright (c) 2026 DietrichGebert. The full licence text is
+    in templates/ponytail/LICENSE.
+    This is a MODIFIED copy: a longer description, an argument hint, a
+    reworded closing rule, and one added rule about code comments. Setup
+    installs it as a skill and never over a copy you already have.
+
+
+REQUIRED, NOT BUNDLED
+
+Commandeck runs on these. None of their code is in this repository; you
+install each one yourself, under its own terms.
+
+  Claude Code, by Anthropic          proprietary
+    https://claude.com/claude-code
+  Orca, by Stably AI                 MIT
+    https://github.com/stablyai/orca
+  Codex CLI, by OpenAI               Apache-2.0
+    https://github.com/openai/codex
+    (the claude-openai profile only)
+  Codex plugin for Claude Code, by OpenAI    Apache-2.0
+    https://github.com/openai/codex-plugin-cc
+    (the claude-openai profile only)
+  git, the GitHub CLI, jq, Python 3, Bash, flock, GNU coreutils
+
+
+OPTIONAL ADD-ONS, NOT BUNDLED
+
+Setup prints an install command for each of these and installs none of them
+(the Ponytail skill above is the one exception). The list is
+config/addons.tsv. Each is its author's work, under its own terms.
+
+  serena, by Oraios AI
+    https://github.com/oraios/serena
+    See the licensing overview in its repository.
+  codebase-memory-mcp, by DeusData               MIT
+    https://github.com/DeusData/codebase-memory-mcp
+  agent-browser, by Vercel Labs                  Apache-2.0
+    https://github.com/vercel-labs/agent-browser
+  Ponytail (the full plugin), by Dietrich Gebert MIT
+    https://github.com/DietrichGebert/ponytail
+  ui-themes, by yugal1107                        NO LICENCE STATED
+    https://github.com/yugal1107/ui-themes
+    Its repository carried no licence file when this notice was written, so
+    no rights to copy or change it are granted by its author. Commandeck
+    only prints its install command.
+  skills, by Matt Pocock                         MIT
+    https://github.com/mattpocock/skills
+
+Licences named here were read on 2026-10-13. A project can change its
+licence; its own repository is the authority.

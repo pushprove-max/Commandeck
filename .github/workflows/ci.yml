@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools the scripts call
+        run: sudo apt-get update && sudo apt-get install -y ripgrep jq
+      # The tests build throwaway repos and commit in them.
+      - name: Git identity for fixture repos
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+      # The dashboard's DOM tests need jsdom, which the plugin does not ship.
+      - name: jsdom for the dashboard's DOM tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dom" --no-save jsdom@26
+          echo "COMMANDECK_TEST_NODE_MODULES=$RUNNER_TEMP/dom/node_modules" >> "$GITHUB_ENV"
+      - name: Leak test
+        run: bash ci/leak-test.sh
+      - name: Shell tests
+        run: bash scripts/run-shell-tests.sh

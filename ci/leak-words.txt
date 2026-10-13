@@ -1,0 +1,36 @@
+# leak-words.txt -- one ripgrep pattern per line; ci/leak-test.sh fails the
+# build when any file in the tree matches one. Lines starting "# " and blank
+# lines are not patterns.
+#
+# Exempt paths: CHANGELOG.md and this file. Nothing else: a build's papers
+# under .claude/briefs/ are untracked and ignored, and a tracked file there is
+# searched like any other.
+#
+# Two exact texts are allowed, in this case: the repository's own address,
+# pushprove-max/Commandeck (with or without a closing .git), anywhere; and
+# the owner's full name in LICENSE, NOTICE, .claude-plugin/plugin.json and
+# .claude-plugin/marketplace.json only. ci/leak-test.sh takes them out of a
+# matching line and matches the rest again.
+# An allowed text counts only with an allowed neighbour on each side. Before
+# it: the line's start, a space, a quote, ( < [ / or :. After it: the line's
+# end, a space, a quote, ) > ] , ; or a full stop that ends the line or stands
+# before a space. Anything else beside it (a longer name, a dotted suffix, a
+# path after the address) fails. A line that is not UTF-8 gets no exception.
+#
+# Order: product name (any case; also covers the hostnames and the domain),
+# owner names, seat nicknames, sister products, an API host, issue references,
+# a seat the plugin does not ship (bracketed so this file does not match it),
+# a ruling id of the source project's log (nobody else can look one up: say
+# the reason in plain words; a test fixture uses a date before 2000).
+(?i)pushprove
+(?i)goldfarb
+\bMax\b
+(?i)skippy
+\bBob\b
+(?i)reelmaker
+(?i)overtest
+(?i)\bprism\b
+qj4yd7v1ae
+#[0-9]{3,4}\b
+(?i)dev[i]n
+r-20[0-9]{6}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}

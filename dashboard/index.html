@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Only sibling files load: app.css, app.js and the data.js it re-reads. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Commandeck Dashboard</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <h1 id="title">Commandeck Dashboard</h1>
+  <nav id="projects" class="projects" aria-label="Projects"></nav>
+  <div class="clocks">
+    <span id="status" class="status" data-state="unavailable">Unavailable</span>
+    <span class="clock-pair">Updated <time id="updated">never</time></span>
+    <span class="clock-pair">Now <time id="clock">--:--:-- --</time></span>
+    <label class="look"><input type="checkbox" id="needs-look"> Needs a look</label>
+    <button type="button" id="unhide" hidden></button>
+    <button type="button" id="reset-layout">Reset layout</button>
+  </div>
+</header>
+<p id="banner" class="banner" role="alert" hidden></p>
+<p id="refresh-note" class="refresh-note" role="status" hidden></p>
+
+<nav id="summary" class="summary" aria-label="Summary"></nav>
+
+<!-- data-size is the default width: 1 is the compact view, 2 to 4 show the .more parts too. -->
+<main class="grid">
+  <section id="alerts" class="card" data-size="4" data-sources="alerts">
+    <header class="card-head"><h2>Alerts</h2></header>
+    <p class="sub"><span id="alerts-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <ul id="alerts-list" class="list"></ul>
+  </section>
+
+  <section id="builds" class="card" data-size="2" data-sources="worktrees builder-logs orca" data-max-age="120">
+    <header class="card-head"><h2>Builds in progress</h2></header>
+    <p class="sub"><span id="builds-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="builds-list"></div>
+  </section>
+
+  <section id="needs" class="card" data-size="1" data-sources="decisions">
+    <header class="card-head"><h2>Needs <span data-owner>the owner</span></h2></header>
+    <p class="sub"><span>decisions waiting on an answer</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <dl id="needs-facts" class="facts"></dl>
+    <div class="group"><h3>Waiting on <span data-owner>the owner</span> <span class="count" data-count="decisions"></span></h3><ol id="decisions" class="decisions"></ol></div>
+  </section>
+
+  <section id="main-chain" class="card" data-size="1" data-sources="git-main">
+    <header class="card-head"><h2>Main</h2></header>
+    <p class="sub"><span>local main against its remote</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <dl id="chain-facts" class="facts"></dl>
+    <div class="more">
+      <h3>Latest commits on main</h3>
+      <ol id="commits" class="commits"></ol>
+    </div>
+  </section>
+
+  <section id="units" class="card" data-size="4" data-sources="worktrees orca orca-tasks builder-logs">
+    <header class="card-head"><h2>Units</h2></header>
+    <p class="sub"><span>every worktree, by step · model and effort from each seat's own session</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="units-bar"></div>
+    <div id="units-legend" class="legend"></div>
+    <div class="more">
+      <div id="stages" class="stages">
+        <div class="stage" data-stage="planning"><h3>Planning <span class="count" data-count="planning"></span></h3><ul class="unit-list" data-list="planning"></ul></div>
+        <div class="stage" data-stage="building"><h3>Building <span class="count" data-count="building"></span></h3><ul class="unit-list" data-list="building"></ul></div>
+        <div class="stage" data-stage="review"><h3>In review <span class="count" data-count="review"></span></h3><ul class="unit-list" data-list="review"></ul></div>
+        <div class="stage" data-stage="fixing"><h3>Fixing <span class="count" data-count="fixing"></span></h3><ul class="unit-list" data-list="fixing"></ul></div>
+        <div class="stage" data-stage="waiting-main"><h3>Waiting on main <span class="count" data-count="waiting-main"></span></h3><ul class="unit-list" data-list="waiting-main"></ul>
+          <details id="stale-units" class="stale-row" hidden>
+            <summary tabindex="0"><span class="count" data-count="stale"></span> waiting on main a day or more</summary>
+            <ul class="unit-list" data-list="stale"></ul>
+          </details>
+        </div>
+      </div>
+      <details id="permanent" class="long-lived" data-fold open hidden>
+        <summary tabindex="0">Standing worktrees <span class="count" data-count="permanent"></span></summary>
+        <ul class="unit-list" data-list="permanent"></ul>
+      </details>
+      <details id="unclassified" class="unclassified" hidden>
+        <summary tabindex="0">Stage not known yet <span class="count" data-count="unclassified"></span></summary>
+        <ul class="unit-list" data-list="unclassified"></ul>
+      </details>
+      <p id="units-foot" class="legend"></p>
+    </div>
+  </section>
+
+  <section id="limit" class="card" data-size="2" data-sources="claude-usage claude-logs codex-usage">
+    <header class="card-head"><h2>7-day limit</h2></header>
+    <p class="sub"><span>Claude and Codex</span><span id="limit-week" class="limit-week"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="limit-bars"></div>
+    <dl id="limit-facts" class="facts"></dl>
+    <p class="legend">The white line is where even pace would be.</p>
+    <div class="more">
+      <h3 id="limit-graph-title">Use across the week</h3>
+      <figure class="limit-chart">
+        <div id="limit-chart"></div>
+        <figcaption class="legend"><span class="sub-only"><b class="r"></b>Claude used <b class="p"></b>Codex used </span><span class="api-only"><b class="r"></b>spent </span><b class="w"></b>even pace (dashed) <b class="b"></b>now <span class="sub-only"><b class="five"></b>this 5-hour window</span></figcaption>
+      </figure>
+      <details id="limit-body" data-fold open>
+        <summary id="limit-summary" tabindex="0"></summary>
+        <div id="limit-tiles" class="tiles"></div>
+        <p id="limit-note" class="fine limit-note"></p>
+        <h3 class="limit-codex-head">Codex 7-day limit</h3>
+        <div id="limit-codex-tiles" class="tiles"></div>
+        <p id="limit-codex-note" class="fine limit-note"></p>
+      </details>
+    </div>
+  </section>
+
+  <section id="todos" class="card" data-size="2" data-sources="todos">
+    <header class="card-head"><h2>Main's to-do list</h2></header>
+    <p class="sub"><span id="todos-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="todos-bar"></div>
+    <div class="more">
+      <p id="todos-count" class="meta"></p>
+      <ul id="todos-list" class="list todos"></ul>
+    </div>
+  </section>
+
+  <section id="host" class="card" data-size="1" data-sources="host">
+    <header class="card-head"><h2>Host</h2></header>
+    <p class="sub"><span>this machine</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="host-gauges" class="gauges"></div>
+    <div class="more">
+      <dl id="host-facts" class="facts"></dl>
+      <p class="fine">Load colours turn amber at one job per core and red at two; swap at 25% and 75% used.</p>
+    </div>
+  </section>
+
+  <section id="cost-role" class="card" data-size="1" data-sources="seat-events">
+    <header class="card-head"><h2>Tokens per role, 7 days</h2></header>
+    <p class="sub"><span>biggest first</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="role-top"></div>
+    <div class="more">
+      <p id="cache-tile" class="meta"></p>
+      <h3>Input and output together, every role</h3>
+      <div id="role-bars" class="bars"></div>
+      <details id="cost-role-all" open><summary tabindex="0">Every role</summary>
+        <div class="scroll"><table class="data">
+          <thead><tr><th scope="col">Role</th><th scope="col">Seats</th><th scope="col">Unmeasured</th><th scope="col">Input</th><th scope="col">Cached</th><th scope="col">Hit rate</th><th scope="col">Output</th></tr></thead>
+          <tbody id="cost-role-rows"></tbody>
+        </table></div>
+      </details>
+    </div>
+  </section>
+
+  <section id="guard-blocks" class="card" data-size="2" data-sources="hook-fire-log">
+    <header class="card-head"><h2>Recent guard blocks</h2></header>
+    <p class="sub"><span>commands a guard refused</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="guard-hour"></div>
+    <dl id="guard-facts" class="facts"></dl>
+    <div class="more">
+      <h3>Latest</h3>
+      <p id="guard-blocks-count" class="meta"></p>
+      <div class="scroll">
+        <table class="data wide">
+          <thead><tr><th scope="col">When</th><th scope="col">Guard</th><th scope="col">Where</th><th scope="col">After</th></tr></thead>
+          <tbody id="guard-blocks-list"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="chief-of-staff" class="card" data-size="1" data-sources="chief-of-staff">
+    <header class="card-head"><h2>Chief of Staff's inbox</h2></header>
+    <p class="sub"><span>messages from main</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <dl id="cos-facts" class="facts"></dl>
+  </section>
+
+  <section id="agents" class="card" data-size="1" data-sources="agents">
+    <header class="card-head"><h2>Main's background agents</h2></header>
+    <p class="sub"><span id="agents-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <p id="agents-count" class="meta more"></p>
+    <ul id="agents-list" class="list agents"></ul>
+  </section>
+</main>
+<footer id="sources-foot" class="foot"></footer>
+<script src="layout.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

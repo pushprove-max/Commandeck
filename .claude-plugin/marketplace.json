@@ -1,0 +1,16 @@
+{
+  "name": "commandeck",
+  "owner": { "name": "Max Goldfarb" },
+  "metadata": {
+    "description": "Commandeck: an orchestrated build workflow for Claude Code on Orca."
+  },
+  "plugins": [
+    {
+      "name": "commandeck",
+      "source": "./",
+      "description": "An orchestrated build workflow for Claude Code on Orca.",
+      "author": { "name": "Max Goldfarb" },
+      "license": "Apache-2.0"
+    }
+  ]
+}

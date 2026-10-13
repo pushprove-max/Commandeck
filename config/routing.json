@@ -1,0 +1,69 @@
+{
+  "profile": "claude-openai",
+  "launch": {
+    "templates": {
+      "claude": "{box} {env} claude {model} {effort} {tools} {advisor} {fast}",
+      "codex": "{box} {env} codex {compact} {model} {effort} {fast} {sandbox} {approval} {network} {shellenv} {mcp} {skills} {plugins}",
+      "claude-headless": "{env} claude -p {model} {effort} {tools} {fast}",
+      "codex-headless": "{env} codex exec {sandbox} {projectdoc} {model} {effort} {fast}"
+    },
+    "note": "The one home of every per-role launch setting. A role's structured fields are the settings; launch.templates is only the wiring each agent's command follows, and the reader in scripts/paths.sh (pp_route, pp_review, pp_argv) fills its placeholders and fails before any launch on a malformed entry. A model is a family name, never a version: Claude Code resolves opus, sonnet, haiku and fable itself, and builder-codex-pass.sh resolves a Codex family to the newest model the account lists. A null effort is omitted from the command, never defaulted. fast renders as Codex service_tier=fast or Claude --settings {\"fastMode\":true}; false is the default tier. A headless role (headless: true) is one a script runs with codex exec or claude -p. Every pane role is unboxed: the plugin ships no pane box, so launch.paneBox is not set."
+  },
+  "roles": {
+    "orchestrator": {
+      "agent": "claude",
+      "model": "opus",
+      "effort": null,
+      "unboxed": true,
+      "edits": true,
+      "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges."
+    },
+    "builder": {
+      "agent": "claude",
+      "model": "opus",
+      "effort": null,
+      "advisor": "fable",
+      "unboxed": true,
+      "edits": true,
+      "note": "One pane per batch in its own worktree; builds, runs its own Explore subagents (haiku) and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh."
+    },
+    "codex-reviewer": {
+      "agent": "codex",
+      "model": "sol",
+      "effort": "medium",
+      "fast": true,
+      "reviewer": true,
+      "sandbox": "read-only",
+      "unboxed": true,
+      "edits": false,
+      "note": "The Codex review pass of the Claude+OpenAI profile. fast needs service_tier = \"fast\" in the Codex config; the pass preflight checks it."
+    },
+    "claude-reviewer": {
+      "agent": "claude",
+      "headless": true,
+      "model": "sonnet",
+      "effort": "high",
+      "tools": ["Write", "Edit", "NotebookEdit"],
+      "edits": false,
+      "note": "The review pass of the Claude-only profile: a headless read-only session on a different family than the Builder's, so the review is not the Builder checking itself."
+    },
+    "design-coauthor": {
+      "agent": "claude",
+      "model": "fable",
+      "effort": "high",
+      "unboxed": true,
+      "edits": true,
+      "note": "The design check of a batch marked risky: builder-launch.sh --risky opens this pane before the Builder, and it writes the design note the Builder reads first. It writes that note and no code."
+    }
+  },
+  "review": {},
+  "review-limits": {
+    "calls": 60,
+    "diffLines": 3000,
+    "note": "Per Codex review. calls: model calls one review session may make. diffLines: added plus deleted lines in main...HEAD, generated files excluded; a bigger unit is split before review."
+  },
+  "seat-liveness": {
+    "backgroundMaxMinutes": 20,
+    "note": "read-verdict.sh --state: a seat's background command older than this counts as overdue, not busy, so a hung command cannot hold its driver past the stall line."
+  }
+}

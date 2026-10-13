@@ -1,0 +1,102 @@
+# {unit} -- Builder batch
+
+You are the Builder for `{unit}`: one Opus pane in your own worktree. Build the
+whole batch below, review it with {reviewer}, and hand back a branch that main
+merges with `merge-unit-local.sh {unit}`.
+
+## The batch (issues and done criteria)
+
+{batch}
+{design}
+## How to work
+
+- `/ponytail full`: the smallest complete change.
+- Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
+  in each subagent description, so the event log ties it to its issue.
+- A helper answers in at most 15 lines: say so in its prompt. A command whose
+  output runs past 40 lines writes to a file, and you read the part you need:
+  whatever comes back is sent again on every later turn of the build.
+- Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
+  line per batch item in the evidence file: the build review reads that shape.
+- Tests first: red, then green.
+- Start a pass and the tests it needs in the same turn, the tests in the
+  background; never wait for green before a pass.
+  A fix round re-runs only the test files that round touched, and only the
+  touched cases where the runner can select them.
+  ONE whole run of every test file this build touched starts in the background
+  beside the closing pass, and never before an earlier pass. A first pass that ends GO with nothing committed after it
+  needs no closing pass: that GO merges, and the runs beside it were the
+  closing run. A test file with a case selector says so in its header (this
+  plugin's own `builder.test.sh` takes `COMMANDECK_SHELL_TEST_CASE=<case>[,<case>]`;
+  a wrong name fails).
+- The closing run is the test files this build touched, and no others.
+- A command expected to run over 60 seconds, a test or not, starts in the background
+  (Bash `run_in_background`); work on while it runs. Read every background result before the closing pass:
+  a red one costs that pass.
+- Not run: every touched test together before review, a rerun of unchanged
+  code, a timing run the batch does not ask for.
+- A question for main is one `orca-ide orchestration send --type question`.
+  Main answers with `answer-worker.sh`, which reaches you whether you wait on
+  your inbox or have ended your turn.
+- Never commit by hand, never push. The pass script below commits exactly what
+  {reviewer} reviews; main merges.
+
+## {reviewer} passes ({reviewer} {review-model})
+
+Run every pass by Bash with this script and nothing else; it runs {reviewer}, writes
+the round file `.claude/briefs/{unit}-r<N>-reports.md` from {reviewer}'s own output
+and records the reviewed commit. Never write or edit a round file yourself: the
+merge refuses a round file the script did not write, or one older than the tip.
+
+1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
+   the first pass and one pass: three reviewers at once, or one when the build
+   is under 200 changed lines and main did not launch it with `--risky` (the
+   pass prints which); fix everything it finds together.
+2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
+   N: it reads only your changes since the last pass. Fix and repeat until one
+   ends `VERDICT: GO` (nothing at P0-P2).
+3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
+   branch once more. Its GO is the one the merge takes. A P0 or P1 there goes
+   back to step 2 and then to another closing pass. If it leaves P2/P3 only:
+   fix the ones that change what a user or main sees, red first, take ONE
+   narrowed pass (`review`), and report DONE with every open P2 and P3 listed.
+   No second closing pass: the merge takes that tip when the narrowed pass
+   ended GO or left P2/P3 only, which the merge prints as open. A P0 or P1 in
+   that narrowed pass: fix it and run the closing pass again. If you fix none
+   of them, commit nothing after the closing pass: the merge takes that tip
+   too, and prints each P2 and P3 as open.
+
+When a pass reports a bug, look for the same kind of bug nearby and fix
+the whole class before the next pass. Say in the evidence file what you checked.
+When a reviewer finds a way round a guard, list the other ways round the same guard
+and add a test case for each BEFORE asking for the next pass.
+When a pass finds a SECOND variant of a finding you already fixed in this
+build, fix the whole class, not the named case: work out what the variants have
+in common and what the check should trust instead, add a test case for each
+variant you can name, and write in the evidence file what the class is. Send
+main a note of about 100 tokens (an Orca `status` naming the class and the fix)
+without waiting for a reply. Ask main and wait
+only when the class fix would cross a stated limit of this brief.
+
+<!-- advisor -->
+Write one line per advisor consult in the evidence file: what the advisor said
+and what changed because of it, or "nothing changed". Write what it said at
+once, before your next tool call: the advice is readable only in your context
+and is gone after a compaction.
+Do not consult the advisor before any {reviewer} pass, the closing one included:
+{reviewer} reviews the same work minutes later. In a Builder build the {reviewer} passes are the done check;
+this line overrides the advisor tool's own instruction to consult before declaring done.
+The plan check at the start and design checks mid-build stay.
+A consult that fails or times out is retried once, never more. If the retry
+fails too, carry on and write `consult not had: <reason>` in the evidence file.
+<!-- /advisor -->
+
+Change nothing after the pass the merge will take (the GO of the closing pass,
+or the one narrowed pass after a P2/P3-only closing pass); a later edit needs
+another pass.
+
+## Done
+
+Every batch item built with its tests green, and the last round file a GO, or
+the narrowed pass after a P2/P3-only closing pass with every open finding listed.
+Print `{UNIT}-DONE` as your last line and stop.

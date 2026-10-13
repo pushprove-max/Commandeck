@@ -1,0 +1,977 @@
+#!/usr/bin/env bash
+# main-watch.sh [--install|--uninstall|--job-file|--status|--once]
+#   -- the ONE thing that wakes main. A persistent user service that,
+#      every tick, computes the set "finished, not handled" and posts each item
+#      to run:<current run>, then proves an idle main woke (wake(): Orca's
+#      inbox pointer alone did not). Nothing in main's session is armed, so
+#      nothing can be left unarmed.
+#
+# Finished:
+#   - a seat (seat-*.txt) whose pane Orca reads `done` after this service saw
+#     it `working`, or `done` with a verdict or marker present (fast work can
+#     finish between two ticks). A boot `done` with neither is not finished.
+# Stopped without reporting: a seat that finished with no marker or verdict
+#   after this service saw it `working`, or whose pane is gone (closed or
+#   crashed) after it was seen alive. Never read as success. A seat that sent
+#   worker_done has a completed task, so it is handled and never posted.
+# Stalled: a working seat whose session log and pane screen have not changed
+#   for STALL_S, or an Orca state neither working nor done held for WAITING_S.
+#   Each stall episode is its own item with its own task.
+# Machine safety, every tick: leaked Codex plugin brokers are killed (see
+#   reap_brokers), a user process count past 2,000 is an item, and finished or
+#   orphaned panes are closed (close-done-panes.sh --close).
+# Heads-up: every Claude session's "you should know" offer, full text, posted
+#   to main's inbox and never typed into a pane (heads_up_capture).
+# Handled = main closed the item's Orca task (completed or failed). An item with
+# no task gets one on its first post. An open item re-posts every 5 minutes,
+# except a heads-up note, which is settled once delivered. A seat a
+# `seat.sh wait` watches is that wait's to report, and the typed wake goes only
+# while main has unread mail.
+# Delivery never counts as handled: a post is a wake, not a disposition.
+# Every post is a full context replay for main, so the items due in one tick go
+# out as one message, and repeats wait while main's pane is working.
+#
+# State lives in $PP_SCRATCH/main-watch, beside the seat records it reads, so a
+# restart neither loses an item nor re-posts one inside the 5 minutes.
+# Test seams: COMMANDECK_NOW (epoch), COMMANDECK_MAIN_WATCH_TICK_S, --once.
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/paths.sh" || exit 1
+. "$HERE/host-services.sh"
+NAME=main-watch
+# One job per project, under the plugin's own name on both hosts: the Mac label
+# is $HS_PREFIX$JOB, the Linux unit commandeck-$JOB.service.
+JOB=$NAME-$(basename "$PP_MAIN" | tr -c 'A-Za-z0-9_.\n-' '-')
+[ "$(hs_os)" = Darwin ] && UNIT=$JOB || UNIT=commandeck-$JOB.service
+STALL_S=1200    # 20 min with no session-log or pane growth
+WAITING_S=120   # 2 min in a state that is neither working nor done
+TICK=${COMMANDECK_MAIN_WATCH_TICK_S:-60}
+REPOST=${COMMANDECK_MAIN_WATCH_REPOST_S:-300}
+SCRATCH=$PP_SCRATCH
+ST=$SCRATCH/main-watch
+WS=$PP_WORKSPACES
+
+# The job has no shell of its own: where the install was told the records are
+# (paths.sh reads these) goes into the job, or it watches the default folders.
+KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME)
+# others_job -- the job is named after the checkout's folder alone. Prints the
+# other checkout, still on disk, that the job file of this name watches; its
+# job is neither replaced nor removed from here.
+# shortcut: a path with a character the job file escapes is not recognised, upgrade when the job name carries the path.
+others_job() {
+  local f o
+  [ "$(hs_os)" = Darwin ] && f=$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist || f=$HOME/.config/systemd/user/$UNIT
+  o=$(sed -n -e 's/^Environment="COMMANDECK_MAIN=\(.*\)"$/\1/p' -e 's/.*<key>COMMANDECK_MAIN<\/key><string>\([^<]*\)<.*/\1/p' "$f" 2>/dev/null | head -1)
+  [ -n "$o" ] && [ "$o" != "$PP_MAIN" ] && [ -d "$o" ] && printf '%s\n' "$o"
+}
+install() {
+  local o
+  if o=$(others_job); then
+    echo "main-watch: the job $JOB already watches $o, a checkout with the same folder name; one of the two folders needs another name. Nothing installed" >&2
+    return 1
+  fi
+  if [ "$(hs_os)" = Darwin ]; then
+    local plist=$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist k
+    mkdir -p "${plist%/*}"
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$HS_PREFIX$JOB</string>
+<key>ProgramArguments</key><array><string>$(hs__xml "$BASH")</string><string>$(hs__xml "$HERE/$NAME.sh")</string></array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>$(hs__xml "$PATH")</string><key>HOME</key><string>$(hs__xml "$HOME")</string><key>COMMANDECK_MAIN</key><string>$(hs__xml "$PP_MAIN")</string>$(for k in "${KEEP_ENV[@]}"; do [ -z "${!k:-}" ] || printf '<key>%s</key><string>%s</string>' "$k" "$(hs__xml "${!k}")"; done)</dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>$(hs__xml "$SCRATCH/scratchpad/$NAME.log")</string>
+<key>StandardErrorPath</key><string>$(hs__xml "$SCRATCH/scratchpad/$NAME.log")</string>
+</dict></plist>
+EOF
+    # launchd does not make the log's folder, and will not start a job whose log it cannot open.
+    mkdir -p "$SCRATCH/scratchpad" || return 1
+    launchctl bootout "gui/$(id -u)/$HS_PREFIX$JOB" 2>/dev/null || true
+    # bootout returns before the job is gone; bootstrapping in that window fails (error 5).
+    for _ in $(seq 50); do launchctl print "gui/$(id -u)/$HS_PREFIX$JOB" >/dev/null 2>&1 || break; sleep 0.1; done
+    launchctl bootstrap "gui/$(id -u)" "$plist"
+  else
+    local unit=$HOME/.config/systemd/user/$UNIT
+    mkdir -p "${unit%/*}"
+    cat > "$unit" <<EOF
+[Unit]
+Description=Commandeck main-watch: wakes main while anything finished is unhandled
+
+[Service]
+ExecStart="$(hs__sd "$BASH")" "$(hs__sd "$HERE/$NAME.sh")"
+Environment="PATH=$(hs__sd "$PATH")"
+Environment="HOME=$(hs__sd "$HOME")"
+Environment="COMMANDECK_MAIN=$(hs__sd "$PP_MAIN")"
+$(for k in "${KEEP_ENV[@]}"; do [ -z "${!k:-}" ] || printf 'Environment="%s=%s"\n' "$k" "$(hs__sd "${!k}")"; done)
+Restart=always
+RestartSec=10
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
+EOF
+    # restart, not enable --now: over a running job (an update) that would leave the old process.
+    systemctl --user daemon-reload && systemctl --user enable "$UNIT" && systemctl --user restart "$UNIT"
+  fi
+}
+
+uninstall() {
+  ! others_job >/dev/null || return 0
+  if [ "$(hs_os)" = Darwin ]; then
+    launchctl bootout "gui/$(id -u)/$HS_PREFIX$JOB" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist"
+  else
+    systemctl --user disable --now "$UNIT" 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/$UNIT"
+    systemctl --user daemon-reload
+  fi
+}
+
+case "${1:-}" in
+  --uninstall) uninstall; echo "main-watch uninstalled"; exit 0 ;;
+  --job-file) [ "$(hs_os)" = Darwin ] && echo "$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist" || echo "$HOME/.config/systemd/user/$UNIT"; exit 0 ;;
+  --install) install || { echo "main-watch: install FAILED; nothing wakes main" >&2; exit 1; }
+             echo "main-watch installed and started"; exit 0 ;;
+  --status) if hs_active "$UNIT"; then echo "main-watch: running"; exit 0; fi
+            echo "MAIN-WATCH NOT RUNNING -- nothing wakes main; bash $(printf '%q' "$HERE")/main-watch.sh --install"; exit 1 ;;
+  --once|"") ;;
+  *) echo "usage: main-watch.sh [--install|--uninstall|--job-file|--status|--once]" >&2; exit 2 ;;
+esac
+mkdir -p "$ST" || exit 1
+[ -e "$ST/since" ] || : > "$ST/since"
+
+# post <key> <task or empty> <subject> <body> [once] -- the whole handled/re-post
+# rule. `once`: an item already delivered is settled, never re-posted.
+post() {
+  local f=$ST/item-$1 task=$2 last status
+  [ -e "$f" ] && grep -qx handled "$f" && return 0
+  [ -e "$f" ] && task=$(sed -n 's/^task=//p' "$f")
+  last=$(sed -n 's/^posted=//p' "$f" 2>/dev/null)
+  if [ -z "$task" ] || [ "$task" = none ]; then
+    orca_op '' "$HERE/orca-task-create.sh" --run "$RUN" ${MAIN_H:+--from "$MAIN_H"} \
+      --spec "main-watch item: $3. Complete this task once main has handled it; until then it is re-posted every 5 minutes." \
+      || { echo "main-watch: no task for $1: $OP_ERR" >&2; note "${3#main-watch: }: $OP_ERR" "$1"; return 0; }
+    task=$OP_OUT
+    # Recorded before the send, so a failed send never mints a second task.
+    printf 'posted=%s\ntask=%s\n' "${last:-}" "$task" > "$f"
+  else
+    status=$(jq -r --arg t "$task" 'first(.result.tasks[]? | select(.id == $t) | .status) // "absent"' <<<"$TASKS")
+    case $status in
+      completed|failed) echo handled > "$f"; return 0 ;;
+      # Not in this run's task list: another run's seat, never this main's.
+      absent) return 0 ;;
+    esac
+  fi
+  [ -n "$last" ] && [ "${5:-}" = once ] && { echo handled > "$f"; return 0; }
+  [ -n "$last" ] && [ $((NOW - last)) -lt "$REPOST" ] && return 0
+  # A repeat waits while main is mid-turn: main is awake, and the post would only
+  # queue another full replay behind that turn. A first post is never held.
+  [ -n "$last" ] && [ "$MAIN_BUSY" = 1 ] && return 0
+  DUE_KEY+=("$1"); DUE_TASK+=("$task"); DUE_SUBJ+=("$3")
+  # pp_task_close, not a bare task-update: a seat's task keeps its supervised
+  # dispatch active, and Orca refuses the update until that dispatch is ended.
+  DUE_BODY+=("$4"$'\n'"handled = close task $task: (. $(printf '%q' "$HERE")/paths.sh && pp_task_close $task completed)")
+}
+
+# builder_watch -- each working Builder seat's event log through
+# dashboard_builders.jq. The first sighting of a signal episode ({kind, since})
+# types one line into that pane and records the episode under $ST, so it never
+# repeats across ticks or a restart. Main is woken only when the nudge did not
+# help: the pane's third episode, or one lasting past 3x its limit. The
+# dashboard card shows every signal; this function only types one line and
+# posts, and no path in it ends, closes or relaunches a pane.
+builder_watch() {
+  local r u h out sig kind since lim text n state hist la
+  for r in "$SCRATCH"/seat-*-builder.txt; do
+    # A record the origin run placed is that run's to watch, as in the seat loop.
+    [ -f "$r" ] && ! grep -q '^origin=' "$r" || continue
+    u=$(sed -n 's/^unit=//p' "$r" | head -1); h=$(sed -n 's/^handle=//p' "$r" | head -1)
+    [ -n "$u" ] && [ -n "$h" ] && [ -f "$WS/$u/.claude/builder-events.jsonl" ] || continue
+    # Episodes are per pane: a replacement pane's first signal is its first, not the old pane's third.
+    hist=$ST/builder-$u-$h
+    # A pane that is not mid-turn is main-watch's own item, not a signal.
+    state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
+    [ "$state" = working ] || continue
+    # The log outlives a crashed Builder: only rows since this pane's launch are
+    # its own, or it is nudged for a call the dead pane never ended.
+    la=$(sed -n 's/^launched=//p' "$r" | head -1); [[ "$la" =~ ^[0-9]+$ ]] || la=0
+    out=$(jq -cR --argjson la "$la" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$u/.claude/builder-events.jsonl" 2>/dev/null \
+      | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$u")" -f "$HERE/dashboard_builders.jq" 2>/dev/null) || continue
+    while IFS= read -r sig; do
+      [ -n "$sig" ] || continue
+      kind=$(jq -r '.kind | ascii_upcase' <<<"$sig"); since=$(jq -r .since <<<"$sig"); lim=$(jq -r '.limitSec // 0' <<<"$sig")
+      case $kind in
+        STUCK) text="Signal STUCK: one tool call has run for over $((lim / 60)) min. If you are waiting on it, say what; otherwise interrupt it and continue the batch." ;;
+        QUIET) text="Signal QUIET: no tool call for 5 min. If you are waiting on something, say what; otherwise continue the batch." ;;
+        *) text="Signal LOOP: the same call 3 times, or 4 failed calls in a row. Try a different approach, or say what blocks you." ;;
+      esac
+      # Recorded before the send: a nudge that fails is not retried, so one episode never sends twice.
+      if ! grep -qxF -- "${kind} $since" "$hist" 2>/dev/null; then
+        echo "${kind} $since" >> "$hist"
+        orca-ide terminal send --terminal "$h" --text "$text" --enter >/dev/null 2>&1 || echo "main-watch: nudge to $h for $u failed" >&2
+      fi
+      n=$(grep -nxF -- "${kind} $since" "$hist" | head -1 | cut -d: -f1)
+      if [ "${n:-0}" -ge 3 ] || { [ "$lim" -gt 0 ] && [ $((NOW - since)) -gt $((lim * 3)) ]; }; then
+        post "builder-$u-$kind-$since" "" "main-watch: Builder $u is $kind and the nudge did not help" \
+          "Builder $u (pane $h) has signal $kind since epoch $since; it was nudged once. Episodes on this pane so far: $(wc -l < "$hist" | tr -d ' '). The dashboard card for $u shows its steps."
+      fi
+    done < <(jq -c '.signals[]?' <<<"$out")
+  done
+}
+
+# flush -- every item due this tick goes out as ONE message, since each post is a
+# full context replay for main. Each item keeps its own task and posted time.
+flush() {
+  local n=${#DUE_KEY[@]} i subj body=""
+  [ "$n" -gt 0 ] || return 0
+  if [ "$n" = 1 ]; then subj=${DUE_SUBJ[0]} body=${DUE_BODY[0]}
+  else
+    # orca-wait.sh prints a `heads-up:` subject's body whole; keep the prefix.
+    subj="main-watch: $n items need you"; [ "$RELAY" = 0 ] || subj="heads-up: $n notes"
+    for i in "${!DUE_KEY[@]}"; do body+="$((i + 1)). ${DUE_SUBJ[i]}"$'\n'"${DUE_BODY[i]}"$'\n\n'; done
+  fi
+  if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type question \
+       --subject "$subj" --body "$body" --json; then
+    for i in "${!DUE_KEY[@]}"; do printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"; done
+    # A heads-up relay is inbox only: nothing is ever typed for it.
+    [ "$RELAY" = 0 ] || return 0
+    # IN THE INBOX IS NOT AWAKE: an idle main missed ~16 accepted
+    # sends, two merge-ready STOPs among them. The wake is its own record, proven
+    # by wake() and retried without a second message. An idle main the inbox
+    # pointer already started reads working now, and needs nothing typed.
+    printf '0\n%s\n%s\n' "${DUE_TASK[*]}" "$RUN" > "$ST/wake"
+    if [ "$MAIN_BUSY" = 0 ]; then main_now; [ "$MAIN_STATE" != working ] || rm -f "$ST/wake"; fi
+  else
+    local s; s=$(printf '%s, ' "${DUE_SUBJ[@]#main-watch: }")
+    echo "main-watch: send refused for $n item(s): $OP_ERR" >&2
+    # A refused relay retries next tick from its saved text, still untyped.
+    [ "$RELAY" = 0 ] || return 0
+    note "${s%, }: send refused: $OP_ERR" "${DUE_KEY[@]}"
+  fi
+}
+
+# note <text> [item key...] -- one undelivered item, or the reason a repair
+# failed, for this tick's diagnostic (arm_diag).
+note() { DIAG+="${DIAG:+; }$1"; shift; [ "$#" = 0 ] || DIAG_KEYS+=$(printf '%s\n' "$@")$'\n'; }
+
+# orca_op <jq test of a good reply, or '' for the exit alone> <command...> -- one
+# Orca call. A fenced refusal ("no longer bound to Run") is repaired by rebind
+# and the call retried once. Leaves the reply in OP_OUT and, on failure, Orca's
+# real reason in OP_ERR: a nonzero exit and an ok:false reply both fail.
+orca_op() {
+  local good=$1 rc try i; shift
+  local args=("$@")
+  for try in 1 2; do
+    OP_OUT=$("${args[@]}" 2>"$ST/op-err"); rc=$?
+    [ "$rc" = 0 ] && { [ -z "$good" ] || jq -e "$good" >/dev/null 2>&1 <<<"$OP_OUT"; } && return 0
+    OP_ERR=$({ cat "$ST/op-err"; jq -r '.error.message // .error.code // empty' <<<"$OP_OUT" 2>/dev/null || printf '%s' "$OP_OUT"; } | tr '\n' ' ' | cut -c1-300)
+    OP_ERR=${OP_ERR:-exit $rc with no answer}
+    [ "$try" = 1 ] && grep -qiE 'no longer bound|not bound to' <<<"$OP_ERR" && rebind || return 1
+    # rebind re-resolved main: a pane that restarted mid-tick is the sender now.
+    for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" != --from ] || args[i+1]=$MAIN_H; done
+  done
+}
+
+# rebind -- once a tick, bind the run to main's own pane after a fenced refusal
+# (a job under the old main's handle took the run, then that pane closed). Only when no live pane holds the run: a live coordinator, whoever
+# it is, keeps it, and main is told instead. 0 = the run is main's again.
+rebind() {
+  [ -z "$REBOUND" ] || return 1
+  REBOUND=1
+  main_now
+  local r why
+  if [ -z "$MAIN_H" ]; then why="no main pane to rebind run $RUN to"
+  elif [ "$COORD" = '?' ]; then why="the run list did not answer, so who holds run $RUN is unknown; not rebound"
+  elif [ "$COORD_LIVE" != 0 ] && [ "$COORD" != "$MAIN_H" ]; then why="run $RUN is held by live pane $COORD; not taken from it"
+  else
+    r=$(orca-ide orchestration run-use --id "$RUN" --from "$MAIN_H" --json 2>&1) && jq -e '.ok == true' >/dev/null 2>&1 <<<"$r" \
+      && { echo "main-watch: rebound run $RUN to main $MAIN_H" >&2; return 0; }
+    why="rebinding run $RUN to $MAIN_H failed: $(tr '\n' ' ' <<<"$r" | cut -c1-200)"
+  fi
+  echo "main-watch: $why" >&2; note "$why"; return 1
+}
+
+# arm_diag -- what Orca would not take this tick reaches main as one typed line
+# (wake), since no inbox holds it; a task-create failure leaves no task to name.
+# Items main already heard about for this run are not repeated inside REPOST; a
+# new one is told at once. The items stay pending, so a later send delivers them.
+arm_diag() {
+  [ -n "$DIAG" ] || return 0
+  local keys at tasks=
+  keys=$(sort -u <<<"$DIAG_KEYS" | sed '/^$/d')
+  at=$(sed -n 1p "$ST/diag" 2>/dev/null)
+  [ -n "$at" ] && [ $((NOW - at)) -lt "$REPOST" ] && [ "$(sed -n 2p "$ST/diag")" = "$RUN" ] \
+    && [ -z "$(comm -23 <(printf '%s\n' "$keys") <(sed 1,2d "$ST/diag" | sort -u))" ] && return 0
+  printf '%s\n%s\n%s\n' "$NOW" "$RUN" "$keys" > "$ST/diag"
+  [ "$(sed -n 3p "$ST/wake" 2>/dev/null)" = "$RUN" ] && tasks=$(sed -n 2p "$ST/wake")
+  printf '0\n%s\n%s\n%s\n' "$tasks" "$RUN" "$(cut -c1-800 <<<"$DIAG")" > "$ST/wake"
+}
+
+# resolve_main <worktree ps JSON> <terminal list JSON> -- sets MAIN_H and
+# MAIN_STATE (Orca's state for that pane, `none` when unknown), COORD (the run's
+# coordinator, `?` when the run list did not answer) and COORD_LIVE (that pane
+# is listed). Main's pane is the sender: a service has no terminal of its own,
+# and Orca refuses a send it cannot attribute. Found every tick, so /clear and a
+# restarted pane need nothing re-pinned. Only a claude pane in the main checkout
+# is main, so a worker or shell holding the run is never typed into. The run's
+# coordinator comes first: an old main pane left open after a restart is also a
+# claude pane in the main checkout, and Orca refuses its sends ("no longer
+# bound to Run").
+resolve_main() {
+  COORD=$(orca-ide orchestration run-list --json 2>/dev/null | jq -er --arg r "$RUN" \
+    '.result.runs | if type == "array" then (first(.[] | select(.id == $r) | .coordinator_handle) // "") else error end' 2>/dev/null) || COORD='?'
+  COORD_LIVE=$(jq -r --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $c)] | length' <<<"$2" 2>/dev/null)
+  MAIN_H=$(jq -r --arg m "$PP_MAIN" --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select(.worktreePath == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
+  MAIN_STATE=$(jq -rn --argjson ps "$1" --argjson ts "$2" --arg h "$MAIN_H" '
+    ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
+    | first(($ts.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h)
+      | $a["\(.tabId):\(.leafId)"]) // "none"' 2>/dev/null)
+  [ -n "$MAIN_STATE" ] || MAIN_STATE=none
+}
+main_now() { # main as Orca sees it at this moment, not at the start of the tick
+  resolve_main "$(listing worktree ps || echo '{}')" "$(listing terminal list || echo '{}')"
+}
+
+# listing <orca-ide subcommand...> -- a pane listing, printed only when Orca
+# answered one: Orca can exit 0 with an RPC error body, which holds no panes and
+# would read as "every pane is gone". 1 = no listing.
+listing() {
+  local o
+  o=$(orca-ide "$@" --json 2>/dev/null) && jq -e '.result' >/dev/null 2>&1 <<<"$o" && printf '%s\n' "$o"
+}
+
+# wake -- the pending wake of an accepted send: one line typed into main's pane,
+# counted only when Orca's receipt shows the turn it started (turn_started, the
+# seat.sh receipt contract). Never typed into a pane that is working, in any
+# state but idle/done, or waiting on a person (PROMPT_BLOCKED); those keep it
+# for a later tick. An unproven wake is retried WAKE_TRIES times, one a tick,
+# then dropped: the item re-posts after 5 minutes anyway. Main's mail is never
+# acknowledged here.
+# A fourth line is arm_diag's diagnostic: what Orca refused, typed whatever
+# became of the tasks, and never called inbox mail.
+WAKE_TRIES=3
+wake() {
+  [ -e "$ST/wake" ] || return 0
+  local tries tasks t open=0 screen r diag text
+  tries=$(sed -n 1p "$ST/wake"); tasks=$(sed -n 2p "$ST/wake"); diag=$(sed -n 4p "$ST/wake")
+  # Mail another run's inbox took is that run's; main switched away from it.
+  [ "$(sed -n 3p "$ST/wake")" = "$RUN" ] || { rm -f "$ST/wake"; return 0; }
+  for t in $tasks; do
+    case $(jq -r --arg t "$t" 'first(.result.tasks[]? | select(.id == $t) | .status) // "open"' <<<"$TASKS") in
+      completed|failed) ;; *) open=1 ;;
+    esac
+  done
+  [ "$open" = 1 ] || [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
+  # Nothing unread, nothing typed: main drained its inbox and only the item's
+  # task is open, so a typed wake read "nothing was queued". An inbox Orca does
+  # not answer keeps the wake, and so does a full page: the inbox is the whole
+  # machine's, newest first, and this run's unread mail may be behind it.
+  local unread
+  if [ "$open" = 1 ] && unread=$(orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -er --arg to "run:$RUN" \
+       '.result.messages | if type == "array" and length < 500 then [.[] | select(.to_handle == $to and .read == 0)] | length else error end' 2>/dev/null) \
+     && [ "$unread" = 0 ]; then
+    open=0; [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
+  fi
+  if [ "${tries:-0}" -ge "$WAKE_TRIES" ] 2>/dev/null; then
+    echo "main-watch: wake not proven after $WAKE_TRIES tries; the items re-post in 5 minutes" >&2
+    rm -f "$ST/wake"; return 0
+  fi
+  main_now
+  [ -n "$MAIN_H" ] || { echo "main-watch: no main pane to wake" >&2; return 0; }
+  case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
+  screen=$(orca-ide terminal read --terminal "$MAIN_H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null) \
+    || { echo "main-watch: main's screen is unreadable; no wake typed" >&2; return 0; }
+  ! grep -qiE "$PROMPT_BLOCKED" <<<"$screen" || return 0
+  text="main-watch: items are waiting in your Orca inbox for run $RUN; read them and handle each."
+  # The recovery is built here, outside the stored reason arm_diag truncates, and
+  # the command ends the line so it can be copied whole. It is offered only when
+  # no live pane holds the run (rebind's own test, on main_now's fresh answer):
+  # run-use from main would fence a live holder, so that one is named instead.
+  local fix=" To take the run back, run this from your own pane: orca-ide orchestration run-use --id $RUN"
+  if [ "$COORD" = '?' ]; then fix=" Who holds run $RUN is unknown; reconcile first: find out what that pane is before taking the run."
+  elif [ "$COORD_LIVE" != 0 ] && [ "$COORD" != "$MAIN_H" ]; then fix=" Live pane $COORD holds run $RUN; reconcile first: find out what that pane is before taking the run."
+  fi
+  [ -z "$diag" ] || text="main-watch: Orca did not take these for run $RUN, so they are NOT in your inbox: $diag. Each retries every tick.$([ "$open" = 0 ] || echo ' Other items are waiting in your Orca inbox.')$fix"
+  r=$(orca-ide terminal send --terminal "$MAIN_H" --text "$text" --enter --wait-submit 10 --json 2>/dev/null)
+  if jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' <<<"$r" >/dev/null 2>&1; then
+    rm -f "$ST/wake"
+  else
+    printf '%s\n%s\n%s\n%s\n' "$((tries + 1))" "$tasks" "$RUN" "$diag" > "$ST/wake"
+    echo "main-watch: wake not proven for $MAIN_H (try $((tries + 1)) of $WAKE_TRIES): $(jq -r '.error.message // "no turn_started in the receipt"' <<<"$r" 2>/dev/null || echo "no receipt")" >&2
+  fi
+}
+
+# The cutoff is always the seat's launch: read-verdict.sh drops session logs
+# older than it, and takes the answer after the last prompt, so a follow-up in
+# the same session is read from that session and an old verdict is not.
+# has_result <handle> <launched> -- a verdict or marker is in this seat's OWN
+# output (its pane, or its session log since launch). A file in the worktree is
+# never read: another seat of the same unit writes there too. RV_OK=1 when the
+# read answered (0, or 3/5: no verdict yet, turn over without one); a timeout or
+# failed read leaves 0, so the caller retries instead of remembering it.
+has_result() {
+  local out rc
+  out=$(timeout 20 bash "$HERE/read-verdict.sh" "$1" 5 "" "" "" "" "" "$2" 2>/dev/null); rc=$?
+  RV_OUT=$out
+  case $rc in 0|3|5) RV_OK=1 ;; *) RV_OK=0 ;; esac
+  grep -qE '^VERDICT: |-DONE$' <<<"$out"
+}
+
+# grew_at <key> <handle> <worktree> <task> <launched> <session id> -- the epoch the
+# seat's session log or pane output last grew. Pane growth is Orca's output
+# cursor, never the screen: a spinner redraw changes the screen of a hung pane.
+# No locatable log leaves the pane alone to decide.
+grew_at() {
+  local g=$ST/grow-$1 lf=$ST/log-$1 log old cur at sig
+  old=$(sed -n 3p "$g" 2>/dev/null); at=$(head -1 "$g" 2>/dev/null)
+  # Only the lines since the last read: the whole buffer is read once per seat.
+  # An unanswered read keeps the old cursor, so it never reads as growth.
+  cur=$(pane_cursor "$2" "${old:-0}")
+  cur=${cur:-$old}
+  log=$HOME/.claude/projects/$(printf '%s' "$3" | sed 's#/#-#g')/$6.jsonl
+  if [ -z "$6" ] || [ ! -f "$log" ]; then
+    # The read-verdict lookup is the costly read: once per seat, then again only
+    # for a stall candidate, in case the seat moved to a new session.
+    log=$(cat "$lf" 2>/dev/null)
+    if [ ! -e "$lf" ] || [ $((NOW - ${at:-$NOW})) -ge "$STALL_S" ]; then
+      log=$(timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$3" --task "$4" \
+        --launched "${5:-0}" 2>/dev/null | sed -n 's/^session=//p')
+      printf '%s\n' "$log" > "$lf"
+    fi
+  fi
+  sig="$(stat -c %s "$log" 2>/dev/null) $log $cur"
+  # Line 4 is the located session log, empty when none was found.
+  [ "$(sed -n 2p "$g" 2>/dev/null)" = "$sig" ] \
+    || printf '%s\n%s\n%s\n%s\n' "$NOW" "$sig" "$cur" "$([ -f "$log" ] && printf '%s' "$log")" > "$g"
+  head -1 "$g"
+}
+
+# pane_cursor <handle> [from] -- Orca's output cursor for the pane, reading only
+# the lines past <from>; empty when Orca did not answer.
+pane_cursor() {
+  orca-ide terminal read --terminal "$1" --cursor "${2:-0}" --limit 300000 --json 2>/dev/null \
+    | jq -r '.result.terminal.latestCursor // empty' 2>/dev/null
+}
+
+# log_size <key> -- bytes in the seat's session log grew_at located (grow file
+# line 4); empty when none was found.
+log_size() {
+  local log; log=$(sed -n 4p "$ST/grow-$1" 2>/dev/null)
+  [ -z "$log" ] || stat -c %s "$log" 2>/dev/null || true
+}
+
+# pane_grew <handle> <key> -- the pane printed past the cursor, or its session
+# log grew past the size, recorded when this seat's finish settled. Orca 1.4.220
+# never moves an agent pane's cursor, so the log is what shows a new turn there.
+# No record or an unanswered read is no growth. A third argument `b` compares
+# with the marks of the seat's boot read instead (mark_pane). A seat marked
+# when it had no log yet is looked up again here, with grew_at's arguments
+# after the mark's letter: a log that has appeared since is its new turn.
+pane_grew() {
+  local fp cur fl sz m=${3:-f}
+  fl=$(cat "$ST/${m}l-$2" 2>/dev/null)
+  if [ -z "$fl" ] && [ -e "$ST/${m}l-$2" ] && [ $# -gt 3 ]; then
+    rm -f "$ST/log-$2"; grew_at "$2" "$1" "$4" "$5" "$6" "${7:-}" >/dev/null
+    [ -z "$(log_size "$2")" ] || return 0
+  fi
+  sz=$(log_size "$2")
+  [[ $fl =~ ^[0-9]+$ && $sz =~ ^[0-9]+$ ]] && [ "$sz" -gt "$fl" ] && return 0
+  fp=$(cat "$ST/${m}p-$2" 2>/dev/null); [[ $fp =~ ^[0-9]+$ ]] || return 1
+  cur=$(pane_cursor "$1" "$fp")
+  [[ $cur =~ ^[0-9]+$ ]] && [ "$cur" -gt "$fp" ]
+}
+
+# mark_pane <f|b> <key> <handle> <worktree> <task> <launched> <session id> --
+# what pane_grew compares with: the pane's cursor and its session log's size,
+# each recorded once. An unanswered cursor read is retried next tick. On Orca
+# 1.4.220 the log is the only sign of a new turn; one not located yet (first
+# seen `done`, or it appeared after a `working` tick cached "none") is looked
+# up once more here, and the size is empty when there is still none.
+mark_pane() {
+  local at
+  [ -e "$ST/$1p-$2" ] || { at=$(pane_cursor "$3"); [[ ! $at =~ ^[0-9]+$ ]] || echo "$at" > "$ST/$1p-$2"; }
+  [ -e "$ST/$1l-$2" ] || {
+    [ -n "$(sed -n 4p "$ST/grow-$2" 2>/dev/null)" ] \
+      || { rm -f "$ST/log-$2"; grew_at "$2" "$3" "$4" "$5" "$6" "${7:-}" >/dev/null; }
+    log_size "$2" > "$ST/$1l-$2"; }
+}
+
+# rv_unanswered <key> -- the seat's own output could not be read (RV_OK=0), so
+# nothing is known and nothing may be remembered. 0 = try again next
+# tick; 1 after RV_TRIES unanswered reads in a row, when the caller settles on
+# what it has rather than never reporting the seat.
+RV_TRIES=5
+rv_unanswered() {
+  local n; n=$(( $(cat "$ST/rvf-$1" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$ST/rvf-$1"
+  [ "$n" -lt "$RV_TRIES" ]
+}
+
+# reap_brokers -- the openai-codex plugin starts one detached
+# `app-server-broker.mjs serve --cwd <dir>` per Claude session and stops it only
+# in that session's SessionEnd hook, which a pane closed by `orca-ide terminal
+# close` never runs. Each leak keeps 5-120 children; on 2026-09-28 about 2,000
+# of them hit kern.maxprocperuid and crashed the Mac. A broker is leaked when it
+# is over an hour old, no live claude or codex-companion works in its --cwd, and
+# no codex-companion is in its tree (a review in flight). Its tree is killed
+# children first; a --cbm-daemon-internal process and its subtree never are.
+# Leaves PROCS and PROC_TOP (this user's process count and top command
+# families) for proc_warn.
+reap_brokers() {
+  local snap pids live="" p cwd age n order
+  PROCS=
+  snap=$(ps -A -o uid=,pid=,ppid=,etime=,command= 2>/dev/null | awk -v me="$(id -u)" '$1 == me')
+  [ -n "$snap" ] || return 0
+  pids=$(awk '{ n = split($5, a, "/") } a[n] == "claude" || /codex-companion/ { printf "%s%s", s, $2; s = "," }' <<<"$snap")
+  local raw rc=0
+  [ -z "$pids" ] || { raw=$(lsof -a -d cwd -p "$pids" -Fn 2>/dev/null); rc=$?; live=$(sed -n 's/^n//p' <<<"$raw"); }
+  if [ -n "$pids" ] && { [ "$rc" != 0 ] || [ -z "$live" ]; }; then
+    # An lsof that failed or named nothing would make a live session's broker look abandoned.
+    echo "main-watch: lsof failed (exit $rc) or named no working directory for the live sessions; no broker reaped" >&2
+  else
+    while IFS=$'\t' read -r p cwd age n order; do
+      # env: the external kill, so a test's PATH stub stands in for it.
+      # shellcheck disable=SC2086 # the tree is a pid list
+      env kill -TERM $order "$p" 2>/dev/null
+      echo "main-watch: killed leaked codex broker pid=$p cwd=$cwd age=${age}s children=$n"
+    done < <(awk -v OFS='\t' '
+      NR == FNR { live[$0] = 1; next }
+      {
+        pid = $2; kids[$3] = kids[$3] " " pid
+        t = $4; d = 0
+        if (t ~ /-/) { split(t, dt, "-"); d = dt[1]; t = dt[2] }
+        k = split(t, hms, ":")
+        age[pid] = hms[k] + 60 * hms[k - 1] + (k == 3 ? 3600 * hms[1] : 0) + 86400 * d
+        c = $0; for (i = 1; i <= 4; i++) sub(/^[[:space:]]*[^[:space:]]+/, "", c)
+        sub(/^[[:space:]]+/, "", c); cmd[pid] = c
+      }
+      function walk(p,   m, ks, j, ch) {
+        m = split(kids[p], ks, " ")
+        for (j = 1; j <= m; j++) {
+          ch = ks[j]
+          if (cmd[ch] ~ /--cbm-daemon-internal/) continue
+          if (cmd[ch] ~ /codex-companion/) busy = 1
+          walk(ch); order = order " " ch; n++
+        }
+      }
+      END {
+        for (p in cmd) {
+          if (cmd[p] !~ /app-server-broker\.mjs serve/ || cmd[p] ~ /--cbm-daemon-internal/ || age[p] <= 3600) continue
+          if (!match(cmd[p], /--cwd[= ][^[:space:]]+/)) continue
+          cwd = substr(cmd[p], RSTART + 6, RLENGTH - 6)
+          # A path may hold a space, and ps does not quote: ask of each live
+          # folder whether it is the whole --cwd of this broker.
+          alive = 0
+          for (l in live) {
+            i = index(cmd[p], "--cwd " l); if (!i) i = index(cmd[p], "--cwd=" l)
+            if (i && substr(cmd[p], i + 6 + length(l), 1) ~ /^ ?$/) alive = 1
+          }
+          if (alive) continue
+          order = ""; n = 0; busy = 0; walk(p)
+          if (!busy) print p, cwd, age[p], n, substr(order, 2)
+        }
+      }' <(printf '%s\n' "$live") - <<<"$snap")
+  fi
+  # The observed count, not less the kills: a tree slow to die is still there,
+  # and the next tick samples again.
+  PROCS=$(wc -l <<<"$snap" | tr -d ' ')
+  PROC_TOP=$(awk '{ n = split($5, a, "/"); c[a[n]]++ } END { for (k in c) print c[k], k }' <<<"$snap" \
+    | sort -rn | head -3 | awk '{ printf "%s%s %s", s, $2, $1; s = ", " }')
+}
+
+# proc_warn -- past 2,000 of this user's processes, one item per episode: at
+# kern.maxprocperuid nothing new can start, which is how the Mac crashed.
+proc_warn() {
+  [ -n "${PROCS:-}" ] || return 0
+  if [ "$PROCS" -le 2000 ]; then rm -f "$ST/procs-high"; return 0; fi
+  [ -s "$ST/procs-high" ] || echo "$NOW" > "$ST/procs-high"
+  local cap
+  cap=$(sysctl -n kern.maxprocperuid 2>/dev/null) || cap=unknown
+  post "procs-$(cat "$ST/procs-high")" "" "main-watch: $PROCS processes for this user (cap $cap)" \
+    "Top command families: $PROC_TOP. At the per-user cap (kern.maxprocperuid) nothing new can start. Find the leak: ps -A -o command= | sort | uniq -c | sort -rn | head"
+}
+
+seat() { # handle task unit role launched [session id]
+  local h=$1 task=$2 u=$3 key="seat-$1-$2" state kind since at ep item
+  # The closing line compared below is this seat's own read, never the last seat's.
+  RV_OUT=
+  [ -n "$h" ] && [ -n "$u" ] && [ "$u" != u ] && [ -d "$WS/$u" ] || return 0
+  state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
+  case $state in ""|none) ;; *) : > "$ST/seen-$key" ;; esac
+  [ -e "$ST/state-$key" ] && [ "$(sed -n 2p "$ST/state-$key")" = "$state" ] || printf '%s\n%s\n' "$NOW" "$state" > "$ST/state-$key"
+  since=$(head -1 "$ST/state-$key")
+  # Once settled, the kind never changes within one episode; only the task
+  # decides from here. A seat that works again after a settled finish (main sent
+  # it a follow-up) starts a new episode: its next stop is a new item with a
+  # new task, whatever became of the first one's task. Working again is seen
+  # as `working`, or, when the follow-up started and finished between two
+  # ticks, as pane output past the cursor recorded when the finish settled.
+  # A Codex pane on the Mac reads `none` throughout, so the same growth is the
+  # only sign there.
+  # ponytail: output a pane prints after `done` with no new turn (late hook
+  # output, a resize) reads as a new finish and costs main one extra post;
+  # fingerprint the session log's last assistant message if that shows up.
+  kind=$(cat "$ST/kind-$key" 2>/dev/null)
+  # A Codex pane on the Mac reads `none` at work and at rest, so there its log
+  # growing past the settled finish is the only sign of the follow-up.
+  if [ -n "$kind" ] && { [ "$state" = working ] || { { [ "$state" = "done" ] || [ "$state" = none ]; } && pane_grew "$h" "$key" f "$WS/$u" "$task" "$5" "${6:-}"; }; }; then
+    rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
+  fi
+  # A settled finish is not read again; the wait check below still needs the
+  # closing line it was settled on.
+  [ "$kind" != finished ] || RV_OUT=$(cat "$ST/rv-$key" 2>/dev/null)
+  ep=$(cat "$ST/episode-$key" 2>/dev/null)
+  item=$key${ep:+-$ep}; [ -z "$ep" ] || task=
+  case $state in
+    working)
+      : > "$ST/working-$key"
+      at=$(grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}")
+      [ $((NOW - at)) -ge "$STALL_S" ] || return 0
+      post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
+        "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h"
+      return 0 ;;
+    done)
+      if [ -z "$kind" ]; then
+        # A boot `done` with no result is read once, not every tick until closed,
+        # and again only when the pane or its log grew past that read: a seat
+        # that works and finishes between two ticks never reads `working`.
+        if [ ! -e "$ST/working-$key" ] && [ -e "$ST/booted-$key" ]; then
+          pane_grew "$h" "$key" b "$WS/$u" "$task" "$5" "${6:-}" || return 0
+          rm -f "$ST/booted-$key" "$ST/bp-$key" "$ST/bl-$key"
+        fi
+        # The cutoff is the seat's launch, also for a follow-up: read-verdict.sh
+        # drops a session created before it, and the seat's own session was
+        # created at launch. Its latest answer is the one after the last prompt.
+        if has_result "$h" "${5:-0}"; then kind=finished
+        elif [ "$RV_OK" = 0 ] && rv_unanswered "$key"; then return 0
+        elif [ -e "$ST/working-$key" ]; then kind=silent
+        else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}"; }; return 0; fi
+        rm -f "$ST/rvf-$key"
+        echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
+      fi
+      # The finish's fingerprint, once per finish.
+      mark_pane f "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" ;;
+    ""|none)
+      # Gone: only a pane this service saw alive, and only when Orca answered.
+      [ "$LISTED" = 1 ] || return 0
+      if [ ! -e "$ST/seen-$key" ]; then
+        # Orca never binds a Codex pane on the Mac: it reads `none` from its
+        # first tick to its last and was never tracked. A pane Orca
+        # still lists whose session log is found is alive. The lookup is the
+        # costly read: every tick for a seat's first STALL_S, then once per STALL_S.
+        [ "$state" = none ] || return 0
+        at=$(cat "$ST/look-$key" 2>/dev/null)
+        [ -z "$at" ] || [ $((NOW - ${5:-0})) -lt "$STALL_S" ] || [ $((NOW - at)) -ge "$STALL_S" ] || return 0
+        echo "$NOW" > "$ST/look-$key"; rm -f "$ST/log-$key"
+        grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" >/dev/null
+        [ -n "$(sed -n 4p "$ST/grow-$key" 2>/dev/null)" ] || return 0
+        : > "$ST/seen-$key"
+      fi
+      # Orca never binds a Codex pane on the Mac, so a Codex seat can read blank
+      # while it works: a located session log that grew within STALL_S is still
+      # working. read-verdict.sh --state searches both Codex homes. A verdict
+      # is read first, so a blank seat that finished is posted as finished.
+      if [ -z "$kind" ]; then
+        if has_result "$h" "${5:-0}"; then kind=finished
+        else
+          at=$(grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}")
+          [ -z "$(sed -n 4p "$ST/grow-$key" 2>/dev/null)" ] || [ $((NOW - at)) -ge "$STALL_S" ] || return 0
+          # A read that failed says nothing about how the seat ended, and a
+          # settled seat is not read again: it is tried each tick, and only a
+          # read still failing STALL_S later settles as silent (a pane with no
+          # buffer fails every read, and must still be posted).
+          if [ "$RV_OK" = 0 ]; then
+            [ -e "$ST/rvfail-$key" ] || echo "$NOW" > "$ST/rvfail-$key"
+            [ $((NOW - $(cat "$ST/rvfail-$key"))) -ge "$STALL_S" ] || return 0
+          fi
+          kind=silent
+        fi
+        rm -f "$ST/rvf-$key" "$ST/rvfail-$key"
+        echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
+      fi
+      # A listed pane's finish is fingerprinted too, so its follow-up is seen.
+      [ "$state" != none ] || mark_pane f "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" ;;
+    *)
+      [ $((NOW - since)) -ge "$WAITING_S" ] || return 0
+      post "wait-$key-$since" "" "main-watch: $u $4 stalled in Orca state $state; inspect" \
+        "Seat $4 ($h) on $u has been '$state' for $(( (NOW - since) / 60 )) min. It may be waiting for input: $HERE/read-verdict.sh $h"
+      return 0 ;;
+  esac
+  if [ "$kind" = finished ]; then
+    # A seat.sh wait on this pane reports the finish itself.
+    pp_waited_on "$h" "$NOW" "${RV_OUT:-}" "watch:$item" && { echo handled > "$ST/item-$item"; return 0; }
+    post "$item" "$task" "main-watch: seat $4 on $u finished ($h)" \
+      "Seat $4 on $u stopped. Read it: $HERE/read-verdict.sh $h, then collect it."
+  else
+    post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
+      "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}. This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h"
+  fi
+}
+
+# HEADS-UP RELAY. The built-in "you should know" mod keeps each Claude
+# session's current Heads-up offer, full explanation included, in its store;
+# pressing 1 would inject it into that session as a prompt, so the store is only
+# read. Each tick captures every unseen (session id, shownAt) pair into the
+# ledger and the archive, then posts each group as an item, inbox only. A later
+# offer overwrites `view`, so capture comes first and is never conditional on a
+# run, a sender or a send. Offers with the same line within HU_WINDOW_MS of the
+# group's first one are one note naming every session.
+HU_STORE=$HOME/.claude/plugins/store
+HU_LEDGER=$ST/heads-up.json
+# The archive is this project's own: another project's watcher on the same
+# machine keeps its own, so neither takes the other's archived offers as new.
+HU_LOG=$ST/heads-up-log.jsonl
+# Handled notes, one line per group key and per member (session@shownAt), beside
+# the archive: the archive keeps every note for good, so a handled receipt that
+# went with its item file would leave the note on record and looking new.
+HU_DONE=$ST/heads-up-handled
+HU_WINDOW_MS=300000
+
+# hu_cwd <session id> -- the checkout the session ran in: the first cwd its own
+# transcript records. The project directory name is a lossy slug and is never
+# reversed. Empty when not exactly one transcript names one.
+hu_cwd() {
+  local t
+  t=$(ls "$HOME"/.claude/projects/*/"$1".jsonl 2>/dev/null)
+  [ -n "$t" ] && [ "$(wc -l <<<"$t")" = 1 ] || return 0
+  head -200 "$t" | jq -rR 'fromjson? | select(type == "object" and (.cwd | type) == "string" and .cwd != "") | .cwd' 2>/dev/null | head -1
+}
+
+hu_save() { # <ledger JSON> -- replaced whole, so a crash never leaves half a ledger
+  printf '%s\n' "$1" > "$HU_LEDGER.tmp" && mv -f "$HU_LEDGER.tmp" "$HU_LEDGER" && return 0
+  echo "main-watch: cannot write $HU_LEDGER; heads-up state not saved" >&2; return 1
+}
+
+heads_up_capture() {
+  local f offers o led rec
+  [ -e "$HU_LEDGER" ] && { led=$(jq -ce 'select(.pairs | type == "object") | select(.groups | type == "object")' "$HU_LEDGER" 2>/dev/null) \
+    || { echo "main-watch: $HU_LEDGER is unreadable; no heads-up captured until it is repaired" >&2; return 0; }; }
+  led=${led:-'{"pairs":{},"groups":{}}'}
+  # An offer archived whose ledger write then failed is taken from the archive,
+  # since the store may have replaced it by now.
+  # ponytail: reads the whole archive every tick; keep an offset if it grows large.
+  # A handled note never comes back from the archive, ledger or no ledger.
+  offers=$(jq -cR --argjson led "$led" --arg done "$(cat "$HU_DONE" 2>/dev/null)" '
+    ($done | split("\n") | map({(.): 1}) | add // {}) as $d
+    | fromjson? | select(type == "object" and (.id | type) == "string")
+    | select($led.pairs["\(.id)@\(.shownAt)"] == null and $d["\(.id)@\(.shownAt)"] == null) | {id, at: .shownAt, line, explanation, cwd, archived: true}' "$HU_LOG" 2>/dev/null)
+  hu_take "$offers" || return 0
+  for f in "$HU_STORE"/cc-plugin-you-should-know_builtin-*.json; do
+    [ -f "$f" ] || continue
+    # One read of the whole file: the mod rewrites it under us, and a partial
+    # copy fails to parse, so it is skipped whole until the next tick.
+    offers=$(jq -c '.sessions | if type == "array" then . else error end
+      | map(select(type == "object" and .view.kind? == "offer")) | sort_by(.view.shownAt)[]
+      | {id, at: .view.shownAt, line: .view.line, explanation: .view.explanation}' "$f" 2>/dev/null) \
+      || { echo "main-watch: heads-up store $f did not parse; skipped this tick" >&2; continue; }
+    hu_take "$offers" || return 0
+  done
+}
+
+# hu_take <offers, one JSON per line> -- capture each unseen pair into the
+# caller's ledger `led`. 1 = the ledger could not be saved; stop this tick.
+hu_take() {
+  local o rec cwd next sent p htext
+  # Groups already delivered: a relay is sent once, so anything that joined one
+  # would never reach main. Only the same session's identical text joins those.
+  sent=$({ grep -lE '^(posted=[0-9]|handled$)' "$ST"/item-heads-up-* 2>/dev/null | sed 's#.*/item-##'; cat "$HU_DONE" 2>/dev/null; } \
+    | jq -Rsc 'split("\n") | map(select(. != ""))')
+  # What main already handled, by (session, line, explanation), from the archive:
+  # the ledger that would have matched a repeat of it may be gone with the temp folder.
+  htext=$(jq -cRn --arg done "$(cat "$HU_DONE" 2>/dev/null)" '
+    ($done | split("\n") | map({(.): 1}) | add // {}) as $d
+    | [inputs | fromjson? | select(type == "object" and $d["\(.id)@\(.shownAt)"] != null) | {([.id, .line, .explanation] | tojson): 1}] | add // {}' "$HU_LOG" 2>/dev/null); [ -n "$htext" ] || htext='{}'
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    jq -e '(.id | type == "string" and test("^[A-Za-z0-9-]+$")) and (.at | type == "number" and . > 0 and . == floor)
+      and (.line | type == "string" and length > 0) and (.explanation | type == "string" and length > 0)' >/dev/null 2>&1 <<<"$o" \
+      || { echo "main-watch: heads-up offer skipped: no valid id, shownAt, line or explanation: $(cut -c1-160 <<<"$o")" >&2; continue; }
+    p=$(jq -r '"\(.id)@\(.at)"' <<<"$o")
+    jq -e --arg p "$p" '.pairs[$p]' >/dev/null <<<"$led" && continue
+    # Still shown in the store after the temp folder lost the ledger.
+    grep -qxF -- "$p" "$HU_DONE" 2>/dev/null && continue
+    # The same session showing the same text again is handled with it.
+    if jq -e --argjson h "$htext" '$h[[.id, .line, .explanation] | tojson] != null' >/dev/null 2>&1 <<<"$o"; then
+      echo "$p" >> "$HU_DONE"; continue
+    fi
+    # An archived record keeps the checkout it was captured with; only a missing
+    # one is looked up again.
+    cwd=$(jq -r 'if (.cwd | type) == "string" then .cwd else empty end' <<<"$o")
+    [ -n "$cwd" ] || cwd=$(hu_cwd "$(jq -r .id <<<"$o")")
+    # A shownAt todate cannot render (1e100) fails here; nothing below may save then.
+    rec=$(jq -c --arg cwd "$cwd" \
+      '{id, shownAt: .at, utc: (.at / 1000 | floor | todate), cwd: (if $cwd == "" then null else $cwd end), line, explanation}' <<<"$o" 2>/dev/null) \
+      && [ -n "$rec" ] || { echo "main-watch: heads-up offer skipped: shownAt is not a time: $(cut -c1-160 <<<"$o")" >&2; continue; }
+    # Archived before it counts as captured: an unwritable archive leaves the
+    # offer uncaptured, so the next tick tries again.
+    jq -e '.archived' >/dev/null <<<"$o" || printf '%s\n' "$rec" 2>/dev/null >> "$HU_LOG" \
+      || { echo "main-watch: cannot append $HU_LOG; heads-up $(jq -r '"\(.id)@\(.shownAt)"' <<<"$rec") not captured" >&2; continue; }
+    # A session with no known checkout shares a note with nobody: a group waits
+    # for every member's checkout, so one unplaced session held the others' note
+    # back, for good when it never resolved.
+    next=$(jq -c --argjson r "$rec" --argjson w "$HU_WINDOW_MS" --argjson sent "${sent:-[]}" '
+      (first(.groups | to_entries[] | select(.key as $k | .value.line == $r.line
+          and (any(.value.members[]; .id == $r.id and .explanation == $r.explanation)
+               or ((any($sent[]; . == $k) | not) and $r.cwd != null and all(.value.members[]; .cwd != null)
+                 and (((.value.first - $r.shownAt) | if . < 0 then -. else . end) < $w)))) | .key)
+        // "heads-up-\($r.shownAt)-\($r.id[0:8])") as $k
+      | .pairs["\($r.id)@\($r.shownAt)"] = $k
+      | .groups[$k] |= ((. // {line: $r.line, first: $r.shownAt, members: []}) | .members += [$r | del(.line)])' <<<"$led") \
+      && [ -n "$next" ] || { echo "main-watch: heads-up $(jq -r '"\(.id)@\(.shownAt)"' <<<"$rec") could not be added to the ledger; skipped" >&2; continue; }
+    led=$next
+    hu_save "$led" || return 1
+    # The same text joining a note main already handled is handled with it.
+    ! grep -qxF -- "$(jq -r --arg p "$p" '.pairs[$p]' <<<"$led")" "$HU_DONE" 2>/dev/null || echo "$p" >> "$HU_DONE"
+  done <<<"$1"
+}
+
+# hu_done <key> <ledger> -- when the group's receipt reads handled, put every
+# member's (session, shownAt) and then the key on the lasting list, so a key on
+# record means its members are too. 1 = not handled. A failed append is tried
+# again next tick, while the receipt is still there.
+hu_done() {
+  [ -e "$ST/item-$1" ] && grep -qx handled "$ST/item-$1" || return 1
+  { jq -r --arg k "$1" '.pairs | to_entries[] | select(.value == $k) | .key' <<<"$2"; echo "$1"; } >> "$HU_DONE"
+}
+
+# hu_shown <session id> <shownAt> -- 0 while the store still shows that offer,
+# or cannot be read; 1 once every store file answers and none shows it.
+hu_shown() {
+  local f rc
+  # A folder that cannot be listed shows no file, which is not the offer being
+  # gone. A folder that is not there at all, under a parent that can be
+  # searched, holds no offer.
+  [ -d "$HU_STORE" ] && [ -r "$HU_STORE" ] && [ -x "$HU_STORE" ] \
+    || { [ ! -e "$HU_STORE" ] && [ -x "${HU_STORE%/*}" ] && return 1; return 0; }
+  for f in "$HU_STORE"/cc-plugin-you-should-know_builtin-*.json; do
+    [ -f "$f" ] || continue
+    jq -e --arg id "$1" --argjson at "$2" '.sessions | if type == "array" then . else error end
+      | any(.[]; type == "object" and .id == $id and .view.kind? == "offer" and .view.shownAt == $at)' "$f" >/dev/null 2>&1; rc=$?
+    [ "$rc" = 1 ] || return 0
+  done
+  return 1
+}
+
+# heads_up_post -- each group not yet handled, through post: one task per group,
+# retried from the saved text until Orca accepts it, then never sent again.
+heads_up_post() {
+  local led k id cwd subj body t p
+  led=$(cat "$HU_LEDGER" 2>/dev/null) || return 0
+  for k in $(jq -r '.groups | keys[]' <<<"$led" 2>/dev/null); do
+    grep -qxF -- "$k" "$HU_DONE" 2>/dev/null && continue
+    ! hu_done "$k" "$led" || continue
+    # A note is main's whatever run it was first posted to: a task this run's
+    # list does not hold (main switched runs) is made again here, not dropped.
+    t=$(sed -n 's/^task=//p' "$ST/item-$k" 2>/dev/null)
+    [ -z "$t" ] || jq -e --arg t "$t" 'any(.result.tasks[]?; .id == $t)' >/dev/null <<<"$TASKS" || rm -f "$ST/item-$k"
+    for id in $(jq -r --arg k "$k" '.groups[$k].members[] | select(.cwd == null) | .id' <<<"$led"); do
+      cwd=$(hu_cwd "$id"); [ -n "$cwd" ] || continue
+      led=$(jq -c --arg k "$k" --arg id "$id" --arg c "$cwd" '.groups[$k].members |= map(if .id == $id and .cwd == null then .cwd = $c else . end)' <<<"$led")
+      hu_save "$led" || return 0
+    done
+    # Never guessed as main: a source with no checkout yet waits, visibly. It
+    # holds back no note already known to be this project's: that one goes now.
+    if jq -e --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" '.groups[$k].members | any(.[]; .cwd == null)
+        and (any(.[]; .cwd != null and (.cwd == $m or (.cwd | startswith($m + "/")) or (.cwd | startswith($w + "/")))) | not)' >/dev/null <<<"$led"; then
+      # It waits while the offer is still shown. Once the offer is gone and no
+      # transcript ever named the session, it would wait for good: it is put on
+      # the handled list unsent, and said so; its text stays in the archive.
+      for p in $(jq -r --arg k "$k" '.groups[$k].members[] | select(.cwd == null) | "\(.id)@\(.shownAt)"' <<<"$led"); do
+        ! hu_shown "${p%@*}" "${p##*@}" || { echo "main-watch: heads-up $k waits: no transcript names its session's checkout yet" >&2; continue 2; }
+      done
+      { jq -r --arg k "$k" '.pairs | to_entries[] | select(.value == $k) | .key' <<<"$led"; echo "$k"; } >> "$HU_DONE" \
+        && echo "main-watch: heads-up $k dropped: its offer is gone and no transcript ever named its session's checkout; the text is kept in $HU_LOG" >&2
+      continue
+    fi
+    # The offer store is the machine's and every project runs a watcher: only
+    # notes from this project's checkouts go to this project's main, and only
+    # those members are quoted.
+    led=$(jq -c --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" '.groups[$k].members |= map(select(.cwd != null and (.cwd == $m or (.cwd | startswith($m + "/")) or (.cwd | startswith($w + "/")))))' <<<"$led")
+    jq -e --arg k "$k" '.groups[$k].members | length > 0' >/dev/null <<<"$led" || continue
+    subj=$(jq -r --arg k "$k" --arg m "$PP_MAIN" '.groups[$k] | "heads-up: \([.members[] | if .cwd == $m then "main" else (.cwd | split("/") | last) end] | unique | join(", ")) -- \(.line)"' <<<"$led")
+    body=$(jq -r --arg k "$k" --arg m "$PP_MAIN" --arg log "$HU_LOG" '.groups[$k]
+      | "This note is another model'"'"'s unverified claim. Main must verify it against code or live state before acting.\nLine: \(.line)\n\n"
+        + ([.members[] | "From \(if .cwd == $m then "main" else (.cwd | split("/") | last) end): session \(.id), shown \(.utc) (shownAt \(.shownAt) ms)\nCheckout: \(.cwd)\nExplanation:\n\(.explanation)"] | join("\n\n"))
+        + "\n\nFull text archived in \($log)."' <<<"$led")
+    post "$k" "" "$subj" "$body" once
+    # In the tick that marks it, not the next: the temp folder may be gone by then.
+    hu_done "$k" "$led" || true
+  done
+}
+
+tick() {
+  # Before the run lookup: a leak is reaped whether or not main can be told.
+  reap_brokers
+  heads_up_capture
+  RUN=$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null)
+  [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
+  NOW=${COMMANDECK_NOW:-$(date +%s)}
+  DIAG= DIAG_KEYS= REBOUND= RELAY=0
+  # A failed task list cannot tell handled from open; skip rather than guess.
+  # A fenced one would silence every item, so main hears it (rebind was tried).
+  if ! orca_op '.result.tasks' orca-ide orchestration task-list --run "$RUN" --json; then
+    echo "main-watch: task-list failed; skipping this tick: $OP_ERR" >&2
+    [ -z "$REBOUND" ] || { note "task list: $OP_ERR" task-list; arm_diag; wake; }
+    return 0
+  fi
+  TASKS=$OP_OUT
+  local ps terms r f u h t role launched sid
+  # LISTED=0 when Orca could not list panes: then every pane would read as gone.
+  LISTED=1
+  ps=$(orca-ide worktree ps --json 2>/dev/null) || { ps='{}'; LISTED=0; }
+  terms=$(orca-ide terminal list --json 2>/dev/null) || { terms='{}'; LISTED=0; }
+  # An error reply that exits zero lists nothing either.
+  jq -e '.result | type == "object"' <<<"$ps" >/dev/null 2>&1 || { ps='{}'; LISTED=0; }
+  jq -e '.result | type == "object" or type == "array"' <<<"$terms" >/dev/null 2>&1 || { terms='{}'; LISTED=0; }
+  # handle<TAB>Orca agent state, joined on the pane key as close-done-panes.sh does.
+  STATES=$(jq -rn --argjson ps "$ps" --argjson ts "$terms" '
+    ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
+    | ($ts.result | if type == "array" then . else (.terminals // []) end)[]?
+    | "\(.handle)\t\($a["\(.tabId):\(.leafId)"] // "none")"' 2>/dev/null)
+  resolve_main "$ps" "$terms"
+  MAIN_BUSY=0
+  [ "$MAIN_STATE" = working ] && MAIN_BUSY=1
+  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=()
+  proc_warn
+  builder_watch
+
+  # A seat another host's run placed here is marked so (origin= line): that run
+  # hears of it, and posting it here too would wake a second main.
+  # One awk over every record, as in close-done-panes.sh: thirteen processes a
+  # record was most of a tick. Each key's first line counts, the last
+  # for session=. The separator is not whitespace, so an empty field keeps its
+  # place; not a pipe: a subshell would drop the items this tick batches.
+  while IFS=$'\x1f' read -r h t u role launched sid; do
+    seat "$h" "$t" "$u" "$role" "$launched" "$sid"
+  done < <(awk -F= -v OFS=$'\x1f' '
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"] }
+    FNR == 1 { if (NR > 1) out(); split("", v) }
+    /^(handle|task|unit|role|launched|origin)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
+    /^session=/ { v["session"] = substr($0, 9) }
+    END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
+  flush
+  arm_diag
+  wake
+  # Heads-up notes are their own batch, after the typed wake and its diagnostic:
+  # inbox only, success or refusal.
+  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() RELAY=1
+  heads_up_post
+  flush
+  RELAY=0
+  # Finished and orphaned panes are closed here, after this tick's items went
+  # out with the panes still listed; an open pane holds RAM.
+  local swept
+  [ "$LISTED" = 1 ] || return 0
+  if swept=$(COMMANDECK_PS_JSON="$ps" COMMANDECK_TERMINALS_JSON="$terms" bash "$HERE/close-done-panes.sh" --close 2>&1); then
+    [ -z "$swept" ] || printf '%s\n' "$swept"
+  else
+    echo "main-watch: pane sweep failed: $(tail -1 <<<"$swept" | cut -c1-200)" >&2
+  fi
+}
+
+while :; do
+  tick
+  [ "${1:-}" = --once ] && break
+  sleep "$TICK"
+done
