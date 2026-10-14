@@ -56,6 +56,12 @@ chmod -x "$PLUGIN/hooks/git-safety.sh"; broken "a hook file that cannot run" 'ho
 touch "$T/signed-out"; broken "the review pass cannot run" 'review pass'; rm "$T/signed-out"
 
 doctor; check "everything put back: exit 0 again" 0 $?
+# Whether Codex goes through a proxy decides where its model list comes from (#42): said plainly.
+check "it says Codex goes direct" 1 "$(grep -c '^ok  *codex route: Codex goes direct to its provider' "$T/out")"
+cp "$HOME/.codex/config.toml" "$T/toml"; printf '#!/usr/bin/env bash\nexit 7\n' > "$BIN/curl"; chmod +x "$BIN/curl"
+{ printf 'model_provider = "copilot"\n'; cat "$T/toml"; printf '[model_providers.copilot]\nbase_url = "http://localhost:4141/v1"\n'; } > "$HOME/.codex/config.toml"
+doctor; check "and names the proxy it goes through" '0 1' "$? $(grep -c '^ok  *codex route: Codex goes through the proxy http://localhost:4141/v1' "$T/out")"
+cp "$T/toml" "$HOME/.codex/config.toml"; rm "$BIN/curl"
 
 # --- the main checkout stays clean while the plugin runs ---
 # A project whose main checkout is never clean cannot tell its own work from

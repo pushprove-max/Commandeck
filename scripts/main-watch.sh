@@ -45,6 +45,7 @@ JOB=$NAME-$(basename "$PP_MAIN" | tr -c 'A-Za-z0-9_.\n-' '-')
 [ "$(hs_os)" = Darwin ] && UNIT=$JOB || UNIT=commandeck-$JOB.service
 STALL_S=1200    # 20 min with no session-log or pane growth
 WAITING_S=120   # 2 min in a state that is neither working nor done
+HOLD_S=3600     # 1 h at most that a Builder waiting on its helpers is held unposted (#41)
 TICK=${COMMANDECK_MAIN_WATCH_TICK_S:-60}
 REPOST=${COMMANDECK_MAIN_WATCH_REPOST_S:-300}
 SCRATCH=$PP_SCRATCH
@@ -174,6 +175,20 @@ post() {
   DUE_BODY+=("$4"$'\n'"handled = close task $task: (. $(printf '%q' "$HERE")/paths.sh && pp_task_close $task completed)")
 }
 
+# builder_card <unit> <launched> -- the Builder's card from the rows of its event log since that launch.
+builder_card() {
+  jq -cR --argjson la "$2" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$1/.claude/builder-events.jsonl" 2>/dev/null \
+    | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$1")" -f "$HERE/dashboard_builders.jq" 2>/dev/null
+}
+# helper_out <unit> <launched> -- a helper the Builder started has not finished, and logged a row within
+# STALL_S: a Builder that ended its turn to wait on it is waiting, not stopped (#41). A helper silent
+# longer than that died with no stop row, so the Builder's stop is real and is posted.
+helper_out() {
+  [ -f "$WS/$1/.claude/builder-events.jsonl" ] || return 1
+  builder_card "$1" "$2" | jq -e --argjson now "$NOW" --argjson s "$STALL_S" \
+    'any(.waiting[] | select(.kind == "subagent") | $now - (.seenAt | sub("\\.[0-9]+"; "") | fromdateiso8601); . >= 0 and . < $s)' >/dev/null 2>&1
+}
+
 # builder_watch -- each working Builder seat's event log through
 # dashboard_builders.jq. The first sighting of a signal episode ({kind, since})
 # types one line into that pane and records the episode under $ST, so it never
@@ -196,8 +211,7 @@ builder_watch() {
     # The log outlives a crashed Builder: only rows since this pane's launch are
     # its own, or it is nudged for a call the dead pane never ended.
     la=$(sed -n 's/^launched=//p' "$r" | head -1); [[ "$la" =~ ^[0-9]+$ ]] || la=0
-    out=$(jq -cR --argjson la "$la" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$u/.claude/builder-events.jsonl" 2>/dev/null \
-      | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$u")" -f "$HERE/dashboard_builders.jq" 2>/dev/null) || continue
+    out=$(builder_card "$u" "$la") || continue
     while IFS= read -r sig; do
       [ -n "$sig" ] || continue
       kind=$(jq -r '.kind | ascii_upcase' <<<"$sig"); since=$(jq -r .since <<<"$sig"); lim=$(jq -r '.limitSec // 0' <<<"$sig")
@@ -592,7 +606,7 @@ proc_warn() {
     "Top command families: $PROC_TOP. At the per-user cap (kern.maxprocperuid) nothing new can start. Find the leak: ps -A -o command= | sort | uniq -c | sort -rn | head"
 }
 
-seat() { # handle task unit role launched [session id]
+seat() { # handle task unit role launched [session id] [seat tag]
   local h=$1 task=$2 u=$3 key="seat-$1-$2" state kind since at ep item
   # The closing line compared below is this seat's own read, never the last seat's.
   RV_OUT=
@@ -616,7 +630,7 @@ seat() { # handle task unit role launched [session id]
   # A Codex pane on the Mac reads `none` at work and at rest, so there its log
   # growing past the settled finish is the only sign of the follow-up.
   if [ -n "$kind" ] && { [ "$state" = working ] || { { [ "$state" = "done" ] || [ "$state" = none ]; } && pane_grew "$h" "$key" f "$WS/$u" "$task" "$5" "${6:-}"; }; }; then
-    rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
+    rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key" "$ST/held-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
   fi
   # A settled finish is not read again; the wait check below still needs the
   # closing line it was settled on.
@@ -647,7 +661,20 @@ seat() { # handle task unit role launched [session id]
         elif [ "$RV_OK" = 0 ] && rv_unanswered "$key"; then return 0
         elif [ -e "$ST/working-$key" ]; then kind=silent
         else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}"; }; return 0; fi
-        rm -f "$ST/rvf-$key"
+        # A Builder with no DONE line and a helper out is waiting on it: read again next tick. A VERDICT line
+        # is no finish here: read-verdict.sh ends its output at one, and a Builder quotes its passes' verdicts,
+        # so DONE is also read as the last line of the latest message in the Builder's own session (--state's
+        # marker), bound as seat.sh binds it: the seat tag typed into every prompt, direct ones included.
+        # The log is the Builder's own to write, so the hold is bounded by this service's clock: HOLD_S at most.
+        if [ "$4" = builder ] && ! grep -q -- '-DONE$' <<<"$RV_OUT" && helper_out "$u" "${5:-0}" \
+          && ! timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$WS/$u" --agent claude --launched "${5:-0}" --spec "${7:-}" \
+            --marker "${u^^}-DONE" 2>/dev/null | grep -qx 'marker=1'; then
+          [ -s "$ST/held-$key" ] || echo "$NOW" > "$ST/held-$key"
+          [ $((NOW - $(cat "$ST/held-$key"))) -ge "$HOLD_S" ] || return 0
+          # Expired with no DONE: a quoted verdict is not the Builder's finish.
+          kind=silent
+        fi
+        rm -f "$ST/rvf-$key" "$ST/held-$key"
         echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
       fi
       # The finish's fingerprint, once per finish.
@@ -942,12 +969,12 @@ tick() {
   # record was most of a tick. Each key's first line counts, the last
   # for session=. The separator is not whitespace, so an empty field keeps its
   # place; not a pipe: a subshell would drop the items this tick batches.
-  while IFS=$'\x1f' read -r h t u role launched sid; do
-    seat "$h" "$t" "$u" "$role" "$launched" "$sid"
+  while IFS=$'\x1f' read -r h t u role launched sid tag; do
+    seat "$h" "$t" "$u" "$role" "$launched" "$sid" "$tag"
   done < <(awk -F= -v OFS=$'\x1f' '
-    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"] }
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"], v["tag"] }
     FNR == 1 { if (NR > 1) out(); split("", v) }
-    /^(handle|task|unit|role|launched|origin)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
+    /^(handle|task|unit|role|launched|origin|tag)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   flush

@@ -61,7 +61,7 @@ check "no text tells the owner to edit a shell start file or put a folder first 
   "$(cat "$SKILL" "$HERE/README.md" "$HERE/scripts/paths.sh" "$HERE/scripts/requirements.sh" "$HERE/scripts/setup.sh" "$HERE/scripts/doctor.sh" "$HERE/hooks/lib/run-hook.sh" | grep -ciE 'first on .?PATH|zshrc|zprofile|bash_profile|bashrc')"
 
 # Each undoing flag is in the skill, and sent over a saved config it clears the saved answer.
-for f in "--no-strict" "--name '' --persona ''" "--test-command ''" "--hosts ''" "--no-standard-context" "--builder-advisor none" "--no-codex-fast"; do
+for f in "--no-strict" "--name '' --persona ''" "--test-command ''" "--hosts ''" "--no-standard-context" "--builder-advisor none" "--no-codex-fast" "--codex-model codex-reviewer="; do
   check "the skill names $f" 1 "$([ "$(printf '%s\n' "$BODY" | grep -cF -e "$f")" -ge 1 ] && echo 1 || echo 0)"
 done
 P=$PASS F=$FAIL
@@ -106,6 +106,28 @@ check "with the yes saved, the review pass refuses a Codex home without the fast
 run "$PROJ" setup.sh --profile claude-openai --no-codex-fast >"$T/out" 2>&1; check "the answer off is accepted over a saved yes" 0 $?
 check "and saved" false "$(fastmode)"
 check "after which the pass starts without the fast tier again" 0 "$(pre)"
+
+# --- a Codex model id named at setup (#42) ---
+# Behind a proxy Codex's models_cache.json is empty or stale. The id the owner names is the project's own
+# answer: a plugin update replaces the plugin folder, so nothing of it may live there.
+cmodels() { jq -c '.codexModels' "$CFG"; }
+RSHA=$(cksum < "$PLUGIN/config/routing.json")
+mv "$HOME/.codex/models_cache.json" "$T/cache"
+run "$PROJ" setup.sh --profile claude-openai >"$T/out" 2>&1; check "with no model list and no id, setup refuses" 1 $?
+check "the refusal says Codex goes direct and names the answer that fixes it" '1 1' \
+  "$(grep -c 'Codex goes direct to its provider' "$T/out") $(grep -c -- '--codex-model codex-reviewer=<model id>' "$T/out")"
+run "$PROJ" setup.sh --profile claude-openai --codex-model codex-reviewer=gpt-6.1-sol >"$T/out" 2>&1; check "with the id named, setup succeeds" 0 $?
+check "and says whether Codex goes through a proxy" 1 "$(grep -c '^setup: Codex goes direct to its provider' "$T/out")"
+check "the id is saved in the project's own config" '{"codex-reviewer":"gpt-6.1-sol"}' "$(cmodels)"
+check "the plugin's routing.json is untouched" "$RSHA" "$(cksum < "$PLUGIN/config/routing.json")"
+check "the review pass runs on it" gpt-6.1-sol "$(run "$PROJ" builder-codex-pass.sh --preflight 2>/dev/null | cut -f1)"
+run "$PROJ" setup.sh --profile claude-openai >"$T/out" 2>&1; check "a rerun with no answer keeps it" '0 {"codex-reviewer":"gpt-6.1-sol"}' "$? $(cmodels)"
+run "$PROJ" setup.sh --profile claude-openai --codex-model builder=gpt-6.1-sol >"$T/out" 2>&1
+check "a role that is not a Codex role is refused, and nothing saved" '1 {"codex-reviewer":"gpt-6.1-sol"}' "$? $(cmodels)"
+run "$PROJ" setup.sh --profile claude-openai --codex-model codex-reviewer=sol >"$T/out" 2>&1
+check "a bare family is refused: it would be looked up again" '1 {"codex-reviewer":"gpt-6.1-sol"}' "$? $(cmodels)"
+mv "$T/cache" "$HOME/.codex/models_cache.json"
+run "$PROJ" setup.sh --profile claude-openai --codex-model codex-reviewer= >"$T/out" 2>&1; check "an empty id clears the answer" '0 null' "$? $(cmodels)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -87,6 +87,7 @@ if [ -n "$PROFILE" ]; then
   PASS=claude; [ "$PROFILE" != claude-openai ] || PASS=codex
   if ERR=$(COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then ok "review pass ($PASS)"
   else bad "review pass: $(tail -1 <<<"$ERR")"; fi
+  [ "$PASS" != codex ] || ok "codex route: $(pp_codex_route)"
 fi
 if [ "$PROFILE" = claude-openai ]; then
   N=$(il_codex_count "$IL_ROOT") ALL=$(il_codex_count)

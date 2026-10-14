@@ -71,6 +71,7 @@ edit, switch off or work round the project's own guard.
    - **Context.** `200K` adds `--standard-context`: the account's model
      holds 200K; `larger` adds `--no-standard-context`.
    - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
+   - **Codex model.** Not asked up front. When setup refuses because it found no model of the Codex family (it says whether Codex goes through a proxy), ask in plain text for the model id, such as `gpt-6.1-sol`, and run setup again with `--codex-model codex-reviewer=<id>`. It is saved in this project's config, so a plugin update keeps it. `--codex-model codex-reviewer=` clears it.
    - **Merge check.** On "name one", ask for the one command that must pass
      before a merge: `--test-command '<cmd>'`. On "none", pass
      `--test-command ''`.

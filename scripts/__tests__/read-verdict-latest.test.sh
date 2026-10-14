@@ -135,5 +135,27 @@ OUT=$(PATH="$TMP/bin:$PATH" HOME="$TMP/home" COMMANDECK_SCRATCH="$TMP/scratch" C
 check "Claude: with no session id a later sibling's GO does not answer for the first session" none \
   "$(grep -q '^VERDICT: GO$' <<<"$OUT" && echo go || echo none)"
 
+
+# main-watch reads a Builder's DONE with this call (#41). A Builder prompted directly carries no task
+# id in its prompt, and its latest message quotes a pass's verdict before DONE: the newest Claude
+# session in the worktree is read, not an older one (a design check's) that also ended on a marker.
+WT3=$TMP/ws/unit3; mkdir -p "$WT3"
+PROJ3=$TMP/home/.claude/projects/$(printf '%s' "$WT3" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PROJ3"
+stamp() { jq -c --arg ts "$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ)" '. + {timestamp: $ts}'; }
+turn_end() { jq -cn --arg ts "$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ)" '{type: "system", subtype: "turn_duration", timestamp: $ts}'; }
+L3=$(( $(date +%s) - 3600 ))
+# The seat's tag is typed into its prompt (seat.sh). A design coauthor beside it carries its own tag.
+{ cu "Write the design. Seat tag seat-design-coauthor-$L3-1: it names this pane's session." | stamp $((L3 + 5)); ca $'Note written.\nDESIGN-DONE' | stamp $((L3 + 60)); turn_end $((L3 + 60)); } > "$PROJ3/design.jsonl"
+done_marker() { PATH="$TMP/bin:$PATH" HOME="$TMP/home" COMMANDECK_SCRATCH="$TMP/scratch" COMMANDECK_MAIN="$TMP" \
+  bash "$REAL/scripts/read-verdict.sh" --state --worktree "$WT3" --agent claude --launched "$L3" --spec "seat-builder-$L3-2" --marker UNIT3-DONE 2>&1 | sed -n 's/^marker=//p'; }
+{ cu "Read and follow the brief. Seat tag seat-builder-$L3-2: it names this pane's session." | stamp $((L3 + 10)); ca "Pass 2 is back." | stamp $((L3 + 600)); turn_end $((L3 + 600)); } > "$PROJ3/builder.jsonl"
+touch -d '10 minutes ago' "$PROJ3/design.jsonl"
+check "Claude: a Builder that stopped with no DONE is not DONE" 0 "$(done_marker)"
+{ cu "go on" | stamp $((L3 + 900)); ca $'Pass 2 is back.\nVERDICT: GO\nUNIT3-DONE' | stamp $((L3 + 1200)); turn_end $((L3 + 1200)); } >> "$PROJ3/builder.jsonl"
+check "Claude: DONE after a quoted verdict, in a session with no task id, is read" 1 "$(done_marker)"
+# The sibling written last is not the Builder's session.
+touch -d '1 minute ago' "$PROJ3/builder.jsonl"; touch "$PROJ3/design.jsonl"
+check "Claude: a sibling session written after the Builder's does not hide its DONE" 1 "$(done_marker)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

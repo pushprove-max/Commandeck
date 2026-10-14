@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.3 -- 2026-10-14
+
+A Builder waiting on its helpers is no longer reported as stopped, and Codex
+behind a proxy finds its model.
+
+- A Builder that starts helpers in the background ends its turn to wait for
+  them (#41). The watcher posted it to main as "stopped without reporting",
+  or as finished. It now reads the Builder's event log first: while a helper
+  is out, and that helper wrote a row in the last 20 minutes, it waits and
+  checks again on the next tick, for an hour at most; a wait that runs out
+  with no DONE line is posted as stopped. A Builder that stopped with no
+  helper out, or printed its DONE line, is still posted at once.
+- A helper can log a stop and then go on working, then stop again. The
+  Builder card took the first stop as the finish. It now counts a helper as
+  running until a stop that none of its own calls follows. Stop rows from
+  ids that never started (most of them) are not helpers and change nothing.
+  The dashboard no longer shows an idle Builder as waiting on main while its
+  helper or Codex pass is still running.
+- Codex behind a proxy (#42). When Codex's `config.toml` sends it through a
+  proxy (a `model_provider` with a `base_url`), the model family is looked
+  up in the proxy's own model list, newest version first, then in
+  `models_cache.json` as before. A GitHub Copilot API proxy is asked with
+  no key; a regular proxy gets the key its `env_key` names, as a bearer
+  token.
+- Setup takes a model id for a Codex role: `--codex-model
+  codex-reviewer=gpt-6.1-sol`. It is saved in the project's own
+  `.claude/commandeck.json`, so a plugin update keeps it, and it wins over
+  `routing.json`, a hand edit of it included. `--codex-model
+  codex-reviewer=` clears it.
+- Doctor and setup say whether Codex goes through a proxy, and a refusal
+  names the fix that fits.
+
 ## 0.4.2 -- 2026-10-14
 
 CI is green again on Linux. The plugin works the same for the owner.

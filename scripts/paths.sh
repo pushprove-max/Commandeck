@@ -344,16 +344,61 @@ pp_routing_valid() { # the whole file validates; prints why when it does not
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
   jq -e --arg home "$HOME" "$PP_ROUTE_JQ"' validate | true' "$cfg" >/dev/null
 }
+# pp_codex_proxy -- the proxy Codex's config.toml sends it through: the base URL and the name of the
+# env var holding its key (empty for a proxy that signs in by itself, as a Copilot API proxy does),
+# tab-separated. Nothing when Codex goes direct. The proxy is the top-level model_provider's base_url.
+# Read with tomllib, as setup's requirements already need (Python 3.11): a hand-rolled reader lost key
+# and string boundaries (a quoted name with a dot, "base_url =" inside another value). With no tomllib
+# nothing is guessed: it says so, and returns 3 with no proxy.
+pp_codex_proxy() {
+  python3 -c 'import tomllib' 2>/dev/null \
+    || { echo "routing: proxy model discovery needs Python 3.11 or newer (tomllib); Codex's config.toml was not read for a proxy" >&2; return 3; }
+  python3 -c '
+import sys, tomllib
+try: c = tomllib.load(open(sys.argv[1], "rb"))
+except (OSError, ValueError): sys.exit()
+p = (c.get("model_providers") or {}).get(c.get("model_provider"))
+u = p.get("base_url") if isinstance(p, dict) else None
+if isinstance(u, str) and u:
+    k = p.get("env_key")
+    print(u + "\t" + (k if isinstance(k, str) else ""))' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null
+}
+pp_codex_route() { # one plain line for doctor, setup and a refusal
+  local px rc=0; px=$(pp_codex_proxy 2>/dev/null) || rc=$?
+  if [ "$rc" = 3 ]; then echo "Codex's proxy setting was not read: proxy model discovery needs Python 3.11 or newer"
+  elif [ -n "$px" ]; then echo "Codex goes through the proxy ${px%%$'\t'*}"
+  else echo "Codex goes direct to its provider (no model_provider with a base_url in ${CODEX_HOME:-$HOME/.codex}/config.toml)"; fi
+}
 # routing.json names a Codex model by family (sol); Codex takes a model id: the
-# newest gpt-<version>-<family> in the account's own list. A family the list
-# does not carry fails here, before a pane opens or a pass starts. A name that
-# is not a bare family is a model id and is printed as written.
-pp_codex_model() { # <family or model id>
+# newest gpt-<version>-<family> in the account's own list. Behind a proxy that
+# list is the proxy's (models_cache.json is then empty or stale), with the
+# cache as the fallback. A family neither list carries fails here, before a
+# pane opens or a pass starts. A name that is not a bare family is a model id
+# and is printed as written. Above both: the model id setup saved for the role
+# in the project's own config (setup.sh --codex-model; COMMANDECK_CODEX_MODELS
+# is setup's answer before it is saved), which no plugin update replaces.
+pp_codex_model() { # <family or model id> [role]
+  local list=${CODEX_HOME:-$HOME/.codex}/models_cache.json id= px url key
+  local newest='[.[] | select(test("^gpt-[0-9.]+-\($f)$"))] | sort_by(capture("^gpt-(?<v>[0-9.]+)-").v | split(".") | map(tonumber)) | last // empty'
+  [ -z "${2:-}" ] || id=$(jq -rn --arg r "$2" --argjson m "${COMMANDECK_CODEX_MODELS:-$(jq -c '.codexModels // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null || echo '{}')}" \
+    '$m[$r] // empty | strings' 2>/dev/null)
+  [ -z "$id" ] || { printf '%s\n' "$id"; return 0; }
   [[ $1 =~ ^[a-z]+$ ]] || { printf '%s\n' "$1"; return 0; }
-  local list=${CODEX_HOME:-$HOME/.codex}/models_cache.json id
-  id=$(jq -r --arg f "$1" '[.models[].slug | select(test("^gpt-[0-9.]+-\($f)$"))]
-    | sort_by(capture("^gpt-(?<v>[0-9.]+)-").v | split(".") | map(tonumber)) | last // empty' "$list" 2>/dev/null || true)
-  [ -n "$id" ] || { echo "routing: $list lists no gpt-<version>-$1 model for the Codex family $1; run codex once while signed in, or name a model id in routing.json" >&2; return 2; }
+  px=$(pp_codex_proxy) || px=
+  if [ -n "$px" ]; then
+    url=${px%%$'\t'*} key=${px#*$'\t'}
+    [[ $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [ -n "${!key:-}" ] || key=
+    # The key goes on stdin, never on the command line, where ps shows it.
+    id=$({ [ -z "$key" ] || printf 'Authorization: Bearer %s\n' "${!key}"; } \
+      | curl -fsS --max-time 5 ${key:+-H @-} "${url%/}/models" 2>/dev/null | jq -r --arg f "$1" "[.data[]?.id | strings] | $newest" 2>/dev/null || true)
+  fi
+  [ -n "$id" ] || id=$(jq -r --arg f "$1" "[.models[]?.slug | strings] | $newest" "$list" 2>/dev/null || true)
+  if [ -z "$id" ]; then
+    local via= or=" Or run codex once while signed in."
+    [ -z "$px" ] || { via=", and its model list has none" or=; }
+    echo "routing: no gpt-<version>-$1 model for the Codex family $1. $(pp_codex_route)$via; $list lists none either. Name the model id: setup.sh --codex-model ${2:-codex-reviewer}=<model id>.$or" >&2
+    return 2
+  fi
   printf '%s\n' "$id"
 }
 # pp_worktree_new <name> -- a new Orca worktree of this project at
@@ -381,8 +426,9 @@ pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
   b=$(jq -c '.builder // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$b" ] || b='{}'
   if [ -z "$m" ]; then
-    m=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty | select(test("^[a-z]+$"))' "$cfg" 2>/dev/null || true)
-    [ -z "$m" ] || m=$(pp_codex_model "$m") || return 2
+    # Every Codex role's model goes through the resolver: the project's saved id beats a family and an id alike.
+    m=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty' "$cfg" 2>/dev/null || true)
+    [ -z "$m" ] || m=$(pp_codex_model "$m" "${1%%.*}") || return 2
   fi
   jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
 }

@@ -5,6 +5,7 @@
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
 #          [--builder-model <alias>] [--builder-advisor <alias>|none] [--codex-fast|--no-codex-fast]
+#          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
 #          [--install-missing]
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
@@ -34,7 +35,7 @@ INSTALL= ASKED= OPT=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; OPT=; continue; fi
   case $a in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor) OPT=$a ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model) OPT=$a ;;
     --install-missing) INSTALL=1 ;;
   esac
 done
@@ -60,7 +61,7 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -71,6 +72,7 @@ fi
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BADVISOR=$(old .builder.advisor) FAST=$(old .codexFast)
+CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 SCOPE=$(jq -r '.scope // empty' "$IL_PROJECT" 2>/dev/null || true)
 BIND=$(jq -r '.dashboard.bind // empty' "$IL_MACHINE" 2>/dev/null || true)
 PORT=$(jq -r '.dashboard.port // empty' "$IL_MACHINE" 2>/dev/null || true)
@@ -82,7 +84,7 @@ WAS=$SCOPE DASHBOARD=1 STATUS=
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $1 in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor) [ $# -ge 2 ] || usage ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model) [ $# -ge 2 ] || usage ;;
   esac
   case $1 in
     --profile) PROFILE=$2; shift 2 ;;
@@ -96,6 +98,8 @@ while [ $# -gt 0 ]; do
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     --builder-model) BMODEL=$2; shift 2 ;;
     --builder-advisor) BADVISOR=$2; shift 2 ;;
+    # A role with no id clears the saved one. Checked below, once the routing file is known.
+    --codex-model) [[ $2 == *=* ]] || usage; CMODELS=$(jq -c --arg r "${2%%=*}" --arg m "${2#*=}" 'if $m == "" then del(.[$r]) else .[$r] = $m end' <<<"$CMODELS"); shift 2 ;;
     --strict) STRICT=true; shift ;;
     --no-strict) STRICT=false; shift ;;
     --serena) SERENA=true; shift ;;
@@ -124,6 +128,15 @@ for a in "$BMODEL" "$ADVISOR"; do
   [ -z "$a" ] || jq -e --arg a "$a" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null \
     || die "the Builder's model and advisor are each one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)") (the advisor may also be none), not '$a'. Nothing was changed"
 done
+# A Codex model id named at setup is the project's own, so a plugin update keeps it (paths.sh pp_codex_model).
+# Only a Codex role takes one, and only an id: a bare family name would be looked up again.
+for r in $(jq -r 'keys[]' <<<"$CMODELS"); do
+  jq -e --arg r "$r" '.roles[$r].agent == "codex"' "$(pp_routing)" >/dev/null \
+    || die "--codex-model takes a Codex role, one of $(jq -r '[.roles | to_entries[] | select(.value.agent == "codex") | .key] | join(", ")' "$(pp_routing)"), not '$r'. Nothing was changed"
+  m=$(jq -r --arg r "$r" '.[$r]' <<<"$CMODELS")
+  [[ $m =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] && ! [[ $m =~ ^[a-z]+$ ]] \
+    || die "--codex-model $r=$m: name a model id, such as gpt-6.1-sol, not a family or other text. Nothing was changed"
+done
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || die "this project is set up with --scope $WAS; run uninstall.sh first to change the scope"
 
 # --- preflight: refuse here, before anything changes ---
@@ -151,7 +164,8 @@ fi
 # tier itself is the Codex home's own setting, which setup never writes: a yes that home does not match is refused here.
 [ "$FAST" != true ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
   || die "Codex fast mode was chosen, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so the review passes would run on the standard tier. Add that line and run setup again, or answer off (--no-codex-fast). Nothing was changed"
-COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
+COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
+[ "$PROFILE" != claude-openai ] || echo "setup: $(pp_codex_route)"
 for f in "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json" "$IL_CODEX/hooks.json"; do
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
 done
@@ -193,11 +207,12 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" '
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" --argjson cm "$CMODELS" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $bm + $ba == "" then {} else {builder: ({model: $bm, advisor: $ba} | with_entries(select(.value != "")))} end)
+  + (if $cm == {} then {} else {codexModels: $cm} end)
   + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"

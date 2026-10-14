@@ -19,11 +19,17 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 # A call a guard refused never runs: its tool-refused row (lib/hook-fire-log.sh, every guard) ends it.
 # A call denied by a hook that logs no row, or by the auto-mode classifier, has no end row of its own:
 # its batch's batch-end row names it. Later calls never end one, since parallel calls can start one after another.
-| ($r | map(select(.event == "subagent-stop"))) as $se
-# A helper the pane stopped mid-call logs no end for that call: its stop row ends every call it began.
-# A running helper's open call, and the pane's own, are ended by their own rows only.
-| ($r | map(select(.event == "tool-end" or .event == "search-refused" or .event == "tool-refused"), (select(.event == "batch-end") | .uses[]? | {use: .}),
-    (select(.event == "tool-start" and .agent != null and (.agent as $a | any($se[]; .agent_id == $a))) | {use}))) as $ended
+| ($r | to_entries) as $ri
+# A helper can log a stop and go on with calls of its own, then stop again (#41, real logs): only a
+# stop that no call of that helper follows is its finish. The stops kept here are those finishes.
+| (reduce ($ri[] | select(.value.event == "tool-start" and .value.agent != null)) as $e ({}; .[$e.value.agent] = $e.key)) as $lastCall
+| ([$ri[] | select(.value.event == "subagent-stop" and .key > ($lastCall[.value.agent_id // ""] // -1)) | .value]) as $se
+# A helper the pane stopped mid-call logs no end for that call: any stop row of it ends every call it
+# began before that stop, a stop it went on from included. A call begun after its last stop, and the
+# pane's own, are ended by their own rows only.
+| (reduce ($ri[] | select(.value.event == "subagent-stop" and .value.agent_id != null)) as $e ({}; .[$e.value.agent_id] = $e.key)) as $lastStop
+| (($r | map(select(.event == "tool-end" or .event == "search-refused" or .event == "tool-refused"), (select(.event == "batch-end") | .uses[]? | {use: .})))
+  + [$ri[] | select(.value.event == "tool-start" and .value.agent != null and ($lastStop[.value.agent] // -1) > .key) | {use: .value.use}]) as $ended
 | ($r | map(select(.event == "tool-end"))) as $ends
 | ($r | map(select(.event == "codex-start"))) as $cs
 | ($r | map(select(.event == "codex-end"))) as $ce
@@ -34,7 +40,6 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 | ([$starts[] | select(.use == null or (.use as $u | any($ended[]; .use == $u) | not))] | length > 0) as $openTool
 # A pass ends at the first codex-end of its pass and round that FOLLOWS it in
 # the log: a round run again is open until its own end, whatever the first try left.
-| ($r | to_entries) as $ri
 | ([$ri[] | select(.value.event == "codex-start") | .key as $i | .value as $c
     | {c: $c, e: (first($ri[] | select(.key > $i and .value.event == "codex-end" and .value.pass == $c.pass and .value.round == $c.round) | .value) // null)}]) as $cx
 | ([$cx[] | select(.e == null) | .c]) as $openCodex
@@ -46,7 +51,7 @@ map(select(type == "object" and (.event | type) == "string")) as $r
     steps: (
       [$ss | to_entries[] | .key as $i | .value as $s | ($sr | map(select(.type == $s.type)) | .[
           ($ss[:$i] | map(select(.type == $s.type)) | length)]?) as $q
-        | ($se | map(select(.agent_id != null and .agent_id == $s.agent_id)) | first) as $p
+        | ($se | map(select(.agent_id != null and .agent_id == $s.agent_id)) | last) as $p
         | {kind: "subagent", agentId: $s.agent_id, type: $s.type, modelAsked: (if $q == null then null else $q.model // "" end), model: ($p.model // null),
            tokens: ($p.tokens // null), start: $s.ts, stop: ($p.ts // null), reason: ($p.reason // null)}]
       + [$cx[] | .c as $c | .e as $e
@@ -76,6 +81,10 @@ map(select(type == "object" and (.event | type) == "string")) as $r
         | (($ce | map(select(.pass == $c.pass and .round == $c.round)) | first | .ts // null | if . == null then $now else ep end)) as $b
         | select($a != null and $b != null and $b >= $a) | $b - $a] | add // 0 end),
     waiting: ([($openCodex[] | {kind: "codex", what: .pass, round: .round, since: .ts}),
-               ($openSub[] | {kind: "subagent", what: .type, round: null, since: .ts}),
+               # seenAt: the helper's newest row, so main-watch can tell a helper at work from one that died with no stop.
+               # An end row names no agent: it is the helper's when its use is one of the helper's calls.
+               ($openSub[] | .agent_id as $a | ([$starts[] | select($a != null and .agent == $a) | .use | strings]) as $us
+                 | {kind: "subagent", what: .type, round: null, since: .ts,
+                    seenAt: ([$r[] | select($a != null and (.agent == $a or .agent_id == $a or (.use as $u | $u != null and any($us[]; . == $u)))) | .ts] + [.ts] | max)}),
                ($pending[] | {kind: "tool", what: .tool, round: null, since: .ts})] | sort_by(.since))
   }

@@ -259,7 +259,7 @@ units() {
     # own event log. A log it cannot read is not measured, never an empty Builder.
     bj=null
     if [ -z "$seat" ] && [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$wt/.claude/settings.local.json" 2>/dev/null)" = 1 ]; then
-      st=null age=null sr=null
+      st=null age=null sr=null b='{}'
       bj='{"steps":null,"signals":null,"verdict":null,"verdictRound":null}'
       bl=$wt/.claude/builder-events.jsonl
       if [ ! -e "$bl" ]; then st='"building"' bj='{"steps":[],"signals":[],"verdict":null,"verdictRound":null}'
@@ -269,8 +269,9 @@ units() {
         bj=$(jq -c '{steps, signals, verdict: null, verdictRound: null}' <<<"$b")
         bj=$(jq -c --argjson b "$b" '. + ($b | {startedAt, reviewSec, waiting})' <<<"$bj")
       else : > "$RUN/builder-bad"; fi
-      # No working agent leaves the Builder waiting on main; an unread agent list keeps the log's stage.
-      [ "$st" = null ] || [ "$ag" = null ] || [[ $ag == *:working* ]] || st='"waiting-main"'
+      # No working agent leaves the Builder waiting on main; an unread agent list keeps the log's stage, and so
+      # does a helper, pass or call of its own still out: an idle pane waits on that, not on main (#41).
+      [ "$st" = null ] || [ "$ag" = null ] || [[ $ag == *:working* ]] || [ "$(jq '.waiting | length' <<<"$b")" != 0 ] || st='"waiting-main"'
       f=$(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$' | tr '\n' '\0' | xargs -0 -r ls -t 2>/dev/null | head -1)
       # The verdict keeps its report's round (<unit>-r<N>-reports.md): the card shows it beside that round only.
       if [ -n "$f" ]; then

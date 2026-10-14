@@ -669,9 +669,8 @@ else
   MODEL=$(jq -r .model <<<"$SOL")
   EFFORT=$(jq -r '.effort // empty' <<<"$SOL")
   [ -n "$EFFORT" ] || die "no roles.codex-reviewer effort in $(pp_routing); the passes never run on the Codex home's own effort"
-  # A family name becomes the newest model id the account lists (paths.sh).
-  FAMILY=$MODEL
-  MODEL=$(pp_codex_model "$FAMILY" 2>/dev/null) || die "roles.codex-reviewer names the model family $FAMILY, and $CODEX_DIR/models_cache.json lists no gpt-<version>-$FAMILY model; run codex once while signed in, or name a model id in routing.json"
+  # A family name becomes the newest model id the account lists, or the id setup saved (paths.sh).
+  MODEL=$(pp_codex_model "$MODEL" codex-reviewer 2>&1) || die "roles.codex-reviewer: ${MODEL#routing: }"
   # Fast mode is the owner's saved answer (set-up asks; no answer is off), never routing.json's.
   if pp_codex_fast; then
     pp_codex_fast_home || die "this project chose Codex fast mode but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier. Add that line, or turn it off: setup.sh --no-codex-fast"

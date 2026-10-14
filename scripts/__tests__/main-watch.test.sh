@@ -29,7 +29,7 @@ mkdir -p "$REPO/config"; cp "$SOURCE/config/routing.json" "$REPO/config/"
 # an `rvfail-<handle>` file is a read that failed (a timeout, no buffer).
 cat > "$REPO/scripts/read-verdict.sh" <<RV
 #!/usr/bin/env bash
-[ "\$1" = --state ] && { cat "$F/state-\${3##*/}" 2>/dev/null; exit 0; }
+[ "\$1" = --state ] && { echo "\$*" >> "$F/state-reads"; cat "$F/state-\${3##*/}" 2>/dev/null; exit 0; }
 echo "\$1" >> "$F/rv-reads"
 echo "\$1 \${8:-}" >> "$F/rv-cutoffs"
 [ ! -e "$F/rvfail-\$1" ] || exit 1
@@ -634,5 +634,58 @@ tick $((B + 10))
 [ "$(posts 'Builder wt-b2 is')" = 0 ] || fail "main was woken for the crashed Builder's open call"
 tick $((B + 200))
 [ "$(nudges term_b2new)" = 1 ] || fail "the replacement pane's own open call (250 s) got $(nudges term_b2new) nudges, not one"
+
+# A Builder ends its turn to wait on a helper it started, so its pane reads done
+# (#41). The helper's rows are the real shape: a stop, a call of its own, then
+# its finishing stop. Waiting is not stopping; the finish with no DONE still is.
+settle
+H=80000
+hrow() { jq -nc --argjson t "$1" --arg e "$2" '{ts: ($t | todate), event: $e} + if $e == "tool-start"
+  then {use: "h\($t)", agent: "a1", tool: "Grep", kind: "tool", call: "h"} else {agent_id: "a1", type: "Explore"} end'; }
+for u in wt-h1 wt-h2 wt-h3; do bseat $u term_$u task_$u $((H - 2000)); state term_$u working; done
+{ hrow $((H - 120)) subagent-start; hrow $((H - 90)) subagent-stop; hrow $((H - 30)) tool-start; } > "$T/ws/wt-h1/.claude/builder-events.jsonl"
+# read-verdict.sh ends its output at a verdict line: a Builder quoting its pass's verdict reads like this.
+printf 'Pass 1 is back.\nVERDICT: GO\n' > "$F/verdict-term_wt-h1"
+# A helper with no row for longer than the stall limit has not run on: the stop is real.
+hrow $((H - 1500)) subagent-start > "$T/ws/wt-h2/.claude/builder-events.jsonl"
+# A Builder that printed DONE is done, a helper out or not.
+hrow $((H - 120)) subagent-start > "$T/ws/wt-h3/.claude/builder-events.jsonl"; echo 'WT-H3-DONE' > "$F/verdict-term_wt-h3"
+tick $H; for u in wt-h1 wt-h2 wt-h3; do state term_$u "done"; done; tick $((H + 60))
+[ "$(posts wt-h1)" = 0 ] || fail "a Builder waiting on its helper was posted: $(grep wt-h1 "$T/sends")"
+grep -q 'wt-h2 builder stopped without reporting' "$T/sends" || fail "a Builder whose helper went silent past the stall limit was not posted"
+grep -q 'seat builder on wt-h3 finished' "$T/sends" || fail "a Builder that printed DONE with a helper out was not posted as finished"
+tick $((H + 120)); [ "$(posts wt-h1)" = 0 ] || fail "a Builder still waiting on its helper was posted on a later tick"
+hrow $((H + 130)) subagent-stop >> "$T/ws/wt-h1/.claude/builder-events.jsonl"; tick $((H + 180))
+grep -q 'seat builder on wt-h1 finished' "$T/sends" || fail "a Builder whose helper finished was not posted on the next tick: $(cat "$T/sends")"
+rm -f "$F/verdict-term_wt-h1"; settle
+bseat wt-h4 term_wt-h4 task_wt-h4 $((H - 2000)); state term_wt-h4 working
+{ hrow $((H + 200)) subagent-start; hrow $((H + 210)) tool-start; hrow $((H + 230)) subagent-stop; } > "$T/ws/wt-h4/.claude/builder-events.jsonl"
+tick $((H + 240)); state term_wt-h4 "done"; tick $((H + 300))
+grep -q 'wt-h4 builder stopped without reporting' "$T/sends" || fail "a Builder whose only helper had finished, with no DONE, was not posted"
+# The log is the Builder's own to write. A row dated in the future is no sign of a helper at work, and
+# however fresh its rows, a hold ends after HOLD_S (1 h) of this service's own clock.
+settle; H=90000
+for u in wt-h5 wt-h6 wt-h7 wt-h8 wt-h9; do bseat $u term_$u task_$u $((H - 2000)); state term_$u working; done
+hrow 4070908800 subagent-start > "$T/ws/wt-h5/.claude/builder-events.jsonl"
+hrow $((H - 10)) subagent-start > "$T/ws/wt-h6/.claude/builder-events.jsonl"
+# wt-h8 quotes a pass's verdict and waits on a helper that stays busy: the expired hold is no finish.
+hrow $((H - 10)) subagent-start > "$T/ws/wt-h8/.claude/builder-events.jsonl"; printf 'Pass 2 is back.\nVERDICT: GO\n' > "$F/verdict-term_wt-h8"
+# wt-h9 printed DONE after a quoted verdict: read-verdict.sh's output ends at the verdict, the session's last line is DONE.
+hrow $((H - 10)) subagent-start > "$T/ws/wt-h9/.claude/builder-events.jsonl"; echo 'VERDICT: GO' > "$F/verdict-term_wt-h9"; echo 'marker=1' > "$F/state-wt-h9"; echo 'tag=seat-builder-88000-9' >> "$S/seat-wt-h9-builder.txt"
+# The helper's own rows are old; the end of its call (an end row names no agent) is recent.
+{ hrow $((H - 1500)) subagent-start; hrow $((H - 1400)) tool-start; jq -nc --argjson t $((H - 30)) --arg u "h$((H - 1400))" '{ts: ($t | todate), event: "tool-end", use: $u, ok: true}'; } \
+  > "$T/ws/wt-h7/.claude/builder-events.jsonl"
+tick $H; for u in wt-h5 wt-h6 wt-h7 wt-h8 wt-h9; do state term_$u "done"; done; tick $((H + 60))
+grep -q 'seat builder on wt-h9 finished' "$T/sends" || fail "a Builder whose last line is DONE after a quoted verdict was held: $(grep wt-h9 "$T/sends")"
+# read-verdict-latest.test.sh runs the real reader with these arguments on a session with no task id.
+grep -q -- '--worktree [^ ]*/wt-h9 --agent claude --launched 88000 --spec seat-builder-88000-9 --marker WT-H9-DONE$' "$F/state-reads" || fail "the DONE read is not the call read-verdict-latest.test.sh checks: $(grep wt-h9 "$F/state-reads")"
+grep -q 'wt-h5 builder stopped without reporting' "$T/sends" || fail "a helper row dated in the future held a stopped Builder"
+[ "$(posts wt-h6)" = 0 ] || fail "a Builder with a fresh helper was posted at once"
+[ "$(posts wt-h7)" = 0 ] || fail "a Builder whose helper's call ended 30 s ago was posted: the end row was not read as the helper's"
+for u in wt-h6 wt-h8; do hrow $((H + 3600)) tool-start >> "$T/ws/$u/.claude/builder-events.jsonl"; done; tick $((H + 3600))
+[ "$(posts wt-h6)" = 0 ] || fail "a Builder held under an hour was posted"
+for u in wt-h6 wt-h8; do hrow $((H + 3660)) tool-start >> "$T/ws/$u/.claude/builder-events.jsonl"; done; tick $((H + 3670))
+grep -q 'wt-h6 builder stopped without reporting' "$T/sends" || fail "a Builder held past an hour by fresh helper rows was never posted"
+grep -q 'wt-h8 builder stopped without reporting' "$T/sends" || fail "an expired hold on a Builder quoting a verdict was not posted as stopped: $(grep wt-h8 "$T/sends")"
 
 echo "PASS main-watch.test.sh"

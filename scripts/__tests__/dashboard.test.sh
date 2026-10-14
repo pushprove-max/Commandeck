@@ -444,6 +444,14 @@ check "the count is null and says why; the rest of the project is there" '[null,
   "$(j "[$P.githubP1, $GE, ($P.sources[\"git-main\"].status == \"fresh\")]")"
 rm -f "$T/gh-slow" "$T/gh.json"
 
+# A Builder ends its turn to wait on a helper or a pass it started (#41): its pane is idle, and it
+# waits on its own job, not on main. Only an idle pane with nothing of its own out waits on main.
+jq -cn --arg a "$WS/u1" '{result: {worktrees: [{path: $a, agents: [{agentType: "claude", state: "idle"}]}]}}' > "$T/orca.json"
+printf '{"ts":"%s","event":"subagent-start","agent_id":"a1","type":"Explore"}\n' "$now_iso" > "$WS/u1/.claude/builder-events.jsonl"
+collect; check "an idle Builder with a helper out is building, not waiting on main" '"building"' "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .stage")"
+printf '{"ts":"%s","event":"subagent-stop","agent_id":"a1","type":"Explore"}\n' "$now_iso" >> "$WS/u1/.claude/builder-events.jsonl"
+collect; check "once the helper finished, the idle Builder waits on main" '"waiting-main"' "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .stage")"
+
 [ "$FAIL" = 0 ] || sed 's/^/  collect: /' "$T/collect.out" | tail -20
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
