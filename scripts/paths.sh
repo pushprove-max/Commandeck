@@ -401,6 +401,30 @@ pp_codex_model() { # <family or model id> [role]
   fi
   printf '%s\n' "$id"
 }
+# pp_pane_of <worktree path> -- the live Claude pane in that worktree, found at
+# the moment of asking: a pane's handle changes each time its session restarts,
+# so a handle saved earlier may name a pane that is gone. Nothing when none is live.
+# Live as live_pane_with_title has it: connected and not orphaned.
+# shortcut: a review pane is told from the seat by its launch title; one that retitled itself is not, when a pane is a reviewer by more than its title, match that.
+pp_pane_of() {
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$1" \
+    'first((.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select(.worktreePath == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
+      | select((.title // "") | test("^(Reviewer|Claude reviewer|Codex reviewer|Luna reviewer|Refuter|Certifier|Judge)\\b") | not) | .handle) // empty' 2>/dev/null
+}
+# pp_seat_pane <seat key> <worktree> -- the live pane of main (key main) or of a
+# Builder (key unit-<unit>): the handle its last session start recorded
+# (inbox-drain.sh), when Orca still lists it live in that worktree. Nothing when
+# the seat is down. A Builder with no record yet has not started: other panes in
+# its worktree (a design co-author) are never taken for it. Only main, alone in
+# its checkout, falls back to pp_pane_of, for a session that began before the record.
+pp_seat_pane() {
+  local h; h=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
+  [ -n "$h" ] || { [ "$1" != main ] || pp_pane_of "$2"; return 0; }
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg h "$h" \
+    'first((.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select(.handle == $h and .worktreePath == $wt and .connected != false and .orphaned != true) | .handle) // empty' 2>/dev/null
+}
 # pp_worktree_new <name> -- a new Orca worktree of this project at
 # $PP_WORKSPACES/<name>, on local main and not Orca's origin/main default. The
 # one place a worktree is created: a Builder's (builder-launch.sh) and the
@@ -419,6 +443,23 @@ pp_worktree_new() {
 # COMMANDECK_CODEX_FAST=false turns it off for one call and no value of it turns it on: set-up's own
 # preflight runs before the new answer is saved, and has checked the tier for that answer itself.
 pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(jq -r '.codexFast // false' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null)" = true ]; }
+# pp_review_loop <key> <default> <regex> -- a review-loop setting setup saved
+# in this project's config (reviewLoop.<key>), as the owner typed it, else the
+# default. A saved value the regex does not take says so on stderr and fails:
+# the file can be edited by hand, and a wrong number must not pass for a setting.
+# COMMANDECK_REVIEW_LOOP: setup's own check reads the answers it is about to save, not the old ones.
+pp_review_loop() {
+  local f=$PP_MAIN/.claude/commandeck.json v src=/dev/stdin
+  # Setup's answers come in on stdin: a <(...) file is closed before the next line could read it.
+  [ -n "${COMMANDECK_REVIEW_LOOP:-}" ] || { [ -e "$f" ] || { echo "$2"; return 0; }; src=$f; }
+  # No config is the defaults; one that cannot be read is no setting, and says so.
+  v=$(jq -r --arg k "$1" '.reviewLoop | if . == null then {} elif type == "object" then . else error("reviewLoop is not an object") end
+    | .[$k] | if . == null then empty else tostring end' "$src" 2>&1 <<<"{\"reviewLoop\": ${COMMANDECK_REVIEW_LOOP:-}}") \
+    || { echo "$f: reviewLoop.$1 cannot be read ($v); answer it again with /commandeck:setup" >&2; return 1; }
+  [ -n "$v" ] || { echo "$2"; return 0; }
+  [[ $v =~ $3 ]] || { echo "$PP_MAIN/.claude/commandeck.json has reviewLoop.$1 = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
+  echo "$v"
+}
 # The tier is the Codex home's own setting: a pass runs on what its config says.
 pp_codex_fast_home() { grep -qE '^[[:space:]]*service_tier[[:space:]]*=[[:space:]]*"fast"' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
 pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has no advisor] -- the resolved seat, as JSON

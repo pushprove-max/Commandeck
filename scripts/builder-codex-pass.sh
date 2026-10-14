@@ -314,8 +314,11 @@ round_files() {
 
 # A first pass is ONE reviewer when the commit it reads is under this many
 # changed lines and main did not launch the build with --risky, else three.
-# The owner's number, not a setting.
-SMALL_BUILD=200
+# The owner's number, asked at setup; 200 when not answered.
+SMALL_BUILD=$(pp_review_loop smallBuild 200 '^[1-9][0-9]*$') || exit 2
+# Whether a closing pass over the whole branch runs (asked at setup): with "no",
+# a narrowed GO that follows the first pass over every commit merges.
+CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 # build_size <worktree> <commit> -- print "<lines changed> <files with no count> <risky>" of the
 # commit against its fork from main: insertions plus deletions, .claude/briefs/
 # left out as the merge leaves it out (collect.py's lines_changed counts the
@@ -498,7 +501,7 @@ if [ "${1:-}" = --verify ]; then
   [ "$BY" = "$(pp_pass)" ] || die "${LAST##*/} is a $BY pass, and the profile in $(pp_routing) reviews with builder-$(pp_pass)-pass.sh"
   # No commit subject is exempt: a commit after the review is unreviewed whatever it is called.
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
-  SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS=""
+  SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
   FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
   for TID in $TIDS; do
@@ -524,7 +527,8 @@ if [ "${1:-}" = --verify ]; then
       fix) NOW="narrowed pass" RULE="P2 tail"
         FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true)
         ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}) found a P0 or P1: only a tail of P2 and P3 merges without a closing GO. Fix it, then run the closing pass: builder-$BY-pass.sh $UNIT <N> final"
-        [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || [ -n "$FOUND" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
+        [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || NOT_GO=1
+        [ -z "$NOT_GO" ] || [ -n "$FOUND" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
         LEFT+=${FOUND:+$FOUND$'\n'} STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
       *) die "$NAME $TID (${LAST##*/}) is not a pass of builder-codex-pass.sh" ;;
     esac
@@ -594,20 +598,30 @@ if [ "${1:-}" = --verify ]; then
     AGAIN="Run the closing pass: builder-$BY-pass.sh $UNIT <N> final"
     found_by() { awk -v t="$1" '$1 == "@" { on = ($2 == t); next } on' <<<"$PASSES"; }
     read -r C_ENDED C_TID COVERED C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $9, $11 }' <<<"$PASSES" | sort | tail -1)"
-    [ -n "${C_TID:-}" ] || die "${LAST##*/} is a narrowed pass with no closing pass before it: it read only the changes since the pass before it, and its GO merges nothing. $AGAIN"
-    [ "$C_SAID" != none ] || die "the reviewer's record of the closing pass (thread $C_TID) holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
-    [ "$C_SAID" = NO-GO ] || die "the closing pass ($NAME $C_TID) ended GO and commits came after it: a narrowed pass over them merges nothing. $AGAIN"
-    FOUND=$(found_by "$C_TID")
-    [ -n "$FOUND" ] || die "the closing pass ($NAME $C_TID) ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. $AGAIN"
-    ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the closing pass ($NAME $C_TID) found a P0 or P1: only a closing pass that left P2 and P3 alone can be followed by narrowed passes. $AGAIN"
+    ANCHOR="closing pass" NOCLOSE=""
+    if [ -z "${C_TID:-}" ] && [ "$CLOSING" = no ]; then
+      # The owner chose no closing pass at setup: the last first pass anchors the chain instead, and
+      # the narrowed pass under merge must end GO. It was handed every earlier finding (checked above),
+      # so a P0 or P1 an earlier narrowed pass found is cleared by its GO, as a closing GO clears one.
+      ANCHOR="first pass" NOCLOSE=1 AGAIN="Fix it, then run another narrowed pass: builder-$BY-pass.sh $UNIT <N> review"
+      [ -z "$NOT_GO" ] || die "${LAST##*/} ended NO-GO, and this project runs no closing pass (reviewLoop.closingPass): only a narrowed pass that ends GO merges. $AGAIN"
+      read -r C_ENDED C_TID COVERED _ <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9 }' <<<"$PASSES" | sort | tail -1)"
+    else
+      [ -n "${C_TID:-}" ] || die "${LAST##*/} is a narrowed pass with no closing pass before it: it read only the changes since the pass before it, and its GO merges nothing. $AGAIN"
+      [ "$C_SAID" != none ] || die "the reviewer's record of the closing pass (thread $C_TID) holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
+      [ "$C_SAID" = NO-GO ] || die "the closing pass ($NAME $C_TID) ended GO and commits came after it: a narrowed pass over them merges nothing. $AGAIN"
+      FOUND=$(found_by "$C_TID")
+      [ -n "$FOUND" ] || die "the closing pass ($NAME $C_TID) ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. $AGAIN"
+      ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the closing pass ($NAME $C_TID) found a P0 or P1: only a closing pass that left P2 and P3 alone can be followed by narrowed passes. $AGAIN"
+    fi
     # Each pass after the closing one, oldest first, then the pass under merge.
     AFTER=$(awk -v c="$C_ENDED" '$1 == "@" && $8 > c { print $8, $2, $3, $9, $10, $11 }' <<<"$PASSES" | sort)
     while read -r _ TID READ WAS_READ SINCE SAID; do
       [ -n "$TID" ] || continue
-      [ "$READ" = fix ] || die "a whole-branch pass ($NAME $TID) ran after the closing pass $C_TID and is not the pass under merge. $AGAIN"
+      [ "$READ" = fix ] || die "a whole-branch pass ($NAME $TID) ran after the $ANCHOR $C_TID and is not the pass under merge. $AGAIN"
       [ "$SAID" != none ] || die "the reviewer's record of the narrowed pass $TID holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
       FOUND=$(found_by "$TID")
-      ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the narrowed pass $TID, after the closing pass $C_TID, found a P0 or P1: a later narrowed GO does not clear it. $AGAIN"
+      [ -n "$NOCLOSE" ] || ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the narrowed pass $TID, after the closing pass $C_TID, found a P0 or P1: a later narrowed GO does not clear it. $AGAIN"
       [ "$SAID" = GO ] || [ -n "$FOUND" ] || die "the narrowed pass $TID ended NO-GO and names no finding with a severity, so what it left open cannot be read. $AGAIN"
       STEPS="$TID $WAS_READ $SINCE"$'\n'$STEPS
     done <<<"$(sort -r <<<"$AFTER")"
@@ -615,9 +629,14 @@ if [ "${1:-}" = --verify ]; then
       [ -n "$TID" ] || continue
       # A narrowed range may start at or before the last commit read, never after it, and must end at or after it.
       git -C "$WT" merge-base --is-ancestor "$SINCE" "$COVERED" 2>/dev/null && git -C "$WT" merge-base --is-ancestor "$COVERED" "$WAS_READ" 2>/dev/null \
-        || die "no pass read the commits between $COVERED and where the narrowed pass $TID began ($SINCE): every commit after the closing pass $C_TID must be read. $AGAIN"
+        || die "no pass read the commits between $COVERED and where the narrowed pass $TID began ($SINCE): every commit after the $ANCHOR $C_TID must be read. $AGAIN"
       COVERED=$WAS_READ
     done <<<"$STEPS"
+    if [ -n "$NOCLOSE" ]; then
+      echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
+      [ -n "$LEFT" ] && sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" || echo "Nothing open at merge: the last narrowed pass ended GO and named no finding"
+      exit 0
+    fi
     echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $C_TID) left P2/P3 only and narrowed passes read every commit after it, the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
     # What merges open, by Codex's record: the merge cannot read the Builder's DONE report.
     # One "Open at merge:" line per finding and no other line with those words: the merge counts them.
@@ -687,6 +706,9 @@ ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
 UNIT=${1:?usage: builder-$BY-pass.sh <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
+MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
+[ -z "$MAX_ROUNDS" ] || [ "$N" -le "$MAX_ROUNDS" ] \
+  || die "round $N is over the $MAX_ROUNDS rounds this project allows (reviewLoop.maxRounds, chosen at setup; the round is the N a pass is given, so a pass that failed still used its number). Run no more passes: report to main what is still open"
 case $KIND in adversarial) FOCI=("${ANGLES[@]}") ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"

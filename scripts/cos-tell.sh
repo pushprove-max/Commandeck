@@ -5,8 +5,7 @@
 # The pane is found by its worktree, not a saved handle: handles change on restart.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
-HANDLE=$(orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$PP_WORKSPACES/Chief-of-Staff" \
-  'first((.result | if type == "array" then . else (.terminals // []) end)[]? | select(.worktreePath == $wt and .agentIdentity == "claude") | .handle) // empty' 2>/dev/null)
+HANDLE=$(pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")
 [ -n "$HANDLE" ] || { echo "Chief of Staff pane not found (no claude pane in $PP_WORKSPACES/Chief-of-Staff)" >&2; exit 1; }
 [ "${1:-}" != --handle ] || { echo "$HANDLE"; exit 0; }
 TEXT=${*:-$(cat)}

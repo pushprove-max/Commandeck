@@ -42,7 +42,7 @@ measure() { # role
     # A hook that fails has no size: 0 bytes from it would pass the line it was never held to.
     rc=0
     (cd "$dir" && jq -cn --arg e "$EVENT" --arg d "$dir" '{hook_event_name: $e, source: "startup", prompt: "status?", session_id: "startup-size", cwd: $d}' \
-      | CLAUDE_PROJECT_DIR=$ROOT COMMANDECK_BUILDER=$builder COMMANDECK_HOOK_FIRE_LOG=/dev/null COMMANDECK_RULING_LOG=$T/rulings.jsonl COMMANDECK_AWARENESS_DIR=$T/awareness-$1 \
+      | CLAUDE_PROJECT_DIR=$ROOT COMMANDECK_BUILDER=$builder COMMANDECK_HOOK_FIRE_LOG=/dev/null COMMANDECK_RULING_LOG=$T/rulings.jsonl COMMANDECK_AWARENESS_DIR=$T/awareness-$1 COMMANDECK_SCRATCH=$T/scratch-$1 COMMANDECK_MEASURE=1 \
         bash -c "$cmd" >"$T/out" 2>/dev/null) || rc=$?
     [ "$rc" = 0 ] || { echo "startup-size: $name failed as $1 (exit $rc), so its size is not known" >&2; over=1; }
     bytes=$(wc -c <"$T/out" | tr -d ' ')

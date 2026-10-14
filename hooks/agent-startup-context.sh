@@ -13,6 +13,10 @@
 [ -t 0 ] || IFS= read -r -d '' INPUT
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "${INPUT-}" SessionStart
 PLUGIN=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
+# The paths printed below ride into checkpoints and outlive this session, and the
+# plugin's own folder is versioned: an update leaves them naming the old one. So
+# they name setup's stable link to it whenever that link points here.
+[ "$(readlink -f "$HOME/.commandeck/plugin" 2>/dev/null)" != "$(readlink -f "$PLUGIN")" ] || PLUGIN=$HOME/.commandeck/plugin
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -z "$REPO_ROOT" ] && exit 0
 
@@ -64,6 +68,9 @@ fi
 # The plugin's files and messages name its own files as scripts/..., hooks/...
 # and templates/...; a session runs in the project, where none of them is.
 echo "# Commandeck plugin folder: $PLUGIN. A path that starts scripts/, hooks/ or templates/ in the plugin's files and messages is under it, not in this project."
+# Main and a Builder restart under a new handle: what was sent while the seat was down comes first (to-main.sh queues it).
+if [ "$MAIN" = 1 ]; then timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" main 2>/dev/null
+elif [ "$LINKED" = 1 ] && [ "${COMMANDECK_BUILDER:-}" = 1 ]; then timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" --unit "${TOP##*/}" 2>/dev/null; fi
 
 # Codex cuts hook output past ~10K bytes out of the middle, so a Codex seat
 # reads the file itself, once, as its first step.
@@ -80,7 +87,7 @@ elif [ "$COS" = 1 ]; then
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-inbox.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: main's messages for you or the owner. A turn may not end without it running.
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/decision.sh answer <id> '<answer>'\` and append its printed \`seen\` value to ${COS_STATE%.md}.decisions-seen
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-alerts.sh\` and \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-limit.sh\`: dashboard alerts and the 7-day limit. Tell the owner, then append the alert id to ${COS_STATE%.md}.alerts-seen
-# To main: \`orca-ide orchestration send --to <main's handle>\` with the owner's answer verbatim; find the handle with \`orca-ide terminal list\`, by the main checkout's path.
+# To main: \`bash $(printf '%q' "$PLUGIN")/scripts/to-main.sh question '<subject>' '<the owner's answer verbatim>'\`. It finds main's live pane itself; "message queued" means main is down and sees it first when it starts.
 EOF
   if [ -f "$COS_STATE" ]; then
     echo

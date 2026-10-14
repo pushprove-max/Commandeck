@@ -68,6 +68,17 @@ check "without setsid the detached helper still runs and opens a new pane" "yes"
   "$(grep -q '^terminal create' "$BOX/calls" && echo yes || echo no)"
 check "a started helper leaves the restarted marker" "yes" \
   "$([ -e "$CPD/sid.md.restarted" ] && echo yes || echo no)"
+# /handoff: the owner sees the new main confirm it took over, or this pane says why it did not.
+check "the new main's first line to the owner confirms the handoff and names the old pane" 1 \
+  "$(grep '^terminal send --terminal new-pane' "$BOX/calls" | grep -c 'first line to the owner is: Handoff done: .*old pane old-pane closes now')"
+prompt_line() { (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","prompt":"hi"}' "$BOX/transcript.jsonl" \
+  | env -i PATH="$BOX/bin" HOME="$BOX/home" ORCA_TERMINAL_HANDLE=old-pane bash "$ROOT/hooks/context-line.sh" 2>/dev/null); }
+check "a spent handoff leaves no line at the next prompt" "" "$(prompt_line)"
+touch "$CPD/sid.handoff"
+echo "2026-10-14T10:00:00 restart: terminal create failed; old pane old-pane left up, next stop retries" >> "$CPD/clear-hook.log"
+check "one that did not finish says so at the next prompt, with the helper's reason" 1 \
+  "$(prompt_line | grep -c '^HANDOFF NOT DONE: this pane is still main\. .*terminal create failed; old pane old-pane left up')"
+rm -f "$CPD/sid.handoff"
 
 # Carry-over: a resumed main's next checkpoint must keep, or explicitly
 # close, every open item of the checkpoint it resumed from. A restart that

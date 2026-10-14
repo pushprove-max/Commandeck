@@ -29,5 +29,13 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh" 2>&1 || true
    Older open items are carried by a `Carries open items of: <file>` line,
    never copied. Under 5KB.
 3. `touch ~/.claude/checkpoints/<session id>.handoff`
-4. End the turn. Do not type `/clear`. The Stop hook opens a fresh main pane,
-   closes finished panes, types the resume prompt there, and closes this pane.
+4. Tell the owner, in one line: "Handing off: a new main pane opens when this
+   turn ends, says 'Handoff done' first, and this pane closes once it has
+   taken over." Then end the turn. Do not type `/clear`, and never open a
+   main pane yourself: the plugin's guard refuses a hand-made one, and the
+   Stop hook is the one supported way. It opens the fresh main pane, types the
+   resume prompt there, and closes this pane only after the new one has taken
+   it; a step that fails leaves this pane up as main.
+5. If this pane is still here at the owner's next prompt, the restart did not
+   finish: a `HANDOFF NOT DONE` line names why. Read it to the owner, fix
+   what it names (most often the checkpoint), and end the turn to try again.

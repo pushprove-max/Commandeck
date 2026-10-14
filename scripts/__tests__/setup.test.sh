@@ -39,6 +39,17 @@ check "and it says never to write its name in a comment" '1:0' \
   "$(grep -c 'Never write "ponytail" in a comment' "$HOME/.claude/skills/ponytail/SKILL.md"):$(grep -c '`ponytail:` comment' "$HOME/.claude/skills/ponytail/SKILL.md")"
 check "setup says it left the status line alone and how to set one" 1 "$(grep -c '^Status line: left as it is (.*other.sh.*setup.sh --status-line' "$T/out")"
 
+# --- the default Builder: Opus at effort high, no advisor, a risky build included (owner's default) ---
+builder_seat() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR PATH="$BIN:$PATH" bash -c '. "$0" && pp_route_json builder | jq -c "[.model, .effort, .advisor]"' "$PLUGIN/scripts/paths.sh"); }
+check "the default Builder is Opus at effort high with no advisor" '["opus","high",null]' "$(builder_seat)"
+printf '## The issues\n1. #1: toy\n' > "$T/batch.md"
+run "$PROJ" builder-launch.sh --dry-run --risky toy-unit "$T/batch.md" >"$T/brief" 2>"$T/err"
+check "a risky launch gets no advisor either, and says so" '1:0' "$(grep -c '^advisor: none' "$T/err"):$(grep -c 'advisor consult' "$T/brief")"
+check "and its brief keeps the design check" 1 "$(grep -c '^## Design check' "$T/brief")"
+echo "review this" > "$T/spec.md"; mkdir -p "$HOME/orca/workspaces/proj/seat-unit"
+run "$PROJ" seat.sh launch claude-reviewer seat-unit "$T/spec.md" >"$T/out" 2>&1
+check "a headless role is still refused as a pane seat" "2:1" "$?:$(grep -c 'is not a pane seat' "$T/out")"
+
 # --- the manifest names every changed path, with what was there before ---
 AFTER=$(snap)
 NAMED=$(jq -r '.entries | keys[]' "$MF"/*.json | sort -u)
@@ -62,12 +73,57 @@ check "the project's own permissions and hooks are kept" '["Bash(make:*)","./own
 check "the plugin's permissions are added to the project (project scope)" true "$(jq '.permissions.allow | any(contains("orca-ide"))' "$PROJ/.claude/settings.json")"
 check "the machine's settings are not touched in project scope" "$(grep ' home/.claude/settings.json$' <<<"$BEFORE")" "$(grep ' home/.claude/settings.json$' <<<"$AFTER")"
 
+# A path a session prints rides into its checkpoint and outlives an update: it names the stable link, not the versioned folder.
+check "setup links ~/.commandeck/plugin to the plugin" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"
+check "a session's startup context names the plugin by that link" 1 \
+  "$(cd "$PROJ" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN PATH="$BIN:$PATH" bash "$PLUGIN/hooks/agent-startup-context.sh" </dev/null 2>/dev/null | grep -c "^# Commandeck plugin folder: $HOME/.commandeck/plugin\. ")"
+
+# --- the review loop: an owner who takes every default sees no change; numbers are saved as typed ---
+check "with every default taken the config holds no review-loop setting" false "$(jq 'has("reviewLoop")' "$CFG")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --max-rounds six >"$T/out" 2>&1
+check "a round cap that is not a whole number is refused, and nothing is saved" "1:false" "$?:$(jq 'has("reviewLoop")' "$CFG")"
+
 # --- a second run adds nothing twice and keeps the first run's record ---
-run "$PROJ" setup.sh "${ANSWERS[@]}" --name Grace >"$T/out" 2>&1; check "a second setup succeeds" 0 $?
+PLUGIN_DIR=$HOME/.commandeck/plugin run "$PROJ" setup.sh "${ANSWERS[@]}" --name Grace --max-rounds 6 --closing-pass no --small-build 150 --max-review-min 45.50 --max-test-percent 40 --max-usd 25 >"$T/out" 2>&1; check "a second setup succeeds" 0 $?
 check "the new answer is taken" Grace "$(jq -r '.chiefOfStaff.name' "$CFG")"
+check "setup run through the stable link keeps the link on the plugin" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"
+run "$PROJ" update.sh >"$T/out" 2>&1; check "an update with the link recorded succeeds" 0 $?
+check "and keeps the link" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"
+check "the review-loop answers are saved as typed" '{"maxRounds":"6","closingPass":"no","smallBuild":"150","maxReviewMinutes":"45.50","maxTestPercent":"40","maxUsd":"25"}' "$(jq -c '.reviewLoop' "$CFG")"
+run "$PROJ" builder-launch.sh --dry-run toy-unit "$T/batch.md" >"$T/brief" 2>"$T/err"
+check "a Builder's brief carries them: the small-build line, the round cap, no closing pass" '1:1:1' \
+  "$(grep -c 'under 150 changed lines' "$T/brief"):$(grep -c 'at most 6 rounds' "$T/brief"):$(grep -c 'This project runs no closing pass' "$T/brief")"
+check "the build review flags at the saved thresholds" '[45.5, 0.4, 25.0]' \
+  "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import collect; print(list(collect.loop_limits(sys.argv[2])))' "$PLUGIN/skills/worktreereview/scripts" "$PROJ")"
 check "still five Codex entries" 5 "$(ours)"
 check "still one block in the instruction file" 1 "$(grep -c '^<!-- commandeck:begin -->$' "$PROJ/AGENTS.md")"
 check "the manifest still records what was there before the first run" 'did not exist' "$(jq -r --arg p "$CFG" '.entries[$p].prior' "$(mf "$PROJ")")"
+
+# --- the global CLAUDE.md template and the rules: offered, never written over the owner's file unasked ---
+G=$HOME/.claude/CLAUDE.md
+printf '# Mine\n\nKeep it short.\n' > "$G"
+# A saved setting the loop refuses is repaired by answering again: setup's own check reads the new answers.
+jq '.reviewLoop.smallBuild = "lots"' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+run "$PROJ" setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1
+check "a saved setting the loop refuses, not answered again, fails setup and names it" "1:1" "$?:$(grep -c 'reviewLoop.smallBuild = "lots"' "$T/out")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude install --global-rules install --max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd '' >"$T/out" 2>&1; check "install over an existing file succeeds" 0 $?
+check "the review-loop answers taken back to the defaults leave no setting" false "$(jq 'has("reviewLoop")' "$CFG")"
+check "and leaves the owner's file exactly as it was, saying how to add a block" '# Mine||Keep it short.|2' \
+  "$(paste -sd'|' - < "$G")|$(grep -c "^global .*: $G exists, left as it is; to add it as a marked block: --global-.* block$" "$T/out")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude block --global-rules block >"$T/out" 2>&1; check "adding both as blocks succeeds" 0 $?
+run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude block --global-rules block >"$T/out" 2>&1
+check "a second run replaces its blocks: one of each, the owner's text first" '1:1:1' \
+  "$(grep -c '^<!-- commandeck:claude-md:begin -->$' "$G"):$(grep -c '^<!-- commandeck:rules:begin -->$' "$G"):$(head -1 "$G" | grep -c '^# Mine$')"
+check "the blocks hold the shipped templates" '1:1' "$(grep -c '^## Rule 12 - Fail loud$' "$G"):$(grep -c '^- "Create a PR" is a request' "$G")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --global-rules skip >"$T/out" 2>&1
+check "skip changes nothing already there" 1 "$(grep -c '^<!-- commandeck:rules:begin -->$' "$G")"
+run "$PROJ" uninstall.sh >"$T/out" 2>&1; check "uninstall succeeds" 0 $?
+check "uninstall takes out only the plugin's blocks" '# Mine||Keep it short.' "$(paste -sd'|' - < "$G")"
+rm "$G"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude install --global-rules install >"$T/out" 2>&1; check "install with no file succeeds" 0 $?
+check "it creates the file with both blocks" '1:1' "$(grep -c '^<!-- commandeck:claude-md:end -->$' "$G"):$(grep -c '^<!-- commandeck:rules:end -->$' "$G")"
+run "$PROJ" uninstall.sh >/dev/null 2>&1
+check "and uninstall removes the file it created" no "$([ -e "$G" ] && echo yes || echo no)"
 
 [ "$FAIL" = 0 ] || { echo "--- last output"; tail -15 "$T/out"; }
 done_tests

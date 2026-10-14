@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.4-111111?style=flat-square" alt="Version 0.4.4">
+  <img src="https://img.shields.io/badge/version-0.4.5-111111?style=flat-square" alt="Version 0.4.5">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -108,7 +108,10 @@ line to run.
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Chief of Staff | a name and one line on how the relay pane should sound, or none |
 | Codex fast | off (the default) or on. On, the Codex review passes run on the fast tier, which costs more per token; off, they are held to the normal tier whatever your Codex config says |
-| Builder model | Opus advised by Fable (the default), Sonnet advised by Opus for less usage, Opus advised by Opus, or any of them with no advisor |
+| Builder model | Opus at effort high with no advisor (the default, a risky build included), Sonnet advised by Opus for less usage, or Opus advised by Opus |
+| Global CLAUDE.md | skip, install (writes `~/.claude/CLAUDE.md` only when there is none) or add block (a marked block in your own file); the plugin's general working rules, code exploration and root-cause rules |
+| Global rules | the same three choices for the plugin's working, review, agent and test rules; uninstall takes out only the plugin's blocks |
+| Review loop | the most review rounds a build may run (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits, $30). Numbers are saved as typed; taking every default saves nothing |
 
 Setup also creates the project's Orca run, or prints the one command for it,
 and ends with the list of project files it created or changed and which of
@@ -181,7 +184,7 @@ merges nothing.
 ## Review passes
 
 A build's first pass reads the whole branch. It is three reviewers at once,
-one angle each, unless the commit is under 200 changed lines (insertions plus
+one angle each, unless the commit is under 200 changed lines, or the number set at setup (insertions plus
 deletions against `main`) and the build was not launched with `--risky`; then
 it is one reviewer told all three angles. The pass prints which rule chose,
 and the merge counts the lines again and refuses a one-reviewer first pass
@@ -190,7 +193,10 @@ the rule did not allow.
 After that come narrowed passes, each reading only the changes since the last
 one, until one ends `VERDICT: GO`. A closing pass then reads the whole branch
 again. If the first pass ends GO and nothing is committed after it, that GO
-merges and no closing pass is needed.
+merges and no closing pass is needed. A project that answered "none" to the
+closing pass at setup merges the narrowed pass that ends GO, once narrowed
+passes have read every commit after the first pass; one that set a round cap
+has any pass numbered above it refused.
 
 Findings are graded P0 to P3. A P0 or P1 refuses the merge. A closing pass
 that leaves only P2 or P3 findings still merges: the merge prints each one as
@@ -200,8 +206,8 @@ stands, the output lists what was not filed, and the exit code is 4.
 A launch with `--risky` opens a design pane first. It writes a design note
 that the Builder reads before it builds; running the same command again opens
 the Builder. A launch with `--small` says the batch is expected under 200
-changed lines, and that Builder runs without its advisor unless the launch is
-also `--risky`. `--model <alias> --reason '<one line>'` puts one launch on
+changed lines, and that Builder runs without the advisor a project chose at
+setup; `--risky` adds no advisor. `--model <alias> --reason '<one line>'` puts one launch on
 another allowed model.
 
 `scripts/merge-queue.sh <unit> ...` merges several finished units in the
@@ -360,6 +366,14 @@ goal, the live units, what it is waiting on, the queue, what was ruled out
 and how to resume. `scripts/state-snapshot.sh` fills in the mechanical
 fields. With a checkpoint under 30 minutes old the hook restarts the
 orchestrator in a fresh Orca pane and closes the old one.
+
+Claude Code (2.1.299 and later) compacts an idle session by itself: past
+200K tokens and about 54 idle minutes (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`
+moves the line). That suits the relay and Builder panes, and the plugin
+ships no compactor of its own. The orchestrator restarts at the clear line
+before it can sit idle that large; if a restart fails, it can still be
+compacted, unless `"idleCompaction": false` is in the main checkout's
+`.claude/settings.local.json`.
 
 The new session starts with that checkpoint, the board, its run binding and
 your last eight prompts word for word already in context, under the same

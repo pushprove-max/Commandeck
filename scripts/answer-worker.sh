@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# answer-worker.sh <terminal-handle> <text> -- main's one way to answer a
+# answer-worker.sh <terminal-handle|unit> <text> -- main's one way to answer a
 # worker's question.
+#
+# A unit name finds its Builder's pane at send time: a restart gives the pane a
+# new handle. With no live pane the answer is queued and shown first when the
+# Builder starts again (to-main.sh --unit); that still exits 1, as not delivered.
 #
 # A worker that asked main either waits on its inbox (`orchestration check
 # --wait`) or has ended its turn. An inbox message ends the wait at once, but a
@@ -14,8 +18,14 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/codex-helpers.sh"
-H=${1:?usage: answer-worker.sh <terminal-handle> <text>}; H=${H#terminal:}
-TEXT=${2:?usage: answer-worker.sh <terminal-handle> <text>}
+H=${1:?usage: answer-worker.sh <terminal-handle|unit> <text>}; H=${H#terminal:}
+TEXT=${2:?usage: answer-worker.sh <terminal-handle|unit> <text>}
+if [ -d "$PP_WORKSPACES/$H" ]; then
+  U=$H; H=$(pp_seat_pane "unit-$U" "$PP_WORKSPACES/$U")
+  [ -n "$H" ] || { bash "$HERE/to-main.sh" --unit "$U" status "answer from main" "$TEXT" 2>/dev/null
+    [ $? = 3 ] && echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2 \
+      || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }
+fi
 WAIT=${ANSWER_WORKER_WAIT:-60}
 # The tag is what is looked for in the log: the text itself may be re-wrapped.
 TAG="answer-$(date +%s)-$$"
@@ -24,7 +34,7 @@ MSG="[$TAG] $TEXT"
 TS=$(timeout 8 orca-ide terminal list --json 2>/dev/null) && PS=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) \
   || { echo "answer-worker: Orca's pane lists cannot be read; nothing was sent to $H" >&2; exit 1; }
 WT=$(pane_worktree_of "$TS" "$PS" "$H")
-[ -n "$WT" ] || { echo "answer-worker: no agent pane $H in Orca's worktree list; nothing was sent" >&2; exit 1; }
+[ -n "$WT" ] || { echo "answer-worker: no agent pane $H in Orca's worktree list; nothing was sent. A restarted pane has a new handle: pass the unit name instead" >&2; exit 1; }
 # The pane's log is looked up by worktree and kind: a Builder's Codex reviewer writes its own log in the same worktree.
 KIND=$(pane_kind_of "$TS" "$PS" "$H")
 [ -n "$KIND" ] || { echo "answer-worker: Orca does not say whether $H is a Claude or a Codex pane, so its session log cannot be picked; nothing was sent" >&2; exit 1; }

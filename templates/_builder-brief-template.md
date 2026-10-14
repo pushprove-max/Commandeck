@@ -48,7 +48,7 @@ merge refuses a round file the script did not write, or one older than the tip.
 
 1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
    the first pass and one pass: three reviewers at once, or one when the build
-   is under 200 changed lines and main did not launch it with `--risky` (the
+   is under {small-build} changed lines and main did not launch it with `--risky` (the
    pass prints which); fix everything it finds together.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass. Fix and repeat until one
@@ -63,7 +63,7 @@ merge refuses a round file the script did not write, or one older than the tip.
    that narrowed pass: fix it and run the closing pass again. If you fix none
    of them, commit nothing after the closing pass: the merge takes that tip
    too, and prints each P2 and P3 as open.
-
+{loop-rules}
 When a pass reports a bug, look for the same kind of bug nearby and fix
 the whole class before the next pass. Say in the evidence file what you checked.
 When a reviewer finds a way round a guard, list the other ways round the same guard

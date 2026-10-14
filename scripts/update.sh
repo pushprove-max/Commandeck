@@ -32,12 +32,15 @@ mapfile -t PATHS < <(jq -r '.entries | to_entries[] | select(.value.kind != "dir
 # A link to a file not made yet is the owner's: setup writes through it, and
 # the way back removes what it wrote and leaves the link.
 for i in "${!PATHS[@]}"; do
-  if [ -e "${PATHS[$i]}" ]; then cp -p "${PATHS[$i]}" "$KEEP/$i"; elif [ -L "${PATHS[$i]}" ]; then : > "$KEEP/$i.link"; fi
+  # A link to a folder (the stable plugin link) is kept as the link: cp would copy the folder.
+  if [ -L "${PATHS[$i]}" ] && [ -d "${PATHS[$i]}" ]; then readlink "${PATHS[$i]}" > "$KEEP/$i.dirlink"
+  elif [ -e "${PATHS[$i]}" ]; then cp -p "${PATHS[$i]}" "$KEEP/$i"; elif [ -L "${PATHS[$i]}" ]; then : > "$KEEP/$i.link"; fi
 done
 back() {
   for i in "${!PATHS[@]}"; do
     # A file kept read-only refuses the copy; it gets its mode back from the copy.
-    if [ -e "$KEEP/$i" ]; then [ ! -e "${PATHS[$i]}" ] || [ -w "${PATHS[$i]}" ] || chmod u+w "${PATHS[$i]}"; cp -p "$KEEP/$i" "${PATHS[$i]}"
+    if [ -e "$KEEP/$i.dirlink" ]; then ln -sfn "$(cat "$KEEP/$i.dirlink")" "${PATHS[$i]}"
+    elif [ -e "$KEEP/$i" ]; then [ ! -e "${PATHS[$i]}" ] || [ -w "${PATHS[$i]}" ] || chmod u+w "${PATHS[$i]}"; cp -p "$KEEP/$i" "${PATHS[$i]}"
     elif [ -e "$KEEP/$i.link" ]; then [ ! -e "${PATHS[$i]}" ] || rm -f "$(readlink -f "${PATHS[$i]}")"
     else rm -f "${PATHS[$i]}"; fi
   done

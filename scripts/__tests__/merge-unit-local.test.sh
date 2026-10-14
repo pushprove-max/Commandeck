@@ -149,5 +149,61 @@ AFTER=$(head_main)
 check "a merge that would overwrite an ignored local file is refused" 1 "$(merge envu)"
 check "the owner's ignored file is as it was, main did not move, and the file is named" "mine|$AFTER|1" \
   "$(cat "$REPO/secret.env" 2>/dev/null)|$(head_main)|$(grep -c 'the branch adds secret.env' "$TMP/out")"
+
+# The review loop the owner chose at setup (reviewLoop in the project config).
+# With no closing pass, a narrowed GO merges once narrowed passes read every
+# commit after the first pass; the default still asks for the closing pass.
+jq -n '{}' > "$REPO/.claude/commandeck.json"
+mk nofin
+STUB_REPLY=$'- [P1] a blocker -- nofin.txt:1\nVERDICT: NO-GO' pass nofin 1 adversarial
+echo fixed > "$TMP/ws/nofin/nofin.txt"; git -C "$TMP/ws/nofin" commit -qam "fix(nofin): the blocker"
+pass nofin 2 review
+AFTER=$(head_main)
+check "by default a narrowed GO with no closing pass is refused" "1|$AFTER" "$(merge nofin)|$(head_main)"
+jq -n '{reviewLoop: {closingPass: "no"}}' > "$REPO/.claude/commandeck.json"
+check "with no closing pass chosen, the same narrowed GO merges" 0 "$(merge nofin)"
+check "under its own rule" 1 "$(grep -c 'rule: no closing pass' "$TMP/out")"
+mk nofin2
+STUB_REPLY=$'- [P1] a blocker -- nofin2.txt:1\nVERDICT: NO-GO' pass nofin2 1 adversarial
+echo fixed > "$TMP/ws/nofin2/nofin2.txt"; git -C "$TMP/ws/nofin2" commit -qam "fix(nofin2): one"
+pass nofin2 2 review
+echo again > "$TMP/ws/nofin2/nofin2.txt"; git -C "$TMP/ws/nofin2" commit -qam "fix(nofin2): unreviewed"
+check "with no closing pass, a commit after the last narrowed pass is still refused" 1 "$(merge nofin2)"
+jq -n '{reviewLoop: {closingPass: "no"}}' > "$REPO/.claude/commandeck.json"
+mk nofin3
+STUB_REPLY=$'- [P1] a blocker -- nofin3.txt:1\nVERDICT: NO-GO' pass nofin3 1 adversarial
+echo one > "$TMP/ws/nofin3/nofin3.txt"; git -C "$TMP/ws/nofin3" commit -qam "fix(nofin3): one"
+STUB_REPLY=$'- [P1] still broken -- nofin3.txt:1\nVERDICT: NO-GO' pass nofin3 2 review
+check "with no closing pass, a narrowed pass that ends NO-GO does not merge" 1 "$(merge nofin3)"
+echo two > "$TMP/ws/nofin3/nofin3.txt"; git -C "$TMP/ws/nofin3" commit -qam "fix(nofin3): two"
+pass nofin3 3 review
+check "and the narrowed GO that was handed its finding does" 0 "$(merge nofin3)"
+mk cap
+jq -n '{reviewLoop: {maxRounds: "2"}}' > "$REPO/.claude/commandeck.json"
+STUB_REPLY=$'- [P1] a blocker -- cap.txt:1\nVERDICT: NO-GO' pass cap 1 adversarial
+(cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-3 \
+  bash "$PASS_SH" cap 3 review >/dev/null 2>"$TMP/pass.err"); RC=$?
+check "a pass over the project's round cap is refused, and says so" "2:1" "$RC:$(grep -c 'round 3 is over the 2 rounds this project allows' "$TMP/pass.err")"
+jq -n '{reviewLoop: {smallBuild: "lots"}}' > "$REPO/.claude/commandeck.json"
+(cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-2 \
+  bash "$PASS_SH" cap 2 review >/dev/null 2>"$TMP/pass.err"); RC=$?
+check "a saved setting that is not a number stops the pass, naming the key" "2:1" "$RC:$(grep -c 'reviewLoop.smallBuild' "$TMP/pass.err")"
+jq -n '{reviewLoop: {maxRounds: false}}' > "$REPO/.claude/commandeck.json"
+(cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-2 \
+  bash "$PASS_SH" cap 2 review >/dev/null 2>"$TMP/pass.err"); RC=$?
+check "a round cap saved as false is no cap: it stops the pass, naming the key" "2:1" "$RC:$(grep -c 'reviewLoop.maxRounds = "false"' "$TMP/pass.err")"
+jq -n '{reviewLoop: false}' > "$REPO/.claude/commandeck.json"
+(cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-2 \
+  bash "$PASS_SH" cap 2 review >/dev/null 2>"$TMP/pass.err"); RC=$?
+check "a review loop saved as false is no setting: it stops the pass" "2:1" "$RC:$(grep -c 'reviewLoop' "$TMP/pass.err")"
+check "and stops the build review" 1 \
+  "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import collect
+try: collect.loop_limits(sys.argv[2])
+except SystemExit as e: print(int("reviewLoop" in str(e)))' "$REAL/skills/worktreereview/scripts" "$REPO")"
+jq -n '{reviewLoop: {maxReviewMinutes: "NaN"}}' > "$REPO/.claude/commandeck.json"
+check "a threshold that is not a finite number stops the build review" 1 \
+  "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import collect
+try: collect.loop_limits(sys.argv[2])
+except SystemExit as e: print(int("reviewLoop" in str(e)))' "$REAL/skills/worktreereview/scripts" "$REPO")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

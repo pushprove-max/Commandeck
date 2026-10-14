@@ -17,7 +17,11 @@
 IL_DIR=$HOME/.commandeck/install
 IL_PROJECT=$IL_DIR/$PP_MAIN_SLUG.json
 IL_MACHINE=$IL_DIR/_machine.json
-IL_ROOT=$(cd "$PP_SCRIPTS/.." && pwd)
+# The real folder, not the stable link: setup run through the link would point the link at itself.
+IL_ROOT=$(cd "$PP_SCRIPTS/.." && pwd -P)
+# A path that outlives a session (a checkpoint, a notify wrapper) names the plugin
+# by this link, never by its versioned cache folder: setup points it at IL_ROOT.
+IL_LINK=$HOME/.commandeck/plugin
 IL_VERSION=1   # the config schema this plugin writes and reads; there is no migration
 IL_CONFIG=$PP_MAIN/.claude/commandeck.json
 IL_CODEX=${CODEX_HOME:-$HOME/.codex}
@@ -35,6 +39,7 @@ il_shq() {
 IL_BEGIN='<!-- commandeck:begin -->' IL_END='<!-- commandeck:end -->'
 IL_EXCLUDE=$PP_MAIN/.git/info/exclude
 IL_AGENTS=$PP_MAIN/AGENTS.md
+IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin adds only marked blocks (il_global)
 # The project's running state: every path a plugin script or hook, or the
 # session itself (a build's papers, main's to-do), writes during ordinary
 # running. The one list: setup hides these from git, the doctor reports one
@@ -94,7 +99,7 @@ il_projects() { find "$IL_DIR" -maxdepth 1 -name '*.json' ! -name '_machine.json
 
 # il_allow <root> -- the permission rules a session needs to run the plugin without a prompt per command.
 il_allow() {
-  jq -cn --arg r "$1" '["Bash(orca-ide orchestration:*)", "Bash(orca-ide terminal:*)", "Bash(orca-ide worktree:*)", "Bash(bash \($r)/scripts/*)"]'
+  jq -cn --arg r "$1" --arg l "$IL_LINK" '["Bash(orca-ide orchestration:*)", "Bash(orca-ide terminal:*)", "Bash(orca-ide worktree:*)", "Bash(bash \($r)/scripts/*)", "Bash(bash \($l)/scripts/*)"]'
 }
 # il_allow_set <manifest> <settings file> <rules json> -- the plugin's rules in
 # the file become exactly <rules>; the ones it added before are in the manifest.
@@ -171,6 +176,68 @@ il_codex_count() {
 # key must sit above the first table, so the line goes first.
 # The path is a TOML string: jq writes it as a JSON one, which TOML reads the same.
 il_notify_line() { printf 'notify = [%s]\n' "$(jq -n --arg p "$1/hooks/codex-notify.sh" '$p')"; }
+# il_notify_argv -- Codex's notify command, one word a line; nothing when it has none. Read with tomllib.
+il_notify_argv() {
+  python3 -c 'import sys, tomllib
+try: n = tomllib.load(open(sys.argv[1], "rb")).get("notify")
+except (OSError, ValueError): n = None
+if isinstance(n, list): print("\n".join(str(w) for w in n))' "$IL_CODEX/config.toml" 2>/dev/null
+}
+# il_notify_wrapper -- the owner's script notify runs (Codex takes one command, so
+# a second tool needs a wrapper calling both): its last word that is a file, not
+# the plugin's hook itself. Nothing when notify is the hook or names no file.
+il_notify_wrapper() {
+  local w f=
+  while IFS= read -r w; do [ ! -f "$w" ] || f=$w; done < <(il_notify_argv)
+  case $f in ''|*/hooks/codex-notify.sh) ;; *) printf '%s\n' "$f" ;; esac
+}
+# il_notify_hooks <file> -- each plugin hook path a wrapper names outside a
+# comment, one a line, a quoted path whole (it may hold a space). The wrapper is
+# read as text, never run: a line its own code never reaches still counts.
+il_notify_hooks() {
+  grep -v '^[[:space:]]*#' "$1" 2>/dev/null | sed 's/[[:space:]]#.*//' | grep -oE "\"[^\"]*/hooks/codex-notify\.sh\"|'[^']*/hooks/codex-notify\.sh'|[^\"' =]*/hooks/codex-notify\.sh" \
+    | sed "s/^[\"']//; s/[\"']\$//" | sort -u
+}
+# il_notify_stale <file> -- the hook paths in it that are not this plugin's current hook.
+il_notify_stale() {
+  local p
+  while IFS= read -r p; do
+    [ "$(readlink -f "${p/#\~/$HOME}" 2>/dev/null)" = "$(readlink -f "$IL_ROOT/hooks/codex-notify.sh")" ] || printf '%s\n' "$p"
+  done < <(il_notify_hooks "$1")
+}
+# il_notify_report -- the doctor's line on Codex's one notify command: "ok <why>"
+# when it calls this plugin's hook, straight or through the owner's wrapper,
+# else "warn <what is wrong and the fix>".
+il_notify_report() {
+  local hook=$IL_ROOT/hooks/codex-notify.sh w stale up lost="so a finished Codex turn waits for the orchestrator's next check"
+  up="bash $(printf '%q' "$PP_SCRIPTS")/update.sh"
+  w=$(il_notify_wrapper)
+  if [ -z "$(il_notify_argv)" ]; then echo "warn codex notify: $IL_CODEX/config.toml has no notify line, $lost; run: $up, or add above its first table: $(il_notify_line "$IL_LINK")"
+  elif grep -qxF -- "$(il_notify_line "$IL_ROOT")" "$IL_CODEX/config.toml"; then echo "ok codex notify: the line calls this plugin's hook"
+  elif [ -z "$w" ]; then echo "warn codex notify: $IL_CODEX/config.toml runs $(il_notify_argv | paste -sd' ' -), not this plugin's hook $hook, $lost; run: $up"
+  elif [ -z "$(il_notify_hooks "$w")" ]; then echo "warn codex notify: the wrapper $w does not call the plugin's hook, $lost; add this line to it: \"$IL_LINK/hooks/codex-notify.sh\" \"\$@\""
+  elif stale=$(il_notify_stale "$w"); [ -n "$stale" ]; then echo "warn codex notify: the wrapper $w calls an older plugin's hook ($(paste -sd' ' - <<<"$stale")), not this one's $hook; run: $up, which points it at $IL_LINK/hooks/codex-notify.sh"
+  else echo "ok codex notify: through the wrapper $w, which names this plugin's hook outside a comment (read as text, not run)"; fi
+}
+# il_notify_repoint <manifest> [yes|no] -- a wrapper that calls an older plugin's
+# hook is the owner's file: with no answer this prints the question (the old line
+# and the new), on no what the doctor will warn, and only on yes does it call the
+# stable link instead (IL_LINK, re-pointed at every setup and update), so no
+# update leaves it on an old version again. Only those exact paths change.
+il_notify_repoint() {
+  local w s t p old new
+  w=$(il_notify_wrapper); [ -n "$w" ] || return 0
+  s=$(il_notify_stale "$w"); [ -n "$s" ] || return 0
+  t=$(cat "$w") old=$(grep -F -f <(printf '%s\n' "$s") "$w" | paste -sd'|' - | sed 's/|/ \/ /g')
+  new=$old
+  while IFS= read -r p; do t=${t//"$p"/"$IL_LINK/hooks/codex-notify.sh"} new=${new//"$p"/"$IL_LINK/hooks/codex-notify.sh"}; done <<<"$s"
+  case ${2:-} in
+    yes) il_record "$1" merge "$w" && printf '%s\n' "$t" | il_write "$w" \
+           && echo "codex notify: $w now calls $IL_LINK/hooks/codex-notify.sh, not $(paste -sd' ' - <<<"$s")" ;;
+    no) echo "codex notify: the wrapper $w was left as it is; the doctor will warn: $(il_notify_report | sed 's/^warn //')" ;;
+    *) echo "codex notify: ASK: the wrapper $w calls an older plugin's hook. Old line: $old New line: $new Change it: --notify-wrapper yes; leave it: --notify-wrapper no" ;;
+  esac
+}
 il_notify() {
   local f=$IL_CODEX/config.toml rest
   [ -e "$f" ] || { [ -n "$1" ] || return 0; : | il_write "$f" || return 1; }
@@ -189,6 +256,26 @@ il_block() {
   elif [ -e "$f" ] && [ "$body" != "$(cat "$f")" ]; then
     printf '%s\n' "$body" | il_write "$f"
   fi
+}
+
+# il_global <install|block|skip|''> <tag> <template> <flag> -- the template as the
+# plugin's own marked block in IL_GLOBAL. install writes it only into a file
+# setup itself created; block adds it to the owner's file, or replaces the one
+# an earlier run added; skip and no answer leave the file as it is. Run after
+# IL_GLOBAL is recorded in the machine manifest, which says whether setup made it.
+il_global() {
+  case $1 in
+    install) [ ! -e "$IL_GLOBAL" ] || [ "$(jq -r --arg p "$IL_GLOBAL" '.entries[$p].prior // empty' "$IL_MACHINE" 2>/dev/null)" = "did not exist" ] \
+      || { echo "global $2: $IL_GLOBAL exists, left as it is; to add it as a marked block: $4 block"; return 0; } ;;
+    block) ;;
+    *) return 0 ;;
+  esac
+  IL_BEGIN="<!-- commandeck:$2:begin -->" IL_END="<!-- commandeck:$2:end -->" il_block "$IL_GLOBAL" "$3"
+}
+# il_global_out -- both blocks out of IL_GLOBAL; the owner's text stays.
+il_global_out() {
+  local t
+  for t in claude-md rules; do IL_BEGIN="<!-- commandeck:$t:begin -->" IL_END="<!-- commandeck:$t:end -->" il_block "$IL_GLOBAL"; done
 }
 
 # il_lines <manifest> <file> [line...] -- the plugin's own lines in a line-list

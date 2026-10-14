@@ -22,6 +22,7 @@ import collections
 import glob
 import importlib.util
 import json
+import math
 import os
 import re
 import statistics
@@ -374,6 +375,33 @@ def main_checkout(worktree, given=None):
     return os.path.dirname(git.stdout.strip()) if git.returncode == 0 else None
 
 
+def loop_limits(home):
+    """The thresholds past which a run is flagged, as (minutes of Codex review, share of the clock on tests or
+    idle waits, dollars): the owner's answers at setup (reviewLoop in the project config), else today's defaults."""
+    rl = {}
+    if home:
+        try:
+            with open(os.path.join(home, '.claude/commandeck.json')) as f:
+                rl = json.load(f).get('reviewLoop')
+        except OSError:
+            pass
+        except (ValueError, AttributeError) as e:
+            raise SystemExit(f'{home}/.claude/commandeck.json cannot be read for reviewLoop ({e}); answer it again with /commandeck:setup')
+    rl = {} if rl is None else rl
+    if not isinstance(rl, dict):
+        raise SystemExit(f'{home}/.claude/commandeck.json: reviewLoop is not an object ({rl!r}); answer it again with /commandeck:setup')
+    try:
+        got = (float(rl.get('maxReviewMinutes', 30.0)),
+               float(rl['maxTestPercent']) / 100 if 'maxTestPercent' in rl else 1 / 3,
+               float(rl.get('maxUsd', 30.0)))
+    except (TypeError, ValueError) as e:
+        got = e
+    # NaN compares false with everything, so it would flag nothing: only a finite number, 0 or more, is a threshold.
+    if isinstance(got, Exception) or not all(math.isfinite(x) and x >= 0 for x in got):
+        raise SystemExit(f'{home}/.claude/commandeck.json: a reviewLoop threshold is not a number of 0 or more ({rl}); answer it again with /commandeck:setup')
+    return got
+
+
 def main_archive(worktree, unit, given=None):
     """Where merge-unit-local.sh files the unit's brief files: <main checkout>/archive/briefs-<unit>.tar."""
     home = main_checkout(worktree, given)
@@ -496,11 +524,16 @@ def main():
     # The project's main checkout, read for its decisions and round archive once the worktree is removed.
     ap.add_argument('--main')
     # A run past any of these is flagged for a written review; the rest get the automatic page only.
-    ap.add_argument('--max-review-min', type=float, default=30.0)
-    ap.add_argument('--max-test-share', type=float, default=1 / 3)
-    ap.add_argument('--max-usd', type=float, default=30.0)
+    # Not given: the project's own (loop_limits).
+    ap.add_argument('--max-review-min', type=float)
+    ap.add_argument('--max-test-share', type=float)
+    ap.add_argument('--max-usd', type=float)
     a = ap.parse_args()
     wt = a.worktree.rstrip('/')
+    limits = loop_limits(main_checkout(wt, a.main))
+    for k, v in zip(('max_review_min', 'max_test_share', 'max_usd'), limits):
+        if getattr(a, k) is None:
+            setattr(a, k, v)
     unit = os.path.basename(wt)
     out = a.out or f'/tmp/commandeck/worktreereview/{unit}'
     os.makedirs(out, exist_ok=True)

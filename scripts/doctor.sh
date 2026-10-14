@@ -96,7 +96,7 @@ if [ "$PROFILE" = claude-openai ]; then
   else bad "codex hooks: $N of 5 entries in $IL_CODEX/hooks.json run $IL_ROOT ($ALL of the plugin's in all); run: bash $(printf '%q' "$HERE")/update.sh"; fi
   if ERR=$(python3 "$HERE/codex-hook-trust.py" --check "$IL_CODEX" 2>&1); then ok "codex trust"
   else bad "codex trust: $(grep -c 'not trusted' <<<"$ERR") of the plugin's entries are not trusted, and each Codex pane would open on the review menu; run: bash $(printf '%q' "$HERE")/update.sh"; fi
-  if grep -qxF -- "$(il_notify_line "$IL_ROOT")" "$IL_CODEX/config.toml" 2>/dev/null; then ok "codex notify"
-  else warn "codex notify: $IL_CODEX/config.toml does not send a finished turn to this plugin (another notify line is the owner's and is kept); the orchestrator then waits for its next check"; fi
+  L=$(il_notify_report)
+  if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi
 fi
 exit $RC

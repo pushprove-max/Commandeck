@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.5 -- 2026-10-14
+
+Setup asks how the review loop runs, the default Builder has no advisor, and
+messages to a restarted main or Builder are no longer lost.
+
+- Setup asks the review-loop settings instead of fixing them: the most review
+  rounds a build may run, whether a closing pass reads the whole branch, the
+  small-build line for a one-reviewer first pass, and the three thresholds
+  that flag a finished build for a written review. Each offers today's value;
+  taking every default saves nothing and changes nothing. Numbers are saved as
+  typed, and a value the loop cannot use is refused. With no closing pass, the
+  narrowed pass that ends GO merges once narrowed passes have read every
+  commit after the first pass.
+- The default Builder is Opus at effort high with no advisor, a risky build
+  included; `--small --model sonnet` is unchanged.
+- Claude Code 2.1.299: the ruling log skips a prompt that is a slash command
+  seen before it expands, and the README points at the built-in idle
+  compaction.
+- Handoff (#43): the startup context names the plugin by the stable link
+  `~/.commandeck/plugin`, a pane that is still main after a handoff says so,
+  the new main's first line confirms the handoff, and the main-pane guard
+  points to `/handoff`.
+- Global CLAUDE.md and rules (#48, #49): setup offers the plugin's general
+  instructions and working rules, as a new file or a marked block; it never
+  changes the owner's own text, and uninstall takes out only its blocks.
+- Lost messages (#50): `to-main.sh` finds main's pane when it sends, and
+  queues the message when main is down; the next session shows the queue and
+  unread mail to its earlier handles first. `answer-worker.sh` takes a unit
+  name the same way.
+- Codex notify wrapper (#66): doctor reads a notify line that calls the
+  owner's wrapper script and warns only when the wrapper calls no hook or an
+  older one. Setup asks before it changes such a wrapper, and uninstall names
+  the line to take out of it.
+- A fast doctor test covers the common path.
+
 ## 0.4.4 -- 2026-10-14
 
 The shell test suite runs in under five minutes.

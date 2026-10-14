@@ -25,7 +25,8 @@ with the reviewer's analysis is, for a flagged build. A reviewer writes lessons 
 - the run trips a threshold, in which case review.py sends the pane in its `--open-in` worktree one message
   "worktree review flagged <unit>". Defaults: more than 30 minutes of Codex review in
   total, more than a third of the clock on tests or idle waits, more than $30 at list price
-  (`--max-review-min`, `--max-test-share`, `--max-usd`); or
+  (`--max-review-min`, `--max-test-share`, `--max-usd`; the owner's answers at setup, saved as `reviewLoop`
+  in the project config, replace these defaults); or
 - the owner asks for a review, for a merged build or one still running.
 
 It reads logs only, so it works after main has removed the worktree:

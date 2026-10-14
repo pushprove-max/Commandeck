@@ -27,6 +27,21 @@ case "$EVENT" in UserPromptSubmit|PostToolUse) ;; *) exit 0 ;; esac
 [ "$EVENT" = UserPromptSubmit ] \
   && printf '%s' "$INPUT" | jq -e '.prompt | test("^\\s*(<(local-command-|user-prompt-submit-hook)|[A-Za-z]+ hook (feedback|error))")' \
     >/dev/null 2>&1 && exit 0
+# Nor is a slash command: since Claude Code 2.1.299 it arrives as typed ("/handoff now"), and it answers no ask.
+# A command is told by its name: a plugin's (name:skill), a skill or command on
+# this machine, or a built-in. Any other "/word" ("/tmp is the one") is the owner's words.
+# shortcut: the built-ins are a fixed list; one Claude Code adds later is logged until it is added here.
+CMD=$(printf '%s' "$INPUT" | jq -r '.prompt // "" | capture("^\\s*/(?<c>[A-Za-z0-9:_-]+)(\\s|$)").c // empty' 2>/dev/null)
+if [ "$EVENT" = UserPromptSubmit ] && [ -n "$CMD" ]; then
+  case $CMD in
+    *:*|add-dir|agents|bug|clear|compact|config|context|cost|doctor|effort|exit|export|fast|help|hooks|ide|init|login|logout|loop|mcp|memory|model|permissions|plan|plugin|resume|review|rewind|status|statusline|usage|vim) exit 0 ;;
+  esac
+  P=${CLAUDE_PROJECT_DIR:-$PWD}
+  for d in "$(dirname "${BASH_SOURCE[0]}")/../skills/$CMD" "$HOME/.claude/skills/$CMD" "$HOME/.claude/commands/$CMD.md" "$P/.claude/skills/$CMD" "$P/.claude/commands/$CMD.md"; do
+    [ ! -e "$d" ] || exit 0
+  done
+  ! compgen -G "$HOME/.claude/plugins/cache/*/*/*/skills/$CMD" >/dev/null && ! compgen -G "$HOME/.claude/plugins/cache/*/*/*/commands/$CMD.md" >/dev/null || exit 0
+fi
 
 # The event's arrival time, read before anything that can wait on the ledger
 # lock: a prompt answers only asks stamped no later than its arrival second.
@@ -45,6 +60,8 @@ RND=$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')
 DECIDE="${BASH_SOURCE[0]%/*}/../scripts/decision.sh"
 OPEN_ROWS=$(
   [ "${COMMANDECK_REVIEWER:-}" != 1 ] || exit 0
+  # startup-size.sh (the doctor) runs this on a made-up prompt only to measure it: that prompt answers nothing.
+  [ "${COMMANDECK_MEASURE:-}" != 1 ] || exit 0
   root=${CLAUDE_PROJECT_DIR:-$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)}
   gitdir=$(git -C "${root:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
   [ "$gitdir" = "$(git -C "${root:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] || exit 0
@@ -85,7 +102,7 @@ case "$EVENT" in
       select((.prompt // "") != "")
       | {id:$id, utc:$utc, et:$et, session:.session_id, cwd:.cwd, source:"prompt",
          question:null, answer:.prompt, annotations:null, pick:"prompt"}
-        + (if .prompt | gsub("<(task-notification|system-notification|system-reminder)>[\\s\\S]*?</\\1>|You have [0-9]+ orchestration messages?\\. Run `orca orchestration check[^`\\n]*`\\.?|resume from the checkpoint \\S+\\.md \\(its text, board\\.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut\\); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing \\(main-watch\\.sh wakes you\\); then service whichever marker has landed|main-watch: items are waiting in your Orca inbox for run [\\w-]+; read them and handle each\\.|main-watch: Orca did not take these for run [\\w-]+, so they are NOT in your inbox: [^\\n]*?\\. Each retries every tick\\.(?: Other items are waiting in your Orca inbox\\.)?(?: To take the run back, run this from your own pane: orca-ide orchestration run-use --id [\\w-]+| Who holds run [\\w-]+ is unknown; reconcile first: find out what that pane is before taking the run\\.| Live pane [\\w-]+ holds run [\\w-]+; reconcile first: find out what that pane is before taking the run\\.)"; "")
+        + (if .prompt | gsub("<(task-notification|system-notification|system-reminder)>[\\s\\S]*?</\\1>|You have [0-9]+ orchestration messages?\\. Run `orca orchestration check[^`\\n]*`\\.?|resume from the checkpoint \\S+\\.md \\(its text, board\\.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut\\); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing \\(main-watch\\.sh wakes you\\); then service whichever marker has landed(?:\\. Your first line to the owner is: Handoff done: this is the new main session, resumed from \\S+\\.md; the old pane \\S+ closes now\\.)?|main-watch: items are waiting in your Orca inbox for run [\\w-]+; read them and handle each\\.|main-watch: Orca did not take these for run [\\w-]+, so they are NOT in your inbox: [^\\n]*?\\. Each retries every tick\\.(?: Other items are waiting in your Orca inbox\\.)?(?: To take the run back, run this from your own pane: orca-ide orchestration run-use --id [\\w-]+| Who holds run [\\w-]+ is unknown; reconcile first: find out what that pane is before taking the run\\.| Live pane [\\w-]+ holds run [\\w-]+; reconcile first: find out what that pane is before taking the run\\.)"; "")
               | test("\\A\\s*\\z") then {void:true} else {} end)' 2>/dev/null)
     [ -n "$PROW" ] || exit 0
     printf '%s\n' "$PROW" >> "$LOG" 2>/dev/null \

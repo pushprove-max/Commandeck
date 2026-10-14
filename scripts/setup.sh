@@ -6,7 +6,8 @@
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
 #          [--builder-model <alias>] [--builder-advisor <alias>|none] [--codex-fast|--no-codex-fast]
 #          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
-#          [--install-missing]
+#          [--global-claude|--global-rules install|block|skip] [--notify-wrapper yes|no] [--install-missing]
+#          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>] [--max-review-min <minutes>] [--max-test-percent <n>] [--max-usd <n>]
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
 # the answers given and keeps the rest; update.sh is this script with none.
@@ -35,7 +36,7 @@ INSTALL= ASKED= OPT=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; OPT=; continue; fi
   case $a in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model) OPT=$a ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model|--notify-wrapper|--global-claude|--global-rules) OPT=$a ;;
     --install-missing) INSTALL=1 ;;
   esac
 done
@@ -61,7 +62,7 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
-usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -73,18 +74,24 @@ PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfSta
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BADVISOR=$(old .builder.advisor) FAST=$(old .codexFast)
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
+RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
+# rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
+# default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.
+rl() { [ -z "$2" ] || [[ $2 =~ $3 ]] || die "$4 takes $5; '$2' was not saved, and nothing was changed"
+  RL=$(jq -c --arg k "$1" --arg v "$2" 'if $v == "" then del(.[$k]) else .[$k] = $v end' <<<"$RL"); }
+INT='^[1-9][0-9]*$' NUM='^[0-9]+([.][0-9]+)?$'
 SCOPE=$(jq -r '.scope // empty' "$IL_PROJECT" 2>/dev/null || true)
 BIND=$(jq -r '.dashboard.bind // empty' "$IL_MACHINE" 2>/dev/null || true)
 PORT=$(jq -r '.dashboard.port // empty' "$IL_MACHINE" 2>/dev/null || true)
 HOSTS=$(jq -r '.dashboard.hosts // empty' "$IL_MACHINE" 2>/dev/null || true)
-WAS=$SCOPE DASHBOARD=1 STATUS=
+WAS=$SCOPE DASHBOARD=1 STATUS= NWRAP= GCLAUDE= GRULES=
 [ "$(jq -r '.dashboard' "$IL_PROJECT" 2>/dev/null)" != false ] || DASHBOARD=
 # No answer and no earlier one: on when the owner already has the serena server.
 [ -n "$SERENA" ] || ! jq -e --arg p "$PP_MAIN" '.mcpServers.serena // .projects[$p].mcpServers.serena' "$HOME/.claude.json" >/dev/null 2>&1 || SERENA=true
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $1 in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model) [ $# -ge 2 ] || usage ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model|--notify-wrapper|--global-claude|--global-rules|--max-rounds|--closing-pass|--small-build|--max-review-min|--max-test-percent|--max-usd) [ $# -ge 2 ] || usage ;;
   esac
   case $1 in
     --profile) PROFILE=$2; shift 2 ;;
@@ -98,8 +105,20 @@ while [ $# -gt 0 ]; do
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     --builder-model) BMODEL=$2; shift 2 ;;
     --builder-advisor) BADVISOR=$2; shift 2 ;;
+    # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
+    --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
+    # The global CLAUDE.md template and the rules: this run's answer, never saved; no answer leaves the file alone.
+    --global-claude) case $2 in install|block|skip) GCLAUDE=$2 ;; *) usage ;; esac; shift 2 ;;
+    --global-rules) case $2 in install|block|skip) GRULES=$2 ;; *) usage ;; esac; shift 2 ;;
     # A role with no id clears the saved one. Checked below, once the routing file is known.
     --codex-model) [[ $2 == *=* ]] || usage; CMODELS=$(jq -c --arg r "${2%%=*}" --arg m "${2#*=}" 'if $m == "" then del(.[$r]) else .[$r] = $m end' <<<"$CMODELS"); shift 2 ;;
+    # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
+    --max-rounds) rl maxRounds "$2" "$INT" "$1" "a whole number of passes"; shift 2 ;;
+    --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
+    --small-build) rl smallBuild "$2" "$INT" "$1" "a whole number of changed lines"; shift 2 ;;
+    --max-review-min) rl maxReviewMinutes "$2" "$NUM" "$1" "a number of minutes"; shift 2 ;;
+    --max-test-percent) rl maxTestPercent "$2" "$NUM" "$1" "a number (percent)"; shift 2 ;;
+    --max-usd) rl maxUsd "$2" "$NUM" "$1" "a number of dollars"; shift 2 ;;
     --strict) STRICT=true; shift ;;
     --no-strict) STRICT=false; shift ;;
     --serena) SERENA=true; shift ;;
@@ -164,8 +183,9 @@ fi
 # tier itself is the Codex home's own setting, which setup never writes: a yes that home does not match is refused here.
 [ "$FAST" != true ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
   || die "Codex fast mode was chosen, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so the review passes would run on the standard tier. Add that line and run setup again, or answer off (--no-codex-fast). Nothing was changed"
-COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
+COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
 [ "$PROFILE" != claude-openai ] || echo "setup: $(pp_codex_route)"
+[ -L "$IL_LINK" ] || [ ! -e "$IL_LINK" ] || die "$IL_LINK is not a link; setup keeps a link to the plugin there. Move it aside. Nothing was changed"
 for f in "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json" "$IL_CODEX/hooks.json"; do
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
 done
@@ -175,6 +195,9 @@ SETTINGS=$PP_MAIN/.claude/settings.json SM=$IL_PROJECT
 [ "$SCOPE" = project ] || { SETTINGS=$HOME/.claude/settings.json; SM=$IL_MACHINE; }
 WATCH_JOB=$(bash "$HERE/main-watch.sh" --job-file) DASH_JOB=$(bash "$HERE/dashboard.sh" --job-file)
 il_record "$IL_PROJECT" own "$IL_CONFIG" "$WATCH_JOB"
+# A link setup made and no manifest records (one left by a lost manifest) is made again, and recorded as new.
+il_has "$IL_MACHINE" "$IL_LINK" || rm -f "$IL_LINK"
+il_record "$IL_MACHINE" own "$IL_LINK"
 il_record "$IL_PROJECT" merge "$IL_EXCLUDE"
 il_record "$SM" merge "$SETTINGS"
 # Workflows are switched on in the project's own settings at either scope: the machine's file is every project's.
@@ -186,6 +209,7 @@ if [ "$PROFILE" = claude-openai ]; then
   il_record "$IL_MACHINE" merge "$IL_CODEX/hooks.json" "$IL_CODEX/config.toml"
 fi
 [ -z "$DASHBOARD" ] || il_record "$IL_MACHINE" own "$DASH_JOB"
+case $GCLAUDE$GRULES in *install*|*block*) il_record "$IL_MACHINE" merge "$IL_GLOBAL" ;; esac
 # The ponytail skill is the one add-on setup installs. A skill of that name the owner has, or
 # the whole add-on, is the owner's: only a copy an earlier setup made is written again.
 PONY=$HOME/.claude/skills/ponytail PONY_OURS=
@@ -207,13 +231,15 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" --argjson cm "$CMODELS" '
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $bm + $ba == "" then {} else {builder: ({model: $bm, advisor: $ba} | with_entries(select(.value != "")))} end)
   + (if $cm == {} then {} else {codexModels: $cm} end)
+  + (if $rl == {} then {} else {reviewLoop: $rl} end)
   + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
+ln -sfn "$IL_ROOT" "$IL_LINK"
 il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"
 il_test_audit "$IL_ROOT" "$WF"
@@ -223,6 +249,7 @@ if [ "$PROFILE" = claude-openai ]; then
   il_block "$IL_AGENTS" "$IL_ROOT/templates/codex-instructions.md"
   il_codex_hooks "$IL_ROOT"
   il_notify "$IL_ROOT"
+  il_notify_repoint "$IL_MACHINE" "$NWRAP"
   python3 "$HERE/codex-hook-trust.py" "$IL_CODEX" >/dev/null
 fi
 if [ -n "$DASHBOARD" ]; then
@@ -238,6 +265,8 @@ else
     || { bash "$HERE/dashboard.sh" --unregister "$PP_MAIN" >/dev/null; il_set "$IL_PROJECT" 'del(.registered)'; }
 fi
 bash "$HERE/main-watch.sh" --install >/dev/null
+il_global "$GCLAUDE" claude-md "$IL_ROOT/templates/global-claude.md" --global-claude
+il_global "$GRULES" rules "$IL_ROOT/templates/global-rules.md" --global-rules
 if [ -n "$PONY_OURS" ]; then
   for f in SKILL.md LICENSE; do il_write "$PONY/$f" < "$IL_ROOT/templates/ponytail/$f"; done
 fi

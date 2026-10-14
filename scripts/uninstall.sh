@@ -53,9 +53,14 @@ if [ -n "$LAST" ] && [ -s "$IL_MACHINE" ]; then
     [ ! -e "$IL_CODEX/hooks.json" ] || [ ! -e "$IL_CODEX/config.toml" ] || python3 "$HERE/codex-hook-trust.py" --forget "$IL_CODEX" >/dev/null
     il_codex_hooks ''
     il_notify ''
+    # The owner's wrapper is theirs to edit: uninstall only says which line now calls nothing.
+    W=$(il_notify_wrapper)
+    [ -z "$W" ] || ! il_notify_hooks "$W" | grep -qxF "$IL_LINK/hooks/codex-notify.sh" \
+      || echo "codex notify: the wrapper $W still calls $IL_LINK/hooks/codex-notify.sh, which uninstall has removed; take this line out of it: $(grep -v '^[[:space:]]*#' "$W" | grep -F "$IL_LINK/hooks/codex-notify.sh" | head -1)"
   done < <(jq -r '.entries | keys[] | select(endswith("/hooks.json"))' "$IL_MACHINE")
   S=$HOME/.claude/settings.json
   ! il_has "$IL_MACHINE" "$S" || [ ! -e "$S" ] || il_allow_set "$IL_MACHINE" "$S" '[]'
+  ! il_has "$IL_MACHINE" "$IL_GLOBAL" || [ ! -e "$IL_GLOBAL" ] || il_global_out
   # The status line setup set goes back to the one before it; one the owner set since is the owner's.
   if jq -e '.statusLine.set' "$IL_MACHINE" >/dev/null 2>&1 && [ -e "$S" ]; then
     if [ "$(jq -c '.statusLine' "$S")" = "$(jq -c '.statusLine.set' "$IL_MACHINE")" ]; then

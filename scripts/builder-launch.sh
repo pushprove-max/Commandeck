@@ -13,13 +13,14 @@
 # first in the same worktree and writes <wt>/.claude/briefs/<unit>-design.md,
 # which the brief tells the Builder to read before it builds. That call opens
 # no Builder; the same command run again, once the note exists, opens it.
-# A tooling build expected under 200 changed lines is launched --small on the
+# A tooling build expected under 200 changed lines may be launched --small on the
 # smaller model with --model sonnet; a risky one stays on the configured model,
 # and its batch brief says to write the failing test first.
-# --small is main's word that the batch is expected under 200 changed lines:
-# the Builder starts with no advisor, unless the launch is --risky. Nothing
-# checks the word against the finished diff; the first pass counts the real
-# lines. Every launch prints which rule chose, on stderr.
+# The Builder has an advisor only when the project chose one at set-up
+# (routing.json names none), and --small, main's word that the batch is
+# expected under 200 changed lines, drops even that; --risky keeps none.
+# Nothing checks the word against the finished diff; the first pass counts the
+# real lines. Every launch prints which rule chose, on stderr.
 # --model puts this one Builder on another model routing.json names (an alias,
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
@@ -54,11 +55,10 @@ if [ "$PICK" = 1 ]; then
   # A log line is read as key=value words, so the reason holds no = and is one line.
   [[ -n $REASON && $REASON != *[=$'\n']* ]] || { echo "REFUSED: --model needs --reason '<one line, no = sign>'; the pick is logged with it" >&2; exit 2; }
 fi
-# A risky build keeps its advisor at any size.
-ADVISOR=1 RULE='kept (not marked small)'
-if [ "$SMALL" = 1 ]; then
-  if [ "$RISKY" = 1 ]; then RULE='kept (marked small, but launched --risky)'
-  else ADVISOR=0 RULE='none (marked small; not launched --risky)'; fi
+ADVISOR=0 RULE='none (the default Builder has no advisor)'
+if [ -n "$(pp_route_json builder "" "$BMODEL" | jq -r '.advisor // empty')" ]; then
+  if [ "$SMALL" = 1 ]; then RULE='none (the advisor chosen at set-up; marked small)'
+  else ADVISOR=1 RULE='kept (chosen at set-up)'; fi
 fi
 OPTS=()
 [ "$PICK" = 0 ] || OPTS+=(--model "$BMODEL")
@@ -88,7 +88,7 @@ if [ "$ADVISOR" = 1 ]; then
   T=${T/$'<!-- advisor -->\n'/}
   T=${T/$'<!-- /advisor -->\n'/}
 else
-  T="${T%%'<!-- advisor -->'*}This build has no advisor: main launched it as a small build. Do not try a consult; write no consult line in the evidence file."$'\n'"${T#*$'<!-- /advisor -->\n'}"
+  T="${T%%'<!-- advisor -->'*}This build has no advisor. Do not try a consult; write no consult line in the evidence file."$'\n'"${T#*$'<!-- /advisor -->\n'}"
 fi
 T=${T//'{unit}'/"$UNIT"}
 T=${T//'{UNIT}'/"${UNIT^^}"}
@@ -97,6 +97,14 @@ T=${T//'{reviewer}'/"${BY^}"}
 T=${T//'{pass-script}'/"builder-$BY-pass.sh"}
 T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
+# The review loop the owner chose at setup; with every default taken the brief reads as it always did.
+SMALL=$(pp_review_loop smallBuild 200 '^[1-9][0-9]*$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
+  && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
+LOOP=
+[ -z "$MAXR" ] || LOOP+="This project allows at most $MAXR rounds: a pass numbered over $MAXR is refused. Before that, stop and report to main what is still open."$'\n'
+[ "$CLOSING" != no ] || LOOP+="This project runs no closing pass: skip step 3. The narrowed pass that ends \`VERDICT: GO\` is the one the merge takes, once narrowed passes have read every commit after the first pass; change nothing after it."$'\n'
+T=${T//'{small-build}'/"$SMALL"}
+T=${T//$'{loop-rules}\n'/"$LOOP"}
 T=${T//'{batch}'/"$(cat "$BATCH")"}
 echo "advisor: $RULE" >&2
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.

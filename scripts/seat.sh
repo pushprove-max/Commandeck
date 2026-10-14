@@ -120,8 +120,9 @@ launch)
     [ -z "$LMODEL" ] || pp_builder_model_ok "$LMODEL" || exit 2
   fi
   pp_route "$ROLE" "" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
-  CMD=$RT_CMD
-  [ -n "$CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
+  [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
+  # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
+  CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
   # A finished spec does not run twice: the same plan-reviser job ran
   # three times in 22 minutes. collect writes verdict= beside this hash.
   SPEC_HASH=$(sha256sum "$SPEC" | cut -d' ' -f1)

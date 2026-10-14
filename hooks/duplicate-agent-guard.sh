@@ -198,7 +198,7 @@ MAIN=""
 while IFS=$'\t' read -r kind val; do
   case $kind in
     hand)
-      [ -z "$MAIN" ] || block "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11)." ;;
+      [ -z "$MAIN" ] || block "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11). To move main itself to a fresh session, run /handoff: its Stop hook opens the new main pane." ;;
     create)
       WT=$val
       [ -n "$WT" ] || WT="path:$(git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" rev-parse --show-toplevel 2>/dev/null)"

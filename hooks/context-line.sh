@@ -14,6 +14,13 @@ input=$(cat)
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then exit 0; fi
+# A /handoff whose restart did not finish keeps its marker (context-clear-restart.sh spends it only once a
+# new main holds the resume prompt), and this pane is still main: the owner gets the reason in one line.
+sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
+if [ -n "$sid" ] && [ -f "$HOME/.claude/checkpoints/$sid.handoff" ]; then
+  why=$(grep -F " restart: " "$HOME/.claude/checkpoints/clear-hook.log" 2>/dev/null | grep -F -- "${ORCA_TERMINAL_HANDLE:-no handle}" | tail -1)
+  echo "HANDOFF NOT DONE: this pane is still main. ${why:-No restart started: the Stop hook needs a checkpoint under 30 minutes old at ~/.claude/checkpoints/$sid.md.} Tell the owner this line first; fix what it names, then end the turn and the Stop hook tries again."
+fi
 LINE=$(pp_clear_line 2>/dev/null) || LINE=
 LINE=${LINE:-${COMMANDECK_CLEAR_LINE:-200000}}   # the helper did not load
 TPL=$(cd "$(dirname "$0")/../templates" && pwd)

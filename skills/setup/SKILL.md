@@ -48,8 +48,8 @@ edit, switch off or work round the project's own guard.
    - **Relay.** The Chief of Staff. On "name one", ask in plain text for the
      name the relay answers to and one line on how it should sound. On
      "none", pass `--name '' --persona ''`.
-2. Send these two calls, then ask in plain text for what a "name one", "set
-   one" or "another name" answer needs:
+2. Send these four calls, then ask in plain text for what a "name one", "set
+   one", "set a number", "set numbers" or "another name" answer needs:
 
    Call 2 (`AskUserQuestion`)
    Ask "Model": plugin default | sonnet | opus
@@ -62,12 +62,23 @@ edit, switch off or work round the project's own guard.
    Ask "Host name": this machine only | another name
    Ask "Status line": none | set one
 
-   - **Model.** Which model builds: the plugin's own, Opus advised by Fable
-     (`--builder-model '' --builder-advisor ''`); `sonnet` advised by Opus,
-     for less usage (`--builder-model sonnet --builder-advisor opus`); or
-     `opus` advised by Opus (`--builder-model opus --builder-advisor opus`).
+   Call 4 (`AskUserQuestion`)
+   Ask "Global CLAUDE.md": skip | install | add block
+   Ask "Global rules": skip | install | add block
+
+   Call 5 (`AskUserQuestion`)
+   Ask "Review rounds": no cap | set a number
+   Ask "Closing pass": runs | none
+   Ask "Small build": 200 lines | set a number
+   Ask "Review flags": defaults | set numbers
+
+   - **Model.** Which model builds: the plugin's own, Opus at effort high
+     with no advisor, a risky build included (`--builder-model ''
+     --builder-advisor ''`); `sonnet` advised by Opus, for less usage
+     (`--builder-model sonnet --builder-advisor opus`); or `opus` advised by
+     Opus (`--builder-model opus --builder-advisor opus`).
    - **Advisor.** `keep` sends the Model flags as they are; `none` adds
-     `--builder-advisor none` to any of them.
+     `--builder-advisor none` to any of them (the plugin default has none).
    - **Context.** `200K` adds `--standard-context`: the account's model
      holds 200K; `larger` adds `--no-standard-context`.
    - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
@@ -78,6 +89,36 @@ edit, switch off or work round the project's own guard.
    - **Host name.** On "another name", ask for the name the dashboard is
      opened under, a tailnet name: `--hosts <name>[,<name>]`; without it
      such a name gets a 403. On "this machine only", pass `--hosts ''`.
+   - **Global CLAUDE.md.** The plugin's general global instructions (working
+     rules, code exploration, root-cause discipline). `install` writes
+     `~/.claude/CLAUDE.md` only when there is none (`--global-claude
+     install`); `add block` puts them in the owner's file as a marked block,
+     which a later run replaces and uninstall takes out (`--global-claude
+     block`); `skip` sends `--global-claude skip`. The owner's own text is
+     never changed.
+   - **Global rules.** The plugin's working, review, agent and test rules,
+     the same three ways: `--global-rules install|block|skip`.
+   - **Review rounds.** The most Codex review passes a build may run,
+     counted by the round number each pass is given. "no cap" (today's
+     rule) sends `--max-rounds ''`; on "set a number", ask for it:
+     `--max-rounds <n>`.
+   - **Closing pass.** "runs" (today's rule: after the narrowed passes end
+     GO, one more pass reads the whole branch, and its GO is the one that
+     merges) sends `--closing-pass yes`. "none" sends `--closing-pass no`:
+     the narrowed pass that ends GO merges, once narrowed passes have read
+     every commit after the first pass. A first pass that ends GO merges
+     either way.
+   - **Small build.** A first pass is one reviewer under this many changed
+     lines (and no `--risky` launch), else three. "200 lines" sends
+     `--small-build ''`; on "set a number", ask for it: `--small-build <n>`.
+   - **Review flags.** When a finished build is flagged for a written
+     review: over 30 minutes of Codex review, over a third of the clock on
+     tests or idle waits, over $30 at list price. "defaults" sends
+     `--max-review-min '' --max-test-percent '' --max-usd ''`; on "set
+     numbers", ask for the three (minutes, percent, dollars) and send each
+     one given: `--max-review-min <n> --max-test-percent <n> --max-usd <n>`.
+   - Numbers are passed exactly as typed. Setup refuses one it cannot use
+     and changes nothing; read its line to the owner and ask again.
    - **Status line.** On "none", no flag: it keeps the saved setting, by design. On "set one", ask for the owner's own command:
      `--status-line '<command>'`. The plugin ships none, and uninstall puts
      the earlier one back.
@@ -99,7 +140,7 @@ edit, switch off or work round the project's own guard.
    owner's: plain text, never a question. If there is a "can install" group,
    show its commands exactly as printed, then send:
 
-   Call 4 (`AskUserQuestion`)
+   Call 6 (`AskUserQuestion`)
    Ask "Install": install | stop
 
    - **Install.** On "install", run the same `setup.sh` command again with
@@ -107,6 +148,19 @@ edit, switch off or work round the project's own guard.
      other, then checks again. On "stop", run nothing more. Only the answer
      "install" sends the flag; a refused call, or any other answer, never
      does.
+
+   If it printed a `codex notify: ASK:` line, Codex's notify runs the owner's
+   own wrapper script, and it calls an older plugin version's hook. Setup
+   changed nothing in it. Show the owner the old line and the new one as
+   printed, then send:
+
+   Call 7 (`AskUserQuestion`)
+   Ask "Notify wrapper": change it | leave it
+
+   - **Notify wrapper.** Run the same `setup.sh` command again with
+     `--notify-wrapper yes` on "change it", or `--notify-wrapper no` on
+     "leave it", and read its `codex notify:` line to the owner. Only
+     "change it" sends yes.
 3. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh` and show every line that
    is not `ok`.
    Tell the owner what setup added for tests: `/test-audit <scope dir...>
