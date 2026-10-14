@@ -15,7 +15,7 @@
 # again: single lookups spread over a fix round with no edit between
 # them are separate questions, not one large search. The streak file holds the
 # count and the time of the last counted search. GAP is a starting value too.
-# Self-test: bash scripts/__tests__/builder.test.sh
+# Self-test: bash hooks/__tests__/builder-search-guard.test.sh
 LIMIT=3
 GAP=600
 INPUT=$(cat)

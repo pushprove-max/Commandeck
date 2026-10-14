@@ -59,7 +59,6 @@
 # and takes only the pass the configured profile uses.
 # Ceiling: a same-user process could still forge the reviewer's own session
 # files or that record; the upgrade path is a merge-side re-run.
-# Self-test: bash scripts/__tests__/builder.test.sh, builder-claude-pass.test.sh
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"

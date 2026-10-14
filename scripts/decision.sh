@@ -49,7 +49,7 @@ now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # "13th" and "13" are one number; cardinal words ("one more round") are not
 # numbers. Measured on the 2026-10-03/04 repeats: 0.57,
 # 0.57 and 0.78 matched; the changed reader order scored 0.36 and stays a new
-# decision (dashboard.test.sh, A10b). A ceiling: a paraphrase sharing under
+# decision. A ceiling: a paraphrase sharing under
 # half its words gets through; a new decision reusing most of an open one's
 # words is refused and goes through --reask.
 SAME_Q='

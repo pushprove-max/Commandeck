@@ -15,11 +15,6 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name ci
           git config --global init.defaultBranch main
-      # The dashboard's DOM tests need jsdom, which the plugin does not ship.
-      - name: jsdom for the dashboard's DOM tests
-        run: |
-          npm install --prefix "$RUNNER_TEMP/dom" --no-save jsdom@26
-          echo "COMMANDECK_TEST_NODE_MODULES=$RUNNER_TEMP/dom/node_modules" >> "$GITHUB_ENV"
       - name: Leak test
         run: bash ci/leak-test.sh
       # The checkout brings one commit; the check compares with the main branch, so that is fetched

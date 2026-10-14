@@ -6,7 +6,6 @@
 # <session>.jsonl (main thread) and <session>/subagents/agent-*.jsonl, field
 # message.usage.cache_creation.ephemeral_1h_input_tokens / ephemeral_5m_input_tokens.
 # Default session: the newest. Exit 1 when either side is wrong or unproved.
-# Self-test: bash scripts/__tests__/builder.test.sh
 set -euo pipefail
 WT=${1:?usage: builder-cache-check.sh <worktree> [session-id]}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"

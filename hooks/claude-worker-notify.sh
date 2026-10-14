@@ -2,7 +2,7 @@
 # Stop hook for Claude panes in Orca worktrees: when a seat finishes a turn,
 # send an Orca message so the main session's `orchestration check --wait` wakes
 # at once (ruling 2026-09-07, the Claude twin of codex-notify.sh; keep the
-# two in parity, worker-notify.test.sh). Main is exempt: it is not a linked
+# two in parity). Main is exempt: it is not a linked
 # worktree. The last assistant text comes from the transcript the hook is
 # handed; the run id from the file main writes at dispatch time.
 # $HOME/.claude/hooks/claude-worker-notify.sh links here.

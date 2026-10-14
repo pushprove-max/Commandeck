@@ -4,7 +4,6 @@
 # (gitignored). Registered only in a Builder worktree's settings.local.json by
 # worktree-setup.sh --builder. Findings and convergence live in the round files,
 # not here. Never blocks a tool call.
-# Self-test: bash scripts/__tests__/builder.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 ROOT=${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}

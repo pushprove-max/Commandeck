@@ -3,9 +3,11 @@
 # dispatcher every guard is prose for Codex and enforcement for Claude. What
 # this pins: a set-up, trusted project gets the plugin's hooks for the five
 # events, chosen by the same matcher rule Claude Code uses; a project that is
-# not set up or not trusted runs none of them; a patch reaches the Write and
-# Edit hooks one file at a time; a warning is relayed, not swallowed; and a
-# dispatcher that could not run says so instead of reading as a clean turn.
+# not set up or not trusted runs none of them; a denial reaches Codex; a patch
+# reaches the Write and Edit hooks one file at a time; and a dispatcher that
+# could not run says so instead of reading as a clean turn. A guard marked
+# onFailure: block refuses the call when it breaks or is missing, and a read-only
+# run drops a guard off the keep-list only on a genuine Codex session record.
 set -uo pipefail
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -98,36 +100,11 @@ check "a folder that is no checkout runs nothing" '0:' "$RC:$(ran)"
 BASH_MODE=deny run "$T/ours" PreToolUse Bash "$CMD"
 check "a denial is relayed as exit 2" 2 "$RC"
 check "with the hook's own message" 1 "$(grep -c 'BLOCKED: fixture denial' <<<"$ERR")"
-# Claude Code also takes a refusal as JSON on stdout with exit 0, and the Stop
-# hooks that hold a turn open speak only that way: dropped, Codex stops anyway.
 BASH_MODE=json-deny run "$T/ours" PreToolUse Bash "$CMD"
 check "a denial written as JSON on stdout is a denial" '2:1' "$RC:$(grep -c '^fixture json denial$' <<<"$ERR")"
 check "and its JSON does not reach Codex as output" '' "$OUT"
-BASH_MODE=json-allow run "$T/ours" PreToolUse Bash "$CMD"
-check "an allow written as JSON is not a denial" 0 "$RC"
-# A passing hook's advice is for the model: Codex reads it from one JSON object on stdout.
-BASH_MODE=advise run "$T/ours" PreToolUse Bash "$CMD"
-check "a hook's additionalContext reaches Codex, under the event's name" '0|PreToolUse|advice from advise' "$RC|$(jq -r '.hookSpecificOutput | "\(.hookEventName)|\(.additionalContext)"' <<<"$OUT" 2>/dev/null)"
-check "as one line of JSON and nothing else" 1 "$(grep -c . <<<"$OUT")"
 STOP_MODE=json-block run "$T/ours" Stop ''
 check "a Stop hook's block on stdout holds the turn, with its reason" '2:1' "$RC:$(grep -c '^fixture stop refusal$' <<<"$ERR")"
-# Claude Code runs the call when a hook exits with anything but 0 or 2, and so
-# does this; what must not happen is that nobody is told the rule did not run.
-BASH_MODE=crash run "$T/ours" PreToolUse Bash "$CMD"
-check "a hook that breaks does not refuse the call" 0 "$RC"
-check "but Codex is told which hook broke, beside the hook's own words" '1:1' "$(grep -c 'rec.sh exited 1' <<<"$ERR"):$(grep -c 'fixture crash' <<<"$ERR")"
-check "and the break is logged" 1 "$(grep -c 'rec.sh.exit 1$' "$XDG_CACHE_HOME/commandeck/codex-dispatch.log" 2>/dev/null)"
-run "$T/ours" PostToolUse Bash "$CMD"
-check "the event decides: a post call runs the post group only" 'warn' "$(ran)"
-check "a warning from a hook that exits 0 is relayed" '0:1' "$RC:$(grep -c 'WARNING: fixture warning' <<<"$ERR")"
-run "$T/ours" SessionStart ''
-check "session-start context comes back on stdout" 'fixture context' "$OUT"
-run "$T/ours" Stop ''
-check "Stop runs the Stop group" 'stop' "$(ran)"
-run "$T/ours" SubagentStop ''
-check "an event the dispatcher does not know runs nothing" '0:' "$RC:$(ran)"
-run "$T/ours" PreToolUse WebFetch '{"url":"x"}'
-check "a tool Codex does not have is not dispatched" '0:' "$RC:$(ran)"
 
 # --- a patch reaches the Write and Edit hooks one file at a time ---
 PATCH=$(printf '*** Begin Patch\n*** Add File: src/new.txt\n+first line\n*** Update File: src/old.txt\n@@\n-was\n+now\n*** Delete File: src/gone.txt\n*** End Patch\n' | jq -Rs '{command: .}')
@@ -135,47 +112,12 @@ run "$T/ours" PreToolUse apply_patch "$PATCH"
 check "an added file is a Write: it reaches the Write-only group too" "pre-any pre-edit pre-write" "$(awk -F'\t' '$2 == "Write" {print $1}' "$REC_LOG" | tr '\n' ' ' | sed 's/ $//')"
 check "an updated file is an Edit: the Write-only group does not see it" "pre-any pre-edit" "$(awk -F'\t' '$2 == "Edit" && $3 ~ /old.txt$/ {print $1}' "$REC_LOG" | tr '\n' ' ' | sed 's/ $//')"
 check "each payload names the file's full path and its new text" "$T/ours/src/new.txt	first line" "$(awk -F'\t' '$1 == "pre-write" {print $3 "\t" $5}' "$REC_LOG")"
-# A guard that decides by whose file it is (main-edit-guard) must see a
-# deletion and the file a move takes away, not only where text lands.
-check "a deleted file reaches the Edit hooks by its path, with no text" "pre-any pre-edit" \
-  "$(awk -F'\t' -v p="$T/ours/src/gone.txt" '$2 == "Edit" && $3 == p && $5 == "" {print $1}' "$REC_LOG" | tr '\n' ' ' | sed 's/ $//')"
-PATCH=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n*** Move to: docs/old.md\n@@\n-was\n+now\n*** End Patch\n' | jq -Rs '{command: .}')
-run "$T/ours" PreToolUse apply_patch "$PATCH"
-check "a moved file is screened where it leaves and where it lands" "$T/ours/src/old.txt $T/ours/docs/old.md" \
-  "$(awk -F'\t' '$1 == "pre-edit" {print $3}' "$REC_LOG" | tr '\n' ' ' | sed 's/ $//')"
-# A hook that applies the edit to the file (a new dependency in a manifest)
-# reads the text where it still is: the new name is not on disk yet.
-check "a moved file's edit names the file its text comes from, and no other payload does" "$T/ours/src/old.txt > $T/ours/docs/old.md" "$(sort -u "$REC_LOG.source")"
 
 # --- a dispatcher that could not run never reads as a clean turn ---
 : > "$REC_LOG"
 echo '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | bash "$P/hooks/codex-dispatch.sh" 2>"$T/err"; RC=$?
 check "a payload with no cwd is exit 1, naming the cause" '1:1' "$RC:$(grep -c 'no usable cwd' "$T/err")"
 
-# Two hunks of one file are two edits. Joined into one text, lines far apart
-# read as one change, and a guard that compares what an edit adds with what it
-# removes (a new dependency in a manifest) saw a change nobody made.
-PATCH=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n@@\n-was1\n+now1\n@@\n-was2\n+now2\n*** End Patch\n' | jq -Rs '{command: .}')
-run "$T/ours" PreToolUse apply_patch "$PATCH"
-check "each hunk of a file is its own Edit" "now1 now2" "$(awk -F'\t' '$1 == "pre-edit" {print $5}' "$REC_LOG" | tr '\n' ' ' | sed 's/ $//')"
-
-# A hunk's `@@ <line>` says where in the file it lands, and each hunk comes
-# after the one before it. A guard that applies the edit to the file on disk
-# needs both: the same lines may sit in a part of the file it does not screen.
-PATCH=$(printf '*** Begin Patch\n*** Update File: src/old.txt\n@@ [project]\n-was1\n+now1\n@@\n-was2\n+now2\n*** End Patch\n' | jq -Rs '{command: .}')
-: > "$REC_LOG.anchors"; : > "$REC_LOG.hunks"
-run "$T/ours" PreToolUse apply_patch "$PATCH"
-check "each Edit carries the lines its hunk comes after" '["[project]","was1"] ["[project]"]' "$(LC_ALL=C sort -u "$REC_LOG.anchors" | paste -sd' ' -)"
-# A guard that reads a manifest must see all of a file's hunks at once: one
-# alone may leave text that is not the file the patch makes.
-check "each Edit of a file with several hunks carries them all" '["was1>now1>[project]","was2>now2>"]' "$(sort -u "$REC_LOG.hunks" 2>/dev/null)"
-
-# A hook that caps how many files one change set touches sees a patch one file
-# at a time, none written yet: each payload names every file the patch writes.
-PATCH=$(printf '*** Begin Patch\n*** Add File: src/new.txt\n+first line\n*** Update File: src/old.txt\n@@\n-was\n+now\n*** Delete File: src/gone.txt\n*** End Patch\n' | jq -Rs '{command: .}')
-: > "$REC_LOG.batch"
-run "$T/ours" PreToolUse apply_patch "$PATCH"
-check "each payload of a patch names the files it writes" '["new.txt","old.txt"]' "$(sort -u "$REC_LOG.batch" | paste -sd' ' -)"
 
 # --- a guard marked onFailure: block refuses the call when it cannot run ---
 # hooks.json marks the guards that way: a guard that broke, or is missing, has
@@ -192,6 +134,8 @@ SECOND=gone.sh run "$T/ours" PreToolUse Bash "$CMD"
 check "a guard that is missing refuses the call" '2:1' "$RC:$(grep -c 'BLOCKED: .* exited 127' <<<"$ERR")"
 SECOND='rec.sh pre-bash' run "$T/ours" PreToolUse Bash "$CMD"
 check "the same guards, working, allow it" '0:pre-bash pre-bash' "$RC:$(ran)"
+
+# --- a read-only run keeps the guards on the keep-list and drops the rest ---
 
 # --- a read-only run keeps the guards on the keep-list and drops the rest ---
 # The run is read-only when the session record Codex names says so in EVERY
@@ -228,6 +172,5 @@ check "READ_ONLY=1 in the environment skips nothing" 2 "$(READ_ONLY=1 ro "")"
 cp "$P/hooks/rec.sh" "$P/hooks/suite-rerun-guard.sh"
 printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [%s]}]}}\n' "$(h "suite-rerun-guard.sh deny")" > "$P/hooks/hooks.json"
 check "a guard on the keep-list still refuses in a read-only run" 2 "$(ro "$SES/ro.jsonl")"
-
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

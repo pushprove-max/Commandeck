@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.4 -- 2026-10-14
+
+The shell test suite runs in under five minutes.
+
+- The suite had grown to about 70 minutes. It now keeps only the critical
+  tests: setup and uninstall complete, each blocking hook blocks what it must
+  and lets through what it must, the leak test, every shell file parses under
+  Bash 3.2, the version check, and a merge is refused without a passing
+  review. 125 shell test files were deleted, with the Node and Python tests
+  and fixtures only they used; the kept hook and setup tests were trimmed to
+  their critical cases. The Builder search guard's block cases, which lived
+  in a deleted Builder test, now have a small test file of their own.
+- The Doctor, dashboard, main-watch and proof-run tests are gone, with the
+  tests of the advisory hooks that never block. Uninstall is tested at project
+  scope only.
+- CI no longer installs jsdom; no kept test uses it.
+
 ## 0.4.3 -- 2026-10-14
 
 A Builder waiting on its helpers is no longer reported as stopped, and Codex

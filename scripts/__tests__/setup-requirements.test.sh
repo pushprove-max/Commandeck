@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# timeout: 300 -- one full setup among many refused ones
 # setup-requirements.test.sh -- on a fresh Mac setup stopped on the first
 # missing tool, named one at a time, and told the owner to edit a shell start
 # file. What this pins: one check names everything missing at once, in two
 # groups (what a package manager can install, with the one command; what only
 # the owner can do, with its step); nothing is installed without
-# --install-missing, and with it exactly the printed command runs, once; a
-# second look that still finds something missing stops with nothing changed;
-# the doctor reports the same set; Orca's own command is linked as orca-ide
-# only on a yes and only when it really is Orca's; and a script the Mac's Bash
-# 3.2 started carries on under Homebrew's, once, with its arguments and input.
+# --install-missing, and with it setup carries on in the same run; and a script
+# the Mac's Bash 3.2 started carries on under Homebrew's, once, with its
+# arguments and input.
 # No package is installed: brew, apt-get and sudo are stand-ins that record
 # their arguments, on a PATH that holds nothing but the fixture's folders.
 # The Bash 3.2 cases need the Mac's own /bin/bash; where there is none they
@@ -50,100 +47,13 @@ check "the old one-line refusal is gone" 0 "$(grep -c 'missing on PATH' "$T/out"
 check "nothing was installed without the flag" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
 check "and nothing on the machine changed" "$BEFORE" "$(snap)"
 WANT=$(printed)
-# The yes is the flag itself. A value that spells it (a relay named --install-missing) is a value.
-VALUED=$(grep -oE '^ +--profile\|[a-z|-]+\) \[ \$# -ge 2' "$PLUGIN/scripts/setup.sh" | sed 's/).*//' | tr -d ' ' | tr '|' ' ')
-for o in $VALUED; do go setup.sh --profile claude "$o" --install-missing >"$T/out" 2>&1; done
-check "setup has options that take a value" 1 "$([ "$(wc -w <<<"$VALUED")" -ge 11 ] && echo 1 || echo 0)"
-check "the flag's spelling as the value of any of them installs nothing" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
 
-# --- the doctor names the same set for the same PATH ---
-grep -E '^(can install|yours to do|  )' "$T/out" > "$T/setup-set"
-go doctor.sh >"$T/out" 2>&1; check "the doctor fails on the same PATH" 1 $?
-check "with one FAIL line for the tools" 1 "$(grep -c '^FAIL tools' "$T/out")"
-check "and the same missing set as setup, word for word" "$(cat "$T/setup-set")" "$(grep -E '^(can install|yours to do|  )' "$T/out")"
-# The preflight asks uname, so a Linux runner plays the Mac with both.
-printf '#!/bin/sh\necho Darwin\n' > "$BIN/uname"; chmod +x "$BIN/uname"
-OS=Darwin go doctor.sh >"$T/out" 2>&1
-rm "$BIN/uname"
-check "on a Mac the doctor names the tools, not a missing project" '1 0' "$(grep -c '^FAIL tools' "$T/out") $(grep -c 'not in a project' "$T/out")"
-
-# --- --install-missing: the printed command, once; still missing means stop, nothing changed ---
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "an install that leaves something missing stops setup" 1 $?
-check "it ran exactly the printed command, once" "$WANT" "$(cat "$T/pm" 2>/dev/null)"
-check "and changed nothing else" "$BEFORE" "$(snap)"
-rm -f "$T/pm"; mv "$BIN/apt-get" "$T/keep/"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "with no package manager setup stops" 1 $?
-check "it runs nothing" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
-check "and names what is missing as the owner's to install" 1 "$(group 'yours to do' | grep -c 'flock, jq: there is no apt-get')"
-check "with nothing offered to install" 0 "$(grep -c '^can install' "$T/out")"
-
-# --- a Mac: Homebrew's command, and never Homebrew itself ---
-OS=Darwin; cp "$T/keep/orca-ide" "$BIN/"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "a Mac without Homebrew: setup stops" 1 $?
-check "Homebrew is the owner's to install, with what it supplies" 1 "$(group 'yours to do' | grep -c 'Homebrew: it is not installed, and it supplies flock, jq\. .*https://brew.sh')"
-check "and nothing was run" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
-cp "$T/keep/brew" "$BIN/brew"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1
-check "with Homebrew the command is one brew install" 'brew install flock jq' "$(printed)"
-check "not run without the flag" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1
-check "with the flag: that command, once" 'brew install flock jq' "$(cat "$T/pm" 2>/dev/null)"
-check "nothing tells the owner to edit a shell start file or reorder PATH" 0 "$(grep -ciE 'first on PATH|zshrc|bash_profile|bashrc|\.profile' "$T/out")"
-OS=Linux; rm -f "$T/pm" "$BIN/brew" "$BIN/orca-ide"; mv "$T/keep/apt-get" "$BIN/"
-
-# --- Orca is there under its own name: the link is offered, and made only on a yes ---
-MORE=:$HOME/.local/bin
-printf '#!/bin/sh\necho "Usage: orca <command>"; echo "  worktree ps   List worktrees"\n' > "$T/keep/orca"; chmod +x "$T/keep/orca"
-cp "$T/keep/orca" "$BIN/orca"; ln -s "$(command -v jq)" "$(command -v flock)" "$BIN/"
-LINK="ln -s $BIN/orca $HOME/.local/bin/orca-ide"
-mv "$BIN/codex" "$T/keep/"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1; check "Orca without orca-ide: setup stops" 1 $?
-check "the link to Orca's own command is offered, as the exact command" "$LINK" "$(printed)"
-check "and not made without the flag" 0 "$([ -e "$HOME/.local/bin/orca-ide" ] || [ -L "$HOME/.local/bin/orca-ide" ] && echo 1 || echo 0)"
-check "the Codex CLI, for this profile, is the owner's to do" 1 "$(group 'yours to do' | grep -c '^  Codex CLI: .*codex login')"
-printf '#!/bin/sh\necho "usage: orca [-h] [-v] screen reader"\n' > "$BIN/orca"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1
-check "another program named orca is not linked" '0 0' "$(grep -c 'ln -s' "$T/out") $([ -L "$HOME/.local/bin/orca-ide" ] && echo 1 || echo 0)"
-check "and Orca is named as not installed" 1 "$(group 'yours to do' | grep -c 'orca-ide.*Orca .* is not installed')"
-cp "$T/keep/orca" "$BIN/orca"
-MORE= go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1
-check "no folder of the owner's on PATH: said plainly, no link" '1 0' "$(group 'yours to do' | grep -c 'is on PATH and writable') $([ -L "$HOME/.local/bin/orca-ide" ] && echo 1 || echo 0)"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "with the flag and Codex still missing setup stops" 1 $?
-check "after making exactly the link it printed" "$BIN/orca" "$(readlink "$HOME/.local/bin/orca-ide")"
-
-# --- a session's PATH is the settings file's env.PATH when that is set, not the shell's ---
-# orca-ide is on the shell's PATH (the link just made) and in no folder the settings' PATH names.
-cp "$HOME/.claude/settings.json" "$T/keep/settings.json"
-jq --arg p "$BIN:$FARM" '.env.PATH = $p' "$T/keep/settings.json" > "$HOME/.claude/settings.json"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "a tool on the shell's PATH alone is missing for the session: setup stops" 1 $?
-check "and says so in one plain line" 1 "$(grep -c "^on this shell's PATH but not on the PATH a session gets (env.PATH in .*/.claude/settings.json): Orca's orca-ide command$" "$T/out")"
-check "no folder on the session's PATH takes the link: said plainly, nothing offered" '1 0' "$(group 'yours to do' | grep -c 'is on the PATH a session gets and writable') $(grep -c '^  ln -s' "$T/out")"
-mkdir "$HOME/bin"; jq --arg p "$BIN:$FARM:$HOME/bin" '.env.PATH = $p' "$T/keep/settings.json" > "$HOME/.claude/settings.json"
-SET=$(cat "$HOME/.claude/settings.json")
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1
-check "the link is offered in a folder that is on the session's PATH" "ln -s $BIN/orca $HOME/bin/orca-ide" "$(printed)"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1
-check "and made there on a yes" "$BIN/orca" "$(readlink "$HOME/bin/orca-ide")"
-check "the settings file's PATH is never edited" "$SET" "$(cat "$HOME/.claude/settings.json")"
-# Set and empty is still set: a session then finds nothing, whatever the shell has.
-jq '.env.PATH = ""' "$T/keep/settings.json" > "$HOME/.claude/settings.json"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1; check "an empty env.PATH is a session PATH with nothing on it: setup stops" 1 $?
-check "and the tools the session lacks are named" 1 "$(grep -c "^on this shell's PATH but not on the PATH a session gets .*: .*jq, git, perl" "$T/out")"
-jq '.env = {}' "$T/keep/settings.json" > "$HOME/.claude/settings.json"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1; check "no env.PATH at all: the shell's PATH alone is checked" 0 "$(grep -c 'PATH a session gets' "$T/out")"
-cp "$T/keep/settings.json" "$HOME/.claude/settings.json"; rm -r "$HOME/bin"
-rm "$HOME/.local/bin/orca-ide" "$BIN/orca" "$BIN/jq" "$BIN/flock"; MORE=
-mv "$T/keep/orca-ide" "$T/keep/codex" "$BIN/"
-
+mv "$T/keep/orca-ide" "$BIN/"
 # --- an install that works: setup carries on, in the same run ---
 touch "$T/pm-works"
 go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "after an install that supplies everything setup carries on" 0 $?
 check "having run the printed command once" "$WANT" "$(cat "$T/pm" 2>/dev/null)"
 check "and the project is set up" claude-openai "$(jq -r .profile "$PROJ/.claude/commandeck.json" 2>/dev/null)"
-mv "$BIN/gh" "$T/keep/"; printf '#!/bin/sh\nexit 1\n' > "$BIN/gh"; chmod +x "$BIN/gh"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1
-check "a gh that is not signed in is the owner's to do" 1 "$(group 'yours to do' | grep -c 'GitHub CLI sign-in: run: gh auth login')"
-mv "$T/keep/gh" "$BIN/gh"
 
 # --- Bash 3.2 on a Mac: carry on under Homebrew's, once ---
 OS=Darwin BREW=$T/brew

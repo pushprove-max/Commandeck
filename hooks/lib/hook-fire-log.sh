@@ -54,7 +54,6 @@
 # COMMANDECK_HOOK_FIRE_LOG names one exact file instead, for the self-tests, and
 # nothing beside it is ever deleted.
 #
-# Self-test: bash hooks/__tests__/hook-fire-log.test.sh
 . "${BASH_SOURCE[0]%/*}/project.sh"
 
 # Installed for the user, the plugin's hooks are run in every project on the

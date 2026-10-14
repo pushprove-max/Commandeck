@@ -26,9 +26,7 @@ merges with `merge-unit-local.sh {unit}`.
   ONE whole run of every test file this build touched starts in the background
   beside the closing pass, and never before an earlier pass. A first pass that ends GO with nothing committed after it
   needs no closing pass: that GO merges, and the runs beside it were the
-  closing run. A test file with a case selector says so in its header (this
-  plugin's own `builder.test.sh` takes `COMMANDECK_SHELL_TEST_CASE=<case>[,<case>]`;
-  a wrong name fails).
+  closing run. A test file with a case selector says so in its header.
 - The closing run is the test files this build touched, and no others.
 - A command expected to run over 60 seconds, a test or not, starts in the background
   (Bash `run_in_background`); work on while it runs. Read every background result before the closing pass:

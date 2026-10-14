@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# install-fixture.sh -- sourced by setup.test.sh, uninstall-snapshot.test.sh and
-# doctor.test.sh. One machine in a temp folder: a HOME that another tool has
+# install-fixture.sh -- sourced by setup.test.sh, setup-requirements.test.sh and
+# uninstall-snapshot.test.sh. One machine in a temp folder: a HOME that another tool has
 # already written to (its own Codex hook and trust entry, its own permission
 # list, status line, background job and instruction file), a project, and the
 # plugin copied OUTSIDE any checkout, as Claude Code's plugin cache holds it.

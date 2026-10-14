@@ -137,8 +137,7 @@ fi
 
 # CONTRACT of the discard checks, from here to the end. A seat belt against a
 # plain mistake, not a sandbox. They are the checks as they were before the
-# quote reader was reworked, text for text: git-safety-parity.refute.test.sh
-# holds them to blocking everything they blocked then.
+# quote reader was reworked, text for text.
 # Known limits, not screened: eval, bash -c '<string>' and any other shell
 # given a string, xargs, aliases and functions, a script file.
 # Block git reset --hard on main

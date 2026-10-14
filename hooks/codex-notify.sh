@@ -5,7 +5,7 @@
 # {"type":"agent-turn-complete", "last-assistant-message":"...", ...}. The run
 # id comes from the file the main session writes at dispatch time; no run file,
 # no message. $HOME/.claude/hooks/codex-notify.sh links here; keep in parity
-# with its Claude twin, claude-worker-notify.sh (worker-notify.test.sh).
+# with its Claude twin, claude-worker-notify.sh.
 PAYLOAD=${1:-}
 HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # Codex launches this outside the dispatcher, so its fire-log row is Codex's.

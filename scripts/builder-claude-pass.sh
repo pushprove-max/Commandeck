@@ -7,5 +7,4 @@
 #
 # One body for both passes, so the proof cannot drift between them: this file
 # only picks the reviewer.
-# Self-test: bash scripts/__tests__/builder-claude-pass.test.sh
 COMMANDECK_PASS=claude exec bash "$(dirname "${BASH_SOURCE[0]}")/builder-codex-pass.sh" "$@"

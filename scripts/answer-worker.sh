@@ -11,7 +11,6 @@
 # pane's session log; otherwise this exits 1 and says so.
 #
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
-# Self-test: bash scripts/__tests__/answer-worker.test.sh
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/codex-helpers.sh"

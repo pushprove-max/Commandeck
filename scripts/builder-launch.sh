@@ -24,7 +24,6 @@
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
 # routing-override line, written by the call that opens the Builder.
-# Self-test: bash scripts/__tests__/builder.test.sh, builder-claude-pass.test.sh
 set -euo pipefail
 USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] <unit> <batch-brief>"
 RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON=''

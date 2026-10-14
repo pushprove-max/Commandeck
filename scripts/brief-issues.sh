@@ -16,7 +16,6 @@
 # Main's rulings file adds the issues its numbered lines name.
 # shortcut: an issue mentioned on an item's own first line counts as a work
 # item; give the briefs a marked issue list if that ever miscounts.
-# Self-test: bash scripts/__tests__/brief-issues.test.sh
 set -uo pipefail
 list() { awk '!s[$0]++' | jq -Rcn '[inputs | select(length > 1) | if startswith("#") then (.[1:] | tonumber) else .[1:] end]'; }
 [ "${1:-}" != --list ] || { list; exit; }

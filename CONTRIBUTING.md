@@ -17,9 +17,7 @@ bash scripts/run-shell-tests.sh
 Every change to the plugin raises the version in `.claude-plugin/plugin.json` and the README's badge, with a `CHANGELOG.md` entry: the third part for a fix, the second for new behaviour.
 `ci/version-check.sh` fails when a plugin file changed against the main branch and the version did not; a change to the docs or to `ci/` alone does not count.
 
-They need `bash`, `git`, `ripgrep`, `jq` and `perl`. The dashboard's DOM tests
-also need `jsdom` 26, installed with `npm`; `COMMANDECK_TEST_NODE_MODULES` is
-the `node_modules` folder it lands in.
+They need `bash`, `git`, `ripgrep`, `jq` and `perl`.
 
 ## Pull requests
 

@@ -41,7 +41,7 @@ pane_word() {
 pane_title() { printf '%s%s — %s\n' "$(pane_word "$1")" "${3:+ $3}" "$2"; }
 # The one role -> lane table: the dashboard column a working pane of that role
 # puts its unit in. Every routing.json role has an entry
-# (routing-ssot.guard.test.sh); null is a seat, never a unit stage. `reviewer`
+# null is a seat, never a unit stage. `reviewer`
 # is review-round.sh's title word for every review seat.
 ROLE_LANES='{
   "plan-author": "planning", "brief-reviewer": "planning", "design-coauthor": "planning",

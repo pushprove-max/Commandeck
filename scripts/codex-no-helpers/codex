@@ -6,7 +6,6 @@
 # its own Serena, code graph and language servers and leaves them running.
 # Nothing in the Codex home changes; the names are read from its config at each
 # run, so a server added there later is off here too.
-# Self-test: bash scripts/__tests__/builder.test.sh
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The real codex is the next one on PATH; with this folder left in, exec finds this script again.
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$HERE" | paste -sd: -)
