@@ -151,6 +151,20 @@ def read_history(path):
     return sorted(rows)
 
 
+def request_key(r):
+    """The id one request is counted under, or None.
+
+    Behind an API proxy a line has no requestId (#47), but every assistant line
+    carries message.id, shared by the lines a streamed request writes (each has
+    its own uuid). The uuid is the last resort.
+    """
+    m = r.get("message")
+    for k in (m.get("id") if isinstance(m, dict) else None, r.get("requestId"), r.get("uuid")):
+        if isinstance(k, str) and k:
+            return k
+    return None
+
+
 def request_row(r):
     """[time, model, input, 5-min cache write, 1-hour cache write, cache read, output] or None.
 
@@ -162,8 +176,8 @@ def request_row(r):
     usage.iterations: the top-level counts leave it out. Each one follows
     the seven fields as its own row of the same shape, under its own model.
     """
-    rid, at, msg = r.get("requestId"), epoch(r.get("timestamp")), r.get("message")
-    if r.get("type") != "assistant" or not isinstance(rid, str) or at is None or not isinstance(msg, dict):
+    at, msg = epoch(r.get("timestamp")), r.get("message")
+    if r.get("type") != "assistant" or at is None or not isinstance(msg, dict):
         return None
     u = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
     n = lambda d, k: d.get(k) if isinstance(d.get(k), int) else None
@@ -203,13 +217,14 @@ LONG_PROMPT = 100_000
 # Codex's models are priced from the parts of the name, not one row per id (the owner's ruling): the
 # version and the tier word, then the mode (":fast" is Codex's "priority") and the prompt size. Rates
 # from the Standard and Fast tables of https://developers.openai.com/api/docs/pricing, read 2026-10-12
-# (a cache write is 1.25x input there too); prompts over 272K tokens take the long rate. A known tier
+# (luna: read 2026-10-14; a cache write is 1.25x input there too); prompts over 272K tokens take the long rate. A known tier
 # prices every version of it (the owner's ruling, #36): a version other than the one the rate was read
 # for is priced by tier, and says so. A name with no known tier, or any other part (-mini, a date,
 # another mode), matches nothing and stays unpriced.
 CODEX_NAME = re.compile(r"gpt-(\d+(?:\.\d+)?)-([a-z]+)(:fast)?")
 CODEX_RULES = {  # tier: (version the rate was published for, {mode: (short-prompt rate, long-prompt rate)})
     "sol": ("6.1", {"": ((2.0, 10.0, 0.10), (4.0, 15.0, 0.20)), ":fast": ((4.0, 20.0, 0.20), (8.0, 30.0, 0.40))}),
+    "luna": ("6", {"": ((0.10, 0.50, 0.01), (0.20, 0.75, 0.02)), ":fast": ((0.20, 1.00, 0.02), (0.40, 1.50, 0.04))}),
     "astra": ("6", {"": ((10.0, 50.0, 1.00), (20.0, 75.0, 2.00)), ":fast": ((20.0, 100.0, 2.00), (40.0, 150.0, 4.00))}),
 }
 CODEX_LONG_PROMPT = 272_000
@@ -322,8 +337,8 @@ def requests(projects, cache_path, since, now, folders=False):
         with open(cache_path) as f:
             cache = json.load(f)
         offsets, seen, where = cache["offsets"], cache["requests"], cache["cwd"]
-        # Version 4 keeps each request's working folder beside its row; an older cache is read again.
-        if cache.get("version") != 4 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict):
+        # Version 5 keys a request on message.id, not requestId; an older cache is read again.
+        if cache.get("version") != 5 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict):
             raise ValueError("cache from before requests kept their working folder")
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         offsets, seen, where = {}, {}, {}
@@ -364,21 +379,22 @@ def requests(projects, cache_path, since, now, folders=False):
                     if not line.endswith(b"\n"):
                         break  # a half-written last line waits for the next call
                     off += len(line)
-                    if b'"requestId"' not in line or b'"usage"' not in line:
+                    if b'"usage"' not in line:
                         continue
                     try:
                         r = json.loads(line)
                     except ValueError:
                         continue
                     row = request_row(r) if isinstance(r, dict) else None
-                    if row:
-                        seen[r["requestId"]] = row  # a streamed request's last line carries its final usage
-                        where[r["requestId"]] = r.get("cwd")
+                    key = request_key(r) if row else None
+                    if key:
+                        seen[key] = row  # a streamed request's last line carries its final usage
+                        where[key] = r.get("cwd")
             live[path] = off
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 4, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}}, f)
+        json.dump({"version": 5, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}}, f)
     os.replace(tmp, cache_path)
     if unread or any(not isinstance(e, FileNotFoundError) for e in unlisted):
         return None

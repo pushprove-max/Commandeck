@@ -31,6 +31,17 @@ behind a proxy finds its model.
   codex-reviewer=` clears it.
 - Doctor and setup say whether Codex goes through a proxy, and a refusal
   names the fix that fits.
+- Claude cost behind an API proxy (#47). A proxy writes session lines with
+  no `requestId`, and the "Cost today" tile showed $0.00. A line with no
+  `requestId` is now counted under its `message.id` (a streamed request
+  writes several lines with one `message.id`; the last holds the final
+  usage), else its `uuid`, so a request is never counted twice. A log where
+  every line has a `requestId` totals as before. Dollars are still a
+  list-price equivalent, not a bill.
+- `gpt-6-luna` is priced from its published list price (read 2026-10-14);
+  a new luna version takes the tier's price and says so.
+- The doctor no longer prints the "Python 3.11 or newer" fault twice when
+  Python has no tomllib.
 
 ## 0.4.2 -- 2026-10-14
 

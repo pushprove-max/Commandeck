@@ -30,20 +30,26 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 | (reduce ($ri[] | select(.value.event == "subagent-stop" and .value.agent_id != null)) as $e ({}; .[$e.value.agent_id] = $e.key)) as $lastStop
 | (($r | map(select(.event == "tool-end" or .event == "search-refused" or .event == "tool-refused"), (select(.event == "batch-end") | .uses[]? | {use: .})))
   + [$ri[] | select(.value.event == "tool-start" and .value.agent != null and ($lastStop[.value.agent] // -1) > .key) | {use: .value.use}]) as $ended
+# Lookup objects for the loops below: a scan of a whole list per row ran one cycle past 25 minutes on a real log.
+| (reduce $ended[] as $e ({}; if $e.use != null then .[$e.use | tostring] = true else . end)) as $endedSet
+| (reduce $se[] as $e ({}; if $e.agent_id != null then .[$e.agent_id | tostring] = true else . end)) as $stopSet
 | ($r | map(select(.event == "tool-end"))) as $ends
 | ($r | map(select(.event == "codex-start"))) as $cs
 | ($r | map(select(.event == "codex-end"))) as $ce
 | ($r | map(select(.event == "subagent-start"))) as $ss
 | ($r | map(select(.event == "subagent-request"))) as $sr
 | ([$r[].ts | ep | select(. != null)] | max) as $last
-| ([$starts[] | select(.use != null and .kind != "codex" and (.use as $u | any($ended[]; .use == $u) | not))]) as $pending
-| ([$starts[] | select(.use == null or (.use as $u | any($ended[]; .use == $u) | not))] | length > 0) as $openTool
+# A helper's own calls by use id, then each helper's newest row: its own rows, its stops, and the end rows of its calls.
+| (reduce ($starts[] | select(.agent != null and (.use | type) == "string")) as $e ({}; .[$e.use] += [$e.agent])) as $useOwners
+| (reduce $r[] as $e ({}; reduce ([$e.agent, $e.agent_id] + (if ($e.use | type) == "string" then ($useOwners[$e.use] // []) else [] end) | map(select(. != null)) | unique | .[]) as $k (.; .[$k | tostring] = ([.[$k | tostring], $e.ts] | max)))) as $seenBy
+| ([$starts[] | select(.use != null and .kind != "codex" and ($endedSet[.use | tostring] | not))]) as $pending
+| ([$starts[] | select(.use == null or ($endedSet[.use | tostring] | not))] | length > 0) as $openTool
 # A pass ends at the first codex-end of its pass and round that FOLLOWS it in
 # the log: a round run again is open until its own end, whatever the first try left.
 | ([$ri[] | select(.value.event == "codex-start") | .key as $i | .value as $c
     | {c: $c, e: (first($ri[] | select(.key > $i and .value.event == "codex-end" and .value.pass == $c.pass and .value.round == $c.round) | .value) // null)}]) as $cx
 | ([$cx[] | select(.e == null) | .c]) as $openCodex
-| ([$ss[] | select(.agent_id == null or (.agent_id as $a | any($se[]; .agent_id == $a) | not))]) as $openSub
+| ([$ss[] | select(.agent_id == null or ($stopSet[.agent_id | tostring] | not))]) as $openSub
 | {
     lastAt: (if $last == null then null else $last | todate end),
     round: ($cs | last | .round // null),
@@ -83,8 +89,8 @@ map(select(type == "object" and (.event | type) == "string")) as $r
     waiting: ([($openCodex[] | {kind: "codex", what: .pass, round: .round, since: .ts}),
                # seenAt: the helper's newest row, so main-watch can tell a helper at work from one that died with no stop.
                # An end row names no agent: it is the helper's when its use is one of the helper's calls.
-               ($openSub[] | .agent_id as $a | ([$starts[] | select($a != null and .agent == $a) | .use | strings]) as $us
+               ($openSub[] | .agent_id as $a
                  | {kind: "subagent", what: .type, round: null, since: .ts,
-                    seenAt: ([$r[] | select($a != null and (.agent == $a or .agent_id == $a or (.use as $u | $u != null and any($us[]; . == $u)))) | .ts] + [.ts] | max)}),
+                    seenAt: ([($a | if . == null then null else $seenBy[tostring] end), .ts] | max)}),
                ($pending[] | {kind: "tool", what: .tool, round: null, since: .ts})] | sort_by(.since))
   }

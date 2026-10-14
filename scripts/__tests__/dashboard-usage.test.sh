@@ -69,6 +69,11 @@ check "its long-prompt rate past 272K comes from the same rule" 1.215 "$(cx 'usd
 check "and its fast mode, Codex's priority tier, too" 0.82 "$(cx 'usd("gpt-6.1-sol:fast", 200_000)')"
 check "the other published id, normal and fast, long and short" "[2.05, 6.075, 4.1, 12.15]" \
   "$(cx '[usd(m, n) for m in ("gpt-6-astra", "gpt-6-astra:fast") for n in (200_000, 300_000)]')"
+# luna is published (#47, list prices read 2026-10-14): $0.10 in, $0.50 out, $0.20 and $0.75 past 272K, fast doubles the short rate.
+check "gpt-6-luna is priced from its published rows: short, long, fast, fast long" "[0.0205, 0.06075, 0.041, 0.1215]" \
+  "$(cx '[usd(m, n) for m in ("gpt-6-luna", "gpt-6-luna:fast") for n in (200_000, 300_000)]')"
+check "a new version of luna takes luna's price, by tier" "[0.0205, True, False]" \
+  "$(cx '[usd("gpt-6.1-luna", 200_000), d.by_tier([0, "gpt-6.1-luna", 1, 0, 0, 0, 1]), d.by_tier([0, "gpt-6-luna", 1, 0, 0, 0, 1])]')"
 check "no Codex id has a row of its own in the price tables" "[]" "$(cx '[m for m in (*d.PRICES, *d.LONG_PRICES) if m.startswith("gpt-")]')"
 check "a new version of a known tier takes the tier's price, every mode and prompt size" \
   "[0.41, 1.215, 0.82, 0.41, 2.05, 12.15]" \
@@ -76,7 +81,7 @@ check "a new version of a known tier takes the tier's price, every mode and prom
 check "a tier-priced figure says it is by tier, and a published id's price does not" "[True, True, True, False, False, False, False]" \
   "$(cx '[d.by_tier([0, m, 1, 0, 0, 0, 1]) for m in ("gpt-6.2-sol", "gpt-6.2-sol:fast", "gpt-6.1-astra", "gpt-6.1-sol", "gpt-6-astra:fast", "gpt-9-nova", "claude-opus-5-5")]')"
 check "a name with no known tier, or any part the rule does not know, stays unpriced" "[None, None, None, None, None, None, None]" \
-  "$(cx '[usd(m, 1000) for m in ("gpt-6.1-sol-mini", "gpt-6.1-luna", "gpt-9-nova", "gpt-6.1-sol-2026-10-01", "gpt-6.1-sol:flex", "xgpt-6.1-sol", "gpt-6.1-sol ")]')"
+  "$(cx '[usd(m, 1000) for m in ("gpt-6.1-sol-mini", "gpt-6-lunar", "gpt-9-nova", "gpt-6.1-sol-2026-10-01", "gpt-6.1-sol:flex", "xgpt-6.1-sol", "gpt-6.1-sol ")]')"
 check "and it is named as left out of the total" "['gpt-9-nova', 'gpt-6.1-sol-mini']" \
   "$(cx 'd.unpriced_models([[0, "gpt-9-nova", 1, 0, 0, 0, 1], [0, "gpt-6.2-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol-mini", 1, 0, 0, 0, 1]])[::-1]')"
 check "the week and the day carry the tier-priced dollars, and an unknown tier leaves the total partial" "[0.41, 0.82, False, ['gpt-9-nova']]" \

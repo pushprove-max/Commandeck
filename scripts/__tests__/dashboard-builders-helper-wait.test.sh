@@ -38,5 +38,19 @@ check "a call begun after the helper's last stop is still pending until it ends"
 check "the helper's newest row counts the end of its own call" "\"$(iso 10)\"" \
   "$({ start 900; open 890; printf '{"ts":"%s","event":"tool-end","use":"o890","ok":true}\n' "$(iso 10)"; } | card '.waiting[] | select(.kind == "subagent") | .seenAt')"
 
+# A big log must not take a whole-list scan per row (DASH-PERF-47): 300 helpers with ten calls each,
+# a third left running, ran one cycle past 10 s of CPU before the lookups, under 1 s after. 5 s is the
+# bound, far from both. The counts are what the card said before.
+big() { jq -n -c '[range(300) as $h | ("a\($h)") as $a
+  | {ts: "2026-10-01T00:00:00Z", event: "subagent-start", agent_id: $a, type: "Explore"},
+    (range(10) as $c | {ts: "2026-10-01T00:00:01Z", event: "tool-start", use: "u\($h)-\($c)", agent: $a, tool: "Grep", kind: "tool", call: "c\($h)-\($c)", timeoutSec: null},
+      {ts: "2026-10-01T00:00:02Z", event: "tool-end", use: "u\($h)-\($c)", ok: true}),
+    (select($h % 3 != 0) | {ts: "2026-10-01T00:00:03Z", event: "subagent-stop", agent_id: $a, type: "Explore", model: "m", tokens: {input: 1, cachedInput: 1, output: 1}})] | .[]'; }
+BIGLOG=$(mktemp); big > "$BIGLOG"
+T0=$SECONDS; BIGOUT=$(card '[([.waiting[] | select(.kind == "subagent")] | length), ([.waiting[] | select(.kind == "tool")] | length)]' < "$BIGLOG"); T1=$((SECONDS - T0))
+rm -f "$BIGLOG"
+check "300 helpers and 6000 call rows give the card: 100 helpers running, no call pending" "[100,0]" "$BIGOUT"
+check "and the card is built in under 5 seconds (took ${T1}s)" 1 "$([ "$T1" -lt 5 ] && echo 1 || echo 0)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
