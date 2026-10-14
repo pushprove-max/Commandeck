@@ -4,3 +4,4 @@ __pycache__/
 .claude/builder-events.jsonl
 .claude/briefs/
 .claude/routing-log
+.claude/metrics/seat-events.jsonl

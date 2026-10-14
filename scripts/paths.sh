@@ -22,9 +22,10 @@ pp_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
 # on a Mac's PATH, starts a script the Mac's own Bash 3.2 ran again under
 # Homebrew's, and holds the one requirements list. What every script needs
 # from that list is checked here on a Mac (its own tools are BSD ones and its
-# Bash is 3.2); anything missing stops the caller before any work.
+# Bash is 3.2); anything missing stops the caller before any work. It asks
+# uname, not COMMANDECK_HOST_OS: a self-test's pretend Mac has no Homebrew.
 . "$(dirname "${BASH_SOURCE[0]}")/requirements.sh"
-if [ "$REQ_OS" = Darwin ] && ! req_check all; then
+if [ "$REQ_UNAME" = Darwin ] && ! req_check all; then
   { echo "paths.sh: Mac preflight failed."; req_report
     echo "setup installs what it can on a yes: bash $(printf '%q' "$REQ_DIR")/setup.sh --profile claude|claude-openai --install-missing"; } >&2
   return 1

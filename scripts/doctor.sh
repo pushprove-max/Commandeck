@@ -19,7 +19,7 @@ tools() {
   else bad "tools: requirements are missing. Setup installs what it can on a yes: bash $(printf '%q' "$HERE")/setup.sh --install-missing"; req_report; fi
 }
 # On a Mac paths.sh refuses to load when a tool every script needs is missing: a tools failure, not a missing project.
-[ "$REQ_OS" != Darwin ] || req_check all || { tools; exit 1; }
+[ "$REQ_UNAME" != Darwin ] || req_check all || { tools; exit 1; }
 . "$HERE/paths.sh" || { echo "FAIL project: not in a project; run this in the checkout setup was run in"; exit 1; }
 . "$HERE/install-lib.sh"
 

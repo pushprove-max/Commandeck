@@ -61,7 +61,10 @@ grep -E '^(can install|yours to do|  )' "$T/out" > "$T/setup-set"
 go doctor.sh >"$T/out" 2>&1; check "the doctor fails on the same PATH" 1 $?
 check "with one FAIL line for the tools" 1 "$(grep -c '^FAIL tools' "$T/out")"
 check "and the same missing set as setup, word for word" "$(cat "$T/setup-set")" "$(grep -E '^(can install|yours to do|  )' "$T/out")"
+# The preflight asks uname, so a Linux runner plays the Mac with both.
+printf '#!/bin/sh\necho Darwin\n' > "$BIN/uname"; chmod +x "$BIN/uname"
 OS=Darwin go doctor.sh >"$T/out" 2>&1
+rm "$BIN/uname"
 check "on a Mac the doctor names the tools, not a missing project" '1 0' "$(grep -c '^FAIL tools' "$T/out") $(grep -c 'not in a project' "$T/out")"
 
 # --- --install-missing: the printed command, once; still missing means stop, nothing changed ---

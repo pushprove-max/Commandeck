@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.2 -- 2026-10-14
+
+CI is green again on Linux. The plugin works the same for the owner.
+
+- The Mac preflight in `scripts/paths.sh` (and the doctor's copy of it)
+  read the self-tests' pretend system, `COMMANDECK_HOST_OS`. So a Linux
+  runner that a test called a Mac asked for Homebrew and stopped. It now
+  asks `uname`, the machine it runs on.
+- `plugin.test.sh` pinned version 0.3.0, so every release broke it. It now
+  reads the version from the manifest and checks the README badge and the
+  newest CHANGELOG entry against it.
+- The day tile's test expected no model name after "requests unpriced". The
+  tile names the unpriced models, as 0.4.0 says, so the test now expects
+  the name.
+- `.claude/metrics/seat-events.jsonl` is ignored by git.
+
 ## 0.4.1 -- 2026-10-14
 
 Codex prices by tier, and a decision names a unit only as a whole name.

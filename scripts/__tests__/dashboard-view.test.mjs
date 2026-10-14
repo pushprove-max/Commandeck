@@ -950,7 +950,7 @@ test('cost_today_tile: the strip shows the project\'s Claude and Codex cost for 
   assert.equal(whole.className, 'measure');
   const part = tile({ demo: { spentUsd: 1234.5, claudeUsd: 1234.5, codexUsd: null, estimatedUsd: 4, unpricedRequests: 2, unpricedModels: ['gpt-9-nova'], complete: false } });
   assert.equal(text(part, '.measure-value'), 'at least $1.2k', 'a total with a part missing is a floor');
-  assert.equal(text(part, '.measure-detail'), 'Claude $1.2k + Codex not measured, list price · $4.00 estimated · 2 requests unpriced');
+  assert.equal(text(part, '.measure-detail'), 'Claude $1.2k + Codex not measured, list price · $4.00 estimated · 2 requests unpriced (gpt-9-nova)', 'an unpriced model is named, as the week note names it');
   assert.ok(part.classList.contains('warn'));
   // #36: a Codex price taken from its tier, not its exact version, says so.
   const tier = tile({ demo: { spentUsd: 2, claudeUsd: 0, codexUsd: 2, estimatedUsd: 0, tierUsd: 1.5, unpricedRequests: 0, unpricedModels: [], complete: true } });

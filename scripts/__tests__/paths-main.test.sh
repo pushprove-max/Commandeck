@@ -50,5 +50,17 @@ check "the session's project decides it, as for everything else" "$W $W" "$(runf
 check "a scratch override moves both" "$T/s/current-run $T/s/current-run" "$(runfile "$T/two" COMMANDECK_SCRATCH="$T/s")"
 check "a named project moves both" "$W $W" "$(runfile "$T/two" COMMANDECK_MAIN="$T/one")"
 
+# The Mac preflight guards the machine it runs on. COMMANDECK_HOST_OS only
+# picks the service manager a self-test drives: a Linux runner told it is a Mac
+# lacks Homebrew, and must still load (CI run 38555384170).
+for os in Linux Darwin; do mkdir -p "$T/$os"; printf '#!/bin/sh\necho %s\n' "$os" > "$T/$os/uname"; chmod +x "$T/$os/uname"; done
+# A preflight that runs fails: the session's PATH holds no tools, and no Homebrew is added to it.
+mkdir -p "$HOME/.claude"; printf '{"env":{"PATH":"%s"}}\n' "$T/nowhere" > "$HOME/.claude/settings.json"
+check "a Linux host a self-test calls a Mac runs no Mac preflight" "$T/two" \
+  "$(main "$I" "$T/two" PATH="$T/Linux:$PATH" COMMANDECK_HOST_OS=Darwin COMMANDECK_BREW_PREFIX="$T/nowhere")"
+check "a Mac a self-test calls Linux still runs it" 1 \
+  "$(main "$I" "$T/two" PATH="$T/Darwin:$PATH" COMMANDECK_HOST_OS=Linux COMMANDECK_BREW_PREFIX="$T/nowhere" | grep -c 'Mac preflight failed')"
+rm "$HOME/.claude/settings.json"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
