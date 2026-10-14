@@ -37,7 +37,9 @@ if [ "$GITDIR" = "$COMMON" ] || [ "${TOP##*/}" = Chief-of-Staff ]; then
   exit 0
 fi
 
-run=${COMMANDECK_RUN:-$( { tr -d '[:space:]' < "$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_run_file)"; } 2>/dev/null)}
+# Two steps, not ${X:-$( { ...; } )}: Bash 3.2 cannot parse a brace group there.
+run=${COMMANDECK_RUN:-}
+[ -n "$run" ] || run=$( { tr -d '[:space:]' < "$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_run_file)"; } 2>/dev/null)
 printf '%s\n' \
   "BLOCKED: AskUserQuestion in a worker pane is never seen: it draws in this pane only and does not reach main's inbox, so you would wait forever." \
   "Ask main instead, ONCE, with the question, the options and your recommendation in one line:" \

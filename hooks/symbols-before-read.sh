@@ -123,14 +123,14 @@ if [[ "$INPUT" == *scripts/* ]]; then
   SH_CWD=$CWD
   SH_TARGET=$(
     case "$TOOL" in
-      Read|Grep) echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // empty' ;;
-      Bash) echo "$INPUT" | jq -r '.tool_input.command // empty' \
+      (Read|Grep) echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // empty' ;;
+      (Bash) echo "$INPUT" | jq -r '.tool_input.command // empty' \
           | sed -E 's/[[:space:]]*(&&|\|\||[;|])[[:space:]]*/\n/g' \
           | grep -E '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(cat|head|tail|sed|awk|nl|less|grep|rg)\b' \
           | grep -oE '[A-Za-z0-9_./~-]*scripts/[A-Za-z0-9_.-]+\.sh' ;;
     esac | while IFS= read -r p; do
-      case "$p" in /*) f=$p ;; "~/"*) f="$HOME/${p#\~/}" ;; *) f="$SH_CWD/$p" ;; esac
-      case "$f" in */scripts/__tests__/*) continue ;; */scripts/*.sh) ;; *) continue ;; esac
+      case "$p" in (/*) f=$p ;; ("~/"*) f="$HOME/${p#\~/}" ;; (*) f="$SH_CWD/$p" ;; esac
+      case "$f" in (*/scripts/__tests__/*) continue ;; (*/scripts/*.sh) ;; (*) continue ;; esac
       grep -qF -- '--help|-h)' "$f" 2>/dev/null && { echo "$p"; break; }
     done
   )

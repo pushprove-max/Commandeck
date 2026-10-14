@@ -53,9 +53,35 @@ check "and the model left out is named" '["mystery-1"]' "$(j '.today.demo.unpric
 check "with the usage reading refused the panel still has the day's cost, partial" true "$(j '.cost.today == .one')"
 check "with its own count and model left out" '[2,["mystery-1"]]' "$(j '[.cost.todayUnpriced, .cost.unpricedModels]')"
 check "and no week figure is made up without the reading" '[null,null,null]' "$(j '[.cost.week, .cost.projected, .usedPct]')"
-check "the Codex models this plugin launches have a price, fast and normal" 4 "$(cd "$ROOT/scripts" && python3 -c '
-import dashboard_limit as d
-print(sum(m in d.PRICES for m in ("gpt-6.1-sol", "gpt-6.1-sol:fast", "gpt-6-astra", "gpt-6-astra:fast")))')"
+# --- a Codex price comes from the parts of the model's name, never from a guess ---
+# The owner ruled out one price row per Codex id: the rule reads the version and the tier
+# the name states, then the mode and the prompt size. Only a published (version, tier)
+# is priced; a near name may cost something else, so it stays unpriced and the total partial.
+cx() { (cd "$ROOT/scripts" && python3 -c '
+import sys, dashboard_limit as d
+def usd(model, inp, out=1000):
+    p = d.price([0, model, inp, 0, 0, 0, out])
+    return None if p is None else round(p, 6)
+print(eval(sys.argv[1]))' "$1" 2>&1); }
+check "a published Codex id is priced by the rule: \$2 and \$10 per million" 0.41 "$(cx 'usd("gpt-6.1-sol", 200_000)')"
+check "its long-prompt rate past 272K comes from the same rule" 1.215 "$(cx 'usd("gpt-6.1-sol", 300_000)')"
+check "and its fast mode, Codex's priority tier, too" 0.82 "$(cx 'usd("gpt-6.1-sol:fast", 200_000)')"
+check "the other published id, normal and fast, long and short" "[2.05, 6.075, 4.1, 12.15]" \
+  "$(cx '[usd(m, n) for m in ("gpt-6-astra", "gpt-6-astra:fast") for n in (200_000, 300_000)]')"
+check "no Codex id has a row of its own in the price tables" "[]" "$(cx '[m for m in (*d.PRICES, *d.LONG_PRICES) if m.startswith("gpt-")]')"
+check "a known tier at a version with no published price stays unpriced, and so does a known version at another tier" \
+  "[None, None, None, None]" "$(cx '[usd(m, 1000) for m in ("gpt-6.2-sol", "gpt-7-sol", "gpt-6.1-astra", "gpt-6-sol")]')"
+check "a name with any part the rule does not know stays unpriced" "[None, None, None, None, None, None]" \
+  "$(cx '[usd(m, 1000) for m in ("gpt-6.1-sol-mini", "gpt-6.1-luna", "gpt-6.1-sol-2026-10-01", "gpt-6.1-sol:flex", "xgpt-6.1-sol", "gpt-6.1-sol ")]')"
+check "and it is named as left out of the total" "['gpt-6.2-sol', 'gpt-6.1-sol-mini']" \
+  "$(cx 'd.unpriced_models([[0, "gpt-6.2-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol-mini", 1, 0, 0, 0, 1]])[::-1]')"
+check "a rule-priced Codex fast mode is a published price, not an estimate" False "$(cx 'd.estimated([0, "gpt-6.1-sol:fast", 1, 0, 0, 0, 1])')"
+# Every Claude row exactly as it was before the rule: the rule is for Codex names only.
+check "every Claude price row is unchanged" True "$(cx '{m: p for m, p in d.PRICES.items() if m.startswith("claude-")} == {
+    "claude-fable-5-1": (10.0, 50.0, 0.25), "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-opus-4-8": (5.0, 25.0, 0.50),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.10), "claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-opus-5-5:fast": (8.0, 40.0, 0.40),
+    "claude-opus-4-8:fast": (10.0, 50.0, 1.00)} and {m: p for m, p in d.LONG_PRICES.items() if m.startswith("claude-")} == {
+    "claude-haiku-5-5": (0.50, 2.50, 0.05), "claude-haiku-5-5:fast": (1.0, 5.0, 0.1)}')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

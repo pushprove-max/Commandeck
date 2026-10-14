@@ -38,7 +38,7 @@ case "$FILE_PATH" in "$TOP"/*)
   if counted "$REL"; then
     # batch_paths: the other files of one Codex patch (codex-dispatch.sh), not written yet.
     N=$( { git -C "$TOP" diff --name-only HEAD 2>/dev/null; echo "$REL"
-           echo "$INPUT" | jq -r '.tool_input.batch_paths[]?' 2>/dev/null | while IFS= read -r p; do case $p in "$TOP"/*) echo "${p#"$TOP"/}" ;; esac; done; } | sort -u \
+           echo "$INPUT" | jq -r '.tool_input.batch_paths[]?' 2>/dev/null | while IFS= read -r p; do case $p in ("$TOP"/*) echo "${p#"$TOP"/}" ;; esac; done; } | sort -u \
       | while IFS= read -r f; do counted "$f" && echo "$f"; done | wc -l)
     if [ "$N" -gt 3 ]; then
       echo "BLOCKED: hand this edit to a worker: write the batch brief, then $LAUNCH <unit> <batch-brief>. It would be file $N of main's uncommitted change set (cap 3, outside .claude/briefs/, .claude/rules/, todo/, docs/, memory and *.md); or commit what is done first." >&2

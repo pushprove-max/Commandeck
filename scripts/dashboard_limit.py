@@ -24,6 +24,7 @@ the chart draws from that file.
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -181,15 +182,12 @@ def request_row(r):
 # are 1.25x input for the 5-minute TTL and 2x for 1 hour. Source:
 # https://platform.claude.com/docs/en/about-claude/pricing, as cached 2026-10-06.
 # The ":fast" Claude rows are that page's "Fast mode pricing" table, read
-# 2026-10-12; the cache multipliers stack on the fast input price. The gpt-*
-# rows are Codex's models, from the Standard and Fast tables of
-# https://developers.openai.com/api/docs/pricing, read 2026-10-12 (a cache
-# write is 1.25x input there too; "priority" in a Codex log is its fast mode).
-# A mode with no published price is priced by estimate() and its dollars are
-# reported as estimated. A model with no row and nothing to estimate from is
-# unpriced, never $0. Haiku 5.5 steps up for prompts over 100K tokens (input +
-# cache read + cache write) and the gpt-* models over 272K: PRICES holds the
-# short-prompt rate, LONG_PRICES the rest, LONG_AT a threshold that is not 100K.
+# 2026-10-12; the cache multipliers stack on the fast input price. Codex's
+# models are priced by CODEX_RULES below, not here. A mode with no published
+# price is priced by estimate() and its dollars are reported as estimated. A
+# model with no row and nothing to estimate from is unpriced, never $0. Haiku
+# 5.5 steps up for prompts over 100K tokens (input + cache read + cache write):
+# PRICES holds the short-prompt rate, LONG_PRICES the rest.
 PRICES = {
     "claude-fable-5-1": (10.0, 50.0, 0.25),
     "claude-opus-5-5": (4.0, 20.0, 0.20),
@@ -198,16 +196,33 @@ PRICES = {
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
     "claude-opus-5-5:fast": (8.0, 40.0, 0.40),
     "claude-opus-4-8:fast": (10.0, 50.0, 1.00),
-    "gpt-6.1-sol": (2.0, 10.0, 0.10),
-    "gpt-6.1-sol:fast": (4.0, 20.0, 0.20),
-    "gpt-6-astra": (10.0, 50.0, 1.00),
-    "gpt-6-astra:fast": (20.0, 100.0, 2.00),
 }
-LONG_PRICES = {"claude-haiku-5-5": (0.50, 2.50, 0.05),
-               "gpt-6.1-sol": (4.0, 15.0, 0.20), "gpt-6.1-sol:fast": (8.0, 30.0, 0.40),
-               "gpt-6-astra": (20.0, 75.0, 2.00), "gpt-6-astra:fast": (40.0, 150.0, 4.00)}
+LONG_PRICES = {"claude-haiku-5-5": (0.50, 2.50, 0.05)}
 LONG_PROMPT = 100_000
-LONG_AT = {m: 272_000 for m in LONG_PRICES if m.startswith("gpt-")}
+
+# Codex's models are priced from the parts of the name, not one row per id (the owner's ruling): the
+# version and the tier word, then the mode (":fast" is Codex's "priority") and the prompt size. Rates
+# from the Standard and Fast tables of https://developers.openai.com/api/docs/pricing, read 2026-10-12
+# (a cache write is 1.25x input there too); prompts over 272K tokens take the long rate. Only a
+# (version, tier) that is published matches: another version of a known tier may cost something else,
+# and a name with any other part (-mini, a date, another mode) matches nothing. Both stay unpriced.
+CODEX_NAME = re.compile(r"gpt-(\d+(?:\.\d+)?)-([a-z]+)(:fast)?")
+CODEX_RULES = {  # (version, tier): {mode: (short-prompt rate, long-prompt rate)}
+    ("6.1", "sol"): {"": ((2.0, 10.0, 0.10), (4.0, 15.0, 0.20)), ":fast": ((4.0, 20.0, 0.20), (8.0, 30.0, 0.40))},
+    ("6", "astra"): {"": ((10.0, 50.0, 1.00), (20.0, 75.0, 2.00)), ":fast": ((20.0, 100.0, 2.00), (40.0, 150.0, 4.00))},
+}
+CODEX_LONG_PROMPT = 272_000
+
+
+def codex_rates(model):
+    """(short-prompt rate, long-prompt rate) of a Codex model the rule prices by its name, or None."""
+    m = CODEX_NAME.fullmatch(model)
+    return CODEX_RULES.get(m.group(1, 2), {}).get(m.group(3) or "") if m else None
+
+
+def listed(model):
+    """Whether the model has a published price: a row of PRICES or a Codex rule."""
+    return model in PRICES or codex_rates(model) is not None
 
 
 def estimate(model):
@@ -224,18 +239,21 @@ LONG_PRICES.update({f"{m}:fast": tuple(2 * x for x in p) for m, p in list(LONG_P
 
 def estimated(row):
     """Whether this request, or an advisor call inside it, is priced by estimate()."""
-    return any(x[1] not in PRICES and estimate(x[1]) is not None for x in [row] + row[7:])
+    return any(not listed(x[1]) and estimate(x[1]) is not None for x in [row] + row[7:])
 
 
 def price(row):
-    p = PRICES.get(row[1]) or estimate(row[1])
+    codex = codex_rates(row[1])
+    p = PRICES.get(row[1]) or estimate(row[1]) or (codex and codex[0])
     if p is None:
         # Every count present and 0 costs $0 at any price; a missing count is unknown, so it stays unpriced.
         return 0.0 if row[2:7] == [0, 0, 0, 0, 0] and not row[7:] else None
     # A count the usage lacks is unknown, not 0: the request is unpriced, for every model.
     if any(not isinstance(n, (int, float)) for n in row[2:7]):
         return None
-    if row[1] in LONG_PRICES and sum(row[2:6]) > LONG_AT.get(row[1], LONG_PROMPT):
+    if codex and sum(row[2:6]) > CODEX_LONG_PROMPT:
+        p = codex[1]
+    elif row[1] in LONG_PRICES and sum(row[2:6]) > LONG_PROMPT:
         p = LONG_PRICES[row[1]]
     inp, out, read = p
     i, w5, w1, r, o = row[2:7]
@@ -248,7 +266,7 @@ def price(row):
 
 def unpriced_models(rows):
     """The models that leave these rows without a price, by name."""
-    return sorted({x[1] for r in rows if price(r) is None for x in [r] + r[7:] if x[1] not in PRICES and estimate(x[1]) is None})
+    return sorted({x[1] for r in rows if price(r) is None for x in [r] + r[7:] if not listed(x[1]) and estimate(x[1]) is None})
 
 
 def cost(rows, used, start, now):

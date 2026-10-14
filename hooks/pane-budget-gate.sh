@@ -65,7 +65,9 @@ if [ -n "$SID" ] && [ ! -e "$MCP_CHECKED" ]; then
       exit 2
     fi
     : > "$MCP_CHECKED"
-    RUN=${COMMANDECK_RUN:-$( { tr -d '[:space:]' < "$(pp_run_file)"; } 2>/dev/null)}
+    # Two steps, not ${X:-$( { ...; } )}: Bash 3.2 cannot parse a brace group there.
+    RUN=${COMMANDECK_RUN:-}
+    [ -n "$RUN" ] || RUN=$( { tr -d '[:space:]' < "$(pp_run_file)"; } 2>/dev/null)
     TOLD="Main could NOT be told (the send failed): send it yourself with orca-ide orchestration send --type escalation, then wait"
     [ -z "$RUN" ] || ! timeout 10 orca-ide orchestration send --run "$RUN" --to "run:$RUN" --type escalation \
       --subject "$UNIT: $MISSING missing from the worker pane" \

@@ -20,11 +20,11 @@ result=$(
     serve() { :; }
     orca-ide() {
       case " $* " in
-        *' --ack '*)
+        (*' --ack '*)
           echo ACK_SENT >&3
           echo '{"result":{"messages":[],"deliveryId":null}}'
           ;;
-        *)
+        (*)
           printf '{"result":{"deliveryId":"d1","messages":[
             {"id":"m1","subject":"ask","body":"%sTAIL"}]}}\n' \
             "$(printf 'x%.0s' {1..250})"

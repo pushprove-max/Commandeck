@@ -25,6 +25,8 @@
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"
+# The tests, and this runner's mapfile and wait -n, need Bash 4: with no newer Bash to restart under, say so.
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "run-shell-tests: the tests need Bash 4 or newer and this is $BASH_VERSION; on a Mac: brew install bash" >&2; exit 2; }
 ROOT=$(git rev-parse --show-toplevel)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}
@@ -44,7 +46,7 @@ ONLY_OWN_LANE=0
 
 if [ $# -gt 0 ] && [ "$1" != --list ]; then
   # Named files are relative to where the caller stood, not to $ROOT.
-  mapfile -t TESTS < <(for f in "$@"; do case $f in /*) echo "$f" ;; *) echo "$CALLER_PWD/$f" ;; esac; done | sort)
+  mapfile -t TESTS < <(for f in "$@"; do case $f in (/*) echo "$f" ;; (*) echo "$CALLER_PWD/$f" ;; esac; done | sort)
 else
   mapfile -t TESTS < <(ls hooks/__tests__/*.test.sh scripts/__tests__/*.test.sh 2>/dev/null | sort)
 fi

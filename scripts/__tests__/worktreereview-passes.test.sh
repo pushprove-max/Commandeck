@@ -527,6 +527,244 @@ json.dump(json.load(open(os.path.join(sys.argv[2], 'worktreereview-render-result
 subprocess.run([sys.executable, os.path.join(sys.argv[1], 'render.py'), os.path.join(wt, 'part.json'), os.path.join(wt, 'part.html')],
                check=True, capture_output=True)
 check('the page shows it beside the pass list', 1, open(os.path.join(wt, 'part.html')).read().count('Lines changed by the build: 1,234'))
+# Time a Builder sat waiting on the owner is not build time (the owner, 2026-10-14). A window given by hand
+# (--exclude) and one found in the idle gaps (behind an open decision for this unit, or after its DONE
+# until new work comes) come out of every clock figure, share and flag; cost stays as it was.
+import contextlib, io
+h = os.path.join(wt, 'home-cut')
+os.makedirs(os.path.join(h, '.claude', 'projects', '-w-unit-cut'))
+def say(s, text):
+    return {'type': 'assistant', 'timestamp': at(s), 'message': {'id': f'm{s}', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': text}],
+            'usage': {'input_tokens': 10, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'output_tokens': 5}}}
+def prompt(s):
+    return {'type': 'user', 'timestamp': at(s), 'message': {'content': 'carry on'}}
+with open(os.path.join(h, '.claude', 'projects', '-w-unit-cut', 'sess1.jsonl'), 'w') as f:
+    f.write('\n'.join(json.dumps(r) for r in [
+        {'type': 'user', 'timestamp': at(0), 'message': {'content': 'go'}},
+        say(10, 'asked main'), turn_end(20), prompt(60),            # A: 40 s inside D1, under two minutes: kept
+        say(90, 'asked again'), turn_end(100), prompt(400),         # B: inside D1 from 100 to 300: cut 200 s
+        say(490, 'working'), turn_end(500), prompt(800),            # C: inside a decision of unit-cut-2 only: kept
+        say(890, 'working'), turn_end(900), prompt(1200),           # D: no decision, no DONE: kept
+        call(1250, 'toolu_bgtest', 'Bash', run_in_background=True, description='Run the touched test file', command='bash run-shell-tests.sh c'),
+        answer(1251, 'toolu_bgtest', STARTED.format('b5')),
+        turn_end(1300), prompt(1600), notice(1610, 'toolu_bgtest'),  # E: inside D3, a test still running: kept
+        # F: the DONE marker ends a long last message, past the 220 characters a note keeps; cut 1660 to 2000.
+        say(1650, 'All built. ' + 'x' * 300 + '\nUNIT-CUT-DONE'), turn_end(1660), prompt(2000),
+        say(2090, 'more work'), turn_end(2100), prompt(2400),       # G: DONE was an earlier turn: kept, but for a hand window
+        say(2490, 'a question'), turn_end(2500), prompt(2800),      # H: inside D4, answered to this unit: cut 300 s
+        # I: DONE again, but a Codex run the pane never started as a tool works from 3000 to 3200: kept.
+        say(2950, 'Fixed.\nUNIT-CUT-DONE'), turn_end(2960), prompt(3300),
+        say(3400, 'done'),
+    ]) + '\n')
+os.makedirs(os.path.join(h, '.codex', 'sessions', '2023', '11', '14'))
+with open(os.path.join(h, '.codex', 'sessions', '2023', '11', '14', 'rollout-cut.jsonl'), 'w') as f:
+    f.write(json.dumps({'timestamp': at(3000), 'type': 'turn_context', 'payload': {'cwd': '/w/unit-cut', 'model': 'gpt-x', 'effort': 'high'}}) + '\n'
+            + json.dumps({'timestamp': at(3200), 'type': 'event_msg', 'payload': {'type': 'task_complete', 'last_agent_message': 'VERDICT: GO'}}) + '\n')
+decisions = os.path.join(wt, 'decisions.jsonl')
+with open(decisions, 'w') as f:
+    # The ledger is append-only: a decision's asked row (answeredAt null) stays above its answered row.
+    for d in [{'id': 'D1', 'askedAt': at(15), 'answeredAt': None, 'source': 'run 1 (unit-cut) question msg_1'},
+              {'id': 'D1', 'askedAt': at(15), 'answeredAt': at(300), 'source': 'run 1 (unit-cut) question msg_1', 'answer': 'A'},
+              {'id': 'D2', 'askedAt': at(450), 'answeredAt': at(900), 'source': 'run 2 (unit-cut-2) question msg_2', 'answer': 'B'},
+              {'id': 'D3', 'askedAt': at(1250), 'answeredAt': at(1700), 'source': 'run 1 (unit-cut) question msg_3', 'answer': 'A'},
+              {'id': 'D4', 'askedAt': at(2450), 'answeredAt': at(2900), 'source': 'main', 'answer': 'A. Sent to unit-cut (tag X).'}]:
+        f.write(json.dumps(d) + '\n')
+def collect_cut(out, decisions_file, *extra, unit='/w/unit-cut'):
+    argv0, home0 = sys.argv, os.environ['HOME']
+    collect.DECISIONS, sys.argv = decisions_file, ['collect.py', unit, '--out', os.path.join(wt, out), '--max-test-share', '0', *extra]
+    os.environ['HOME'] = h
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            collect.main()
+    finally:
+        sys.argv, os.environ['HOME'] = argv0, home0
+    return json.load(open(os.path.join(wt, out, 'result.json')))
+try:
+    cut = collect_cut('cut', decisions, '--exclude', f'{at(1700)}={at(1900)}', '--exclude', f'{at(2150)}={at(2250)}')
+except BaseException as e:  # argparse refuses an unknown option with SystemExit
+    cut = {'error': repr(e)[:300]}
+ts0 = collect.ts(at(0))
+windows = sorted((round(w['start'] - ts0), round(w['end'] - ts0), round(w['seconds']), w['reason']) for w in cut.get('cut', []))
+check('each cut window is listed with start, end, length and reason', [(100, 300, 200, 'decision D1'), (1660, 2000, 340, 'finished, awaiting answers'),
+      (1700, 1900, 200, 'by hand'), (2150, 2250, 100, 'by hand'), (2500, 2800, 300, 'decision D4')], windows)
+check('a hand window inside an auto window cuts its seconds once: 940 s in all', 940, round(cut.get('cut_s', -1)))
+check('the clock adds up to the wall time minus the cut windows', 3400 - 940, round(sum(cut.get('clock', {}).values())))
+check('the idle slices lose exactly the cut seconds, a gap with a test or Codex running keeps all of its own',
+      (40 + 100 + 300 + 300 + 200 + 40 + 100, 300, 200), tuple(round(cut.get('clock', {}).get(k, 0)) for k in ('idle', 'idle_tests', 'codex')))
+check('each idle gap carries the seconds cut from it', [0, 200, 0, 0, 0, 340, 100, 300, 0], [round(g.get('cut_s', -1)) for g in cut.get('idle_gaps', [])])
+check('a Codex pass fully cut by hand trips no review flag', None,
+      collect.review_flag([{'n': 1, 'start': 0, 'end': 31 * 60, 'cut_s': 31 * 60}], 30))
+check('each stage loses its share of the cut', [round(s['end'] - s['start'] - s.get('cut_s', 0)) for s in cut.get('stages', [])],
+      [round(sum(s['clock'].values())) for s in cut.get('stages', [])])
+c = cut.get('clock', {})
+check('the test-and-idle flag is a share of the clock that was not cut',
+      [f"{100 * (c.get('tests', 0) + c.get('idle', 0) + c.get('idle_tests', 0) + c.get('idle_job', 0)) / (3400 - 940):.0f}% of the clock on tests or idle waits (more than 0%)"],
+      [x for x in cut.get('flags', []) if 'idle' in x])
+try:
+    plain = collect_cut('cut-plain', os.path.join(wt, 'no-decisions.jsonl'))
+except BaseException as e:
+    plain = {'error': repr(e)[:300]}
+check('with no decisions file and no hand window only the wait after DONE is cut', [(1660, 2000)],
+      [(round(w['start'] - ts0), round(w['end'] - ts0)) for w in plain.get('cut', [])])
+check('and cost is the same with or without the cuts', plain.get('totals'), cut.get('totals'))
+page = subprocess.run([sys.executable, os.path.join(sys.argv[1], 'render.py'), os.path.join(wt, 'cut', 'result.json'), os.path.join(wt, 'cut.html')], capture_output=True, text=True)
+shown = open(os.path.join(wt, 'cut.html')).read() if page.returncode == 0 else page.stderr[-300:]
+check('the page names every cut window and its reason', [True] * 4,
+      [all(x in shown for x in ('decision D1', '3:20')), 'finished, awaiting answers' in shown, 'by hand' in shown, 'decision D4' in shown])
+check('and its clock shares are of the time left after the cuts', True, 98 <= sum(int(x) for x in re.findall(r'&middot; (\d+)% of the run', shown)) <= 102)
+check("the summary's dearest stage takes its time after the cuts: 3000 - 940 s", True, 'in 34:20.' in shown)
+whole = json.load(open(os.path.join(sys.argv[2], 'worktreereview-render-result.json')))
+json.dump(whole | {'cut_s': whole['end'] - whole['start'], 'clock': {}}, open(os.path.join(wt, 'allcut.json'), 'w'))
+page = subprocess.run([sys.executable, os.path.join(sys.argv[1], 'render.py'), os.path.join(wt, 'allcut.json'), os.path.join(wt, 'allcut.html')], capture_output=True, text=True)
+check('a run cut from end to end still renders', (0, ''), (page.returncode, page.stderr[-200:]))
+# Two sessions in one worktree: what keeps a gap build time is a job running in ANY of them, not only in the
+# session whose gap it is. And a decision asked again later is a second window, not a rewrite of the first.
+os.makedirs(os.path.join(h, '.claude', 'projects', '-w-unit-two'))
+for name, rows in (('sa', [{'type': 'user', 'timestamp': at(0), 'message': {'content': 'go'}},
+                           say(10, 'asked'), turn_end(20), prompt(400),                      # inside D9's first window: cut
+                           say(450, 'Built.\nUNIT-TWO-DONE'), turn_end(460), prompt(1300),  # session B's test runs: kept
+                           say(1400, 'done'), turn_end(1410), prompt(1700),                # D8 asked, re-asked, answered before: kept
+                           say(1750, 'done')]),
+                   ('sb', [{'type': 'user', 'timestamp': at(500), 'message': {'content': 'go'}},
+                           call(550, 'toolu_btest', 'Bash', run_in_background=True, description='Run the touched test file', command='bash run-shell-tests.sh b'),
+                           answer(551, 'toolu_btest', STARTED.format('b6')), turn_end(560), prompt(1250), notice(1260, 'toolu_btest'),
+                           say(1350, 'read it')]),
+                   # Session C runs a command in the foreground from 100 to 300, inside session A's decision gap.
+                   ('sc', [{'type': 'user', 'timestamp': at(90), 'message': {'content': 'go'}},
+                           call(100, 'toolu_cmake', 'Bash', description='Build the bundle', command='make bundle'), answer(300, 'toolu_cmake', 'ok')])):
+    with open(os.path.join(h, '.claude', 'projects', '-w-unit-two', f'{name}.jsonl'), 'w') as f:
+        f.write('\n'.join(json.dumps(r) for r in rows) + '\n')
+with open(os.path.join(wt, 'decisions-two.jsonl'), 'w') as f:
+    for d in [{'id': 'D9', 'askedAt': at(0), 'answeredAt': None, 'source': 'run 1 (unit-two) question'},
+              {'id': 'D9', 'askedAt': at(0), 'answeredAt': at(500), 'source': 'run 1 (unit-two) question'},
+              {'id': 'D9', 'askedAt': at(5000), 'answeredAt': None, 'source': 'run 1 (unit-two) asked again'},
+              # Asked, never answered as such, asked again and answered: the first ask closes at the second.
+              {'id': 'D8', 'askedAt': at(1000), 'answeredAt': None, 'source': 'run 1 (unit-two) question'},
+              {'id': 'D8', 'askedAt': at(1100), 'answeredAt': None, 'source': 'run 1 (unit-two) asked again'},
+              {'id': 'D8', 'askedAt': at(1100), 'answeredAt': at(1200), 'source': 'run 1 (unit-two) asked again'},
+              # Asked for this unit, then re-asked for another and answered there: the re-ask closes this unit's window.
+              {'id': 'D7', 'askedAt': at(1000), 'answeredAt': None, 'source': 'run 1 (unit-two) question'},
+              {'id': 'D7', 'askedAt': at(1100), 'answeredAt': at(1200), 'source': 'run 2 (unit-other) question'}]:
+        f.write(json.dumps(d) + '\n')
+argv0, home0 = sys.argv, os.environ['HOME']
+collect.DECISIONS, sys.argv, os.environ['HOME'] = os.path.join(wt, 'decisions-two.jsonl'), ['collect.py', '/w/unit-two', '--out', os.path.join(wt, 'two')], h
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        collect.main()
+    two = json.load(open(os.path.join(wt, 'two', 'result.json')))
+except BaseException as e:
+    two = {'error': repr(e)[:300]}
+finally:
+    sys.argv, os.environ['HOME'] = argv0, home0
+check("a gap is kept while another session's background test runs, and a re-asked decision keeps its first window",
+      [(20, 400, 'decision D9')], [(round(w['start'] - ts0), round(w['end'] - ts0), w['reason']) for w in two.get('cut', [])])
+check("and another session's foreground work inside a cut gap stays build time: 380 s less its request and command, 90 to 300", [170], [round(w['seconds']) for w in two.get('cut', [])])
+# A hand window can cover active work: the request and tool timings lose the cut seconds too, or the page
+# shows requests taking more than the run.
+try:
+    allcut = collect_cut('two-all', os.path.join(wt, 'no-decisions.jsonl'), '--exclude', f'{at(0)}={at(1750)}', unit='/w/unit-two')
+except BaseException as e:
+    allcut = {'error': repr(e)[:300]}
+tm = allcut.get('timing', {'requests': [{'s': -1}], 'tools': [{'s': -1, 'run': -1}]})
+check('a run cut end to end leaves no request or tool time', (0, 0, 0), (round(sum(r['s'] for r in tm['requests'])),
+      round(sum(t['s'] for t in tm['tools'])), round(sum(t['run'] for t in tm['tools']))))
+bad = subprocess.run([sys.executable, os.path.join(sys.argv[1], 'collect.py'), '/w/unit-cut', '--out', os.path.join(wt, 'bad'), '--exclude', f'{at(900)}={at(800)}'],
+                     env=os.environ | {'HOME': h}, capture_output=True, text=True)
+check('a window that ends before it starts is refused', (2, True), (bad.returncode, 'END' in bad.stderr))
+# The decisions are the reviewed project's, found from its worktree: the plugin runs from a checkout of
+# its own, and that checkout's ledger names other projects' units, or nothing.
+host_main = os.path.join(wt, 'host')
+os.makedirs(os.path.join(host_main, '.claude', 'metrics'))
+git_q = ['git', '-c', 'user.email=t@example.com', '-c', 'user.name=t', '-C', host_main]
+subprocess.run(['git', 'init', '-q', host_main], check=True)
+subprocess.run(git_q + ['commit', '-q', '--allow-empty', '-m', 'x'], check=True)
+subprocess.run(git_q + ['worktree', 'add', '-q', os.path.join(wt, 'host-wt', 'unit-cut')], check=True, capture_output=True)
+host_wt = os.path.realpath(os.path.join(wt, 'host-wt', 'unit-cut'))
+shutil.copy(decisions, os.path.join(host_main, '.claude', 'metrics', 'decisions.jsonl'))
+os.makedirs(os.path.join(h, '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', host_wt)))
+shutil.copy(os.path.join(h, '.claude', 'projects', '-w-unit-cut', 'sess1.jsonl'), os.path.join(h, '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', host_wt)))
+try:
+    found = os.path.realpath(collect.main_checkout(host_wt) or '/none')
+except TypeError as e:  # a main_checkout() that takes no worktree
+    found = repr(e)
+check("the main checkout is the reviewed project's, not the plugin's", os.path.realpath(host_main), found)
+try:
+    host = collect_cut('host', None, unit=host_wt)
+except BaseException as e:
+    host = {'error': repr(e)[:300]}
+check("with no ledger given, the project's own decisions cut their windows (and no Codex run here keeps the last gap)",
+      [(100, 300, 'decision D1'), (1660, 2000, 'finished, awaiting answers'), (2500, 2800, 'decision D4'), (2960, 3300, 'finished, awaiting answers')],
+      [(round(w['start'] - ts0), round(w['end'] - ts0), w['reason']) for w in host.get('cut', [])])
+# After the merge removes the worktree nothing on the machine proves which checkout it came from: a
+# working folder, a COMMANDECK_WORKSPACES, a ledger lying about can each name another project. Only the
+# checkout given with --main is read, and with none no decision is.
+subprocess.run(git_q + ['worktree', 'remove', '--force', host_wt], check=True)
+check("the worktree really is gone", False, os.path.isdir(host_wt))
+try:
+    gone = (os.path.realpath(collect.main_checkout(host_wt, host_main) or '/none'), collect_cut('host-gone', None, '--main', host_main, unit=host_wt))
+except BaseException as e:
+    gone = (repr(e)[:300], {})
+check("with the worktree removed, the checkout given with --main is the project's", os.path.realpath(host_main), gone[0])
+check("and its decisions still cut their windows", [w['reason'] for w in host.get('cut', [])], [w['reason'] for w in gone[1].get('cut', [])])
+# Each way a guess could name the wrong project, with no --main: run from that project's checkout (or the
+# plugin's), from it with COMMANDECK_WORKSPACES naming the worktree's folder, from a folder that is no
+# checkout with a ledger in it. None is taken, and only the waits after DONE are cut.
+other = os.path.join(wt, 'other')
+os.makedirs(os.path.join(other, '.claude', 'metrics'))
+subprocess.run(['git', 'init', '-q', other], check=True)
+shutil.copy(decisions, os.path.join(other, '.claude', 'metrics', 'decisions.jsonl'))
+plain = os.path.join(wt, 'plain')
+os.makedirs(os.path.join(plain, '.claude', 'metrics'))
+shutil.copy(decisions, os.path.join(plain, '.claude', 'metrics', 'decisions.jsonl'))
+cwd0 = os.getcwd()
+for name, folder, spaces in (('another checkout', other, None), ('the project checkout itself', host_main, None),
+                             ('a checkout with COMMANDECK_WORKSPACES on the worktree folder', other, os.path.join(wt, 'host-wt')),
+                             ('a folder that is no checkout', plain, None)):
+    os.chdir(folder)
+    if spaces:
+        os.environ['COMMANDECK_WORKSPACES'] = spaces
+    try:
+        guess = (collect.main_checkout(host_wt), collect_cut('host-guess', None, unit=host_wt))
+    except BaseException as e:
+        guess = (repr(e)[:300], {})
+    finally:
+        os.chdir(cwd0)
+        os.environ.pop('COMMANDECK_WORKSPACES', None)
+    check(f"removed and no --main, run from {name}: no checkout taken, no decision read",
+          (None, ['finished, awaiting answers'] * 2), (guess[0], [w['reason'] for w in guess[1].get('cut', [])]))
+# A unit name may hold dots: a decision for unit.v1 is not one for unit, nor unit for unit.v1; a full stop
+# that ends a sentence after the name still names it.
+with open(os.path.join(wt, 'dotted-decisions.jsonl'), 'w') as f:
+    for d in [{'id': 'E1', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'run 1 (unit.v1) question'},
+              {'id': 'E2', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'main', 'answer': 'A. Sent to v2.unit'},
+              {'id': 'E3', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'main', 'answer': 'A. Sent to unit.'}]:
+        f.write(json.dumps(d) + '\n')
+check('a decision names a dotted sibling of the unit, or the unit at the end of a sentence',
+      (['E3'], ['E1']), ([i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit')],
+                        [i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit.v1')]))
+# A unit name may hold dots and underscores; its DONE line is the same name in capitals.
+with open(os.path.join(wt, 'dotted.jsonl'), 'w') as f:
+    f.write('\n'.join(json.dumps(r) for r in [say(10, 'Built.\nUNIT_V1.2-DONE'), say(20, 'Not a marker: UNIT-DONE later')]) + '\n')
+check('a DONE line of a name with dots and underscores is read, one only at the end of a line', ['UNIT_V1.2-DONE'],
+      [m for _, m in collect.read_session(os.path.join(wt, 'dotted.jsonl'))['dones']])
+# A cut request loses its cut seconds from its wait and its thinking too, not only from its length:
+# asked at 0, the model began at 10 and thought until 50, and wrote at 60.
+os.makedirs(os.path.join(h, '.claude', 'projects', '-w-unit-think'))
+with open(os.path.join(h, '.claude', 'projects', '-w-unit-think', 's.jsonl'), 'w') as f:
+    usage = {'input_tokens': 10, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'output_tokens': 5}
+    f.write('\n'.join(json.dumps(r) for r in [
+        {'type': 'user', 'timestamp': at(0), 'message': {'content': 'go'}},
+        {'type': 'assistant', 'timestamp': at(50), 'requestId': 'rq', 'thinkingDurationMs': 40000,
+         'message': {'id': 'mq', 'model': 'claude-opus-5-5', 'content': [{'type': 'thinking', 'thinking': 'x'}], 'usage': usage}},
+        {'type': 'assistant', 'timestamp': at(60), 'requestId': 'rq', 'message': {'id': 'mq', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'ok'}], 'usage': usage}},
+    ]) + '\n')
+for window, want in (((0, 60), (0, 0, 0)), ((0, 30), (30, 20, 0)), ((5, 15), (50, 35, 5))):
+    try:
+        th = collect_cut(f'think-{window[0]}-{window[1]}', os.path.join(wt, 'no-decisions.jsonl'), '--exclude', f'{at(window[0])}={at(window[1])}', unit='/w/unit-think')
+        got = [(round(r['s']), round(r['think']), round(r['wait'])) for r in th['timing']['requests']]
+    except BaseException as e:
+        got = repr(e)[:300]
+    check(f'a request cut from {window[0]} to {window[1]} s keeps (length, thinking, wait) {want}', [want], got)
 print(f'{checks - failed} passed, {failed} failed')
 sys.exit(1 if failed else 0)
 PY

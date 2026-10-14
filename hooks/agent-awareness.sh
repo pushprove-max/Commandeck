@@ -83,7 +83,7 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   # Old .kept files name long-dead handles, so only the live intersection prints.
   warm=$(grep -ho 'term_[0-9a-f-]\{36\}' \
       "$PP_SCRATCH"/review-handles-*.kept 2>/dev/null \
-    | sort -u | while read -r h; do case "$LIVE" in *"$h"*) printf ' %s' "$h" ;; esac; done)
+    | sort -u | while read -r h; do case "$LIVE" in (*"$h"*) printf ' %s' "$h" ;; esac; done)
   if [ -n "$warm" ]; then
     out+="Panes kept for the same-round relaunch -- closing one discards the verdict it holds:\n $warm\n\n"
   fi
@@ -100,7 +100,7 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   # makes its task active.
   LIVE_TASKS=$(awk -F= '/^handle=/{h=$2} /^task=/ && h {print $2, h; h=""}' \
       "$PP_SCRATCH"/seat-*.txt 2>/dev/null \
-    | while read -r t h; do case "$LIVE" in *"$h"*) printf '%s\n' "$t" ;; esac; done \
+    | while read -r t h; do case "$LIVE" in (*"$h"*) printf '%s\n' "$t" ;; esac; done \
     | jq -R . | jq -sc . 2>/dev/null)
   [ -n "$LIVE_TASKS" ] || LIVE_TASKS='[]'
   tasks=$(jq -r --argjson live "$LIVE_TASKS" '

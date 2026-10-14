@@ -53,7 +53,7 @@ case "$TOOL" in
       | while IFS= read -r SEG; do
           printf '%s' "$SEG" | grep -qE '^[[:space:]]*(cat|sed|head|tail|less|bat|nl)[[:space:]]' || continue
           for TOK in $SEG; do
-            case "$TOK" in -*|*=*|\'*|\"*) continue ;; esac
+            case "$TOK" in (-*|*=*|\'*|\"*) continue ;; esac
             P="$TOK"; [ "${P#/}" = "$P" ] && P="$CWD/$TOK"
             [ -f "$P" ] && printf '%s\n' "$P"
           done
@@ -85,7 +85,8 @@ while IFS= read -r FAM; do
   [ "$N" -ge "$THRESHOLD" ] || continue
   printf '%s\n' "$FAM" >> "$WARNED"
   DIR=${FAM%|*}; EXT=${FAM##*|}
-  ADVICE=$(cat <<EOF
+  # A function, not $(cat <<EOF): Bash 3.2 misreads the quotes of a here-document inside $(...).
+  advice() { cat <<EOF
 READ SWEEP: $N files of one kind opened this session.
 
   family: ${DIR}/*${EXT}
@@ -101,7 +102,8 @@ over all of them costs the answer.
 Raw output goes to a file under the scratchpad; only the answer comes back.
 If you genuinely need each file's own content in context, say so and carry on.
 EOF
-)
+}
+  ADVICE=$(advice)
   HOOK_FIRE_ADVISE=1
   printf '%s\n' "$ADVICE" >&2
   jq -cn --arg message "$ADVICE" '{

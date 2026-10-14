@@ -80,8 +80,11 @@ WAS=$SCOPE DASHBOARD=1 STATUS=
 # No answer and no earlier one: on when the owner already has the serena server.
 [ -n "$SERENA" ] || ! jq -e --arg p "$PP_MAIN" '.mcpServers.serena // .projects[$p].mcpServers.serena' "$HOME/.claude.json" >/dev/null 2>&1 || SERENA=true
 while [ $# -gt 0 ]; do
+  # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $1 in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor) [ $# -ge 2 ] || usage ;;&
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor) [ $# -ge 2 ] || usage ;;
+  esac
+  case $1 in
     --profile) PROFILE=$2; shift 2 ;;
     --scope) SCOPE=$2; shift 2 ;;
     --name) NAME=$2; shift 2 ;;

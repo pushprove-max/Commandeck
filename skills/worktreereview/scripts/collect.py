@@ -7,11 +7,15 @@ session record whose working folder is the worktree.
 
 Usage:
   collect.py <worktree path> [--out DIR] [--session ID-PREFIX]
-             [--split HH:MM:SS=Label ...] [--test-regex RE]
+             [--split HH:MM:SS=Label ...] [--test-regex RE] [--exclude START=END ...] [--main DIR]
 
 --split starts a new stage named Label at that UTC time (date of the run start);
 a time within a minute of the run start renames the first stage. Writes result.json
 and notes.txt (the agent's own progress notes, for choosing splits) to --out.
+
+Time spent waiting on the owner is not build time (the owner, 2026-10-14): each --exclude window (ISO UTC)
+and each idle gap over two minutes with nothing running that sits behind an open decision for this
+unit (decisions.jsonl) or after its DONE marker comes out of the clock, shares and flags; cost stays.
 """
 import argparse
 import collections
@@ -36,6 +40,8 @@ EDIT_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
 FILE_TOOLS = EDIT_TOOLS + LOOK_TOOLS
 KEYS = ('calls', 'in', 'cw', 'cr', 'out', 'usd', 'est', 'unpriced', 'uncounted')
 IDLE = ('idle', 'idle_job', 'idle_tests')
+WAIT_ON_OWNER = 120  # an idle gap longer than this, waiting on the owner, is cut from the clock
+DECISIONS = None  # decisions.jsonl; None is the main checkout's own
 # What a call that went to the background answers at once: a Bash job's id, or a helper's. The harness
 # runs a helper in the background without the flag, so the answer is the only sign of it.
 STARTED = re.compile(r'running in background with ID: (\w+)|Async agent launched[\s\S]{0,400}?agentId: (\w+)')
@@ -117,7 +123,7 @@ def r2(x):
 def read_session(path):
     """One Claude session log -> its calls, tool calls, wake-ups and markers."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
-         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'first': None, 'last': None}
+         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'dones': [], 'first': None, 'last': None}
     tasks, asked = {}, {}  # background task id -> its call; a job tool's call -> the job's call it asks about
     for e in rows_of(path):
         when = e.get('timestamp')
@@ -132,6 +138,9 @@ def read_session(path):
             for b in c if isinstance(c, list) else []:
                 if b.get('type') == 'text' and b.get('text', '').strip():
                     s['notes'].append((ts(when), b['text'].strip().replace('\n', ' ')[:220]))
+                    # The Builder's last line, e.g. TOOLING-BATCH-2026-10-14B-DONE; the note above is cut short of it.
+                    if done := re.search(r'(?:^|\n)\s*([A-Z0-9][A-Z0-9._-]*-DONE)\s*$', b['text']):
+                        s['dones'].append((ts(when), done.group(1)))
                 elif b.get('type') == 'tool_use':
                     i = b.get('input') or {}
                     s['tools'][b['id']] = {'t': ts(when), 'name': b.get('name'), 'bg': bool(i.get('run_in_background')),
@@ -202,15 +211,56 @@ def call_kind(t, test_re):
     return 'files' if t['name'] in FILE_TOOLS else 'tools'
 
 
-def idle_gap(sess, end, nxt, t1, kind):
-    """One idle wait -> its clock label and its row: the jobs still running in it and what the pane waited on."""
+def idle_gap(sess, end, nxt, t1, kind, marker=None):
+    """One idle wait -> its clock label and its row: the jobs still running in it, what the pane waited on,
+    and whether the turn before it printed the unit's DONE marker."""
     pending = [t for k, t in sess['tools'].items() if t['bg'] and t['t'] < nxt and sess['woken'].get(k, t1) > end]
     kinds = {kind(t) for t in pending}
     turn = max((e for e in sess['turn_ends'] if e < end), default=sess['first'])
     waiting = next((k for k in ('codex', 'helper', 'tests') if k in kinds),
                    'job' if pending else 'main' if any(turn < a <= end for a in sess['asks']) else 'nothing')
     return ('idle_tests' if 'tests' in kinds else 'idle_job' if pending else 'idle',
-            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting})
+            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting,
+             'done': any(turn < w <= end and m == marker for w, m in sess['dones'])})
+
+
+def decisions_for(path, unit):
+    """(asked, answered or None, id) of each decision for the owner whose source or answer names this unit."""
+    # A unit whose name starts or ends with this one's (unit-2, unit.v1, v2.unit beside unit) is another unit;
+    # a full stop after the name that no letter follows ends a sentence.
+    named = re.compile(r'(?<![\w.-])' + re.escape(unit) + r'(?![\w-]|\.\w)')
+    try:
+        lines = open(path, errors='replace').read().splitlines()
+    except OSError:
+        return []
+    # Append-only: a decision's asked row (answeredAt null) stays above its answered row, so a later row wins.
+    # A decision asked again is a new askedAt, and so a window of its own.
+    rows = {}
+    for line in lines:
+        try:
+            d = json.loads(line)
+            key = (d['id'], d.get('askedAt'))
+            rows[key] = rows.get(key, {}) | d
+        except (ValueError, TypeError, KeyError):
+            continue
+    asks = collections.defaultdict(list)
+    for d in rows.values():
+        try:
+            if d.get('askedAt'):
+                asks[d['id']].append((ts(d['askedAt']), ts(d['answeredAt']) if d.get('answeredAt') else None,
+                                      bool(named.search(f"{d.get('source') or ''} {d.get('answer') or ''}"))))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    # A window closes at its answer, or at the next ask of the same decision, which replaces it whichever
+    # unit that ask names; only then is a window kept for naming this unit.
+    out = []
+    for i, times in asks.items():
+        times.sort()
+        for n, (q, r, mine) in enumerate(times):
+            ends = [x for x in (r, times[n + 1][0] if n + 1 < len(times) else None) if x is not None]
+            if mine:
+                out.append((q, min(ends) if ends else None, i))
+    return out
 
 
 def compaction_of(e):
@@ -312,11 +362,22 @@ def codex_days(t0, t1):
     return [(first + timedelta(days=d)).strftime('%Y/%m/%d') for d in range((datetime.fromtimestamp(t1, timezone.utc).date() - first).days + 2)]
 
 
-def main_archive(unit):
-    """Where merge-unit-local.sh files the unit's brief files: <main checkout>/archive/briefs-<unit>.tar."""
-    git = subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+def main_checkout(worktree, given=None):
+    """The main checkout of the reviewed worktree's project, not of the plugin this script ships in. Once the
+    worktree is removed nothing on this machine proves which checkout it came from, so only the one given
+    (--main) counts; else None."""
+    where = worktree if os.path.isdir(worktree) else given
+    if not where:
+        return None
+    git = subprocess.run(['git', '-C', where, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                          capture_output=True, text=True)
-    return os.path.join(os.path.dirname(git.stdout.strip()), 'archive', f'briefs-{unit}.tar') if git.returncode == 0 else None
+    return os.path.dirname(git.stdout.strip()) if git.returncode == 0 else None
+
+
+def main_archive(worktree, unit, given=None):
+    """Where merge-unit-local.sh files the unit's brief files: <main checkout>/archive/briefs-<unit>.tar."""
+    home = main_checkout(worktree, given)
+    return os.path.join(home, 'archive', f'briefs-{unit}.tar') if home else None
 
 
 def round_threads(worktree, unit, archive=None):
@@ -420,7 +481,7 @@ def number_passes(passes, rounds, launches):
 
 def review_flag(passes, max_min):
     """The flag line when the passes' Codex review time, added up, is over max_min minutes; else None."""
-    mins = sum(p['end'] - p['start'] for p in passes if p['n']) / 60
+    mins = sum(p['end'] - p['start'] - p.get('cut_s', 0) for p in passes if p['n']) / 60
     return f'{mins:.0f} minutes of Codex review in total (more than {max_min:.0f})' if mins > max_min else None
 
 
@@ -431,6 +492,9 @@ def main():
     ap.add_argument('--session')
     ap.add_argument('--split', action='append', default=[])
     ap.add_argument('--test-regex', default=TEST_RE)
+    ap.add_argument('--exclude', action='append', default=[], metavar='START=END')
+    # The project's main checkout, read for its decisions and round archive once the worktree is removed.
+    ap.add_argument('--main')
     # A run past any of these is flagged for a written review; the rest get the automatic page only.
     ap.add_argument('--max-review-min', type=float, default=30.0)
     ap.add_argument('--max-test-share', type=float, default=1 / 3)
@@ -441,8 +505,17 @@ def main():
     out = a.out or f'/tmp/commandeck/worktreereview/{unit}'
     os.makedirs(out, exist_ok=True)
     test_re = re.compile(a.test_regex, re.I)
+    cuts = []
+    for spec in a.exclude:
+        try:
+            start, end = (ts(x) for x in spec.split('=', 1))
+        except ValueError:
+            ap.error(f'--exclude {spec}: want START=END, ISO UTC')
+        if end <= start:
+            ap.error(f'--exclude {spec}: END is not after START')
+        cuts.append({'start': start, 'end': end, 'reason': 'by hand'})
 
-    proj = os.path.expanduser('~/.claude/projects/') + re.sub(r'[^A-Za-z0-9]', '-', wt)
+    proj =os.path.expanduser('~/.claude/projects/') + re.sub(r'[^A-Za-z0-9]', '-', wt)
     files = sorted(f for f in glob.glob(proj + '/*.jsonl') if not a.session or os.path.basename(f).startswith(a.session))
     sessions = sorted((read_session(f) | {'id': os.path.basename(f)[:8], 'ledger': session_ledger(f)} for f in files), key=lambda s: s['first'])
     passes = []
@@ -459,7 +532,7 @@ def main():
         if not passes:
             raise SystemExit(f'no Claude session log under {proj} and no Codex session of {wt}')
         t0, t1 = min(p['start'] for p in passes), max(p['end'] for p in passes)
-    rounds = round_threads(wt, unit, main_archive(unit))
+    rounds = round_threads(wt, unit, main_archive(wt, unit, a.main))
     passes = fold_passes(passes, rounds)
     for p in passes:
         # Threads run side by side, so their command seconds can add up to more than the pass took.
@@ -510,7 +583,7 @@ def main():
 
     for s in stages:
         s.update(builder=collections.Counter(), advisor=collections.Counter(), helper=collections.Counter(),
-                 codex=collections.Counter(), clock=collections.Counter(), context=[],
+                 codex=collections.Counter(), clock=collections.Counter(), context=[], cut_s=0,
                  detail={'commands': [], 'edits': collections.Counter(), 'notes': [], 'blocked': collections.Counter()})
     models, ctx = collections.Counter(), []
     for sess in sessions:
@@ -581,15 +654,29 @@ def main():
                 label[i] = what
 
     idle_gaps, jobs = [], []
+    marker = unit.upper() + '-DONE'
+    # No checkout found, no ledger: never one relative to wherever this runs.
+    home = main_checkout(wt, a.main)
+    asked = decisions_for(DECISIONS or (os.path.join(home, '.claude', 'metrics', 'decisions.jsonl') if home else ''), unit)
     for sess in sessions:
         paint(sess['first'], sess['last'], 'gap')
     for sess in sessions:
         for end in sess['turn_ends']:
             nxt = min((u for u in sess['users'] if u > end), default=None)
             if nxt and nxt - end > 5:
-                waited, gap = idle_gap(sess, end, nxt, t1, kind_of)
+                waited, gap = idle_gap(sess, end, nxt, t1, kind_of, marker)
                 paint(end, nxt, waited, only=('gap',))
                 idle_gaps.append(gap)
+                # Waiting on the owner, with nothing of the build's own running: finished and awaiting new work,
+                # or inside an open decision window. A background job of ANY session, or a Codex run, still
+                # going keeps the gap build time; idle_gap's `pending` sees only this session's.
+                busy = any(t['bg'] and t['t'] < nxt and other['woken'].get(k, t1) > end for other in sessions for k, t in other['tools'].items())
+                if nxt - end > WAIT_ON_OWNER and not busy and not any(p['start'] < nxt and p['end'] > end for p in runs):
+                    if gap['done']:
+                        cuts.append({'start': end, 'end': nxt, 'reason': 'finished, awaiting answers'})
+                    else:
+                        cuts += [{'start': max(q, end), 'end': min(r or nxt, nxt), 'reason': f'decision {i}'}
+                                 for q, r, i in asked if max(q, end) < min(r or nxt, nxt)]
     for p in runs:
         # With no Claude session nothing paints "gap": a Codex seat that built alone owns its own time.
         paint(p['start'], p['end'], 'codex', only=('gap',) + IDLE + (() if sessions else ('none',)))
@@ -629,12 +716,31 @@ def main():
                 detail['commands'].append({'start': t['t'], 'seconds': end - t['t'], 'what': t['desc'][:120] or t['name'],
                                            'kind': kind, 'background': t['bg'], 'outcome': sess['outcome'].get(k, '')})
             if t['bg'] and end:
-                jobs.append({'what': t['desc'][:100], 'seconds': end - t['t'], 'kind': kind})
+                jobs.append({'what': t['desc'][:100], 'start': t['t'], 'seconds': end - t['t'], 'kind': kind})
         for c in sess['compactions']:
             paint(c['start'], c['end'], 'compaction')
-    clock = collections.Counter()
+    # Painted last and counted nowhere, so windows that overlap cut each second once. A window found
+    # in a gap cuts only its idle seconds: another session's work in it is still build time.
+    for w in sorted(cuts, key=lambda w: w['reason'] == 'by hand'):
+        paint(w['start'], w['end'], 'cut', only=None if w['reason'] == 'by hand' else ('idle',))
+
+    def cut_in(start, end):
+        return label[max(int((start - t0) * TICK), 0):max(int((end - t0) * TICK), 0)].count('cut') / TICK
+
+    # Every duration the page shows loses the seconds cut from it, not only the clock.
+    for x in idle_gaps + runs:
+        x['cut_s'] = round(cut_in(x['start'], x['end']), 1)
+    for x in jobs + helpers + [c for s in stages for c in s['detail']['commands']]:
+        if x['start'] is not None:
+            x['seconds'] -= cut_in(x['start'], x['start'] + x['seconds'])
+    clock, cut_s = collections.Counter(), 0
     for i, what in enumerate(label):
-        stage_of(t0 + i / TICK)['clock'][what] += 1 / TICK
+        st = stage_of(t0 + i / TICK)
+        if what == 'cut':
+            st['cut_s'] += 1 / TICK
+            cut_s += 1 / TICK
+            continue
+        st['clock'][what] += 1 / TICK
         clock[what] += 1 / TICK
 
     # The granular ledger: one row per model request and one per tool call, for the page's two timing sections.
@@ -643,7 +749,7 @@ def main():
         led = sess['ledger']
         counters.update(led['counters'])
         for h in led['hooks']:
-            hook_runs[(h['event'], h['name'])].append(h['s'])
+            hook_runs[(h['event'], h['name'])].append(h['s'] - cut_in(h['t'] - h['s'], h['t']))
         for r in led['requests'].values():
             u = r['usage']
             did = [led['tools'][k] for k in r['tools']]
@@ -651,8 +757,11 @@ def main():
                      for i in [i for i in u.get('iterations') or [] if i.get('type') == 'message'] or [u]]
             look = len(did) == 1 and (did[0]['name'] in ('Read', 'Glob', 'Grep') or (
                 did[0]['name'] == 'Bash' and bool(LOOK.search(did[0]['cmd'])) and not WRITES.search(did[0]['cmd'])))
-            requests.append({'t': r2(r['start']), 's': r2(r['end'] - r['start']), 'think': r2(r['think']),
-                             'wait': None if r['think0'] is None else r2(max(r['first'] - r['start'] - r['think0'], 0)),
+            # The wait ran until the model began, each thinking block in the seconds before it: each loses its own cut.
+            began = None if r['think0'] is None else r['first'] - r['think0']
+            requests.append({'t': r2(r['start']), 's': r2(r['end'] - r['start'] - cut_in(r['start'], r['end'])),
+                             'think': r2(r['think'] - sum(cut_in(t - d, t) for t, d in r['thinks'])),
+                             'wait': None if began is None else r2(max(began - r['start'] - cut_in(r['start'], began), 0)),
                              'out': u.get('output_tokens') or 0, 'ctx': max(sizes), 'cw': u.get('cache_creation_input_tokens') or 0,
                              'in': cache_counts(u)[0], 'cr': cache_counts(u)[1],
                              'usd': r2(usd(r['model'], u)), 'model': r['model'], 'stage': stage_of(r['start'])['code'], 'session': sess['id'],
@@ -660,7 +769,10 @@ def main():
                              'what': (did[0]['desc'] or did[0]['cmd'] or did[0]['name'])[:110] if did else 'wrote a note' if r['text'] else 'thinking only'})
         for k, t in led['tools'].items():
             if t['end'] is not None:
-                calls.append({'t': r2(t['start']), 's': r2(t['end'] - t['start']), 'pre': r2(t['pre']), 'run': r2(t['run']), 'post': r2(t['post']),
+                ran_from, ran_to = t['start'] + t['pre'], t['end'] - t['post']
+                calls.append({'t': r2(t['start']), 's': r2(t['end'] - t['start'] - cut_in(t['start'], t['end'])),
+                              'pre': r2(t['pre'] - cut_in(t['start'], ran_from)), 'run': r2(t['run'] - cut_in(ran_from, ran_to)),
+                              'post': r2(t['post'] - cut_in(ran_to, t['end'])),
                               'name': t['name'], 'kind': kind_of(t), 'what': (t['desc'] or t['name'])[:110], 'cmd': t['cmd'][:300],
                               'bg': t['bg'], 'timeout': t['timeout'], 'refused': t['refused'], 'outcome': sess['outcome'].get(k, ''),
                               'stage': stage_of(t['start'])['code']})
@@ -683,7 +795,8 @@ def main():
         for k in ('builder', 'advisor', 'helper', 'codex'):
             s[k] = dict(s[k])
         s['clock'] = {k: round(v, 1) for k, v in s['clock'].items()}
-    waiting = (clock['tests'] + sum(clock[k] for k in IDLE)) / max(1, t1 - t0)
+        s['cut_s'] = round(s['cut_s'], 1)
+    waiting = (clock['tests'] + sum(clock[k] for k in IDLE)) / max(1, t1 - t0 - cut_s)
     priced = sum(v['usd'] for v in total.values())
     flags = []
     if review_flag(passes, a.max_review_min):
@@ -701,8 +814,11 @@ def main():
         'compactions': [c for s in sessions for c in s['compactions']], 'idle_gaps': idle_gaps, 'background_jobs': jobs,
         'helpers': helpers, 'blocked': dict(blocked), 'closing_pass': closing_pass(runs, reviewed_tree(wt, unit)),
         'lines_changed': lines_changed(wt),
+        'cut': sorted(({'start': max(w['start'], t0), 'end': min(w['end'], t1), 'seconds': cut_in(w['start'], w['end']), 'reason': w['reason']}
+                       for w in cuts if cut_in(w['start'], w['end'])), key=lambda w: w['start']),
+        'cut_s': round(cut_s, 1),
         'passes': [{k: p[k] for k in ('n', 'kind', 'start', 'end', 'complete', 'model', 'effort', 'verdict', 'findings', 'usage', 'calls', 'threads',
-                                      'commands', 'command_s', 'longest')}
+                                      'commands', 'command_s', 'longest', 'cut_s')}
                    | {'message': p['message'][:2000]} for p in passes],
     }
     json.dump(result, open(f'{out}/result.json', 'w'), indent=1)
@@ -716,12 +832,13 @@ def main():
     for s in stages:
         b = s['builder']
         cost = sum(s[k].get('usd', 0) for k in ('builder', 'advisor', 'helper'))
-        print(f"  {s['code']} {datetime.fromtimestamp(s['start'], timezone.utc):%H:%M:%S} {hm(s['end'] - s['start']):>7}  {s['name'][:44]:44} "
+        print(f"  {s['code']} {datetime.fromtimestamp(s['start'], timezone.utc):%H:%M:%S} {hm(s['end'] - s['start'] - s['cut_s']):>7}  {s['name'][:44]:44} "
               f"calls {b.get('calls', 0):>3}  read {b.get('cr', 0):>11,}  out {b.get('out', 0):>7,}  ${cost:>7.2f}")
     for k, v in total.items():
         price = f"${v['usd']:,.2f}" + (f" (+{v['unpriced']} unpriced calls)" if v['unpriced'] else '') if v['usd'] else 'no list price on file'
         print(f"  {k:8} calls {v['calls']:>4}  uncached {v['in']:>10,}  write {v['cw']:>10,}  read {v['cr']:>11,}  out {v['out']:>8,}  {price}")
     print('  clock:', {k: hm(v) for k, v in clock.most_common()})
+    print(f'  cut from the clock, waiting on the owner: {hm(cut_s)}', [(w['reason'], hm(w['seconds'])) for w in result['cut']])
     print('  passes (number, kind, time, verdict, findings, threads):',
           [(p['n'], p['kind'], hm(p['end'] - p['start']), p['verdict'], p['findings'], p['threads']) for p in passes])
     print('  lines changed:', result['lines_changed'])

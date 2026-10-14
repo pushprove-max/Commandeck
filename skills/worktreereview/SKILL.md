@@ -81,6 +81,20 @@ It reads logs only, so it works after main has removed the worktree:
    report's title. (`orca-ide file open` only takes files inside the worktree and shows the
    source, not the page.) Then give the owner the clock split, the cost and the lessons in a few lines.
 
+## Time waiting on the owner is cut
+
+Time a Builder sat waiting on the owner is not build time (the owner, 2026-10-14). collect.py cuts it
+from every clock figure, share and flag, and leaves cost as it is: each `--exclude START=END` window
+(ISO UTC, repeatable; review.py passes it through), and each idle gap over two minutes with nothing of
+the build running that either follows the Builder's `<UNIT>-DONE` line until new work arrives, or sits
+inside an open decision in the main checkout's `.claude/metrics/decisions.jsonl` that names the unit in
+its `source` or `answer` (the last row per decision and ask wins). A gap with any session's background
+job or a Codex run in it is kept, and a found window cuts only idle seconds. Overlapping windows cut
+each second once. Once the worktree is removed nothing proves which checkout it came from: pass `--main <main
+checkout>` (review.py passes it through), or no decision and no round archive is read. Still counted, and the page says so: a helper's request and tool subtotals, and
+command seconds inside a cut Codex pass. The page and `result.json` (`cut`, `cut_s`) list every window with its start, end,
+length and reason.
+
 ## The two timing sections
 
 Every page carries them, computed, with no words needed from you:

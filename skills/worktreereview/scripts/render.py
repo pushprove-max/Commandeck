@@ -21,7 +21,12 @@ from datetime import datetime
 R = json.load(open(sys.argv[1]))
 N = json.load(open(sys.argv[2])) if len(sys.argv) > 3 else {}
 OUT = sys.argv[-1]
-TOTAL = R['end'] - R['start']
+def took(x):
+    """A stage's, pass's or idle gap's time without the time cut as waiting on the owner."""
+    return x['end'] - x['start'] - x.get('cut_s', 0)
+
+
+TOTAL = max(1, took(R))  # a run cut from end to end still renders
 ROLES = (('builder', 'the agent'), ('advisor', 'advisor'), ('helper', 'helpers'), ('codex', 'Codex reviewer'))
 # Each clock label, its colour and which side of the line it is on: Claude's servers, a helper agent, or neither.
 CLOCK = [('claude', 'Claude requests: thinking and writing', '#1d4ed8', 'claude'), ('compaction', 'Context compaction', '#6b7280', 'claude'),
@@ -147,12 +152,12 @@ for s in R['stages']:
              for k, label in ROLES[1:] if s[k].get('calls')]
     note = N.get('stage_notes', {}).get(s['code'], '')
     rows.append(f'<tr class="{s["kind"]}"><td><b>{s["code"]}. {txt(s["name"])}</b><div class="what">{txt(note)}</div></td><td class="r">{local(s["start"])}</td>'
-                f'<td class="r"><b>{hm(s["end"] - s["start"])}</b></td><td class="r">{b.get("calls", 0)}</td><td class="r">{M(b.get("cr", 0))}</td>'
+                f'<td class="r"><b>{hm(took(s))}</b></td><td class="r">{b.get("calls", 0)}</td><td class="r">{M(b.get("cr", 0))}</td>'
                 f'<td class="r">{M(b.get("cw", 0))}</td><td class="r hit">{hit(b)}</td><td class="r">{M(b.get("out", 0))}</td><td class="r"><b>${cost:,.2f}</b></td>'
                 f'<td>{"<br>".join(txt(o) for o in other) or "&ndash;"}</td></tr>')
 
     # Drilldown: where this stage's own minutes and dollars went, and what the agent did in it.
-    d, span = s['detail'], max(1, s['end'] - s['start'])
+    d, span = s['detail'], max(1, took(s))
     mini = ''.join(f'<tr><td>{name}</td><td class="r">{hm(s["clock"][k])}</td><td class="r">{100 * s["clock"][k] / span:.0f}%</td></tr>'
                    for k, name, _, _ in sorted(CLOCK, key=lambda x: -s['clock'].get(x[0], 0)) if s['clock'].get(k, 0) >= 2)
     costs = ''.join(f'<tr><td>{txt(MODEL[k])} <span class="tag">{label}</span></td><td class="r">{s[k].get("calls", 0)}</td><td class="r">{M(allof(s[k]))}</td><td class="r">{money(s[k])}</td></tr>'
@@ -192,7 +197,7 @@ for p in R['passes']:
     u = p['usage']
     finding = N.get('pass_findings', {}).get(str(p['n'])) or re.split(r'\n\s*\n', p['message'].strip())[0][:260]
     cls = 'go' if p['verdict'] == 'GO' else 'nogo'
-    prows.append(f'<tr><td class="r">{p["n"]}</td><td>{p["kind"]}</td><td class="r">{hm(p["end"] - p["start"])}</td><td class="r">{n(u.get("input_tokens", 0))}</td>'
+    prows.append(f'<tr><td class="r">{p["n"]}</td><td>{p["kind"]}</td><td class="r">{hm(took(p))}</td><td class="r">{n(u.get("input_tokens", 0))}</td>'
                  f'<td class="r">{100 * u.get("cached_input_tokens", 0) / max(1, u.get("input_tokens", 0)):.0f}%</td><td class="r">{n(u.get("output_tokens", 0))}</td>'
                  f'<td class="r">{p["threads"]}</td><td><span class="{cls}">{p["verdict"]}</span> {p["findings"] or ""}</td><td>{txt(finding)}</td></tr>')
 if R.get('lines_changed') is not None:
@@ -222,15 +227,15 @@ says = ['Largest slices of the clock: ' + ' and '.join(f'{names[k].lower()} ({du
 if slow:
     says.append(f'Longest single test command: "{slow["what"]}", {hm(slow["seconds"])}' + (f', result {slow["outcome"]}' if slow['outcome'] else '') + '.')
 if R['passes']:
-    says.append(f'{len(R["passes"])} Codex passes took {dur(sum(p["end"] - p["start"] for p in R["passes"]))}: '
+    says.append(f'{len(R["passes"])} Codex passes took {dur(sum(took(p) for p in R["passes"]))}: '
                 + ', '.join(f'pass {p["n"]} {p["verdict"]} with {p["findings"]} finding(s)' for p in R['passes'])
                 + (f'; closing pass: {R["closing_pass"]}' if R.get('closing_pass') else '') + '.')
 if fixes:
-    says.append(f'Fixing between passes took {dur(sum(s["end"] - s["start"] for s in fixes))} and ${sum(s[k].get("usd", 0) for s in fixes for k, _ in ROLES):,.2f} at list price.')
+    says.append(f'Fixing between passes took {dur(sum(took(s) for s in fixes))} and ${sum(s[k].get("usd", 0) for s in fixes for k, _ in ROLES):,.2f} at list price.')
 says.append(f'List price ${priced:,.2f}: ' + ', '.join(f'{MODEL[k]} ${T[k]["usd"]:,.2f}' for k, _ in ROLES if T[k].get('usd'))
             + (f'; ${estimated:,.2f} of the total is estimated from the nearest published price' if estimated else '')
             + (f'. Not priced: {" and ".join(unpriced)}' if unpriced else '') + '.')
-says.append(f'Dearest stage: {dearest["code"]}. {dearest["name"]}, ${sum(dearest[k].get("usd", 0) for k, _ in ROLES):,.2f} in {hm(dearest["end"] - dearest["start"])}.')
+says.append(f'Dearest stage: {dearest["code"]}. {dearest["name"]}, ${sum(dearest[k].get("usd", 0) for k, _ in ROLES):,.2f} in {hm(took(dearest))}.')
 says.append(f'{n(T["builder"].get("calls", 0))} {AGENT} calls at an average context of {n(R["context"]["mean"])} tokens, largest {n(R["context"]["peak"])}'
             + (f'; compaction fired {len(R["compactions"])} time(s), at ' + ' and '.join(n(c['before'] or 0) for c in R['compactions']) + ' tokens' if R['compactions'] else '') + '.')
 if T['advisor'].get('calls'):
@@ -309,7 +314,7 @@ for k, name, _, side in sorted(CLOCK, key=lambda x: -clock.get(x[0], 0)):
     if side != 'off' or clock.get(k, 0) < 1:
         continue
     runs = [c['run'] for c in counts.get(k, [])] or ([c['pre'] + c['post'] for c in hooked] if k == 'hooks' else
-                                                     [g['end'] - g['start'] for g in R['idle_gaps']] if k.startswith('idle') else [])
+                                                     [took(g) for g in R['idle_gaps']] if k.startswith('idle') else [])
     off_rows.append(f'<tr><td>{name}</td>{td(clock[k], hm(clock[k]))}{td(round(100 * clock[k] / TOTAL, 1), f"{100 * clock[k] / TOTAL:.1f}%")}'
                     + (f'{td(len(runs))}{td(med(runs), sec(med(runs)))}{td(max(runs), sec(max(runs)))}' if runs and not k.startswith('idle')
                        else '<td></td><td></td><td></td>') + '</tr>')
@@ -331,12 +336,17 @@ WAITED_ON = {'codex': 'A Codex pass', 'helper': 'A helper', 'tests': 'A backgrou
 if any('waiting' not in g for g in R['idle_gaps']):
     sys.exit(f'render.py: {sys.argv[1]} was collected before an idle gap recorded what it waited on (no "waiting" key), '
              'and this page cannot be drawn from it. Collect it again: review.py <worktree>')
-idle_rows = [f'<tr>{at(g["start"])}{td(g["end"] - g["start"], hm(g["end"] - g["start"]))}<td>{WAITED_ON[g["waiting"]]}</td>'
+idle_rows = [f'<tr>{at(g["start"])}{td(took(g), hm(took(g)))}<td>{WAITED_ON[g["waiting"]]}</td>'
              f'<td>{txt("; ".join(dict.fromkeys(g["pending"])) or "nothing logged as running")}</td>'
              f'<td>{", ".join(f"Codex pass {p["n"]}" for p in R["passes"] if p["start"] < g["end"] and p["end"] > g["start"]) or "&ndash;"}</td></tr>'
              for g in R['idle_gaps']]
-codex_rows = [f'<tr>{td(p["n"])}{td(p["end"] - p["start"], hm(p["end"] - p["start"]))}{td(p["commands"])}{td(p["command_s"], sec(p["command_s"]))}'
-              + (td(max(p['end'] - p['start'] - p['command_s'], 0), hm(max(p['end'] - p['start'] - p['command_s'], 0))) if p['threads'] == 1 else '<td class="r">several threads</td>')
+cut_rows = [f'<tr>{at(w["start"])}{at(w["end"])}{td(w["seconds"], hm(w["seconds"]))}<td>{txt(w["reason"])}</td></tr>' for w in R.get('cut', [])]
+cut_box = (f'<h4>Cut from the clock, waiting on the owner: {dur(R["cut_s"])}</h4><p class="tag">Not build time (the owner, 2026-10-14), so no clock figure, share or flag '
+           'on this page counts it, but for two: a helper\'s request and tool subtotals, and command seconds inside a cut Codex pass. '
+           'Cost is unchanged. Windows that overlap are cut once.</p>'
+           + table(['>From', '>To', '>Length', 'Why'], cut_rows)) if cut_rows else ''
+codex_rows = [f'<tr>{td(p["n"])}{td(took(p), hm(took(p)))}{td(p["commands"])}{td(p["command_s"], sec(p["command_s"]))}'
+              + (td(max(took(p) - p['command_s'], 0), hm(max(took(p) - p['command_s'], 0))) if p['threads'] == 1 else '<td class="r">several threads</td>')
               + f'<td>{txt("; ".join(f"{sec(s)} {c.split(chr(92))[0][:70]}" for s, c in p["longest"][:2]))}</td></tr>' for p in R['passes']]
 helper_rows = [f'<tr><td>{txt(h["what"])}</td><td>{txt(nice(h["model"]))}</td>{td(h["seconds"], hm(h["seconds"]))}{td(h["claude_s"], hm(h["claude_s"]))}{td(h["tool_s"], hm(h["tool_s"]))}'
                # An older result.json has no count: a dash, never a 0 nobody counted.
@@ -519,7 +529,7 @@ ul{{margin:6px 0 0 18px;padding:0}} li{{margin:3px 0}} code{{background:#eef2f7;
 <div class="card"><div class="big">{grand / 1e6:.1f}M tokens</div><div class="lab">all models; {100 * cached / max(1, grand):.0f}% were cache reads</div></div>
 <div class="card"><div class="big">${priced:,.2f}</div><div class="lab">list-price equivalent{', without ' + txt(' and '.join(unpriced)) if unpriced else ''}</div></div>
 </div>
-<h2>Where the time went</h2><div class="box">{bars}</div>
+<h2>Where the time went</h2><div class="box">{bars}{cut_box}</div>
 <h2>Stage by stage</h2>
 <table><tr><th>Stage and what happened</th><th class="r">Started</th><th class="r">Time (min:sec)</th><th class="r">{txt(AGENT)} calls</th><th class="r">Cache read</th><th class="r">Cache write</th><th class="r">Cache hit</th><th class="r">Output</th><th class="r">List price, all priced models</th><th>Other models in this stage</th></tr>{''.join(rows)}
 <tr><td><b>Whole run</b></td><td></td><td class="r"><b>{hm(TOTAL)}</b></td><td class="r">{n(T['builder'].get('calls', 0))}</td><td class="r">{M(T['builder'].get('cr', 0))}</td><td class="r">{M(T['builder'].get('cw', 0))}</td><td class="r hit">{hit(T['builder'])}</td><td class="r">{M(T['builder'].get('out', 0))}</td><td class="r"><b>${priced:,.2f}</b></td><td></td></tr></table>

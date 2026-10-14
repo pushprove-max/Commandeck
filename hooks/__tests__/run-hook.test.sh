@@ -29,6 +29,19 @@ check "every hook in hooks.json is started through the launcher" 0 \
   "$(printf '%s\n' "${CMDS[@]}" | grep -vc '^"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh" "${CLAUDE_PLUGIN_ROOT}/hooks/[a-z-]*\.sh"\( --[a-z-]*\)\{0,1\}$')"
 check "and so is every hook worktree setup registers" 0 "$(grep -c '"\\"$HOOKS/[a-z-]*\.sh\\""' "$ROOT/scripts/worktree-setup.sh")"
 check "the launcher is plain sh" 0 "$(/bin/sh -n "$RUN" 2>&1 | grep -c .)"
+# Not only the hooks: setup.sh is the first thing a Mac with no newer Bash runs, and a
+# script that does not parse under 3.2 fails there before its first line. Every shell
+# file in the tree, by name or by its first line, parses under the old Bash.
+if [ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')" -lt 4 ]; then
+  BAD=$(git -C "$ROOT" ls-files | while IFS= read -r f; do
+    case $f in (*.sh) ;; (*) head -1 "$ROOT/$f" 2>/dev/null | grep -q '^#!.*\<\(ba\)\{0,1\}sh\>' || continue ;; esac
+    /bin/bash -n "$ROOT/$f" 2>/dev/null || echo "$f"
+  done)
+  check "every shell file parses under the Mac's Bash 3.2" "" "$BAD"
+  # Parsing is not running: the test runner keeps Bash 4 commands, so with no newer Bash it stops and says why.
+  OUT=$(cd "$ROOT" && env COMMANDECK_BREW_PREFIX="$T/none" COMMANDECK_HOST_OS=Darwin /bin/bash scripts/run-shell-tests.sh --list 2>&1)
+  check "the test runner under 3.2 with no newer Bash stops, naming Bash 4" "2 1" "$? $(grep -c 'need Bash 4 or newer' <<<"$OUT")"
+else echo "NOT RUN here (no Bash 3 at /bin/bash): every shell file parses under 3.2; CI's macOS job runs it"; fi
 
 # --- no Bash 4 or newer: one line, exit 0, nothing blocked ---
 BAD=0 LINES=0

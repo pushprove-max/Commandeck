@@ -43,7 +43,8 @@ SCRIPTED="the scripted launchers (seat.sh launch, builder-launch.sh) hand back a
 # prompt text, comments and heredoc bodies never read as a command or a flag.
 # ponytail: expansions are not run; an orca-ide call built through a variable
 # or eval is not seen.
-PLAN=$(python3 - "$CMD" <<'PY'
+# A function, not $(... <<'PY'): Bash 3.2 misreads the quotes of a here-document inside $(...).
+plan() { python3 - "$CMD" <<'PY'
 import re, sys
 def scan(s, unbalanced):
     # One shell line as its simple commands, each a list of words, split as bash does.
@@ -184,7 +185,8 @@ for words in cmds:
             print('hand\t')
             if not wt.startswith('new-'): print('create\t' + wt)
 PY
-) || block "an orca-ide command this hook cannot parse (unbalanced quotes?); an unchecked launch or send is not allowed. Split it into plain commands."
+}
+PLAN=$(plan) || block "an orca-ide command this hook cannot parse (unbalanced quotes?); an unchecked launch or send is not allowed. Split it into plain commands."
 
 # Main is the session's checkout, not the cwd a `cd` left behind. Outside a
 # repository nothing is main and the live-agent check below still applies.

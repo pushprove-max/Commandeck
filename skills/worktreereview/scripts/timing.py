@@ -63,11 +63,13 @@ def session_ledger(path):
                 # Then first - start - think0 is the wait before the model began at all.
                 opened = bool(blocks) and blocks[0].get('type') == 'thinking'
                 r = reqs[rid] = {'start': max((x for x in recent if x <= t), default=t), 'first': t, 'think': 0.0, 'tools': [],
-                                 'text': False, 'think0': (e.get('thinkingDurationMs') or 0) / 1000 if opened else None}
+                                 'text': False, 'think0': (e.get('thinkingDurationMs') or 0) / 1000 if opened else None, 'thinks': []}
             r.update(end=t, usage=m.get('usage') or r.get('usage') or {}, model=m.get('model'))
             # An advisor consult runs inside the request that asked for it and is part of its time.
             r['advisor'] = sum(1 for i in r['usage'].get('iterations') or [] if i.get('type') == 'advisor_message')
             r['think'] += (e.get('thinkingDurationMs') or 0) / 1000
+            # Each block's thinking ran in the seconds before it: what the build review cuts from it.
+            r['thinks'].append((t, (e.get('thinkingDurationMs') or 0) / 1000))
             for b in blocks:
                 if b.get('type') == 'text' and b.get('text', '').strip():
                     r['text'] = True

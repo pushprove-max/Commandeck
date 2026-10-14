@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 -- 2026-10-14
+
+Prices from model names, waits that are not build time, and the Mac's old Bash.
+
+- A Codex model's price came from one row per model id (#36). It now comes
+  from the parts of the name: the version and the tier word, then the mode
+  and the prompt size, through one small rule table in
+  `scripts/dashboard_limit.py`. Only a published version and tier is priced:
+  `gpt-6.2-sol`, `gpt-6.1-astra` or a name with any other part (`-mini`, a
+  date) stays unpriced, and the total says it is partial and names it. The
+  per-id Codex rows are gone; every Claude row is as it was.
+- The build review counted time the Builder spent waiting on the owner as
+  build time (#39). `collect.py` takes `--exclude START=END` (repeatable) and
+  finds windows itself: an idle gap over two minutes after the Builder's DONE
+  line, or inside an open decision that names the unit. It never cuts while
+  any session has a background job or a Codex pass running, and a found
+  window cuts only idle seconds. The cut comes out of wall clock, shares,
+  flags, stage, pass and gap times; cost is unchanged. The page and
+  `result.json` (`cut`, `cut_s`) list every window and why; `SKILL.md` states
+  the rule. A cut request loses it from its wait and thinking too.
+  Not cut yet, and the page says so: a helper's request and tool subtotals,
+  and command seconds inside a cut review pass. The decisions, and the round
+  archive, are read from the reviewed project's main checkout, found from its
+  worktree; once the worktree is removed, only from one given with `--main`.
+- Eleven shell files did not parse under the Mac's own Bash 3.2, `setup.sh`
+  among them (#38). Each is rewritten to 3.2's syntax: `;;&` as two `case`
+  statements, a `(pattern)` in each `case` inside `$(...)`, a here-document
+  inside `$(...)` moved into a function, and `${X:-$( { ...; } )}` in two
+  steps. `run-hook.test.sh` runs `/bin/bash -n` over every shell file, in the
+  macOS CI job too. The test runner still needs Bash 4 and, with none to
+  restart under, now says so and stops.
+- `.claude/routing-log` is in `.gitignore`; only a local exclude covered it.
+
 ## 0.3.0 -- 2026-10-13
 
 After setup: the first session, the relay, and readings that say what they lack.

@@ -119,7 +119,10 @@ strip_odd_end() {
   local ODD=""
   case "$1" in
     *"\$'"*'<<'*|*'<<'*"\$'"*)
-      ODD=$(sed -E "s/<<<//g; s/<<-?[[:blank:]]*('$_STRIP_PLAIN_W'|\"$_STRIP_PLAIN_W\"|\\\\?$_STRIP_PLAIN_W)([[:space:];|&<>()]|\$)/\2/g" <<<"$1" | grep -oE '<<.{0,24}' | head -1) ;;&
+      ODD=$(sed -E "s/<<<//g; s/<<-?[[:blank:]]*('$_STRIP_PLAIN_W'|\"$_STRIP_PLAIN_W\"|\\\\?$_STRIP_PLAIN_W)([[:space:];|&<>()]|\$)/\2/g" <<<"$1" | grep -oE '<<.{0,24}' | head -1) ;;
+  esac
+  # A second case, not `;;&` above: Bash 3.2 cannot parse that.
+  case "$1" in
     *'<<'*)
       [ -n "$ODD" ] || ODD=$(strip_quoted "$(sed -E 's/\$\(\([A-Za-z0-9_ +*\/%()<>-]*\)\)//g' <<<"$1")" "" ends 2>&1 >/dev/null | head -1) ;;
   esac

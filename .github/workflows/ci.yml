@@ -35,7 +35,8 @@ jobs:
       - name: Shell tests
         run: bash scripts/run-shell-tests.sh
   # The Mac's own /bin/bash is 3.2, which the Ubuntu job never meets: these two
-  # files start every hook and setup.sh under it. Homebrew's Bash runs the tests.
+  # files start every hook and setup.sh under it, and run-hook.test.sh runs
+  # `/bin/bash -n` over every shell file in the tree. Homebrew's Bash runs the tests.
   mac-bash-3:
     runs-on: macos-14
     steps:
