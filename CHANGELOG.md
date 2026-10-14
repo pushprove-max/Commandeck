@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The setup questions of 2026-10-13.
+
+- `/commandeck:setup` sent four questions in one call, one of them free
+  text, and a refused call was read as "none". Now only fixed choices go
+  through the question tool, each with a header of 12 characters or fewer and
+  two to four options, at most four per call; names and commands are asked in
+  plain text, and a refused call is asked again in plain text. New test:
+  `scripts/__tests__/setup-skill-questions.test.sh`.
+
 The public-release files of 2026-10-13.
 
 - `SECURITY.md`, `CONTRIBUTING.md` and two issue templates (bug report,
