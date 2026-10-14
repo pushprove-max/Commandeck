@@ -25,7 +25,7 @@ check "the template sends nothing else" "$(printf '%s\n' "${EVENTS[@]}" | sort |
 check "every event the plugin registers reaches Codex or is listed as Claude-only" '[]' \
   "$(jq -c --argjson c "$CLAUDE_ONLY" --argjson e "$(printf '%s\n' "${EVENTS[@]}" | jq -R . | jq -cs .)" '(.hooks | keys) - $e - $c' "$REG")"
 check "every registered hook file exists" '' \
-  "$(jq -r '.hooks[][].hooks[].command' "$REG" | sed -e 's/^"\{0,1\}\${CLAUDE_PLUGIN_ROOT}\///' -e 's/[" ].*//' | sort -u | while read -r f; do [ -x "$SOURCE/$f" ] || echo "$f"; done)"
+  "$(jq -r '.hooks[][].hooks[].command' "$REG" | grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' | sed 's/^\${CLAUDE_PLUGIN_ROOT}\///' | sort -u | while read -r f; do [ -x "$SOURCE/$f" ] || echo "$f"; done)"
 check "every codex: skip marker is on a registered hook" '' \
   "$(grep -l '^# codex: skip' "$SOURCE"/hooks/*.sh | while read -r f; do grep -qF "/hooks/${f##*/}\\\"" "$REG" || echo "${f##*/}"; done)"
 

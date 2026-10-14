@@ -260,11 +260,13 @@ run_matcher() {
     [ -n "$cmd" ] || continue
 
     # The script path for the marker check. hooks.json spells every command
-    # as `"${CLAUDE_PLUGIN_ROOT}/hooks/<name>"`, so what sits between the
-    # root and the closing quote (or the first space) is the whole parse;
-    # anything else is left to the shell below, which runs the command
-    # exactly as Claude Code does.
-    script=${cmd#\"}; script=${script#\$\{CLAUDE_PLUGIN_ROOT\}}
+    # as the launcher, then `"${CLAUDE_PLUGIN_ROOT}/hooks/<name>"`: the hook is
+    # the path after the launcher, and what sits between the root and the
+    # closing quote (or the first space) is the whole parse; anything else is
+    # left to the shell below, which runs the command exactly as Claude Code
+    # does.
+    script=${cmd#\"\$\{CLAUDE_PLUGIN_ROOT\}/hooks/lib/run-hook.sh\" }
+    script=${script#\"}; script=${script#\$\{CLAUDE_PLUGIN_ROOT\}}
     script=$PLUGIN${script%%[\" ]*}
 
     if [ -f "$script" ] && head -40 "$script" | grep -q '^# codex: skip'; then

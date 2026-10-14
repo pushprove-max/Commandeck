@@ -118,9 +118,9 @@ EXCLUDE="$(cd "$WT" && pwd)/.claude/rules/orchestration.md"
 #    PLUGINS_OFF is set above, shared with the Chief-of-Staff branch.
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
-jq --arg w "$WINDOW" --arg notify "\"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
-  # A hook this script registered from another plugin path (before an update).
-  def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/") | not);
+jq --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+  # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
+  def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
   | .hooks = ((.hooks // {}) | map_values(map(select(((.hooks // []) | length) > 0 and all(.hooks[]; stale) | not))))
   | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false, "typescript-lsp@claude-plugins-official": false} + $poff)
@@ -145,8 +145,8 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 if [ "$BUILDER" = 1 ]; then
   RULES="$(cd "$WT" && pwd)/.claude/rules"
   BX=$(jq -cn --arg r "$RULES" '["orchestration", "agents", "planning", "adversarial-reviews", "worktree-sessions"] | map("\($r)/\(.).md")')
-  jq --argjson bx "$BX" --arg cmd "\"$HOOKS/builder-event-log.sh\"" \
-    --arg gcmd "\"$HOOKS/builder-search-guard.sh\"" --arg s "$PP_SCRIPTS_Q" '
+  jq --argjson bx "$BX" --arg cmd "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/builder-event-log.sh\"" \
+    --arg gcmd "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/builder-search-guard.sh\"" --arg s "$PP_SCRIPTS_Q" '
     def reg($m): [{hooks: [{type: "command", command: $cmd}]} + (if $m then {matcher: $m} else {} end)];
     .env.COMMANDECK_BUILDER = "1"
     | .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h"

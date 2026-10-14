@@ -28,6 +28,8 @@ for event, groups in json.load(open(settings)).get("hooks", {}).items():
     for group in groups:
         for hook in group.get("hooks", []):
             words = hook.get("command", "").split()
+            # Every hook is started through the launcher: the hook is the word after it.
+            words = [w for w in words if not w.endswith('/hooks/lib/run-hook.sh"')]
             path = (words[0] if words else "").strip(chr(34)).replace("${CLAUDE_PLUGIN_ROOT}", root)
             name = f"{event} {group.get('matcher', '*')} {os.path.basename(path)}"
             block = hook.get("onFailure") == "block"

@@ -200,9 +200,9 @@ REALPY=$(command -v python3)
 printf '#!/usr/bin/env bash\n[[ "$*" == *tomllib* ]] && [ -e "%s/py310" ] && exit 1\nexec "%s" "$@"\n' "$T" "$REALPY" > "$BIN/python3"; chmod +x "$BIN/python3"
 touch "$T/py310"; KEEP=$(snap)
 run "$PROJ" setup.sh >"$T/out" 2>&1; check "a Python without tomllib stops setup" 1 $?
-check "it says which Python is needed" 1 "$(grep -c 'python 3.11 or newer' "$T/out")"
+check "it says which Python is needed" 1 "$(grep -c 'Python 3.11 or newer' "$T/out")"
 check "and changes nothing" "$KEEP" "$(snap)"
-run "$PROJ" doctor.sh >"$T/out" 2>&1; check "the doctor fails on it too" 1 "$(grep -c '^FAIL tools: .*python 3.11 or newer' "$T/out")"
+run "$PROJ" doctor.sh >"$T/out" 2>&1; check "the doctor fails on it too" "1 1" "$(grep -c '^FAIL tools: ' "$T/out") $(grep -c 'Python 3.11 or newer' "$T/out")"
 rm "$T/py310" "$BIN/python3"
 jq '.version = 99' "$CFG" > "$T/c.json" && cp "$T/c.json" "$CFG"; KEEP=$(snap)
 PLUGIN_DIR=$T/plugin-2 run "$PROJ" update.sh >"$T/out" 2>&1; check "a config version update does not know is refused" 1 $?

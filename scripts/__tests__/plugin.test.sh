@@ -28,7 +28,9 @@ ok() { manifest_ok "$TMP/p" >/dev/null 2>&1; echo $?; }
 
 check "the shipped manifest is sound" 0 "$(manifest_ok "$REAL" >/dev/null 2>&1; echo $?)"
 M=$REAL/.claude-plugin/plugin.json
-check "it is version 0.1.0" 0.1.0 "$(jq -r .version "$M" 2>/dev/null)"
+check "it is version 0.2.0" 0.2.0 "$(jq -r .version "$M" 2>/dev/null)"
+check "the README's badge shows the manifest's version, twice on its line" 2 "$(grep -o "version-0\.2\.0-\|Version 0\.2\.0\"" "$REAL/README.md" | wc -l | tr -d ' ')"
+check "and the CHANGELOG has that version's entry" 1 "$(grep -c '^## 0\.2\.0 -- ' "$REAL/CHANGELOG.md")"
 check "it carries a description" yes "$(jq -r 'if (.description | type == "string" and length > 20) then "yes" else "no" end' "$M" 2>/dev/null)"
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
 # Claude Code loads hooks/hooks.json without being told. A command that names
@@ -39,7 +41,8 @@ hook_files() { jq -r '.hooks[][].hooks[].command | capture("^\"\\$\\{CLAUDE_PLUG
 # The root is wherever the plugin was installed, and that path may hold a
 # space: unquoted, the shell splits it and every hook fails, the ones that run
 # on every tool call included.
-check "every hook command runs from the plugin root, its path quoted" 0 "$(jq '[.hooks[][].hooks[].command | select(test("^\"\\$\\{CLAUDE_PLUGIN_ROOT\\}/hooks/[A-Za-z0-9_.-]+\"( |$)") | not)] | length' "$H" 2>/dev/null)"
+# Each goes through the launcher, which finds a Bash new enough for the hook.
+check "every hook command runs from the plugin root, through the launcher, each path quoted" 0 "$(jq '[.hooks[][].hooks[].command | select(test("^\"\\$\\{CLAUDE_PLUGIN_ROOT\\}/hooks/lib/run-hook\\.sh\" \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/hooks/[A-Za-z0-9_.-]+\"( |$)") | not)] | length' "$H" 2>/dev/null)"
 mkdir -p "$TMP/a root"; ln -s "$REAL/hooks" "$TMP/a root/hooks"
 check "and each one is a runnable word under a root with a space in it" "" \
   "$(jq -r '.hooks[][].hooks[].command' "$H" | while IFS= read -r c; do CLAUDE_PLUGIN_ROOT="$TMP/a root" bash -c "set -- $c; [ -x \"\$1\" ]" 2>/dev/null || echo "$c"; done | head -3)"

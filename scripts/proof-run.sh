@@ -12,6 +12,8 @@
 # as "not measured" with the command that measures them after a real toy unit.
 # Exit 1 when a measured row breaks its limit. --keep leaves the temp folder.
 set -uo pipefail
+# On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
+. "$(dirname "$0")/requirements.sh"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 KEEP= PROFILES=(claude claude-openai)
 while [ $# -gt 0 ]; do
@@ -38,7 +40,7 @@ printf '#!/usr/bin/env bash\ncase "$*" in "worktree ps --json") echo %s ;; "term
 printf '#!/usr/bin/env bash\ncase "$*" in *is-active*) echo active ;; esac\n' > "$BIN/systemctl"
 printf '#!/usr/bin/env bash\n[ "$*" = "login status" ]\n' > "$BIN/codex"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/claude"
-printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/gh"   # the sample is no GitHub project: the real gh is never asked
+printf '#!/usr/bin/env bash\n[ "$*" = "auth token" ]\n' > "$BIN/gh"   # signed in, and no more: the sample is no GitHub project, and the real gh is never asked
 chmod +x "$BIN"/*
 # What another tool left here before the plugin: the stand-in for coexistence.
 printf '{"models":[{"slug":"gpt-9.1-%s"}]}\n' "$(jq -r '.roles["codex-reviewer"].model' "$ROOT/config/routing.json")" > "$HOME/.codex/models_cache.json"

@@ -8,6 +8,8 @@
 # overBudget=true marks a session whose turns (model calls) exceed the
 # configured review-limits.calls: Codex has no hard stop, so this is the check.
 set -euo pipefail
+# On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
+. "$(dirname "$0")/requirements.sh"
 if [ "${1:-}" = "--rollout" ]; then
   shift
   ROUTING=${COMMANDECK_ROUTING:-$(dirname "${BASH_SOURCE[0]}")/../config/routing.json}

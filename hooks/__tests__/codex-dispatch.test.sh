@@ -16,7 +16,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); 
 # records each call and acts on its first argument.
 P=$T/plugin; mkdir -p "$P/hooks/lib"
 cp "$SOURCE/hooks/codex-dispatch.sh" "$P/hooks/" 2>/dev/null
-cp "$SOURCE/hooks/lib/hook-fire-log.sh" "$SOURCE/hooks/lib/project.sh" "$P/hooks/lib/"
+cp "$SOURCE/hooks/lib/hook-fire-log.sh" "$SOURCE/hooks/lib/project.sh" "$SOURCE/hooks/lib/run-hook.sh" "$P/hooks/lib/"
 cat > "$P/hooks/rec.sh" <<'REC'
 #!/usr/bin/env bash
 IN=$(cat)
@@ -40,8 +40,10 @@ exit 0
 REC
 printf '#!/usr/bin/env bash\n# codex: skip -- fixture: Claude-only\necho ran >> "$REC_LOG"\n' > "$P/hooks/skipped.sh"
 chmod +x "$P/hooks/"*.sh
-# As hooks.json spells them: the path quoted, any argument after it.
-h() { local a=${1#* }; [ "$a" != "$1" ] || a=; printf '{"type":"command","command":"\\"${CLAUDE_PLUGIN_ROOT}/hooks/%s\\"%s"}' "${1%% *}" "${a:+ $a}"; }
+# As hooks.json spells them: through the launcher, the hook's path quoted, any
+# argument after it. The hook is the second path: the skip marker and the
+# read-only keep-list are read from it, never from the launcher.
+h() { local a=${1#* }; [ "$a" != "$1" ] || a=; printf '{"type":"command","command":"\\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\\" \\"${CLAUDE_PLUGIN_ROOT}/hooks/%s\\"%s"}' "${1%% *}" "${a:+ $a}"; }
 cat > "$P/hooks/hooks.json" <<JSON
 {"hooks": {
   "SessionStart": [{"matcher": "*", "hooks": [$(h "rec.sh context")]}],

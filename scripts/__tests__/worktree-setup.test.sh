@@ -101,7 +101,7 @@ check "Builder: node is allowed" 1 "$(jq '[.permissions.allow[] | select(. == "B
 # names the pass script where the plugin is, for either reviewer.
 check "Builder: the pass script is allowed, by the plugin's path" 2 "$(jq --arg s "$REAL/scripts" '[.permissions.allow[] | select(. == "Bash(bash \($s)/builder-codex-pass.sh:*)" or . == "Bash(bash \($s)/builder-claude-pass.sh:*)")] | length' "$BF")"
 check "Builder: its hooks are the plugin's files, which exist" "2 yes" \
-  "$(jq -r '[.hooks.PreToolUse[].hooks[].command] | unique | length' "$BF") $(jq -r '.hooks.PreToolUse[].hooks[].command' "$BF" | while IFS= read -r c; do eval "[ -x $c ]" || echo no; done | grep -q no && echo no || echo yes)"
+  "$(jq -r '[.hooks.PreToolUse[].hooks[].command] | unique | length' "$BF") $(jq -r '.hooks.PreToolUse[].hooks[].command' "$BF" | while IFS= read -r c; do eval "set -- $c"; for f; do [ -x "$f" ] || echo no; done; done | grep -q no && echo no || echo yes)"
 check "Builder: no hook is looked for in the project" 0 "$(grep -c 'CLAUDE_PROJECT_DIR' "$BF")"
 check "Builder: the five orchestration rules are excluded, once each" \
   "adversarial-reviews.md agents.md orchestration.md planning.md worktree-sessions.md" \

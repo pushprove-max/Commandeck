@@ -23,6 +23,8 @@
 # only those, which is how the chain gives them a lane of their own. The
 # coverage guard reads the same marker, so the two never both run one test.
 set -uo pipefail
+# On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
+. "$(dirname "$0")/requirements.sh"
 ROOT=$(git rev-parse --show-toplevel)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}

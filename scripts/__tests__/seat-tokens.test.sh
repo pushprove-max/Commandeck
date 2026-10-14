@@ -15,7 +15,7 @@ check() { [ "$2" = "$3" ] || { echo "FAIL $1 (expected [$2], got [$3])" >&2; exi
 ROOT=$TMP/repo WS=$TMP/ws HOME_DIR=$TMP/home
 git init -q "$ROOT"
 mkdir -p "$ROOT/scripts" "$ROOT/config" "$WS/u1" "$WS/u2" "$TMP/bin" "$TMP/scratch"
-cp "$SOURCE/scripts/seat.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/read-verdict.sh" "$SOURCE/scripts/seat-tokens.sh" "$SOURCE/scripts/seat-event.sh" "$ROOT/scripts/"
+cp "$SOURCE/scripts/seat.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/requirements.sh" "$SOURCE/scripts/read-verdict.sh" "$SOURCE/scripts/seat-tokens.sh" "$SOURCE/scripts/seat-event.sh" "$ROOT/scripts/"
 printf '#!/bin/sh\nexit 0\n' > "$ROOT/scripts/run-bound.sh"
 jq '.roles["claude-seat"] = {agent: "claude", model: "claude-opus-5-5", effort: "high", unboxed: true, edits: true}
   | .roles["codex-seat"] = {agent: "codex", model: "gpt-6-astra", effort: "high", unboxed: true, edits: true}

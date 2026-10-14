@@ -13,7 +13,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 git init -q "$TMP/repo"
 WT=$TMP/ws/fake-unit
 mkdir -p "$TMP/repo/scripts" "$TMP/repo/config" "$WT/.claude/briefs" "$TMP/bin" "$TMP/scratch" "$TMP/out"
-cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/read-verdict.sh" "$TMP/repo/scripts/"
+cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/requirements.sh" "$REAL/scripts/read-verdict.sh" "$TMP/repo/scripts/"
 jq -f "$REAL/scripts/__tests__/fixtures/routing-seats.jq" "$REAL/config/routing.json" > "$TMP/repo/config/routing.json"
 for s in run-bound.sh worktree-setup.sh; do
   printf '#!/bin/sh\nexit 0\n' > "$TMP/repo/scripts/$s"; chmod +x "$TMP/repo/scripts/$s"

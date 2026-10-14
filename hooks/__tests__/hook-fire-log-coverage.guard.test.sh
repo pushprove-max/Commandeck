@@ -35,6 +35,8 @@ for groups in json.load(open(os.path.join(hooks, "hooks.json"))).get("hooks", {}
     for group in groups:
         for hook in group.get("hooks", []):
             words = hook.get("command", "").split()
+            # Every hook is started through the launcher: the hook is the word after it.
+            words = [w for w in words if not w.endswith('/hooks/lib/run-hook.sh"')]
             word = words[0] if words else ""
             path = word.strip(chr(34)).replace("${CLAUDE_PLUGIN_ROOT}", root)
             if not path.endswith(".sh"):

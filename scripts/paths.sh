@@ -18,49 +18,16 @@
 # ~/.claude/projects folders the ledgers read.
 pp_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
 
-# Mac preflight. The scripts use GNU sed -i, stat -c, date -d, readlink -f,
-# grep -P, flock and timeout, and Bash 4+ syntax; the Mac's /bin/bash 3.2 and
-# BSD tools break or silently answer differently. Homebrew supplies them, and
-# its bin plus the gnubin directories must lead PATH (a LaunchAgent sets that
-# PATH itself). Anything missing stops the caller here, before any work.
-# A zsh login shell runs path_helper, which puts /usr/bin and /bin ahead of the
-# gnubin directories, so those Homebrew directories are moved in front of the
-# first system one first; entries already ahead (a test stub, nvm) keep their
-# place. COMMANDECK_BREW_PREFIX relocates Homebrew for the self-test.
-if [ "$(uname -s)" = Darwin ]; then
-  pp_gnu=()
-  for pp_t in "${COMMANDECK_BREW_PREFIX:-/opt/homebrew}"/opt/*/libexec/gnubin "${COMMANDECK_BREW_PREFIX:-/opt/homebrew}/bin"; do
-    [ -d "$pp_t" ] && pp_gnu+=("$pp_t")
-  done
-  pp_path=: pp_added=
-  IFS=: read -ra pp_dirs <<<"$PATH"
-  # The trailing newline entry is an end marker: no system directory at all
-  # still gets the Homebrew ones, appended.
-  for pp_t in "${pp_dirs[@]}" $'\n'; do
-    if [ -z "$pp_added" ] && { [ "$pp_t" = /usr/bin ] || [ "$pp_t" = /bin ] || [ "$pp_t" = $'\n' ]; }; then
-      pp_added=1
-      for pp_g in ${pp_gnu[@]+"${pp_gnu[@]}"}; do
-        case $pp_path in *":$pp_g:"*) ;; *) pp_path="$pp_path$pp_g:" ;; esac
-      done
-    fi
-    [ "$pp_t" != $'\n' ] || continue
-    case $pp_path in *":$pp_t:"*) ;; *) pp_path="$pp_path$pp_t:" ;; esac
-  done
-  pp_path=${pp_path#:}; PATH=${pp_path%:}; export PATH
-  unset pp_gnu pp_path pp_added pp_dirs pp_g
-  pp_missing=
-  [ "${BASH_VERSINFO[0]}" -ge 4 ] || pp_missing=" bash-4+ (running $BASH $BASH_VERSION)"
-  for pp_t in gsed gstat gdate greadlink ggrep flock timeout; do
-    command -v "$pp_t" >/dev/null 2>&1 || pp_missing="$pp_missing $pp_t"
-  done
-  for pp_t in sed stat date readlink grep; do
-    grep -q GNU <<<"$("$pp_t" --version 2>/dev/null)" || pp_missing="$pp_missing GNU-$pp_t-first-on-PATH"
-  done
-  if [ -n "$pp_missing" ]; then
-    echo "paths.sh: Mac preflight failed, missing:$pp_missing. Put /opt/homebrew/bin and the Homebrew gnubin directories first on PATH." >&2
-    return 1
-  fi
-  unset pp_missing pp_t
+# Preflight. requirements.sh puts Homebrew's folders ahead of the system ones
+# on a Mac's PATH, starts a script the Mac's own Bash 3.2 ran again under
+# Homebrew's, and holds the one requirements list. What every script needs
+# from that list is checked here on a Mac (its own tools are BSD ones and its
+# Bash is 3.2); anything missing stops the caller before any work.
+. "$(dirname "${BASH_SOURCE[0]}")/requirements.sh"
+if [ "$REQ_OS" = Darwin ] && ! req_check all; then
+  { echo "paths.sh: Mac preflight failed."; req_report
+    echo "setup installs what it can on a yes: bash $(printf '%q' "$REQ_DIR")/setup.sh --profile claude|claude-openai --install-missing"; } >&2
+  return 1
 fi
 
 . "$(dirname "${BASH_SOURCE[0]}")/project-main.sh"

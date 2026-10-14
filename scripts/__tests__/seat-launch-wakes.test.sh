@@ -11,7 +11,7 @@ TMP=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$TMP"' EXIT
 # from inside a real repo. Copying it keeps the stub tree off the checkout.
 git init -q "$TMP/repo"
 mkdir -p "$TMP/repo/scripts" "$TMP/repo/config" "$TMP/ws/fake-unit" "$TMP/bin" "$TMP/scratch"
-cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/read-verdict.sh" "$REAL/scripts/seat-go.sh" "$REAL/scripts/dispatch-task.sh" "$REAL/scripts/orca-task-create.sh" "$TMP/repo/scripts/"
+cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/requirements.sh" "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/read-verdict.sh" "$REAL/scripts/seat-go.sh" "$REAL/scripts/dispatch-task.sh" "$REAL/scripts/orca-task-create.sh" "$TMP/repo/scripts/"
 # The Codex cases below need a writable Codex seat: pin that shape here.
 jq "$(cat "$REAL/scripts/__tests__/fixtures/routing-seats.jq")"' | .roles["companion"] = {agent: "codex", model: "gpt-6.1-sol", effort: "high", memory: "12G", sandbox: "workspace-write", edits: true}' \
   "$REAL/config/routing.json" > "$TMP/repo/config/routing.json"

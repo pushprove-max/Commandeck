@@ -33,8 +33,8 @@ printf '#!/usr/bin/env bash\necho "$*" >> %q\ncase "$*" in *is-active*) [ -e %q 
 printf '#!/usr/bin/env bash\n[ "$*" = "login status" ] && [ ! -e %q ]\n' "$T/signed-out" > "$BIN/codex"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/pgrep"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/claude"
-# gh is never the real one: a project's issues are the file named after the folder gh runs in, else gh fails.
-printf '#!/usr/bin/env bash\ncat %q/"${PWD##*/}".json 2>/dev/null\n' "$T/gh" > "$BIN/gh"
+# gh is never the real one: signed in, and a project's issues are the file named after the folder gh runs in, else gh fails.
+printf '#!/usr/bin/env bash\n[ "$*" != "auth token" ] || exit 0\ncat %q/"${PWD##*/}".json 2>/dev/null\n' "$T/gh" > "$BIN/gh"
 chmod +x "$BIN"/*
 touch "$T/jobs-up"
 

@@ -14,7 +14,7 @@ mkdir -p "$TMP/home/.claude" "$TMP/bin"
 git init -q "$P" && git -C "$P" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 # No Orca in the measure: the per-prompt hooks must not reach a live one.
 printf '#!/usr/bin/env bash\necho "{}"\n' > "$TMP/bin/orca-ide"; chmod +x "$TMP/bin/orca-ide"
-size() { (cd "$P" && env -u CLAUDE_PROJECT_DIR PATH="$TMP/bin:$PATH" HOME="$TMP/home" COMMANDECK_SCRATCH="$TMP/scratch" bash "$REAL/scripts/startup-size.sh" "$@" 2>"$TMP/err"); }
+size() { (cd "$P" && env -u CLAUDE_PROJECT_DIR PATH="$TMP/bin:$PATH" HOME="$TMP/home" COMMANDECK_SCRATCH="$TMP/scratch" "$BASH" "$REAL/scripts/startup-size.sh" "$@" 2>"$TMP/err"); }
 
 OUT=$(size); RC=$?
 check "the shipped templates fit every seat" 0 "$RC"
@@ -39,6 +39,12 @@ size --role nobody >/dev/null; check "an unknown role is a usage error" 2 "$?"
 OUT=$(size --per-prompt --role main); RC=$?
 check "--per-prompt runs every UserPromptSubmit hook and sums them" \
   "0 $(jq '[.hooks.UserPromptSubmit[].hooks[]] | length' "$REAL/hooks/hooks.json") 1" "$RC $(grep -vc '	total	' <<<"$OUT") $(grep -c '	total	' <<<"$OUT")"
+
+# A hook that fails prints nothing, and nothing is not a size: a broken hook
+# read as 0 bytes passed the measure. Here no hook can start at all.
+(bash() { return 127; }; export -f bash; size --role worker >/dev/null); RC=$?
+check "a hook that fails fails the measure" 1 "$RC"
+check "and each one is named with its seat" "$(jq '[.hooks.SessionStart[].hooks[]] | length' "$REAL/hooks/hooks.json")" "$(grep -c '^startup-size: [a-z-]*\.sh failed as worker (exit 127), so its size is not known$' "$TMP/err")"
 
 # A project's own startup file over the line fails the measure and names the hook.
 head -c 11000 /dev/zero | tr '\0' 'x' > "$P/AGENT_STARTUP.md"

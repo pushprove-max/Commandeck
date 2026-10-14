@@ -180,7 +180,7 @@ check "a clean closing pass at the tip merges" 0 "$(verify)"
 ROOT=$TMP/root
 git init -q -b main "$ROOT"; git -C "$ROOT" config user.name t; git -C "$ROOT" config user.email t@t
 mkdir -p "$ROOT/scripts" "$ROOT/templates" "$ROOT/config"
-cp "$REAL/scripts/"{builder-launch.sh,builder-codex-pass.sh,builder-claude-pass.sh,paths.sh,project-main.sh,lib-mutation-note.sh} "$ROOT/scripts/"
+cp "$REAL/scripts/"{builder-launch.sh,builder-codex-pass.sh,builder-claude-pass.sh,paths.sh,project-main.sh,requirements.sh,lib-mutation-note.sh} "$ROOT/scripts/"
 cp "$REAL/templates/_builder-brief-template.md" "$ROOT/templates/"; cp "$ROUTING" "$ROOT/config/routing.json"
 printf '#!/usr/bin/env bash\necho "seat $*" >> %q\n' "$TMP/launches" > "$ROOT/scripts/seat.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$ROOT/scripts/worktree-setup.sh"

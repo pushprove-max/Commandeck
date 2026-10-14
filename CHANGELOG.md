@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 -- 2026-10-13
+
+The version is 0.2.0: the second part rises for new behaviour, the third for
+fixes. It is written in `.claude-plugin/plugin.json` and the README's badge.
+
+The requirements of 2026-10-14.
+
+- Set-up named one missing tool at a time and told the owner to reorder
+  `PATH` in a shell start file. Now one list, in `scripts/requirements.sh`, is
+  read by `setup.sh`, `doctor.sh` and the Mac preflight in `paths.sh`; the three kept lists that did not agree. One
+  check names everything missing in two groups: "can install", with the one
+  `brew install` or `sudo apt-get install -y` command, and "yours to do"
+  (Orca, Homebrew itself, `gh auth login`, the Codex CLI). `setup.sh
+  --install-missing` runs the printed commands and no other, then checks
+  again; without the flag nothing is installed. `gh` and its sign-in are now
+  checked. New test: `scripts/__tests__/setup-requirements.test.sh`.
+- On a Mac whose first `bash` is the system's 3.2, hooks that do not parse
+  under it failed, and a failed hook blocked every command. Every hook is now
+  started through `hooks/lib/run-hook.sh`, plain `sh`, which finds a Bash 4
+  or newer and runs the hook under it with its input untouched and, on a Mac,
+  Homebrew's GNU tools ahead of the system's on its `PATH`; with none it
+  prints one line and exits 0. A script started by Bash 3.2 starts itself
+  again under Homebrew's Bash, once, with its arguments and input. CI has a
+  macOS job for both. New test: `hooks/__tests__/run-hook.test.sh`.
+- The Mac app ships Orca's command as `orca`, with no `orca-ide`. Set-up now
+  offers the link, as the exact `ln -s` command, when the `orca` it finds
+  really is Orca's, and otherwise names Orca and its releases page.
+- The user settings file can carry its own `env.PATH`, which replaces the
+  shell's inside every session. The check now reads both: a tool on one and
+  not the other is named in one plain line, and the `orca-ide` link goes into
+  a folder on the PATH a session gets. The settings file is never edited.
+- `/commandeck:setup` passes what the owner types exactly as typed; it asks
+  one fixed question before installing; and its first command is a probe, so
+  a host project's own guard that refuses `orca-ide` is named before any
+  question, and never worked round.
 
 The setup questions of 2026-10-13.
 

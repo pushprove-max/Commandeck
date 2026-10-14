@@ -21,7 +21,7 @@ fail() { echo "FAIL: $*" >&2; [ ! -s "$T/sends" ] || { echo "sends were:" >&2; c
 REPO=$T/repo S=$T/scratch F=$T/fake
 mkdir -p "$REPO/scripts" "$T/bin" "$S" "$F" "$T/home/.config/orca" "$T/ws"
 git -C "$REPO" init -q
-cp "$SOURCE/scripts/main-watch.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" \
+cp "$SOURCE/scripts/main-watch.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/requirements.sh" \
    "$SOURCE/scripts/host-services.sh" "$SOURCE/scripts/orca-task-create.sh" "$SOURCE/scripts/dashboard_builders.jq" "$REPO/scripts/"
 mkdir -p "$REPO/config"; cp "$SOURCE/config/routing.json" "$REPO/config/"
 # read-verdict.sh stands in for a seat's own output: `verdict-<handle>` files.

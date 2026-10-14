@@ -8,20 +8,22 @@
 # claude-openai profile the review pass and Codex's hooks, trust and notify.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-. "$HERE/paths.sh" || { echo "FAIL project: not in a project; run this in the checkout setup was run in"; exit 1; }
-. "$HERE/install-lib.sh"
+. "$HERE/requirements.sh"
 RC=0
 ok() { printf 'ok   %s\n' "$*"; }
 warn() { printf 'warn %s\n' "$*"; }
 bad() { printf 'FAIL %s\n' "$*"; RC=1; }
+# tools [profile] -- the one requirements check, with the two groups setup prints under its FAIL line.
+tools() {
+  if req_check setup "${1:-}"; then ok "tools on PATH"
+  else bad "tools: requirements are missing. Setup installs what it can on a yes: bash $(printf '%q' "$HERE")/setup.sh --install-missing"; req_report; fi
+}
+# On a Mac paths.sh refuses to load when a tool every script needs is missing: a tools failure, not a missing project.
+[ "$REQ_OS" != Darwin ] || req_check all || { tools; exit 1; }
+. "$HERE/paths.sh" || { echo "FAIL project: not in a project; run this in the checkout setup was run in"; exit 1; }
+. "$HERE/install-lib.sh"
 
-MISSING=()
-for t in jq git perl python3 flock timeout sha1sum sha256sum realpath readlink orca-ide; do command -v "$t" >/dev/null || MISSING+=("$t"); done
-realpath -m /nowhere/x >/dev/null 2>&1 || MISSING+=("GNU realpath (realpath -m)")
-# Codex's trust table is read with tomllib: without it every project reads as untrusted and no Codex guard runs.
-python3 -c 'import tomllib' 2>/dev/null || MISSING+=("python 3.11 or newer (python3 has no tomllib)")
-[ "${BASH_VERSINFO[0]}" -ge 4 ] || MISSING+=("bash 4 or newer")
-if [ ${#MISSING[@]} = 0 ]; then ok "tools on PATH"; else bad "tools: missing on PATH: ${MISSING[*]}"; fi
+tools "$(jq -r '.profile // empty' "$IL_CONFIG" 2>/dev/null)"
 
 ok "plugin $(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json") at $IL_ROOT"
 H=$IL_ROOT/hooks/hooks.json

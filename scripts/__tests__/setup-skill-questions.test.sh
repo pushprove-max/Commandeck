@@ -7,6 +7,11 @@
 # tool's shape, the skill says a refused call is not an answer, and every
 # off/none/larger choice names the flag that undoes a saved setting (a flag
 # left out keeps the earlier answer, so the owner's "off" would be lost).
+# Also: setup once sent a "corrected" spelling of a name the owner typed, so the
+# rule that free text goes exactly as typed must be there; installing a missing
+# tool is one fixed question, and only "install" sends the flag; no text tells
+# the owner to edit a shell start file; and the first command is a probe that
+# shows a host project's own guard before any question is asked.
 # Form it reads: a line `Call ...` opens one tool call; each question in it is
 # one line `Ask "<header>": <option> | <option> [| ...] [-- <note>]`.
 set -uo pipefail
@@ -40,6 +45,20 @@ check "the skill says a refused call is not an answer" 1 \
 check "and says to ask the same thing again in plain text" 1 \
   "$(printf '%s\n' "$BODY" | grep -i 'refused or failed question call is not an answer' | grep -ic 'again in plain text')"
 check "the old no-second-ask wording is gone" 0 "$(printf '%s\n' "$BODY" | grep -c 'Do not ask anything a second time')"
+check "free text the owner types is passed exactly as typed, by rule" 1 \
+  "$(printf '%s\n' "$BODY" | grep '^Rule: free text the owner types' | grep 'exactly as typed' | grep -c 'never corrected, completed or reformatted')"
+check "and the original is sent unless the owner changes it" 1 "$(printf '%s\n' "$BODY" | grep '^Rule: free text' | grep -c 'the original is sent unless the owner changes it')"
+check "installing what is missing is one fixed question" 1 "$(printf '%s\n' "$BODY" | grep -c '^ *Ask "Install": install | stop$')"
+check "only the answer install sends the flag, and a refused call never does" 1 \
+  "$(printf '%s\n' "$BODY" | tr '\n' ' ' | tr -s ' ' | grep -c 'Only the answer "install" sends the flag; a refused call, or any other answer, never does')"
+check "what only the owner can do is never a question" 1 "$(printf '%s\n' "$BODY" | tr '\n' ' ' | tr -s ' ' | grep -c '"yours to do" lines are the owner.s: plain text, never a question')"
+check "the probe comes before the first question" 1 \
+  "$(printf '%s\n' "$BODY" | awk '/command -v orca-ide/ { p = NR } /^ *Call/ && !c { c = NR } END { print (p && p < c) ? 1 : 0 }')"
+check "and the skill never works round a project's own guard" 1 "$(printf '%s\n' "$BODY" | tr '\n' ' ' | tr -s ' ' | grep -c "Never edit, switch off or work round the project's own guard")"
+# Homebrew's folders are found by the scripts themselves; the owner's shell start file is never the remedy.
+HERE=$(cd "$(dirname "$0")/../.." && pwd)
+check "no text tells the owner to edit a shell start file or put a folder first on PATH" 0 \
+  "$(cat "$SKILL" "$HERE/README.md" "$HERE/scripts/paths.sh" "$HERE/scripts/requirements.sh" "$HERE/scripts/setup.sh" "$HERE/scripts/doctor.sh" "$HERE/hooks/lib/run-hook.sh" | grep -ciE 'first on .?PATH|zshrc|zprofile|bash_profile|bashrc')"
 
 # Each undoing flag is in the skill, and sent over a saved config it clears the saved answer.
 for f in "--no-strict" "--name '' --persona ''" "--test-command ''" "--hosts ''" "--no-standard-context" "--builder-advisor none"; do

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-111111?style=flat-square" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/version-0.2.0-111111?style=flat-square" alt="Version 0.2.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -21,16 +21,42 @@ merged: a `VERDICT: GO`, or a closing pass that left nothing above P2.
 
 | Need | For |
 |---|---|
-| [Orca](https://github.com/stablyai/orca), with its `orca-ide` command on `PATH` | worktrees and panes |
+| [Orca](https://github.com/stablyai/orca), and its command under the name `orca-ide` on `PATH` | worktrees and panes |
 | Claude Code | every session |
 | git | worktrees, the merge |
 | GitHub CLI (`gh`), signed in | the issues a merge files for findings left open, and the dashboard |
-| `jq`, `perl`, Python 3.11 or newer, Bash 4 or newer | the scripts |
+| `jq`, `perl`, Python 3.11 or newer, Bash 4 or newer | the scripts and the hooks |
+| GNU `sed`, `stat`, `date`, `readlink`, `grep`, `realpath`, `timeout`, `sha1sum` and `sha256sum`; `flock` | the scripts |
 | Codex CLI and the `openai-codex` Claude Code plugin, both signed in | the `claude-openai` profile only: its review passes run on Codex |
 
-It runs on macOS and Linux, and on Windows through WSL. On macOS the scripts
-need Bash 4+ and the GNU tools from Homebrew first on `PATH` (`coreutils`,
-`gnu-sed`, `grep`, `flock`); `scripts/paths.sh` names what is missing.
+It runs on macOS and Linux, and on Windows through WSL. The table is
+the list in `scripts/requirements.sh`, the one set-up, `doctor.sh` and the scripts'
+own preflight read. `/commandeck:setup` checks all of it at once and names
+what is missing in two groups. What a package manager supplies comes with the
+one command for your machine (`brew install ...` on macOS, `sudo apt-get
+install -y ...` on Linux), and set-up runs that command when you say yes, and
+nothing without it. The rest is yours to do, each with its step: Orca,
+Homebrew itself, `gh auth login`, the Codex CLI.
+
+Orca is a desktop app you install yourself, from
+[its releases page](https://github.com/stablyai/orca/releases): the `.dmg` for
+your chip on a Mac, the `orca-ide` `.deb`, `.rpm` or AppImage on Linux. The
+Linux packages name its command `orca-ide`. The Mac app names it `orca` and
+puts no `orca-ide` anywhere, so on a Mac set-up offers to link `orca-ide` to
+the app's own command, in a folder of yours that is already on `PATH`.
+Homebrew's `orca` is another program.
+
+On macOS, Bash 4+ and the GNU tools come from Homebrew (`bash`, `coreutils`,
+`gnu-sed`, `grep`, `flock`). The scripts look in Homebrew's folders
+themselves, a script the Mac's own Bash 3.2 started carries on under
+Homebrew's, and the hooks are started through a launcher that finds a Bash 4
+or newer, so your shell's start file needs no edit. Until that Bash is there
+the hooks do not run: each says so in one line and blocks nothing.
+
+If your `~/.claude/settings.json` sets its own `env.PATH`, that is the `PATH`
+every session and hook gets, in place of your shell's. Set-up checks both: a
+tool that is on one and not the other is named in one line, and the `orca-ide`
+link goes into a folder on the session's. Set-up never edits that setting.
 
 GitHub is the only git host, and a project needs a GitHub remote to get a
 dashboard. Everything runs on one machine. Nothing here pushes: a merge is a

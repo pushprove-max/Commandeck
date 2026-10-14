@@ -4,10 +4,14 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-model <alias>] [--builder-advisor <alias>|none]
+#          [--builder-model <alias>] [--builder-advisor <alias>|none] [--install-missing]
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
 # the answers given and keeps the rest; update.sh is this script with none.
+#
+# Requirements (requirements.sh) are checked before all else, and all
+# at once. Setup installs nothing by itself: --install-missing is the owner's
+# yes, and runs the commands the check printed, word for word, and no other.
 #
 # Order, and why: the preflight refuses before anything is touched; then the
 # install manifest (install-lib.sh) records every path about to change, so a
@@ -19,6 +23,38 @@
 # one is given, and the one before it is recorded for uninstall.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Ahead of paths.sh, which on a Mac refuses to load without the tools this
+# check offers to install; and down to that load in Bash 3.2's syntax, for a
+# Mac that has no newer Bash yet.
+. "$HERE/requirements.sh"
+# A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
+# The options that take a value are the ones the loop below lists.
+INSTALL= ASKED= OPT=
+for a; do
+  if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; OPT=; continue; fi
+  case $a in
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor) OPT=$a ;;
+    --install-missing) INSTALL=1 ;;
+  esac
+done
+# need <profile> -- stop unless every requirement is met. With the owner's yes,
+# what can be installed is, once, and the list is read again.
+need() {
+  req_check setup "$1" && return 0
+  if [ -n "$INSTALL" ] && [ -n "$REQ_NAMES" ]; then
+    INSTALL=
+    echo "setup: installing $REQ_NAMES"
+    req_install
+    # What was installed may be Homebrew's GNU folders, new on PATH, or Bash itself.
+    req_path; req_restart
+    req_check setup "$1" && return 0
+    { echo "setup: still missing after the install; nothing else was changed."; req_report; } >&2
+    exit 1
+  fi
+  { echo "setup: requirements are missing; nothing was changed."; req_report; } >&2
+  exit 1
+}
+need "$ASKED"
 . "$HERE/paths.sh"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
@@ -64,6 +100,7 @@ while [ $# -gt 0 ]; do
     --no-standard-context) STANDARD=false; shift ;;
     --dashboard) DASHBOARD=1; shift ;;
     --no-dashboard) DASHBOARD=; shift ;;
+    --install-missing) shift ;;
     *) usage ;;
   esac
 done
@@ -84,13 +121,8 @@ done
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || die "this project is set up with --scope $WAS; run uninstall.sh first to change the scope"
 
 # --- preflight: refuse here, before anything changes ---
-MISSING=()
-for t in jq git perl python3 flock timeout sha1sum sha256sum realpath readlink orca-ide; do command -v "$t" >/dev/null || MISSING+=("$t"); done
-realpath -m /nowhere/x >/dev/null 2>&1 || MISSING+=("GNU realpath (realpath -m)")
-# Codex's trust table is read with tomllib: without it every project reads as untrusted and no Codex guard runs.
-python3 -c 'import tomllib' 2>/dev/null || MISSING+=("python 3.11 or newer (python3 has no tomllib)")
-[ "${BASH_VERSINFO[0]}" -ge 4 ] || MISSING+=("bash 4 or newer")
-[ ${#MISSING[@]} = 0 ] || die "missing on PATH: ${MISSING[*]}"
+# Again, for a profile that came from the saved config and not from --profile.
+need "$PROFILE"
 # The watcher's job and the logs under ~/.claude are named for the project's
 # folder name, so two projects with one name would share them, and uninstalling
 # either would stop the other's watcher and delete its history.

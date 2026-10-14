@@ -54,7 +54,7 @@ check "a turn with one tool call is not a first-turn stall" 0 "$(state | kv firs
 # 2. seat.sh wait: it ends at once with the stall line.
 mkdir -p "$TMP/repo/scripts" "$TMP/repo/config"
 git init -q "$TMP/repo"
-cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/read-verdict.sh" "$TMP/repo/scripts/"
+cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/requirements.sh" "$REAL/scripts/read-verdict.sh" "$TMP/repo/scripts/"
 cp "$REAL/config/routing.json" "$TMP/repo/config/routing.json"
 cat > "$TMP/bin/orca-ide" <<'EOF'
 #!/usr/bin/env bash

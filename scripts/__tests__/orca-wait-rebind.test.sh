@@ -17,7 +17,7 @@ fail() { echo "FAIL: $*" >&2; printf 'stdout:\n%s\nstderr:\n%s\n' "${OUT:-}" "$(
 REPO=$SCRATCH/repo
 mkdir -p "$REPO/scripts" "$SCRATCH/bin" "$SCRATCH/ws"
 git -C "$REPO" init -q
-cp "$SOURCE/scripts/orca-wait.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/host-services.sh" "$REPO/scripts/"
+cp "$SOURCE/scripts/orca-wait.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/requirements.sh" "$SOURCE/scripts/host-services.sh" "$REPO/scripts/"
 mkdir -p "$REPO/hooks/lib"; cp "$SOURCE/hooks/lib/project.sh" "$REPO/hooks/lib/"
 export COMMANDECK_HOST_OS=Linux  # the systemctl stubs are the service manager under test
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SCRATCH/bin/systemctl"

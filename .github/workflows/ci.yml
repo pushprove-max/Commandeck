@@ -24,3 +24,20 @@ jobs:
         run: bash ci/leak-test.sh
       - name: Shell tests
         run: bash scripts/run-shell-tests.sh
+  # The Mac's own /bin/bash is 3.2, which the Ubuntu job never meets: these two
+  # files start every hook and setup.sh under it. Homebrew's Bash runs the tests.
+  mac-bash-3:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Tools the scripts call
+        run: brew install bash coreutils gnu-sed grep flock jq
+      - name: Git identity for fixture repos
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+      - name: Bash 3.2 tests
+        run: |
+          /opt/homebrew/bin/bash hooks/__tests__/run-hook.test.sh
+          /opt/homebrew/bin/bash scripts/__tests__/setup-requirements.test.sh

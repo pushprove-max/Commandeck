@@ -5,7 +5,7 @@ T=$(mktemp -d /tmp/main-watch-refute.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/repo/scripts" "$T/bin" "$T/home/.config/orca" "$T/scratch" "$T/ws"
 git -C "$T/repo" init -q
-cp "$SOURCE/scripts/"{main-watch,paths,project-main,host-services,orca-task-create}.sh "$T/repo/scripts/"
+cp "$SOURCE/scripts/"{main-watch,paths,requirements,project-main,host-services,orca-task-create}.sh "$T/repo/scripts/"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T/repo/scripts/read-verdict.sh"
 # The machine-wide file names another project's run: each project reads its own.
 echo run_foreign > "$T/home/.config/orca/current-run"

@@ -14,7 +14,7 @@ trap 'rm -rf "$T"' EXIT
 REPO=$T/repo S=$T/scratch F=$T/fake
 mkdir -p "$REPO/scripts" "$T/bin" "$S" "$F" "$T/home/.config/orca" "$T/ws"
 git -C "$REPO" init -q
-cp "$SOURCE/scripts/main-watch.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" \
+cp "$SOURCE/scripts/main-watch.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/requirements.sh" \
    "$SOURCE/scripts/host-services.sh" "$SOURCE/scripts/orca-task-create.sh" "$REPO/scripts/"
 # The machine-wide file names another project's run: each project reads its own.
 echo run_foreign > "$T/home/.config/orca/current-run"

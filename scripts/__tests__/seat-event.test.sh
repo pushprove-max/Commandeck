@@ -35,7 +35,7 @@ chmod +x "$T/read-verdict.sh"
 export FAKE_SESSION=$SESSION FAKE_REPORT=$T/report.txt
 
 # --- seat-event.sh on its own -------------------------------------------------
-cp "$SCRIPTS/seat-event.sh" "$SCRIPTS/paths.sh" "$SCRIPTS/project-main.sh" "$T/read-verdict.sh" "$T/bin/"
+cp "$SCRIPTS/seat-event.sh" "$SCRIPTS/paths.sh" "$SCRIPTS/project-main.sh" "$SCRIPTS/requirements.sh" "$T/read-verdict.sh" "$T/bin/"
 event() { COMMANDECK_SEAT_EVENTS=$EVENTS bash "$T/bin/seat-event.sh" u role task_x 1788948240 m 1; tail -1 "$EVENTS"; }
 check "--usage sums a Claude log, each message id once" "{\"model\":\"claude-opus-5-5\",\"tokens\":$TOKENS}" \
   "$(bash "$T/bin/seat-event.sh" --usage claude "$SESSION")"

@@ -15,7 +15,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 # from inside a real repo.
 git init -q "$TMP/repo"
 mkdir -p "$TMP/repo/scripts" "$TMP/repo/config" "$TMP/ws/fake-unit" "$TMP/bin" "$TMP/scratch"
-cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/read-verdict.sh" "$REAL/scripts/orca-task-create.sh" "$TMP/repo/scripts/"
+cp "$REAL/scripts/seat.sh" "$REAL/scripts/paths.sh" "$REAL/scripts/project-main.sh" "$REAL/scripts/requirements.sh" "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/read-verdict.sh" "$REAL/scripts/orca-task-create.sh" "$TMP/repo/scripts/"
 jq -f "$REAL/scripts/__tests__/fixtures/routing-seats.jq" "$REAL/config/routing.json" > "$TMP/repo/config/routing.json"
 for s in run-bound.sh worktree-setup.sh; do
   printf '#!/bin/sh\nexit 0\n' > "$TMP/repo/scripts/$s"; chmod +x "$TMP/repo/scripts/$s"
