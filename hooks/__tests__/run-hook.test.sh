@@ -69,6 +69,17 @@ if [ "$(uname -s)" = Darwin ]; then
   printf 'echo "$PATH"\n' > "$T/path.sh"
   check "a hook finds Homebrew's GNU tools ahead of the system's, and the owner's folders still first" "$T/mine:$T/real/opt/coreutils/libexec/gnubin:$T/real/bin:/usr/bin:/bin" \
     "$(env PATH="$T/mine:/usr/bin:/bin:$T/real/bin" COMMANDECK_BREW_PREFIX="$T/real" sh -c "\"$RUN\" \"$T/path.sh\"" < "$T/payload" 2>&1)"
+  # An Intel Mac keeps Homebrew under /usr/local, not /opt/homebrew: the folder is the one `brew` is in,
+  # wherever that is. With only /opt/homebrew read, the hooks there kept the Mac's own tools.
+  mkdir -p "$T/intel/bin" "$T/intel/opt/coreutils/libexec/gnubin"
+  printf '#!/bin/sh\necho "brew was run" >> %q\n' "$T/brew-ran" > "$T/intel/bin/brew"; chmod +x "$T/intel/bin/brew"
+  check "Homebrew under another prefix (an Intel Mac's) is found by where brew is" "$T/mine:$T/intel/opt/coreutils/libexec/gnubin:$T/intel/bin:/usr/bin:/bin" \
+    "$(env -u COMMANDECK_BREW_PREFIX PATH="$T/mine:/usr/bin:/bin:$T/intel/bin" sh -c "\"$RUN\" \"$T/path.sh\"" < "$T/payload" 2>&1)"
+  check "and no brew process is started for it, on every hook" no "$([ -e "$T/brew-ran" ] && echo yes || echo no)"
+  # No brew on PATH at all: both known places are read, so whichever this Mac has leads.
+  KNOWN=$(for d in /opt/homebrew/bin /usr/local/bin; do [ ! -d "$d" ] || printf '%s:' "$d"; done)
+  check "with no brew on PATH both known Homebrew places are read" "$KNOWN/usr/bin:/bin" \
+    "$(env -u COMMANDECK_BREW_PREFIX PATH="/usr/bin:/bin" sh -c "\"$RUN\" \"$T/path.sh\"" < "$T/payload" 2>&1 | tr ':' '\n' | grep -v '/libexec/gnubin$' | paste -sd: -)"
 else echo "NOT RUN here (not a Mac): a hook finds Homebrew's GNU tools ahead of the system's"; fi
 
 echo "$PASS passed, $FAIL failed"

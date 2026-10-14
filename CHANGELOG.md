@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0 -- 2026-10-13
+
+After setup: the first session, the relay, and readings that say what they lack.
+
+- Hooks did not start on an Intel Mac: Homebrew's tools were looked for under
+  `/opt/homebrew` only. `req_path` in `scripts/requirements.sh` now takes the
+  prefix of the `brew` on the path and otherwise looks under both
+  `/opt/homebrew` and `/usr/local`.
+- Codex fast mode was on for every review pass, which the owner never chose.
+  It is now one setup question, off by default (`--codex-fast`,
+  `--no-codex-fast`), saved as `codexFast` in `.claude/commandeck.json`; a
+  project set up before has no answer and is off. Off is off: the pass and a
+  launched Codex seat name the normal tier on their own command line
+  (`-c service_tier=default`), and your Codex config is never edited.
+- Setup creates the project's Orca run, or prints the one command when Orca
+  does not answer, and ends with the list of project files it created or
+  changed, each marked to commit or not.
+- A relay chosen at setup had no worktree and no pane. Setup now creates the
+  `Chief-of-Staff` worktree and opens its pane under the stored name; where it
+  cannot, it ends with the exact steps. It says plainly that the session in
+  the main checkout is not the relay, and so does the orchestrator's start-up
+  text, in one line that names where the relay pane is or how to make it.
+- New check `ci/version-check.sh`: it fails when a plugin file changed against
+  main and the version in `.claude-plugin/plugin.json` did not. Docs and `ci/`
+  do not count. The rule for the number is in `CONTRIBUTING.md`.
+- The dashboard listed no issues for a brief whose issues sat under a
+  sub-heading or in a section of their own. One reader,
+  `scripts/brief-issues.sh`, now serves the dashboard and the launch dry run;
+  an item with no issue number is listed as a line of its own;
+  `templates/_batch-brief-template.md` starts a batch brief with "The issues",
+  and the dry run says so when a brief names no work item.
+- Usage and cost readings. A refused usage check now waits longer after each
+  refusal in a row, an hour at most and never less than the service's
+  `Retry-After`, which is read as seconds or as a date; the card says when the
+  next try is. The limit panel keeps the day's cost when the usage reading is
+  refused. A model with no price no longer hides what is left out: the total
+  is marked partial, with the count of requests and the names of the models.
+  A merged build writes its Builder's row to the token ledger, which nothing
+  wrote before.
+
 ## 0.2.0 -- 2026-10-13
 
 The version is 0.2.0: the second part rises for new behaviour, the third for

@@ -41,6 +41,7 @@ REAL_PY=$(command -v python3)
 cat > "$BIN/python3" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == */dashboard_serve.py ]]; then shift; echo "\$*" >> "$T/served"; exec sleep 600; fi
+[[ "\${2:-}" != fetch || ! -e "$T/refuse" ]] || { cat "$T/refuse" >&2; exit 1; }
 exec "$REAL_PY" "\$@"
 EOF
 cat > "$BIN/systemctl" <<EOF
@@ -85,6 +86,8 @@ check "each unread source is not measured and says why" 'true' \
 check "a read that worked is fresh" '["fresh","fresh"]' "$(j "[$P.sources[\"git-main\"].status, $P.sources.worktrees.status]")"
 check "an unmeasured input makes the alerts record name it" 'true' \
   "$(j '.sources.alerts | .status == "not-measured" and (.error | test("7-day limit"))')"
+check "and every reading it lacks by name: the token ledger, both limits, the cache write share" 'true' \
+  "$(j '.sources.alerts.error | test("seat-events") and test("Codex 7-day limit") and test("24 h cache write share")')"
 check "the snapshot names no title unless the owner set one" 'null' "$(j .name)"
 
 # --- the sources, once there is something to read ---
@@ -117,12 +120,12 @@ echo untracked > "$WS/u2/new-file"
 # built) and its newest round report (the findings, and the commit it read).
 SLOG=$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u1"); mkdir -p "$SLOG" "$WS/u1/.claude/briefs" "$MAIN/.claude/briefs"
 printf '{"type":"assistant","timestamp":"2026-10-01T00:00:00.000Z","effort":"medium","advisorModel":"claude-fable-5-1","message":{"model":"claude-opus-5-5"}}\n' > "$SLOG/s.jsonl"
-printf '# u1\n\n## The issues\n\n1. #11: first\n2. #12: second\n   it only mentions #99\n\n## Other\n\n#98\n' > "$WS/u1/.claude/briefs/u1.md"
+printf '# u1\n\n## The issues\n\n1. #11: first\n2. #12: second\n   it only mentions #99\n3. Tidy the notes.\n4. Tidy\n5. Sweep the floor\n6. Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane\n8. Show the next try beside the last good reading on every card whose reading was refused, in the page and in the alerts list too\n9. Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane and then remove the old relay\n\n## Other\n\n#98\n' > "$WS/u1/.claude/briefs/u1.md"
 printf '1. #13: added by main\n' > "$MAIN/.claude/briefs/u1-main-rulings.md"
 # Real evidence files head a section "Item N" with no issue number: Item 2 is the brief's second numbered
 # item (#12), and no item 7 exists. A heading with nothing under it is a section still to be written, not a
 # built issue: Item 1 of main's rulings (#13) and its sub-heading are such headings here.
-printf '# u1 evidence for #11 and #12\n\n## #11 first\n\nBuilt.\n\n## Item 2 -- second\n\n### Today\n\nBuilt.\n\n## Item 1\n\n### #13\n\n## Item 7 -- no such item\n\nNothing.\n' > "$WS/u1/.claude/briefs/u1-evidence.md"
+printf '# u1 evidence for #11 and #12\n\n## #11 first\n\nBuilt.\n\n## Item 2 -- second\n\n### Today\n\nBuilt.\n\n## Item 1\n\n### #13\n\n## Item 7 -- no such item\n\nNothing.\n\n## Item 3\n\nTidied.\n\n## Tidy the notes again\n\nLater.\n\n## Sweep the floor\n\nSwept.\n\n## Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane\n\nChecked.\n\n## Item 8\n\nShown.\n' > "$WS/u1/.claude/briefs/u1-evidence.md"
 printf 'Reviewed: %s\n\n- [P2] one\n- [P2] two\n* [P3] three\nProse names a P1.\nVERDICT: NO-GO\n' "$(git -C "$WS/u1" rev-parse HEAD)" > "$WS/u1/.claude/briefs/u1-r1-reports.md"
 # The limit: a quota reading inside the 5-minute TTL stands in for the network
 # read, and one request an hour ago with 1000 fresh, 5000 written and 4000 read
@@ -152,9 +155,9 @@ check "the Builder is drawn from its event log" '["u1","review",1,"claude:workin
 check "a seat's model, effort and advisor come from its own session record" '{"model":"claude-opus-5-5","effort":"medium","advisor":"claude-fable-5-1","at":"2026-10-01T00:00:00.000Z"}' \
   "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .seat")"
 check "a unit with no session record has no seat reading, never a guessed model" '[true,null]' "$(j "$P.units.inFlight[] | select(.unit == \"u2\") | [has(\"seat\"), .seat]")"
-check "a build's issues are its brief's numbered work items plus the ones main's rulings add; a mention is not one" '[11,12,13]' \
+check "a build's issues are its brief's numbered work items plus the ones main's rulings add; a mention is not one, and an item with no issue number is kept as its text" '[11,12,"Tidy the notes","Tidy","Sweep the floor","Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane","Show the next try beside the last good reading on every card whose reading was refused, in the page and in the alerts list too","Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane and then remove the old relay",13]' \
   "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .builder.issues")"
-check "built issues are the ones an evidence section with something under it is headed with, by number or as Item N; findings are the newest round's finding lines" '[[11,12],{"P0":0,"P1":0,"P2":2,"P3":1}]' \
+check "built issues are the ones an evidence section with something under it is headed with, by number or as Item N; findings are the newest round's finding lines" '[[11,12,"Tidy the notes","Sweep the floor","Check that a setup run again after its settings step failed writes every relay setting before it offers to open the relay pane","Show the next try beside the last good reading on every card whose reading was refused, in the page and in the alerts list too"],{"P0":0,"P1":0,"P2":2,"P3":1}]' \
   "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .builder | [.built, .findings]")"
 # u1's settings file and event log are uncommitted outside the briefs folder, so the tree is not the one the pass read.
 check "a Builder carries whether its worktree is still the tree its newest pass read" 'false' "$(j "$P.units.inFlight[] | select(.unit == \"u1\") | .builder.reviewedTree")"
@@ -192,6 +195,26 @@ check "and is marked stale, with the reason" '["stale",true,true]' \
   "$(j '.sources["claude-usage"] | [.status, (.staleSince | type == "string"), (.error | test("last good copy"))]')"
 check "the failed read left a retry time, so the next cycle does not repeat it" 'true' \
   "$([ -s "$OUT/cache/claude-usage.retry" ] && echo true || echo false)"
+# A refusal with no wait named was tried again every five minutes for ever, and the card said only "stale".
+# retried <tries so far> -- the wait over, one more refused collection: "<tries> <minutes it now waits>".
+retried() {
+  local at tries why
+  echo "$(($(date +%s) - 1)) $1 rate limited (429)" > "$OUT/cache/claude-usage.retry"
+  collect; read -r at tries why < "$OUT/cache/claude-usage.retry"
+  echo "$tries $(((at - $(date +%s) + 30) / 60))"
+}
+check "the card's source says when the reading is tried next" 'true' "$(j '.sources["claude-usage"].retryAt | type == "string"')"
+echo 'rate limited (429)' > "$T/refuse"
+check "a first refusal with no Retry-After waits the five minutes" '1 5' "$(retried 0)"
+check "the next one in a row waits twice as long" '2 10' "$(retried 1)"
+check "and the wait stops growing at an hour" '9 60' "$(retried 8)"
+echo 'rate limited (429); retry after 7200 s' > "$T/refuse"
+check "a Retry-After longer than the plugin's own wait is respected" '2 120' "$(retried 1)"
+echo 'rate limited (429); retry after 30 s' > "$T/refuse"
+check "a shorter one never shortens it" '3 20' "$(retried 2)"
+check "the last good reading is still the one shown, with its age and the reason" '[true,"stale",true]' \
+  "$(j '[.limit.usedPct == 44, .sources["claude-usage"].status, (.sources["claude-usage"].error | test("429"))]')"
+rm "$T/refuse"
 
 # --- a collect that cannot build keeps the last good page ---
 cp "$OUT/data.js" "$T/good.js"

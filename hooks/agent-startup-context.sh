@@ -45,12 +45,20 @@ LINKED=0 MAIN=0 COS=0
 # Main's persona leads its context; the first line of main-session.md is its
 # one home, and resume-context.sh reads the same line.
 [ "$MAIN" = 1 ] && head -1 "$MAIN_ONLY"
+# A relay chosen at set-up is a pane of its own, in the Chief-of-Staff worktree. A session in the main
+# checkout was once taken for it and acted as the orchestrator, so main is told in one line which it is.
+if [ "$MAIN" = 1 ] && RELAY=$(jq -re '.chiefOfStaff.name // empty' "$CONFIG" 2>/dev/null); then
+  RELAY_WT=$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | grep '/Chief-of-Staff$' | head -1)
+  if [ -n "$RELAY_WT" ]; then echo "# This pane is the orchestrator, NOT the relay $RELAY: the relay is the pane in $RELAY_WT."
+  else echo "# This pane is the orchestrator, NOT the relay $RELAY; no relay pane exists yet: bash $(printf '%q' "$PLUGIN")/scripts/setup.sh makes its Chief-of-Staff worktree and opens the pane."; fi
+fi
 # The Chief-of-Staff worktree is the owner's relay pane; it stays a worker seat otherwise.
 [ "$LINKED" = 1 ] && [ "${TOP##*/}" = Chief-of-Staff ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] && COS=1
 COS_STATE=$HOME/.commandeck/chief-of-staff/$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_project && printf '%s' "$PP_PROJECT").md
 if [ "$COS" = 1 ]; then
   PERSONA=$(jq -r '.chiefOfStaff.persona // empty' "$CONFIG" 2>/dev/null)
-  echo "# Chief of Staff: ${PERSONA:-plain speech, no personality.} Every turn, including resumed sessions, you relay between the owner and the main orchestrator and never answer for the owner; facts and plain English stay rigorous."
+  RELAY=$(jq -r '.chiefOfStaff.name // empty' "$CONFIG" 2>/dev/null)
+  echo "# Chief of Staff${RELAY:+, named $RELAY}: ${PERSONA:-plain speech, no personality.} Every turn, including resumed sessions, you relay between the owner and the main orchestrator and never answer for the owner; facts and plain English stay rigorous."
 fi
 
 # The plugin's files and messages name its own files as scripts/..., hooks/...

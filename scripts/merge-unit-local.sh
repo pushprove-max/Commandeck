@@ -314,6 +314,12 @@ if [ "$DRY_RUN" = 0 ]; then
       --argjson p1 "$(open_at P1)" --argjson p2 "$(open_at P2)" --argjson p3 "$(open_at P3)" \
       '{$main, $unit, how: "merged", $at, $sha, open: {P1: $p1, P2: $p2, P3: $p3}}' >> "$BUILDS" ) \
     || echo "finished-builds record not written to $BUILDS: the dashboard will not list $UNIT (ignored)" >&2
+  # The token ledger: a Builder's seat is never collected, it ends with this merge, so its row is written here,
+  # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.
+  SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
+  [ ! -f "$SEAT" ] || SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(pp_route builder 2>/dev/null && printf '%s' "$RT_AGENT" || true) SEAT_EVENT_STOP=done \
+    bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
+    || echo "no token ledger row written for $UNIT's Builder (ignored)" >&2
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"

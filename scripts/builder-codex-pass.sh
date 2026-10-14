@@ -38,9 +38,9 @@
 # Each Codex pass is a persisted `task` thread of the Codex plugin companion: its
 # review threads are ephemeral and leave no session record to check. The pass
 # commits the worktree (`.claude/briefs/` excepted) before the reviewer reads it,
-# so the session's commit is exactly the reviewed content. The model, effort and
-# tier come from roles["codex-reviewer"]; the companion runs on
-# ${CODEX_HOME:-~/.codex}, so a fast seat needs service_tier = "fast" there.
+# so the session's commit is exactly the reviewed content. The model and effort
+# come from roles["codex-reviewer"], fast mode from set-up's saved answer; the
+# companion runs on ${CODEX_HOME:-~/.codex}, so a fast seat needs service_tier = "fast" there.
 # The Codex prompt is the installed Codex plugin's prompts/adversarial-review.md,
 # read at every run and never copied here: that plugin's built-in review has no
 # prompt file, so the review pass sends the same template with a correctness
@@ -672,9 +672,9 @@ else
   # A family name becomes the newest model id the account lists (paths.sh).
   FAMILY=$MODEL
   MODEL=$(pp_codex_model "$FAMILY" 2>/dev/null) || die "roles.codex-reviewer names the model family $FAMILY, and $CODEX_DIR/models_cache.json lists no gpt-<version>-$FAMILY model; run codex once while signed in, or name a model id in routing.json"
-  if [ "$(jq -r '.fast // false' <<<"$SOL")" = true ]; then
-    grep -qE '^[[:space:]]*service_tier[[:space:]]*=[[:space:]]*"fast"' "$CODEX_DIR/config.toml" 2>/dev/null \
-      || die "roles.codex-reviewer is fast but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier"
+  # Fast mode is the owner's saved answer (set-up asks; no answer is off), never routing.json's.
+  if pp_codex_fast; then
+    pp_codex_fast_home || die "this project chose Codex fast mode but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier. Add that line, or turn it off: setup.sh --no-codex-fast"
   fi
   if [ "${1:-}" = --preflight ]; then
     # The companion runs the Codex CLI under the owner's sign-in; the plugin alone is not enough.
@@ -870,11 +870,14 @@ else
   # turn at a time, hence one each. With no broker at all the plugin closes its
   # Codex a third of a second after the answer and the session record ends
   # "interrupted", which session_proof refuses.
+  # Fast mode not chosen is off for this run whatever the owner's Codex config says: the wrapper adds the
+  # normal tier to its own command line, and that file is never edited.
+  TIER=default; ! pp_codex_fast || TIER=
   BROKER=${COMPANION%/*}/app-server-broker.mjs
   [ -f "$BROKER" ] || die "no Codex plugin broker beside $COMPANION"
   for i in "${!FOCI[@]}"; do
     K=$((i + 1))
-    PATH="$HERE/codex-no-helpers:$PATH" node "$BROKER" serve --endpoint "unix:$SOCKS/$K.sock" --cwd "$WT" > "$SOCKS/$K.log" 2>&1 &
+    PATH="$HERE/codex-no-helpers:$PATH" COMMANDECK_CODEX_TIER=$TIER node "$BROKER" serve --endpoint "unix:$SOCKS/$K.sock" --cwd "$WT" > "$SOCKS/$K.log" 2>&1 &
     BROKERS+=($!)
   done
   : > "$SOCKS/launched"

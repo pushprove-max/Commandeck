@@ -125,13 +125,16 @@
     // A card that names a limit (data-max-age, seconds) marks a fresh sample older than it.
     const oldest = Math.min(...recs.map((r) => parseTime(r.sampledAt)).filter(Number.isFinite));
     age.classList.toggle('old', state === 'fresh' && (now - oldest) / 1000 > Number(card.dataset.maxAge));
+    // A refused read says when it is tried next (retryAt), beside what it last read.
+    const retry = Math.min(...recs.map((r) => parseTime(r.retryAt)).filter(Number.isFinite));
+    const next = Number.isFinite(retry) ? ` · next try ${hm(new Date(retry))}` : '';
     if (state === 'not-measured') {
       const missing = ids.filter((id, i) => recs[i].status === 'not-measured');
       // A card that drew its data with one input unread (the Alerts list) is not wholly unmeasured; its note names the part.
-      age.textContent = card.dataset.partial ? 'part not measured' : `${missing.join(', ')} not measured`;
+      age.textContent = card.dataset.partial ? 'part not measured' : `${missing.join(', ')} not measured${next}`;
     } else if (state === 'stale') {
       const since = Math.min(...recs.filter((r) => r.status === 'stale').map((r) => parseTime(r.staleSince)).filter(Number.isFinite));
-      age.textContent = Number.isFinite(since) ? `stale since ${when(since)}` : 'stale since unknown';
+      age.textContent = (Number.isFinite(since) ? `stale since ${when(since)}` : 'stale since unknown') + next;
     } else {
       age.textContent = Number.isFinite(oldest) ? `sampled ${ago((now - oldest) / 1000)} ago` : '';
     }
@@ -432,7 +435,8 @@
     if (issues === null) more.push(h('p', 'meta', `Issue list ${NOT_REC}`));
     else {
       const tags = h('div', 'iss');
-      for (const i of issues) tags.append(h('span', built && built.includes(i) ? 'y' : null, `#${i}`));
+      // An issue is its number; an item with no issue number arrives as its own text and takes a line of its own.
+      for (const i of issues) tags.append(h('span', [typeof i === 'number' ? null : 'item', built && built.includes(i) ? 'y' : null].filter(Boolean).join(' ') || null, typeof i === 'number' ? `#${i}` : i));
       const key = h('div', 'legend');
       // A null built list is a build with no evidence file yet, the normal first minutes; a file with nothing in it arrives as [].
       legend(key, [['g', 'recorded as built'], ['n', built === null ? noBuilt : 'not yet recorded']]);
@@ -812,6 +816,9 @@
     const req = num(l.requests), cwp = num(l.cacheWritePct24h);
     const c = l.cost || {};
     const cw = num(c.week), ct = num(c.today), cp = num(c.projected), ch = num(c.perHour), cpp = num(c.perPoint), unpriced = num(c.unpricedRequests);
+    // A total with requests left out is a partial one, and says how many and on which models.
+    const tun = num(c.todayUnpriced), models = Array.isArray(c.unpricedModels) && c.unpricedModels.length ? ` (${c.unpricedModels.join(', ')})` : '';
+    const partial = tun ? `partial: ${tun.toLocaleString('en-US')} unpriced${models}` : '';
     const over = under !== null && under < 0;
     const cx = l.codex || {};
     put(byId('limit-bars'), limitBar('Claude', l).concat(limitBar('Codex', cx)));
@@ -832,15 +839,16 @@
         : `${Math.round(Math.abs(under))} pts · ${span(paceSec)}`, over ? 'crit' : 'ok'),
       tile('Time left', left === null ? null : span(left)),
       tile('Cost this week', cw === null ? null : money(cw)),
-      tile('Cost today', ct === null ? null : money(ct)),
+      tile('Cost today', ct === null ? null : money(ct), '', partial),
       tile('Projected cost at 100%', cp === null ? null : money(cp), '', ch === null ? null : `${money(ch)}/hr`),
       tile('Value per point', cpp === null ? null : money(cpp)),
       tile('Requests', req === null ? null : req.toLocaleString('en-US'), '', 'this host'),
       // Over 5% is the collector's cache-write alert (dashboard_alerts.jq).
       tile('Cache write share, 24 h', cwp === null ? null : `${cwp.toFixed(1)}%`, cwp !== null && cwp > 5 ? 'crit' : '', 'of input tokens'),
     ]);
-    byId('limit-note').textContent = cw === null ? ''
-      : `Dollars are list-price equivalents: what this host's logged tokens would cost on the pay-as-you-go API${unpriced ? `; ${unpriced.toLocaleString('en-US')} requests on unpriced models are left out` : ''}.`;
+    const out = unpriced || tun;
+    byId('limit-note').textContent = cw === null && ct === null && !out ? ''
+      : `Dollars are list-price equivalents: what this host's logged tokens would cost on the pay-as-you-go API${out ? `; ${out.toLocaleString('en-US')} requests on unpriced models${models} are left out` : ''}.`;
     put(byId('limit-chart'), [week ? limitChart(l, start, updatedAt) : h('p', 'nm', 'no data')]);
     const n = readings(l.history).length, cn = readings(cx.history).length;
     byId('limit-graph-title').textContent = `Use across the week (Claude ${n} samples, Codex ${cn < 2 ? 'no history yet' : `${cn} samples`})`;
@@ -975,6 +983,8 @@
     const days = d.limit && d.limit.today;
     const day = days && project !== null && Object.prototype.hasOwnProperty.call(days, project) ? days[project] : null;
     const dSpent = num(day && day.spentUsd), dEst = num(day && day.estimatedUsd), dUn = num(day && day.unpricedRequests);
+    const dModels = day && Array.isArray(day.unpricedModels) && day.unpricedModels.length ? ` (${day.unpricedModels.join(', ')})` : '';
+    const dUnText = dUn ? `${dUn.toLocaleString('en-US')} requests unpriced${dModels}` : null;
     const dShare = (label, v) => `${label} ${num(v) === null ? 'not measured' : money(v)}`;
     put(byId('summary'), [
       measure('Alerts', al ? al.length : null, !al ? 'nm' : crit ? 'crit' : al.length ? 'warn' : 'ok', al ? `${crit} critical` : null, 'alerts'),
@@ -987,8 +997,8 @@
           'against the weekly limit', 'limit'),
       ] : [lim('Claude 7-day', d.limit), lim('Codex 7-day', d.limit && d.limit.codex)]),
       measure('Cost today', dSpent === null ? null : `${day.complete === false ? 'at least ' : ''}${money(dSpent)}`, dSpent === null ? 'nm' : day.complete === false ? 'warn' : '',
-        dSpent === null ? null : [`${dShare('Claude', day.claudeUsd)} + ${dShare('Codex', day.codexUsd)}, list price`, dEst ? `${money(dEst)} estimated` : null,
-          dUn ? `${dUn.toLocaleString('en-US')} requests unpriced` : null].filter(Boolean).join(' · '), 'limit'),
+        dSpent === null ? dUnText : [`${dShare('Claude', day.claudeUsd)} + ${dShare('Codex', day.codexUsd)}, list price`, dEst ? `${money(dEst)} estimated` : null,
+          dUnText].filter(Boolean).join(' · '), 'limit'),
       measure('Unpushed', unp, unp === null ? 'nm' : unp > 0 ? 'info' : 'ok', 'commits on local main', 'main-chain'),
       measure('Units in flight', inflight, inflight === null ? 'nm' : '', null, 'units'),
       measure('Host load', hostInfo.load === null ? null : hostInfo.load.toFixed(2), per === null ? 'nm' : per >= 2 ? 'crit' : per >= 1 ? 'warn' : 'ok',

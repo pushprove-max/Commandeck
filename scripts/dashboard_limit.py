@@ -26,9 +26,11 @@ import os
 import platform
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 WEEK = 7 * 86400
 FIVE_HOURS = 5 * 3600
@@ -79,7 +81,13 @@ def fetch():
         if e.code == 429:
             why = "rate limited (429)"
             wait = (e.headers.get("Retry-After") or "") if e.headers else ""
-            if wait.isdigit():
+            if not wait.isdigit():
+                # The header may be a date instead of seconds.
+                try:
+                    wait = str(max(0, round(parsedate_to_datetime(wait).timestamp() - time.time())))
+                except (TypeError, ValueError):
+                    wait = ""
+            if wait:
                 why += f"; retry after {wait} s"
         print(why, file=sys.stderr)
         return 1
@@ -238,6 +246,11 @@ def price(row):
     return (i * inp + w5 * inp * 1.25 + w1 * inp * 2 + r * read + o * out) / 1e6 + sum(advisors)
 
 
+def unpriced_models(rows):
+    """The models that leave these rows without a price, by name."""
+    return sorted({x[1] for r in rows if price(r) is None for x in [r] + r[7:] if x[1] not in PRICES and estimate(x[1]) is None})
+
+
 def cost(rows, used, start, now):
     """List-price equivalent of this host's requests in the week, and what it projects to.
 
@@ -252,13 +265,15 @@ def cost(rows, used, start, now):
     day_priced = [c for c in map(price, day) if c is not None]
     today = None if midnight < start or (day and not day_priced) else sum(day_priced)
     priced = [c for c in map(price, rows) if c is not None]
+    # A total with a part left out says so: how many of the day's requests, and which models.
+    left = {"todayUnpriced": len(day) - len(day_priced), "unpricedModels": unpriced_models(rows)}
     if rows and not priced:
-        return {"week": None, "today": today, "perHour": None, "projected": None, "perPoint": None, "unpricedRequests": len(rows)}
+        return {"week": None, "today": today, "perHour": None, "projected": None, "perPoint": None, "unpricedRequests": len(rows), **left}
     week = sum(priced)
     projected = week / used * 100 if used > 0 else None
     return {"week": week, "today": today, "perHour": projected / (WEEK / 3600) if projected is not None else None,
             "projected": projected, "perPoint": week / used if used > 0 else None,
-            "unpricedRequests": len(rows) - len(priced)}
+            "unpricedRequests": len(rows) - len(priced), **left}
 
 
 def under(folder, roots):
@@ -591,8 +606,7 @@ def api_week(limit, rows, now, codex_rows=None, codex_partial=False, since=None)
     # opened (codex_partial is codex_requests' missed list, non-empty), and nothing unpriced.
     out.update(requests=len(week), unpricedRequests=len(week) - len(priced),
                complete=rows is not None and codex_rows is not None and not codex_partial and len(week) == len(priced),
-               unpricedModels=sorted({x[1] for r, _, c in costs if c is None for x in [r] + r[7:]
-                                      if x[1] not in PRICES and estimate(x[1]) is None}))
+               unpricedModels=unpriced_models([r for r, _, c in costs if c is None]))
     if week and not priced:
         return out
     spent, hist = 0.0, []
@@ -690,6 +704,10 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     lost = []
     day = requests(projects, os.path.join(cache_dir, "limit-requests.json"), midnight, now, True)
+    # The week needs the usage reading for its start; the day does not. With that reading refused the
+    # panel keeps the day's cost and leaves every week figure unmeasured.
+    if out["cost"] is None and day is not None:
+        out["cost"] = {**cost([r for r, _ in day], 0, midnight, now), "week": None, "unpricedRequests": None}
     codex_day = codex_requests(sessions, os.path.join(cache_dir, "codex-requests.json"), midnight, now, lost, True)
     # A session is one project's: where one checkout sits inside another, the innermost root that holds it wins.
     roots = sorted(((r, name) for name, rs in (day_projects or {}).items() for r in rs if isinstance(r, str)), key=lambda t: -len(t[0].rstrip("/")))

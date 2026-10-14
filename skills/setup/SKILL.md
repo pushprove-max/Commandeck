@@ -55,6 +55,7 @@ edit, switch off or work round the project's own guard.
    Ask "Model": plugin default | sonnet | opus
    Ask "Advisor": keep | none
    Ask "Context": 200K | larger
+   Ask "Codex fast": off | on
 
    Call 3 (`AskUserQuestion`)
    Ask "Merge check": none | name one
@@ -69,6 +70,7 @@ edit, switch off or work round the project's own guard.
      `--builder-advisor none` to any of them.
    - **Context.** `200K` adds `--standard-context`: the account's model
      holds 200K; `larger` adds `--no-standard-context`.
+   - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
    - **Merge check.** On "name one", ask for the one command that must pass
      before a merge: `--test-command '<cmd>'`. On "none", pass
      `--test-command ''`.

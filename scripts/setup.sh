@@ -4,7 +4,8 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-model <alias>] [--builder-advisor <alias>|none] [--install-missing]
+#          [--builder-model <alias>] [--builder-advisor <alias>|none] [--codex-fast|--no-codex-fast]
+#          [--install-missing]
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
 # the answers given and keeps the rest; update.sh is this script with none.
@@ -59,7 +60,7 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
-usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -69,7 +70,7 @@ if [ -e "$IL_CONFIG" ]; then
 fi
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
-BMODEL=$(old .builder.model) BADVISOR=$(old .builder.advisor)
+BMODEL=$(old .builder.model) BADVISOR=$(old .builder.advisor) FAST=$(old .codexFast)
 SCOPE=$(jq -r '.scope // empty' "$IL_PROJECT" 2>/dev/null || true)
 BIND=$(jq -r '.dashboard.bind // empty' "$IL_MACHINE" 2>/dev/null || true)
 PORT=$(jq -r '.dashboard.port // empty' "$IL_MACHINE" 2>/dev/null || true)
@@ -98,6 +99,8 @@ while [ $# -gt 0 ]; do
     --no-serena) SERENA=false; shift ;;
     --standard-context) STANDARD=true; shift ;;
     --no-standard-context) STANDARD=false; shift ;;
+    --codex-fast) FAST=true; shift ;;
+    --no-codex-fast) FAST=false; shift ;;
     --dashboard) DASHBOARD=1; shift ;;
     --no-dashboard) DASHBOARD=; shift ;;
     --install-missing) shift ;;
@@ -141,7 +144,11 @@ PASS=claude
 if [ "$PROFILE" = claude-openai ]; then
   PASS=codex
 fi
-COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
+# Codex fast mode changes what a run costs, so only the owner's yes turns it on; no answer is off. The
+# tier itself is the Codex home's own setting, which setup never writes: a yes that home does not match is refused here.
+[ "$FAST" != true ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
+  || die "Codex fast mode was chosen, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so the review passes would run on the standard tier. Add that line and run setup again, or answer off (--no-codex-fast). Nothing was changed"
+COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
 for f in "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json" "$IL_CODEX/hooks.json"; do
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
 done
@@ -178,9 +185,14 @@ fi
 il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --arg d "${DASHBOARD:-0}" '. + {project: $p, scope: $s, root: $r, dashboard: ($d == "1")}'
 
 # --- the changes ---
+# What setup really writes in the project: il_write notes each path whose content is new or different.
+# The exclude file is also written by worktree-setup.sh, by itself, so it is compared at the end.
+IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE"' EXIT
+EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" '
-  {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true")}
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" '
+  {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
+   codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $bm + $ba == "" then {} else {builder: ({model: $bm, advisor: $ba} | with_entries(select(.value != "")))} end)
   + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
@@ -219,6 +231,69 @@ fi
 
 echo "commandeck $(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json") is set up for $PP_MAIN ($PROFILE profile, permissions in $SETTINGS)"
 [ -z "$DASHBOARD" ] || echo "dashboard: http://${BIND:-127.0.0.1}:$PORT/"
+
+# --- the project's Orca run: made once here, or the one command that makes it ---
+# The board refuses to work without one. A run already recorded, or bound to this terminal, is the project's.
+# Either is written down as board.sh writes it, so a setup from another terminal makes no second run.
+run_id() { jq -r "$1"' // empty' 2>/dev/null | grep -xE '[A-Za-z0-9_-]+' || true; }
+keep_run() { mkdir -p "$PP_SCRATCH" && printf '%s\n' "$RUN" > "$PP_RUN_FILE"; }
+RUN=$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)
+[ -n "$RUN" ] || { RUN=$(orca-ide orchestration run-current --json 2>/dev/null | run_id .result.run.id || true); [ -z "$RUN" ] || keep_run; }
+if [ -n "$RUN" ]; then echo "Orca run: $RUN (already there; none was created)"
+elif RUN=$(orca-ide orchestration run-create --objective "${PP_MAIN##*/}" --json 2>/dev/null | run_id '.result.run.id // .result.id') && [ -n "$RUN" ]; then
+  keep_run
+  echo "Orca run: created $RUN for this project and bound this terminal to it"
+else
+  echo "Orca run: none was created (Orca did not answer with a run). Run this in the main checkout's session: orca-ide orchestration run-create --objective $(printf '%q' "${PP_MAIN##*/}")"
+fi
+
+# --- the relay: its worktree and its pane, made once ---
+# A relay was chosen (now or at an earlier setup) when it has a name. The worktree's folder is what
+# makes a pane the relay (agent-startup-context.sh), so one that exists is never made again, and a
+# pane is opened only into a worktree this run created. What could not be done is printed as the
+# exact steps. The worktree is created where a Builder's is: pp_worktree_new.
+if [ -n "$NAME" ]; then
+  COS=$PP_WORKSPACES/Chief-of-Staff STEPS=() PANE=
+  S_WT="orca-ide worktree create --repo path:$(printf '%q' "$PP_MAIN") --name Chief-of-Staff --base-branch main --parent-worktree path:$(printf '%q' "$PP_MAIN") --setup run"
+  S_SET="bash $(printf '%q' "$HERE")/worktree-setup.sh $(printf '%q' "$COS")"
+  S_PANE="orca-ide terminal create --worktree path:$(printf '%q' "$COS") --title $(printf '%q' "$NAME") --command claude"
+  if [ -e "$COS" ] && [ "$(git -C "$COS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" != "$(git -C "$PP_MAIN" rev-parse --path-format=absolute --git-common-dir)" ]; then
+    # A same-named project elsewhere shares the workspaces folder: its relay is not this one's.
+    echo "Relay: $COS is not a worktree of this project; nothing was done with it. Move it aside and run setup again."
+  elif [ -d "$COS" ]; then
+    echo "Relay: $NAME's worktree is $COS (already there; nothing was created)."
+    # Its settings again: a setup that stopped after making the worktree left them out.
+    if ! bash "$HERE/worktree-setup.sh" "$COS" >/dev/null 2>&1; then STEPS=("$S_SET" "$S_PANE")
+    else PANE=$(bash "$HERE/cos-tell.sh" --handle 2>/dev/null) && echo "Relay: its pane is $PANE." || STEPS=("$S_PANE"); fi
+  elif ! pp_worktree_new Chief-of-Staff 2>/dev/null; then STEPS=("$S_WT" "$S_SET" "$S_PANE")
+  elif ! bash "$HERE/worktree-setup.sh" "$COS" >/dev/null 2>&1; then STEPS=("$S_SET" "$S_PANE")
+  # 3 is a live pane of that name already there: nothing new was opened, and it is the relay's.
+  elif . "$HERE/codex-helpers.sh" && { PANE=$(open_pane "path:$COS" "$NAME" claude 2>/dev/null) || [ $? = 3 ]; }; then
+    echo "Relay: created $NAME's worktree $COS and opened its pane ($PANE)."
+  else echo "Relay: created $NAME's worktree $COS."; STEPS=("$S_PANE")
+  fi
+  if [ ${#STEPS[@]} -gt 0 ]; then
+    echo "Relay: $NAME has no pane yet. Run, in this order:"
+    for s in "${STEPS[@]}"; do echo "  $s"; done
+  fi
+  echo "The session in this main checkout is the orchestrator, NOT the relay: talk to $NAME only in the pane of the Chief-of-Staff worktree."
+fi
+
+# --- the project files setup created or changed, from the writes themselves ---
+[ "$EXCLUDE_WAS" = "$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)" ] || grep -qF "	$IL_EXCLUDE" "$IL_WROTE" || printf 'changed\t%s\n' "$IL_EXCLUDE" >> "$IL_WROTE"
+WROTE=$(awk -F'\t' -v m="$PP_MAIN/" 'index($2, m) == 1 && !s[$2]++ { print $1 "\t" substr($2, length(m) + 1) }' "$IL_WROTE" | sort -t$'\t' -k2)
+if [ -z "$WROTE" ]; then echo "Setup created or changed no file in this project."
+else
+  echo "Files setup created or changed in this project:"
+  while IFS=$'\t' read -r k f; do
+    case $f in
+      .git/*) why="not for git: git's own local file" ;;
+      *) if git -C "$PP_MAIN" check-ignore -q -- "$f"; then why="not for git: this machine's own, and git ignores it"; else why="commit it"; fi ;;
+    esac
+    printf '  %s  %s  %s\n' "$k" "$f" "$why"
+  done <<<"$WROTE"
+  echo
+fi
 # The config setup wrote is the project's: a unit's worktree has it only once git holds it. Setup never commits.
 OWED=()
 for f in "$IL_CONFIG" "$PSET" "$IL_AGENTS"; do

@@ -52,13 +52,13 @@ trap 'exit 143' TERM
 
 iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
-# rec <id> <status> [sampled-epoch] [stale-since-epoch] [error] -- one source
+# rec <id> <status> [sampled-epoch] [stale-since-epoch] [error] [retry-at-epoch] -- one source
 # record, kept in this invocation's private directory: two collections at once
 # never share a note.
 rec() {
-  jq -cn --arg id "$1" --arg st "$2" --arg at "${3:+$(iso "$3")}" --arg ss "${4:+$(iso "$4")}" --arg e "${5:-}" \
+  jq -cn --arg id "$1" --arg st "$2" --arg at "${3:+$(iso "$3")}" --arg ss "${4:+$(iso "$4")}" --arg e "${5:-}" --arg ra "${6:+$(iso "$6")}" \
     'def n: if . == "" then null else . end;
-     {($id): {sampledAt: ($at | n), status: $st, staleSince: ($ss | n), error: ($e | n)}}' > "$RUN/src/$1.json"
+     {($id): ({sampledAt: ($at | n), status: $st, staleSince: ($ss | n), error: ($e | n)} + (if $ra == "" then {} else {retryAt: $ra} end))}' > "$RUN/src/$1.json"
 }
 ok() { rec "$1" fresh "$NOW"; }
 nm() { rec "$1" not-measured "" "" "$2"; }
@@ -67,13 +67,17 @@ nm() { rec "$1" not-measured "" "" "$2"; }
 # Only a successful read that parses as JSON replaces the copy; a failed or
 # malformed one keeps it, stale since its own sample time. No copy prints
 # nothing and is not measured -- never a blank that reads as "nothing there".
-# A failed read writes $CACHE/<key>.retry ("<retry-at epoch> <reason>"): until
-# then the command is skipped, so a 429 is not re-hit every cycle. Retry-at is
-# the TTL, or the `retry after <n> s` the command's stderr names if longer.
+# A failed read writes $CACHE/<key>.retry ("<retry-at epoch> <failures in a row>
+# <reason>"): until then the command is skipped, so a 429 is not re-hit every
+# cycle. The wait is the TTL, doubled by each failure in a row up to an hour,
+# or the `retry after <n> s` the command's stderr names if longer. The source
+# record carries the retry time, so the card says when the next try is.
 cached() {
-  local key=$1 f=$CACHE/$1 tmp=$RUN/cache-$1 err=$RUN/err-$1 m=$CACHE/$1.retry at='' why='' rc=0 n t
+  local key=$1 f=$CACHE/$1 tmp=$RUN/cache-$1 err=$RUN/err-$1 m=$CACHE/$1.retry at='' tries=0 why='' rc=0 n b t
   shift
-  [ ! -s "$m" ] || read -r at why < "$m" || true
+  [ ! -s "$m" ] || read -r at tries why < "$m" || true
+  # A note written before failures were counted has its reason there.
+  [[ $tries =~ ^[0-9]{1,4}$ ]] || { why="$tries $why"; tries=0; }
   if [ -s "$f" ] && [ $((NOW - $(stat -c %Y "$f"))) -lt $TTL ]; then
     rec "$key" fresh "$(stat -c %Y "$f")"
   elif [[ $at =~ ^[0-9]+$ ]] && [ "$at" -gt "$NOW" ]; then
@@ -85,15 +89,18 @@ cached() {
     [ -n "$why" ] || { [ $rc -eq 0 ] && why='malformed response' || why='read failed'; }
     n=$(grep -oE 'retry after [0-9]+ s' "$err" | tail -n 1 | grep -oE '[0-9]+') || n=0
     n=$((10#${n:-0}))  # a leading zero must not read as octal
-    [ "$n" -gt $TTL ] || n=$TTL
-    printf '%s %s\n' $((NOW + n)) "$why" > "$RUN/retry-$key" && mv -f "$RUN/retry-$key" "$m"
+    tries=$((10#$tries + 1))
+    b=$((TTL << (tries > 5 ? 4 : tries - 1))); [ "$b" -le 3600 ] || b=3600
+    [ "$n" -gt "$b" ] || n=$b
+    at=$((NOW + n))
+    printf '%s %s %s\n' "$at" "$tries" "$why" > "$RUN/retry-$key" && mv -f "$RUN/retry-$key" "$m"
   fi
   if [ ! -s "$RUN/src/$key.json" ]; then
     if [ -s "$f" ]; then
       t=$(stat -c %Y "$f")
-      rec "$key" stale "$t" "$t" "$why; showing the last good copy"
+      rec "$key" stale "$t" "$t" "$why; showing the last good copy" "$at"
     else
-      nm "$key" "$why; nothing was cached"
+      rec "$key" not-measured "" "" "$why; nothing was cached" "$at"
     fi
   fi
   [ ! -s "$f" ] || cat "$f"
@@ -153,41 +160,33 @@ seat_actual() {
   [ -n "$f" ] && tail -n 40 "$f" 2>/dev/null | jq -cR 'fromjson? | objects | select(.type == "assistant" and .isSidechain != true and (.message.model | type) == "string")
     | {model: .message.model, effort: (.effort | strings // null), advisor: (.advisorModel | strings // null), at: (.timestamp // null)}' 2>/dev/null | tail -1 | grep . || echo null
 }
-# issue_numbers -- the distinct #<n> on stdin, in first-seen order, as a JSON list.
-issue_numbers() { grep -oE '#[0-9]+' | tr -d '#' | awk '!s[$0]++' | jq -cs .; }
-# work_items -- the first line of each numbered list item ("3. #12: ...") on stdin: where a brief or a
-# rulings file names the issue an item builds. A continuation line only mentions issues, and is dropped.
-work_items() { grep -E '^[0-9]+\. '; }
 # builder_progress <worktree> <unit> -- a Builder's {issues, built, findings}, each null when its file is
 # missing. Built is false for an evidence file that is there and cannot be read, and an empty list
-# only for one read with no built issue in it. Issues are the numbered work items of the brief's "The issues" section plus the ones main's rulings
-# file for the unit adds (an issue that is only mentioned is not counted); a brief with no numbered item
-# there gives every issue of that section, and one without the section its "The batch" section. Built
-# ones are the issues its evidence file heads a section with, findings the newest round report's finding lines.
-# shortcut: an issue mentioned on a numbered item's own first line counts as a work item; give the briefs a
-# marked issue list if that ever miscounts.
+# only for one read with no built item in it. Issues are the work items brief-issues.sh reads from the brief
+# and main's rulings file for the unit: an issue is its number, an item with no issue number its own text.
+# Built ones are the items its evidence file heads a section with, findings the newest round report's finding lines.
 builder_progress() {
-  local d=$1/.claude/briefs u=${2##*/} is=null bu=null fi_=null f sec
-  if [ -f "$d/$u.md" ]; then
-    sec=$(awk '/^#+ /{on = ($0 ~ /^#+ The issues/)} on' "$d/$u.md")
-    is=$(work_items <<<"$sec" | issue_numbers)
-    [ "$is" != '[]' ] || is=$(issue_numbers <<<"$sec")
-    [ "$is" != '[]' ] || is=$(awk '/^#+ /{on = ($0 ~ /^#+ The batch/)} on' "$d/$u.md" | issue_numbers)
-    is=$({ jq -r '.[]' <<<"$is" | sed 's/^/#/'; work_items < "$PP_MAIN/.claude/briefs/$u-main-rulings.md" 2>/dev/null; } | issue_numbers)
-  fi
+  local d=$1/.claude/briefs u=${2##*/} is=null bu=null fi_=null f t
+  [ ! -f "$d/$u.md" ] || is=$(bash "$HERE/brief-issues.sh" "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md")
   # The file's title names the unit's issue before anything is built: only a section heading counts.
-  # A heading "Item N" with no issue number stands for the issues on numbered line N of the brief
-  # or of main's rulings file, those of the issue list only.
+  # A heading "Item N" with no issue number stands for the items on numbered line N of the brief
+  # or of main's rulings file, those of the issue list only. An item with no issue number is built
+  # under "Item N" too, or under a heading that is its text, whole: a heading holding a shorter item's words is not that item.
   # shortcut: two numbered lists that both name listed issues on line N are both read; mark the list if one ever does.
   # A heading counts once something is written under it, before the next heading: one with nothing under it is
   # a section laid out ahead of the work. What is written under a sub-heading is written under its item too.
   [ ! -f "$d/$u-evidence.md" ] || bu=false
   [ ! -f "$d/$u-evidence.md" ] || [ ! -r "$d/$u-evidence.md" ] || bu=$(awk '/^#+ /{ l = length($1); for (k in h) if (k + 0 >= l) delete h[k]; h[l] = $0; next }
       NF { for (k in h) if (k + 0 >= 2) { print h[k]; delete h[k] } }' "$d/$u-evidence.md" | while IFS= read -r f; do
-      printf '%s\n' "$f"
-      [[ $f =~ ^#+\ Item\ ([0-9]+) ]] && [ "$is" != null ] || continue
-      grep -hE "^${BASH_REMATCH[1]}\. " "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md" 2>/dev/null | grep -oE '#[0-9]+' | grep -xFf <(jq -r '.[] | "#\(.)"' <<<"$is")
-    done | issue_numbers)
+      grep -oE '#[0-9]+' <<<"$f"
+      [ "$is" != null ] || continue
+      t=$(sed -E 's/^#+ +//; s/[[:space:]:.]+$//' <<<"$f")
+      jq -r '.[] | strings' <<<"$is" | grep -xF -- "$t" | sed 's/^/=/' || true
+      [[ $f =~ ^#+\ Item\ ([0-9]+) ]] || continue
+      t=$(grep -hE "^${BASH_REMATCH[1]}\. " "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md" 2>/dev/null)
+      grep -oE '#[0-9]+' <<<"$t" | grep -xFf <(jq -r '.[] | numbers | "#\(.)"' <<<"$is")
+      sed -E 's/^[0-9]+\. +//; s/[[:space:]:.]+$//' <<<"$t" | grep -xFf <(jq -r '.[] | strings' <<<"$is") | sed 's/^/=/'
+    done | bash "$HERE/brief-issues.sh" --list)
   f=$(ls -t "$d/$u"-r*-reports.md 2>/dev/null | head -1)
   [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
   jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" '{issues: $is, built: $bu, findings: $fi}'

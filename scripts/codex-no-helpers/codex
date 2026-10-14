@@ -16,4 +16,6 @@ while IFS= read -r name; do
 done < <(python3 -c '
 import sys, tomllib
 print("\n".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "${CODEX_HOME:-$HOME/.codex}/config.toml")
+# The pass names the tier when the project did not choose fast mode (COMMANDECK_CODEX_TIER=default).
+[ -z "${COMMANDECK_CODEX_TIER:-}" ] || OFF+=(-c "service_tier=$COMMANDECK_CODEX_TIER")
 exec codex "$@" "${OFF[@]}"

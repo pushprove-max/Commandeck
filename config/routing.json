@@ -7,7 +7,7 @@
       "claude-headless": "{env} claude -p {model} {effort} {tools} {fast}",
       "codex-headless": "{env} codex exec {sandbox} {projectdoc} {model} {effort} {fast}"
     },
-    "note": "The one home of every per-role launch setting. A role's structured fields are the settings; launch.templates is only the wiring each agent's command follows, and the reader in scripts/paths.sh (pp_route, pp_review, pp_argv) fills its placeholders and fails before any launch on a malformed entry. A model is a family name, never a version: Claude Code resolves opus, sonnet, haiku and fable itself, and builder-codex-pass.sh resolves a Codex family to the newest model the account lists. A null effort is omitted from the command, never defaulted. fast renders as Codex service_tier=fast or Claude --settings {\"fastMode\":true}; false is the default tier. A headless role (headless: true) is one a script runs with codex exec or claude -p. Every pane role is unboxed: the plugin ships no pane box, so launch.paneBox is not set."
+    "note": "The one home of every per-role launch setting. A role's structured fields are the settings; launch.templates is only the wiring each agent's command follows, and the reader in scripts/paths.sh (pp_route, pp_review, pp_argv) fills its placeholders and fails before any launch on a malformed entry. A model is a family name, never a version: Claude Code resolves opus, sonnet, haiku and fable itself, and builder-codex-pass.sh resolves a Codex family to the newest model the account lists. A null effort is omitted from the command, never defaulted. fast renders as Codex service_tier=fast or Claude --settings {\"fastMode\":true}; false is the default tier, and the Codex review role takes it from set-up's saved answer only. A headless role (headless: true) is one a script runs with codex exec or claude -p. Every pane role is unboxed: the plugin ships no pane box, so launch.paneBox is not set."
   },
   "roles": {
     "orchestrator": {
@@ -31,12 +31,11 @@
       "agent": "codex",
       "model": "sol",
       "effort": "medium",
-      "fast": true,
       "reviewer": true,
       "sandbox": "read-only",
       "unboxed": true,
       "edits": false,
-      "note": "The Codex review pass of the Claude+OpenAI profile. fast needs service_tier = \"fast\" in the Codex config; the pass preflight checks it."
+      "note": "The Codex review pass of the Claude+OpenAI profile. Fast mode is not set here: it changes what a run costs, so it is the owner's answer at set-up (codexFast in the project's .claude/commandeck.json, off by default). With a yes the pass preflight needs service_tier = \"fast\" in the Codex config."
     },
     "claude-reviewer": {
       "agent": "claude",

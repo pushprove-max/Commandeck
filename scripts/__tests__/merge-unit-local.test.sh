@@ -217,7 +217,15 @@ mk pre; go pre
 mkdir -p "$REPO/.claude/briefs"
 echo other > "$REPO/.claude/briefs/prefab.md"; echo other > "$REPO/.claude/briefs/pre-other.md"; echo other > "$REPO/.claude/briefs/pre-other-r1-reports.md"
 echo stray > "$TMP/ws/pre/.claude/briefs/prefab-evidence.md"
+# The token ledger was empty on every install: only a collected seat wrote a row, and a Builder's seat is
+# never collected, it ends with the merge. The merge writes the row, into the main checkout's ledger.
+LEDGER=$REPO/.claude/metrics/seat-events.jsonl
+check "a merged unit that no seat launched writes no ledger row" no "$([ -e "$LEDGER" ] && echo yes || echo no)"
+mkdir -p "$TMP/scratch"; printf 'handle=t_pre\ntask=task_pre\nrole=builder\nunit=pre\nlaunched=%s\n' "$(($(date +%s) - 600))" > "$TMP/scratch/seat-pre-builder.txt"
 check "a unit whose name is a prefix of another's merges" 0 "$(merge pre)"
+check "a build run through the plugin leaves its Builder's row in the main checkout's ledger" "1 pre builder task_pre done true" \
+  "$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ') $(jq -r '[.unit, .role, .taskId, .stopReason, (.launchedAt < .completedAt)] | join(" ")' "$LEDGER" 2>&1)"
+check "with no session log to read, its tokens are null with the reason, never 0" "null true" "$(jq -r '[(.tokens | tojson), (.tokensReason | length > 0)] | join(" ")' "$LEDGER" 2>&1)"
 check "the other units' briefs are still in the project" "pre-other-r1-reports.md pre-other.md prefab.md" "$(cd "$REPO/.claude/briefs" && ls pre-other* prefab* 2>/dev/null | paste -sd' ' -)"
 check "and the archive holds only this unit's files" "pre-evidence.md pre-r1-reports.md pre.md" "$(tar -tf "$HOME/.commandeck/briefs/proj/pre.tar" | sort | paste -sd' ' -)"
 rm -f "$REPO/.claude/briefs"/pre-other* "$REPO/.claude/briefs/prefab.md"

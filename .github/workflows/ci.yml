@@ -22,6 +22,16 @@ jobs:
           echo "COMMANDECK_TEST_NODE_MODULES=$RUNNER_TEMP/dom/node_modules" >> "$GITHUB_ENV"
       - name: Leak test
         run: bash ci/leak-test.sh
+      # The checkout brings one commit; the check compares with the main branch, so that is fetched
+      # here. A push to main itself is compared with main as it was before the push.
+      - name: Version check
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          git fetch --no-tags --unshallow origin main 2>/dev/null || git fetch --no-tags origin main
+          BASE=FETCH_HEAD
+          if [ "$GITHUB_REF" = refs/heads/main ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then BASE=$BEFORE; fi
+          bash ci/version-check.sh "$BASE"
       - name: Shell tests
         run: bash scripts/run-shell-tests.sh
   # The Mac's own /bin/bash is 3.2, which the Ubuntu job never meets: these two

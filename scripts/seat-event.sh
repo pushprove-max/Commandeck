@@ -5,9 +5,8 @@
 # log's {model, tokens} or null, from the launch on when one is given; the one
 # home of token parsing (subagent-usage.sh and unit-ledger.sh too).
 #
-# seat.sh collect, close-round.sh (each reviewer) and unit-loop.sh (each fixer)
-# all call it, so every seat a unit opened has a row: before, only seat.sh wrote
-# rows and no code-reviewer or fixer seat was ever measured.
+# seat.sh collect calls it for a seat that ends with a verdict, and
+# merge-unit-local.sh for the Builder, whose seat ends with the merge.
 # SEAT_EVENT_WORKTREE (and SEAT_EVENT_AGENT) name where the seat ran: its session
 # log is found there and summed into tokens. Without one, or with no usage in
 # the log, tokens is null and tokensReason (SEAT_EVENT_REASON or a default) says

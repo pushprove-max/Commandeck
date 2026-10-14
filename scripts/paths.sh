@@ -264,7 +264,10 @@ def seat_at($root; $spec):
         | if (.value | IN($root | aliases[])) or (.key == "advisor" and .value == "none") then . else fail("this project has builder.\(.key) is not one of \($root | aliases | join(", ")); set-up sets it") end))
       # "none" is the choice of no advisor, dropped only after it has replaced the one routing names.
       | if .advisor == "none" then del(.advisor) else . end
-    end;
+    end
+  # Codex fast mode changes what a run costs: it is the answer set-up saved
+  # (pp_codex_fast hands it in) and never the routing file itself. No quote mark here: this is inside one.
+  | if ($p.r | startswith("codex-reviewer")) then .fast = ($ARGS.named.codexFast == true) else . end;
 def validate:
   . as $root
   | ([check_templates] | length) as $_
@@ -301,7 +304,7 @@ def words($root):
        + (if .agent == "claude" and .shellEnv then [.shellEnv | to_entries[] | "\(.key)=\(.value)"] else [] end)),
      model: ["--model", .model + (if .context then "[\(.context)]" else "" end)],
      effort: (if .effort == null then [] elif .agent == "codex" then ["-c", "model_reasoning_effort=\(.effort)"] else ["--effort", .effort] end),
-     fast: (if .fast != true then [] elif .agent == "codex" then ["-c", "service_tier=fast"] else ["--settings", "{\"fastMode\":true}"] end),
+     fast: (if .agent == "codex" then ["-c", "service_tier=" + (if .fast == true then "fast" else "default" end)] elif .fast == true then ["--settings", "{\"fastMode\":true}"] else [] end),
      advisor: (if .advisor then ["--advisor", .advisor] else [] end),
      tools: (if .tools then ["--disallowedTools", (.tools | join(","))] else [] end),
      compact: (if .compactLimit != null then ["-c", "model_auto_compact_token_limit=\(.compactLimit)"] else [] end),
@@ -352,6 +355,26 @@ pp_codex_model() { # <family or model id>
   [ -n "$id" ] || { echo "routing: $list lists no gpt-<version>-$1 model for the Codex family $1; run codex once while signed in, or name a model id in routing.json" >&2; return 2; }
   printf '%s\n' "$id"
 }
+# pp_worktree_new <name> -- a new Orca worktree of this project at
+# $PP_WORKSPACES/<name>, on local main and not Orca's origin/main default. The
+# one place a worktree is created: a Builder's (builder-launch.sh) and the
+# relay's (setup.sh). Says why not on stderr.
+pp_worktree_new() {
+  local wt=$PP_WORKSPACES/$1 head
+  orca-ide worktree create --repo "path:$PP_MAIN" --name "$1" --base-branch main \
+    --parent-worktree "path:$PP_MAIN" --setup run --json >/dev/null \
+    || { echo "worktree create failed for $1" >&2; return 1; }
+  [ -d "$wt" ] || { echo "worktree create reported success but $wt does not exist" >&2; return 1; }
+  head=$(git -C "$PP_MAIN" rev-parse refs/heads/main)
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$head" ] || git -C "$wt" reset --hard "$head" >/dev/null \
+    || { echo "could not base $1 on local main $head" >&2; return 1; }
+}
+# Codex fast mode: on only when set-up saved the owner's yes. No config, no answer and an unreadable file are off.
+# COMMANDECK_CODEX_FAST=false turns it off for one call and no value of it turns it on: set-up's own
+# preflight runs before the new answer is saved, and has checked the tier for that answer itself.
+pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(jq -r '.codexFast // false' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null)" = true ]; }
+# The tier is the Codex home's own setting: a pass runs on what its config says.
+pp_codex_fast_home() { grep -qE '^[[:space:]]*service_tier[[:space:]]*=[[:space:]]*"fast"' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
 pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has no advisor] -- the resolved seat, as JSON
   local cfg m=${3:-} b; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
@@ -360,7 +383,7 @@ pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has
     m=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty | select(test("^[a-z]+$"))' "$cfg" 2>/dev/null || true)
     [ -z "$m" ] || m=$(pp_codex_model "$m") || return 2
   fi
-  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
+  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
 }
 # The model one Builder launch may run: an alias routing.json already names, the
 # check set-up makes for --builder-model. builder-launch.sh asks before it
@@ -378,7 +401,7 @@ pp_route() { # same arguments; sets RT_AGENT RT_MODEL RT_EFFORT RT_READONLY RT_B
 pp_review() { # <review key> -- its resolved seats as a JSON array, each with .reviewer (its family)
   local cfg; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
-  jq -ce --arg key "$1" --arg home "$HOME" "$PP_ROUTE_JQ"' validate | review($key)' "$cfg"
+  jq -ce --arg key "$1" --arg home "$HOME" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | review($key)' "$cfg"
 }
 # The review pass of the configured profile: claude for the Claude-only profile,
 # codex for Claude+OpenAI, which is also what a file with no profile means.

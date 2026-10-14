@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-111111?style=flat-square" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.3.0-111111?style=flat-square" alt="Version 0.3.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -107,9 +107,12 @@ line to run.
 | Permissions | `project`: the rules go in this project's `.claude/settings.json`. `machine`: in `~/.claude/settings.json`, for every project |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Chief of Staff | a name and one line on how the relay pane should sound, or none |
+| Codex fast | off (the default) or on. On, the Codex review passes run on the fast tier, which costs more per token; off, they are held to the normal tier whatever your Codex config says |
 | Builder model | Opus advised by Fable (the default), Sonnet advised by Opus for less usage, Opus advised by Opus, or any of them with no advisor |
 
-Setup also takes a test command that must pass before a merge
+Setup also creates the project's Orca run, or prints the one command for it,
+and ends with the list of project files it created or changed and which of
+them to commit. It takes a test command that must pass before a merge
 (`--test-command`), `--standard-context` when your account's model holds
 200K tokens, other names the dashboard may be opened under (`--hosts`), and
 your own status line (`--status-line`; uninstall puts the earlier one back).
@@ -281,11 +284,13 @@ The Chief of Staff is a separate Claude pane that relays between you and the
 orchestrator, so questions for you arrive in one place while builds run. It
 reads no code and never answers for you.
 
-Setup stores its name and persona; it does not open the pane. Create an Orca
-worktree whose folder is named `Chief-of-Staff`, run
-`bash "$PLUGIN/scripts/worktree-setup.sh" <that worktree>` to give it its relay-only
-settings, and start `claude` in it.
-Without one, the orchestrator asks you directly.
+When you choose one, setup creates an Orca worktree named `Chief-of-Staff`,
+gives it its relay-only settings and opens the pane under the stored name.
+Where it cannot (Orca does not answer, or the worktree is already there), it
+ends with the exact commands left to run. The session in the main checkout is
+the orchestrator and never the relay; its start-up text says where the relay
+pane is, or that none exists yet. Without one, the orchestrator asks you
+directly.
 
 The pane keeps four watchers running in the background. Each one prints what
 it found and exits, which wakes the pane:

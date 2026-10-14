@@ -157,6 +157,7 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 .iss { display: flex; flex-wrap: wrap; gap: 5px; }
 .iss span { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
 .iss .y { background: var(--ok-bg); color: var(--ok-ink); }
+.iss .item { flex-basis: 100%; font-family: inherit; }
 
 /* Units: one colour per step; a step with no unit is narrow. */
 .stages { display: grid; grid-template-columns: var(--cols, repeat(5, minmax(0, 1fr))); gap: 10px; margin-top: 14px; }

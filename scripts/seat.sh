@@ -359,7 +359,8 @@ collect)
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac
   # seat-event.sh sums this pane's own session log; a missing or unreadable log
   # writes tokens:null with the reason and never blocks the row. A read VERDICT is done.
-  COMMANDECK_SEAT_EVENTS="$ROOT/.claude/metrics/seat-events.jsonl" SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done \
+  # The row goes to the main checkout's ledger (seat-event.sh's own default), which the dashboard reads, wherever collect is run from.
+  SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done \
     "$(dirname "$0")/seat-event.sh" "$UNIT" "$ROLE" "$T" "$LAUNCHED" || echo "seat: no seat event recorded for $ROLE $UNIT" >&2
   pp_task_close "$T" completed "{\"verdict\":\"${V#VERDICT: }\"}" || true
   orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true

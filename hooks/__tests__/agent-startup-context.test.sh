@@ -103,5 +103,28 @@ OUT=$(HOOK=$ODD/hooks/agent-startup-context.sh; run "$TMP/fresh" CLAUDE_PROJECT_
 check "from an odd plugin path the startup file is still injected" yes "$(has "$OUT" '## Builder flow')"
 check "and names the plugin's scripts by that path, as one shell word" yes "$(has "$OUT" "$(printf '%q' "$ODD")/scripts/")"
 
+# A relay chosen at set-up and a session in the main checkout: that session was told it is the main
+# orchestrator and nothing about the relay, was taken for the relay, and launched two Builders.
+# Main now reads, in one line, that it is the orchestrator and where the relay's pane is.
+F=$TMP/relay; mkdir -p "$F/home/.claude"
+git init -q "$F/proj" && git -C "$F/proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+mkdir -p "$F/proj/.claude"
+relay() { (cd "$1" && env -u COMMANDECK_BUILDER -u COMMANDECK_REVIEWER -u AGENT_KIND -u COMMANDECK_CLEAR_LINE HOME="$F/home" \
+  CLAUDE_PROJECT_DIR="$1" COMMANDECK_HOOK_FIRE_LOG=/dev/null bash "$HOOK" </dev/null 2>&1) | grep 'NOT the relay'; }
+echo '{"chiefOfStaff": {}}' > "$F/proj/.claude/commandeck.json"
+check "main, no relay chosen: nothing is said about one" 0 "$(relay "$F/proj" | grep -c .)"
+echo '{"chiefOfStaff": {"name": "Ada", "persona": "dry"}}' > "$F/proj/.claude/commandeck.json"
+OUT=$(relay "$F/proj")
+check "main, relay chosen and no worktree yet: one line" 1 "$(grep -c . <<<"$OUT")"
+check "it says this pane is the orchestrator, not the relay" yes "$(has "$OUT" 'This pane is the orchestrator, NOT the relay Ada')"
+check "and that no relay pane exists yet, with the command that makes it" yes "$(has "$OUT" "no relay pane exists yet: bash $REAL/scripts/setup.sh makes its Chief-of-Staff worktree and opens the pane")"
+git -C "$F/proj" worktree add -q "$F/ws/Chief-of-Staff" -b cos 2>/dev/null
+OUT=$(relay "$F/proj")
+check "main, relay worktree there: still one line" 1 "$(grep -c . <<<"$OUT")"
+check "it says where the relay's pane is" yes "$(has "$OUT" "This pane is the orchestrator, NOT the relay Ada: the relay is the pane in $F/ws/Chief-of-Staff")"
+OUT=$(cd "$F/ws/Chief-of-Staff" && env -u COMMANDECK_BUILDER -u COMMANDECK_REVIEWER -u AGENT_KIND HOME="$F/home" CLAUDE_PROJECT_DIR="$F/ws/Chief-of-Staff" COMMANDECK_HOOK_FIRE_LOG=/dev/null bash "$HOOK" </dev/null 2>&1)
+check "the relay's own pane is never told it is the orchestrator" no "$(has "$OUT" 'This pane is the orchestrator')"
+check "and is told its name" "# Chief of Staff, named Ada: dry" "$(head -1 <<<"$OUT" | cut -c1-32)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

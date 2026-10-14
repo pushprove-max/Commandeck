@@ -24,7 +24,10 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
    the smaller model with `--model sonnet --reason '<one line>'`: no advisor
    unless it is `--risky`, and the pick is logged in `.claude/routing-log`. A
    risky one stays on the configured model, and its batch brief says to write
-   the failing test first.
+   the failing test first. The batch file starts as
+   `templates/_batch-brief-template.md` does, with `## The issues`: the
+   dashboard lists a build's issues from it, and `--dry-run` says so when it
+   finds none.
 2. Builder: build the batch, write `.claude/briefs/<unit>-evidence.md` item by
    item, then run the pass script the brief names. The script commits, runs
    the review and writes `.claude/briefs/<unit>-r<N>-reports.md`. Fix what it

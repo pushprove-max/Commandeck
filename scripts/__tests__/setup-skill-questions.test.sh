@@ -61,7 +61,7 @@ check "no text tells the owner to edit a shell start file or put a folder first 
   "$(cat "$SKILL" "$HERE/README.md" "$HERE/scripts/paths.sh" "$HERE/scripts/requirements.sh" "$HERE/scripts/setup.sh" "$HERE/scripts/doctor.sh" "$HERE/hooks/lib/run-hook.sh" | grep -ciE 'first on .?PATH|zshrc|zprofile|bash_profile|bashrc')"
 
 # Each undoing flag is in the skill, and sent over a saved config it clears the saved answer.
-for f in "--no-strict" "--name '' --persona ''" "--test-command ''" "--hosts ''" "--no-standard-context" "--builder-advisor none"; do
+for f in "--no-strict" "--name '' --persona ''" "--test-command ''" "--hosts ''" "--no-standard-context" "--builder-advisor none" "--no-codex-fast"; do
   check "the skill names $f" 1 "$([ "$(printf '%s\n' "$BODY" | grep -cF -e "$f")" -ge 1 ] && echo 1 || echo 0)"
 done
 P=$PASS F=$FAIL
@@ -77,6 +77,35 @@ check "the rerun clears every saved answer" '[false,false,null,{},null]' \
 check "and the dashboard host" '""' "$(jq -c '.dashboard.hosts' "$HOME/.commandeck/install/_machine.json")"
 run "$PROJ" setup.sh --profile claude-openai --builder-model sonnet --builder-advisor opus >"$T/out" 2>&1
 run "$PROJ" setup.sh --profile claude-openai --builder-advisor none >"$T/out" 2>&1; check "advisor none is accepted over a saved advisor" 0 $?
+
+# --- Codex fast mode changes what a run costs: off unless the owner said yes ---
+# The fixture's Codex home is on the fast tier already; `slow` takes that line out and `fast` puts it back.
+check "the skill asks it as one fixed question, off first" 1 "$(printf '%s\n' "$BODY" | grep -c '^ *Ask "Codex fast": off | on$')"
+check "and says in one line what it changes" 1 "$(printf '%s\n' "$BODY" | grep -c '^ *- \*\*Codex fast\.\*\*.*cost')"
+TOML=$HOME/.codex/config.toml
+slow() { grep -v '^service_tier' "$TOML" > "$T/toml" && cp "$T/toml" "$TOML"; }
+fast() { slow; { echo 'service_tier = "fast"'; cat "$T/toml"; } > "$TOML"; }
+fastmode() { jq -c '.codexFast' "$CFG"; }
+pre() { run "$PROJ" builder-codex-pass.sh --preflight >/dev/null 2>"$T/err"; echo $?; }
+check "a set-up that was never asked saves fast mode off" false "$(fastmode)"
+jq 'del(.codexFast)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"; slow
+check "an old set-up with no saved answer starts the review pass without the fast tier in the Codex config" 0 "$(pre)"
+run "$PROJ" setup.sh --profile claude-openai >"$T/out" 2>&1
+check "and a rerun with no answer keeps it off" false "$(fastmode)"
+run "$PROJ" setup.sh --profile claude-openai --codex-fast >"$T/out" 2>&1
+check "a yes on a Codex home without the fast tier is refused" 1 $?
+check "the refusal names the line the Codex config needs" 1 "$(grep -c 'service_tier = "fast"' "$T/out")"
+check "and saved nothing" false "$(fastmode)"
+fast
+run "$PROJ" setup.sh --profile claude-openai --codex-fast >"$T/out" 2>&1; check "a yes on a fast Codex home succeeds" 0 $?
+check "fast mode is on only after that yes" true "$(fastmode)"
+run "$PROJ" setup.sh --profile claude-openai >"$T/out" 2>&1
+check "a rerun with no answer keeps the yes" true "$(fastmode)"
+slow
+check "with the yes saved, the review pass refuses a Codex home without the fast tier" 1 "$([ "$(pre)" != 0 ] && grep -c service_tier "$T/err")"
+run "$PROJ" setup.sh --profile claude-openai --no-codex-fast >"$T/out" 2>&1; check "the answer off is accepted over a saved yes" 0 $?
+check "and saved" false "$(fastmode)"
+check "after which the pass starts without the fast tier again" 0 "$(pre)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

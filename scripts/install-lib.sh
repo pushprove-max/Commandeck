@@ -46,13 +46,19 @@ IL_STATE=(.claude/settings.local.json .claude/builder-events.jsonl .claude/metri
 il_sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
 # il_write <path> -- stdin becomes the file, whole or not at all. A link is
-# written through, and an existing file keeps its mode.
+# written through, and an existing file keeps its mode. Every write of the
+# install goes through here, so this is also where setup learns what it really
+# wrote: with IL_WROTE naming a file, each path whose content is new or
+# different gets one line there, "created" or "changed", a tab, the path. A
+# write of the same bytes is no line. A file, not a variable: half the callers
+# are the far end of a pipe.
 il_write() {
-  local p=$1 t
+  local p=$1 t k=created
   [ ! -L "$p" ] || p=$(readlink -f "$p")
   t=$p.new.$$
-  { mkdir -p "${p%/*}" && cat > "$t" && { [ ! -e "$p" ] || chmod --reference="$p" "$t"; } && mv -f "$t" "$p"; } \
+  { mkdir -p "${p%/*}" && cat > "$t" && { [ ! -e "$p" ] || { k=changed; ! cmp -s "$t" "$p" || k=; chmod --reference="$p" "$t"; }; } && mv -f "$t" "$p"; } \
     || { rm -f "$t"; echo "commandeck: could not write $p" >&2; return 1; }
+  [ -z "$k" ] || [ -z "${IL_WROTE:-}" ] || printf '%s\t%s\n' "$k" "$p" >> "$IL_WROTE"
 }
 
 # il_record <manifest> <kind> <path>... -- note what is at each path now. A

@@ -100,6 +100,9 @@ T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
 T=${T//'{batch}'/"$(cat "$BATCH")"}
 echo "advisor: $RULE" >&2
+# The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
+[ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
+  || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
 if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; exit 0; fi
 
 # The second call of a risky launch: the first made the worktree and opened the
@@ -110,14 +113,7 @@ if [ "$RISKY" = 1 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
   open_builder
 fi
 
-# Local main, not Orca's origin/main default (unit-run.sh, same recipe).
-orca-ide worktree create --repo "path:$PP_MAIN" --name "$UNIT" --base-branch main \
-  --parent-worktree "path:$PP_MAIN" --setup run --json >/dev/null \
-  || { echo "worktree create failed for $UNIT" >&2; exit 1; }
-[ -d "$WT" ] || { echo "worktree create reported success but $WT does not exist" >&2; exit 1; }
-HEAD_MAIN=$(git -C "$PP_MAIN" rev-parse refs/heads/main)
-[ "$(git -C "$WT" rev-parse HEAD)" = "$HEAD_MAIN" ] || git -C "$WT" reset --hard "$HEAD_MAIN" >/dev/null \
-  || { echo "could not base $UNIT on local main $HEAD_MAIN" >&2; exit 1; }
+pp_worktree_new "$UNIT" || exit 1
 bash "$HERE/worktree-setup.sh" "$WT" --builder
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"

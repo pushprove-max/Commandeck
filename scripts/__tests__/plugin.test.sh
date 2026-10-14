@@ -28,9 +28,9 @@ ok() { manifest_ok "$TMP/p" >/dev/null 2>&1; echo $?; }
 
 check "the shipped manifest is sound" 0 "$(manifest_ok "$REAL" >/dev/null 2>&1; echo $?)"
 M=$REAL/.claude-plugin/plugin.json
-check "it is version 0.2.0" 0.2.0 "$(jq -r .version "$M" 2>/dev/null)"
-check "the README's badge shows the manifest's version, twice on its line" 2 "$(grep -o "version-0\.2\.0-\|Version 0\.2\.0\"" "$REAL/README.md" | wc -l | tr -d ' ')"
-check "and the CHANGELOG has that version's entry" 1 "$(grep -c '^## 0\.2\.0 -- ' "$REAL/CHANGELOG.md")"
+check "it is version 0.3.0" 0.3.0 "$(jq -r .version "$M" 2>/dev/null)"
+check "the README's badge shows the manifest's version, twice on its line" 2 "$(grep -o "version-0\.3\.0-\|Version 0\.3\.0\"" "$REAL/README.md" | wc -l | tr -d ' ')"
+check "and the CHANGELOG has that version's entry" 1 "$(grep -c '^## 0\.3\.0 -- ' "$REAL/CHANGELOG.md")"
 check "it carries a description" yes "$(jq -r 'if (.description | type == "string" and length > 20) then "yes" else "no" end' "$M" 2>/dev/null)"
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
 # Claude Code loads hooks/hooks.json without being told. A command that names

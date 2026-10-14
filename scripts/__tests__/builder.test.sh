@@ -82,6 +82,7 @@ cat > "${STUB%/*}/app-server-broker.mjs" <<'JS'
 import { appendFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.STUB_CALLS + ".broker", `${process.env.PATH.split(":")[0]} ${args.join(" ")}\n`);
+appendFileSync(process.env.STUB_CALLS + ".tier", `${process.env.COMMANDECK_CODEX_TIER || "none"}\n`);
 writeFileSync(args[args.indexOf("--endpoint") + 1].replace(/^unix:/, ""), "");
 setInterval(() => {}, 1000);
 JS
@@ -115,6 +116,13 @@ launch() { PATH="$TMP/bin:$PATH" "$@"; }
 # them. `passes` is one case because each of its checks builds on the passes
 # before it.
 case_launch() {
+# The dashboard reads a build's issues from its brief: a dry run says so when the brief names none.
+printf 'Tidy things up.\n' > "$TMP/no-issues.md"
+launch bash "$LAUNCH" --dry-run new-unit "$TMP/no-issues.md" >/dev/null 2>"$TMP/err"
+check "a dry run of a brief that names no work item says so" 1 "$(grep -c '^issues: this brief names no work item' "$TMP/err")"
+check "and names the section the batch file should start with" 1 "$(grep -c "## The issues" "$TMP/err")"
+launch bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>"$TMP/err"
+check "a dry run of a brief that names issues says nothing of the kind" 0 "$(grep -c '^issues:' "$TMP/err")"
 mkdir "$TMP/ws/taken"
 launch bash "$LAUNCH" taken "$TMP/batch.md" >/dev/null 2>"$TMP/err"
 check "an existing worktree is refused" 2 "$?"
@@ -181,12 +189,26 @@ check "a signed-out Codex CLI fails the preflight" 2 "$?"
 check "the refusal says how to sign in" 1 "$(grep -c 'codex login' "$TMP/err")"
 rm "$TMP/signed-out"
 
-CODEX_HOME=$TMP/codex-slow bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>"$TMP/err"
-check "a fast seat on a slow Codex home fails loud" 2 "$?"
+# Codex fast mode changes what a run costs, so it is on only where the owner said yes at set-up
+# (codexFast in the project's config). No saved answer is off, and the routing file cannot turn it on.
+mkdir -p "$TMP/fastyes/.claude" "$TMP/fastno/.claude"
+echo '{"version": 1, "profile": "claude-openai", "codexFast": true}' > "$TMP/fastyes/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude-openai"}' > "$TMP/fastno/.claude/commandeck.json"
+check "the shipped routing does not ask for the fast tier" null "$(jq -c '.roles["codex-reviewer"].fast' "$REAL/config/routing.json")"
+COMMANDECK_MAIN=$TMP/fastyes CODEX_HOME=$TMP/codex-slow bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>"$TMP/err"
+check "a project that chose fast mode, on a Codex home without the fast tier, fails loud" 2 "$?"
 check "the failure names service_tier" 1 "$(grep -c 'service_tier' "$TMP/err")"
-jq '.roles["codex-reviewer"].fast = false' "$ROUTING" > "$TMP/slow-routing.json"
-COMMANDECK_ROUTING=$TMP/slow-routing.json CODEX_HOME=$TMP/codex-slow bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>&1
-check "a seat not on the fast tier needs no fast home" 0 "$?"
+COMMANDECK_MAIN=$TMP/fastno CODEX_HOME=$TMP/codex-slow bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>&1
+check "a set-up with no saved answer starts its pass without the fast tier in the Codex config" 0 "$?"
+jq '.roles["codex-reviewer"].fast = true' "$ROUTING" > "$TMP/fast-routing.json"
+COMMANDECK_ROUTING=$TMP/fast-routing.json COMMANDECK_MAIN=$TMP/fastno CODEX_HOME=$TMP/codex-slow bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>&1
+check "and a routing file that says fast does not turn it on without the owner's yes" 0 "$?"
+tier() { COMMANDECK_ROUTING=${3:-$ROUTING} COMMANDECK_MAIN=$1 bash -c '. "$1/scripts/paths.sh" && pp_route_json codex-reviewer' _ "$REAL" 2>&1 | jq -c '.cmd | test("service_tier=fast")' 2>&1; }
+check "the review seat's command carries the fast tier after a yes" true "$(tier "$TMP/fastyes")"
+check "and not without one, whatever the routing file says" false "$(tier "$TMP/fastno" - "$TMP/fast-routing.json")"
+# Off is off whatever the owner's Codex config says: the seat's own command line names the normal tier.
+check "with no yes the review seat's command forces the normal tier" true \
+  "$(COMMANDECK_MAIN=$TMP/fastno CODEX_HOME=$TMP/codex-fast bash -c '. "$1/scripts/paths.sh" && pp_route_json codex-reviewer' _ "$REAL" 2>&1 | jq -c '.cmd | test("-c service_tier=default")' 2>&1)"
 HOME=$TMP/empty bash "$LAUNCH" --dry-run new-unit "$TMP/batch.md" >/dev/null 2>&1
 check "no installed companion fails loud" 2 "$?"
 # routing.json ships a family name, and Codex refuses a name that is no model
@@ -497,6 +519,14 @@ check "the no-helpers codex switches off every helper server the Codex home name
   "app-server -c mcp_servers.serena.enabled=false -c mcp_servers.code-graph.enabled=false" "$(cat "$TMP/codex-args")"
 CODEX_HOME=$TMP/codex-fast PATH="$NOHELP:$TMP/realcodex:$PATH" codex app-server
 check "a Codex home with no helper server runs codex as it is" "app-server" "$(cat "$TMP/codex-args")"
+# Fast mode answered off was not off: the pass ran on whatever tier the owner's
+# Codex config named. With the answer off or not saved the pass forces the
+# normal tier on its own Codex command line and leaves that file alone.
+check "the Codex home says fast and this project never chose it: every broker is started on the normal tier" "3 3" \
+  "$(grep -cx default "$TMP/stub-calls.tier") $(wc -l < "$TMP/stub-calls.tier" | tr -d ' ')"
+COMMANDECK_CODEX_TIER=default CODEX_HOME=$TMP/codex-fast PATH="$NOHELP:$TMP/realcodex:$PATH" codex app-server
+check "and that tier reaches codex as a per-run override" "app-server -c service_tier=default" "$(cat "$TMP/codex-args")"
+check "the owner's Codex config is not edited" 'model = "x" service_tier = "fast"' "$(paste -sd' ' "$TMP/codex-fast/config.toml")"
 S1=$(ls "$CODEX_HOME"/sessions/2026/10/11/rollout-*-thr-1.jsonl)
 check "the pass sent the installed plugin's prompt, every placeholder filled, the verdict format in it" "1 0 1" \
   "$(grep -c 'PROBE-PLUGIN-PROMPT' "$S1") $(grep -c '{{' "$S1") $(grep -c 'VERDICT: NO-GO' "$S1")"

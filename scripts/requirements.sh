@@ -18,9 +18,18 @@
 REQ_UNAME=$(uname -s)
 req_path() {
   [ "$REQ_UNAME" = Darwin ] || return 0
-  local pp_gnu=() pp_t pp_g pp_path=: pp_added= pp_dirs
-  for pp_t in "${COMMANDECK_BREW_PREFIX:-/opt/homebrew}"/opt/*/libexec/gnubin "${COMMANDECK_BREW_PREFIX:-/opt/homebrew}/bin"; do
-    [ -d "$pp_t" ] && pp_gnu+=("$pp_t")
+  local pp_gnu=() pp_t pp_g pp_path=: pp_added= pp_dirs pp_p pp_pre=(/opt/homebrew /usr/local)
+  # Homebrew's folder is the one brew is in: /usr/local on an Intel Mac. Read
+  # from brew's own place, not by running `brew --prefix`: this runs at every
+  # hook start, and that costs a process each time. A brew linked into a folder
+  # that is not Homebrew's (no opt beside it) and no brew at all leave the two
+  # known places.
+  pp_t=$(command -v brew 2>/dev/null) && [ -d "${pp_t%/bin/brew}/opt" ] && pp_pre=("${pp_t%/bin/brew}")
+  [ -z "${COMMANDECK_BREW_PREFIX:-}" ] || pp_pre=("$COMMANDECK_BREW_PREFIX")
+  for pp_p in "${pp_pre[@]}"; do
+    for pp_t in "$pp_p"/opt/*/libexec/gnubin "$pp_p/bin"; do
+      [ -d "$pp_t" ] && pp_gnu+=("$pp_t")
+    done
   done
   IFS=: read -ra pp_dirs <<<"$PATH"
   # The trailing newline entry is an end marker: no system directory at all
