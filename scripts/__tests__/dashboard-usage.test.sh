@@ -55,8 +55,9 @@ check "with its own count and model left out" '[2,["mystery-1"]]' "$(j '[.cost.t
 check "and no week figure is made up without the reading" '[null,null,null]' "$(j '[.cost.week, .cost.projected, .usedPct]')"
 # --- a Codex price comes from the parts of the model's name, never from a guess ---
 # The owner ruled out one price row per Codex id: the rule reads the version and the tier
-# the name states, then the mode and the prompt size. Only a published (version, tier)
-# is priced; a near name may cost something else, so it stays unpriced and the total partial.
+# the name states, then the mode and the prompt size. A new version of a known tier takes
+# the tier's price (#36, the owner's ruling) and says so; a name with no known tier stays
+# unpriced and the total partial, never a guessed number.
 cx() { (cd "$ROOT/scripts" && python3 -c '
 import sys, dashboard_limit as d
 def usd(model, inp, out=1000):
@@ -69,12 +70,17 @@ check "and its fast mode, Codex's priority tier, too" 0.82 "$(cx 'usd("gpt-6.1-s
 check "the other published id, normal and fast, long and short" "[2.05, 6.075, 4.1, 12.15]" \
   "$(cx '[usd(m, n) for m in ("gpt-6-astra", "gpt-6-astra:fast") for n in (200_000, 300_000)]')"
 check "no Codex id has a row of its own in the price tables" "[]" "$(cx '[m for m in (*d.PRICES, *d.LONG_PRICES) if m.startswith("gpt-")]')"
-check "a known tier at a version with no published price stays unpriced, and so does a known version at another tier" \
-  "[None, None, None, None]" "$(cx '[usd(m, 1000) for m in ("gpt-6.2-sol", "gpt-7-sol", "gpt-6.1-astra", "gpt-6-sol")]')"
-check "a name with any part the rule does not know stays unpriced" "[None, None, None, None, None, None]" \
-  "$(cx '[usd(m, 1000) for m in ("gpt-6.1-sol-mini", "gpt-6.1-luna", "gpt-6.1-sol-2026-10-01", "gpt-6.1-sol:flex", "xgpt-6.1-sol", "gpt-6.1-sol ")]')"
-check "and it is named as left out of the total" "['gpt-6.2-sol', 'gpt-6.1-sol-mini']" \
-  "$(cx 'd.unpriced_models([[0, "gpt-6.2-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol-mini", 1, 0, 0, 0, 1]])[::-1]')"
+check "a new version of a known tier takes the tier's price, every mode and prompt size" \
+  "[0.41, 1.215, 0.82, 0.41, 2.05, 12.15]" \
+  "$(cx '[usd("gpt-6.2-sol", 200_000), usd("gpt-6.2-sol", 300_000), usd("gpt-6.2-sol:fast", 200_000), usd("gpt-7-sol", 200_000), usd("gpt-6.1-astra", 200_000), usd("gpt-7-astra:fast", 300_000)]')"
+check "a tier-priced figure says it is by tier, and a published id's price does not" "[True, True, True, False, False, False, False]" \
+  "$(cx '[d.by_tier([0, m, 1, 0, 0, 0, 1]) for m in ("gpt-6.2-sol", "gpt-6.2-sol:fast", "gpt-6.1-astra", "gpt-6.1-sol", "gpt-6-astra:fast", "gpt-9-nova", "claude-opus-5-5")]')"
+check "a name with no known tier, or any part the rule does not know, stays unpriced" "[None, None, None, None, None, None, None]" \
+  "$(cx '[usd(m, 1000) for m in ("gpt-6.1-sol-mini", "gpt-6.1-luna", "gpt-9-nova", "gpt-6.1-sol-2026-10-01", "gpt-6.1-sol:flex", "xgpt-6.1-sol", "gpt-6.1-sol ")]')"
+check "and it is named as left out of the total" "['gpt-9-nova', 'gpt-6.1-sol-mini']" \
+  "$(cx 'd.unpriced_models([[0, "gpt-9-nova", 1, 0, 0, 0, 1], [0, "gpt-6.2-sol", 1, 0, 0, 0, 1], [0, "gpt-6.1-sol-mini", 1, 0, 0, 0, 1]])[::-1]')"
+check "the week and the day carry the tier-priced dollars, and an unknown tier leaves the total partial" "[0.41, 0.82, False, ['gpt-9-nova']]" \
+  "$(cx '[round(w[k], 6) if isinstance(w[k], float) else w[k] for w in [d.api_week(None, [], 1e9, [[1e9, "gpt-6.2-sol", 200_000, 0, 0, 0, 1000], [1e9, "gpt-6.1-sol", 200_000, 0, 0, 0, 1000], [1e9, "gpt-9-nova", 1, 0, 0, 0, 1]])] for k in ("tierUsd", "codexUsd", "complete", "unpricedModels")]')"
 check "a rule-priced Codex fast mode is a published price, not an estimate" False "$(cx 'd.estimated([0, "gpt-6.1-sol:fast", 1, 0, 0, 0, 1])')"
 # Every Claude row exactly as it was before the rule: the rule is for Codex names only.
 check "every Claude price row is unchanged" True "$(cx '{m: p for m, p in d.PRICES.items() if m.startswith("claude-")} == {

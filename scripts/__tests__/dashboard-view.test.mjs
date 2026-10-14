@@ -952,6 +952,9 @@ test('cost_today_tile: the strip shows the project\'s Claude and Codex cost for 
   assert.equal(text(part, '.measure-value'), 'at least $1.2k', 'a total with a part missing is a floor');
   assert.equal(text(part, '.measure-detail'), 'Claude $1.2k + Codex not measured, list price · $4.00 estimated · 2 requests unpriced');
   assert.ok(part.classList.contains('warn'));
+  // #36: a Codex price taken from its tier, not its exact version, says so.
+  const tier = tile({ demo: { spentUsd: 2, claudeUsd: 0, codexUsd: 2, estimatedUsd: 0, tierUsd: 1.5, unpricedRequests: 0, unpricedModels: [], complete: true } });
+  assert.equal(text(tier, '.measure-detail'), 'Claude $0.00 + Codex $2.00, list price · $1.50 priced by tier, not exact version');
   // Another project's day is never this one's: a project with no figure of its own is not measured.
   for (const none of [undefined, null, {}, { other: { spentUsd: 9, claudeUsd: 9, codexUsd: 0, complete: true } }, { demo: { spentUsd: null, claudeUsd: null, codexUsd: null, complete: false } }]) {
     const t = tile(none);
@@ -1439,6 +1442,9 @@ test('API billing shows Claude and Codex spend in the total, estimated dollars a
   const note = $(dom, '#limit-note').textContent;
   assert.match(note, /\$25\.50 of the total is estimated from the nearest published price/);
   assert.match(note, /3 requests on unpriced models are left out \(gpt-9-nova, <synthetic>\)/);
+  mock.timers.tick(15000);
+  apiDeliver(dom, apiSnap({ tierUsd: 7.25 }));
+  assert.match($(dom, '#limit-note').textContent, /\$7\.25 of the total is priced by Codex tier, not by exact version/);
   mock.timers.tick(15000);
   apiDeliver(dom, apiSnap({ codexUsd: null }));
   assert.equal(facts($(dom, '#limit-facts'))['Codex spend'], 'Not measured', 'no Codex sessions is not measured, never $0');

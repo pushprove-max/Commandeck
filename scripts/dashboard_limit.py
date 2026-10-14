@@ -203,13 +203,14 @@ LONG_PROMPT = 100_000
 # Codex's models are priced from the parts of the name, not one row per id (the owner's ruling): the
 # version and the tier word, then the mode (":fast" is Codex's "priority") and the prompt size. Rates
 # from the Standard and Fast tables of https://developers.openai.com/api/docs/pricing, read 2026-10-12
-# (a cache write is 1.25x input there too); prompts over 272K tokens take the long rate. Only a
-# (version, tier) that is published matches: another version of a known tier may cost something else,
-# and a name with any other part (-mini, a date, another mode) matches nothing. Both stay unpriced.
+# (a cache write is 1.25x input there too); prompts over 272K tokens take the long rate. A known tier
+# prices every version of it (the owner's ruling, #36): a version other than the one the rate was read
+# for is priced by tier, and says so. A name with no known tier, or any other part (-mini, a date,
+# another mode), matches nothing and stays unpriced.
 CODEX_NAME = re.compile(r"gpt-(\d+(?:\.\d+)?)-([a-z]+)(:fast)?")
-CODEX_RULES = {  # (version, tier): {mode: (short-prompt rate, long-prompt rate)}
-    ("6.1", "sol"): {"": ((2.0, 10.0, 0.10), (4.0, 15.0, 0.20)), ":fast": ((4.0, 20.0, 0.20), (8.0, 30.0, 0.40))},
-    ("6", "astra"): {"": ((10.0, 50.0, 1.00), (20.0, 75.0, 2.00)), ":fast": ((20.0, 100.0, 2.00), (40.0, 150.0, 4.00))},
+CODEX_RULES = {  # tier: (version the rate was published for, {mode: (short-prompt rate, long-prompt rate)})
+    "sol": ("6.1", {"": ((2.0, 10.0, 0.10), (4.0, 15.0, 0.20)), ":fast": ((4.0, 20.0, 0.20), (8.0, 30.0, 0.40))}),
+    "astra": ("6", {"": ((10.0, 50.0, 1.00), (20.0, 75.0, 2.00)), ":fast": ((20.0, 100.0, 2.00), (40.0, 150.0, 4.00))}),
 }
 CODEX_LONG_PROMPT = 272_000
 
@@ -217,7 +218,13 @@ CODEX_LONG_PROMPT = 272_000
 def codex_rates(model):
     """(short-prompt rate, long-prompt rate) of a Codex model the rule prices by its name, or None."""
     m = CODEX_NAME.fullmatch(model)
-    return CODEX_RULES.get(m.group(1, 2), {}).get(m.group(3) or "") if m else None
+    return CODEX_RULES.get(m.group(2), (None, {}))[1].get(m.group(3) or "") if m else None
+
+
+def by_tier(row):
+    """Whether this request, or an advisor call inside it, is priced by its Codex tier, not its exact version."""
+    names = [CODEX_NAME.fullmatch(x[1]) for x in [row] + row[7:]]
+    return any(m and m[2] in CODEX_RULES and m[1] != CODEX_RULES[m[2]][0] for m in names)
 
 
 def listed(model):
@@ -613,7 +620,7 @@ def api_week(limit, rows, now, codex_rows=None, codex_partial=False, since=None)
     out = {"limitUsd": limit, "spentUsd": None, "goalUsd": None, "underUsd": None, "paceSec": None,
            "timeLeftSec": round(end - now), "windowStart": iso(start), "resetsAt": iso(end),
            "requests": None, "unpricedRequests": None, "history": None,
-           "claudeUsd": None, "codexUsd": None, "estimatedUsd": None, "unpricedModels": None, "complete": False}
+           "claudeUsd": None, "codexUsd": None, "estimatedUsd": None, "tierUsd": None, "unpricedModels": None, "complete": False}
     if rows is None and codex_rows is None:
         return out
     week = sorted(((r, cx) for rs, cx in ((rows or [], False), (codex_rows or [], True)) for r in rs if start <= r[0] <= now),
@@ -642,7 +649,8 @@ def api_week(limit, rows, now, codex_rows=None, codex_partial=False, since=None)
 
     out.update(spentUsd=spent, history=[{"at": iso(a), "usd": u} for a, u in hist + [(now, spent)]],
                claudeUsd=share(rows, False), codexUsd=share(codex_rows, True),
-               estimatedUsd=sum(c for r, _, c in costs if c is not None and estimated(r)))
+               estimatedUsd=sum(c for r, _, c in costs if c is not None and estimated(r)),
+               tierUsd=sum(c for r, _, c in costs if c is not None and by_tier(r)))
     if limit is not None:
         goal = limit * (now - start) / (end - start)
         out.update(goalUsd=round(goal, 2), underUsd=round(goal - spent, 2), paceSec=round((goal - spent) / limit * (end - start)))
@@ -734,7 +742,7 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     out["today"] = {}
     for name in day_projects or {}:
         t = api_week(None, own(day, name), now, own(codex_day, name), bool(lost), midnight)
-        out["today"][name] = {k: t[k] for k in ("windowStart", "spentUsd", "claudeUsd", "codexUsd", "estimatedUsd", "requests",
+        out["today"][name] = {k: t[k] for k in ("windowStart", "spentUsd", "claudeUsd", "codexUsd", "estimatedUsd", "tierUsd", "requests",
                                                 "unpricedRequests", "unpricedModels", "complete")}
     json.dump(out, sys.stdout)
     return 0

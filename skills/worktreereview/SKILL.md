@@ -132,8 +132,9 @@ sort the tables, check the rows, and only then write a lesson.
   bills, hook time per tool call, quality after merge.
 - Dollars are list-price equivalents, priced call by call with the repo's one price table
   (`scripts/dashboard_limit.py`, the dashboard's own). Say "list price" every time.
-  A model with no price there (Codex today) is unpriced: never guess a rate, and name what
-  the total leaves out.
+  A model with no price there (a Codex name with no known tier) is unpriced: never guess a rate,
+  and name what the total leaves out. A new Codex version of a known tier takes the tier's
+  price; say that part is priced by tier, not by exact version.
 - Name each model by its name (Opus 5.5, Fable 5.1, Haiku 5.5), never only by its role.
 - Helper output tokens are under-recorded in the logs; say so if you quote them.
 - A lesson that proposes a change is your view. Say so, and do not present it as a ruling.

@@ -294,6 +294,12 @@ if collect.PRICES is not None:
           (round(0.00358 + 0.00179, 6), 0.00358, 0), (round(c.get('usd', 0), 6), round(c.get('est', 0), 6), c.get('unpriced')))
     check('codex_estimate_is_marked: the page says how much is estimated, in the dashboard\'s words', 1,
           page.count('of the total is estimated from the nearest published price'))
+    # #36: a new version of a known tier is priced as the tier, and the page says that price is by tier.
+    c, page = review('unit-t', [('t', 'gpt-6.2-sol', None, [short]), ('sol', 'gpt-6.1-sol', None, [short])])
+    check('codex_new_version_priced_by_tier: gpt-6.2-sol at sol\'s rate, counted as by tier, none unpriced',
+          (round(2 * 0.00179, 6), 0.00179, 0), (round(c.get('usd', 0), 6), round(c.get('tier', 0), 6), c.get('unpriced')))
+    check('codex_new_version_priced_by_tier: the page says how much is priced by tier, in the dashboard\'s words', 1,
+          page.count('$0.00 of the total is priced by Codex tier, not by exact version'))
     c, page = review('unit-u', [('new', 'gpt-9-new', None, [short]), ('sol', 'gpt-6.1-sol', None, [short])])
     check('codex_model_with_no_row_stays_unpriced: counted, and the rest still priced', (0.00179, 1, 2),
           (round(c.get('usd', 0), 6), c.get('unpriced'), c.get('calls')))
@@ -732,16 +738,21 @@ for name, folder, spaces in (('another checkout', other, None), ('the project ch
         os.environ.pop('COMMANDECK_WORKSPACES', None)
     check(f"removed and no --main, run from {name}: no checkout taken, no decision read",
           (None, ['finished, awaiting answers'] * 2), (guess[0], [w['reason'] for w in guess[1].get('cut', [])]))
-# A unit name may hold dots: a decision for unit.v1 is not one for unit, nor unit for unit.v1; a full stop
-# that ends a sentence after the name still names it.
+# A unit name may hold dots: a decision for unit.v1 is not one for unit, nor unit for unit.v1. The name
+# is a whole token of the launcher's alphabet [A-Za-z0-9._-] (#40): unit.-v1, unit..v1 and unit. are other
+# names (a full stop is part of the name, so at worst a cut is missed, never a wrong one taken).
 with open(os.path.join(wt, 'dotted-decisions.jsonl'), 'w') as f:
     for d in [{'id': 'E1', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'run 1 (unit.v1) question'},
               {'id': 'E2', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'main', 'answer': 'A. Sent to v2.unit'},
-              {'id': 'E3', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'main', 'answer': 'A. Sent to unit.'}]:
+              {'id': 'E3', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'main', 'answer': 'A. Sent to unit.'},
+              {'id': 'E4', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'run 1 (unit.-v1) question'},
+              {'id': 'E5', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'run 1 (unit..v1) question'},
+              {'id': 'E6', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'run 1 (unit) question'},
+              {'id': 'E7', 'askedAt': at(0), 'answeredAt': at(100), 'source': 'unit question'}]:
         f.write(json.dumps(d) + '\n')
-check('a decision names a dotted sibling of the unit, or the unit at the end of a sentence',
-      (['E3'], ['E1']), ([i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit')],
-                        [i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit.v1')]))
+check('a decision names the unit only as a whole token: (unit) and "unit question", never unit.-v1, unit..v1, unit.',
+      (['E6', 'E7'], ['E1']), ([i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit')],
+                               [i for _, _, i in collect.decisions_for(os.path.join(wt, 'dotted-decisions.jsonl'), 'unit.v1')]))
 # A unit name may hold dots and underscores; its DONE line is the same name in capitals.
 with open(os.path.join(wt, 'dotted.jsonl'), 'w') as f:
     f.write('\n'.join(json.dumps(r) for r in [say(10, 'Built.\nUNIT_V1.2-DONE'), say(20, 'Not a marker: UNIT-DONE later')]) + '\n')

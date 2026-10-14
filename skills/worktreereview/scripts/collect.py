@@ -38,7 +38,7 @@ PASS_CMD = re.compile(r'builder-codex-pass\.sh\s+\S+\s+(\d+)\s+(adversarial|revi
 OUTCOME = re.compile(r'\d+ passed, \d+ failed|HUNG past \d+s')
 EDIT_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
 FILE_TOOLS = EDIT_TOOLS + LOOK_TOOLS
-KEYS = ('calls', 'in', 'cw', 'cr', 'out', 'usd', 'est', 'unpriced', 'uncounted')
+KEYS = ('calls', 'in', 'cw', 'cr', 'out', 'usd', 'est', 'tier', 'unpriced', 'uncounted')
 IDLE = ('idle', 'idle_job', 'idle_tests')
 WAIT_ON_OWNER = 120  # an idle gap longer than this, waiting on the owner, is cut from the clock
 DECISIONS = None  # decisions.jsonl; None is the main checkout's own
@@ -226,9 +226,9 @@ def idle_gap(sess, end, nxt, t1, kind, marker=None):
 
 def decisions_for(path, unit):
     """(asked, answered or None, id) of each decision for the owner whose source or answer names this unit."""
-    # A unit whose name starts or ends with this one's (unit-2, unit.v1, v2.unit beside unit) is another unit;
-    # a full stop after the name that no letter follows ends a sentence.
-    named = re.compile(r'(?<![\w.-])' + re.escape(unit) + r'(?![\w-]|\.\w)')
+    # The name is a whole token of the launcher's alphabet: unit-2, unit.v1, unit. and v2.unit beside unit are
+    # other units. A sentence's full stop reads as part of the name, so at worst a cut is missed, never a wrong one.
+    named = re.compile(r'(?<![A-Za-z0-9._-])' + re.escape(unit) + r'(?![A-Za-z0-9._-])')
     try:
         lines = open(path, errors='replace').read().splitlines()
     except OSError:
@@ -639,6 +639,7 @@ def main():
         st['codex'].update({'calls': p['calls'], 'in': (u.get('input_tokens') or 0) - cached, 'cr': cached,
                             'out': u.get('output_tokens') or 0, 'usd': sum(c for _, c in priced),
                             'est': sum(c for r, c in priced if PRICES.estimated(r)),
+                            'tier': sum(c for r, c in priced if PRICES.by_tier(r)),
                             'unpriced': max(p['calls'], len(costs)) - len(priced)})
 
     def kind_of(t):

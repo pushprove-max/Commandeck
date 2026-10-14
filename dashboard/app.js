@@ -866,7 +866,7 @@
     byId('limit-week').textContent = week ? `${day(start)} – ${day(reset)} · In progress` : 'no data';
     const limit = num(a.limitUsd), spent = num(a.spentUsd), goal = num(a.goalUsd), under = num(a.underUsd), paceSec = num(a.paceSec), left = num(a.timeLeftSec);
     const req = num(a.requests), unpriced = num(a.unpricedRequests);
-    const claude = num(a.claudeUsd), codex = num(a.codexUsd), est = num(a.estimatedUsd);
+    const claude = num(a.claudeUsd), codex = num(a.codexUsd), est = num(a.estimatedUsd), tier = num(a.tierUsd);
     const names = Array.isArray(a.unpricedModels) ? a.unpricedModels.map(String) : [];
     const over = under !== null && under < 0;
     // A provider not read or a request not priced: the total is a floor, so under pace is not an all-clear.
@@ -898,6 +898,7 @@
         spent !== null && claude === null ? '; Claude spend is not measured' : ''}${
         spent !== null && codex === null ? '; Codex spend is not measured' : ''}${
         est ? `; ${money(est)} of the total is estimated from the nearest published price` : ''}${
+        tier ? `; ${money(tier)} of the total is priced by Codex tier, not by exact version` : ''}${
         unpriced ? `; ${unpriced.toLocaleString('en-US')} requests on unpriced models are left out${names.length ? ` (${names.join(', ')})` : ''}` : ''}.`;
     const usd = (p) => wholeDollars((p / 100) * top);
     const pts = (Array.isArray(a.history) ? a.history : []).map((r) => ({ at: r && r.at, pct: share(num(r && r.usd)) }));
@@ -982,7 +983,7 @@
     // with a part missing is a floor.
     const days = d.limit && d.limit.today;
     const day = days && project !== null && Object.prototype.hasOwnProperty.call(days, project) ? days[project] : null;
-    const dSpent = num(day && day.spentUsd), dEst = num(day && day.estimatedUsd), dUn = num(day && day.unpricedRequests);
+    const dSpent = num(day && day.spentUsd), dEst = num(day && day.estimatedUsd), dTier = num(day && day.tierUsd), dUn = num(day && day.unpricedRequests);
     const dModels = day && Array.isArray(day.unpricedModels) && day.unpricedModels.length ? ` (${day.unpricedModels.join(', ')})` : '';
     const dUnText = dUn ? `${dUn.toLocaleString('en-US')} requests unpriced${dModels}` : null;
     const dShare = (label, v) => `${label} ${num(v) === null ? 'not measured' : money(v)}`;
@@ -998,6 +999,7 @@
       ] : [lim('Claude 7-day', d.limit), lim('Codex 7-day', d.limit && d.limit.codex)]),
       measure('Cost today', dSpent === null ? null : `${day.complete === false ? 'at least ' : ''}${money(dSpent)}`, dSpent === null ? 'nm' : day.complete === false ? 'warn' : '',
         dSpent === null ? dUnText : [`${dShare('Claude', day.claudeUsd)} + ${dShare('Codex', day.codexUsd)}, list price`, dEst ? `${money(dEst)} estimated` : null,
+          dTier ? `${money(dTier)} priced by tier, not exact version` : null,
           dUnText].filter(Boolean).join(' · '), 'limit'),
       measure('Unpushed', unp, unp === null ? 'nm' : unp > 0 ? 'info' : 'ok', 'commits on local main', 'main-chain'),
       measure('Units in flight', inflight, inflight === null ? 'nm' : '', null, 'units'),

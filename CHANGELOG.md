@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 -- 2026-10-14
+
+Codex prices by tier, and a decision names a unit only as a whole name.
+
+- A new Codex version of a known tier was unpriced (#36). By the owner's
+  ruling it now takes the tier's price: `gpt-6.2-sol` is priced as `sol`,
+  with no new row. The dashboard's week note and day tile and the build
+  review page say how much of the total is priced by tier, not by exact
+  version (`tierUsd` in the dashboard's data). A name with no known tier
+  stays unpriced and the total stays marked partial. Claude rows are
+  unchanged.
+- A decision for `unit.-v1`, `unit..v1` or `unit.` counted as one for
+  `unit` (#40). A unit's name now matches only as a whole token of the
+  launcher's name alphabet (`A-Z a-z 0-9 . _ -`). A full stop after the name
+  reads as part of it, so the worst case is a missed cut, never a wrong one.
+
 ## 0.4.0 -- 2026-10-14
 
 Prices from model names, waits that are not build time, and the Mac's old Bash.

@@ -191,6 +191,7 @@ for k, label in ROLES:
 unpriced = [MODEL[k] for k, _ in ROLES if T[k].get('calls') and not T[k].get('usd')]
 # Dollars priced by the table's estimate, said in the dashboard's own words.
 estimated = sum(T[k].get('est') or 0 for k, _ in ROLES)
+tiered = sum(T[k].get('tier') or 0 for k, _ in ROLES)
 
 prows = []
 for p in R['passes']:
@@ -234,6 +235,7 @@ if fixes:
     says.append(f'Fixing between passes took {dur(sum(took(s) for s in fixes))} and ${sum(s[k].get("usd", 0) for s in fixes for k, _ in ROLES):,.2f} at list price.')
 says.append(f'List price ${priced:,.2f}: ' + ', '.join(f'{MODEL[k]} ${T[k]["usd"]:,.2f}' for k, _ in ROLES if T[k].get('usd'))
             + (f'; ${estimated:,.2f} of the total is estimated from the nearest published price' if estimated else '')
+            + (f'; ${tiered:,.2f} of the total is priced by Codex tier, not by exact version' if tiered else '')
             + (f'. Not priced: {" and ".join(unpriced)}' if unpriced else '') + '.')
 says.append(f'Dearest stage: {dearest["code"]}. {dearest["name"]}, ${sum(dearest[k].get("usd", 0) for k, _ in ROLES):,.2f} in {hm(took(dearest))}.')
 says.append(f'{n(T["builder"].get("calls", 0))} {AGENT} calls at an average context of {n(R["context"]["mean"])} tokens, largest {n(R["context"]["peak"])}'
