@@ -21,6 +21,12 @@ They need `bash`, `git`, `ripgrep`, `jq` and `perl`.
 
 ## Pull requests
 
-This project does not accept pull requests from outside for now. Bug
-reports and feature requests are welcome as issues; if you have a fix in
-mind, describe it there.
+Pull requests are welcome. For anything larger than a small fix, open an issue first so we can agree on the
+approach.
+
+- Branch from `main` and keep each pull request to one change.
+- Run the three checks above; CI runs them on every pull request.
+- A change to a plugin file raises the version and adds a `CHANGELOG.md` entry, as described above.
+- Add a test that fails without your change.
+- Pull requests are squash-merged. A maintainer reviews each one, and CI for a first-time contributor runs after
+  a maintainer approves it.
