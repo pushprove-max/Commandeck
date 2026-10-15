@@ -21,6 +21,9 @@ the number held when that is not the one on disk, so a save that arrives late
 cannot undo a newer one. A save that names a `project` lands in that
 project's slot of the same file (`projects[<name>]`); one that names none is
 the home project's, kept at the top. The name is a key and never a path.
+Each slot has its own number, so a save on one project refuses none on another.
+The same save appends each newly cleared build to <directory>/closed.log, the
+uncut history that tells a stale tab's replay from a new clear.
 Every file is served `no-cache`, so a browser revalidates the page's code
 instead of guessing it is fresh.
 """
@@ -75,7 +78,8 @@ def valid(layout, checks=CHECKS):
 
 
 def held(path):
-    """The file on disk as (number, home layout, project slots), each value checked again as a save's is.
+    """The file on disk as (home number, home layout, project slots), each value checked again as a save's is.
+    Each slot keeps its own number as its `rev`.
 
     No file, or one no numbered save wrote, is number 0.
     """
@@ -86,9 +90,21 @@ def held(path):
         disk = None
     disk = disk if isinstance(disk, dict) else {}
     part = lambda d: {k: v for k, v in d.items() if k not in ('rev', 'project') and k in HELD and HELD[k](v)}
+    num = lambda d: d.get('rev') if CHECKS['rev'](d.get('rev')) else 0
     slots = disk.get('projects') if isinstance(disk.get('projects'), dict) else {}
-    slots = {k: part(v) for k, v in slots.items() if CHECKS['project'](k) and isinstance(v, dict) and valid(dict(v, rev=0), HELD)}
-    return disk.get('rev') if CHECKS['rev'](disk.get('rev')) else 0, part(disk), slots
+    slots = {k: dict(part(v), rev=num(v)) for k, v in slots.items() if CHECKS['project'](k) and isinstance(v, dict) and valid(dict(v, rev=0), HELD)}
+    return num(disk), part(disk), slots
+
+
+def cleared(log, key):
+    """Every build the host dropped from one slot's cleared list ('' is the home project's): closed.log, a
+    `<slot>\\t<name>` line each. Unlike the layout it is never cut, so it grows by one short line per drop.
+    """
+    try:
+        with open(log) as f:
+            return {v for k, _, v in (line.rstrip('\n').partition('\t') for line in f) if k == key}
+    except OSError:
+        return set()
 
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -163,6 +179,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not valid(layout):
             return self.send_error(400)
         path = os.path.join(self.directory, 'layout.js')
+        log = os.path.join(self.directory, 'closed.log')
         tmp = '%s.%d.tmp' % (path, os.getpid())
         # One save at a time: every request thread shares the temporary file, and the number read is the number
         # written over. The number saved is the host's own next one, never a caller's.
@@ -171,26 +188,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             rev, home, slots = held(path)
             if name is not None and name not in slots and len(slots) >= MAX_PROJECTS:
                 return self.send_error(400)
-            saved = layout.pop('rev') == rev
+            # The number checked is the named slot's own, so a save on one project refuses none on another.
+            slot = home if name is None else slots.get(name, {})
+            now = rev if name is None else slot.get('rev', 0)
+            saved = layout.pop('rev') == now
             if saved:
-                # A cleared build stays cleared, in the order this host first saw each: a save adds the names not
-                # held and never moves or drops a held one, so a tab replaying old names, a save that names none
-                # and a Reset layout change nothing. Past MAX_CLOSED the host drops its own oldest.
-                was = (home if name is None else slots.get(name, {})).get('closed', [])
-                closed = (was + [u for u in layout.get('closed', []) if u not in was])[-MAX_CLOSED:]
+                # A cleared build stays cleared, in the order this host first saw each: a save adds the names never
+                # seen and never moves or drops a held one, so a tab replaying old names, a save that names none
+                # and a Reset layout change nothing. Past MAX_CLOSED the host drops its own oldest from the layout;
+                # closed.log keeps every name it dropped, so a dropped one replayed by a stale tab is not new.
+                was = slot.get('closed', [])
+                key = name or ''
+                seen = cleared(log, key)
+                added = [u for u in dict.fromkeys(layout.get('closed', [])) if u not in was and u not in seen]
+                closed = (was + added)[-MAX_CLOSED:]
                 if closed:
                     layout['closed'] = closed
+                # The names this save drops are written down before the layout is replaced: a save whose append
+                # fails does not land, so a dropped name never reads as new; one whose layout write fails has
+                # logged only names it was dropping, never one it was adding.
+                with open(log, 'ab+') as f:
+                    # An append cut off mid-record left no final newline: end that record first, or this one joins it.
+                    end = f.seek(0, os.SEEK_END)
+                    f.seek(max(end - 1, 0))
+                    torn = end > 0 and f.read(1) != b'\n'
+                    dropped = ''.join('%s\t%s\n' % (key, u) for u in (was + added)[:-MAX_CLOSED] if u not in seen)
+                    f.write((('\n' if torn else '') + dropped).encode())
                 if name is None:
-                    home = layout
+                    home, rev = layout, rev + 1
                 else:
-                    slots[name] = layout
-                out = dict(home, rev=rev + 1, **({'projects': slots} if slots else {}))
+                    slots[name] = dict(layout, rev=now + 1)
+                out = dict(home, rev=rev, **({'projects': slots} if slots else {}))
                 with open(tmp, 'w') as f:
                     # ensure_ascii keeps the file plain ASCII; "<" cannot appear in a checked value.
                     f.write('window.DASH_LAYOUT = %s;\n' % json.dumps(out, sort_keys=True))
                 os.replace(tmp, path)
         if not saved:
-            body = json.dumps({'rev': rev}).encode()
+            body = json.dumps({'rev': now}).encode()
             self.send_response(409)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))

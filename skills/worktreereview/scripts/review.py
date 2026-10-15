@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""One command for the automatic worktree review: collect, render, file, open in Orca, flag.
+"""One command for the computed build review page: collect, render, file, open in Orca.
 
-No model is involved, so a merge step can run it for zero tokens:
-  review.py <worktree path> [--out-dir DIR] [--open-in WORKTREE] [--no-open] [--no-notify]
+No model is involved. It runs only when the owner asks for a build review, never at a merge (the owner, 2026-10-14):
+  review.py <worktree path> [--out-dir DIR] [--open-in WORKTREE] [--no-open]
             [collect.py options such as --max-review-min 30 --max-test-share 0.33 --max-usd 30]
 
 The page is written to DIR/<date>/<project>/<unit>-review.html (default DIR ~/.commandeck/reviews) and,
-with --open-in, opened as a browser tab in that worktree. A run that trips a threshold also
-sends that worktree's pane one Orca message, so a reviewer writes lessons only for the runs that need
-them. Nothing here may fail a merge: every step after collect is best effort.
+with --open-in, opened as a browser tab in that worktree. Every step after collect is best effort.
 """
 import argparse
 import json
@@ -29,22 +27,8 @@ def orca(*args):
     return subprocess.run([exe, *args, '--json'], capture_output=True, text=True, timeout=30)
 
 
-def pane_in(worktree):
-    """The agent pane working in that worktree, by path: handles change on every restart."""
-    listing = orca('terminal', 'list')
-    try:
-        data = json.loads(listing.stdout)
-    except (AttributeError, ValueError):
-        return None
-    # orca-ide answers with the list under `result`, or under `terminals` inside or beside it.
-    found = data.get('result') or data
-    panes = found if isinstance(found, list) else found.get('terminals') or []
-    return next((p['handle'] for p in panes if (p.get('worktreePath') or '').rstrip('/') == worktree.rstrip('/')
-                 and p.get('agentIdentity')), None)
-
-
 def main_checkout(worktree):
-    """The main checkout the worktree belongs to: main's pane is the sender."""
+    """The main checkout the worktree belongs to: its folder names the project."""
     common = subprocess.run(['git', '-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                             capture_output=True, text=True).stdout.strip()
     return common[:-len('/.git')] if common.endswith('/.git') else common
@@ -81,7 +65,6 @@ def main():
     ap.add_argument('--out-dir', default=os.path.expanduser('~/.commandeck/reviews'))
     ap.add_argument('--open-in')
     ap.add_argument('--no-open', action='store_true')
-    ap.add_argument('--no-notify', action='store_true')
     a, passthrough = ap.parse_known_args()
     wt = a.worktree.rstrip('/')
     unit = os.path.basename(wt)
@@ -102,19 +85,9 @@ def main():
         if a.open_in and not a.no_open:
             opened = orca('tab', 'create', '--url', 'file://' + page, '--worktree', 'path:' + a.open_in)
             print('opened in Orca:', bool(opened and opened.returncode == 0))
-        flags = result.get('flags') or []
-        if flags and a.open_in and not a.no_notify:
-            to, sender = pane_in(a.open_in), pane_in(main_checkout(wt))
-            if to and sender:
-                sent = orca('orchestration', 'send', '--to', to, '--from', sender, '--priority', 'normal',
-                            '--subject', f'worktree review flagged {unit}',
-                            '--body', '; '.join(flags) + f'. Page: {page}. Numbers: {work}/result.json. Write the lessons.')
-                print('reviewer told:', bool(sent and sent.returncode == 0))
-            else:
-                print('reviewer NOT told: no pane found for', 'the reviewer' if not to else 'the sender')
-        print('flags:', flags or 'none')
     except (OSError, subprocess.SubprocessError) as e:
         print('page written; Orca step failed:', e)
+    print('flags:', result.get('flags') or 'none')
     return 0
 
 

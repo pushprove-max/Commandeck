@@ -16,9 +16,11 @@
 # A tooling build expected under 200 changed lines may be launched --small on the
 # smaller model with --model sonnet; a risky one stays on the configured model,
 # and its batch brief says to write the failing test first.
-# The Builder has an advisor only when the project chose one at set-up
-# (routing.json names none), and --small, main's word that the batch is
-# expected under 200 changed lines, drops even that; --risky keeps none.
+# Every Builder runs with no advisor, a risky one included (owner's order
+# 2026-10-14): set-up no longer offers one, and one an older set-up stored is
+# not read. Only an advisor written into routing.json's roles.builder by hand
+# is given, and --small, main's word that the batch is expected under 200
+# changed lines, drops even that.
 # Nothing checks the word against the finished diff; the first pass counts the
 # real lines. Every launch prints which rule chose, on stderr.
 # --model puts this one Builder on another model routing.json names (an alias,
@@ -57,8 +59,8 @@ if [ "$PICK" = 1 ]; then
 fi
 ADVISOR=0 RULE='none (the default Builder has no advisor)'
 if [ -n "$(pp_route_json builder "" "$BMODEL" | jq -r '.advisor // empty')" ]; then
-  if [ "$SMALL" = 1 ]; then RULE='none (the advisor chosen at set-up; marked small)'
-  else ADVISOR=1 RULE='kept (chosen at set-up)'; fi
+  if [ "$SMALL" = 1 ]; then RULE='none (the advisor routing.json names; marked small)'
+  else ADVISOR=1 RULE='kept (routing.json names it)'; fi
 fi
 OPTS=()
 [ "$PICK" = 0 ] || OPTS+=(--model "$BMODEL")

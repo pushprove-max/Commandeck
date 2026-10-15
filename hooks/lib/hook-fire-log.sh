@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ONE row per hook invocation: which hook fired, on what event and tool,
-# and whether it allowed, advised or blocked. Nothing recorded which hooks fire
-# or how often they block, so a hook that never fires and a hook that blocks
-# every call looked the same. Read it with scripts/hook-fire-log-summary.sh.
+# and whether it allowed, advised, asked or blocked. Nothing recorded which
+# hooks fire or how often they block, so a hook that never fires and a hook
+# that blocks every call looked the same. Read it with
+# scripts/hook-fire-log-summary.sh.
 #
 # Usage, at the top level of a hook, right after its one read of stdin and
 # before its first decision (hook-fire-log-coverage.guard.test.sh checks this):
@@ -14,9 +15,12 @@
 # operational notice, so both are read from the status. What the status cannot
 # say, the hook says with a plain assignment before it prints:
 #   HOOK_FIRE_BLOCK=1    a refusal that exits 0 (JSON {"decision":"block"})
+#   HOOK_FIRE_ASK=1      a permissionDecision "ask": the owner is asked first
 #   HOOK_FIRE_ADVISE=1   a warning or advice that lets the call through
-# Block outranks advice. Plain assignments, so a hook whose helper did not load
-# runs exactly as before. Set in the hook's own shell: a subshell's is lost.
+# Block outranks ask, ask outranks advice, and ask counts only on exit 0.
+# hook-fire-log-coverage.guard.test.sh fails a hook that prints "ask" unmarked.
+# Plain assignments, so a hook whose helper did not load runs exactly as
+# before. Set in the hook's own shell: a subshell's is lost.
 #
 # NO PROCESS PER HOOK (main ruling 2026-10-03). The row is built and appended by
 # shell builtins from an EXIT trap that keeps the hook's status and prints
@@ -77,7 +81,7 @@ hook_fire_log_arm() {
   local LC_ALL=C
   # tool_use_id is the payload's last key, so it is read from the tail.
   _HOOK_FIRE_INPUT=$1 _HOOK_FIRE_HEAD=${1:0:4096} _HOOK_FIRE_TAIL=${1:$(( ${#1} > 512 ? ${#1} - 512 : 0 ))} _HOOK_FIRE_EVENT=${2-} _HOOK_FIRE_HOOK=${BASH_SOURCE[1]##*/} _HOOK_FIRE_FILE=${BASH_SOURCE[1]} _HOOK_FIRE_PID=${BASHPID-} _HOOK_FIRE_T0=${EPOCHREALTIME-}
-  HOOK_FIRE_BLOCK='' HOOK_FIRE_ADVISE='' HOOK_FIRE_WAIT_MS=''
+  HOOK_FIRE_BLOCK='' HOOK_FIRE_ASK='' HOOK_FIRE_ADVISE='' HOOK_FIRE_WAIT_MS=''
   trap _hook_fire_log_exit EXIT
   return 0
 }
@@ -93,6 +97,7 @@ _hook_fire_log_exit() {
     exit 0
   fi
   if [ -n "$HOOK_FIRE_BLOCK" ] || [ "$rc" = 2 ]; then decision=block
+  elif [ -n "$HOOK_FIRE_ASK" ] && [ "$rc" = 0 ]; then decision=ask
   elif [ -n "$HOOK_FIRE_ADVISE" ] || [ "$rc" != 0 ]; then decision=advise
   fi
   _hook_fire_log_write "$decision" >/dev/null 2>&1

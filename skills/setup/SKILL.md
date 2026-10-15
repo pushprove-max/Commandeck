@@ -52,8 +52,7 @@ edit, switch off or work round the project's own guard.
    one", "set a number", "set numbers" or "another name" answer needs:
 
    Call 2 (`AskUserQuestion`)
-   Ask "Model": plugin default | sonnet | opus
-   Ask "Advisor": keep | none
+   Ask "Model": plugin default | sonnet
    Ask "Context": 200K | larger
    Ask "Codex fast": off | on
 
@@ -72,13 +71,9 @@ edit, switch off or work round the project's own guard.
    Ask "Small build": 200 lines | set a number
    Ask "Review flags": defaults | set numbers
 
-   - **Model.** Which model builds: the plugin's own, Opus at effort high
-     with no advisor, a risky build included (`--builder-model ''
-     --builder-advisor ''`); `sonnet` advised by Opus, for less usage
-     (`--builder-model sonnet --builder-advisor opus`); or `opus` advised by
-     Opus (`--builder-model opus --builder-advisor opus`).
-   - **Advisor.** `keep` sends the Model flags as they are; `none` adds
-     `--builder-advisor none` to any of them (the plugin default has none).
+   - **Model.** Which model builds, at effort high and with no advisor, a
+     risky build included: the plugin's own, Opus (`--builder-model ''`), or
+     `sonnet`, for less usage (`--builder-model sonnet`).
    - **Context.** `200K` adds `--standard-context`: the account's model
      holds 200K; `larger` adds `--no-standard-context`.
    - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
@@ -113,7 +108,7 @@ edit, switch off or work round the project's own guard.
      `--small-build ''`; on "set a number", ask for it: `--small-build <n>`.
    - **Review flags.** When a finished build is flagged for a written
      review: over 30 minutes of Codex review, over a third of the clock on
-     tests or idle waits, over $30 at list price. "defaults" sends
+     tests or idle waits (and over 10 minutes of them), over $30 at list price. "defaults" sends
      `--max-review-min '' --max-test-percent '' --max-usd ''`; on "set
      numbers", ask for the three (minutes, percent, dollars) and send each
      one given: `--max-review-min <n> --max-test-percent <n> --max-usd <n>`.

@@ -33,6 +33,8 @@ CLOCK = [('claude', 'Claude requests: thinking and writing', '#1d4ed8', 'claude'
          ('helper', 'Waiting on a helper agent', '#0e7490', 'helper'),
          ('tests', 'Running tests and timing runs', '#c2410c', 'off'), ('idle_tests', 'Idle, waiting on a background test', '#ea580c', 'off'),
          ('idle_job', 'Idle, waiting on another background job', '#b45309', 'off'), ('idle', 'Idle, nothing logged as running', '#a16207', 'off'),
+         ('idle_elsewhere', 'Idle, waiting on a review run outside this session', '#ca8a04', 'off'),
+         ('idle_down', 'Idle, the review tool was down', '#854d0e', 'off'),
          ('commands', 'Other commands', '#0f766e', 'off'), ('files', 'Reading and editing files', '#0d9488', 'off'),
          ('tools', 'Other tools', '#14b8a6', 'off'), ('hooks', 'Hooks before and after tool calls', '#be185d', 'off'),
          ('hooks_stop', 'Hooks at the end of a turn', '#db2777', 'off'), ('codex', 'Waiting on the Codex review (OpenAI servers)', '#7c3aed', 'off'),
@@ -197,10 +199,13 @@ prows = []
 for p in R['passes']:
     u = p['usage']
     finding = N.get('pass_findings', {}).get(str(p['n'])) or re.split(r'\n\s*\n', p['message'].strip())[0][:260]
+    # Every finding line, however long the pass's text: the one-line summary above cannot hold them.
+    every = re.findall(r'^\s*(?:[-*]\s*)?(\[P[0-3]\].*)$', p['message'], re.M)
     cls = 'go' if p['verdict'] == 'GO' else 'nogo'
     prows.append(f'<tr><td class="r">{p["n"]}</td><td>{p["kind"]}</td><td class="r">{hm(took(p))}</td><td class="r">{n(u.get("input_tokens", 0))}</td>'
                  f'<td class="r">{100 * u.get("cached_input_tokens", 0) / max(1, u.get("input_tokens", 0)):.0f}%</td><td class="r">{n(u.get("output_tokens", 0))}</td>'
-                 f'<td class="r">{p["threads"]}</td><td><span class="{cls}">{p["verdict"]}</span> {p["findings"] or ""}</td><td>{txt(finding)}</td></tr>')
+                 f'<td class="r">{p["threads"]}</td><td><span class="{cls}">{p["verdict"]}</span> {p["findings"] or ""}</td><td>{txt(finding)}'
+                 + (f'<details><summary>All {len(every)} findings</summary>{ul(every)}</details>' if every else '') + '</td></tr>')
 if R.get('lines_changed') is not None:
     prows.append(f'<tr><td></td><td colspan="8">Lines changed by the build: {n(R["lines_changed"])}</td></tr>')
 if R.get('closing_pass'):
@@ -332,13 +337,10 @@ phase_rows = [f'<tr><td>{txt(k)}</td>{td(len(v))}' + ''.join(td(med(c[p] for c i
 hook_rows = [f'<tr><td>{txt(h["event"])}</td><td>{txt(h["name"])}</td>{td(h["runs"])}{td(h["total"], sec(h["total"]))}{td(h["median"], sec(h["median"]))}{td(h["max"], sec(h["max"]))}</tr>'
              for h in TM['hooks']]
 WAITED_ON = {'codex': 'A Codex pass', 'helper': 'A helper', 'tests': 'A background test run', 'job': 'Another background job',
-             'main': "Main's answer", 'nothing': 'Nothing logged'}
-# No fallback for the older shape, on purpose (ruled for this change, not an oversight): no compatibility
-# code for old data unless old data exists, and a count when the key came in found no saved result without it.
-if any('waiting' not in g for g in R['idle_gaps']):
-    sys.exit(f'render.py: {sys.argv[1]} was collected before an idle gap recorded what it waited on (no "waiting" key), '
-             'and this page cannot be drawn from it. Collect it again: review.py <worktree>')
-idle_rows = [f'<tr>{at(g["start"])}{td(took(g), hm(took(g)))}<td>{WAITED_ON[g["waiting"]]}</td>'
+             'main': "Main's answer", 'nothing': 'Nothing logged', 'elsewhere': 'A review run outside this session',
+             'down': 'The review tool, down'}
+# A result saved before idle gaps recorded what they waited on: its worktree may be gone, so it cannot be collected again.
+idle_rows = [f'<tr>{at(g["start"])}{td(took(g), hm(took(g)))}<td>{WAITED_ON.get(g.get("waiting"), "Unknown")}</td>'
              f'<td>{txt("; ".join(dict.fromkeys(g["pending"])) or "nothing logged as running")}</td>'
              f'<td>{", ".join(f"Codex pass {p["n"]}" for p in R["passes"] if p["start"] < g["end"] and p["end"] > g["start"]) or "&ndash;"}</td></tr>'
              for g in R['idle_gaps']]

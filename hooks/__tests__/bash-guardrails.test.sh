@@ -43,24 +43,39 @@ check "capped node --test passes" 0 \
 check "a heredoc commit message naming node --test passes" 0 \
   "$(run_hook "$(json $'git commit -m "$(cat <<\'EOF\'\nfix: the suite ran node --test without a cap\nEOF\n)"')")"
 
-# --- the read cap applies to every file ----------------
-printf 'one line\n' >"$READ_TMP/small.md"
+# --- no read cap (owner ruling 2026-10-14): a read of any size is the agent's call ---
 head -c 40000 /dev/zero | tr '\0' 'x' >"$READ_TMP/big.md"
-check_try "cat of a file over the cap blocks, whatever its type" \
-  "cat $READ_TMP/big.md"
-check "cat for reading passes" 0 \
-  "$(run_hook "$(json "cat $READ_TMP/small.md")")"
-check "a redirect is a write, not a read, so it passes" 0 \
-  "$(run_hook "$(json "cat $READ_TMP/big.md > $READ_TMP/copy.md")")"
-mkdir -p "$READ_TMP/.claude/briefs" && cp "$READ_TMP/big.md" "$READ_TMP/.claude/briefs/unit-x.md"
-check "head over the cap of a brief passes" 0 \
-  "$(run_hook "$(json "head -400 $READ_TMP/.claude/briefs/unit-x.md")")"
+seq 1 400 >"$READ_TMP/long.txt"
+check "a whole-file cat of a large file passes" 0 \
+  "$(run_hook "$(json "cat $READ_TMP/big.md")")"
+check "head and sed past 150 lines pass" 0 \
+  "$(run_hook "$(json "head -400 $READ_TMP/long.txt; sed -n '1,400p' $READ_TMP/long.txt")")"
 
 # --- repo-wide text search -------
 check_try "rg with a bare pattern and no path blocks" \
   'rg foo'
 check "rg with a directory passes" 0 \
   "$(run_hook "$(json "rg -n 'foo' src/services")")"
+# A substitution runs in the directory its own commands leave it in, and a
+# nested one inherits that: the inner rg below searches the checkout root.
+mkdir -p "$MAIN_TMP/hooks"
+check "a nested substitution's search after cd .. blocks" 2 \
+  "$(run_hook "$(json 'cd hooks; X=$(cd ..; echo "$(rg foo .)")')")"
+check "a nested substitution's search after cd into a folder passes" 0 \
+  "$(run_hook "$(json 'X=$(cd hooks; echo "$(rg foo .)")')")"
+# A here-document fed to a shell through process substitution is run, not written.
+check "a here-document piped to bash through >( ) is judged as commands" 2 \
+  "$(run_hook "$(json $'cat > >(bash) <<\'EOF\'\nrg -n foo\nEOF')")"
+check "a >( ) after the end word is judged as commands" 2 \
+  "$(run_hook "$(json $'cat <<\'EOF\' > >(bash)\nrg -n foo\nEOF')")"
+check "a tee into >( ) after the end word is judged as commands" 2 \
+  "$(run_hook "$(json $'tee <<\'EOF\' >(bash)\nrg -n foo\nEOF')")"
+check "a here-document after exec into >( ) is judged as commands" 2 \
+  "$(run_hook "$(json $'exec > >(bash)\ncat <<\'EOF\'\nrg -n foo\nEOF')")"
+check "a here-document written to a file is a note" 0 \
+  "$(run_hook "$(json $'cat > notes.md <<\'EOF\'\nrg -n foo\nEOF')")"
+check "a here-document written to a file after the end word is a note" 0 \
+  "$(run_hook "$(json $'cat <<\'EOF\' > notes.md\nrg -n foo\nEOF')")"
 
 # --- raw pane reads keep main's context lean ------
 check "pane read with no limit blocks" 2 \

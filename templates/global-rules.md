@@ -33,6 +33,12 @@
 
 - A test verifies intent and fails on a regression. Write it red first: see it
   fail for the reason you expect, then make it pass.
+- **Before any test run, name what it will prove.** Run the smallest set of
+  tests that would fail if your change were wrong. Do not re-run a test whose
+  inputs have not changed since it passed. Run the full suite only when product
+  code changed since the last full pass, or when a push or merge guard requires
+  it. A fix to tooling tests, a scanner allow-list, or a timeout re-runs only
+  those tests.
 - Name a drift guard for what it guards: it fails when two copies of one fact
   disagree, and its name says which two.
 - Plan by size: a one-line fix needs no plan; a change across a few files

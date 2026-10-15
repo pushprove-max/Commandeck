@@ -1,6 +1,6 @@
 # {unit} -- Builder batch
 
-You are the Builder for `{unit}`: one Opus pane in your own worktree. Build the
+You are the Builder for `{unit}`: one pane in your own worktree. Build the
 whole batch below, review it with {reviewer}, and hand back a branch that main
 merges with `merge-unit-local.sh {unit}`.
 
@@ -13,29 +13,45 @@ merges with `merge-unit-local.sh {unit}`.
 - `/ponytail full`: the smallest complete change.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
+  Start every fact-gathering helper the build needs in one turn, never one
+  after another: a helper started late is waited on alone.
 - A helper answers in at most 15 lines: say so in its prompt. A command whose
   output runs past 40 lines writes to a file, and you read the part you need:
   whatever comes back is sent again on every later turn of the build.
 - Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
   line per batch item in the evidence file: the build review reads that shape.
 - Tests first: red, then green.
-- Start a pass and the tests it needs in the same turn, the tests in the
+- **Before any test run, name what it will prove.** Run the smallest set of
+  tests that would fail if your change were wrong. Do not re-run a test whose
+  inputs have not changed since it passed. Run the full suite only when product
+  code changed since the last full pass, or when a push or merge guard requires
+  it. A fix to tooling tests, a scanner allow-list, or a timeout re-runs only
+  those tests.
+- While building, prove a fix with the test file of the code it touched.
+  Start a pass and the tests it needs in the same turn, the tests in the
   background; never wait for green before a pass.
   A fix round re-runs only the test files that round touched, and only the
   touched cases where the runner can select them.
   ONE whole run of every test file this build touched starts in the background
-  beside the closing pass, and never before an earlier pass. A first pass that ends GO with nothing committed after it
-  needs no closing pass: that GO merges, and the runs beside it were the
-  closing run. A test file with a case selector says so in its header.
+  beside the closing pass, and never before an earlier pass. A file that times
+  out in that run is rerun alone at once, never in another whole run.
+  A first pass that ends GO with nothing committed after it needs no closing
+  pass: that GO merges, and the runs beside it were the closing run. A test file with a case selector says so in its header.
 - The closing run is the test files this build touched, and no others.
 - A command expected to run over 60 seconds, a test or not, starts in the background
   (Bash `run_in_background`); work on while it runs. Read every background result before the closing pass:
   a red one costs that pass.
-- Not run: every touched test together before review, a rerun of unchanged
-  code, a timing run the batch does not ask for.
+- Not run: every touched test together before review, any test after a GO
+  with nothing changed since, a timing run the batch does not ask for.
+- When you read the machine's load average (`uptime`), write it in the
+  evidence file with the time: on a shared machine it explains a slow run.
+- A documented command you write or change (a README line, a usage line) runs
+  once from a scratch project outside this repository before you ask for
+  review. The evidence file lists each one with its result.
 - A question for main is one `orca-ide orchestration send --type question`.
   Main answers with `answer-worker.sh`, which reaches you whether you wait on
-  your inbox or have ended your turn.
+  your inbox or have ended your turn. When the answer reaches you another way,
+  stop your own command still waiting on that question at once.
 - Never commit by hand, never push. The pass script below commits exactly what
   {reviewer} reviews; main merges.
 
@@ -51,7 +67,8 @@ merge refuses a round file the script did not write, or one older than the tip.
    is under {small-build} changed lines and main did not launch it with `--risky` (the
    pass prints which); fix everything it finds together.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
-   N: it reads only your changes since the last pass. Fix and repeat until one
+   N: it reads only your changes since the last pass, or the whole branch
+   when main changed this brief or its rulings since the last pass. Fix and repeat until one
    ends `VERDICT: GO` (nothing at P0-P2).
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
    branch once more. Its GO is the one the merge takes. A P0 or P1 there goes
@@ -65,13 +82,18 @@ merge refuses a round file the script did not write, or one older than the tip.
    too, and prints each P2 and P3 as open.
 {loop-rules}
 When a pass reports a bug, look for the same kind of bug nearby and fix
-the whole class before the next pass. Say in the evidence file what you checked.
+the whole class before the next pass. Each fix gets one evidence line
+`Other cases checked r<N>: <the other cases of the same fault, and their tests>`,
+N the number of the pass that will read it. When you do not take the fix a
+reviewer named, write `Different fix r<N>: <why>` before you ask for pass N.
+Pass N shows both lines to its reviewer, and reads only a line that starts
+with those words: no bullet, no backticks.
 When a reviewer finds a way round a guard, list the other ways round the same guard
 and add a test case for each BEFORE asking for the next pass.
 When a pass finds a SECOND variant of a finding you already fixed in this
 build, fix the whole class, not the named case: work out what the variants have
-in common and what the check should trust instead, add a test case for each
-variant you can name, and write in the evidence file what the class is. Send
+in common, list every input the check trusts without verifying it, add a test
+case for each, and write in the evidence file what the class is. Send
 main a note of about 100 tokens (an Orca `status` naming the class and the fix)
 without waiting for a reply. Ask main and wait
 only when the class fix would cross a stated limit of this brief.

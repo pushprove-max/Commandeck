@@ -46,6 +46,23 @@ printf '## The issues\n1. #1: toy\n' > "$T/batch.md"
 run "$PROJ" builder-launch.sh --dry-run --risky toy-unit "$T/batch.md" >"$T/brief" 2>"$T/err"
 check "a risky launch gets no advisor either, and says so" '1:0' "$(grep -c '^advisor: none' "$T/err"):$(grep -c 'advisor consult' "$T/brief")"
 check "and its brief keeps the design check" 1 "$(grep -c '^## Design check' "$T/brief")"
+check "the brief's first line names no model: the launch may pick another" 1 "$(grep -c '^You are the Builder for `toy-unit`: one pane in your own worktree\.' "$T/brief")"
+# An advisor an older set-up stored is not given (owner's order 2026-10-14), and a stored "none" is not
+# told to consult one: without --small, both briefs carry the same no-advisor line a --small launch gets.
+for a in opus none; do
+  jq --arg a "$a" '.builder = {advisor: $a}' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+  run "$PROJ" builder-launch.sh --dry-run toy-unit "$T/batch.md" >"$T/brief" 2>"$T/err"
+  check "a stored advisor '$a', launched without --small: no advisor, and the brief says so" '1:1:0' \
+    "$(grep -c '^advisor: none' "$T/err"):$(grep -c '^This build has no advisor\.' "$T/brief"):$(grep -c 'advisor consult' "$T/brief")"
+done
+jq 'del(.builder)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+# Main writes a "leave as is" ruling under the heading its rules name; the pass reads limits from
+# one heading only, so a ruling under any other is raised again as a blocker.
+H=$(sed -n 's/.*stays as it is goes under `\(#[^`]*\)`.*/\1/p' "$PLUGIN/templates/main-session.md")
+printf '# Rulings\n%s\n- the retry stays as it is.\n## Later\n- not a limit\n' "$H" > "$T/rulings.md"
+LIMITS_AWK=$(grep -o "awk '[^']*Stated limits[^']*'" "$PLUGIN/scripts/builder-codex-pass.sh")
+check "a 'leave as is' ruling under the heading main's rules name is the limit the pass reads" '- the retry stays as it is.' \
+  "$(eval "$LIMITS_AWK \"\$T/rulings.md\"")"
 echo "review this" > "$T/spec.md"; mkdir -p "$HOME/orca/workspaces/proj/seat-unit"
 run "$PROJ" seat.sh launch claude-reviewer seat-unit "$T/spec.md" >"$T/out" 2>&1
 check "a headless role is still refused as a pane seat" "2:1" "$?:$(grep -c 'is not a pane seat' "$T/out")"
@@ -60,6 +77,31 @@ check "a file that was there is recorded by its content hash" "sha256:$(grep ' h
   "$(jq -r --arg p "$HOME/.codex/hooks.json" '.entries[$p].prior' "$MF/_machine.json")"
 check "a file that was not is recorded as such" 'did not exist' "$(jq -r --arg p "$CFG" '.entries[$p].prior' "$(mf "$PROJ")")"
 cmp -s "$MF/blobs/$(sha256sum < "$T/hooks-before.json" | cut -d' ' -f1)" "$T/hooks-before.json"; check "the prior bytes are kept, under that hash" 0 $?
+
+# --- a live Builder pane is reused only while the project's Builder settings are the ones it opened with ---
+# The Orca stand-in has one pane: the first launch makes it, and it stays live.
+SWT=$HOME/orca/workspaces/proj/seat-builder; git -C "$PROJ" worktree add -q "$SWT"
+cp "$BIN/orca-ide" "$T/orca-ide.kept"
+cat > "$BIN/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "terminal create"*) touch "$T/pane-up"; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
+  "terminal list"*) [ -e "$T/pane-up" ] && t='[{"handle":"h1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT"}]' || t='[]'
+    echo "{\"ok\":true,\"result\":{\"terminals\":\$t}}" ;;
+  "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
+  "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
+  *) echo '{"ok":true,"result":{}}' ;;
+esac
+EOF
+seat() { COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run "$PROJ" seat.sh launch builder seat-builder "$T/spec.md"; }
+jq '.builder = {model: "sonnet"}' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+seat >"$T/out" 2>&1; check "the first Builder launch opens a pane" 0 $?
+seat >"$T/out" 2>&1; check "a second launch on the same settings reuses it" '0:1' "$?:$(grep -c 'state=reused' "$T/out")"
+jq 'del(.builder)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+seat >"$T/out" 2>&1
+check "once the project's Builder model changed, the live pane is refused, and the refusal says why" '2:0:1' \
+  "$?:$(grep -c 'state=reused' "$T/out"):$(grep -c 'REFUSED: live builder seat h1 for seat-builder was opened with other launch settings' "$T/out")"
+cp "$T/orca-ide.kept" "$BIN/orca-ide"
 
 # --- another tool's entries are left exactly as they were ---
 check "Codex has the plugin's five entries" 5 "$(ours)"
@@ -84,8 +126,10 @@ run "$PROJ" setup.sh "${ANSWERS[@]}" --max-rounds six >"$T/out" 2>&1
 check "a round cap that is not a whole number is refused, and nothing is saved" "1:false" "$?:$(jq 'has("reviewLoop")' "$CFG")"
 
 # --- a second run adds nothing twice and keeps the first run's record ---
+jq '.builder = {model: "sonnet", advisor: "opus"}' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
 PLUGIN_DIR=$HOME/.commandeck/plugin run "$PROJ" setup.sh "${ANSWERS[@]}" --name Grace --max-rounds 6 --closing-pass no --small-build 150 --max-review-min 45.50 --max-test-percent 40 --max-usd 25 >"$T/out" 2>&1; check "a second setup succeeds" 0 $?
 check "the new answer is taken" Grace "$(jq -r '.chiefOfStaff.name' "$CFG")"
+check "a rerun keeps the Builder model an older set-up stored and drops its advisor" '{"model":"sonnet"}' "$(jq -c '.builder' "$CFG")"
 check "setup run through the stable link keeps the link on the plugin" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"
 run "$PROJ" update.sh >"$T/out" 2>&1; check "an update with the link recorded succeeds" 0 $?
 check "and keeps the link" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"

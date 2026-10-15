@@ -21,7 +21,9 @@ seat_usage() {
   local since=""
   [ -z "${3:-}" ] || since=$(date -u -d "@$3" '+%Y-%m-%dT%H:%M:%SZ') || return 1
   case "$1" in
-    claude) jq -Rnc --arg since "$since" '[inputs | fromjson? // empty | select(.type == "assistant" and .message.usage != null)
+    # Claude Code 2.1.300's api-request rows, a third or more of a long log, carry no usage: skipped unparsed.
+    claude) jq -Rnc --arg since "$since" '[inputs | select(startswith("{\"type\":\"api-request") | not) | fromjson? // empty
+        | select(.type == "assistant" and .message.usage != null)
         | select($since == "" or .timestamp == null or .timestamp >= $since)] as $m
       # A streamed reply repeats one message id, with the same usage, per content block.
       | ($m | unique_by(.message.id) | map(.message.usage)) as $u

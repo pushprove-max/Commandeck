@@ -14,8 +14,8 @@ a time within a minute of the run start renames the first stage. Writes result.j
 and notes.txt (the agent's own progress notes, for choosing splits) to --out.
 
 Time spent waiting on the owner is not build time (the owner, 2026-10-14): each --exclude window (ISO UTC)
-and each idle gap over two minutes with nothing running that sits behind an open decision for this
-unit (decisions.jsonl) or after its DONE marker comes out of the clock, shares and flags; cost stays.
+and the part of each idle gap over two minutes with nothing running that sits inside an open decision for
+this unit (decisions.jsonl) comes out of the clock, shares and flags; cost stays.
 """
 import argparse
 import collections
@@ -41,7 +41,13 @@ EDIT_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
 FILE_TOOLS = EDIT_TOOLS + LOOK_TOOLS
 KEYS = ('calls', 'in', 'cw', 'cr', 'out', 'usd', 'est', 'tier', 'unpriced', 'uncounted')
 IDLE = ('idle', 'idle_job', 'idle_tests')
+# Waits on a review the Builder could not run: a pass run outside its session, or a review tool that was down.
+# Shown on the page, never in the share flag: the build did nothing wrong in them.
+REVIEW_WAIT = ('idle_elsewhere', 'idle_down')
+# What builder-codex-pass.sh says when it cannot reach the reviewer.
+TOOL_DOWN = re.compile(r'REFUSED: (?:the \w+ \w+ pass failed|no Codex session appeared|the Codex broker|the Codex CLI is not signed in|no codex on PATH)')
 WAIT_ON_OWNER = 120  # an idle gap longer than this, waiting on the owner, is cut from the clock
+SHARE_FLOOR = 600  # seconds of tests and idle waits below which no share flags a build: two test runs are a third of a short one
 DECISIONS = None  # decisions.jsonl; None is the main checkout's own
 # What a call that went to the background answers at once: a Bash job's id, or a helper's. The harness
 # runs a helper in the background without the flag, so the answer is the only sign of it.
@@ -122,9 +128,9 @@ def r2(x):
 
 
 def read_session(path):
-    """One Claude session log -> its calls, tool calls, wake-ups and markers."""
+    """One Claude session log -> its calls, tool calls, wake-ups, questions to main and failed pass launches."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
-         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'dones': [], 'first': None, 'last': None}
+         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'down': [], 'first': None, 'last': None}
     tasks, asked = {}, {}  # background task id -> its call; a job tool's call -> the job's call it asks about
     for e in rows_of(path):
         when = e.get('timestamp')
@@ -139,9 +145,6 @@ def read_session(path):
             for b in c if isinstance(c, list) else []:
                 if b.get('type') == 'text' and b.get('text', '').strip():
                     s['notes'].append((ts(when), b['text'].strip().replace('\n', ' ')[:220]))
-                    # The Builder's last line, e.g. TOOLING-BATCH-2026-10-14B-DONE; the note above is cut short of it.
-                    if done := re.search(r'(?:^|\n)\s*([A-Z0-9][A-Z0-9._-]*-DONE)\s*$', b['text']):
-                        s['dones'].append((ts(when), done.group(1)))
                 elif b.get('type') == 'tool_use':
                     i = b.get('input') or {}
                     s['tools'][b['id']] = {'t': ts(when), 'name': b.get('name'), 'bg': bool(i.get('run_in_background')),
@@ -167,6 +170,13 @@ def read_session(path):
                     elif tool and b.get('is_error'):
                         # Refused by a hook, or failed before it started: no job runs, so none is waited on.
                         tool['bg'] = False
+                    # A pass in the background says it later: in the answer of a job tool asking about it, or a
+                    # look at its output file, which is named for the job's id. Its end notice carries no output.
+                    if tool and TOOL_DOWN.search(body) and any(PASS_CMD.search(s['tools'][k]['cmd']) for k in
+                                                              [b.get('tool_use_id'), asked.get(b.get('tool_use_id'))]
+                                                              + [k for job, k in tasks.items() if job in tool['cmd'] + tool['desc']]
+                                                              if k in s['tools']):
+                        s['down'].append(ts(when))
                     # A job ends when its end is announced or a job tool says so, whichever the log shows first;
                     # looking at its output while it runs ends nothing.
                     if asked.get(b.get('tool_use_id')) and not b.get('is_error') and job_ended(b.get('content')):
@@ -212,17 +222,20 @@ def call_kind(t, test_re):
     return 'files' if t['name'] in FILE_TOOLS else 'tools'
 
 
-def idle_gap(sess, end, nxt, t1, kind, marker=None):
-    """One idle wait -> its clock label and its row: the jobs still running in it, what the pane waited on,
-    and whether the turn before it printed the unit's DONE marker."""
+def idle_gap(sess, end, nxt, t1, kind, runs):
+    """One idle wait -> its clock label and its row: the jobs still running in it and what the pane waited on.
+
+    With none of its own jobs running, a pass launch in the turn before it that could not reach the reviewer
+    is a review tool down, and a Codex run inside it is a review run outside this session."""
     pending = [t for k, t in sess['tools'].items() if t['bg'] and t['t'] < nxt and sess['woken'].get(k, t1) > end]
     kinds = {kind(t) for t in pending}
     turn = max((e for e in sess['turn_ends'] if e < end), default=sess['first'])
     waiting = next((k for k in ('codex', 'helper', 'tests') if k in kinds),
-                   'job' if pending else 'main' if any(turn < a <= end for a in sess['asks']) else 'nothing')
-    return ('idle_tests' if 'tests' in kinds else 'idle_job' if pending else 'idle',
-            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting,
-             'done': any(turn < w <= end and m == marker for w, m in sess['dones'])})
+                   'job' if pending else 'down' if any(turn < d <= end for d in sess['down'])
+                   else 'elsewhere' if any(p['start'] < nxt and p['end'] > end for p in runs)
+                   else 'main' if any(turn < a <= end for a in sess['asks']) else 'nothing')
+    return ('idle_tests' if 'tests' in kinds else 'idle_job' if pending else f'idle_{waiting}' if waiting in ('down', 'elsewhere') else 'idle',
+            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting})
 
 
 def decisions_for(path, unit):
@@ -305,7 +318,8 @@ def read_codex(path, worktree):
         return None
     verdict = re.findall(r'VERDICT:\s*(NO-GO|GO)', p['message'])
     p['verdict'] = verdict[-1] if verdict else ('stopped' if not p['complete'] else 'none')
-    p['findings'] = len(re.findall(r'^\s*-\s*\[P\d\]', p['message'], re.M))
+    # A finding as the merge reads one (builder-codex-pass.sh FINDING): a '- ' or '* ' bullet, or none.
+    p['findings'] = len(re.findall(r'^\s*(?:[-*]\s*)?\[P[0-3]\]', p['message'], re.M))
     return p
 
 
@@ -480,14 +494,16 @@ def closing_skipped(passes, unchanged=None):
 
 
 def closing_pass(passes, unchanged=None):
-    """The build's closing passes as they happened: each one's number and verdict.
+    """The build's closing passes as they happened: each one's number and verdict, then every pass after the last.
 
     The skip line when the first pass's GO merged, 'none ran' for a build that
     had passes and no closing one, None for a build with no pass at all.
     """
     ran = sorted((p['n'], p['verdict']) for p in passes if p['n'] and p['kind'] == 'final')
     if ran:
-        return ', '.join(f'pass {n} {verdict}' for n, verdict in ran)
+        after = sorted((p['n'], p['kind'], p['verdict']) for p in passes if p['n'] > ran[-1][0])
+        return (', '.join(f'pass {n} {verdict}' for n, verdict in ran)
+                + ('; after it: ' + ', '.join(f'pass {n} ({kind}) {verdict}' for n, kind, verdict in after) if after else ''))
     return closing_skipped(passes, unchanged) or ('none ran' if any(p['n'] for p in passes) else None)
 
 
@@ -523,7 +539,7 @@ def main():
     ap.add_argument('--exclude', action='append', default=[], metavar='START=END')
     # The project's main checkout, read for its decisions and round archive once the worktree is removed.
     ap.add_argument('--main')
-    # A run past any of these is flagged for a written review; the rest get the automatic page only.
+    # A run past any of these is flagged on its page for a written review.
     # Not given: the project's own (loop_limits).
     ap.add_argument('--max-review-min', type=float)
     ap.add_argument('--max-test-share', type=float)
@@ -688,7 +704,6 @@ def main():
                 label[i] = what
 
     idle_gaps, jobs = [], []
-    marker = unit.upper() + '-DONE'
     # No checkout found, no ledger: never one relative to wherever this runs.
     home = main_checkout(wt, a.main)
     asked = decisions_for(DECISIONS or (os.path.join(home, '.claude', 'metrics', 'decisions.jsonl') if home else ''), unit)
@@ -698,23 +713,20 @@ def main():
         for end in sess['turn_ends']:
             nxt = min((u for u in sess['users'] if u > end), default=None)
             if nxt and nxt - end > 5:
-                waited, gap = idle_gap(sess, end, nxt, t1, kind_of, marker)
+                waited, gap = idle_gap(sess, end, nxt, t1, kind_of, runs)
                 paint(end, nxt, waited, only=('gap',))
                 idle_gaps.append(gap)
-                # Waiting on the owner, with nothing of the build's own running: finished and awaiting new work,
-                # or inside an open decision window. A background job of ANY session, or a Codex run, still
-                # going keeps the gap build time; idle_gap's `pending` sees only this session's.
+                # Waiting on the owner, with nothing of the build's own running: only the part inside an open
+                # decision window, never idle after DONE by itself. A background job of ANY session, or a
+                # Codex run, still going keeps the gap build time; idle_gap's `pending` sees only this session's.
                 busy = any(t['bg'] and t['t'] < nxt and other['woken'].get(k, t1) > end for other in sessions for k, t in other['tools'].items())
                 if nxt - end > WAIT_ON_OWNER and not busy and not any(p['start'] < nxt and p['end'] > end for p in runs):
-                    if gap['done']:
-                        cuts.append({'start': end, 'end': nxt, 'reason': 'finished, awaiting answers'})
-                    else:
-                        cuts += [{'start': max(q, end), 'end': min(r or nxt, nxt), 'reason': f'decision {i}'}
-                                 for q, r, i in asked if max(q, end) < min(r or nxt, nxt)]
+                    cuts += [{'start': max(q, end), 'end': min(r or nxt, nxt), 'reason': f'decision {i}'}
+                             for q, r, i in asked if max(q, end) < min(r or nxt, nxt)]
     for p in runs:
         # With no Claude session nothing paints "gap": a Codex seat that built alone owns its own time.
-        paint(p['start'], p['end'], 'codex', only=('gap',) + IDLE + (() if sessions else ('none',)))
-    not_codex = ('none', 'gap', 'claude', 'hooks', 'hooks_stop', 'tests', 'commands', 'files', 'tools', 'helper', 'compaction') + IDLE
+        paint(p['start'], p['end'], 'codex', only=('gap',) + IDLE + REVIEW_WAIT + (() if sessions else ('none',)))
+    not_codex = ('none', 'gap', 'claude', 'hooks', 'hooks_stop', 'tests', 'commands', 'files', 'tools', 'helper', 'compaction') + IDLE + REVIEW_WAIT
     for sess in sessions:
         led = sess['ledger']
         for r in led['requests'].values():
@@ -830,13 +842,17 @@ def main():
             s[k] = dict(s[k])
         s['clock'] = {k: round(v, 1) for k, v in s['clock'].items()}
         s['cut_s'] = round(s['cut_s'], 1)
-    waiting = (clock['tests'] + sum(clock[k] for k in IDLE)) / max(1, t1 - t0 - cut_s)
+    waited = clock['tests'] + sum(clock[k] for k in IDLE)
+    waiting = waited / max(1, t1 - t0 - cut_s)
     priced = sum(v['usd'] for v in total.values())
     flags = []
     if review_flag(passes, a.max_review_min):
         flags.append(review_flag(passes, a.max_review_min))
-    if waiting > a.max_test_share:
-        flags.append(f'{100 * waiting:.0f}% of the clock on tests or idle waits (more than {100 * a.max_test_share:.0f}%)')
+    if waiting > a.max_test_share and waited > SHARE_FLOOR:
+        big = max((c for s in stages for c in s['detail']['commands'] if c['kind'] in ('tests', 'commands', 'codex')),
+                  key=lambda c: c['seconds'], default=None)
+        flags.append(f'{100 * waiting:.0f}% of the clock on tests or idle waits (more than {100 * a.max_test_share:.0f}% and {SHARE_FLOOR // 60} minutes)'
+                     + (f'; largest single command: "{big["what"]}", {hm(big["seconds"])}' if big else ''))
     if priced > a.max_usd:
         flags.append(f'${priced:,.2f} at list price (more than ${a.max_usd:,.0f})')
     result = {
@@ -852,8 +868,7 @@ def main():
                        for w in cuts if cut_in(w['start'], w['end'])), key=lambda w: w['start']),
         'cut_s': round(cut_s, 1),
         'passes': [{k: p[k] for k in ('n', 'kind', 'start', 'end', 'complete', 'model', 'effort', 'verdict', 'findings', 'usage', 'calls', 'threads',
-                                      'commands', 'command_s', 'longest', 'cut_s')}
-                   | {'message': p['message'][:2000]} for p in passes],
+                                      'commands', 'command_s', 'longest', 'cut_s', 'message')} for p in passes],
     }
     json.dump(result, open(f'{out}/result.json', 'w'), indent=1)
     with open(f'{out}/notes.txt', 'w') as fh:

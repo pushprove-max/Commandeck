@@ -15,6 +15,11 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name ci
           git config --global init.defaultBranch main
+      # The dashboard's DOM tests need jsdom, which the plugin does not ship.
+      - name: jsdom for the dashboard's DOM tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dom" --no-save jsdom@26
+          echo "COMMANDECK_TEST_NODE_MODULES=$RUNNER_TEMP/dom/node_modules" >> "$GITHUB_ENV"
       - name: Leak test
         run: bash ci/leak-test.sh
       # The checkout brings one commit; the check compares with the main branch, so that is fetched
@@ -36,6 +41,16 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # A Mac with no Homebrew, the case the restart under a newer Bash exists for: setup started
+      # by the Mac's own Bash 3.2, with the system's tools alone, must reach its requirements report.
+      # COMMANDECK_BREW_PREFIX names an empty folder, so the runner's own Homebrew is not found.
+      - name: Setup with no Homebrew
+        run: |
+          /bin/bash -c '[ "${BASH_VERSINFO[0]}" = 3 ]'
+          T=$(mktemp -d); mkdir "$T/home" "$T/nobrew" "$T/proj"; git -C "$T/proj" init -q
+          rc=0; out=$(cd "$T/proj" && env -i HOME="$T/home" PATH=/usr/bin:/bin:/usr/sbin:/sbin COMMANDECK_BREW_PREFIX="$T/nobrew" /bin/bash "$GITHUB_WORKSPACE/scripts/setup.sh" </dev/null 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          [ "$rc" = 1 ] && grep -q '^setup: requirements are missing' <<<"$out" && grep -q '^  Homebrew: it is not installed' <<<"$out"
       - name: Tools the scripts call
         run: brew install bash coreutils gnu-sed grep flock jq
       - name: Git identity for fixture repos

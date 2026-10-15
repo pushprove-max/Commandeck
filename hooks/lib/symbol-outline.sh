@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Shared by symbols-before-read.sh and bash-symbols-before-read.sh: a refusal
-# prints the file's top-level symbols itself and records the directory as
-# cleared, so the retry needs no serena round trip. Keep both gates on
-# this one helper.
+# Used by symbols-before-read.sh's first-edit gate: the refusal names the files
+# that use the file's top-level symbols, so the retry needs no lookup turn.
 
 # symbol_outline FILE: top-level names on one line, at most 80, in file order.
 # shortcut: a line-anchored regex pass, so a declaration indented inside a
@@ -16,14 +14,14 @@ symbol_outline() {
 
 # new_in_branch FILE: true when FILE sits in a linked worktree and is on
 # neither base of its branch (the merge base with local main, and with
-# origin/main when that exists). Such a file has no shape to learn and no
-# callers, so neither gate asks for a symbols call first. The base
+# origin/main when that exists). Such a file has no callers, so the gate asks
+# for no references call first. The base
 # decides, never the working tree: a base file deleted and written again is
 # still a base file. The path is compared as the disk resolves it (no `..`, no
 # link, any letter case, since the Mac's disk folds case), and with no base to
 # compare with the answer is no, so a gate keeps refusing rather than guess.
 # shortcut: a base file copied or renamed to a new path counts as new; compare
-# content with the base if that ever lets real code through unread.
+# content with the base if that ever lets real code through unasked.
 new_in_branch() {
   local dir top rel ref base tree found=0
   [ -L "$1" ] && return 1
@@ -41,7 +39,3 @@ new_in_branch() {
   done
   [ "$found" = 1 ]
 }
-
-# clear_dir_for TRACKER REL: dir_cleared in both gates reads any tracker line
-# naming a file in the directory, which is what a serena answer writes.
-clear_dir_for() { echo "$2" >> "$1"; }

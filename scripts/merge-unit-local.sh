@@ -17,9 +17,11 @@ Squash-merge a Builder's branch onto local main; run from the main checkout on m
   --dry-run        run the checks and print the plan; merge and clean up nothing
   --area <area>    area label for the issue filed per finding left open (file-open-findings.sh)
   --milestone <name>  milestone for those issues
-exit: 0 merged; 1 refused, not merged, or MERGED and a later step failed (the last lines say which);
-      2 usage; 4 MERGED, but a finding left open could not be filed as an issue: the NOT FILED
-      lines are the last printed, with the command that files them
+exit: 0 merged; 1 refused or failed, not merged; 2 usage; 3 MERGED, but a step after the
+      merge commit failed (archiving the unit's brief files, or closing its panes and removing
+      its worktree): finish it by hand, do not merge again; 4 MERGED, but a finding left open
+      could not be filed as an issue: the NOT FILED lines are the last printed, with the command
+      that files them
 example: merge-unit-local.sh my-unit --dry-run
 EOF
 }
@@ -146,11 +148,11 @@ file_open_findings() { # <commit> [--dry-run]
 merged_end() {
   local rc=$?
   trap - EXIT
-  [ "$rc" = 0 ] || echo "MERGED as $(git rev-parse --short=8 HEAD), but a step after the merge commit failed (above): do not merge $UNIT again; finish that step by hand" >&2
+  [ "$rc" = 0 ] || { echo "MERGED as $(git rev-parse --short=8 HEAD), but a step after the merge commit failed (above): do not merge $UNIT again; finish that step by hand" >&2; rc=3; }
   if [ -n "$NOT_FILED" ]; then
     echo "MERGED, but $(grep -c . <<<"$NOT_FILED") finding(s) left open have no issue. File them from the main checkout with: $FILE_AGAIN" >&2
     echo "$NOT_FILED" >&2
-    rc=4
+    [ "$rc" = 3 ] || rc=4
   fi
   exit "$rc"
 }
@@ -177,15 +179,36 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
     'BEGIN { n = split(have, h, " "); for (i = 1; i <= n; i++) seen[h[i]] = 1 }
      !seen[$0]++ { out = out (out == "" ? "" : ", ") $0 } END { print out }' || true)
 [ -z "$REFS" ] || TITLE="$TITLE ($REFS)"
-# A squash that deletes a file the brief never names is a botched rebase, not
-# a unit. The size line is printed so main sees the count before the commit
-# exists. Compare against the fork point, not main: --dry-run skips the rebase
-# and every file main gained since the fork would read as a deletion.
+# A squash that deletes a file neither the brief nor the evidence's "Files
+# deleted" list names is a botched rebase, not a unit: a unit told to cut
+# "everything but X" can name its cuts only once it has made them. The size
+# line is printed so main sees the count before the commit exists. Compare
+# against the fork point, not main: --dry-run skips the rebase and every file
+# main gained since the fork would read as a deletion.
 BASE=$(git merge-base main "$BRANCH")
 echo "STEP 4 size: $(git diff --shortstat "$BASE" "$BRANCH" | sed 's/^ *//')"
+CUT_LIST=$(awk '/^#+[[:space:]]*Files deleted/ { on = 1; next } /^#/ { on = 0 } on' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+# in_brief <path> -- the brief's prose names <path> whole: a space, quote, backtick or parenthesis before it,
+# and after it the same, or sentence punctuation that ends it ("x.ts."). A longer path that holds it
+# (old/x.ts.bak, x.ts~) names another file.
+in_brief() {
+  P=$1 PRE=$' \t`"\'(<' POST=$' \t`"\')>' awk '
+    function edge(c, set) { return c == "" || index(set, c) > 0 }
+    { from = 1; n = length(ENVIRON["P"])
+      while ((i = index(substr($0, from), ENVIRON["P"])) > 0) {
+        at = from + i - 1; b = at > 1 ? substr($0, at - 1, 1) : ""; a = substr($0, at + n, 1)
+        if (edge(b, ENVIRON["PRE"]) && (edge(a, ENVIRON["POST"]) || (index(".,;:!?", a) && edge(substr($0, at + n + 1, 1), ENVIRON["POST"])))) { found = 1; exit }
+        from = at + 1 } }
+    END { exit !found }' "$BRIEF"
+}
+# Each entry of the evidence's list is one whole path: "- <path>" or "- `<path>`", nothing else on the line.
+CUT_PATHS=$(sed -E 's/^[[:space:]]*[-*+][[:space:]]+//; s/[[:space:]]+$//; s/^`([^`]+)`$/\1/' <<<"$CUT_LIST")
 while IFS= read -r deleted; do
   [ -n "$deleted" ] || continue
-  grep -qF -- "$deleted" "$BRIEF" || fail "step 4 merge" "the squash deletes $deleted, which the brief never names; the rebase probably replayed stale content"
+  if in_brief "$deleted"; then echo "step 4 deletion: $deleted (named in the brief)"
+  elif grep -qxF -- "$deleted" <<<"$CUT_PATHS"; then echo "step 4 deletion: $deleted (named in the evidence's Files deleted list)"
+  else fail "step 4 merge" "the squash deletes $deleted, which the brief never names; the rebase probably replayed stale content"
+  fi
 done < <(git diff --no-relative --diff-filter=D --name-only "$BASE" "$BRANCH")
 # The squash drops every unit commit body; a commit-msg hook that asks for the
 # mutation note the pass commit carried would refuse it, so the notes ride along.
@@ -327,15 +350,6 @@ if [ "$DRY_RUN" = 0 ]; then
   done < <(pp_unit_briefs "$WT/.claude/briefs" "$UNIT")
   [ "${#MAIN_FILES[@]}" = 0 ] || rm -- "${MAIN_FILES[@]}" || fail "step 4 briefs" "could not remove the archived main brief files"
   echo "step 4 briefs: added $KEPT entries to $ARCHIVE"
-fi
-
-# Build review: the page about this build, made after the merge landed and
-# while the worktree is still there to read. A review never fails or blocks a merge.
-if [ "$DRY_RUN" = 0 ]; then
-  # A flagged run is told in the relay's worktree when there is one. The merge's own page is
-  # never opened as a tab: only the page with the reviewer's analysis is, by the reviewer told of it.
-  OPEN_IN=(); [ ! -d "$PP_WORKSPACES/Chief-of-Staff" ] || OPEN_IN=(--open-in "$PP_WORKSPACES/Chief-of-Staff")
-  python3 "$HERE/../skills/worktreereview/scripts/review.py" "$WT" ${OPEN_IN[@]+"${OPEN_IN[@]}"} --no-open || echo "build review did not run (ignored)" >&2
 fi
 
 echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"

@@ -151,18 +151,18 @@ def read_history(path):
     return sorted(rows)
 
 
-def request_key(r):
-    """The id one request is counted under, or None.
+def request_ids(r):
+    """The ids one request is known by: message.id and requestId, else the line's uuid, else none.
 
     Behind an API proxy a line has no requestId (#47), but every assistant line
     carries message.id, shared by the lines a streamed request writes (each has
-    its own uuid). The uuid is the last resort.
+    its own uuid). A line may name either id or both, so lines that share
+    either are one request (#51). The uuid is the last resort.
     """
     m = r.get("message")
-    for k in (m.get("id") if isinstance(m, dict) else None, r.get("requestId"), r.get("uuid")):
-        if isinstance(k, str) and k:
-            return k
-    return None
+    ids = [k for k in (m.get("id") if isinstance(m, dict) else None, r.get("requestId")) if isinstance(k, str) and k]
+    u = r.get("uuid")
+    return ids or ([u] if isinstance(u, str) and u else [])
 
 
 def request_row(r):
@@ -336,12 +336,13 @@ def requests(projects, cache_path, since, now, folders=False):
     try:
         with open(cache_path) as f:
             cache = json.load(f)
-        offsets, seen, where = cache["offsets"], cache["requests"], cache["cwd"]
-        # Version 5 keys a request on message.id, not requestId; an older cache is read again.
-        if cache.get("version") != 5 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict):
-            raise ValueError("cache from before requests kept their working folder")
+        offsets, seen, where, alias = cache["offsets"], cache["requests"], cache["cwd"], cache["alias"]
+        # Version 6 keeps every id a request is known by (#52): an older cache keyed it on one id and is read again.
+        if cache.get("version") != 6 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict) \
+                or not isinstance(alias, dict):
+            raise ValueError("cache from before a request kept all its ids")
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        offsets, seen, where = {}, {}, {}
+        offsets, seen, where, alias = {}, {}, {}, {}
     live, unread, unlisted = {}, False, []
     # A folder that cannot be listed hides its transcripts: the same short count.
     for root, _, files in os.walk(projects, onerror=unlisted.append):
@@ -386,15 +387,24 @@ def requests(projects, cache_path, since, now, folders=False):
                     except ValueError:
                         continue
                     row = request_row(r) if isinstance(r, dict) else None
-                    key = request_key(r) if row else None
-                    if key:
-                        seen[key] = row  # a streamed request's last line carries its final usage
-                        where[key] = r.get("cwd")
+                    ids = request_ids(r) if row else []
+                    if not ids:
+                        continue
+                    # A request is kept under the key its ids already have; a line naming two keys joins them.
+                    keys = list(dict.fromkeys(alias[i] for i in ids if i in alias)) or ids[:1]
+                    for old in keys[1:]:
+                        seen.pop(old, None)
+                        where.pop(old, None)
+                        alias.update({i: keys[0] for i, k in alias.items() if k == old})
+                    alias.update(dict.fromkeys(ids, keys[0]))
+                    seen[keys[0]] = row  # a streamed request's last line carries its final usage
+                    where[keys[0]] = r.get("cwd")
             live[path] = off
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 5, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}}, f)
+        json.dump({"version": 6, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
+                   "alias": {i: k for i, k in alias.items() if k in seen}}, f)
     os.replace(tmp, cache_path)
     if unread or any(not isinstance(e, FileNotFoundError) for e in unlisted):
         return None

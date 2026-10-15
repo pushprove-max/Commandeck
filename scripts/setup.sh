@@ -4,7 +4,7 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-model <alias>] [--builder-advisor <alias>|none] [--codex-fast|--no-codex-fast]
+#          [--builder-model <alias>] [--codex-fast|--no-codex-fast]
 #          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
 #          [--global-claude|--global-rules install|block|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>] [--max-review-min <minutes>] [--max-test-percent <n>] [--max-usd <n>]
@@ -36,7 +36,7 @@ INSTALL= ASKED= OPT=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; OPT=; continue; fi
   case $a in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model|--notify-wrapper|--global-claude|--global-rules) OPT=$a ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--codex-model|--notify-wrapper|--global-claude|--global-rules) OPT=$a ;;
     --install-missing) INSTALL=1 ;;
   esac
 done
@@ -72,7 +72,7 @@ if [ -e "$IL_CONFIG" ]; then
 fi
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
-BMODEL=$(old .builder.model) BADVISOR=$(old .builder.advisor) FAST=$(old .codexFast)
+BMODEL=$(old .builder.model) FAST=$(old .codexFast)
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
@@ -91,7 +91,7 @@ WAS=$SCOPE DASHBOARD=1 STATUS= NWRAP= GCLAUDE= GRULES=
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $1 in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--builder-advisor|--codex-model|--notify-wrapper|--global-claude|--global-rules|--max-rounds|--closing-pass|--small-build|--max-review-min|--max-test-percent|--max-usd) [ $# -ge 2 ] || usage ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--codex-model|--notify-wrapper|--global-claude|--global-rules|--max-rounds|--closing-pass|--small-build|--max-review-min|--max-test-percent|--max-usd) [ $# -ge 2 ] || usage ;;
   esac
   case $1 in
     --profile) PROFILE=$2; shift 2 ;;
@@ -104,7 +104,6 @@ while [ $# -gt 0 ]; do
     --hosts) HOSTS=$2; shift 2 ;;
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     --builder-model) BMODEL=$2; shift 2 ;;
-    --builder-advisor) BADVISOR=$2; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
     # The global CLAUDE.md template and the rules: this run's answer, never saved; no answer leaves the file alone.
@@ -140,13 +139,10 @@ case $SCOPE in project|machine) ;; *) usage ;; esac
 # Extra names the dashboard answers to (a tailnet's name for this machine). None by default: a name
 # not listed is one another site may have pointed here, and gets a 403.
 [[ ${HOSTS:-a} =~ ^[A-Za-z0-9.-]+(,[A-Za-z0-9.-]+)*$ ]] || { echo "setup: --hosts takes host names separated by commas" >&2; usage; }
-# The Builder's model and advisor: no answer means the routing file's own; a name is one routing already
-# names; and the advisor alone may be "none", a Builder launched with no advisor at all.
-ADVISOR=$BADVISOR; [ "$ADVISOR" != none ] || ADVISOR=
-for a in "$BMODEL" "$ADVISOR"; do
-  [ -z "$a" ] || jq -e --arg a "$a" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null \
-    || die "the Builder's model and advisor are each one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)") (the advisor may also be none), not '$a'. Nothing was changed"
-done
+# The Builder's model: no answer means the routing file's own; a name is one routing already names.
+# No advisor is asked: every Builder runs with none, and a rerun drops one an older set-up stored.
+[ -z "$BMODEL" ] || jq -e --arg a "$BMODEL" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null \
+  || die "the Builder's model is one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)"), not '$BMODEL'. Nothing was changed"
 # A Codex model id named at setup is the project's own, so a plugin update keeps it (paths.sh pp_codex_model).
 # Only a Codex role takes one, and only an id: a bare family name would be looked up again.
 for r in $(jq -r 'keys[]' <<<"$CMODELS"); do
@@ -231,11 +227,11 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg ba "$BADVISOR" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" '
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
-  + (if $bm + $ba == "" then {} else {builder: ({model: $bm, advisor: $ba} | with_entries(select(.value != "")))} end)
+  + (if $bm == "" then {} else {builder: {model: $bm}} end)
   + (if $cm == {} then {} else {codexModels: $cm} end)
   + (if $rl == {} then {} else {reviewLoop: $rl} end)
   + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"

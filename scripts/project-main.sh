@@ -23,9 +23,9 @@
 #     worktree must reach the stand-in project it has just made: a FIXTURE, a
 #     folder under the system's temp folder that is no checkout of the
 #     worktree's own project, and whose whole checkout (its main checkout's
-#     git folder too) is under the temp folder. A stand-in project is never followed together
-#     with the real worktrees folder, so no script acts on a real worktree
-#     under a stand-in project's config. COMMANDECK_WORKSPACES naming the
+#     git folder too) is under the temp folder. A stand-in project is followed
+#     only together with a worktrees folder under the temp folder, so no script
+#     acts on a real worktree under a stand-in project's config. COMMANDECK_WORKSPACES naming the
 #     folder the worktree is really in is followed too: it is what git says.
 # shortcut: a clone of the project kept under the temp folder counts as a fixture, and a Builder can make one; scripts then act on that clone and its own scratch, never on main's. Upgrade to a marker only the test runner can set if a script is found to trust what it reads there.
 # pp_real <path>: where the path really is. A part not made yet is kept as
@@ -42,6 +42,10 @@ pp_real() {
   p=$(cd "$p" 2>/dev/null && pwd -P) || return 1
   printf '%s%s' "${p%/}" "$rest"
 }
+# pp_git <args...>: git with none of its routing variables (GIT_DIR, GIT_WORK_TREE
+# and the rest git lists, and the ceiling that stops its search): a Builder sets
+# them in its own shell, and they would make its worktree read as a main checkout.
+pp_git() { (unset $(git rev-parse --local-env-vars) GIT_CEILING_DIRECTORIES; git "$@"); }
 pp_temp() { case $1 in /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) ;; *) return 1 ;; esac; }
 # pp_fixture <path> <git common dir of the worktree's own project>: the path
 # is really under the temp folder, and so is the whole checkout it is in, if
@@ -51,17 +55,17 @@ pp_fixture() {
   local r d k; r=$(pp_real "$1") || return 1
   pp_temp "$r" || return 1
   d=$r; while [ ! -d "$d" ]; do d=${d%/*}; done
-  k=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  k=$(pp_git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   [ "$k" != "$2" ] && k=$(pp_real "$k") && pp_temp "$k"
 }
 pp_checkout() { # <dir>: sets c (git common dir), g (git dir) and t (top folder); 1 when <dir> is in no checkout
   local out
-  [ -n "$1" ] && out=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir --show-toplevel 2>/dev/null) || return 1
+  [ -n "$1" ] && out=$(pp_git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir --show-toplevel 2>/dev/null) || return 1
   { IFS= read -r c; IFS= read -r g; IFS= read -r t; } <<<"$out"
   case $c in */.git) ;; *) return 1 ;; esac
 }
 pp_main_resolve() {
-  local c g t first="" own="" ownws="" m w
+  local c g t first="" own="" ownws="" m w r
   # Where the shell stands is the one thing here git answers for by itself, so a
   # linked worktree there decides; the session's project is a variable beside it.
   if pp_checkout "$PWD"; then
@@ -80,10 +84,12 @@ pp_main_resolve() {
   if [ -n "$own" ]; then
     [ -z "$w" ] || [ "$(pp_real "$w")" = "$ownws" ] || pp_fixture "$w" "$own" || w=
     [ -z "$m" ] || pp_fixture "$m" "$own" || m=
-    # The pair that would be used, whichever input chose the project: a
-    # stand-in project is never followed together with the real worktrees folder.
+    # The pair that would be used, whichever input chose the project: a stand-in
+    # project is followed only with a worktrees folder under the temp folder that
+    # is not this worktree's, never a real one (its default may be a real project's
+    # of the same name).
     m=${m:-$first}
-    [ "$m" = "${own%/.git}" ] || [ "$(pp_real "${w:-$HOME/orca/workspaces/$(basename "$m")}")" != "$ownws" ] || m=${own%/.git}
+    [ "$m" = "${own%/.git}" ] || { r=$(pp_real "${w:-$HOME/orca/workspaces/$(basename "$m")}") && [ "$r" != "$ownws" ] && pp_temp "$r"; } || m=${own%/.git}
   fi
   PP_MAIN=${m:-$first}
   [ -n "$PP_MAIN" ] || return 1

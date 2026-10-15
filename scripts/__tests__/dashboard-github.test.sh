@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# dashboard-github.test.sh -- the GitHub panes (Merge line, Who holds what, Next push) are read by the collector
+# from gh and git. The owner acts on them: a check shown green that failed, or an issue number that links to
+# another repository, would send him the wrong way. What this pins: each pull request's checks keep gh's order
+# and read as pass, fail or run; an issue takes its priority label and milestone; the next push lists exactly
+# the commits the upstream lacks with the issues each names; the page gets the repository's address from the
+# origin remote; every gh call is a read; and with gh not signed in, or no GitHub origin, each pane is null
+# with the reason while the rest of the project is still collected.
+set -uo pipefail
+SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
+T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
+PASS=0 FAIL=0
+check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
+
+export HOME=$T/home
+MAIN=$T/demo BIN=$T/bin
+mkdir -p "$HOME" "$BIN"
+g() { git -C "$MAIN" -c user.name=t -c user.email=t@t "$@"; }
+git init -q -b main "$MAIN" && g commit -q --allow-empty -m "first"
+git init -q --bare "$T/origin.git" && g remote add origin "$T/origin.git" && g push -q -u origin main 2>/dev/null
+printf 'a\nb\n' > "$MAIN/f" && g add f && g commit -q -m "Stream the export" -m "Closes #12"
+printf 'a\n' > "$MAIN/f" && g commit -q -am "Bump the lint config"
+# The address the page links to comes from the remote's URL; the upstream branch stays the one pushed above.
+g remote set-url origin git@github.com:example/demo.git
+
+# gh is never the real one: it answers each read from a fixture in gh's own shape, or exits as $T/gh-exit says.
+cat > "$BIN/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$T/gh.calls"; printf '%s\n' "\${GH_REPO:-none}" >> "$T/gh.repos"
+[ ! -e "$T/gh-exit" ] || exit "\$(cat "$T/gh-exit")"
+case "\$1 \$2" in
+  "pr list") echo '[{"number":7,"title":"Stream the export","url":"https://github.com/example/demo/pull/7","isDraft":false,"headRefName":"work/u1",
+    "reviewDecision":"APPROVED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","additions":3,"deletions":1,"closingIssuesReferences":[{"number":12}],
+    "statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},
+      {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"},
+      {"__typename":"CheckRun","name":"e2e","status":"IN_PROGRESS","conclusion":""},
+      {"__typename":"StatusContext","context":"deploy","state":"PENDING"}]}]' ;;
+  "issue list") echo '[{"number":12,"title":"Export times out","url":"https://github.com/example/demo/issues/12","createdAt":"2026-10-01T00:00:00Z",
+    "labels":[{"name":"bug"},{"name":"P2"},{"name":"P1"}],"milestone":{"title":"2.4 Exports"}}]' ;;
+  "api repos/{owner}/{repo}/milestones?state=open&per_page=100") echo '[{"title":"2.4 Exports","due_on":"2026-10-17T07:00:00Z","open_issues":5,"closed_issues":7}]' ;;
+  "run list") echo '[{"conclusion":"success","status":"completed","createdAt":"2026-10-14T10:00:00Z","workflowName":"ci"}]' ;;
+  *) exit 1 ;;
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/orca-ide"
+chmod +x "$BIN"/*
+
+# collect <out dir> -- one project's collect, as dashboard.sh --project runs it; prints its exit code.
+collect() {
+  env -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" \
+    COMMANDECK_DASHBOARD_DIR="$1" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$1/run" >"$1.log" 2>&1
+  echo $?
+}
+j() { jq -c "first(.[]) | $2" "$1/run/project.json" 2>&1; }
+
+check "a collect with gh answering succeeds" 0 "$(collect "$T/one")"
+check "the repository's address comes from the origin remote" '"https://github.com/example/demo"' "$(j "$T/one" .github.repo)"
+check "a pull request's checks keep gh's order: success, failure, in progress, pending" '["pass","fail","run","run"]' "$(j "$T/one" '[.github.prs[0].checks[].state]')"
+check "a pull request names the issues it closes, its branch, review and merge state" '[[12],"work/u1","APPROVED","MERGEABLE","BLOCKED",false]' \
+  "$(j "$T/one" '.github.prs[0] | [.closes, .branch, .review, .mergeable, .mergeState, .draft]')"
+# gh's own default repository may be another remote (an upstream): every read names the origin's, the one the page links to.
+check "every gh read is made in the origin's repository" "example/demo" "$(sort -u "$T/gh.repos")"
+check "an issue's priority is its lowest P label, and its milestone is named" '["P1","2.4 Exports"]' "$(j "$T/one" '.github.issues[0] | [.priority, .milestone]')"
+check "a milestone keeps its due date and counts" '[{"title":"2.4 Exports","due":"2026-10-17T07:00:00Z","open":5,"closed":7}]' "$(j "$T/one" .github.milestones)"
+check "the last CI run is read for the branch main pushes to" 1 "$(grep -c -- '^run list --branch main ' "$T/gh.calls")"
+check "the next push is the two commits the upstream lacks, newest first, with the issues each names" \
+  '{"upstream":"origin/main","behind":0,"ahead":2,"subjects":["Bump the lint config","Stream the export"],"refs":[[],[12]],"lines":[[0,1],[2,0]]}' \
+  "$(j "$T/one" '.nextPush | {upstream, behind, ahead, subjects: [.commits[].subject], refs: [.commits[].refs], lines: [.commits[] | [.added, .deleted]]}')"
+check "every gh call is a read" "" "$(grep -vE '^(pr list|issue list|run list|api repos/\{owner\}/\{repo\}/milestones\?state=open&per_page=100)( |$)' "$T/gh.calls")"
+
+# gh not signed in exits 4. No copy was cached in this dashboard folder, so each pane is null with the reason.
+echo 4 > "$T/gh-exit"
+check "with gh not signed in the project is still collected" 0 "$(collect "$T/two")"
+check "each GitHub pane is null" '[null,null,null,null]' "$(j "$T/two" '.github | [.prs, .issues, .milestones, .runs]')"
+check "and its source says gh is not signed in" '"not-measured gh is not signed in: run gh auth login; nothing was cached"' \
+  "$(j "$T/two" '.sources["github-prs"] | "\(.status) \(.error)"')"
+check "the rest of the project is there" '[2,"https://github.com/example/demo"]' "$(j "$T/two" '[.nextPush.ahead, .github.repo]')"
+
+# A checkout with no GitHub origin asks gh nothing.
+rm -f "$T/gh-exit" "$T/gh.calls"
+g remote set-url origin "$T/origin.git"
+check "with no GitHub origin the project is still collected" 0 "$(collect "$T/three")"
+check "the panes say there is no GitHub origin" '[null,"no GitHub origin"]' "$(j "$T/three" '[.github.repo, .sources["github-issues"].error]')"
+check "and gh was not asked for them" 0 "$(grep -cvE '^issue list --state open --label P1 ' "$T/gh.calls")"
+
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" = 0 ]

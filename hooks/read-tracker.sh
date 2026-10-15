@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PostToolUse hook: record what symbols-before-read.sh asks about -- whether
-# serena has answered for the file about to be read, under serena's own
+# PostToolUse hook: record what symbols-before-read.sh's first-edit gate asks
+# about -- whether the session asked who uses a file, under serena's own
 # relative_path -- and nudge a worker that searches source with the shell and
 # never asks serena.
 INPUT=$(cat)
@@ -101,8 +101,8 @@ PY
   return 2
 }
 
-# An errored serena call is the one unavailability signal the symbols gates
-# stand down on; a later serena answer clears it.
+# An errored serena call is the one unavailability signal the symbols gate
+# stands down on; a later serena answer clears it.
 if [ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ]; then
   SID=$(echo "$INPUT" | jq -r '.session_id // empty')
   SERENA_DOWN="/tmp/claude-serena-down-${SID:-${CLAUDE_SESSION_ID:-${PPID}}}"
@@ -110,24 +110,13 @@ if [ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ]; then
 fi
 [ "$IS_ERROR" = true ] && exit 0
 
-# A serena lookup counts as knowing the file. symbols-before-read.sh reads this
-# second tracker to decide whether a whole-file Read still needs blocking, so
-# the two hooks share one session key and one recording point.
-if [ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ]; then
+# A references lookup lets a worker's first edit to that file through
+# symbols-before-read.sh; the two hooks share one session key.
+if [ "$TOOL_NAME" = mcp__serena__find_referencing_symbols ]; then
   SERENA_PATH=$(echo "$INPUT" | jq -r '.tool_input.relative_path // .tool_input.file_path // empty')
-  if [ -n "$SERENA_PATH" ]; then
-    SID=$(echo "$INPUT" | jq -r '.session_id // empty')
-    SERENA_TRACKER="/tmp/claude-serena-tracker-${SID:-${CLAUDE_SESSION_ID:-${PPID}}}"
-    echo "$SERENA_PATH" >> "$SERENA_TRACKER"
-    # symbols-before-read.sh lets a worker's first edit to this file through.
-    if [ "$TOOL_NAME" = mcp__serena__find_referencing_symbols ]; then
-      echo "refs-file:$SERENA_PATH" >> "$SERENA_TRACKER"
-      NAME_PATH=$(echo "$INPUT" | jq -r '.tool_input.name_path // empty')
-      for SEG in ${NAME_PATH//\// }; do echo "refs:${SEG%%\[*}" >> "$SERENA_TRACKER"; done
-    fi
-  fi
-  exit 0
+  [ -n "$SERENA_PATH" ] && echo "refs-file:$SERENA_PATH" >> "/tmp/claude-serena-tracker-$MCP_KEY"
 fi
+[ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ] && exit 0
 
 if [ "$TOOL_NAME" = Bash ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')

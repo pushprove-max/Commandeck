@@ -11,23 +11,21 @@ reviewer makes of it. The two scripts do every number; you write only the words.
 
 ## When it runs
 
-After EVERY worktree merge, against the unit that was merged.
+Only when the owner asks: `/worktreereview <unit>`, for a merged build or one still running. The merge
+step does not run it, and nothing else starts it (the owner, 2026-10-14).
 
-That run is automatic and uses no model: main's merge step
-runs one command,
+The page of computed numbers alone, with no words from you, is one command that uses no model:
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/worktreereview/scripts/review.py <worktree path> --no-open
 ```
-which collects, renders a page whose findings are computed, files it under
-`~/.commandeck/reviews/<date>/<project>/<unit>-review.html`, prints that path as its `page:` line, opens
-nothing, and never fails the merge. The merge's own page is never opened as a tab: only the page
-with the reviewer's analysis is, for a flagged build. A reviewer writes lessons (the steps below) only when:
-- the run trips a threshold, in which case review.py sends the pane in its `--open-in` worktree one message
-  "worktree review flagged <unit>". Defaults: more than 30 minutes of Codex review in
-  total, more than a third of the clock on tests or idle waits, more than $30 at list price
-  (`--max-review-min`, `--max-test-share`, `--max-usd`; the owner's answers at setup, saved as `reviewLoop`
-  in the project config, replace these defaults); or
-- the owner asks for a review, for a merged build or one still running.
+It collects, renders, adds the rung per batch item from the evidence file, files the page under
+`~/.commandeck/reviews/<date>/<project>/<unit>-review.html` and prints that path as its `page:` line.
+The page flags a build past a threshold. Defaults: more than 30 minutes of Codex review in total;
+more than a third of the clock on tests or idle waits when those also come to more than 10 minutes, the
+flag naming the largest single command; more than $30 at list price (`--max-review-min`,
+`--max-test-share`, `--max-usd`; the owner's answers at setup, saved as `reviewLoop` in the project
+config, replace these defaults). A wait on a review pass run outside the Builder's session (the owner
+ran it) or on a review tool that was down has its own slice of the clock and counts toward no flag.
 
 It reads logs only, so it works after main has removed the worktree:
 - the Claude session logs filed under the worktree's path (`~/.claude/projects/<path with - for />`),
@@ -86,10 +84,11 @@ It reads logs only, so it works after main has removed the worktree:
 
 Time a Builder sat waiting on the owner is not build time (the owner, 2026-10-14). collect.py cuts it
 from every clock figure, share and flag, and leaves cost as it is: each `--exclude START=END` window
-(ISO UTC, repeatable; review.py passes it through), and each idle gap over two minutes with nothing of
-the build running that either follows the Builder's `<UNIT>-DONE` line until new work arrives, or sits
-inside an open decision in the main checkout's `.claude/metrics/decisions.jsonl` that names the unit in
-its `source` or `answer` (the last row per decision and ask wins). A gap with any session's background
+(ISO UTC, repeatable; review.py passes it through), and the part of each idle gap over two minutes with
+nothing of the build running that sits inside an open decision in the main checkout's
+`.claude/metrics/decisions.jsonl` that names the unit in its `source` or `answer` (the last row per
+decision and ask wins). Idle after the Builder's `<UNIT>-DONE` line is not cut by itself: with no owner
+decision open it stays on the clock, as does time waiting on the orchestrator. A gap with any session's background
 job or a Codex run in it is kept, and a found window cuts only idle seconds. Overlapping windows cut
 each second once. Once the worktree is removed nothing proves which checkout it came from: pass `--main <main
 checkout>` (review.py passes it through), or no decision and no round archive is read. Still counted, and the page says so: a helper's request and tool subtotals, and
@@ -139,6 +138,48 @@ sort the tables, check the rows, and only then write a lesson.
 - Name each model by its name (Opus 5.5, Fable 5.1, Haiku 5.5), never only by its role.
 - Helper output tokens are under-recorded in the logs; say so if you quote them.
 - A lesson that proposes a change is your view. Say so, and do not present it as a ruling.
+- Refer to a lesson as `<unit> L<n>`: the page numbers its lessons L1, L2, ... in the order of `notes.json`.
+
+## A lesson becomes an issue only with the owner's approval
+
+1. Each lesson that proposes a change becomes a draft issue, never an issue: the repo, a title, a body
+   of 2 to 4 lines, the labels, and the source lessons (`<unit> L<n>`).
+2. Put the drafts to the owner one at a time, each with its details, and wait for an answer to each.
+3. File only the drafts the owner approves, as approved. A draft the owner declines or does not answer
+   is not filed.
+
+No step of this skill and no script files an issue from a lesson without that approval.
+
+## Sweep over past lessons (on demand)
+
+When the owner asks what became of past lessons, read the lessons of the filed review pages and, for
+each lesson, say which of these it is:
+- **done**: an issue closed or a commit made the change; name it.
+- **filed**: an open issue holds it; name it.
+- **nothing yet**.
+
+Group the lessons that say the same thing on several pages as one, with each source lesson. For the
+"nothing yet" ones, make draft issues as above, ordered by what the lessons say they cost (the
+largest first), and put them to the owner one at a time.
+
+## Writing the lessons page in a separate writer session
+
+Use this when the session asked for the review is busy with other work and its context is large (an
+orchestrator, for example): the words cost far less in a fresh session. Measured: about $0.31 to $0.72
+per page.
+
+1. Run collect (steps 1 to 3), then copy `writer-handoff.md` (beside this file) to the scratch folder
+   and fill in every `<...>`: the inputs, the facts the logs do not show (step 4), and the lesson
+   numbering.
+2. From a new empty folder, launch the writer in the background:
+   ```
+   claude -p "Read <scratch>/writer-handoff.md and do exactly what it says." --model <opus model> \
+     --setting-sources "" --disable-slash-commands --strict-mcp-config --no-session-persistence \
+     --allowedTools "Read,Write,Edit,Bash" --add-dir <scratch> ${CLAUDE_PLUGIN_ROOT}/skills/worktreereview \
+     --output-format json > <scratch>/run.json
+   ```
+3. When it ends, read `run.json` for its result and cost, check the page's figures against its tables,
+   and carry on from step 7.
 
 ## Known limits
 
@@ -153,3 +194,6 @@ sort the tables, check the rows, and only then write a lesson.
 - A request starts at the last log row before its first block. The client's own API counter
   runs higher: it also counts helper agents, compaction and small background calls.
 - The permission check before a tool runs sits inside "the tool itself"; it is not split out.
+- The closing-pass field lists the passes after the closing one, but not a merge done by hand:
+  `merge-unit-local.sh` records only its own merges. Check `git log` on main (step 4) for a
+  merge of the unit after its closing pass, and say so in the report.

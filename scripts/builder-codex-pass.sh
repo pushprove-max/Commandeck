@@ -7,7 +7,8 @@
 #       adversarial  the whole branch, the first pass: three reviewers at once, one
 #                    angle each, or one reviewer with all three angles when the
 #                    build is under 200 changed lines and not a risky launch
-#       review       narrowed: the changes since the last pass and its findings
+#       review       narrowed: the changes since the last pass and its findings;
+#                    run as final when main's brief or rulings changed since then
 #       final        the whole branch, one reviewer; the closing pass
 # builder-codex-pass.sh --verify <worktree> <unit> <tip> -- the merge's check
 #     (merge-unit-local.sh, Builder worktrees only). The last round file only
@@ -138,6 +139,10 @@ HEAD_FINAL='Review input: the closing pass, the whole branch diff against main (
 EARLIER_HEAD='Findings of the earlier passes on this branch, already with the author. Report one again only if it is still there, and ask what else in the diff is like these:'
 EARLIER_END='End of the earlier passes.'
 LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is reported as P3 "inside a stated limit", never P0 to P2:'
+# The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
+# "Other cases checked r<N>: <which>": a fix other than the one a finding named, and the
+# other cases of the same fault a fix covers, go to the reviewer with the diff.
+AUTHOR_HEAD="The author's notes on this round, from its evidence file: why it took a fix other than the one a finding named, and which other cases of the same fault it checked. Check each against the diff:"
 # shortcut: past this many bytes the files do not go out whole, only the plain diff; raise it when the reviewer model's window grows.
 DIFF_MAX=${COMMANDECK_PASS_DIFF_MAX:-400000}
 # Codex refuses an input over 1048576 characters. Past this many a deleted file is named and its old text left out.
@@ -688,7 +693,10 @@ else
   EFFORT=$(jq -r '.effort // empty' <<<"$SOL")
   [ -n "$EFFORT" ] || die "no roles.codex-reviewer effort in $(pp_routing); the passes never run on the Codex home's own effort"
   # A family name becomes the newest model id the account lists, or the id setup saved (paths.sh).
-  MODEL=$(pp_codex_model "$MODEL" codex-reviewer 2>&1) || die "roles.codex-reviewer: ${MODEL#routing: }"
+  # Its warnings stay on stderr: one beside a resolved id is not part of the id.
+  WHY=$(mktemp) || die "cannot make a temp file"
+  MODEL=$(pp_codex_model "$MODEL" codex-reviewer 2>"$WHY") || { MODEL=$(<"$WHY"); rm -f "$WHY"; die "roles.codex-reviewer: ${MODEL#routing: }"; }
+  cat "$WHY" >&2; rm -f "$WHY"
   # Fast mode is the owner's saved answer (set-up asks; no answer is off), never routing.json's.
   if pp_codex_fast; then
     pp_codex_fast_home || die "this project chose Codex fast mode but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier. Add that line, or turn it off: setup.sh --no-codex-fast"
@@ -759,6 +767,18 @@ PREV=$(round_files "$WT" "$UNIT" | awk -v n="$N" '$1 < n' | sort -n | tail -1 | 
 PASSES=$(CUT=mark earlier_passes "$WT") || exit 2
 EARLIER=$(awk '$1 == "@" { print "Earlier pass " $2 " ended " $8; next } !seen[$0]++' <<<"$PASSES")
 [ "$KIND" = adversarial ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-$BY-pass.sh $UNIT $N adversarial"
+# Main adds scope in a fix round by changing the brief or its rulings. A narrowed
+# pass would read only the fix and leave the new part unread until the closing
+# pass, so the first pass after such a change reads the whole branch as a closing
+# pass does. What they held at the last pass is kept in the worktree's git directory;
+# with no record of it after an earlier pass, a change cannot be ruled out, so the pass reads the whole branch.
+# shortcut: the record is a file the Builder can write, so a Builder that rewrites it is not guarded against (main's checkout is the trust boundary).
+SCOPE_REC=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-pass-scope
+SCOPE=$(cat ${RULINGS[@]+"${RULINGS[@]}"} "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | cksum) || true
+if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCOPE_REC")" ]; }; then
+  KIND=final
+  echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
+fi
 
 # Staged whole, then the briefs taken back out: an exclude pathspec naming
 # .claude/briefs makes git add fail in a repo that ignores .claude/.
@@ -787,10 +807,19 @@ if [ "$KIND" = adversarial ]; then
   RULE_LINE="Reviewers: ${#FOCI[@]} ($(size_words "$SIZE"); one reviewer under $SMALL_BUILD lines and no risky launch, else three)"
   echo "$RULE_LINE"
 fi
+FROM=""; [ -z "$PREV" ] || FROM=$(sed -n 's/^Reviewed: \([0-9a-f]*\)$/\1/p' "$PREV" | head -1)
+# What the round changed, files and lines, so a finding reported fixed by a
+# round with no code line in it stands out.
+if [ -n "$FROM" ]; then
+  echo "Changed since ${PREV##*/}:"
+  git -C "$WT" diff --numstat --no-renames --no-ext-diff --no-textconv "$FROM" "$SHA" -- . ':(exclude).claude/briefs' | awk -F'\t' '{ print "  " $3 " +" $1 " -" $2 }' || true
+  git -C "$WT" diff -U0 --no-renames --no-ext-diff --no-textconv --no-color "$FROM" "$SHA" -- . ':(exclude).claude/briefs' \
+    | awk '/^diff --git / { h = 0 } /^@@/ { h = 1; next } h && /^[-+]/ && !/^[-+][[:space:]]*(#|\/\/|\/\*|\*|<!--|$)/ { code = 1 } END { exit code }' \
+    && echo "No code changed in this round: only comments or blank lines, or nothing. A finding it reports fixed is not fixed in code."
+fi
 # The review input is the diff itself, each changed file whole with its
 # changes marked (one diff gives both), so the reviewer fetches neither.
 if [ "$KIND" = review ]; then
-  FROM=$(sed -n 's/^Reviewed: \([0-9a-f]*\)$/\1/p' "$PREV" | head -1)
   [ -n "$FROM" ] || die "${PREV##*/} names no reviewed commit: it was not written by the pass script"
   [ "$FROM" != "$SHA" ] || die "nothing changed since ${PREV##*/} reviewed $SHA: a narrowed pass has nothing to read. A whole-branch pass that ended GO there merges as it is; otherwise the closing pass is: builder-$BY-pass.sh $UNIT $N final"
   RANGE=$FROM..HEAD HEAD_LINE=$HEAD_FIX
@@ -810,7 +839,8 @@ DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color -U100000 "$RANGE
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
   [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Stated limits/ { on = 1 }' "$f"
 done)
-REST=${NOTE:+$NOTE$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}$'\n'$DIFF
+AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+REST=${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}$'\n'$DIFF
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
@@ -983,4 +1013,5 @@ done
 HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
   printf 'Pass: %s\n%s\n%s\n\n%s\n' "$KIND" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"

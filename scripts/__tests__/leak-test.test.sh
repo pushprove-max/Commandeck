@@ -35,7 +35,6 @@ check "the changelog and the word list are exempt" 0 "$?"
 leak() { bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1; echo $?; }
 fresh() { rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/.claude/briefs" "$TMP/tree/.claude-plugin" "$TMP/tree/scripts/__tests__" "$TMP/tree/sub/.claude-plugin"
   git init -q "$TMP/tree"; echo '.claude/briefs/' > "$TMP/tree/.gitignore"; }
-fresh
 # Two exact texts are allowed and nothing near them: the repository's own
 # address anywhere, and the owner's name in the four files that must carry it.
 REPO_ID='pushprove-max/Commandeck' OWNER='M''ax Gold''farb'
@@ -50,6 +49,12 @@ planted() { [ ! -e "$TMP/tree/$2" ] || cp "$TMP/tree/$2" "$TMP/keep"; { printf '
   rm "$TMP/tree/$2"; [ ! -e "$TMP/keep" ] || mv "$TMP/keep" "$TMP/tree/$2"; }
 planted "the owner's name in the README" README.md "$OWNER"
 planted "the owner's name in a script" scripts/x.sh "$OWNER"
+# A checkout entered through a path in other letter case, where the file system
+# ignores case, is still a checkout: its ignored files stay out of the search.
+fresh; printf '%s\n' "${SAMPLES[0]}" > "$TMP/tree/.claude/briefs/b.md"
+if [ -d "$TMP/TREE" ]; then
+  bash "$REAL/ci/leak-test.sh" "$TMP/TREE" >/dev/null 2>&1; check "a checkout reached through other letter case skips its ignored files" 0 "$?"
+else echo "skip a checkout reached through other letter case: this file system tells case apart"; fi
 
 out=$(bash "$REAL/ci/leak-test.sh" 2>&1); rc=$?
 check "the tree as committed is clean" 0 "$rc"

@@ -112,6 +112,17 @@
     if (tail) el.append(` · ${tail}`);
   }
   const sub = (id, text) => { byId(id).textContent = text; };
+  // GitHub links open in a new tab. An address from the snapshot is used only when it is on github.com, so no data
+  // value can make a link to anywhere else; the repository's own address is the collector's (dashboard.sh github_panes).
+  const ghUrl = (u) => (typeof u === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(issues|pull)\/\d+$/.test(u) ? u : null);
+  const repoUrl = (g) => (g && typeof g.repo === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(g.repo) ? g.repo : null);
+  function link(href, cls, text) {
+    const a = h('a', cls, text);
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    return a;
+  }
 
   // Card freshness from its own sources: the worst status wins and the age is
   // the oldest sample, so one fresh read cannot cover a stale one.
@@ -212,69 +223,96 @@
     : typeof u.seatRole === 'string' && u.seatRole ? `${u.seatRole[0].toUpperCase()}${u.seatRole.slice(1)}` : null);
 
   const SIGNAL_LABELS = { stuck: 'Stuck', quiet: 'Quiet', loop: 'Loop' };
-  // A Builder's steps, newest first as the collector orders them; a field the log lacks reads not measured.
-  function builderSteps(b) {
-    if (!Array.isArray(b.steps)) return [h('p', 'meta', 'Steps not measured')];
-    if (!b.steps.length) return [h('p', 'meta', 'No steps yet')];
-    const f = (label, v) => `${label} ${v === null || v === undefined ? 'not measured' : v}`;
-    const at = (iso) => { const t = parseTime(iso); return Number.isFinite(t) ? clock(t) : null; };
-    const tokens = (t) => (t && num(t.input) !== null && num(t.output) !== null ? `${t.input} in / ${t.output} out` : null);
-    let verdictShown = false;
-    return b.steps.map((s) => {
-      if (s.kind === 'codex') {
-        const parts = [`Codex ${s.pass == null ? 'not measured' : s.pass}`, f('round', s.round), f('started', at(s.start)),
-          s.end ? f('ended', at(s.end)) : 'running', f('rc', s.rc)];
-        // A verdict belongs to the round its report names: only that round's newest finished step carries it.
-        if (!verdictShown && b.verdict && s.end && num(s.round) !== null && s.round === b.verdictRound) { parts.push(b.verdict); verdictShown = true; }
-        return h('p', 'meta', parts.join(' · '));
-      }
-      // '' is a launch that named no model, so the agent's own default ran; null is a launch the log lacks.
-      const parts = [f('', s.type).trim(), f('asked', s.modelAsked === '' ? 'agent default' : s.modelAsked), f('ran', s.model), f('tokens', tokens(s.tokens)), f('started', at(s.start)),
-        s.stop ? f('stopped', at(s.stop)) : 'running'];
-      if (s.reason) parts.push(s.reason);
-      return h('p', 'meta', parts.join(' · '));
-    });
+  // The seat on one line: "Builder, Opus 5.5, medium effort".
+  function seatText(u, label) {
+    const s = u.seat;
+    if (!s || typeof s !== 'object' || typeof s.model !== 'string') return [label, u.agents === '' ? 'no seat running' : 'model and effort not recorded'].filter(Boolean).join(', ');
+    return [label, modelName(s.model), `${s.effort || 'effort not recorded'}${s.effort ? ' effort' : ''}`, s.advisor ? `advisor ${modelName(s.advisor)}` : null].filter(Boolean).join(', ');
   }
 
   const isBuilder = (u) => Boolean(u) && Boolean(u.builder) && typeof u.builder === 'object';
   const isStale = (u) => num(u.ageSec) !== null && u.ageSec >= STALE_SEC;
+  // The unit card, "Run trace" (the owner's pick, #73): a head with the state in words, up to four big facts, then the
+  // last 40 minutes on one clock ending now. The stage is a band, the last sign a tick with the silence after it
+  // hatched, and each helper run a bar with its numbers in a right-hand column. The diff and the seat show once.
+  // shortcut: only the stage the unit is in now is drawn; the collector keeps no history of the stages before it.
+  const TRACE_SEC = 2400;
+  const took = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
   function unitCard(u, now) {
-    const li = h('li', 'unit');
-    li.append(h('p', 'unit-name', u.unit), seatTags(u, seatLabel(u)));
+    const signals = isBuilder(u) && Array.isArray(u.builder.signals) ? u.builder.signals.filter(Boolean) : [];
+    const quiet = signals.some((s) => s.kind === 'quiet');
+    const li = h('li', `unit${quiet ? ' quiet' : ''}`);
+    li.dataset.unit = u.unit;
+    const head = h('div', 'unit-head');
+    head.append(h('p', 'unit-name', u.unit),
+      h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
+      h('span', 'seat', seatText(u, seatLabel(u))));
+    li.append(head);
+    // A Builder is drawn from its own event log: one badge per signal the state word does not already say.
     const badges = h('p', 'badges');
-    // A Builder is drawn from its own event log: one badge per active signal.
-    if (isBuilder(u)) {
-      badges.append(badge('Builder'));
-      if (!Array.isArray(u.builder.signals)) badges.append(badge('Signals not measured', 'muted'));
-      else for (const s of u.builder.signals) badges.append(badge(SIGNAL_LABELS[s && s.kind] || 'Signal', 'warn'));
-    } else if (SEATS.has(u.stage)) badges.append(badge(SEATS.get(u.stage)));
-    else if (typeof u.seatRole === 'string' && u.seatRole) badges.append(badge(`${u.seatRole[0].toUpperCase()}${u.seatRole.slice(1)} seat`));
+    if (isBuilder(u) && !Array.isArray(u.builder.signals)) badges.append(badge('Signals not measured', 'muted'));
+    for (const s of signals) if (s.kind !== 'quiet') badges.append(badge(SIGNAL_LABELS[s.kind] || 'Signal', 'warn'));
+    if (isStale(u)) badges.append(badge('stale', 'crit'));
     li.append(badges);
-    const sign = h('p', 'meta', num(u.ageSec) === null ? 'Last sign not measured' : `Last sign ${ago(u.ageSec)} ago `);
-    if (isStale(u)) sign.append(badge('stale', 'crit'));
-    li.append(sign);
+
+    const facts = h('dl', 'ufacts');
+    const fact4 = (term, value, cls) => { const d = h('div', cls); d.append(h('dt', null, term)); const dd = h('dd'); dd.append(...[].concat(value)); d.append(dd); facts.append(d); };
+    const since = parseTime(u.stageSince);
+    const inStage = Number.isFinite(since) ? (now - since) / 1000 : null;
     if (STAGES.includes(u.stage)) {
-      const r = num(u.round) !== null && (u.stage === 'review' || u.stage === 'fixing') ? `${u.stage === 'fixing' ? 'fix' : 'review'} ${u.round} · ` : '';
-      const since = parseTime(u.stageSince);
-      const sec = Number.isFinite(since) ? (now - since) / 1000 : null;
-      li.append(h('p', `meta stage-time${sec !== null && sec > STUCK_SEC ? ' crit' : ''}`, sec === null ? `${r}Time in stage not measured`
-        : `${r}in stage ${u.stageExact === false ? 'at least ' : ''}${ago(sec)}`));
+      const r = num(u.round) !== null && (u.stage === 'review' || u.stage === 'fixing') ? ` ${u.round}` : '';
+      fact4(`${STAGE_LABEL[u.stage]}${r}`, inStage === null ? 'not measured' : `${u.stageExact === false ? 'at least ' : ''}${ago(inStage)}`,
+        `stage-time${inStage !== null && inStage > STUCK_SEC ? ' crit' : ''}`);
     }
-    if (num(u.dirty)) li.append(h('p', 'meta', `${u.dirty} files changed, not committed`));
-    if (typeof u.diffStat === 'string' && u.diffStat) li.append(h('p', 'meta', u.diffStat));
-    // The rest starts folded so more cards fit; renderUnits restores what was open by unit name.
-    const more = h('details', 'unit-more');
-    more.dataset.unit = u.unit;
-    const sum = h('summary', null, 'Details');
-    sum.tabIndex = 0;
-    more.append(sum);
-    if (u.branch) more.append(h('p', 'meta mono', u.branch));
-    more.append(h('p', 'meta', u.agents === null || u.agents === undefined ? 'Agents not measured'
-      : u.agents === '' ? 'No agents' : `Agents ${u.agents}`));
-    more.append(h('p', 'meta mono', u.diffStat === '' ? 'No tracked changes' : typeof u.diffStat === 'string' ? u.diffStat : 'Diff not measured'));
-    if (num(u.dirty) !== null) more.append(h('p', 'meta', `Changed paths: ${u.dirty}`));
-    if (isBuilder(u)) more.append(...builderSteps(u.builder));
-    li.append(more);
+    fact4('Last sign', num(u.ageSec) === null ? 'not measured' : `${ago(u.ageSec)} ago`, quiet ? 'hot' : null);
+    // diffStat is git's "N files changed, A insertions(+), D deletions(-)" for the tracked change; "" is none.
+    const diff = typeof u.diffStat === 'string' ? /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/.exec(u.diffStat) : null;
+    if (diff) fact4(`${diff[1]} file${diff[1] === '1' ? '' : 's'}`, [h('span', 'add', `+${diff[2] || 0}`), ' ', h('span', 'del', `−${diff[3] || 0}`)]);
+    else fact4('Diff', u.diffStat === '' ? 'none' : 'not measured');
+    fact4('Not committed', num(u.dirty) === null ? 'not measured' : String(u.dirty));
+    li.append(facts);
+
+    const start = now - TRACE_SEC * 1000;
+    const x = (t) => Math.max(0, Math.min(100, ((t - start) / (TRACE_SEC * 1000)) * 100));
+    const place = (el, from, to) => { el.style.left = `${x(from).toFixed(1)}%`; el.style.width = `${Math.max(0, x(to) - x(from)).toFixed(1)}%`; return el; };
+    const lane = (cls, ...kids) => { const d = h('div', `lane${cls ? ` ${cls}` : ''}`); d.append(...kids); return d; };
+    const nums = (...cells) => { const d = h('span', 'num'); d.append(...cells.map((c) => h('span', null, c))); return d; };
+    const trace = h('div', 'trace');
+    const stageBand = Number.isFinite(since) && STAGE_TONE[u.stage] ? [place(h('i', STAGE_TONE[u.stage], STAGE_LABEL[u.stage]), since, now)] : [];
+    trace.append(h('span', 'lab', 'Stage'), lane('stages', ...stageBand, h('span', 'now')), nums('Tokens in', 'Out', 'Took'));
+    trace.lastChild.classList.add('headnums');
+    const signAt = num(u.ageSec) === null ? null : now - u.ageSec * 1000;
+    const sign = lane('pulse');
+    if (signAt !== null) {
+      const tick = h('b');
+      tick.style.left = `${x(signAt).toFixed(1)}%`;
+      sign.append(place(h('i', 'gap'), signAt, now), tick);
+    }
+    trace.append(h('span', 'lab', 'Last sign'), sign, h('span'));
+    // One row per helper run on the clock: a subagent's tokens, or a Codex pass's exit code.
+    const steps = isBuilder(u) && Array.isArray(u.builder.steps) ? u.builder.steps.filter(Boolean) : [];
+    let earlier = 0;
+    for (const s of steps) {
+      const t0 = parseTime(s.start), t1 = parseTime(s.kind === 'codex' ? s.end : s.stop);
+      if (!Number.isFinite(t0)) continue;
+      if (Number.isFinite(t1) && t1 < start) { earlier += 1; continue; }
+      const live = !Number.isFinite(t1);
+      const lab = h('span', 'lab', s.kind === 'codex' ? 'Codex ' : `${s.type || 'Agent'} `);
+      lab.append(h('small', null, s.kind === 'codex' ? `${s.pass || 'pass'}${num(s.round) === null ? '' : `, round ${s.round}`}` : modelName(s.model || s.modelAsked || 'model not recorded')));
+      const spent = live ? 'running' : took((t1 - t0) / 1000);
+      const tk = s.tokens && num(s.tokens.input) !== null && num(s.tokens.output) !== null ? s.tokens : null;
+      trace.append(lab, lane(null, place(h('i', `h${s.kind === 'codex' ? ' codex' : ''}${live ? ' live' : ''}`), t0, live ? now : t1)),
+        s.kind === 'codex' ? nums('', live ? '' : `rc ${s.rc ?? 'not recorded'}`, spent)
+          : nums(tk ? tk.input.toLocaleString('en-US') : 'not recorded', tk ? tk.output.toLocaleString('en-US') : '', spent));
+    }
+    const axis = h('div', 'axis');
+    for (let i = 0; i <= 4; i += 1) axis.append(h('span', null, i === 4 ? `now ${hm(new Date(now))}` : hm(new Date(start + i * 600000))));
+    trace.append(h('span'), axis, h('span'));
+    if (earlier) trace.append(h('p', 'tmore', `${earlier} earlier helper run${earlier > 1 ? 's' : ''} before ${hm(new Date(start))}`));
+    li.append(trace);
+    const branch = h('p', 'branch', 'Branch ');
+    branch.append(h('code', null, u.branch || 'not measured'), `, ${u.agents === null || u.agents === undefined ? 'agents not measured' : u.agents === '' ? 'no agents' : `agents ${u.agents}`}`);
+    li.append(branch);
     return li;
   }
 
@@ -283,11 +321,6 @@
     for (const s of [...STAGES, 'stale', 'permanent', 'unclassified']) lists[s] = [];
     const known = Boolean(units) && Array.isArray(units.inFlight);
     note('units', known ? '' : 'Units in flight not measured');
-    // The lists are rebuilt below: carry each card's open state and focus over by unit name.
-    const opened = new Set([...document.querySelectorAll('#units details.unit-more')].filter((d) => d.open).map((d) => d.dataset.unit));
-    const active = document.activeElement;
-    const focusUnit = active && active.localName === 'summary' && active.parentElement.classList.contains('unit-more')
-      ? active.parentElement.dataset.unit : null;
     // A unit that has waited on main a day or more folds into one counted row.
     const group = (u) => (u.stage === 'waiting-main' && isStale(u) ? 'stale'
       : STAGES.includes(u.stage) ? u.stage : SEATS.has(u.stage) ? 'permanent' : 'unclassified');
@@ -302,10 +335,6 @@
     byId('stale-units').hidden = lists.stale.length === 0;
     byId('unclassified').hidden = lists.unclassified.length === 0;
     byId('permanent').hidden = lists.permanent.length === 0;
-    for (const d of document.querySelectorAll('#units details.unit-more')) {
-      if (opened.has(d.dataset.unit)) d.open = true;
-      if (d.dataset.unit === focusUnit) d.firstChild.focus();
-    }
     // The compact view: one bar, a colour per step. A step with no unit is a narrow column.
     const cols = STAGES;
     const total = cols.reduce((a, s) => a + size(s), 0) || 1;
@@ -386,7 +415,7 @@
     el.append(uline(unit, small), tags, steps(stepRows), mbar([[done, 'g']], 'h14'), caption, m);
     return el;
   }
-  function buildBlock(u, now) {
+  function buildBlock(u, now, g) {
     const x = u.builder;
     let at = buildStep(u);
     const first = cleanGo(u, 'adversarial');
@@ -435,8 +464,16 @@
     if (issues === null) more.push(h('p', 'meta', `Issue list ${NOT_REC}`));
     else {
       const tags = h('div', 'iss');
-      // An issue is its number; an item with no issue number arrives as its own text and takes a line of its own.
-      for (const i of issues) tags.append(h('span', [typeof i === 'number' ? null : 'item', built && built.includes(i) ? 'y' : null].filter(Boolean).join(' ') || null, typeof i === 'number' ? `#${i}` : i));
+      // An issue is its number, a link to it on GitHub with its title on hover when the open list has it; an item with
+      // no issue number arrives as its own text and takes a line of its own.
+      const repo = repoUrl(g);
+      const titles = new Map((g && Array.isArray(g.issues) ? g.issues : []).map((x) => [x.number, x.title]));
+      for (const i of issues) {
+        const cls = [typeof i === 'number' ? null : 'item', built && built.includes(i) ? 'y' : null].filter(Boolean).join(' ') || null;
+        const tag = typeof i === 'number' && repo ? link(`${repo}/issues/${i}`, cls, `#${i}`) : h('span', cls, typeof i === 'number' ? `#${i}` : i);
+        if (typeof i === 'number' && typeof titles.get(i) === 'string') tag.title = titles.get(i);
+        tags.append(tag);
+      }
       const key = h('div', 'legend');
       // A null built list is a build with no evidence file yet, the normal first minutes; a file with nothing in it arrives as [].
       legend(key, [['g', 'recorded as built'], ['n', built === null ? noBuilt : 'not yet recorded']]);
@@ -483,7 +520,7 @@
   let listedBuilds = null;
   // A clear only this browser holds, held back from a save made before the first list was read.
   let owed = false;
-  function renderBuilds(units, now) {
+  function renderBuilds(units, now, g) {
     const { builders, used } = workingBuilders(units);
     note('builds', builders ? '' : 'Builders not measured');
     const closed = closedBuilds();
@@ -492,7 +529,7 @@
     if (listedBuilds && owed) { owed = false; sendLayout(); }
     sub('builds-sub', [!builders ? null : used === null ? 'working Builders not measured' : `${used} of ${builders.length} working`,
       fin && fin.length ? `${fin.length} finished` : null].filter(Boolean).join(' · '));
-    const blocks = !builders ? [] : builders.length ? builders.map((u) => buildBlock(u, now)) : [h('p', 'empty', 'No build is running.')];
+    const blocks = !builders ? [] : builders.length ? builders.map((u) => buildBlock(u, now, g)) : [h('p', 'empty', 'No build is running.')];
     // The finished list has its own source: it is drawn whether or not the running builds could be read.
     blocks.push(...(fin ? fin.map((f) => finishedBlock(f, now)) : [h('p', 'nm', 'Finished builds not measured')]));
     put(byId('builds-list'), blocks);
@@ -510,6 +547,178 @@
       return li;
     }) : [h('li', null, 'Main commits not measured')]);
     flag('main-chain', num(m.unpushed) > 0);
+  }
+
+  // The GitHub panes (the owner's picks, #74), from the collector's gh and git reads (dashboard.sh github_panes,
+  // next_push). A read never had is null: the pane says why, in the collector's words, and the rest of the page is drawn.
+  function ghMissing(card, sources, ids, what) {
+    const why = ids.map((id) => sources && sources[id] && sources[id].error).find(Boolean);
+    note(card, `${what} not read${why ? `: ${why}` : ''}`);
+  }
+  // What stands between a pull request and its merge, worst first: [tone, words]. Ready only when nothing does.
+  function prBlock(p) {
+    const checks = Array.isArray(p.checks) ? p.checks : [];
+    const failed = checks.filter((c) => c && c.state === 'fail'), running = checks.filter((c) => c && c.state === 'run');
+    if (p.draft) return ['wait', 'Still a draft'];
+    if (failed.length) return ['fail', `${failed[0].name || 'a check'} failed${failed.length > 1 ? `, and ${failed.length - 1} more` : ''}`];
+    if (p.mergeable === 'CONFLICTING') return ['fail', 'Conflicts with its base branch'];
+    if (p.review === 'CHANGES_REQUESTED') return ['fail', 'Changes requested'];
+    if (running.length) return ['run', `${running.length} check${running.length > 1 ? 's' : ''} still running`];
+    if (p.review === 'REVIEW_REQUIRED') return ['wait', 'Needs a review'];
+    if (p.mergeable !== 'MERGEABLE') return ['wait', 'GitHub has not said whether it merges cleanly'];
+    // Approved and conflict-free is not enough: the branch's rules (required checks, reviews) can still block it.
+    if (p.mergeState !== 'CLEAN' && p.mergeState !== 'HAS_HOOKS') return ['wait', MERGE_STATE[p.mergeState] || 'GitHub has not said whether its rules let it merge'];
+    return ['ready', p.review === 'APPROVED' ? 'Approved, merges cleanly' : 'Merges cleanly'];
+  }
+  const MERGE_STATE = { BLOCKED: "Blocked by the branch's rules", BEHIND: 'Behind its base branch', UNSTABLE: 'A check is not passing' };
+  const PR_ORDER = { ready: 0, fail: 1, run: 2, wait: 3 };
+  const CHECK_TONE = { pass: 'g', fail: 'r', run: 'b', skip: 'n' };
+  const prs = (g) => (g && Array.isArray(g.prs) ? g.prs.filter((p) => p && Number.isInteger(p.number)) : null);
+  // The Builder working a branch, by the branch name its worktree is on.
+  const unitOn = (units, branch) => ((units && Array.isArray(units.inFlight) ? units.inFlight : []).find((u) => u && u.branch && u.branch === branch) || null);
+
+  // Merge line: every open pull request, the ones ready to merge first, each naming what blocks it.
+  function renderMergeLine(g, units, sources) {
+    const list = prs(g);
+    if (!list) { ghMissing('merge-line', sources, ['github-prs'], 'Pull requests'); sub('merge-line-sub', ''); put(byId('merge-line-list'), []); return; }
+    note('merge-line', '');
+    const rows = list.map((p) => ({ p, b: prBlock(p) })).sort((a, b) => PR_ORDER[a.b[0]] - PR_ORDER[b.b[0]] || a.p.number - b.p.number);
+    const n = (t) => rows.filter((r) => r.b[0] === t).length;
+    sub('merge-line-sub', `${n('ready')} ready · ${n('fail')} failing · ${n('run') + n('wait')} waiting`);
+    const kids = [];
+    let last = null;
+    for (const { p, b } of rows) {
+      const group = b[0] === 'ready' ? 'Ready to merge' : 'Blocked';
+      if (group !== last) { kids.push(h('li', 'group', group)); last = group; }
+      const href = ghUrl(p.url);
+      const row = href ? link(href, `pr ${b[0]}`) : h('div', `pr ${b[0]}`);
+      const who = h('p', 'by');
+      const u = unitOn(units, p.branch);
+      const closes = Array.isArray(p.closes) && p.closes.length ? `closes ${p.closes.map((i) => `#${i}`).join(', ')}` : null;
+      who.append(...[u ? u.unit : null, closes].filter(Boolean).map((t) => `${t}, `), h('code', null, p.branch || 'branch not named'), ' ',
+        h('span', 'add', `+${num(p.additions) ?? 0}`), ' ', h('span', 'del', `−${num(p.deletions) ?? 0}`));
+      const text = h('div');
+      text.append(h('p', 'title', p.title), who);
+      const checks = (Array.isArray(p.checks) ? p.checks : []).filter(Boolean);
+      const seg = h('div', 'checks');
+      seg.setAttribute('aria-label', checks.length ? `${checks.filter((c) => c.state === 'pass').length} of ${checks.length} checks passed` : 'no checks');
+      for (const c of checks) { const i = h('i', CHECK_TONE[c.state] || 'n'); i.title = `${c.name}: ${c.state}`; seg.append(i); }
+      const cw = h('div');
+      cw.append(seg, h('p', 'checks-note', checks.length ? `${checks.filter((c) => c.state === 'pass').length} of ${checks.length} passed` : 'No checks'));
+      row.append(h('span', 'num', `#${p.number}`), text, cw, h('p', `block ${b[0]}`, b[1]));
+      const li = h('li');
+      li.append(row);
+      kids.push(li);
+    }
+    put(byId('merge-line-list'), kids.length ? kids : [h('li', 'empty', 'No open pull requests')]);
+    flag('merge-line', n('fail') > 0);
+  }
+
+  // Who holds what: open issues by milestone, most urgent first, each with the Builder whose brief lists it.
+  // An urgent issue (P0 or P1) that nobody holds is called out at the top.
+  function renderHeld(g, units, sources) {
+    const issues = g && Array.isArray(g.issues) ? g.issues.filter((i) => i && Number.isInteger(i.number)) : null;
+    const alarm = byId('held-alarm');
+    if (!issues) { ghMissing('held', sources, ['github-issues'], 'Issues'); sub('held-sub', ''); alarm.hidden = true; put(byId('held-list'), []); return; }
+    note('held', '');
+    const held = new Map();
+    for (const u of units && Array.isArray(units.inFlight) ? units.inFlight.filter(isBuilder) : []) {
+      for (const i of Array.isArray(u.builder.issues) ? u.builder.issues : []) if (typeof i === 'number') held.set(i, [...(held.get(i) || []), u.unit]);
+    }
+    const open = prs(g) || [];
+    const pri = (i) => (/^P[0-3]$/.test(i.priority) ? Number(i.priority[1]) : 9);
+    const miles = new Map((g && Array.isArray(g.milestones) ? g.milestones : []).filter((m) => m && typeof m.title === 'string').map((m) => [m.title, m]));
+    const groups = new Map();
+    for (const i of issues) { const k = typeof i.milestone === 'string' ? i.milestone : ''; groups.set(k, [...(groups.get(k) || []), i]); }
+    const due = (k) => { const t = parseTime(miles.get(k) && miles.get(k).due); return Number.isFinite(t) ? t : Infinity; };
+    const order = [...groups.keys()].sort((a, b) => (a === '') - (b === '') || due(a) - due(b) || a.localeCompare(b));
+    let free = 0;
+    const kids = order.map((k) => {
+      const list = groups.get(k).sort((a, b) => pri(a) - pri(b) || a.number - b.number);
+      const n = list.filter((i) => held.has(i.number)).length;
+      const m = miles.get(k);
+      const sec = h('section', 'mile');
+      const title = h('h3', null, k || 'No milestone');
+      const t = parseTime(m && m.due);
+      title.append(h('span', null, Number.isFinite(t) ? `due ${MONTHS[new Date(t).getMonth()]} ${new Date(t).getDate()}` : `${list.length} open`));
+      const total = m && num(m.open) !== null && num(m.closed) !== null ? m.open + m.closed : null;
+      sec.append(title, mbar(total ? [[(100 * m.closed) / total, 'g'], [(100 * n) / total, 'b']] : [[(100 * n) / list.length, 'b']], 'h8'),
+        h('p', 'prog-note', `${total ? `${m.closed} of ${total} closed, ` : ''}${n} held, ${list.length - n} free`));
+      const ul = h('ul', 'issues');
+      for (const i of list) {
+        const who = held.get(i.number);
+        const urgent = pri(i) <= 1 && !who;
+        if (urgent) free += 1;
+        const li = h('li', 'issue');
+        const href = ghUrl(i.url);
+        const name = href ? link(href, 't') : h('span', 't');
+        name.append(h('span', 'inum', `#${i.number}`), i.title);
+        const pr = open.find((p) => Array.isArray(p.closes) && p.closes.includes(i.number));
+        if (pr) name.append(h('small', null, `PR #${pr.number}: ${prBlock(pr)[1]}`));
+        li.append(h('span', `pri p${pri(i)}`, pri(i) < 9 ? `P${pri(i)}` : '–'), name,
+          h('span', `holder${who ? '' : urgent ? ' none' : ' free'}`, who ? who.join(', ') : urgent ? 'Nobody' : 'Free'));
+        ul.append(li);
+      }
+      sec.append(ul);
+      return sec;
+    });
+    sub('held-sub', `${issues.length} open · ${order.filter(Boolean).length} milestone${order.filter(Boolean).length === 1 ? '' : 's'}`);
+    alarm.hidden = free === 0;
+    alarm.textContent = `${free} urgent issue${free === 1 ? '' : 's'} nobody holds`;
+    put(byId('held-list'), kids.length ? kids : [h('p', 'empty', 'No open issues')]);
+    flag('held', free > 0);
+  }
+
+  // Next push: the commits local main would push, under the issue each names, and what should stop the push first.
+  function renderNextPush(np, g, sources, now) {
+    const verdict = byId('next-push-verdict');
+    if (!np || typeof np !== 'object' || !Array.isArray(np.commits)) {
+      ghMissing('next-push', sources, ['git-push'], 'The next push');
+      sub('next-push-sub', ''); verdict.replaceChildren(); put(byId('next-push-list'), []); return;
+    }
+    note('next-push', '');
+    const ahead = num(np.ahead), behind = num(np.behind);
+    sub('next-push-sub', `against ${np.upstream}: ${ahead ?? 'not measured'} ahead, ${behind ?? 'not measured'} behind`);
+    const repo = repoUrl(g);
+    const titles = new Map((g && Array.isArray(g.issues) ? g.issues : []).map((i) => [i.number, i.title]));
+    const failing = new Map((prs(g) || []).filter((p) => prBlock(p)[0] === 'fail').flatMap((p) => (Array.isArray(p.closes) ? p.closes : []).map((i) => [i, p])));
+    // A commit that names several issues is listed under the first.
+    const groups = new Map();
+    for (const c of np.commits.filter(Boolean)) { const k = Array.isArray(c.refs) && c.refs.length ? c.refs[0] : null; groups.set(k, [...(groups.get(k) || []), c]); }
+    const bare = (groups.get(null) || []).length;
+    const stops = [bare ? `${bare} commit${bare > 1 ? 's name' : ' names'} no issue` : null, behind > 0 ? `main is ${behind} behind ${np.upstream}: pull first` : null,
+      ...[...groups.keys()].filter((k) => failing.has(k)).map((k) => `#${k}'s pull request #${failing.get(k).number} is blocked: ${prBlock(failing.get(k))[1]}`)].filter(Boolean);
+    const run = g && Array.isArray(g.runs) && g.runs[0] && typeof g.runs[0] === 'object' ? g.runs[0] : null;
+    const ran = run ? parseTime(run.createdAt) : NaN;
+    const big = h('span', 'big', String(ahead ?? '?'));
+    big.append(h('small', null, ahead === 1 ? 'commit' : 'commits'));
+    const words = h('div');
+    words.append(h('p', stops.length ? 'warn' : null, ahead === 0 ? `Nothing to push${stops.length ? `; ${stops.join('; ')}` : ''}.` : stops.length ? `Check before pushing: ${stops.join('; ')}.` : 'Nothing flagged.'),
+      h('p', 'meta', `${[...groups.keys()].filter((k) => k !== null).length ? `Names ${[...groups.keys()].filter((k) => k !== null).map((k) => `#${k}`).join(', ')}. ` : ''}`
+        + (run ? `Last CI on ${np.upstream}: ${run.conclusion || run.status || 'state not recorded'}${Number.isFinite(ran) ? `, ${ago((now - ran) / 1000)} ago` : ''}.` : 'Last CI run not read.')));
+    verdict.replaceChildren(big, words);
+    const kids = [...groups.entries()].map(([k, list]) => {
+      const sec = h('section', 'push-issue');
+      const head = h('div', 'push-head');
+      const name = h('h3');
+      if (k === null) name.append('No issue named');
+      else { name.append(repo ? link(`${repo}/issues/${k}`, 'inum', `#${k}`) : h('span', 'inum', `#${k}`)); if (titles.has(k)) name.append(` ${titles.get(k)}`); }
+      head.append(name);
+      if (k === null) head.append(badge('needs an issue or a reason', 'warn'));
+      else if (failing.has(k)) head.append(badge(`PR #${failing.get(k).number} blocked`, 'crit'));
+      const ol = h('ol');
+      for (const c of list) {
+        const li = h('li', 'commit');
+        li.append(h('span', 'sha', c.sha), h('span', 'msg', c.subject), h('span', 'add', `+${num(c.added) ?? 0}`),
+          h('span', 'del', `−${num(c.deleted) ?? 0}`), h('span', 'when', num(c.at) === null ? '' : ago((now - c.at * 1000) / 1000)));
+        ol.append(li);
+      }
+      sec.append(head, ol);
+      return sec;
+    });
+    if (ahead > np.commits.length) kids.push(h('p', 'meta', `The newest ${np.commits.length} of ${ahead} commits are listed.`));
+    put(byId('next-push-list'), kids);
+    flag('next-push', stops.length > 0);
   }
 
   function renderCos(s) {
@@ -1035,7 +1244,10 @@
     if (typeof d.name === 'string' && d.name) { byId('title').textContent = d.name; document.title = d.name; }
     renderNeeds(d.needsOwner, now, d.units, d.githubP1);
     renderUnits(d.units, now);
-    renderBuilds(d.units, now);
+    renderBuilds(d.units, now, d.github);
+    renderMergeLine(d.github, d.units, d.sources);
+    renderHeld(d.github, d.units, d.sources);
+    renderNextPush(d.nextPush, d.github, d.sources, now);
     renderChain(d.mainChain);
     renderCos(d.chiefOfStaff);
     const hostInfo = renderHost(d.host);
@@ -1210,10 +1422,10 @@
   }
   // The layout follows the owner to every PC: layout.js, served by the dashboard's host, is the copy that
   // wins at load, and every change sends the whole layout back to that host (dashboard_serve.py checks and writes it).
-  // The file holds each project's layout in its own slot, projects[<name>], and one save number for them all.
+  // The file holds each project's layout in its own slot, projects[<name>], each with its own save number.
   // Each value is still read through restore()'s own checks, so the host's file is trusted no more than this browser's.
-  // shortcut: the last browser to change anything wins whole, and a page already open does not pick up another PC's
-  // change until it is reloaded; merge per key if two PCs are ever used at once.
+  // shortcut: a page already open does not pick up another page's change until it is reloaded, and its own next change
+  // is then refused and reloads it (sendLayout); merge per key if two PCs are ever used at once.
   const LAYOUT = { order: ORDER_KEY, sizes: SIZES_KEY, heights: HEIGHTS_KEY, hidden: HIDDEN_KEY, closed: CLOSED_KEY, collapsed: COLLAPSED_KEY };
   const UNSAVED_KEY = `commandeck-dashboard-unsaved${NS}`;
   const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -1227,8 +1439,8 @@
   const has = (k) => Object.prototype.hasOwnProperty.call(held, k);
   // The host numbers each save. A save names the number of the layout it was made over, and the host refuses it
   // when it holds another (dashboard_serve.py), so a save that lands late cannot undo a newer one.
-  // The number is the file's, one for every project in it.
-  let rev = Number.isSafeInteger(plain(file).rev) && plain(file).rev > 0 ? plain(file).rev : 0;
+  // The number is this project's slot's own, so a save on another project's page refuses none on this one.
+  let rev = Number.isSafeInteger(held.rev) && held.rev > 0 ? held.rev : 0;
   // This browser's own copy wins over the host's in two cases, and is then sent up: a change the host never
   // confirmed (a reload while its save was unanswered), and a host that holds no layout and no number while
   // this browser holds one. A numbered empty layout is another PC's Reset layout, and wins.
@@ -1269,15 +1481,20 @@
     // winning on load; upgrade if a record can go missing in normal use.
     if (listedBuilds && Array.isArray(body.closed)) body.closed = body.closed.filter((x) => listedBuilds.includes(x));
     else { owed = owed || (mine && closedBuilds().length > 0); delete body.closed; }
-    const done = (ok, again) => {
+    const done = (ok) => {
       sending = false;
       if (ok) rev += 1;
-      if (unsent || again) { unsent = false; sendLayout(); } else if (ok && !owed) store((s) => s.removeItem(UNSAVED_KEY));
+      if (unsent) { unsent = false; sendLayout(); } else if (ok && !owed) store((s) => s.removeItem(UNSAVED_KEY));
     };
-    // 409: the host holds another layout than the one this save was made over. Its number comes back and the
-    // layout goes again over that one; an answer with no new number is left for the next change or load.
-    const answer = (res) => (res.status !== 409 ? done(res.ok === true)
-      : res.json().then((r) => { const next = Boolean(r) && Number.isSafeInteger(r.rev) && r.rev >= 0 && r.rev !== rev; if (next) rev = r.rev; done(false, next); }));
+    // 409: another page changed the layout since this one loaded it. Sending this page's whole layout again would
+    // undo that change (a Reset layout came back as the old widths), so this page drops its change and reloads
+    // onto the host's layout; with no unsaved mark the reload takes the host's copy.
+    // shortcut: a build cleared in the refused save shows again after the reload; resend clears alone if that bites.
+    const answer = (res) => {
+      if (res.status !== 409) return done(res.ok === true);
+      store((s) => s.removeItem(UNSAVED_KEY));
+      window.location.reload();
+    };
     window.fetch('layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(answer).catch(() => done(false));
   };
   const keep = (key, value) => { mem.set(key, value); store((s) => s.setItem(key, JSON.stringify(value))); sendLayout(); };

@@ -24,7 +24,7 @@ type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} coul
 ODD=$(strip_odd_end "$CMD")
 [ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
 
-# The serena-down marker stands the symbols gates down. read-tracker.sh writes
+# The serena-down marker stands the symbols gate down. read-tracker.sh writes
 # it on an errored serena call and is the only writer; a hand-made one ran a
 # whole worker cut with the gates off (2026-09-18).
 case "$CMD" in *claude-serena-down*)
@@ -167,8 +167,8 @@ subst_var() {
 # and `for f in /tmp/x/*.log; do rg y "$f"; done`. Only a bare literal
 # assignment, a one-word for-list and $HOME resolve; nothing is executed. Any
 # other `$` stays in the text, and every check below still refuses it. The
-# worktree and search checks read SEG_TEXT, so an alias is judged exactly like
-# the path it names.
+# search check reads SRCH_TEXT, so an alias is judged exactly like the path it
+# names.
 ASSIGN_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'"'[^']*'"'|\$\(.*\)|[^[:space:]"'"'"']*)[[:space:]]*$'
 FOR_RE='^[[:space:]]*for[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+in[[:space:]]+(.+)$'
 # `[while] [IFS=] read [-r] VAR`: VAR takes the fed-in lines one at a time.
@@ -215,9 +215,6 @@ load_segments() { # $1 = a command text, $2 = the prefix of the four arrays to f
     L_PIPE+=("${LINE:0:1}"); L_TEXT+=("$TEXT")
   done < <(split_search_segments "$1")
 }
-SEG_PIPE=(); SEG_TEXT=(); SEG_FOR=(); SEG_READ=()
-load_segments "$CMD" SEG
-
 
 # Block a repo-wide text search:
 # every path an `rg`, or a `grep` with a recursive flag, names must be bounded,
@@ -297,7 +294,9 @@ search_bounded() {
 # that holds it (a `$()` stays in its place), so a search inside one is judged
 # as the command it is; and with a note's text taken out, so prose that names
 # a search is not. A note is a here-document cat or tee reads, alone on its
-# line, with nothing after its end word; under an end word with no quote its
+# line, with nothing after its end word and no process substitution on or before
+# that line (`cat <<EOF > >(bash)` and `exec > >(bash)` before a plain
+# `cat <<EOF` run its body); under an end word with no quote its
 # substitutions still run and are judged. Any other here-document is read as
 # commands, since a shell may be fed it or a later line may run the file. So a
 # note whose text names a search, followed by another command in the same
@@ -385,7 +384,8 @@ search_text() {
                  T=${T//[\'\"\\]/}
                  if [ -n "$T" ]; then
                    TAG=$T DASH=$R NOTE=0
-                   [ ${#BUF[@]} -eq 0 ] && [ -z "$DASH" ] && [[ ${TEXT:LS:I-LS} =~ $NOTE_RE ]] && NOTE=1
+                   R=${TEXT:I}; R=${TEXT:0:I}${R%%"$NL"*}
+                   [ ${#BUF[@]} -eq 0 ] && [ -z "$DASH" ] && [[ ${TEXT:LS:I-LS} =~ $NOTE_RE && $R != *[\<\>]\(* ]] && NOTE=1
                  fi
                  OUT+='<<'; I=$((I+1))
                fi ;;
@@ -661,10 +661,9 @@ done < <(split_search_segments "$CMD")
 #
 # A CLI's options can sit before its subcommand and between the subcommand's
 # words (`orca-ide --json terminal read`, `gh run -R owner/repo watch`), so a
-# check that reads fixed word positions misses the call. Every check on
-# an Orca or gh subcommand, here and in the main-only block below, reads it
-# through this. $1 = the flags whose value is the NEXT word, space-separated;
-# the rest = the words after the command name. Sets SUBCMD to the first two
+# check that reads fixed word positions misses the call. Every check on an
+# Orca subcommand reads it through this. $1 = the flags whose value is the NEXT
+# word, space-separated; the rest = the words after the command name. Sets SUBCMD to the first two
 # non-option words, GLOBALS to the option words and values met on the way, and
 # REST to everything after.
 # ORCA_VALUED = the Orca options that take a separate value word: the two
@@ -691,148 +690,4 @@ while IFS= read -r LINE; do
   echo "BLOCKED: raw pane read. Use scripts/read-verdict.sh <handle> [lines] or seat.sh collect for content -- they filter outside main's context. For liveness use scripts/board.sh, or the state block orca-wait.sh prints with every wake." >&2
   exit 2
 done < <(split_search_segments "$CMD")
-
-
-# Block a read that puts more than ~150 lines into the context (owner ruling
-# 2026-09-12, widened 2026-09-15): a quarter of every builder's calls were
-# `cat`/`sed -n` reads, and every byte is re-sent on each later call. A read
-# names a line range of at most 150 lines (`sed -n '120,260p' file`), or goes
-# through serena. It runs after the main-only block, so main reading a worker's
-# file gets that block's advice rather than a range read it would then refuse.
-#
-# THE FILE'S TYPE NEVER MATTERED; only how much it prints does. This rule used
-# to fire only on a `.ts`/`.tsx` under the source roots, which exempted every
-# one of the four files Sol printed most on 2026-09-15 -- two `SKILL.md`, a
-# brief and a shell script -- 104M carried input tokens in a day, of which the
-# cap recovers 46M.
-#
-# The exception is a document an agent is ORDERED to read whole:
-# AGENT_STARTUP.md, a unit brief, and a SKILL.md under a .claude, .codex,
-# .codex-review or .agents skills root. `.codex-review` is the review lane's
-# CODEX_HOME, so reviewer skills install there. It is
-# judged per operand, so an exempt file beside an ordinary one excuses nothing.
-#
-# `cat`/`nl` block on SIZE, not on line count: a `wc -l` here would read a
-# whole file inside a hook, and a short file is cheap however many lines it
-# has. 12 KB is 150 lines at 80 columns.
-#
-# A redirect means the output lands in a file, not in the context, so the
-# segment is exempt -- that also covers a heredoc write (`cat > notes.md
-# <<EOF`), which is not a read at all.
-#
-# CEILING: a read that feeds a pipe (`cat big.md | rg x`) is judged on what it
-# prints, not on what survives the pipe. Write it as `rg x big.md`.
-READ_CAP_BYTES=12000
-# ANSWER THE ESCALATION. One seat met 33 read-cap blocks in a day by
-# asking for the next size up each time -- head -160, -180, -240, -260,
-# sed '1,220p', '1,260p'. The refusal named a replacement and never said that a
-# bigger number is not on the menu, so every refusal read as a negotiation.
-READ_CAP_ESCALATION="THE CAP DOES NOT RISE: a larger -n or a wider range is refused too. If 150 lines are not enough, ask a question over the file instead (rg -n -e <pattern> <file>), read the symbol with serena find_symbol, or read the NEXT 150-line range after this one."
-required_doc() {
-  case "/$1/" in */../*) return 1 ;; esac
-  # A skills root lives under an agent config directory, the repo's or an
-  # installed plugin's; a directory merely named skills is ordinary.
-  [[ $1 =~ (^|/)AGENT_STARTUP\.md$ || $1 =~ (^|/)\.claude/briefs/[^/]+\.md$ || $1 =~ (^|/)\.(claude|codex|codex-review|agents)/(.+/)?skills/([^/]+/)+SKILL\.md$ ]]
-}
-# The file is the one the command reads, so its own `cd` counts. Which
-# cd is still in force depends on subshells, `||` and exit codes, and this is
-# not a shell: the file is sized in EVERY folder the command could be in, the
-# starting one and each cd target that exists. One this cannot read (`cd "$X"`,
-# `cd -`) adds no folder, so a file after it is sized in the folders known.
-READ_BASES=("$PWD")
-for i in "${!SEG_TEXT[@]}"; do
-  load_words "${SEG_TEXT[i]}"; set -- "${WORDS[@]}"
-  TOOL=${1-}; [ $# -gt 0 ] && shift
-  case "${SEG_TEXT[i]}" in *'>'*|*'<'*) continue ;; esac
-  RANGE=""
-  case "$TOOL" in
-    cd|pushd)
-      # The `)` that closes a subshell is not part of the folder's name.
-      TO=${1-}; [ -d "$TO" ] || TO=${TO%"${TO##*[!)]}"}
-      case "$TO" in
-        ''|'~') READ_BASES+=("$HOME") ;;
-        '~/'*) [ ! -d "$HOME/${TO#'~/'}" ] || READ_BASES+=("$HOME/${TO#'~/'}") ;;
-        -*|*'$'*|*'`'*) ;;
-        /*) [ ! -d "$TO" ] || READ_BASES+=("$(realpath -m -- "$TO")") ;;
-        *)
-          for BASE in "${READ_BASES[@]}"; do
-            [ ! -d "$BASE/$TO" ] || READ_BASES+=("$(realpath -m -- "$BASE/$TO")")
-          done ;;
-      esac ;;
-    cat|nl)
-      for OPERAND in "$@"; do
-        case "$OPERAND" in -*) continue ;; esac
-        # The `)` that closes a subshell is not part of the name, unless a file has it.
-        NAMED=0
-        for BASE in "${READ_BASES[@]}"; do [ ! -f "$OPERAND" ] && [ ! -f "$BASE/$OPERAND" ] || NAMED=1; done
-        [ "$NAMED" = 1 ] || OPERAND=${OPERAND%"${OPERAND##*[!)]}"}
-        for BASE in "${READ_BASES[@]}"; do
-          FILE=$OPERAND
-          case "$OPERAND" in /*) ;; *) [ "$BASE" = "$PWD" ] || FILE=$BASE/$OPERAND ;; esac
-          [ -f "$FILE" ] || continue
-          required_doc "$FILE" && continue
-          SIZE=$(stat -c %s "$FILE" 2>/dev/null) || continue
-          [ "$SIZE" -le "$READ_CAP_BYTES" ] && continue
-          echo "BLOCKED: whole-file $TOOL of $FILE ($SIZE bytes) is over the ${READ_CAP_BYTES}-byte read cap. Read a range of at most 150 lines, or serena find_symbol." >&2
-          [ "${#READ_BASES[@]}" = 1 ] || echo "A file is sized in every folder this command could be in (the starting one and each cd target); name the file by its full path to read a smaller one of the same name." >&2
-          echo "$READ_CAP_ESCALATION" >&2
-          echo "Try: sed -n '1,150p' $(shq "$FILE")" >&2; exit 2
-        done
-      done ;;
-    head|tail|sed)
-      if [ "$TOOL" = sed ]; then
-        RANGE=$(printf '%s\n' "$@" | grep -oE '^([0-9]+),([0-9]+)p$' | head -1)
-        [ -n "$RANGE" ] || continue
-        A=${RANGE%%,*}; B=${RANGE#*,}; B=${B%p}
-        # A sed range is inclusive: `1,151p` prints 151 lines.
-        [ $((B - A + 1)) -le 150 ] && continue
-      else
-        # Every spelling of a line count: -N, -nN, -n N, --lines=N, --lines N,
-        # and a flag cluster ending in n. The last one wins, as head and tail
-        # read them. A byte count (-c, --bytes) is consumed so its number is
-        # never read as lines. TAKES = the flag whose value is the next word.
-        N=""; TAKES=""
-        for W in "$@"; do
-          if [ -n "$TAKES" ]; then
-            [ "$TAKES" = n ] && { N=""; [[ $W =~ ^[0-9]+$ ]] && N=$W; }
-            TAKES=""; continue
-          fi
-          case "$W" in
-            --l|--li|--lin|--line|--lines) TAKES=n ;;
-            --b|--by|--byt|--byte|--bytes) TAKES=c ;;
-            --l*=*) N=""; [[ ${W#*=} =~ ^[0-9]+$ ]] && N=${W#*=} ;;
-            --*) ;;
-            -*)
-              if [[ $W =~ ^-[^-nc0-9]*([nc])(.*)$ ]]; then
-                FLAG=${BASH_REMATCH[1]}; VALUE=${BASH_REMATCH[2]}
-                if [ -z "$VALUE" ]; then TAKES=$FLAG
-                elif [ "$FLAG" = n ]; then N=""; [[ $VALUE =~ ^[0-9]+$ ]] && N=$VALUE
-                fi
-              elif [[ $W =~ ^-([0-9]+)$ ]]; then N=${BASH_REMATCH[1]}
-              fi ;;
-          esac
-        done
-        [ -z "$N" ] && continue
-        [ "$N" -le 150 ] && continue
-      fi
-      FILES=""; ALL_DOCS=1
-      for OPERAND in "$@"; do
-        case "$OPERAND" in -*) continue ;; esac
-        [ "$OPERAND" = "$RANGE" ] && continue
-        [[ $OPERAND =~ ^[0-9]+$ ]] && continue
-        FILES+=" $(shq "$OPERAND")"; required_doc "$OPERAND" || ALL_DOCS=0
-      done
-      [ -n "$FILES" ] && [ "$ALL_DOCS" = 1 ] && continue
-      if [ "$TOOL" = sed ]; then
-        echo "BLOCKED: sed range $RANGE is over the 150-line read cap. Read the symbol's lines, or two ranges if it is that long." >&2
-        echo "$READ_CAP_ESCALATION" >&2
-        echo "Try: sed -n '$A,$((A + 149))p'$FILES" >&2
-      else
-        echo "BLOCKED: $TOOL -$N is over the 150-line read cap. Read what the symbol needs." >&2
-        echo "$READ_CAP_ESCALATION" >&2
-        echo "Try: $TOOL -150$FILES" >&2
-      fi
-      exit 2 ;;
-  esac
-done
 exit 0

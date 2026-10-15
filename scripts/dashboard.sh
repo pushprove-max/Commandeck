@@ -339,15 +339,24 @@ needs_owner() {
     '{decisions: $dec, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
 }
 
-# The project's open GitHub issues labelled P1 (the exact label), counted in the repository gh resolves from this
-# checkout: GH_REPO or GH_HOST would name one repository for every project. A count that cannot be had (no gh, not
+# owner/name of the checkout's GitHub origin, or nothing. Every gh read names it as GH_REPO, so a gh default set
+# to another remote (an upstream) cannot mix that repository's issues, checks and pull requests into the page's links.
+origin_repo() {
+  git -C "$PP_MAIN" config --get remote.origin.url 2>/dev/null \
+    | sed -nE 's#^(https://([^/@]+@)?|ssh://git@|git@)github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/?$#\3#p' | sed 's/\.git$//'
+}
+
+# The project's open GitHub issues labelled P1 (the exact label), counted in the repository of its GitHub origin,
+# or with none the one gh resolves from this checkout: a GH_REPO or GH_HOST of the caller's would name one
+# repository for every project. A count that cannot be had (no gh, not
 # signed in, no GitHub remote, no network, no answer in 8 s, an answer that is not a list of issues) is null, never 0,
 # and the reason is the collector's own words: nothing gh prints reaches the snapshot. gh writes to a file, so a
 # process it leaves behind cannot hold the collector on a pipe.
 # shortcut: the first 1000 open P1 issues are counted, page the list when a project can hold more.
 github_p1() {
-  local n rc why
-  env -u GH_REPO -u GH_HOST GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout -k 2 8 \
+  local n rc why repo
+  repo=$(origin_repo)
+  env -u GH_REPO -u GH_HOST ${repo:+GH_REPO=$repo} GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout -k 2 8 \
     gh issue list --state open --label P1 --limit 1000 --json labels > "$RUN/gh-p1" 2>/dev/null </dev/null; rc=$?
   if [ "$rc" -eq 0 ] && n=$(jq -e 'if type == "array" and all(.[]; type == "object" and (.labels | type) == "array" and all(.labels[]; type == "object"))
       then map(select(any(.labels[]; .name == "P1"))) | length else error("not a list of issues") end' "$RUN/gh-p1" 2>/dev/null) \
@@ -356,6 +365,75 @@ github_p1() {
     case $rc in 0) why="gh's answer was not a list of issues" ;; 124|137) why="gh gave no answer in 8 s" ;; *) why="gh issue list failed (exit $rc)" ;; esac
     nm github-p1 "$why"; echo null
   fi
+}
+
+# gh_read <gh args>... -- one read-only gh call for the GitHub panes, made as github_p1 makes it; nothing gh prints
+# reaches the snapshot. A failure names itself on stderr in the collector's own words, which cached() keeps as the reason.
+gh_read() {
+  local rc
+  env -u GH_REPO -u GH_HOST GH_REPO="$PANE_REPO" GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout -k 2 8 gh "$@" 2>/dev/null </dev/null && return 0
+  rc=$?
+  case $rc in 4) echo "gh is not signed in: run gh auth login" ;; 124|137) echo "gh gave no answer in 8 s" ;; 127) echo "gh is not installed" ;;
+    *) echo "gh $1 $2 failed (exit $rc)" ;; esac >&2
+  return $rc
+}
+# Open pull requests with each check's state in rollup order (pass, fail, run or skip) and the issues each closes.
+gh_prs() {
+  gh_read pr list --state open --limit 50 --json number,title,url,isDraft,headRefName,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,additions,deletions,closingIssuesReferences \
+    | jq -c 'map({number, title, url, draft: .isDraft, branch: .headRefName, review: (.reviewDecision // ""), mergeable, mergeState: (.mergeStateStatus // ""), additions, deletions,
+        closes: [.closingIssuesReferences[]?.number],
+        checks: [.statusCheckRollup[]? | {name: (.name // .context // ""), state: (
+          if .__typename == "StatusContext" then ({SUCCESS: "pass", FAILURE: "fail", ERROR: "fail"}[.state // ""] // "run")
+          elif .status != "COMPLETED" then "run" else ({SUCCESS: "pass", NEUTRAL: "skip", SKIPPED: "skip", STALE: "skip"}[.conclusion // ""] // "fail") end)}]})'
+}
+# Open issues with their milestone and priority (the lowest P0 to P3 label).
+# shortcut: the first 200 open issues are read; page the list when a project can hold more.
+gh_issues() {
+  gh_read issue list --state open --limit 200 --json number,title,url,labels,milestone,createdAt \
+    | jq -c 'map({number, title, url, createdAt, milestone: (.milestone.title // null), priority: ([.labels[].name | select(test("^P[0-3]$"))] | sort | .[0] // null)})'
+}
+gh_milestones() {
+  gh_read api 'repos/{owner}/{repo}/milestones?state=open&per_page=100' | jq -c 'map({title, due: .due_on, open: .open_issues, closed: .closed_issues})'
+}
+# The newest CI run on the branch main pushes to.
+gh_runs() { gh_read run list --branch "$1" --limit 1 --json conclusion,status,createdAt,workflowName | jq -c 'map({conclusion, status, createdAt, workflow: .workflowName})'; }
+
+# The GitHub panes' data. repo is the GitHub address of the checkout's origin (github() below reads the same
+# remote), so the page can link an issue number, and every gh read is made in it (PANE_REPO). Each gh read goes
+# through cached(): re-read every TTL, backed off after a failure, and a failed read keeps its last good copy
+# marked stale. A read never had is null with its reason (no GitHub origin, gh missing or not signed in, no
+# answer), and only its pane says so.
+github_panes() {
+  local repo up k prs='' issues='' miles='' runs=''
+  repo=$(origin_repo); PANE_REPO=$repo
+  if [ -z "$repo" ]; then
+    for k in github-prs github-issues github-milestones github-runs; do nm "$k" "no GitHub origin"; done
+  else
+    prs=$(cached github-prs gh_prs)
+    issues=$(cached github-issues gh_issues)
+    miles=$(cached github-milestones gh_milestones)
+    if up=$(git -C "$PP_MAIN" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null); then runs=$(cached github-runs gh_runs "${up#*/}")
+    else nm github-runs "main has no upstream branch"; fi
+  fi
+  jq -cn --arg repo "$repo" --argjson prs "${prs:-null}" --argjson issues "${issues:-null}" \
+    --argjson milestones "${miles:-null}" --argjson runs "${runs:-null}" \
+    '{repo: (if $repo == "" then null else "https://github.com/" + $repo end), prs: $prs, issues: $issues, milestones: $milestones, runs: $runs}'
+}
+
+# What a push of main would send: the commits its upstream lacks, newest first (100 at most), each with the issue
+# numbers its message names and its line counts, and how far each side is ahead.
+next_push() {
+  local up counts log
+  if ! up=$(git -C "$PP_MAIN" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null); then nm git-push "main has no upstream branch"; echo null; return 0; fi
+  if ! counts=$(git -C "$PP_MAIN" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null) \
+     || ! log=$(git -C "$PP_MAIN" log --max-count=100 --format='%x1e%h%x1f%ct%x1f%s%x1f%B%x1f' --shortstat '@{upstream}..HEAD' 2>/dev/null); then
+    nm git-push "git log in $PP_MAIN failed"; echo null; return 0
+  fi
+  ok git-push
+  jq -Rsc --arg up "$up" --arg counts "$counts" '($counts | split("\t") | map(tonumber)) as $n
+    | {upstream: $up, behind: $n[0], ahead: $n[1], commits: (split("\u001e")[1:] | map(split("\u001f")
+      | {sha: .[0], at: (.[1] | tonumber), subject: .[2], refs: (reduce (.[3] | scan("#([0-9]+)") | .[0] | tonumber) as $n ([]; if index([$n]) then . else . + [$n] end)),
+         added: ((.[4] | capture("(?<n>[0-9]+) insertion") | .n | tonumber) // 0), deleted: ((.[4] | capture("(?<n>[0-9]+) deletion") | .n | tonumber) // 0)}))}' <<<"$log"
 }
 
 # The main checkout's own branch: its newest commits and how many its upstream lacks.
@@ -639,7 +717,8 @@ project() {
   trap - EXIT
   mkdir -p "$CACHE" "$RUN/src" "$RUN/parts" || return 1
   cd "$PP_MAIN" || return 1
-  part units units && part needsOwner needs_owner && part githubP1 github_p1 && part mainChain main_chain && part costPerRole cost_role \
+  part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
+    && part mainChain main_chain && part costPerRole cost_role \
     && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \
     && part chiefOfStaff chief_of_staff || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1

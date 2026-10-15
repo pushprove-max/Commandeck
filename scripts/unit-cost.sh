@@ -45,11 +45,13 @@ def suite: test("npm (run )?(test|typecheck|build)|tsc|vitest|node --test");
 | .mcp_flag = (if .serena + .cbm == 0 and .shell_searches >= 10 then "MCP UNUSED" else "" end)'
 if [ -n "$files" ]; then
 printf '%-10s %6s %6s %9s %8s %7s %6s %7s %6s %6s %6s %5s %6s\n' session turns tools cacheMtok out_k ctx_avgk suites repeat blocks shreads serena cbm shsrch
+# Claude Code 2.1.300's api-request rows, a third or more of a long log, are no turn: dropped before jq parses them.
+API='^{"type":"api-request'
 for f in $files; do
-  jq -s -r --arg s "$(basename "$f" .jsonl | cut -c1-8)" "$JQ | [\$s, .turns, .tools, .cache_read_M, .output_k, .ctx_avg_k, .suite_runs, .same_cmd_repeats, .hook_blocks, .shell_reads, .serena, .cbm, .shell_searches, .mcp_flag] | @tsv" "$f" \
+  grep -v "$API" "$f" | jq -s -r --arg s "$(basename "$f" .jsonl | cut -c1-8)" "$JQ | [\$s, .turns, .tools, .cache_read_M, .output_k, .ctx_avg_k, .suite_runs, .same_cmd_repeats, .hook_blocks, .shell_reads, .serena, .cbm, .shell_searches, .mcp_flag] | @tsv" \
     | awk -F'\t' '{printf "%-10s %6s %6s %9s %8s %7s %6s %7s %6s %6s %6s %5s %6s %s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14}'
 done
-cat $files | jq -s -r "$JQ | \"TOTAL      \(.turns) turns, \(.tools) tool calls, \(.cache_read_M)M cache-read tokens, \(.output_k)k output, \(.suite_runs) suite/tsc runs (\(.same_cmd_repeats) repeats), \(.hook_blocks) hook blocks, \(.shell_reads) shell reads\""
+grep -hv "$API" $files | jq -s -r "$JQ | \"TOTAL      \(.turns) turns, \(.tools) tool calls, \(.cache_read_M)M cache-read tokens, \(.output_k)k output, \(.suite_runs) suite/tsc runs (\(.same_cmd_repeats) repeats), \(.hook_blocks) hook blocks, \(.shell_reads) shell reads\""
 fi
 # Codex panes keep no per-turn transcript we parse; their index carries a
 # per-session token total (updated_at is epoch seconds).

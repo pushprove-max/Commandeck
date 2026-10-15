@@ -42,9 +42,8 @@ CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty')
 # logical cwd and the same directory reached by `cd` would key two runs.
 CWD=$(cd "$CWD" && pwd -P)
 
-# Words are split as the shell would, with the shlex split
-# bash-symbols-before-read.sh uses: a quoted filename stays a file filter, a
-# quoted word holding spaces is prose (a commit message may name a suite) and
+# Words are split as the shell would, with Python's shlex: a quoted filename
+# stays a file filter, a quoted word holding spaces is prose (a commit message may name a suite) and
 # is dropped unless it holds a `$(...)` that runs, and so is every redirection
 # with its target. A line whose quote is still open is split together with the
 # lines that close it: split alone, a quoted string spanning lines lost its

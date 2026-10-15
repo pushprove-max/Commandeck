@@ -71,7 +71,9 @@ done <<<"$ROWS"
 # A decoy or re-ask retry that came back reworded shows the ORIGINAL question:
 # ruling-log.sh closes the row only on an exact question match. "ask"
 # keeps the picker in front of the owner; "allow" could answer it unseen.
-[ "$restore" = '{}' ] || jq -c --argjson r "$restore" '{hookSpecificOutput: {hookEventName: "PreToolUse",
+[ "$restore" = '{}' ] && exit 0
+HOOK_FIRE_ASK=1
+jq -c --argjson r "$restore" '{hookSpecificOutput: {hookEventName: "PreToolUse",
   permissionDecision: "ask", permissionDecisionReason: "retry of an open decision: the original question is shown",
   updatedInput: (.tool_input | .questions |= [to_entries[] | .value + (if $r[.key | tostring] then {question: $r[.key | tostring]} else {} end)])}}' <<<"$INPUT"
 exit 0

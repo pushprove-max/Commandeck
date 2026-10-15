@@ -27,7 +27,7 @@ TIMING RUN: no
 
 ## Reading files in this repository
 
-- Read at most 150 lines per read (`sed -n '1,150p' <file>`, or your file-read tool with an offset and limit). A project's hooks may block a larger shell read.
+- Read at most 150 lines per read (`sed -n '1,150p' <file>`, or your file-read tool with an offset and limit).
 - Every `rg` or `grep -r` names a literal directory or file inside the repository, typed out. No path, `.`, the repository root, or a shell variable as the path: a hook may block those.
 - If the first read of a production (non-test) file is blocked with a message asking for a symbol overview, do the lookup it names, then read. If you have no such tool, write `subject not read` and continue.
 - Messages that suggest "a script would answer this" or "batch your looks" are advice. Keep reading every file in the batch.
@@ -70,6 +70,7 @@ For each batch in order, create `batch-NNN.md` and handle its files one at a tim
 3. Apply the checks below. Before writing a finding, read its quoted line range once more and confirm the quote matches the file.
 4. Append one row to `batch-NNN.md` immediately, before opening the next file:
    `<path> | lines=<n> | read=<ranges> | subject=<path or none> | subject read=<ranges or no> | result=<finding IDs, or possible, or none, or not judged: reason>`
+   `read=` holds the line ranges you read and nothing else, such as `1-150, 151-300`: any other word in it makes the row not clean.
 5. After the last file: the number of rows must equal `wc -l batch-NNN.list`. Then write `Batch NNN complete` as the last line and change that batch to `done` in `batches.md`. A file you could not read gets a row with `read=none`; it is not checked, never clean.
 
 If you must stop early, stop between files. Batches still `NOT DONE` are reported as not checked.

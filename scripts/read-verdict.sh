@@ -115,7 +115,9 @@ reduce (inputs | (fromjson? // {_bad:true})) as $r (init;
 STATE_JQ_CLAUDE='
 def text: if (.message.content | type) == "string" then .message.content
   else [.message.content[]? | select(.type == "text") | .text] | join("\n") end;
-reduce (inputs | (fromjson? // {_bad:true})) as $r (init;
+# The api-request rows of Claude Code 2.1.300, a third or more of a long log, hold no
+# state: skipped unparsed, so one being written is no partial record.
+reduce (inputs | select(startswith("{\"type\":\"api-request") | not) | (fromjson? // {_bad:true})) as $r (init;
   ($r | ts) as $at | ($r.toolUseResult | if type == "object" then . else {} end) as $u |
   if $r._bad then .bad = true
   elif $r.type == "user" and ($r.isCompactSummary != true)
@@ -547,7 +549,8 @@ codex_report() {
 # has_result; find_verdict still sees no verdict in it. Codex seats get the
 # same through task_complete (exit 5).
 claude_report() {
-  jq -rs --argjson n "$ORDINAL" '
+  # Claude Code 2.1.300's api-request rows hold no report: dropped before jq slurps the log.
+  grep -v '^{"type":"api-request' "$1" 2>/dev/null | jq -rs --argjson n "$ORDINAL" '
     # As in codex_report: the latest answer (ordinal 0) follows the last prompt.
     # A prompt is a user row with typed text; a tool result is not one, nor is
     # a row holding only notices the harness writes. Text after a notice in the
@@ -565,7 +568,7 @@ claude_report() {
     | if length > 0 then (if $n == 0 then last else .[$n - 1] end)
       elif $n == 0 then $all | last else null end
     | . // empty
-  ' "$1" 2>/dev/null
+  ' 2>/dev/null
 }
 
 SOURCE=log-pending

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Drift guard: every hook arms the fire log before its first decision,
 # so a hook added without the wiring, or one that loses it, fails here instead
-# of going quietly missing from scripts/hook-fire-log-summary.sh.
+# of going quietly missing from scripts/hook-fire-log-summary.sh. A hook that
+# prints a permissionDecision "ask" must set HOOK_FIRE_ASK=1, or its asks are
+# logged as allows.
 #
 # The inventory is every top-level hooks/*.sh plus every command
 # hooks/hooks.json registers. lib/ and __tests__/ are not invocations, so
@@ -26,6 +28,8 @@ hooks = os.path.join(root, "hooks")
 ARM = re.compile(r'^(\.|source) .*/lib/hook-fire-log\.sh"? 2>/dev/null && hook_fire_log_arm( |$)')
 FUNC = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{')
 DECISION = re.compile(r'\bexit\b|\breturn\b|decision|additionalContext|systemMessage|>&2')
+ASK = re.compile(r'permissionDecision\\?"?\s*:\s*\\?"ask')
+ASK_MARK = re.compile(r'^[^#]*\bHOOK_FIRE_ASK=1\b', re.M)
 inventory, problems = set(), []
 for name in os.listdir(hooks):
     path = os.path.join(hooks, name)
@@ -70,6 +74,9 @@ for path in sorted(inventory):
         problems.append(f"{rel}: never sources lib/hook-fire-log.sh and calls hook_fire_log_arm")
     elif first is not None and first < armed:
         problems.append(f"{rel}: line {first} can decide before the fire log is armed on line {armed}")
+    source = open(path, errors="replace").read()
+    if ASK.search(source) and not ASK_MARK.search(source):
+        problems.append(f"{rel}: prints a permissionDecision \"ask\" without setting HOOK_FIRE_ASK=1")
 print(f"checked {len(inventory)}")
 print("\n".join(problems))
 sys.exit(1 if problems else 0)
@@ -126,6 +133,10 @@ rejects "wiring only inside a branch" 'git-safety\.sh: never sources' "$F"
 F=$(fixture)
 { echo '#!/bin/bash'; tail -n +2 "$ROOT/hooks/git-safety.sh"; } > "$F/hooks/git-safety.sh"
 rejects "a hook run by the system bash" 'git-safety\.sh: shebang' "$F"
+
+F=$(fixture)
+grep -vx 'HOOK_FIRE_ASK=1' "$ROOT/hooks/ask-records-decision.sh" > "$F/hooks/ask-records-decision.sh"
+rejects "an ask answer without the ask marker" 'ask-records-decision\.sh: prints a permissionDecision "ask" without' "$F"
 
 # Libraries and tests are not invocations; only top-level scripts are counted.
 F=$(fixture)

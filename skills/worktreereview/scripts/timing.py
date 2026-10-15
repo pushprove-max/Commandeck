@@ -24,6 +24,9 @@ def ts(s):
 
 def rows_of(path):
     for line in open(path, errors='replace'):
+        # Claude Code 2.1.300's api-request rows are no request of their own and a third or more of a long log: skipped unparsed.
+        if line.startswith('{"type":"api-request'):
+            continue
         try:
             yield json.loads(line)
         except ValueError:

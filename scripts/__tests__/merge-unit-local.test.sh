@@ -5,8 +5,9 @@
 # NO-GO with a P0 or P1 is refused, a GO for an older commit is refused, a red check
 # refuses the merge and leaves main as it was, and a branch whose pass ended GO at its tip merges
 # as one squash commit after the project's check command ran on it. A check that
-# rewrites or stages a file, and a branch that would overwrite an ignored local
-# file, are refused.
+# rewrites or stages a file, a branch that would overwrite an ignored local
+# file, and a deletion named in neither the brief nor the evidence's Files
+# deleted list, are refused.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 MERGE=$REAL/scripts/merge-unit-local.sh QUEUE=$REAL/scripts/merge-queue.sh PASS_SH=$REAL/scripts/builder-codex-pass.sh
@@ -149,6 +150,30 @@ AFTER=$(head_main)
 check "a merge that would overwrite an ignored local file is refused" 1 "$(merge envu)"
 check "the owner's ignored file is as it was, main did not move, and the file is named" "mine|$AFTER|1" \
   "$(cat "$REPO/secret.env" 2>/dev/null)|$(head_main)|$(grep -c 'the branch adds secret.env' "$TMP/out")"
+
+# A squash that deletes a file nobody named is a botched rebase. A unit told to
+# cut "everything but X" names its deletions in its evidence, under a Files
+# deleted heading, after the fact; a name anywhere else there does not count.
+jq -n '{}' > "$REPO/.claude/commandeck.json"
+for f in cut-brief.txt cut-ev.txt cut-none.txt cut-sub.txt 'app/[slug]/page.tsx'; do mkdir -p "$(dirname "$REPO/$f")"; echo old > "$REPO/$f"; done
+git -C "$REPO" add cut-*.txt app; git -C "$REPO" commit -qm "cut fixtures"
+mk cutno; git -C "$TMP/ws/cutno" rm -q cut-none.txt; git -C "$TMP/ws/cutno" commit -qm "feat(cutno): cut"
+printf '## Notes\ncut-none.txt\n' >> "$TMP/ws/cutno/.claude/briefs/cutno-evidence.md"; go cutno
+AFTER=$(head_main)
+check "a squash deleting a file named in neither the brief nor the evidence's Files deleted list is refused" "1|$AFTER|1" \
+  "$(merge cutno)|$(head_main)|$(grep -c '^FAILED step 4 merge: the squash deletes cut-none.txt, which the brief never names; the rebase probably replayed stale content$' "$TMP/out")"
+mk cutok; git -C "$TMP/ws/cutok" rm -q cut-brief.txt cut-ev.txt 'app/[slug]/page.tsx'; git -C "$TMP/ws/cutok" commit -qm "feat(cutok): cut"
+echo "Delete cut-brief.txt." >> "$TMP/ws/cutok/.claude/briefs/cutok.md"
+printf '## Files deleted\n- cut-ev.txt\n- `app/[slug]/page.tsx`\n\n## Tests\n' >> "$TMP/ws/cutok/.claude/briefs/cutok-evidence.md"; go cutok
+check "a deletion named only in the evidence's Files deleted list merges" 0 "$(merge cutok)"
+check "and each deletion says which file named it, a path with brackets included" "1|1|1" \
+  "$(grep -c '^step 4 deletion: cut-brief.txt (named in the brief)$' "$TMP/out")|$(grep -c '^step 4 deletion: cut-ev.txt (named in the evidence'"'"'s Files deleted list)$' "$TMP/out")|$(grep -cF 'step 4 deletion: app/[slug]/page.tsx (named in the evidence' "$TMP/out")"
+# A name counts whole: another path that holds it (old/cut-sub.txt.bak, sub/cut-sub.txt, a backup cut-sub.txt~) names a different file.
+mk cutsub; git -C "$TMP/ws/cutsub" rm -q cut-sub.txt; git -C "$TMP/ws/cutsub" commit -qm "feat(cutsub): cut"
+echo "Keep old/cut-sub.txt.bak." >> "$TMP/ws/cutsub/.claude/briefs/cutsub.md"
+printf '## Files deleted\n- sub/cut-sub.txt\n- cut-sub.txt.orig\n- cut-sub.txt~\n- `cut-sub.txt` (kept)\n' >> "$TMP/ws/cutsub/.claude/briefs/cutsub-evidence.md"; go cutsub
+AFTER=$(head_main)
+check "a deletion named only inside a longer path, in the brief or the evidence, is refused" "1|$AFTER" "$(merge cutsub)|$(head_main)"
 
 # The review loop the owner chose at setup (reviewLoop in the project config).
 # With no closing pass, a narrowed GO merges once narrowed passes read every

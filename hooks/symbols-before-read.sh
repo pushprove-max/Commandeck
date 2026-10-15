@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# codex: skip -- gates on this session's serena calls and on main's own reads;
+# codex: skip -- gates on this session's serena calls and hints main's own reads;
 # Codex never sits in main. Nothing for Codex to run.
-# PreToolUse hook on Read|Grep|Glob and Edit|MultiEdit|Write, and on Bash for
-# the script-source rule below only. Requires a serena symbol lookup before the
-# first read, whole or bounded, of a runtime code file (AGENT_STARTUP.md, Required Startup 1b).
-# The rule was prose only until 2026-08-31, when five workers in one session
-# read 0 overviews between them; prose did not hold, so this makes it mechanical.
-# Blocks until serena answers for the file; a retry is not let through.
-# Stands down only when serena is off for the checkout or a serena call errored.
+# PreToolUse hook on Read|Grep and Edit|MultiEdit|Write, and on Bash for the
+# script-source hint below only. In a worker pane, the first edit to an existing
+# runtime code file is refused once until the session asked who uses it. Reads
+# are never gated: the symbols-first read rule and its shell twin were removed
+# (owner ruling 2026-10-14; agents worked around nearly all of their blocks).
+# Stands down when serena is off for the checkout or a serena call errored.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # Strict tier: off unless the project turned it on (lib/project.sh).
@@ -25,9 +24,6 @@ SERENA_TRACKER="/tmp/claude-serena-tracker-${KEY}"
 SERENA_DOWN="/tmp/claude-serena-down-${KEY}"
 
 gated_source() {
-  # A bounded read (offset or limit) is NOT exempt on its own: one implementer
-  # read 40 runtime files through that exemption and called serena zero times.
-  # It passes once serena has answered for the file, like any other read.
   # Letter case is not compared: on the Mac SRC/x.ts opens src/x.ts.
   set -- "${1,,}"
   case "$1" in *.ts|*.tsx|*.py) ;; *) return 1 ;; esac
@@ -35,8 +31,8 @@ gated_source() {
   case "$1" in *__tests__*|*/tests/*|*/test_*.py|*_test.py|*.test.ts|*.test.tsx|*.d.ts|*/__mocks__/*|*/node_modules/*) return 1 ;; esac
 }
 
-# serena reports repo-relative paths while Read receives absolute ones, so the
-# read is resolved against the repo root and the two are compared whole. The
+# serena reports repo-relative paths while Edit receives absolute ones, so the
+# file is resolved against the repo root and the two are compared whole. The
 # basename used to be the comparison, which admitted any file sharing a name
 # with one serena had answered for.
 rel_of() {
@@ -44,25 +40,14 @@ rel_of() {
   if [ -n "$root" ]; then printf '%s' "${1#"$root"/}"; else printf '%s' "$1"; fi
 }
 
-# A serena call naming any file in a directory clears every gated file in that
-# same directory, not its subdirectories: workers read one area file
-# after file, and a block per file cost a turn each. Two spellings that differ
-# only in letter case are one directory. Keep in parity with
-# bash-symbols-before-read.sh.
 # Letter case is ignored only where the disk ignores it: on a disk that tells
-# src/Auth from src/auth they are two directories, and one does not clear the other.
+# src/Auth from src/auth they are two files.
 folds_case() { local u; u=$(tr 'a-zA-Z' 'A-Za-z' <<<"$CWD"); [ "$u" != "$CWD" ] && [ "$CWD" -ef "$u" ]; }
-dir_cleared() {
-  local d=; [[ $1 != */* ]] || d=${1%/*}/   # a file at the repo root has no folder: its neighbours are the entries with no slash
-  awk -v d="$d" -v fold="$(folds_case && echo 1)" 'BEGIN { if (fold) d = tolower(d) } fold { $0 = tolower($0) } (d == "" || index($0, d) == 1) && length($0) > length(d) && index(substr($0, length(d) + 1), "/") == 0 { f = 1; exit } END { exit !f }' \
-    "$SERENA_TRACKER" 2>/dev/null
-}
 
 # Silence is not unavailability: serena is a deferred tool in worker panes, so
 # it stays silent until loaded. Only an errored serena call (read-tracker.sh
 # writes the marker) or serena switched off for the checkout stands the gate
-# down. Main keeps serena and this gate (owner ruling 2026-09-23). Keep in parity
-# with bash-symbols-before-read.sh.
+# down.
 serena_unavailable() {
   [ -e "$SERENA_DOWN" ] && return 0
   local session_root; session_root=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)
@@ -76,13 +61,12 @@ in_worker() {
     && [ "$(git -C "$CWD" rev-parse --git-dir 2>/dev/null)" != "$(git -C "$CWD" rev-parse --git-common-dir 2>/dev/null)" ]
 }
 
-# THE FIRST EDIT TO A SOURCE FILE ASKS WHO USES IT. An overview unblocks
-# reads but says nothing about callers, so in a worker pane the first edit to an
-# existing gated file is refused once, unless this session asked serena
+# THE FIRST EDIT TO A SOURCE FILE ASKS WHO USES IT. In a worker pane the first
+# edit to an existing gated file is refused once, unless this session asked serena
 # find_referencing_symbols about that file or codebase-memory trace_path about a
 # function named in it (read-tracker.sh records both). A new file has no
 # callers: one not yet written, and one that is on no base of the branch
-# (new_in_branch; the read gate at the foot of this file asks the same).
+# (new_in_branch).
 case "$TOOL" in Edit|MultiEdit|Write)
   [ -f "$FILE_PATH" ] && gated_source "$FILE_PATH" || exit 0
   in_worker && ! serena_unavailable || exit 0
@@ -117,8 +101,7 @@ esac
 # its context. A read of a scripts/*.sh that answers --help carries a
 # --help hint as advice and always passes: refusing it cost a turn and
 # redirected nothing (owner ruling 2026-10-01). Shell reads are covered here
-# because bash-symbols-before-read.sh was owned by another unit when this
-# landed. Worker worktrees are exempt.
+# too. Worker worktrees are exempt.
 if [[ "$INPUT" == *scripts/* ]]; then
   SH_CWD=$CWD
   SH_TARGET=$(
@@ -143,28 +126,6 @@ if [[ "$INPUT" == *scripts/* ]]; then
   fi
 fi
 
-# Main may read a worker's worktree, with Read, Grep and Glob as with the shell:
-# the owner took the block out of bash-guardrails.sh on 2026-09-25, and the
-# copy of it that stood here outlived that ruling.
-
-[ -z "$FILE_PATH" ] && exit 0
-[ -f "$FILE_PATH" ] || exit 0
-gated_source "$FILE_PATH" || exit 0
-
-REL=$(rel_of "$FILE_PATH")
-dir_cleared "$REL" && exit 0
-serena_unavailable && exit 0
-
-. "${BASH_SOURCE[0]%/*}/lib/symbol-outline.sh"
-new_in_branch "$FILE_PATH" && exit 0
-OUTLINE=$(symbol_outline "$FILE_PATH")
-clear_dir_for "$SERENA_TRACKER" "$REL"
-cat >&2 <<MSG
-BLOCKED once: '$REL' is runtime code; read its shape first.
-Top-level symbols: ${OUTLINE:-(none found by the outline pass)}
-This directory is now cleared: retry the read, or pull one symbol's body with
-mcp__serena__find_symbol (include_body) and run find_referencing_symbols before you change a function.
-Serena is a deferred tool: load it with ToolSearch, query
-select:mcp__serena__get_symbols_overview,mcp__serena__find_symbol,mcp__serena__find_referencing_symbols
-MSG
-exit 2
+# Main may read a worker's worktree, with Read and Grep as with the shell:
+# the owner took the block out of bash-guardrails.sh on 2026-09-25.
+exit 0

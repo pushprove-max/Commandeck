@@ -188,10 +188,10 @@ launch)
       || { echo "REFUSED: live $ROLE seat $H for $UNIT is not in $REC; read it, then close it or let its driver finish." >&2; exit 2; }
     grep -qx "spechash=$SPEC_HASH" "$REC" \
       || { echo "REFUSED: live $ROLE seat $H for $UNIT is on another spec ($REC); collect or close it first." >&2; exit 2; }
-    # The pane keeps the model and advisor it opened with: other launch options are not this seat.
-    # shortcut: a change to the project's stored Builder setting is not noticed, listed open in the batch's limits.
-    [ "$(sed -n 's/^opts=//p' "$REC" | tail -1)" = "${LOPTS[*]}" ] \
-      || { echo "REFUSED: live $ROLE seat $H for $UNIT was opened with other options ($REC); close it, then launch again." >&2; exit 2; }
+    # The pane keeps the model, effort and advisor it opened with: a launch that resolves to another
+    # command, by its options or by a changed project setting, is not this seat.
+    [ "$(sed -n 's/^cmd=//p' "$REC" | tail -1)" = "$CMD" ] \
+      || { echo "REFUSED: live $ROLE seat $H for $UNIT was opened with other launch settings (model, effort or advisor; $REC); close it, then launch again." >&2; exit 2; }
     echo "seat=$ROLE unit=$UNIT handle=$H task=$(sed -n 's/^task=//p' "$REC" | tail -1) state=reused record=$REC"
     exit 0
   fi
@@ -257,7 +257,7 @@ launch)
       [ -z "$REQ" ] || { send_pointer --retry-request "$REQ" | submitted && PROVEN=1; }
     fi
   fi
-  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nlaunched=%s\nspec=%s\nspechash=%s\ntag=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$LAUNCH_EPOCH" "$SPEC_ABS" "$SPEC_HASH" "$TAG" > "$REC"
+  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nlaunched=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$LAUNCH_EPOCH" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
   # The silent-pane relaunch below starts this seat again from its record.
   [ "${#LOPTS[@]}" -eq 0 ] || echo "opts=${LOPTS[*]}" >> "$REC"
   # A seat the origin placed here is the origin's to hear: main-watch on this

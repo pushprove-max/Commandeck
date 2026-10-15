@@ -79,7 +79,8 @@ def prompt_block(path, budget):
     try:
         with open(path, "rb") as f:
             for line in f:
-                if not line.strip():
+                # Claude Code 2.1.300's api-request rows hold no prompt and a third or more of a long log's bytes.
+                if not line.strip() or line.startswith(b'{"type":"api-request'):
                     continue
                 try:
                     row = json.loads(line)

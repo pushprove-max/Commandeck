@@ -155,7 +155,8 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 /* Builds in progress. */
 .build + .build { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 6px; }
 .iss { display: flex; flex-wrap: wrap; gap: 5px; }
-.iss span { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
+.iss > * { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
+.iss a:hover { color: var(--accent-ink); }
 .iss .y { background: var(--ok-bg); color: var(--ok-ink); }
 .iss .item { flex-basis: 100%; font-family: inherit; }
 
@@ -167,22 +168,113 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 .stage[data-stage="review"] h3 { color: var(--warn-ink); }
 .stage[data-stage="fixing"] h3 { color: #f3a36b; }
 .stage[data-stage="waiting-main"] h3 { color: var(--crit-ink); }
-.unit { background: var(--chip); border-left: 3px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 6px; font: 12px var(--mono); overflow-wrap: anywhere; min-width: 0; }
+.unit { --tone: var(--accent); container-type: inline-size; background: var(--chip); border-left: 3px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
 .unit-list > .empty { color: var(--dim); border: 1px dashed var(--line); border-radius: 6px; padding: 7px 9px; font-size: 12px; text-transform: lowercase; }
-.unit-name { color: var(--ink); font-weight: 700; font-size: 12.5px; margin-bottom: 2px; }
-.unit .meta { display: block; color: var(--muted); font-size: 12px; }
-.stage[data-stage="planning"] .unit { border-left-color: var(--plan); }
+.unit-name { color: var(--ink); font: 700 14px var(--mono); }
+.stage[data-stage="planning"] .unit { --tone: var(--plan); border-left-color: var(--plan); }
 .stage[data-stage="building"] .unit { border-left-color: var(--accent); background: #182538; }
-.stage[data-stage="review"] .unit { border-left-color: var(--warn); }
-.stage[data-stage="fixing"] .unit { border-left-color: var(--fix); }
-.stage[data-stage="waiting-main"] .unit { border-left-color: var(--crit); background: #2a1b1c; }
-.long-lived .unit, .unclassified .unit { border-left-color: var(--dim); }
+.stage[data-stage="review"] .unit { --tone: var(--warn); border-left-color: var(--warn); }
+.stage[data-stage="fixing"] .unit { --tone: var(--fix); border-left-color: var(--fix); }
+.stage[data-stage="waiting-main"] .unit { --tone: var(--crit-ink); border-left-color: var(--crit); background: #2a1b1c; }
+.long-lived .unit, .unclassified .unit { --tone: var(--muted); border-left-color: var(--dim); }
+/* The unit card, "Run trace": one clock per card ending now. The stage is a band, each helper run a bar on the same
+   clock, and the silence since the last sign is hatched, outlined when the Builder has gone quiet. */
+.unit.quiet { --tone: var(--warn-ink); }
+.unit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.unit-head .state { font-weight: 600; color: var(--tone); display: inline-flex; align-items: center; gap: 6px; }
+.unit-head .state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--tone); }
+.unit-head .seat { color: var(--muted); font-size: 12px; }
+.ufacts { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 6px 0 2px; }
+.ufacts div { display: flex; align-items: baseline; gap: 5px; }
+.ufacts dt { color: var(--muted); font-size: 12px; }
+.ufacts dd { font-weight: 600; font-size: 16px; }
+.ufacts .hot dd { color: var(--tone); }
+.ufacts .crit dd { color: var(--crit-ink); }
+.add { color: var(--ok-ink); }
+.del { color: var(--crit-ink); }
+.trace { display: grid; grid-template-columns: 96px minmax(0, 1fr) 170px; gap: 4px 10px; align-items: center; font-size: 12px; margin-top: 8px; }
+.trace .lab { color: #b8bec8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace .lab small { color: var(--muted); font-size: 11px; }
+.trace .num { display: grid; grid-template-columns: 1fr 0.8fr 0.7fr; gap: 6px; text-align: right; color: #b8bec8; }
+.trace .headnums { color: var(--muted); }
+.trace .tmore { grid-column: 1 / -1; color: var(--muted); }
+.lane { position: relative; height: 12px; border-radius: 3px; background: var(--line-soft);
+  background-image: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%); }
+.lane i { position: absolute; top: 0; bottom: 0; border-radius: 3px; min-width: 3px; }
+.lane.stages { height: 18px; }
+.lane.stages i { border-radius: 0; font: 600 11px/18px var(--sans); color: var(--canvas); padding-left: 5px; overflow: hidden; white-space: nowrap; }
+.lane .h { background: #6b7685; }
+.lane .h.codex { background: var(--warn); }
+.lane .h.live { background: var(--accent); }
+.lane .gap { min-width: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--tone) 45%, transparent) 0 4px, transparent 4px 8px); }
+.unit.quiet .lane .gap { outline: 1px solid var(--tone); }
+.lane b { position: absolute; top: 2px; bottom: 2px; width: 2px; background: #9aa5b4; }
+.lane .now { position: absolute; top: -3px; bottom: -3px; right: 0; width: 2px; background: var(--ink); }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+.axis span:last-child { color: var(--ink); }
+.branch { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.branch code { font: 12px var(--mono); color: #b8bec8; }
+/* A narrow stage column: each helper's numbers drop under its bar. */
+@container (max-width: 440px) {
+  .trace { grid-template-columns: 72px minmax(0, 1fr); }
+  .trace .num { grid-column: 2; }
+  .trace .headnums, .trace > span:empty { display: none; }
+}
 .badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
 .badges:empty { display: none; }
 .long-lived, .unclassified { margin-top: 14px; }
 .long-lived > .unit-list, .unclassified > .unit-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 6px; }
 .long-lived > summary, .unclassified > summary { color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
 .stale-row > summary { color: var(--crit-ink); }
+
+/* Merge line: one row per open pull request; its checks are segments in GitHub's order. */
+.prs .group { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin: 10px 0 2px; }
+.prs .pr { display: grid; grid-template-columns: 48px minmax(0, 1fr) minmax(0, 150px) minmax(0, 180px); gap: 4px 12px; align-items: center; padding: 8px 2px; border-top: 1px solid var(--line-soft); color: inherit; }
+.card[data-size="1"] .prs .pr { grid-template-columns: 44px minmax(0, 1fr); }
+.card[data-size="1"] .prs .pr > :nth-child(n+3) { grid-column: 2; }
+a.pr:hover .title { color: var(--accent-ink); }
+.prs .num { font: 600 13px var(--mono); color: var(--muted); }
+.prs .title { font-weight: 600; overflow-wrap: anywhere; }
+.prs .by { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.prs code { font: 12px var(--mono); }
+.checks { display: flex; gap: 2px; height: 10px; }
+.checks i { flex: 1; border-radius: 2px; min-width: 3px; }
+.checks-note { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.block { font-size: 12px; font-weight: 600; }
+.block.ready { color: var(--ok-ink); }
+.block.fail { color: var(--crit-ink); }
+.block.run { color: var(--accent-ink); }
+.block.wait { color: var(--warn-ink); }
+
+/* Who holds what: one column per milestone, most urgent first. */
+.alarm { color: var(--crit-ink); background: var(--crit-bg); border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.miles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.mile h3 { margin-top: 0; }
+.mile h3 span { margin-left: 8px; text-transform: none; letter-spacing: 0; }
+.prog-note { color: var(--muted); font-size: 12px; margin: 4px 0 6px; }
+.issues li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.issues .t { color: inherit; overflow-wrap: anywhere; }
+a.t:hover { color: var(--accent-ink); }
+.issues small { display: block; color: var(--muted); font-size: 12px; }
+.inum { font-family: var(--mono); color: var(--muted); margin-right: 6px; }
+.pri { font: 600 11px var(--mono); text-align: center; border-radius: 4px; padding: 1px 0; background: var(--chip); color: var(--muted); }
+.pri.p0, .pri.p1 { background: var(--crit-bg); color: var(--crit-ink); }
+.pri.p2 { background: var(--warn-bg); color: var(--warn-ink); }
+.holder { font: 12px var(--mono); color: #b8bec8; }
+.holder.none { color: var(--crit-ink); font-weight: 600; }
+.holder.free { color: var(--dim); }
+
+/* Next push: the count, what should stop the push, then the commits under the issue each names. */
+.verdict { display: flex; gap: 14px; align-items: center; margin-bottom: 6px; }
+.verdict .big { font: 700 28px var(--mono); line-height: 1; }
+.verdict .big small { display: block; font: 12px var(--sans); color: var(--muted); }
+.verdict .warn { color: var(--warn-ink); font-weight: 600; }
+.push-issue { margin-top: 10px; }
+.push-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.push-head h3 { margin: 0; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 13px; }
+.push-issue .commit { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--line-soft); }
+.push-issue .msg { overflow-wrap: anywhere; }
+.push-issue .when { color: var(--muted); }
 
 /* Needs the owner. */
 .decisions { display: flex; flex-direction: column; gap: 8px; }

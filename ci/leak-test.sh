@@ -12,7 +12,8 @@ cd "${1:-$HERE/..}" || exit 2
 PAT=$(mktemp) || exit 2; trap 'rm -f "$PAT"' EXIT
 grep -v -e '^# ' -e '^#$' -e '^$' "$HERE/leak-words.txt" > "$PAT"
 [ -s "$PAT" ] || { echo "leak-test: no pattern in ci/leak-words.txt" >&2; exit 2; }
-if [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ]; then list() { git ls-files -z --cached --others --exclude-standard; }
+# -ef compares the folders themselves, not their text: a path in other letter case is the same checkout.
+if [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef . ]; then list() { git ls-files -z --cached --others --exclude-standard; }
 else list() { rg --files -0 --hidden --no-ignore -g '!/.git'; [ $? -le 1 ]; }; fi   # 1: a folder with no file
 LIST=$(mktemp) || exit 2; trap 'rm -f "$PAT" "$LIST"' EXIT
 list > "$LIST" || { echo "leak-test: could not list the files" >&2; exit 2; }

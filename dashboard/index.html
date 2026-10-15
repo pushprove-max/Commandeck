@@ -92,6 +92,32 @@
     </div>
   </section>
 
+  <section id="merge-line" class="card" data-size="2" data-sources="github-prs">
+    <header class="card-head"><h2>Merge line</h2></header>
+    <p class="sub"><span id="merge-line-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <ol id="merge-line-list" class="prs"></ol>
+    <p class="legend more">Open pull requests, the ones ready to merge first. Each check is one segment, in GitHub's order.</p>
+  </section>
+
+  <section id="held" class="card" data-size="2" data-sources="github-issues github-milestones">
+    <header class="card-head"><h2>Who holds what</h2></header>
+    <p class="sub"><span id="held-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <p id="held-alarm" class="alarm" hidden></p>
+    <div id="held-list" class="miles"></div>
+    <p class="legend more">P0 to P3 come from the priority labels. A Builder holds an issue its brief lists.</p>
+  </section>
+
+  <section id="next-push" class="card" data-size="2" data-sources="git-push github-runs">
+    <header class="card-head"><h2>Next push</h2></header>
+    <p class="sub"><span id="next-push-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="next-push-verdict" class="verdict"></div>
+    <div id="next-push-list" class="more"></div>
+    <p class="legend more">Compares main with its upstream; a commit's issue is the first "#" number in its message.</p>
+  </section>
+
   <section id="limit" class="card" data-size="2" data-sources="claude-usage claude-logs codex-usage">
     <header class="card-head"><h2>7-day limit</h2></header>
     <p class="sub"><span>Claude and Codex</span><span id="limit-week" class="limit-week"></span><span class="age"></span></p>

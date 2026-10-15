@@ -16,7 +16,7 @@ ask() { # header question -> the hook's exit code
     '{cwd: $cwd, tool_name: "AskUserQuestion", tool_input: {questions: [{header: $h, question: $q,
       options: [{label: $d}, {label: "Ship it (Recommended)"}, {label: "Hold"}]}]}}' \
   | env -u CLAUDE_PROJECT_DIR -u COMMANDECK_REVIEWER HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" \
-      COMMANDECK_HOOK_FIRE_LOG="$TMP/fire.jsonl" bash "$REAL/hooks/ask-records-decision.sh" >/dev/null 2>"$TMP/err"; echo $?
+      COMMANDECK_HOOK_FIRE_LOG="$TMP/fire.jsonl" bash "$REAL/hooks/ask-records-decision.sh" >"$TMP/out" 2>"$TMP/err"; echo $?
 }
 DAY=$(date +%Y-%m-%d)
 check "a first question is let through" 0 "$(ask 'Ship: Now?' 'Ship the release today?')"
@@ -27,6 +27,19 @@ check "the same question again is blocked" 2 "$(ask 'Ship: Now?' 'Ship the relea
 check "and adds no row" 1 "$(wc -l < "$L" | tr -d ' ')"
 check "a question with another header gets its own id" "0 deploy-window-$DAY" \
   "$(ask 'Deploy window' 'Which hour suits the database migration?') $(tail -1 "$L" | jq -r .id)"
+
+# A re-ask that comes back reworded shows the owner the original question with
+# an "ask" answer, and the fire log must say "ask": logged as "allow", the
+# owner's prompt reads as a call that went through unseen.
+env HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" bash "$REAL/scripts/decision.sh" \
+  add "ship-now-$DAY" 'Ship the release today?' 'Ship it' test --reask 'the tests are green' >/dev/null 2>&1
+check "a reworded re-ask is let through" 0 "$(ask 'Ship: Now?' 'Should we ship the release today?')"
+# Claude Code 2.1.300 validates updatedInput: the rewrite carries the picker's
+# own keys and changes only the question text.
+check "it is answered ask, its input changed only in the question text" true \
+  "$(jq --arg d "$ASK_DECOY" '.hookSpecificOutput | .permissionDecision == "ask" and .updatedInput == {questions: [{header: "Ship: Now?",
+    question: "Ship the release today?", options: [{label: $d}, {label: "Ship it (Recommended)"}, {label: "Hold"}]}]}' "$TMP/out" 2>/dev/null)"
+check "the fire log reads allow, block, allow, ask" "allow block allow ask" "$(jq -r .decision "$TMP/fire.jsonl" 2>/dev/null | paste -sd' ' -)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

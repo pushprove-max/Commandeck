@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.5.0 -- 2026-10-14
+
+Every open issue in one build: the read guards are gone, the build review runs
+only on request, three GitHub panes and a new unit card on the dashboard, and
+a long list of fixes to the merge, the pass script, the watch and the cost
+readers.
+
+- Read guards removed (#76): no 150-line shell read cap, no shell
+  symbols-before-read hook, no symbols-first rule for Read, Grep and Glob. The
+  test heap cap, the repo-wide search block, the main/worktree boundary and the
+  other hooks stay. A here-document sent to a shell through `>(...)` is now
+  judged as commands (#5); a nested substitution after `cd ..` was already
+  judged in the right folder and now has a test (#4).
+- The hook fire log records an "ask" answer as `ask` (#75), and a guard test
+  fails a hook that prints "ask" without its marker. Claude Code 2.1.300
+  (#71): the two hooks that return `updatedInput` send only valid keys
+  (checked live for the agent model guard), and every transcript reader skips
+  the new `api-request` rows, so request counts and prices match the assistant
+  rows.
+- The build review runs only when the owner asks (`/worktreereview <unit>`),
+  never from the merge, and sends no flag message (#78). It keeps the full
+  pass text and lists every pass after the closing one (#64); waits on a pass
+  run elsewhere or a review tool that is down are their own bucket (#55); the
+  share-of-clock flag also needs 10 minutes of tests or idle and names the
+  largest command (#63); idle after DONE is cut only where an owner decision
+  was open (#70); a review saved before the waiting field renders it as
+  unknown (#16). Lessons become issues only with the owner's approval, with an
+  on-demand sweep (#68), and the lessons page can be written by a separate
+  writer session from a shipped handoff (#69).
+- Dashboard: the unit card is a run trace (#73); three GitHub panes, the merge
+  line, who holds what and the next push, read through `gh` and say so when it
+  is missing (#74); an issue in Issue by Issue opens on GitHub (#72); a stale
+  page no longer writes its old widths over a newer reset (#2); a replay of
+  expired clears from a stale tab no longer pushes out newer ones (#6).
+- Merge: a deletion named under "Files deleted" in the unit's evidence file is
+  accepted, and the merge says which file named it (#67); a failure after the
+  squash commit exits 3, and the queue says the unit merged (#22);
+  `proof-run.sh` prints the three-argument `--verify` (#21); `board.sh` says
+  what it writes (#23).
+- Watch: only the Builder's own DONE marker ends a helper hold (#44), and a
+  Builder that works again clears its hold (#45).
+- Pass script: a cache fallback warning no longer ends up in the model id
+  (#46); after main changes the brief or its rulings, the next review pass
+  reads the whole branch (#58); each pass prints the files the round changed
+  and flags a round of comments only (#62); `Different fix r<N>` and
+  `Other cases checked r<N>` evidence lines reach the reviewer (#54, #57); the
+  README says why a build that changes the review prompt makes the next build
+  run one new pass (#19).
+- Builder: Opus at effort high with no advisor, whatever an older set-up
+  stored; a live Builder pane is refused when the configured model changed
+  since its launch (#17); the brief no longer names the model (#20) and carries
+  the test-run rule (#77, also in the shipped rules), the shared-Mac test
+  rules (#53), and rules for questions answered another way (#56), documented
+  commands (#59), starting helpers together (#61) and rulings that leave
+  something as it is (#60).
+- Cost: a request seen under its request id and its message id counts once,
+  across cache reads (#51), and an older cache is rebuilt (#52).
+- Fixes: the leak test compares folders by identity, not letter case (#7);
+  `/test-audit` reads a `read=` field that is not plain ranges as not clean
+  (#8); `project-main.sh` clears Git's routing variables before it probes
+  (#13) and pairs a stand-in main under temp only with a workspace under temp
+  (#14); macOS CI runs setup with no Homebrew on the path (#65). CI installs
+  jsdom again so the dashboard page tests run.
+
 ## 0.4.5 -- 2026-10-14
 
 Setup asks how the review loop runs, the default Builder has no advisor, and

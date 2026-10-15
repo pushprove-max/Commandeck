@@ -639,7 +639,8 @@ seat() { # handle task unit role launched [session id] [seat tag]
   item=$key${ep:+-$ep}; [ -z "$ep" ] || task=
   case $state in
     working)
-      : > "$ST/working-$key"
+      # A hold ends when the Builder works again, settled or not: its next helper wait starts a fresh clock.
+      : > "$ST/working-$key"; rm -f "$ST/held-$key"
       at=$(grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}")
       [ $((NOW - at)) -ge "$STALL_S" ] || return 0
       post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
@@ -661,15 +662,20 @@ seat() { # handle task unit role launched [session id] [seat tag]
         elif [ "$RV_OK" = 0 ] && rv_unanswered "$key"; then return 0
         elif [ -e "$ST/working-$key" ]; then kind=silent
         else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}"; }; return 0; fi
-        # A Builder with no DONE line and a helper out is waiting on it: read again next tick. A VERDICT line
+        # A Builder with no DONE line and a helper out is waiting on it: read again next tick. DONE is its own
+        # unit's marker as the brief prints it, never another pane's it quotes (DESIGN-DONE). A VERDICT line
         # is no finish here: read-verdict.sh ends its output at one, and a Builder quotes its passes' verdicts,
         # so DONE is also read as the last line of the latest message in the Builder's own session (--state's
         # marker), bound as seat.sh binds it: the seat tag typed into every prompt, direct ones included.
         # The log is the Builder's own to write, so the hold is bounded by this service's clock: HOLD_S at most.
-        if [ "$4" = builder ] && ! grep -q -- '-DONE$' <<<"$RV_OUT" && helper_out "$u" "${5:-0}" \
+        if [ "$4" = builder ] && ! grep -qxF -- "${u^^}-DONE" <<<"$RV_OUT" && helper_out "$u" "${5:-0}" \
           && ! timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$WS/$u" --agent claude --launched "${5:-0}" --spec "${7:-}" \
             --marker "${u^^}-DONE" 2>/dev/null | grep -qx 'marker=1'; then
           [ -s "$ST/held-$key" ] || echo "$NOW" > "$ST/held-$key"
+          # A helper started after the hold began means the Builder worked, maybe between two ticks: a new clock.
+          [ "$(builder_card "$u" "${5:-0}" | jq -r --argjson now "$NOW" '[.waiting[] | select(.kind == "subagent")
+            | .since | sub("\\.[0-9]+"; "") | fromdateiso8601 | select(. <= $now)] | max // 0' 2>/dev/null || echo 0)" \
+            -le "$(cat "$ST/held-$key")" ] || echo "$NOW" > "$ST/held-$key"
           [ $((NOW - $(cat "$ST/held-$key"))) -ge "$HOLD_S" ] || return 0
           # Expired with no DONE: a quoted verdict is not the Builder's finish.
           kind=silent

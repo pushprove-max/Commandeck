@@ -321,7 +321,9 @@ const wanted = (entry) => {
   return named.length ? named : [[1, f.lines]]
 }
 // Whether the ranges a row's read= field names, joined up, hold every wanted line.
+// The whole field must be ranges: a word in it ("not read: 101-150") would lend its numbers.
 const covers = (read, want) => {
+  if (!/^\s*\d+(?:-\d+)?(?:[\s,]+\d+(?:-\d+)?)*\s*$/.test(read)) return false
   const spans = [...read.matchAll(/(\d+)(?:-(\d+))?/g)].map((m) => [+m[1], +(m[2] ?? m[1])]).sort((a, b) => a[0] - b[0])
   return want.every(([from, to]) => spans.reduce((at, [a, z]) => (a <= at && z >= at ? z + 1 : at), from) > to)
 }

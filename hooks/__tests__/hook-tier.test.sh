@@ -11,7 +11,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected '$2', got '$3')"; fi }
 
-STRICT="bash-guardrails bash-symbols-before-read batch-independent-looks edit-content-tripwires
+STRICT="bash-guardrails batch-independent-looks edit-content-tripwires
 file-size-cop git-ignore-warn new-test-file-guard pane-budget-gate read-tracker script-over-reads
 staged-index-warn suite-rerun-guard symbols-before-read test-skip-only-blocker web-fetch-blocker"
 

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.5-111111?style=flat-square" alt="Version 0.4.5">
+  <img src="https://img.shields.io/badge/version-0.5.0-111111?style=flat-square" alt="Version 0.5.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -108,10 +108,10 @@ line to run.
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Chief of Staff | a name and one line on how the relay pane should sound, or none |
 | Codex fast | off (the default) or on. On, the Codex review passes run on the fast tier, which costs more per token; off, they are held to the normal tier whatever your Codex config says |
-| Builder model | Opus at effort high with no advisor (the default, a risky build included), Sonnet advised by Opus for less usage, or Opus advised by Opus |
+| Builder model | Opus (the default) or Sonnet for less usage; every Builder runs at effort high with no advisor, a risky build included, and a rerun drops an advisor an older setup saved |
 | Global CLAUDE.md | skip, install (writes `~/.claude/CLAUDE.md` only when there is none) or add block (a marked block in your own file); the plugin's general working rules, code exploration and root-cause rules |
 | Global rules | the same three choices for the plugin's working, review, agent and test rules; uninstall takes out only the plugin's blocks |
-| Review loop | the most review rounds a build may run (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits, $30). Numbers are saved as typed; taking every default saves nothing |
+| Review loop | the most review rounds a build may run (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
 
 Setup also creates the project's Orca run, or prints the one command for it,
 and ends with the list of project files it created or changed and which of
@@ -174,8 +174,8 @@ in. Between
 steps 2 and 4 the merge looks up the reviewer's session and refuses when the
 proof is missing or older than the branch tip. It runs your test command once
 on a copy of the squashed tree before it commits, and a red run undoes the
-squash. Then it writes the build review page, closes the unit's panes and
-removes the worktree.
+squash. Then it closes the unit's panes and removes the worktree. It does
+not write the build review: that runs only when you ask for it.
 
 `bash "$PLUGIN/scripts/board.sh"` prints the state of every worktree, seat and open
 task at any point. `merge-unit-local.sh <unit> --dry-run` runs the checks and
@@ -198,6 +198,22 @@ closing pass at setup merges the narrowed pass that ends GO, once narrowed
 passes have read every commit after the first pass; one that set a round cap
 has any pass numbered above it refused.
 
+Each pass after the first prints the files and lines changed since the last
+pass, and says so when no code line changed (only comments or blank lines). If
+main's brief or rulings for the build changed since the last pass, a `review`
+pass reads the whole branch as a closing pass does, so a part main added in a
+fix round is reviewed with the rest. The Builder's evidence-file lines
+`Different fix r<N>: <why>` and `Other cases checked r<N>: <which>` go into the
+prompt of pass N.
+
+Each pass is checked against the exact prompt it was sent, and so is every
+earlier pass of the same worktree. A plugin update that changes the review
+prompt's text (this plugin building itself is where that happens) therefore
+refuses a build whose passes ran under the old text, at its next pass or at
+its merge. This is expected, and it never gives a wrong GO. The refusal names
+the way on: make a new unit from that branch and run its first pass; a GO
+there with nothing committed after it merges.
+
 Findings are graded P0 to P3. A P0 or P1 refuses the merge. A closing pass
 that leaves only P2 or P3 findings still merges: the merge prints each one as
 open and files a GitHub issue for it. If GitHub cannot be reached the merge
@@ -205,13 +221,15 @@ stands, the output lists what was not filed, and the exit code is 4.
 
 A launch with `--risky` opens a design pane first. It writes a design note
 that the Builder reads before it builds; running the same command again opens
-the Builder. A launch with `--small` says the batch is expected under 200
-changed lines, and that Builder runs without the advisor a project chose at
-setup; `--risky` adds no advisor. `--model <alias> --reason '<one line>'` puts one launch on
+the Builder. Every Builder runs with no advisor, a `--risky` one included. A
+launch with `--small` says the batch is expected under 200 changed lines; it
+also drops an advisor written into `config/routing.json`'s `roles.builder` by
+hand. `--model <alias> --reason '<one line>'` puts one launch on
 another allowed model.
 
 `scripts/merge-queue.sh <unit> ...` merges several finished units in the
-order given, one at a time, and stops at the first that does not merge.
+order given, one at a time, and stops at the first that does not merge, or
+that merged and then failed a later step (exit code 3); it says which.
 
 ## Hooks
 
@@ -259,8 +277,9 @@ catch weak tests:
 - `suite-rerun-guard.sh` blocks the same test or type-check command on an
   unchanged tree within 30 minutes; prefix `RERUN=1` to run it anyway. It
   recognises npm's test and typecheck scripts, `tsc` and `vitest`.
-- `symbols-before-read.sh` and its shell twin require a symbol lookup before
-  the first read of a code file, in projects that use the serena add-on.
+- `symbols-before-read.sh` refuses a Builder's first edit to an existing code
+  file once and names the files that use it, in projects that use the serena
+  add-on. Reads are never capped or gated.
 - `edit-content-tripwires.sh` blocks new CRLF line endings, deferred-work
   markers, comments that suppress TypeScript and `eslint-disable`.
   `file-size-cop.sh` holds a `.ts` file to 500 lines and a `.tsx` file to
@@ -394,22 +413,31 @@ between them. A background job collects its data every 60 seconds with no
 model call, and the page reloads every 15. Each project's view shows alerts,
 builds in progress, decisions waiting on you, `main` against its remote,
 every worktree by stage, the 7-day limit, tokens per role over 7 days, recent
-hook blocks and the Chief of Staff's inbox.
+hook blocks and the Chief of Staff's inbox. Three panels show GitHub work:
+open pull requests with their checks, open issues by milestone with the
+Builder holding each, and the commits the next push of `main` would send.
+They read `gh` (read-only, every 5 minutes) and git. Without `gh`, or signed
+out, each says so and the rest of the page still works. An issue number links
+to the issue on GitHub.
 
 It serves plain HTTP on `127.0.0.1`, on the first free port from 8791, and
 setup prints the address. It has no login. On the loopback bind it answers
 403 to any other host name; `--bind` and `--hosts` at setup open it to your
 own network, and it still has no login there.
 
-The build review runs at every merge, with no model: one HTML page per build
-under `~/.commandeck/reviews/`, and the merge prints its path. It shows where
-the time went stage by stage, the review passes and lines changed, tokens and
-list-price cost by model, and time spent waiting. A build with over 30
-minutes of review, over a third of its clock on tests or idle waits, or over
-$30 sends one message to the Chief of Staff pane.
-`/commandeck:worktreereview <unit>` makes the same page by hand, with the
-session's notes on what to learn from it. It reads logs only, so it works
-after the worktree is gone.
+The build review runs only when you ask for it:
+`/commandeck:worktreereview <unit>`, for a merged build or one still running.
+The merge does not run it. It makes one HTML page per build under
+`~/.commandeck/reviews/`, with the session's notes on what to learn from it.
+It shows where the time went stage by stage, every review pass with its full
+findings and lines changed, tokens and list-price cost by model, and time
+spent waiting. The page flags a build with over 30 minutes of review, over
+$30, or over a third of its clock (and over 10 minutes) on tests or idle
+waits; that flag names the largest single command. A wait on a review pass
+run outside the Builder's session, or on a review tool that was down, is
+shown on its own and flags nothing. A lesson that proposes a change becomes
+a draft issue, and only the drafts you approve are filed. It reads logs
+only, so it works after the worktree is gone.
 
 `/test-audit <scope dir...> [basic|full] [N agents]` has agents read a
 folder's tests against its code and report what is redundant, slow or unable

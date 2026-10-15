@@ -27,6 +27,9 @@ Rules that bind only main. The startup hook prints this file down to the line
   return only the answer and source paths, stop by 40 turns.
 - **Main may set a dispatch's effort** (cap `max`); log each override in the
   brief as `effort override: <role> <pinned/default> -> <used>: <reason>`.
+- **A ruling that something stays as it is goes under `## Stated limits`** in
+  `.claude/briefs/<unit>-main-rulings.md` when you write it: the pass reads
+  limits from that heading only, and raises a ruling written elsewhere again.
 
 ## Orchestrator and Advisor Role (ruling 2026-09-12)
 

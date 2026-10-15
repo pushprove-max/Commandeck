@@ -15,9 +15,10 @@ else MAIN=$(ls -t "$PROJ"/*.jsonl 2>/dev/null | awk 'NR == 1' || true); fi
 [ -f "${MAIN:-}" ] || { echo "no Builder transcript under $PROJ" >&2; exit 1; }
 SUBS=("${MAIN%.jsonl}"/subagents/agent-*.jsonl)
 [ -e "${SUBS[0]}" ] || { echo "no subagent transcript beside ${MAIN##*/}: run one Explore to prove the 5m side" >&2; exit 1; }
-# Sums of each TTL's cache writes over assistant turns, as "<1h> <5m>".
-sum() { jq -rs '[.[] | select(.type == "assistant") | .message.usage.cache_creation // {}]
-  | "\(map(.ephemeral_1h_input_tokens // 0) | add // 0) \(map(.ephemeral_5m_input_tokens // 0) | add // 0)"' "$@"; }
+# Sums of each TTL's cache writes over assistant turns, as "<1h> <5m>". Claude
+# Code 2.1.300's api-request rows hold no usage: dropped before jq slurps them.
+sum() { grep -hv '^{"type":"api-request' "$@" | jq -rs '[.[] | select(.type == "assistant") | .message.usage.cache_creation // {}]
+  | "\(map(.ephemeral_1h_input_tokens // 0) | add // 0) \(map(.ephemeral_5m_input_tokens // 0) | add // 0)"'; }
 read -r MH MM <<<"$(sum "$MAIN")"
 read -r SH SM <<<"$(sum "${SUBS[@]}")"
 echo "${MAIN##*/}: main thread 1h=$MH 5m=$MM; ${#SUBS[@]} subagent transcript(s) 1h=$SH 5m=$SM"

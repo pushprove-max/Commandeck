@@ -258,13 +258,12 @@ def seat_at($root; $spec):
     elif $p.i != null then fail("\($p.r) has no candidates")
     else $role end
   | . + {role: $p.r}
-  # A project may choose the model and advisor of its Builder (set-up stores it,
+  # A project may choose the model of its Builder (set-up stores it,
   # pp_route_json hands it in). The one place it applies, and only to this role.
+  # An advisor an older set-up stored is not read: every Builder runs with none (the owner, 2026-10-14).
   | if $p.r != "builder" then . else
-      . + ($ARGS.named.builder // {} | {model, advisor} | with_entries(select(.value != null)
-        | if (.value | IN($root | aliases[])) or (.key == "advisor" and .value == "none") then . else fail("this project has builder.\(.key) is not one of \($root | aliases | join(", ")); set-up sets it") end))
-      # "none" is the choice of no advisor, dropped only after it has replaced the one routing names.
-      | if .advisor == "none" then del(.advisor) else . end
+      . + ($ARGS.named.builder // {} | {model} | with_entries(select(.value != null)
+        | if .value | IN($root | aliases[]) then . else fail("this project has builder.\(.key) is not one of \($root | aliases | join(", ")); set-up sets it") end))
     end
   # Codex fast mode changes what a run costs: it is the answer set-up saved
   # (pp_codex_fast hands it in) and never the routing file itself. No quote mark here: this is inside one.

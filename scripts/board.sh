@@ -7,7 +7,9 @@
 # third of those were wrong guesses (the workspaces root, task-list's run id)
 # that then had to be redone. A fresh context after /clear pays that every
 # time. Guessing an input is the expensive failure, so this prints the inputs.
-# Read-only: it opens no worktree, acks no message and closes no task.
+# It opens no worktree, acks no message and closes no task. In the main
+# checkout it writes two things: the run id file, when Orca's run differs from
+# it, and the terminal's binding to that run, when the terminal is unbound.
 # Usage: board.sh [unit]   -- with a unit, only that unit's rows.
 set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)
