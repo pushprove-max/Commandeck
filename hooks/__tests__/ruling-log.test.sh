@@ -29,5 +29,33 @@ check "a path that does not exist yet is the owner's words too" 4 "$(rows)"
 # The handoff's resume prompt is typed by a script: logged void, it answers no open ask.
 prompt "resume from the checkpoint /x/cp.md (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from /x/cp.md; the old pane term_a closes now."
 check "the handoff's resume prompt, with its first-line instruction, is void" true "$(tail -1 "$COMMANDECK_RULING_LOG" | jq .void)"
+
+# A prompt closes a plain-chat ask only when it names it: an unrelated line, or one typed in another session,
+# closed every open ask. Named is the id, or the id without its day, as whole words in any case or spacing.
+# A Builder's question waiting on main is never the owner's to close in chat: main answers it with answer-worker.sh.
+git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
+dec() { (cd "$T/p" && bash "${HOOK%/hooks/*}/scripts/decision.sh" "$@" >/dev/null 2>&1); }
+open() { (cd "$T/p" && bash "${HOOK%/hooks/*}/scripts/decision.sh" list 2>/dev/null) | jq -r '[.[] | select(.answeredAt == null) | .id] | join(" ")'; }
+dec add export-batch-2026-10-15 "Ship the export batch now?" yes main
+dec add retry-cap "Raise the retry cap?" no main
+dec add u1-msg_1 "Which fixture?: the old one or the new one" none "u1 asks" --waits-on main
+prompt "the export looks slow today"
+check "a prompt that names no open ask closes none" "export-batch-2026-10-15 retry-cap u1-msg_1" "$(open)"
+prompt "Export Batch: yes, ship it"
+check "a prompt naming an ask by its id without the day closes that one only" "retry-cap u1-msg_1" "$(open)"
+prompt "retry-cap no, and u1-msg_1 the new one"
+check "a Builder's question waiting on main stays open whatever the owner types" "u1-msg_1" "$(open)"
+
+# A row can be hundreds of KB, and an append that size is not one write: two hooks at once interleaved into one
+# damaged line. The append holds a lock on the log, so a writer that holds it makes the hook wait.
+export COMMANDECK_RULING_LOG=$T/lock/log.jsonl; mkdir -p "$T/lock"; : > "$COMMANDECK_RULING_LOG"
+( exec 9>>"$COMMANDECK_RULING_LOG"; flock -x 9; : > "$T/held"; until [ -e "$T/release" ]; do sleep 0.05; done ) &
+HOLDER=$!
+until [ -e "$T/held" ]; do sleep 0.05; done
+prompt "locked out for now" & WRITER=$!
+sleep 1
+check "the hook does not append while another writer holds the log's lock" 0 "$(rows)"
+: > "$T/release"; wait "$HOLDER"; wait "$WRITER"
+check "and appends once the lock is free" 1 "$(rows)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

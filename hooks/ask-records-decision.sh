@@ -10,7 +10,8 @@
 # exit 3), stops the whole picker before any row is written, so the
 # re-ask without it is not itself a repeat; a retry after a voided decoy pick
 # passes, and so does the one picker a `decision.sh add ... --reask` of that
-# id armed (its add below spends the grant). Any other refused add (a same-day header reused for another
+# id, or of a chat or earlier day's id this header names, armed (its add below
+# spends the grant). Any other refused add (a same-day header reused for another
 # question) is logged and the question still goes out. Plain-chat asks:
 # ask-stop-records-decision.sh.
 #

@@ -267,7 +267,7 @@ units() {
         st=$(jq -c '.stage' <<<"$b"); rd=$(jq -c '.round' <<<"$b")
         age=$(jq -c --argjson now "$NOW" '.lastAt | if . == null then null else [$now - fromdateiso8601, 0] | max end' <<<"$b")
         bj=$(jq -c '{steps, signals, verdict: null, verdictRound: null}' <<<"$b")
-        bj=$(jq -c --argjson b "$b" '. + ($b | {startedAt, reviewSec, waiting})' <<<"$bj")
+        bj=$(jq -c --argjson b "$b" '. + ($b | {startedAt, reviewSec, waiting, stageHistory})' <<<"$bj")
       else : > "$RUN/builder-bad"; fi
       # No working agent leaves the Builder waiting on main; an unread agent list keeps the log's stage, and so
       # does a helper, pass or call of its own still out: an idle pane waits on that, not on main (#41).
@@ -283,6 +283,12 @@ units() {
       # An unreadable log stays wholly not measured; any other Builder also carries its issues and findings.
       # reviewedTree: is the worktree still the tree its newest pass read. The build review reads the same script.
       [ "$(jq -c '.steps' <<<"$bj")" = null ] || bj=$(jq -c --argjson p "$(builder_progress "$wt" "$u")" --argjson rt "$(bash "$HERE/reviewed-tree.sh" "$wt" "${u##*/}" 2>/dev/null || echo null)" '. + $p + {reviewedTree: $rt}' <<<"$bj")
+      # cache24h: a Builder writes no seat rows, so its 24 h cache hit rate is its own session's usage. With no
+      # session log or no turn in 24 h there is no rate to judge and no key; null is a log that failed to read.
+      if [ "$(jq -c '.steps' <<<"$bj")" != null ] && f=$(pp_session_log "$wt") && [ -n "$f" ]; then
+        cu=$(bash "$HERE/seat-event.sh" --usage claude "$f" $((NOW - 86400)) 2>/dev/null) && jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$cu" || cu='{"tokens":null}'
+        [ "$cu" = null ] || bj=$(jq -c --argjson c "$cu" '. + {cache24h: $c.tokens}' <<<"$bj")
+      fi
     fi
     jq -cn --arg u "$u" --argjson branch "$branch" --argjson dirty "$dirty" --argjson diff "$diff" --argjson ag "$ag" \
       --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" \
@@ -304,8 +310,21 @@ units() {
   if ws_listable; then
     jq -c 'map({(.unit): .rec}) | add // {}' "$RUN/in-flight.json" > "$RUN/unit-stages" && mv -f "$RUN/unit-stages" "$stages"
   else known=false; fi
-  jq -c --argjson k "$known" --argjson fin "$(finished_builds)" \
-    '{inFlight: (if $k then map(del(.rec)) else null end), finishedBuilds: $fin}' "$RUN/in-flight.json"
+  # Each Builder's cost by stage (#94), from its worktree's own sessions. The last figures read for each unit are
+  # kept, so a finished build shows them as they stood at its merge.
+  # shortcut: kept by unit name, so a later build under the same name replaces an earlier one's; key by build if that matters.
+  local costs kept=$CACHE/unit-cost.json had
+  if costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select(.builder.stageHistory | type == "array" and length > 0)
+        | {unit, worktree: "\($ws)/\(.unit)", stages: .builder.stageHistory}]' "$RUN/in-flight.json" \
+      | python3 "$HERE/dashboard_limit.py" units "$NOW" "$CACHE" "$HOME/.claude/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
+      && jq -e 'objects' >/dev/null 2>&1 <<<"$costs"; then
+    ok unit-cost
+    had=$(jq -ce 'objects' "$kept" 2>/dev/null) || had='{}'
+    jq -cn --argjson o "$had" --argjson c "$costs" '$o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"
+  else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
+  jq -c --argjson k "$known" --argjson fin "$(finished_builds)" --argjson c "$costs" --argjson kept "$(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}')" \
+    '{inFlight: (if $k then map(del(.rec) | if .builder then .builder.cost = ($c[.unit]? // null) else . end) else null end),
+      finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end)}' "$RUN/in-flight.json"
 }
 
 # Finished builds: the lines this checkout's own merges appended (merge-unit-local.sh), one per unit name with the
@@ -717,6 +736,11 @@ project() {
   trap - EXIT
   mkdir -p "$CACHE" "$RUN/src" "$RUN/parts" || return 1
   cd "$PP_MAIN" || return 1
+  # A session records its folder as the OS gives it. On a Mac a workspace path typed in another letter case finds
+  # the same folder on disk but matches none of its sessions: no Builder's cost, no worktree in the day's cost.
+  # The external pwd asks the OS; Bash's own keeps the case as typed.
+  local ws
+  ws=$(cd "$PP_WORKSPACES" 2>/dev/null && env pwd -P) && PP_WORKSPACES=$ws
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role \
     && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \

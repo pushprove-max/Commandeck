@@ -19,6 +19,9 @@ INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # A failed mkdir falls through: the append then fails and says so.
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
+# A row can be hundreds of KB and an append that size is not one write, so two hooks at once interleaved into one
+# damaged line. Every append holds flock on the log itself; a lock not taken in 10 s fails like any failed write.
+append_log() { { flock -w 10 9 && printf '%s\n' "$1" >&9; } 9>>"$LOG"; } 2>/dev/null
 
 EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
 case "$EVENT" in UserPromptSubmit|PostToolUse) ;; *) exit 0 ;; esac
@@ -105,13 +108,19 @@ case "$EVENT" in
         + (if .prompt | gsub("<(task-notification|system-notification|system-reminder)>[\\s\\S]*?</\\1>|You have [0-9]+ orchestration messages?\\. Run `orca orchestration check[^`\\n]*`\\.?|resume from the checkpoint \\S+\\.md \\(its text, board\\.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut\\); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing \\(main-watch\\.sh wakes you\\); then service whichever marker has landed(?:\\. Your first line to the owner is: Handoff done: this is the new main session, resumed from \\S+\\.md; the old pane \\S+ closes now\\.)?|main-watch: items are waiting in your Orca inbox for run [\\w-]+; read them and handle each\\.|main-watch: Orca did not take these for run [\\w-]+, so they are NOT in your inbox: [^\\n]*?\\. Each retries every tick\\.(?: Other items are waiting in your Orca inbox\\.)?(?: To take the run back, run this from your own pane: orca-ide orchestration run-use --id [\\w-]+| Who holds run [\\w-]+ is unknown; reconcile first: find out what that pane is before taking the run\\.| Live pane [\\w-]+ holds run [\\w-]+; reconcile first: find out what that pane is before taking the run\\.)"; "")
               | test("\\A\\s*\\z") then {void:true} else {} end)' 2>/dev/null)
     [ -n "$PROW" ] || exit 0
-    printf '%s\n' "$PROW" >> "$LOG" 2>/dev/null \
+    append_log "$PROW" \
       || { HOOK_FIRE_ADVISE=1; echo "ruling NOT logged: could not write $LOG. This prompt has no id to cite."; exit 0; }
     jq -e '.void == true' <<<"$PROW" >/dev/null && exit 0
-    # the owner's prompt answers every plain-chat ask put to them before it; a picker
-    # row waits for its own PostToolUse answer.
-    answer_decisions --arg utc "$UTC" --arg pid "r-$STAMP-p-$RND" \
-      '$open[] | select(.source != "AskUserQuestion" and .askedAt <= $utc) | [.id, "answered in chat (\($pid))", true]'
+    # The owner's prompt answers a plain-chat ask put to them before it only when it names that decision: an
+    # unrelated line, or one typed in another session, closed every open ask. Named = the id, or the id without
+    # its -YYYY-MM-DD day, as whole words in any case and spacing. A picker row waits for its own PostToolUse
+    # answer; a Builder's question waiting on main is answered by answer-worker.sh, never in chat.
+    answer_decisions --arg utc "$UTC" --arg pid "r-$STAMP-p-$RND" '
+      def words: ascii_downcase | "-\(gsub("[^a-z0-9]+"; "-"))-";
+      (.prompt | words) as $said
+      | $open[] | select(.source != "AskUserQuestion" and .waitsOn != "main" and .askedAt <= $utc
+          and ((.id | sub("-[0-9]{4}-[0-9]{2}-[0-9]{2}$"; "") | words) as $k | $said | contains($k)))
+      | [.id, "answered in chat (\($pid))", true]'
     exit 0 ;;
 esac
 
@@ -157,7 +166,7 @@ ROWS=$(printf '%s' "$INPUT" | jq -c --arg stamp "$STAMP" --arg rnd "$RND" --arg 
 [ -n "$ROWS" ] || exit 0
 # An id is only announced once it is on disk: a note citing an id the log
 # never received would then fail the gate with no way back to the answer.
-if ! printf '%s\n' "$ROWS" >> "$LOG" 2>/dev/null; then
+if ! append_log "$ROWS"; then
   HOOK_FIRE_ADVISE=1
   jq -cn --arg m "ruling NOT logged: could not write $LOG. Record the answer by hand; there is no id to cite." \
     '{hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$m}}'

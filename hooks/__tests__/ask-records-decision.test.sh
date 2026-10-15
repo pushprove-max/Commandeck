@@ -41,5 +41,44 @@ check "it is answered ask, its input changed only in the question text" true \
     question: "Ship the release today?", options: [{label: $d}, {label: "Ship it (Recommended)"}, {label: "Hold"}]}]}' "$TMP/out" 2>/dev/null)"
 check "the fire log reads allow, block, allow, ask" "allow block allow ask" "$(jq -r .decision "$TMP/fire.jsonl" 2>/dev/null | paste -sd' ' -)"
 
+dec() { env HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" bash "$REAL/scripts/decision.sh" "$@"; }
+# the watcher marks a decision seen when it fires; each restart before the
+# Chief of Staff wrote its own mark woke the pane again for the same question.
+watch() { env HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-decisions.sh" 2>/dev/null | jq -r .id; echo "rc=${PIPESTATUS[0]}"; }
+check "the watcher fires an open decision" "deploy-window-$DAY rc=0" "$(watch | grep -v ship-now | paste -sd' ' -)"
+check "a restart does not fire it again" "rc=1" "$(watch | paste -sd' ' -)"
+dec answer "deploy-window-$DAY" 'Noon' >/dev/null; dec reopen "deploy-window-$DAY" >/dev/null
+check "a reopened decision fires again" "deploy-window-$DAY rc=0" "$(watch | paste -sd' ' -)"
+# A Builder's question waits on main: the relay pane the watcher wakes would put it to the owner.
+dec add u1-msg_q1 'Which fixture?' none 'u1 asks' --waits-on main >/dev/null
+check "a Builder's question waiting on main never wakes the relay" "rc=1" "$(watch | paste -sd' ' -)"
+
+# a wrongly recorded answer is replaced in one step, the old one kept.
+dec answer "deploy-window-$DAY" 'Noon' >/dev/null
+check "a second answer still refuses" 1 "$(dec answer "deploy-window-$DAY" 'Simplify' >/dev/null 2>&1; echo $?)"
+check "--correct replaces it and keeps the old answer in history" "Simplify Noon" \
+  "$(dec answer "deploy-window-$DAY" 'Simplify' --correct | jq -r '"\(.answer) \(.history[0].answer)"')"
+check "the corrected ledger still reads" "Simplify" "$(dec list | jq -r --arg id "deploy-window-$DAY" '.[] | select(.id == $id) | .answer')"
+check "--correct on an open decision refuses" 1 "$(dec answer "ship-now-$DAY" 'Hold' --correct >/dev/null 2>&1; echo $?)"
+
+# A re-ask of a chat decision, or of an earlier day's, arms its picker: no
+# header gives a chat id, or an earlier day's id, today, so the grant never
+# matched and the re-asked picker stayed blocked.
+answer_of() { dec list | jq -r --arg id "$1" '.[] | select(.id == $id) | .answer // "open"'; }
+VQ="Keep the voice hook from logging PII?"
+dec add voice-hook-pii "$VQ" none main >/dev/null
+check "the open chat decision's picker is blocked" 2 "$(ask "Voice hook PII" "$VQ")"
+dec add voice-hook-pii "$VQ" none main --reask "the hook now reads transcripts" >/dev/null
+check "a re-ask grants nothing to a header that does not name it" 2 "$(ask "Voice" "$VQ")"
+check "after a re-ask, the picker whose header names it goes out" 0 "$(ask "Voice hook PII" "$VQ")"
+check "the chat row closes, pointing at the picker's row" "re-asked as voice-hook-pii-$DAY" "$(answer_of voice-hook-pii)"
+check "and the picker's row is open, so the picker's answer closes it" "open" "$(answer_of "voice-hook-pii-$DAY")"
+check "the same picker again is blocked" 2 "$(ask "Voice hook PII" "$VQ")"
+PQ="Patch the build box kernel tonight?"
+dec add patch-box-2026-10-01 "$PQ" none main >/dev/null
+dec add patch-box-2026-10-01 "$PQ" none main --reask "the vendor shipped a fix" >/dev/null
+check "an earlier day's re-asked picker goes out under today's header" 0 "$(ask "Patch box" "$PQ")"
+check "and moves to today's id" "re-asked as patch-box-$DAY|open" "$(answer_of patch-box-2026-10-01)|$(answer_of "patch-box-$DAY")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -300,6 +300,8 @@ def words($root):
      env: ((if .memory then ["COMMANDECK_PANE_MEMMAX=\(.memory)"] else [] end)
        + (if .reviewer then ["COMMANDECK_REVIEWER=1"] else [] end)
        + (if .codexHome then ["CODEX_HOME=\(.codexHome)"] else [] end)
+       # Left out, --advisor gives Claude Code its default advisor; this variable is its one off switch (#85).
+       + (if .agent == "claude" and (.advisor | not) then ["CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1"] else [] end)
        # Claude has no shell policy flag, so shellEnv rides the environment words; Codex keeps {shellenv}.
        + (if .agent == "claude" and .shellEnv then [.shellEnv | to_entries[] | "\(.key)=\(.value)"] else [] end)),
      model: ["--model", .model + (if .context then "[\(.context)]" else "" end)],
@@ -438,6 +440,26 @@ pp_worktree_new() {
   [ "$(git -C "$wt" rev-parse HEAD)" = "$head" ] || git -C "$wt" reset --hard "$head" >/dev/null \
     || { echo "could not base $1 on local main $head" >&2; return 1; }
 }
+# pp_sync_main <checkout> [--check] -- fetch origin's main and fast-forward local
+# main to it, before a Builder branches or a merge rebases: a release marked
+# published on origin and not fetched here gets its files rebuilt as a draft.
+# No origin is nothing to fetch. A fetch that fails, or a local main that has
+# diverged, refuses with the reason. --check moves nothing (a dry run).
+pp_sync_main() {
+  local c=$1 got
+  git -C "$c" remote get-url origin >/dev/null 2>&1 || return 0
+  git -C "$c" fetch -q origin main 2>/dev/null && got=$(git -C "$c" rev-parse -q --verify 'FETCH_HEAD^{commit}') \
+    || { echo "could not fetch main from origin; fetch it by hand (git fetch origin main), then run this again" >&2; return 1; }
+  git -C "$c" merge-base --is-ancestor "$got" refs/heads/main && return 0
+  git -C "$c" merge-base --is-ancestor refs/heads/main "$got" \
+    || { echo "local main has diverged from origin's main and cannot fast-forward; reconcile them (git pull --rebase origin main, or push main), then run this again" >&2; return 1; }
+  [ "${2:-}" != --check ] || return 0
+  if [ "$(git -C "$c" branch --show-current)" = main ]; then
+    git -C "$c" merge -q --ff-only "$got" || { echo "could not fast-forward main to origin's $got (uncommitted work in the way?)" >&2; return 1; }
+  else
+    git -C "$c" update-ref refs/heads/main "$got" || return 1
+  fi
+}
 # Codex fast mode: on only when set-up saved the owner's yes. No config, no answer and an unreadable file are off.
 # COMMANDECK_CODEX_FAST=false turns it off for one call and no value of it turns it on: set-up's own
 # preflight runs before the new answer is saved, and has checked the tier for that answer itself.
@@ -500,7 +522,7 @@ pp_unit_briefs() {
   for f in "$1/$2".md "$1/$2"-*.md; do
     [ -e "$f" ] || continue
     b=${f##*/}; b=${b#"$2"}
-    [[ $b =~ ^(\.md|-evidence\.md|-design(-spec)?\.md|-main-rulings\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
+    [[ $b =~ ^(\.md|-evidence\.md|-design(-spec)?\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
   done
   return 0
 }
@@ -508,8 +530,8 @@ pp_unit_briefs() {
 # no unit may be named like one: `u-evidence` would lose its brief to `u`.
 # Refuses with the rule and the part of the name it hit.
 pp_unit_name() {
-  [[ $1 =~ (-evidence|-design(-spec)?|-main-rulings|-r[0-9a-z]+-reports)$|(-cut[0-9]+) ]] || return 0
-  echo "unit $1 may not be named like a paper (it has ${BASH_REMATCH[1]:-${BASH_REMATCH[3]}}): a name ending in -evidence, -design, -design-spec, -main-rulings or -r<N>-reports, or holding -cut<N>, is how another unit's brief files are told from its own. Pick another name" >&2
+  [[ $1 =~ (-evidence|-design(-spec)?|-main-rulings|-review-cap|-r[0-9a-z]+-reports)$|(-cut[0-9]+) ]] || return 0
+  echo "unit $1 may not be named like a paper (it has ${BASH_REMATCH[1]:-${BASH_REMATCH[3]}}): a name ending in -evidence, -design, -design-spec, -main-rulings, -review-cap or -r<N>-reports, or holding -cut<N>, is how another unit's brief files are told from its own. Pick another name" >&2
   return 1
 }
 # The project's own profile, which setup writes, wins over the plugin's default.

@@ -139,8 +139,11 @@ def session_ledger(path):
 
 
 def codex_commands(path):
-    """One Codex session record -> the seconds its own commands ran, read from each command's reported wall time."""
-    calls, total = [], 0.0
+    """One Codex session record -> its own commands as (seconds, command, end), read from each one's reported wall time.
+
+    The end is the output row's time, so a cut window can be taken off the span that ran before it.
+    """
+    calls = []
     asked = {}
     for e in rows_of(path):
         pay = e.get('payload') or {}
@@ -150,8 +153,7 @@ def codex_commands(path):
             text = json.dumps(pay.get('output'))[:400]
             wall = re.search(r'Wall time ([\d.]+) seconds', text)
             if wall:
-                sec = float(wall.group(1))
-                total += sec
                 cmd = re.search(r'cmd:\s*\\?"(.+?)\\?"\s*[,}]', asked.get(pay.get('call_id'), ''))
-                calls.append((sec, (cmd.group(1) if cmd else asked.get(pay.get('call_id'), ''))[:120]))
-    return {'commands': len(calls), 'command_s': total, 'longest': sorted(calls, reverse=True)[:5]}
+                calls.append((float(wall.group(1)), (cmd.group(1) if cmd else asked.get(pay.get('call_id'), ''))[:120],
+                              ts(e['timestamp']) if e.get('timestamp') else None))
+    return calls

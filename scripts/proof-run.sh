@@ -70,7 +70,7 @@ row() { printf '%-14s %-36s %s\n' "$P" "$1" "$2"; }
 # ledger folder, which is not this project's uninstall to remove.
 snap() {
   ( cd "$T" && { find home sample -path '*/.git/*' -prune -o -type d -print | sed 's/$/\//'
-      find home sample \( -path '*/.git/*' -prune \) -o \( -type f -o -type l \) -print | while IFS= read -r f; do printf '%s %s\n' "$(sha256sum < "$f" | cut -d' ' -f1)" "$f"; done
+      find home sample \( -path '*/.git/*' -prune \) -o \( -type f -o -type l \) -print | while IFS= read -r f; do printf '%s %s\n' "$( { [ -d "$f" ] && readlink "$f" || cat "$f"; } | sha256sum | cut -d' ' -f1)" "$f"; done
       printf '%s %s\n' "$(sha256sum < sample/.git/info/exclude | cut -d' ' -f1)" sample/.git/info/exclude; } | sort )
 }
 changed() { diff <(printf '%s\n' "$1") <(printf '%s\n' "$2") | sed -n 's/^[<>] //p' | sed -E 's/^[0-9a-f]{64} //' | sort -u; }

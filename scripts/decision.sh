@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new>]
-#           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt>]
+# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main]
+#           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
 #           | reopen <id> | list
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
 # append-only, one complete snapshot per line, the latest line per id wins.
@@ -14,8 +14,13 @@
 # after the ruling log voided the owner's last pick of that question as the decoy
 # (exit 0, the open row is reused), and --reask with the new facts, logged in
 # the source. A --reask of an existing id appends a fresh open snapshot and
-# lets that id's picker through once. Exit 1 is every other failure;
+# lets that id's picker through once, or, for a chat or earlier day's id, the
+# picker whose header names it. Exit 1 is every other failure;
 # ask-records-decision.sh blocks the picker on 3 only.
+# --waits-on main: a Builder's question to main (orca-wait.sh records it,
+# answer-worker.sh answers it). The row carries waitsOn: "main", so the Needs
+# Owner card lists it as waiting on main, never as the owner's; it is never a
+# repeat of an owner's question, only of its own id.
 # Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG.
 set -uo pipefail
 . "$(dirname "$0")/paths.sh" || exit 1
@@ -23,7 +28,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new>] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt>] | reopen <id> | list"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -32,7 +37,7 @@ lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || di
 # whole read: a corrupt ledger is never an empty one.
 fold() {
   jq -cs 'if all(.[]; type == "object"
-                 and (keys == ["answer","answeredAt","askedAt","id","proposedDefault","question","source"])
+                 and (keys - ["history", "waitsOn"] == ["answer","answeredAt","askedAt","id","proposedDefault","question","source"])
                  and (.id | type == "string" and length > 0))
           then [to_entries[] | .value + {_i: .key}] | group_by(.id) | map(last + {_i: first._i}) | sort_by(._i) | map(del(._i))
           else error("malformed record") end' "$L" 2>/dev/null || die "malformed ledger $L"
@@ -82,7 +87,7 @@ def same_q($new): . as $old | ($new | flat) == ($old | flat) or (
 # none does is the same id asking something else a write failure (exit 1).
 dup() {
   local d
-  d=$(jq -c --arg q "$3" "$SAME_Q"'[.[] | select(recent and (.question | same_q($q)))] | last // empty' <<<"$1")
+  d=$(jq -c --arg q "$3" "$SAME_Q"'[.[] | select(.waitsOn == null and recent and (.question | same_q($q)))] | last // empty' <<<"$1")
   [ -n "$d" ] && { printf '%s\n' "$d"; return; }
   ! jq -e --arg id "$2" 'any(.[]; .id == $id)' <<<"$1" >/dev/null || die "decision $2 already exists"
 }
@@ -129,6 +134,18 @@ gate() {
   # Before the repeat match: a decoy retry reuses its own open row, whatever
   # other decision it resembles.
   [ -n "$d" ] && decoy "$d" && { printf '%s\n' "$d"; exit 0; }
+  # A re-asked chat decision, or an earlier day's, has an id no picker gets
+  # today: the grant passes the picker whose header names it (same id once the
+  # -YYYY-MM-DD day is off both), and the add closes the old row and moves it
+  # to the picker's id, the one ruling-log.sh answers.
+  d=$(jq -c --arg id "$2" --arg q "$3" "$SAME_Q"'def slug: sub("-[0-9]{4}-[0-9]{2}-[0-9]{2}$"; "");
+      [.[] | select(.answeredAt == null and .id != $id and (.id | slug) == ($id | slug)
+        and ((.source // "") | contains("; re-ask: ")) and (.question | same_q($q)))] | last // empty' <<<"$1")
+  if [ -n "$d" ]; then
+    [ $# -lt 4 ] || { append "$(jq -c --arg a "re-asked as $2" --arg at "$(now)" '.answeredAt = $at | .answer = $a' <<<"$d")" >/dev/null
+      append "$(jq -c --arg id "$2" --arg s "$4" '.id = $id | .source = $s' <<<"$d")"; exit 0; }
+    printf '%s\n' "$d"; exit 0
+  fi
   d=$(dup "$1" "$2" "$3") || exit 1
   [ -n "$d" ] || return 0
   [ "$(jq -r .id <<<"$d")" != "$2" ] || refuse "$d"
@@ -137,9 +154,11 @@ gate() {
 
 case "${1:-}" in
   add)
-    reask=""
+    reask="" waits=""
     if [ $# -eq 7 ] && [ "$6" = --reask ]; then
       reask=$7; [ -n "${reask//[[:space:]]/}" ] || die "--reask needs the new facts"
+    elif [ $# -eq 7 ] && [ "$6" = --waits-on ]; then
+      [ "$7" = main ] || die "--waits-on takes main"; waits=$7
     else
       [ $# -eq 5 ] || usage
     fi
@@ -148,9 +167,12 @@ case "${1:-}" in
     [ -e "$L" ] || { mkdir -p "${L%/*}" && : >> "$L"; } || die "could not create $L"
     lock -x
     cur=$(fold) || exit 1
-    [ -n "$reask" ] || gate "$cur" "$2" "$3" "$5"
-    append "$(jq -cn --arg id "$2" --arg q "$3" --arg d "$4" --arg s "$5${reask:+; re-ask: $reask}" --arg at "$(now)" \
-      '{id: $id, askedAt: $at, question: $q, proposedDefault: $d, source: $s, answeredAt: null, answer: null}')" ;;
+    if [ -n "$waits" ]; then
+      ! jq -e --arg id "$2" 'any(.[]; .id == $id)' <<<"$cur" >/dev/null || die "decision $2 already exists"
+    elif [ -z "$reask" ]; then gate "$cur" "$2" "$3" "$5"; fi
+    append "$(jq -cn --arg id "$2" --arg q "$3" --arg d "$4" --arg s "$5${reask:+; re-ask: $reask}" --arg at "$(now)" --arg w "$waits" \
+      '{id: $id, askedAt: $at, question: $q, proposedDefault: $d, source: $s, answeredAt: null, answer: null}
+       + (if $w == "" then {} else {waitsOn: $w} end)')" ;;
   check)
     # check <id> <question> [<question asked beside it>...]: the picker hook
     # passes the questions before this one, so one asked twice in a single
@@ -169,14 +191,23 @@ case "${1:-}" in
     # --asked-at: answer only the snapshot the caller read. A hook that read
     # its open rows before a reopen must not close the reopened ask.
     # ponytail: whole-second stamps; a reopen in the ask's own second passes.
-    asked=""
-    if [ $# -eq 5 ] && [ "$4" = --asked-at ]; then asked=$5; else [ $# -eq 3 ] || usage; fi
+    # --correct: replace a wrongly recorded answer; the old one goes to .history.
+    asked="" correct=""
+    if [ $# -eq 5 ] && [ "$4" = --asked-at ]; then asked=$5
+    elif [ $# -eq 4 ] && [ "$4" = --correct ]; then correct=1
+    else [ $# -eq 3 ] || usage; fi
     [ -n "$3" ] || die "an answer is required"
     lock -x
     cur=$(fold) || exit 1
     prev=$(jq -c --arg id "$2" '.[] | select(.id == $id)' <<<"$cur")
     [ -n "$prev" ] || die "unknown decision $2"
-    jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is already answered"
+    if [ -n "$correct" ]; then
+      ! jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is still open; answer it without --correct"
+      append "$(jq -c --arg a "$3" --arg at "$(now)" --arg by "${USER:-unknown}" \
+        '.history = (.history // []) + [{answer, answeredAt, correctedAt: $at, correctedBy: $by}] | .answer = $a' <<<"$prev")"
+      exit 0
+    fi
+    jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is already answered (a wrongly recorded answer: add --correct)"
     [ -z "$asked" ] || jq -e --arg a "$asked" '.askedAt == $a' <<<"$prev" >/dev/null \
       || die "decision $2 was reopened after this answer read it"
     append "$(jq -c --arg a "$3" --arg at "$(now)" '.answeredAt = $at | .answer = $a' <<<"$prev")" ;;

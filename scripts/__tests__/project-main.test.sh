@@ -27,5 +27,19 @@ check "a stand-in project is not paired with a real project's worktrees folder o
 check "a stand-in project with its worktrees folder under the temp folder is followed" "$T/samename/one $T/home/orca/workspaces/one" \
   "$(resolve HOME="$T/home" COMMANDECK_MAIN="$T/samename/one")"
 
+# #99: builder-launch.sh branches only from a main fast-forwarded from origin (pp_sync_main);
+# a release marked published on origin and not fetched was rebuilt as a draft.
+O=$T/one
+git clone -q --bare "$O" "$T/origin.git"; git -C "$O" remote add origin "$T/origin.git"; git clone -q "$T/origin.git" "$T/other"
+push() { git -C "$T/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1" && git -C "$T/other" push -q origin HEAD:main; }
+sync() { ( cd "$O" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES COMMANDECK_MAIN="$O" bash -c '. "$0" && pp_sync_main "$@"' "$REAL/scripts/paths.sh" "$O" "$@" 2>&1; echo "rc=$?" ); }
+push "release: mark published"
+check "--check with origin ahead moves nothing" "rc=0 first" "$(sync --check) $(git -C "$O" log -1 --format=%s main)"
+check "with origin ahead, main is fast-forwarded" "rc=0 release: mark published" "$(sync) $(git -C "$O" log -1 --format=%s main)"
+push "release: next"; git -C "$O" checkout -q -b off
+check "off main, the main branch itself is fast-forwarded" "rc=0 release: next" "$(sync) $(git -C "$O" log -1 --format=%s main)"
+git -C "$O" checkout -q main; git -C "$O" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "local only"; push "release: third"
+check "a diverged main refuses with the reason" "1 rc=1 local only" "$(sync | grep -c 'cannot fast-forward') $(sync | tail -1) $(git -C "$O" log -1 --format=%s main)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

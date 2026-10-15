@@ -90,6 +90,9 @@ whole() {
 if [ "$TOOL" = "Bash" ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
   [ -z "$CMD" ] && exit 0
+  # Fast path: every check below needs one of these words in the text, so a command naming none (a
+  # plain read) skips the readers, which cost about 50 of its 114 ms per Bash call.
+  grep -qE 'npm|yarn|pip|uv' <<<"$CMD" || exit 0
   # Normalize backslash-newline continuations so a split command matches the
   # same as its single-line form.
   CMD=$(printf '%s' "$CMD" | sed -z 's/\\\n/ /g')

@@ -31,7 +31,9 @@ The page numbers its lessons L1, L2, ... in the order you write them. Refer to a
 
 1. Write `<scratch>/notes.json` with the keys `title`, `summary`, `stage_notes` (by stage code),
    `pass_findings` (by pass number, one plain sentence each), `lessons` (title and points),
-   `not_measured`, `method`.
+   `not_measured`, `method`, and `shrink_review`: each "Where it could shrink" item by its bold
+   title, with `issue` (an open issue that covers it, cited) or `fix` (one line, when none does).
+   <Open issues to check the items against.>
 2. Render:
    ```
    python3 <plugin>/skills/worktreereview/scripts/render.py <scratch>/result.json <scratch>/notes.json <out.html>

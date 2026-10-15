@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # board.sh -- the ONE call main makes at resume and after every wake: the run
 # id, each worktree with its branch and diffstat, the open tasks, the seat
-# handles, the live loop units, main-watch's state, and each unit's brief mtime.
+# handles, the live loop units, main-watch's state, and each unit's brief mtime
+# and newest pass verdict.
 #
 # Resuming from a checkpoint cost about eight tool calls of rediscovery, and a
 # third of those were wrong guesses (the workspaces root, task-list's run id)
@@ -119,6 +120,17 @@ for wt in "$WS"/*/; do
     [ -f "$b" ] || continue
     echo "      brief $(stat -c '%y' "$b" | cut -c1-16)  $(basename "$b")"
   done < <(pp_unit_briefs "$wt/.claude/briefs" "$u")
+  # The newest pass by round number, with its verdict: a unit whose last pass ended NO-GO is
+  # being fixed, not waiting to merge, whatever its pane says.
+  rn=0 rf=
+  while IFS= read -r b; do
+    n=${b##*/}; n=${n#"$u-r"}; n=${n%-reports.md}
+    [[ $n =~ ^[0-9]+$ ]] && [ $((10#$n)) -ge "$rn" ] && { rn=$((10#$n)); rf=$b; }
+  done < <(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$')
+  if [ -n "$rf" ]; then
+    counts=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$rf" | grep -oE 'P[0-3]' | sort | uniq -c | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }')
+    echo "      pass r$rn $(sed -n 's/^Pass: //p' "$rf" | head -1): $(grep -v '^[[:space:]]*$' "$rf" | tail -1)${counts:+ ($counts)}"
+  fi
 done
 # Printed after the list so it is the last thing read.
 [ -z "$STRANDED" ] || printf '%s' "$STRANDED"

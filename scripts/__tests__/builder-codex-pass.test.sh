@@ -30,7 +30,7 @@ import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 const cwd = args[args.indexOf("--cwd") + 1], promptFile = args[args.indexOf("--prompt-file") + 1];
 const id = `${process.env.STUB_THREAD}-${promptFile.match(/-prompt-(\d+)\.md$/)[1]}`;
-const reply = "Clean.\nVERDICT: GO";
+const reply = process.env.STUB_REPLY || "Clean.\nVERDICT: GO";
 const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"]).toString().trim();
 const dir = `${process.env.CODEX_HOME}/sessions/2026/10/14`;
 mkdirSync(dir, { recursive: true });
@@ -43,7 +43,18 @@ process.stdout.write(JSON.stringify({ threadId: id, status: 0, rawOutput: reply 
 JS
 printf 'import { writeFileSync } from "node:fs";\nconst a = process.argv.slice(2);\nwriteFileSync(a[a.indexOf("--endpoint") + 1].replace(/^unix:/, ""), "");\nsetInterval(() => {}, 1000);\n' > "$PLUG/scripts/app-server-broker.mjs"
 echo 1 > "$PLUG/scripts/commandeck-test-waits"
-printf '#!/bin/sh\n[ "$*" = "login status" ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
+# The Codex stand-in: signed in by `login status`; a one-word exec request records where it ran and
+# fails while $TMP/probe-fail holds a count above 0, the way a revoked sign-in does.
+cat > "$TMP/cli/codex" <<EOF
+#!/bin/sh
+case "\$1" in
+  login) [ "\$*" = "login status" ] ;;
+  exec) echo "\$PWD" >> "$TMP/probe"; n=\$(cat "$TMP/probe-fail" 2>/dev/null || echo 0)
+    [ "\$n" -gt 0 ] || exit 0; echo \$((n - 1)) > "$TMP/probe-fail"; echo 'ERROR: stream disconnected before completion' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$TMP/cli/codex"
 # routing.json names the family; the account's model list holds its ids.
 printf 'model = "x"\n' > "$CODEX_HOME/config.toml"
 printf '{"models":[{"slug":"gpt-5.2-sol"},{"slug":"gpt-6.1-sol"}]}\n' > "$CODEX_HOME/models_cache.json"
@@ -58,7 +69,8 @@ check "the warning still goes to stderr" 1 "$(grep -c 'tomllib' "$TMP/err")"
 
 git init -q -b main "$REPO"
 git -C "$REPO" config user.name t; git -C "$REPO" config user.email t@t; git -C "$REPO" config core.hooksPath /dev/null
-printf 'echo base\n' > "$REPO/a.sh"; git -C "$REPO" add a.sh; git -C "$REPO" commit -qm base
+printf 'echo base\n' > "$REPO/a.sh"; mkdir -p "$REPO/.claude"; echo '{"reviewLoop":{"maxRounds":"5"}}' > "$REPO/.claude/commandeck.json"
+git -C "$REPO" add a.sh .claude/commandeck.json; git -C "$REPO" commit -qm base
 printf '%s\n' .claude/settings.local.json .claude/builder-events.jsonl >> "$REPO/.git/info/exclude"
 git -C "$REPO" worktree add -q "$TMP/ws/$U" -b "builder/$U"
 W=$TMP/ws/$U B=$TMP/ws/$U/.claude/briefs MAINBRIEF=$REPO/.claude/briefs/$U-builder-brief.md
@@ -87,6 +99,8 @@ check "the round file is a narrowed pass" 1 "$(grep -cx 'Pass: review' "$B/$U-r2
 printf 'Fix #2, added in the fix round.\n' >> "$MAINBRIEF"
 printf 'echo two\n' > "$W/a.sh"
 printf 'Different fix r2: an older note.\nDifferent fix r3: the named fix broke the caller in b.sh.\nOther cases checked r3: a.sh and c.sh read the same input.\n' > "$B/$U-evidence.md"
+# A finding only main can fix goes under Main-only (deferred): every later pass is told it is known.
+printf '\n## Main-only (deferred)\nthe settings.json entry for the new hook: main edits that file.\n\n## Later heading\nnot deferred.\n' >> "$B/$U-evidence.md"
 pass 3 review
 check "a code round is not flagged" 0 "$(grep -c '^No code changed' "$TMP/out")"
 check "after the brief gained scope, the review pass runs as a whole-branch pass and says why" "1 1" \
@@ -99,6 +113,8 @@ check "the prompt carries this round's different-fix and other-cases lines, and 
 # The brief unchanged since: the next review pass is narrowed again.
 printf 'echo three\n' > "$W/a.sh"
 pass 4 review
+check "every later pass is handed the evidence file's main-only list as known, and nothing under the next heading" "1 1 1 0" \
+  "$(input 3 | grep -c '^Known and deferred to main') $(input 3 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -c 'not deferred')"
 check "with the brief unchanged since the last pass, a review pass stays narrowed" "1 0" \
   "$(grep -cx 'Pass: review' "$B/$U-r4-reports.md") $(input 4 | grep -c '^-echo base$')"
 check "a pass with no notes for its round carries none" 0 "$(input 4 | grep -cE '^(Different fix|Other cases checked) ')"
@@ -107,8 +123,86 @@ check "a pass with no notes for its round carries none" 0 "$(input 4 | grep -cE 
 printf 'Fix #3, added in the fix round.\n' >> "$MAINBRIEF"
 rm -f "$(git -C "$W" rev-parse --absolute-git-dir)/builder-pass-scope"
 printf 'echo four\n' > "$W/a.sh"
-pass 5 review
+# `codex login status` still says signed in after a revoked sign-in, and the pass then ended
+# with no output: a one-word request is the check. Run in the worktree it fires the repo's hooks.
+echo 3 > "$TMP/probe-fail"; : > "$TMP/probe"; HEAD5=$(git -C "$W" rev-parse HEAD)
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_PROBE_BACKOFF=0 STUB_THREAD=thr-5 \
+  bash "$PASS_SH" "$U" 5 review >"$TMP/out" 2>"$TMP/err"); RC=$?
+check "a Codex that fails three one-word requests refuses the pass: no commit, no round file" "1 3 1 no" \
+  "$([ "$RC" != 0 ] && echo 1) $(grep -c 'Codex sign-in probe: try' "$TMP/err") $(grep -c 'launch refused: Codex is not signed in' "$TMP/err") \
+$([ "$(git -C "$W" rev-parse HEAD)" = "$HEAD5" ] && [ ! -e "$B/$U-r5-reports.md" ] && echo no || echo yes)"
+echo 1 > "$TMP/probe-fail"; : > "$TMP/probe"
+COMMANDECK_PROBE_BACKOFF=0 pass 5 review
+check "one failed try then an answer runs the pass, every try outside the worktree" "2 0" \
+  "$(wc -l < "$TMP/probe" | tr -d ' ') $(grep -c "^$W" "$TMP/probe")"
 check "with the scope record deleted, a review pass reads the whole branch" 1 "$(grep -cx 'Pass: final' "$B/$U-r5-reports.md")"
+# every reviewer is told a new required setting with no deployed-format test blocks the merge.
+check "the first and later passes' prompts carry the deployed-format rule" "1 1" \
+  "$(grep -c 'format already deployed' "$B/$U-r1-prompt-1.md") $(grep -c 'format already deployed' "$B/$U-r4-prompt-1.md")"
+
+# the owner's extra rounds for one unit, with no edit to the tracked settings file.
+printf 'echo six\n' > "$W/a.sh"
+p6() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-6 bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err"); echo $?; }
+check "round 6 is over the project's 5" "2 1" "$(p6) $(grep -c 'over the 5 rounds' "$TMP/err")"
+echo 9 > "$B/$U-review-cap.md"
+check "a cap the Builder writes in its own worktree is not read" 2 "$(p6)"
+check "review-cap.sh refuses in a Builder worktree" 2 "$(cd "$W" && bash "$REAL/scripts/review-cap.sh" "$U" 9 >/dev/null 2>&1; echo $?)"
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 6 >/dev/null)
+check "after review-cap.sh <unit> 6 in main's checkout, round 6 runs" 0 "$(p6)"
+check "and neither checkout's tracked files changed" "" \
+  "$(git -C "$REPO" status --porcelain --untracked-files=no; git -C "$W" status --porcelain --untracked-files=no)"
+
+# After a NO-GO pass the Builder's own pane takes the fix round in a fresh session (/clear, then a pointer to a
+# hand-off file that stands alone): the old session carried the whole build's context into every fix call. Main's
+# seat record follows the new session's log, so main-watch reads the new log and not the cleared one.
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 10 >/dev/null)
+SC=$TMP/scratch FB=$TMP/fb; mkdir -p "$SC" "$FB" "$W/x/__tests__"; echo t > "$W/x/__tests__/y.test.sh"
+printf '## 1. RULING-PROBE: keep the probe\n' > "$REPO/.claude/briefs/$U-main-rulings.md"
+(cd "$W" && COMMANDECK_MAIN=$REPO bash "$PASS_SH" --ack-rulings "$U" >/dev/null 2>&1)
+printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n' "$U" > "$SC/seat-$U-builder.txt"
+PROJ=$HOME/.claude/projects/$(printf '%s' "$W" | tr -c 'A-Za-z0-9' '-')
+# The cleared session's own log names the hand-off too (it read the pass's output); it is not the new one.
+mkdir -p "$PROJ"; echo "$B/$U-fix-r7.md" > "$PROJ/old-sid.jsonl"; touch -t 209901010000 "$PROJ/old-sid.jsonl"
+# Logs every call; a wait answers FRS_IDLE (1 is Orca's timeout); typing the pointer starts the new session's log.
+cat > "$FB/orca-ide" <<'SH'
+#!/usr/bin/env bash
+echo "$*" >> "$FRS_CALLS"
+case "$*" in
+  *"terminal wait"*) exit "${FRS_IDLE:-0}" ;;
+  *"Your task spec is the file"*) printf '%s\n' "$*" > "$FRS_PROJ/new-sid.jsonl"; touch -t 209901010000 "$FRS_PROJ/new-sid.jsonl" ;;
+esac
+exit 0
+SH
+chmod +x "$FB/orca-ide"
+fpass() { # <dir> <round> <kind> <reply> [env...]: one pass from <dir> as the Builder's pane; prints its exit code
+  local d=$1 n=$2 k=$3 r=$4; shift 4
+  (cd "$d" && env TMPDIR=$TMP PATH=$FB:$TMP/cli:$PATH COMMANDECK_MAIN=$REPO ORCA_TERMINAL_HANDLE=term_frs COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 \
+    FRS_CALLS=$TMP/frs-calls FRS_PROJ=$PROJ STUB_THREAD=thr-$n "STUB_REPLY=$r" "$@" bash "$PASS_SH" "$U" "$n" "$k" >"$TMP/out" 2>"$TMP/err"); echo $?
+}
+helper_done() { for _ in $(seq 100); do grep -qE '^builder-fresh-round: .*(now names|stays in)' "$SC/$U-fix-r$1.log" 2>/dev/null && return; sleep 0.1; done; }
+NOGO=$'- [P1] FINDING-PROBE -- a.sh:1 -- it breaks -- bash a.sh\nVERDICT: NO-GO'
+printf 'echo seven\n' > "$W/a.sh"
+check "a NO-GO pass from the Builder's pane ends 0 and tells the old session to stop" "0 1" \
+  "$(fpass "$W" 7 review "$NOGO") $(grep -c '^FIX ROUND 7: end your turn now' "$TMP/out")"
+H7=$B/$U-fix-r7.md
+check "the hand-off stands alone: brief, evidence, the findings, main's rulings inlined, the task and the touched tests" "1 1 1 1 1 1" \
+  "$(grep -c "$B/$U.md\$" "$H7") $(grep -c "$B/$U-evidence.md\$" "$H7") $(grep -c 'FINDING-PROBE' "$H7") $(grep -c 'RULING-PROBE' "$H7") $(grep -c 'Orca task: task_frs' "$H7") $(grep -cF 'x/__tests__/y.test.sh' "$H7")"
+helper_done 7
+check "the pane is waited idle, cleared, then handed the file" "terminal wait,--text /clear,terminal wait,Your task spec is the file" \
+  "$(grep -oE 'terminal wait|--text /clear|Your task spec is the file' "$TMP/frs-calls" | uniq | paste -sd, -)"
+check "the pointer names the hand-off file" 1 "$(grep -cF "Your task spec is the file $H7." "$TMP/frs-calls")"
+check "main's seat record now names the new session, not the cleared one" "session=new-sid" "$(grep '^session=' "$SC/seat-$U-builder.txt" | tail -1)"
+rm -f "$TMP/frs-calls"; printf 'echo eight\n' > "$W/a.sh"
+check "a pane that never goes idle: the pass still ends 0" 0 "$(fpass "$W" 8 review "$NOGO" FRS_IDLE=1)"
+helper_done 8
+check "and the helper types nothing and says why" "0 1" \
+  "$(grep -c 'terminal send' "$TMP/frs-calls") $(grep -c 'was not idle within 900s; nothing typed' "$SC/$U-fix-r8.log")"
+rm -f "$TMP/frs-calls"; printf 'echo nine\n' > "$W/a.sh"
+check "a GO pass hands nothing over" "0 0 0" \
+  "$(fpass "$W" 9 review 'VERDICT: GO') $(ls "$B/$U-fix-r9.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | wc -l | tr -d ' ')"
+printf 'echo ten\n' > "$W/a.sh"
+check "a NO-GO pass from another pane (its handle not the seat record's) hands nothing over" "0 0 0" \
+  "$(fpass "$W" 10 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(ls "$B/$U-fix-r10.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | wc -l | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

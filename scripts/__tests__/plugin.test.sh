@@ -79,5 +79,14 @@ check "a command file that does not exist fails" 1 "$(ok)"
 stage '{"name": "p", "version": "0.1.0", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gone.sh --flag"}]}]}}'
 check "an inline hook whose script does not exist fails" 1 "$(ok)"
 
+# #86: setup asks every value in a picker. A "name one" option sent the owner a typed follow-up list in
+# chat, past the picker's record and its stray-keypress decoy; the decoy leaves room for three options.
+SETUP=$REAL/skills/setup/SKILL.md
+ASKS=$(grep -E '^ +Ask "[^"]+": ' "$SETUP")
+check "setup asks its questions in pickers" 1 "$([ "$(wc -l <<<"$ASKS")" -ge 15 ] && echo 1)"
+check "no setup question has more than three options of its own" "" "$(awk -F' [|] ' 'NF > 3' <<<"$ASKS")"
+check "no setup option defers a typed value to a follow-up" "" "$(grep -E '(: |[|] )(name one|set one|set a number|set numbers|another name)( [|]|$)' <<<"$ASKS")"
+check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in plain text for' "$SETUP")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -127,6 +127,16 @@ def r2(x):
     return None if x is None else round(x, 2)
 
 
+def refusal(blocked):
+    """A refused call's key, its hook and its reason: paths, quoted names and numbers differ between refusals
+    of one kind, so they are folded."""
+    _, hook, rest = blocked
+    why = re.sub(r'^:\s*(BLOCKED\s*(\([^)]*\))?:?\s*)?', '', rest.split('\n')[0])
+    why = re.split(r'\. |: | -- ', re.sub(r"'[^']*'|\S*/\S*\.\S+", '…', why))[0]
+    why = re.sub(r'\d+', 'N', why)[:100].strip()
+    return f'{hook}: {why}' if why else hook
+
+
 def read_session(path):
     """One Claude session log -> its calls, tool calls, wake-ups, questions to main and failed pass launches."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
@@ -182,8 +192,9 @@ def read_session(path):
                     if asked.get(b.get('tool_use_id')) and not b.get('is_error') and job_ended(b.get('content')):
                         s['woken'].setdefault(asked[b.get('tool_use_id')], ts(when))
                     if b.get('is_error') and 'hook error' in body[:200]:
-                        hook = re.search(r'/([\w.-]+\.(?:sh|py))\]', body[:400])
-                        s['blocked'].append((ts(when), hook.group(1) if hook else 'unnamed hook'))
+                        # A hook run by its interpreter has its script path quoted: "/.../guard.py"].
+                        hook = re.search(r'/([\w.-]+\.(?:sh|py))\\?"?\]', body[:400])
+                        s['blocked'].append((ts(when), hook.group(1) if hook else 'unnamed hook', body[hook.end():hook.end() + 400] if hook else ''))
                 elif b.get('type') == 'text':
                     text += b.get('text', '')
             for mm in re.finditer(r'<tool-use-id>(toolu_\w+)</tool-use-id>', text):
@@ -260,7 +271,8 @@ def decisions_for(path, unit):
     asks = collections.defaultdict(list)
     for d in rows.values():
         try:
-            if d.get('askedAt'):
+            # A Builder's question to main waits on main, not the owner: it stays on the clock.
+            if d.get('askedAt') and d.get('waitsOn') != 'main':
                 asks[d['id']].append((ts(d['askedAt']), ts(d['answeredAt']) if d.get('answeredAt') else None,
                                       bool(named.search(f"{d.get('source') or ''} {d.get('answer') or ''}"))))
         except (ValueError, TypeError, AttributeError):
@@ -404,14 +416,15 @@ def loop_limits(home):
     rl = {} if rl is None else rl
     if not isinstance(rl, dict):
         raise SystemExit(f'{home}/.claude/commandeck.json: reviewLoop is not an object ({rl!r}); answer it again with /commandeck:setup')
+    # "off" is the owner's answer that a check never flags (#87): no number is past it.
+    limit = lambda k, default, scale=1: math.inf if rl.get(k) == 'off' else float(rl[k]) / scale if k in rl else default
     try:
-        got = (float(rl.get('maxReviewMinutes', 30.0)),
-               float(rl['maxTestPercent']) / 100 if 'maxTestPercent' in rl else 1 / 3,
-               float(rl.get('maxUsd', 30.0)))
+        got = (limit('maxReviewMinutes', 30.0), limit('maxTestPercent', 1 / 3, 100), limit('maxUsd', 30.0))
     except (TypeError, ValueError) as e:
         got = e
-    # NaN compares false with everything, so it would flag nothing: only a finite number, 0 or more, is a threshold.
-    if isinstance(got, Exception) or not all(math.isfinite(x) and x >= 0 for x in got):
+    # NaN compares false with everything, so it would flag nothing: only a finite number, 0 or more, or off, is a threshold.
+    if isinstance(got, Exception) or not all((math.isfinite(x) or (x == math.inf and rl.get(k) == 'off')) and x >= 0
+                                             for x, k in zip(got, ('maxReviewMinutes', 'maxTestPercent', 'maxUsd'))):
         raise SystemExit(f'{home}/.claude/commandeck.json: a reviewLoop threshold is not a number of 0 or more ({rl}); answer it again with /commandeck:setup')
     return got
 
@@ -584,11 +597,9 @@ def main():
     rounds = round_threads(wt, unit, main_archive(wt, unit, a.main))
     passes = fold_passes(passes, rounds)
     for p in passes:
-        # Threads run side by side, so their command seconds can add up to more than the pass took.
-        ran = [codex_commands(f) for f in p['files']]
-        p['commands'] = sum(c['commands'] for c in ran)
-        p['command_s'] = r2(sum(c['command_s'] for c in ran))
-        p['longest'] = sorted((x for c in ran for x in c['longest']), reverse=True)[:5]
+        # command_s and longest are worked out once the cut windows are known.
+        p['spans'] = [x for f in p['files'] for x in codex_commands(f)]
+        p['commands'] = len(p['spans'])
     launches = sorted((tool['t'], int(m.group(1)), m.group(2)) for s in sessions for tool in s['tools'].values()
                       for m in [PASS_CMD.search(tool['cmd'])] if m)
     # `runs` is every Codex run of the worktree, so each one's time and tokens stay on the page;
@@ -673,8 +684,9 @@ def main():
         own = session_ledger(f)
         helpers.append({'what': meta.get('description'), 'type': meta.get('agentType'), 'model': model, 'start': first,
                         'seconds': (last or 0) - (first or 0), 'tokens': dict(total), 'content_chars': chars, 'compactions': compactions,
-                        'claude_s': r2(sum(r['end'] - r['start'] for r in own['requests'].values())),
-                        'tool_s': r2(sum(t['end'] - t['start'] for t in own['tools'].values() if t['end']))})
+                        # Spans, not totals: claude_s and tool_s are summed once the cut windows are known.
+                        'claude_s': [(r['start'], r['end']) for r in own['requests'].values()],
+                        'tool_s': [(t['start'], t['end']) for t in own['tools'].values() if t['end']]})
 
     for p in runs:
         st = stage_of((p['start'] + p['end']) / 2)
@@ -749,8 +761,8 @@ def main():
     for sess in sessions:
         for when, text in sess['notes']:
             stage_of(when)['detail']['notes'].append([when, text[:200]])
-        for when, hook in sess['blocked']:
-            stage_of(when)['detail']['blocked'][hook] += 1
+        for b in sess['blocked']:
+            stage_of(b[0])['detail']['blocked'][refusal(b)] += 1
         for k, t in sess['tools'].items():
             detail = stage_of(t['t'])['detail']
             if t['name'] in EDIT_TOOLS:
@@ -779,6 +791,13 @@ def main():
     for x in jobs + helpers + [c for s in stages for c in s['detail']['commands']]:
         if x['start'] is not None:
             x['seconds'] -= cut_in(x['start'], x['start'] + x['seconds'])
+    for h in helpers:
+        for k in ('claude_s', 'tool_s'):
+            h[k] = r2(sum(e - s - cut_in(s, e) for s, e in h[k]))
+    for p in passes:
+        # Threads run side by side, so their command seconds can add up to more than the pass took.
+        ran = [(sec - (cut_in(end - sec, end) if end else 0), cmd) for sec, cmd, end in p.pop('spans')]
+        p['command_s'], p['longest'] = r2(sum(sec for sec, _ in ran)), sorted(ran, reverse=True)[:5]
     clock, cut_s = collections.Counter(), 0
     for i, what in enumerate(label):
         st = stage_of(t0 + i / TICK)
@@ -827,7 +846,7 @@ def main():
                                for (e, n), v in hook_runs.items()), key=lambda h: -h['total']),
               'counters': {k: r2(v) for k, v in counters.items()}}
 
-    blocked = collections.Counter(hook for sess in sessions for _, hook in sess['blocked'])
+    blocked = collections.Counter(refusal(b) for sess in sessions for b in sess['blocked'])
     total = {k: collections.Counter() for k in ('builder', 'advisor', 'helper', 'codex')}
     for s in stages:
         for k in total:

@@ -67,7 +67,8 @@ printf 'import { writeFileSync } from "node:fs";\nconst a = process.argv.slice(2
 echo 1 > "$PLUG/scripts/commandeck-test-waits"
 printf 'model = "x"\nservice_tier = "fast"\n' > "$CODEX_HOME/config.toml"
 jq '.roles["codex-reviewer"].model = "gpt-9.9-probe"' "$REAL/config/routing.json" > "$TMP/routing.json"
-printf '#!/bin/sh\n[ "$*" = "login status" ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
+# Signed in, and answers the pass's one-word sign-in probe (codex exec).
+printf '#!/bin/sh\n[ "$*" = "login status" ] || [ "$1" = exec ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
 mk() { # <unit>: a Builder worktree with one commit, its brief and its evidence
   local w=$COMMANDECK_WORKSPACES/$1
   git -C "$REPO" worktree add -q "$w" -b "builder/$1"
@@ -230,5 +231,47 @@ check "a threshold that is not a finite number stops the build review" 1 \
   "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import collect
 try: collect.loop_limits(sys.argv[2])
 except SystemExit as e: print(int("reviewLoop" in str(e)))' "$REAL/skills/worktreereview/scripts" "$REPO")"
+
+# #88: a pass commit's subject says nothing of what shipped; the brief's own heading does.
+jq -n '{}' > "$REPO/.claude/commandeck.json"
+mk pt; git -C "$TMP/ws/pt" commit -q --amend -m "feat(pt): Builder pass r1"
+printf '# pt -- Builder batch\n\n# pt -- Stream the export\n' > "$TMP/ws/pt/.claude/briefs/pt.md"; go pt
+check "a pass-style subject becomes the brief's heading" "0 feat(pt): Stream the export" "$(merge pt) $(git -C "$REPO" log -1 --format=%s main)"
+mk pt2; git -C "$TMP/ws/pt2" commit -q --amend -m "feat(pt2): Builder pass r3"
+printf '# pt2 -- Builder batch\n' > "$TMP/ws/pt2/.claude/briefs/pt2.md"; go pt2
+check "with no heading of its own, the title is the unit alone" "0 feat(pt2)" "$(merge pt2) $(git -C "$REPO" log -1 --format=%s main)"
+
+# rebuilt build output committed after the GO needs no new pass when the project lists it as generated.
+gen() { # <unit> <file>...: a GO, then one commit writing each file
+  mk "$1"; go "$1"; local u=$1; shift
+  for f in "$@"; do mkdir -p "$(dirname "$TMP/ws/$u/$f")"; echo rebuilt > "$TMP/ws/$u/$f"; done
+  git -C "$TMP/ws/$u" add -A -- "$@"; git -C "$TMP/ws/$u" commit -qm "build: regenerate"
+}
+gen gen0 src/assets/manifest.js
+check "with no generated-files list, a commit after the GO is refused as before" 1 "$(merge gen0)"
+jq -n '{generatedFiles: ["src/assets/manifest.js", "src/assets/v*-draft/**"]}' > "$REPO/.claude/commandeck.json"
+gen gen1 src/assets/manifest.js src/assets/v3-draft/app/x.js
+check "a tail of listed generated files only keeps the earlier GO" "0 1" "$(merge gen1) $(grep -c 'rule: generated-only tail' "$TMP/out")"
+gen gen2 src/assets/manifest.js gen2.txt
+check "a tail that also changes a source file is refused" 1 "$(merge gen2)"
+mk gen3; echo old > "$TMP/ws/gen3/src-old.js"; mkdir -p "$TMP/ws/gen3/src/assets"; echo m > "$TMP/ws/gen3/src/assets/manifest.js"
+git -C "$TMP/ws/gen3" add -A; git -C "$TMP/ws/gen3" commit -qm "feat(gen3): more"; go gen3
+git -C "$TMP/ws/gen3" rm -q src/assets/manifest.js; git -C "$TMP/ws/gen3" commit -qm "build: drop the manifest"
+check "a tail that deletes even a listed file is refused" 1 "$(merge gen3)"
+
+# #99: main is fast-forwarded from origin before the rebase; a diverged main refuses.
+jq -n '{}' > "$REPO/.claude/commandeck.json"
+git clone -q --bare "$REPO" "$TMP/origin.git"; git -C "$REPO" remote add origin "$TMP/origin.git"
+git clone -q "$TMP/origin.git" "$TMP/other"
+echo released > "$TMP/other/released.txt"; git -C "$TMP/other" add released.txt
+git -C "$TMP/other" -c user.name=t -c user.email=t@t commit -qm "release: mark published"; git -C "$TMP/other" push -q origin HEAD:main
+mk ff; go ff
+check "with origin ahead, the merge fast-forwards main first and merges on top" "0 1" \
+  "$(merge ff) $(git -C "$REPO" merge-base --is-ancestor "$(git -C "$TMP/other" rev-parse HEAD)" main && echo 1)"
+echo more > "$TMP/other/released.txt"; git -C "$TMP/other" -c user.name=t -c user.email=t@t commit -qam "release: next"; git -C "$TMP/other" push -q origin HEAD:main
+echo local > "$REPO/local.txt"; git -C "$REPO" add local.txt; git -C "$REPO" commit -qm "local only"
+mk dv; go dv; AFTER=$(head_main)
+check "with main diverged from origin, the merge refuses and says so" "1 1 $AFTER" \
+  "$(merge dv) $(grep -c 'cannot fast-forward' "$TMP/out") $(head_main)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

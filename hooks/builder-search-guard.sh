@@ -110,7 +110,8 @@ if [ "$WHOLE" = 1 ]; then
 else
   [ "$N" -ge "$LIMIT" ] || exit 0
   REASON=streak
-  MSG="This is now a large search ($((LIMIT+1))+ lookups). Hand it to an Explore subagent (Agent, subagent_type Explore)."
+  # The refusal names the forms that run now: each refusal costs a request, and a retry that guesses costs another.
+  MSG="This is now a large search ($((LIMIT+1))+ lookups in a row). Allowed now, and not counted: the Read tool, or a plain \`grep -n <pattern> <file>...\` with no -r, for files you already know; mcp__serena__find_symbol or find_referencing_symbols for a symbol; an Explore subagent (Agent, subagent_type Explore) for anything wider. An Edit, Write or Agent call, or $((GAP / 60)) minutes with no search, starts the count again."
 fi
 
 ROOT=${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}

@@ -42,12 +42,12 @@ case "\$1 \$2" in
     n=\$(( \$(wc -l < "$F/tasks") + 1 )); echo "task_new\$n pending" >> "$F/tasks"
     echo "{\"ok\":true,\"result\":{\"task\":{\"id\":\"task_new\$n\"}}}" ;;
   "orchestration send") printf '%s' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"; echo '{"ok":true}' ;;
-  "terminal send") echo '{"ok":true,"result":{"stages":["typed","submitted","turn_started"]}}' ;;
+  "terminal send") printf '%s\n' "\$*" >> "$T/typed"; echo '{"ok":true,"result":{"stages":["typed","submitted","turn_started"]}}' ;;
   "terminal read") echo '{"result":{"terminal":{"tail":[],"latestCursor":"0"}}}' ;;
   "terminal list")
     jq -Rn --arg main "$REPO" '{result:{terminals:[inputs | split(" ") | {handle:.[0], tabId:.[0], leafId:"l",
       worktreePath:(if (.[0] | startswith("term_main")) then \$main else "/elsewhere" end), agentIdentity:"claude"}]}}' < "$F/agents" ;;
-  "orchestration inbox") echo '{"ok":true,"result":{"messages":[]}}' ;;
+  "orchestration inbox") cat "$F/inbox" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
   "orchestration run-list") echo '{"result":{"runs":[{"id":"run_test","coordinator_handle":"term_main"}]}}' ;;
   "worktree ps") jq -Rn '{result:{worktrees:[{agents:[inputs | split(" ") | {paneKey:(.[0] + ":l"), state:.[1]}]}]}}' < "$F/agents" ;;
   *) echo '{}' ;;
@@ -92,5 +92,26 @@ hrow $((H - 120)) subagent-start a1 > "$T/ws/wt-h3/.claude/builder-events.jsonl"
 tick $H; for u in wt-h1 wt-h3; do state term_$u "done"; done; tick $((H + 60))
 [ "$(posts wt-h1)" = 0 ] || fail "a Builder quoting another pane's DONE marker, with a helper out, was posted: $(grep wt-h1 "$T/sends")"
 grep -q 'seat builder on wt-h3 finished' "$T/sends" || fail "a Builder that printed its own unit marker with a helper out was not posted as finished"
+
+# Mail from another pane that sits unread while main is idle wakes main: two orders once sat
+# 13 minutes with main idle, because only this watcher's own posts ever typed a wake. A heads-up
+# note and main's own send are not news to main.
+msg() { jq -nc --arg f "$1" --arg s "$2" '{to_handle: "run:run_test", from_handle: $f, read: 0, type: "status", subject: $s}'; }
+inbox() { jq -sc '{ok: true, result: {messages: .}}' > "$F/inbox"; }
+typed() { grep -c 'items are waiting in your Orca inbox' "$T/typed" 2>/dev/null || true; }
+# The seats above are done with and their tasks closed, so nothing of theirs is pending.
+rm -f "$S"/seat-*.txt "$S/main-watch/wake"; sed -i 's/ .*/ completed/' "$F/tasks"
+M=30000; : > "$T/typed"
+{ msg term_main "main's own note"; msg term_x "heads-up: 2 notes"; } | inbox
+tick $M; tick $((M + 200))
+[ "$(typed)" = 0 ] || fail "main was woken for a heads-up note or its own send"
+{ msg term_main "main's own note"; msg term_x "heads-up: 2 notes"; msg term_wt-h1 "order from a Builder"; } | inbox
+tick $((M + 300)); tick $((M + 360))
+[ "$(typed)" = 0 ] || fail "main was woken for mail unread under 2 minutes"
+tick $((M + 420))
+[ "$(typed)" = 1 ] || fail "mail unread 2 minutes with main idle did not wake main (typed $(typed))"
+tick $((M + 480))
+[ "$(typed)" = 1 ] || fail "an unanswered main was woken again inside 2 minutes"
+rm -f "$F/inbox"
 
 echo "PASS main-watch-helper-hold.test.sh"

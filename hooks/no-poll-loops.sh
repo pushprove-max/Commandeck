@@ -11,14 +11,19 @@
 # that ENDS by sending an Orca message (a watcher that turns a file or
 # process event into a message the main session can block on).
 #
-# Worker panes are exempt: they run in linked git worktrees and have no
-# Orca run to block on when they wait for their own test runs.
+# Worker panes are exempt from all but two rules: they run in linked git
+# worktrees and have no Orca run to block on when they wait for their own test
+# runs. In every pane a bare `orca(-ide) orchestration check` is blocked: it
+# returns a batch and never acknowledges it, so the batch replays on every
+# check and later messages queue behind it. A worker's sleep loop is let
+# through with a nudge toward run_in_background and wait-test-run.sh.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 [ -z "$CMD" ] && exit 0
-if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then exit 0; fi
+WORKER=0
+[ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ] || WORKER=1
 
 # A HEREDOC BODY IS DATA BEING WRITTEN, NOT A COMMAND BEING RUN.
 # `cat >> report.md <<'EOF' ... bash scripts/orca-wait.sh ... EOF`
@@ -59,7 +64,7 @@ esac
 # skips it; quote characters are dropped for that test, so `sl''eep` cannot
 # slip past.
 P=${CMD_CODE//[\'\"\\]/}
-case "$P" in *sleep*|*orca-wait*|*orchestration*) ;; *) [ "$TOOL" = "Monitor" ] || exit 0 ;; esac
+case "$P" in *sleep*|*orca-wait*|*orchestration*) ;; *) [ "$TOOL" = "Monitor" ] && [ "$WORKER" = 0 ] || exit 0 ;; esac
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 if type strip_quoted >/dev/null 2>&1; then
   BARE=$(strip_quoted "$CMD_CODE")
@@ -73,6 +78,59 @@ if type strip_quoted >/dev/null 2>&1; then
 else
   BARE=$(printf '%s' "$CMD_CODE" | sed -e "s:'[^']*'::g" -e 's:"[^"]*"::g' | sed -E 's/(^|[[:space:];&|(])#.*$/\1/')
   WORDS=$CMD_CODE
+fi
+
+# Each command of BARE, its leading assignments and wrappers dropped.
+segments() {
+  printf '%s\n' "$BARE" | sed -E 's/(&&|\|\||;|\||\$\()/\n/g' \
+    | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/^((nohup|exec|time|timeout[[:space:]]+[0-9smh]+)[[:space:]]+)*//'
+}
+if [ "$TOOL" = "Bash" ]; then
+  while IFS= read -r seg; do
+    [[ $seg =~ ^orca(-ide)?[[:space:]]+orchestration[[:space:]]+check([[:space:]]|$) ]] || continue
+    [[ "$seg " =~ [[:space:]]--(wait|peek|all|ack|terminal|help)[[:space:]=] ]] && continue
+    printf 'BLOCKED: a bare inbox check returns a batch and never acknowledges it, so the\nbatch replays on every check and later messages queue behind it. Drain the\ninbox with\n  bash %s/orca-wait.sh\nor give check one of --wait, --peek, --all, --ack or --terminal.\n' "${BASH_SOURCE[0]%/*}/../scripts" >&2
+    exit 2
+  done < <(segments)
+fi
+
+# A `sleep N` in command position inside a do...done body, however the loop is
+# split across lines. Depth, not a regex: a sleep after a finished loop, or a
+# `done` that is only an argument (`echo done`), must not read as a poll.
+sleep_loop() {
+  printf '%s' "$BARE" | python3 -c '
+import re, sys
+toks = re.findall(r"[^\s;&|(){}]+|[;&|(){}\n]", sys.stdin.read())
+depth, cmdpos, hit, skip = 0, True, 0, False
+for i, w in enumerate(toks):
+    if w in ";&|(){}\n":
+        cmdpos = True
+    elif not cmdpos:
+        continue
+    elif skip:
+        skip = False  # the duration after `timeout`
+    elif w in ("command", "builtin", "exec", "time", "nohup", "env") or re.match(r"[A-Za-z_]\w*=", w):
+        pass  # a wrapper or assignment: the next word is still the command
+    elif w == "timeout":
+        skip = True
+    elif w == "do":
+        depth += 1
+    elif w == "done":
+        depth, cmdpos = max(depth - 1, 0), False
+    elif w in ("while", "until", "for", "if", "then", "else", "elif", "!"):
+        pass
+    else:
+        hit = hit or (w == "sleep" and depth > 0 and i + 1 < len(toks) and toks[i + 1][:1].isdigit())
+        cmdpos = False
+print(int(hit))'
+}
+
+if [ "$WORKER" = 1 ]; then
+  # Advice, not a block: a Builder hand-wrote polls on its test log for up to 4,500 s of agent time in one build.
+  [ "$TOOL" = "Bash" ] && printf '%s' "$BARE" | grep -qE '(^|[;&|[:space:]])sleep[[:space:]]+[0-9]' && [ "$(sleep_loop)" = 1 ] \
+    && jq -cn --arg m 'A hand-written sleep loop waiting on output: start the run with run_in_background (you are notified when it exits); to block on it, wait only with wait-test-run.sh <runner-pid> <output-file> from the plugin scripts, which also checks the runner is still alive. Never poll.' \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$m}}'
+  exit 0
 fi
 
 # The Monitor tool is a poll loop by construction (owner ruling 2026-09-10,
@@ -179,9 +237,8 @@ fi
 is_wait_command() {
   local seg
   while IFS= read -r seg; do
-    seg=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/^((nohup|exec|time|timeout[[:space:]]+[0-9smh]+)[[:space:]]+)*//')
     case "$seg" in orca-ide[[:space:]]*) printf '%s' "$seg" | grep -qE '^orca-ide[[:space:]]+orchestration[[:space:]]+check[[:space:]].*--wait' && return 0 ;; esac
-  done < <(printf '%s\n' "$BARE" | sed -E 's/(&&|\|\||;|\||\$\()/\n/g')
+  done < <(segments)
   return 1
 }
 if [ "$TOOL" = "Bash" ] && is_wait_command; then
@@ -198,34 +255,7 @@ printf '%s' "$BARE" | grep -qE 'orca-ide[[:space:]]+orchestration[[:space:]]+che
 printf '%s' "$BARE" | grep -qE 'orca-ide[[:space:]]+orchestration[[:space:]]+send[[:space:]]' && exit 0
 printf '%s' "$BARE" | grep -qE '(^|[[:space:]/])orca-wait\.sh([[:space:]]|$)' && exit 0
 
-# A `sleep N` in command position inside a do...done body, however the loop is
-# split across lines. Depth, not a regex: a sleep after a finished loop, or a
-# `done` that is only an argument (`echo done`), must not read as a poll.
-LOOP=$(printf '%s' "$BARE" | python3 -c '
-import re, sys
-toks = re.findall(r"[^\s;&|(){}]+|[;&|(){}\n]", sys.stdin.read())
-depth, cmdpos, hit, skip = 0, True, 0, False
-for i, w in enumerate(toks):
-    if w in ";&|(){}\n":
-        cmdpos = True
-    elif not cmdpos:
-        continue
-    elif skip:
-        skip = False  # the duration after `timeout`
-    elif w in ("command", "builtin", "exec", "time", "nohup", "env") or re.match(r"[A-Za-z_]\w*=", w):
-        pass  # a wrapper or assignment: the next word is still the command
-    elif w == "timeout":
-        skip = True
-    elif w == "do":
-        depth += 1
-    elif w == "done":
-        depth, cmdpos = max(depth - 1, 0), False
-    elif w in ("while", "until", "for", "if", "then", "else", "elif", "!"):
-        pass
-    else:
-        hit = hit or (w == "sleep" and depth > 0 and i + 1 < len(toks) and toks[i + 1][:1].isdigit())
-        cmdpos = False
-print(int(hit))')
+LOOP=$(sleep_loop)
 CHAIN=$(printf '%s' "$BARE" | tr '\n' ' ' | grep -cE 'sleep[[:space:]]+[0-9]+[[:space:]]*(;|&&|\|\|).*sleep[[:space:]]+[0-9]+[[:space:]]*(;|&&|\|\|)')
 [ "$LOOP" = 0 ] && [ "$CHAIN" = 0 ] && exit 0
 

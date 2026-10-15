@@ -44,6 +44,8 @@ check "the cwd is used when CLAUDE_PROJECT_DIR is unset" 2 \
 MSG=$(printf '%s' "$ASK" | CLAUDE_PROJECT_DIR=$WT bash "$HOOK" 2>&1 >/dev/null)
 case "$MSG" in *"orca-ide orchestration ask --from term_selftest --to run:run_selftest"*) R=0 ;; *) R=1 ;; esac
 check "the block names a runnable ask to main's run" 0 "$R"
+case "$MSG" in *"dispatch-capability"*) R=1 ;; *) R=0 ;; esac
+check "the block asks for no dispatch capability, which newer Orca preambles do not carry" 0 "$R"
 case "$MSG" in *"orchestration send"*) R=1 ;; *) R=0 ;; esac
 check "the block never offers a send, which cannot return the answer" 0 "$R"
 # No known run: the command carries no --to, as the dispatch preamble's own ask

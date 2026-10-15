@@ -5,7 +5,8 @@
 # and read as pass, fail or run; an issue takes its priority label and milestone; the next push lists exactly
 # the commits the upstream lacks with the issues each names; the page gets the repository's address from the
 # origin remote; every gh call is a read; and with gh not signed in, or no GitHub origin, each pane is null
-# with the reason while the rest of the project is still collected.
+# with the reason while the rest of the project is still collected. And the project's workspace folder is the
+# one its sessions record, or its Builders' and worktrees' costs would match none of them.
 set -uo pipefail
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -45,9 +46,10 @@ EOF
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/orca-ide"
 chmod +x "$BIN"/*
 
-# collect <out dir> -- one project's collect, as dashboard.sh --project runs it; prints its exit code.
+# collect <out dir> -- one project's collect, as dashboard.sh --project runs it; prints its exit code. $WS, when
+# set, is the project's workspace folder.
 collect() {
-  env -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" \
+  env -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" ${WS:+COMMANDECK_WORKSPACES=$WS} \
     COMMANDECK_DASHBOARD_DIR="$1" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$1/run" >"$1.log" 2>&1
   echo $?
 }
@@ -82,6 +84,11 @@ g remote set-url origin "$T/origin.git"
 check "with no GitHub origin the project is still collected" 0 "$(collect "$T/three")"
 check "the panes say there is no GitHub origin" '[null,"no GitHub origin"]' "$(j "$T/three" '[.github.repo, .sources["github-issues"].error]')"
 check "and gh was not asked for them" 0 "$(grep -cvE '^issue list --state open --label P1 ' "$T/gh.calls")"
+
+# A session records its folder as the OS gives it, a link resolved (and on a Mac, its letter case): the workspace
+# folder a link names is recorded as the folder itself, so the costs read from those sessions match it.
+mkdir -p "$T/ws/u1" && ln -s "$T/ws" "$T/wslink"
+check "a workspace folder named through a link is collected as the folder it names" "\"$T/ws\"" "$(WS=$T/wslink collect "$T/four" >/dev/null; j "$T/four" .workspaces)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

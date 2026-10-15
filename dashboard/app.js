@@ -179,25 +179,36 @@
     const p1 = known && known.reduce((sum, f) => sum + Math.max(0, f.open.P1), 0);
     // The project's open GitHub issues labelled P1; anything but a whole count is unknown.
     const issues = Number.isInteger(githubP1) && githubP1 >= 0 ? githubP1 : null;
-    const open = Array.isArray(n.decisions) ? n.decisions.filter((d) => d && d.answeredAt == null) : null;
+    const rows = Array.isArray(n.decisions) ? n.decisions.filter((d) => d && d.answeredAt == null) : null;
+    // A Builder's question to main (waitsOn "main") is listed apart and never counted as the owner's.
+    const open = rows && rows.filter((d) => d.waitsOn !== 'main');
+    const onMain = rows ? rows.filter((d) => d.waitsOn === 'main') : [];
     const dl = byId('needs-facts');
     dl.replaceChildren();
     fact(dl, `Waiting on ${who}`, open === null ? nm() : [strong(open.length), ' open ', open.length ? null : badge('nothing waiting', 'ok')]);
     fact(dl, 'Open P1', p1 === null ? nm() : [strong(p1), ' on finished builds', known.length < fin.length ? ` · ${fin.length - known.length} ${NOT_REC}` : null]);
     fact(dl, 'Open P1 on GitHub', issues === null ? nm() : strong(issues));
     q('[data-count="decisions"]').textContent = open ? String(open.length) : 'not measured';
+    const asked = (d) => {
+      const t = parseTime(d.askedAt);
+      const wait = Number.isFinite(t) ? (now - t) / 1000 : null;
+      return { wait, meta: `${d.id}, from ${d.source}, asked ${Number.isFinite(t) ? when(t) : 'time not recorded'}${wait === null ? '' : `, ${ago(wait)} ago`}` };
+    };
+    const mainItems = onMain.length ? [h('li', 'waiting-main-label', 'Waiting on main')].concat(onMain.map((d) => {
+      const li = h('li', 'decision waiting-main');
+      li.append(h('p', 'question', d.question), h('p', 'meta', asked(d).meta));
+      return li;
+    })) : [];
     put(byId('decisions'), open === null ? [h('li', 'empty', 'Decisions ledger not measured')]
-      : open.length === 0 ? [h('li', 'empty', 'No open decisions')]
+      : (open.length === 0 ? [h('li', 'empty', 'No open decisions')]
         : open.map((d) => {
-          const t = parseTime(d.askedAt);
-          const wait = Number.isFinite(t) ? (now - t) / 1000 : null;
+          const { wait, meta } = asked(d);
           const li = h('li', wait !== null && wait > DECISION_LATE_SEC ? 'decision crit' : 'decision');
           const dflt = h('p', 'default');
           dflt.append(h('span', 'default-label', 'If no answer: '), h('span', null, d.proposedDefault));
-          li.append(h('p', 'question', d.question), dflt,
-            h('p', 'meta', `${d.id}, from ${d.source}, asked ${Number.isFinite(t) ? when(t) : 'time not recorded'}${wait === null ? '' : `, ${ago(wait)} ago`}`));
+          li.append(h('p', 'question', d.question), dflt, h('p', 'meta', meta));
           return li;
-        }));
+        })).concat(mainItems));
     // An open decision is the owner's to act on here, and so is a P1 a finished build left open: clearing the build
     // from the list is tidying, not an answer, so a cleared build's P1 still counts. So is an open P1 issue.
     flag('needs', Boolean(open && open.length) || p1 > 0 || issues > 0);
@@ -233,11 +244,16 @@
   const isBuilder = (u) => Boolean(u) && Boolean(u.builder) && typeof u.builder === 'object';
   const isStale = (u) => num(u.ageSec) !== null && u.ageSec >= STALE_SEC;
   // The unit card, "Run trace" (the owner's pick, #73): a head with the state in words, up to four big facts, then the
-  // last 40 minutes on one clock ending now. The stage is a band, the last sign a tick with the silence after it
+  // build from its start on one clock ending now. The stage is a band, the last sign a tick with the silence after it
   // hatched, and each helper run a bar with its numbers in a right-hand column. The diff and the seat show once.
-  // shortcut: only the stage the unit is in now is drawn; the collector keeps no history of the stages before it.
+  // A Builder's stages come from its event log (stageHistory), each with its time and cost (#94); any other unit
+  // shows only the stage it is in now.
   const TRACE_SEC = 2400;
   const took = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
+  // A tally's list-price dollars (#94). A request with no price leaves the sum a floor: it says so and names the models.
+  const costOf = (t) => (!t ? 'not measured' : t.partial ? `${money(t.usd)}+ partial, ${t.unpriced && t.unpriced.length ? t.unpriced.join(', ') : 'a model'} not priced` : money(t.usd));
+  // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
+  const STAGE_MIN_PCT = 12;
   function unitCard(u, now) {
     const signals = isBuilder(u) && Array.isArray(u.builder.signals) ? u.builder.signals.filter(Boolean) : [];
     const quiet = signals.some((s) => s.kind === 'quiet');
@@ -248,6 +264,14 @@
       h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
       h('span', 'seat', seatText(u, seatLabel(u))));
     li.append(head);
+    const cost = isBuilder(u) ? u.builder.cost : undefined;
+    if (isBuilder(u)) {
+      const t0b = parseTime(u.builder.startedAt);
+      const top = h('p', 'ucost');
+      top.append('Total time ', strong(Number.isFinite(t0b) ? span((now - t0b) / 1000) : 'not measured'),
+        ' · Cost so far ', strong(cost ? costOf(cost.total) : cost === null ? 'not measured' : NOT_REC), h('small', null, " · main's own tokens not counted"));
+      li.append(top);
+    }
     // A Builder is drawn from its own event log: one badge per signal the state word does not already say.
     const badges = h('p', 'badges');
     if (isBuilder(u) && !Array.isArray(u.builder.signals)) badges.append(badge('Signals not measured', 'muted'));
@@ -272,15 +296,52 @@
     fact4('Not committed', num(u.dirty) === null ? 'not measured' : String(u.dirty));
     li.append(facts);
 
-    const start = now - TRACE_SEC * 1000;
-    const x = (t) => Math.max(0, Math.min(100, ((t - start) / (TRACE_SEC * 1000)) * 100));
+    // The clock runs from the build's start (its first logged event, else the stage's) to now, back to the
+    // earliest helper run if one began before; a unit with no start keeps the last 40 minutes (#95).
+    const steps = isBuilder(u) && Array.isArray(u.builder.steps) ? u.builder.steps.filter(Boolean) : [];
+    const begun = parseTime(isBuilder(u) ? u.builder.startedAt : null);
+    const start = Math.min(Number.isFinite(begun) ? begun : Number.isFinite(since) ? since : now - TRACE_SEC * 1000,
+      ...steps.map((s) => parseTime(s.start)).filter(Number.isFinite));
+    const width = Math.max(1000, now - start);
+    const x = (t) => Math.max(0, Math.min(100, ((t - start) / width) * 100));
     const place = (el, from, to) => { el.style.left = `${x(from).toFixed(1)}%`; el.style.width = `${Math.max(0, x(to) - x(from)).toFixed(1)}%`; return el; };
     const lane = (cls, ...kids) => { const d = h('div', `lane${cls ? ` ${cls}` : ''}`); d.append(...kids); return d; };
     const nums = (...cells) => { const d = h('span', 'num'); d.append(...cells.map((c) => h('span', null, c))); return d; };
     const trace = h('div', 'trace');
-    const stageBand = Number.isFinite(since) && STAGE_TONE[u.stage] ? [place(h('i', STAGE_TONE[u.stage], STAGE_LABEL[u.stage]), since, now)] : [];
+    // Each stage the Builder went through, with its time and its cost from the same collect (matched by start).
+    const segs = (isBuilder(u) && Array.isArray(u.builder.stageHistory) ? u.builder.stageHistory : [])
+      .filter((g) => g && Number.isFinite(parseTime(g.from)))
+      .map((g, i) => {
+        const c = cost && Array.isArray(cost.stages) && cost.stages[i] && cost.stages[i].from === g.from ? cost.stages[i] : null;
+        const a = parseTime(g.from), b = g.to ? parseTime(g.to) : now;
+        return { g, a, b, time: `${took((b - a) / 1000)}${g.to ? '' : ' so far'}`, usd: c ? costOf(c) : 'cost not measured' };
+      });
+    const stageBand = segs.length ? segs.map((sg) => place(h('i', STAGE_TONE[sg.g.stage] || '', STAGE_LABEL[sg.g.stage] || sg.g.stage), sg.a, sg.b))
+      : Number.isFinite(since) && STAGE_TONE[u.stage] ? [place(h('i', STAGE_TONE[u.stage], STAGE_LABEL[u.stage]), since, now)] : [];
     trace.append(h('span', 'lab', 'Stage'), lane('stages', ...stageBand, h('span', 'now')), nums('Tokens in', 'Out', 'Took'));
     trace.lastChild.classList.add('headnums');
+    if (segs.length && segs.every((sg) => x(sg.b) - x(sg.a) >= STAGE_MIN_PCT)) {
+      // Every segment holds its figures: a time row and a cost row, each figure under its own stage.
+      for (const [label, k] of [['Time', 'time'], ['Cost', 'usd']]) trace.append(h('span', 'lab', label), lane('figs', ...segs.map((sg) => place(h('i', 'fig', sg[k]), sg.a, sg.b))), h('span'));
+    } else if (segs.length) {
+      // A segment too narrow for its figures: one line per stage across the card under the bar, in the order they
+      // ran, then a Total row; in the bar's own column a stage name wrapped one letter per line. A segment
+      // wide enough still shows its own figures, and hovering a segment marks its line.
+      const list = h('ol', 'stagelist');
+      segs.forEach((sg, i) => {
+        const row = h('li');
+        row.append(h('i', `sw ${STAGE_TONE[sg.g.stage] || ''}`), h('span', null, STAGE_LABEL[sg.g.stage] || sg.g.stage), h('span', null, sg.time), h('span', null, sg.usd));
+        list.append(row);
+        const band = stageBand[i];
+        if (x(sg.b) - x(sg.a) >= STAGE_MIN_PCT) band.textContent = `${band.textContent} ${sg.time} · ${sg.usd}`;
+        band.addEventListener('mouseenter', () => row.classList.add('hi'));
+        band.addEventListener('mouseleave', () => row.classList.remove('hi'));
+      });
+      const total = h('li', 'total');
+      total.append(h('i'), h('span', null, 'Total'), h('span', null, span((now - segs[0].a) / 1000)), h('span', null, cost ? costOf(cost.total) : 'cost not measured'));
+      list.append(total);
+      trace.append(list);
+    }
     const signAt = num(u.ageSec) === null ? null : now - u.ageSec * 1000;
     const sign = lane('pulse');
     if (signAt !== null) {
@@ -290,12 +351,9 @@
     }
     trace.append(h('span', 'lab', 'Last sign'), sign, h('span'));
     // One row per helper run on the clock: a subagent's tokens, or a Codex pass's exit code.
-    const steps = isBuilder(u) && Array.isArray(u.builder.steps) ? u.builder.steps.filter(Boolean) : [];
-    let earlier = 0;
     for (const s of steps) {
       const t0 = parseTime(s.start), t1 = parseTime(s.kind === 'codex' ? s.end : s.stop);
       if (!Number.isFinite(t0)) continue;
-      if (Number.isFinite(t1) && t1 < start) { earlier += 1; continue; }
       const live = !Number.isFinite(t1);
       const lab = h('span', 'lab', s.kind === 'codex' ? 'Codex ' : `${s.type || 'Agent'} `);
       lab.append(h('small', null, s.kind === 'codex' ? `${s.pass || 'pass'}${num(s.round) === null ? '' : `, round ${s.round}`}` : modelName(s.model || s.modelAsked || 'model not recorded')));
@@ -306,9 +364,8 @@
           : nums(tk ? tk.input.toLocaleString('en-US') : 'not recorded', tk ? tk.output.toLocaleString('en-US') : '', spent));
     }
     const axis = h('div', 'axis');
-    for (let i = 0; i <= 4; i += 1) axis.append(h('span', null, i === 4 ? `now ${hm(new Date(now))}` : hm(new Date(start + i * 600000))));
+    for (let i = 0; i <= 4; i += 1) axis.append(h('span', null, i === 4 ? `now ${hm(new Date(now))}` : hm(new Date(start + (i * width) / 4))));
     trace.append(h('span'), axis, h('span'));
-    if (earlier) trace.append(h('p', 'tmore', `${earlier} earlier helper run${earlier > 1 ? 's' : ''} before ${hm(new Date(start))}`));
     li.append(trace);
     const branch = h('p', 'branch', 'Branch ');
     branch.append(h('code', null, u.branch || 'not measured'), `, ${u.agents === null || u.agents === undefined ? 'agents not measured' : u.agents === '' ? 'no agents' : `agents ${u.agents}`}`);
@@ -406,6 +463,22 @@
     const found = f === null ? `findings ${NOT_REC}` : `${f.length ? f.join(' · ') : 'no findings'}${num(x.verdictRound) !== null && x.verdictRound !== pass ? ` in pass ${x.verdictRound}` : ''}`;
     return `pass ${pass} · ${found} · ${num(x.reviewSec) === null ? `minutes ${NOT_REC}` : `${Math.round(x.reviewSec / 60)} min in review`}`;
   }
+  // The cost-by-stage table under a build's Details (#94): each stage, then the unit's total. `missing` says why
+  // there is none: a running build's collect could not read it, a finished one's was never kept.
+  function costTable(cost, missing) {
+    if (!cost) return h('p', 'meta', `Cost by stage ${missing}`);
+    const t = h('table', 'costs');
+    const tr = (cells, tag) => { const r = h('tr'); r.append(...cells.map((c) => h(tag || 'td', null, String(c)))); return r; };
+    const tin = (x) => `${x.input.toLocaleString('en-US')} (${x.input ? Math.round((100 * x.cached) / x.input) : 0}% cached)`;
+    t.append(tr(['Stage', 'Took', 'Model calls', 'Tokens in', 'Out', 'Cost'], 'th'),
+      ...(cost.stages || []).map((x) => tr([STAGE_LABEL[x.stage] || x.stage, `${took(x.sec)}${x.to ? '' : ' so far'}`, x.calls, tin(x), x.output.toLocaleString('en-US'), costOf(x)])),
+      tr(['Unit total', took(cost.total.sec), cost.total.calls, tin(cost.total), cost.total.output.toLocaleString('en-US'), costOf(cost.total)]));
+    t.lastChild.classList.add('total');
+    const d = h('div', 'costs-wrap');
+    d.append(h('h3', null, 'Cost by stage'), t,
+      h('p', 'meta', "List-price equivalents of the Builder, its helpers and sub-agents and its review passes; main's own tokens are not counted."));
+    return d;
+  }
   // One build's block, running or finished: the same parts in the same order, so the two cannot drift.
   function block(unit, small, tags, stepRows, done, caption, more) {
     const el = h('div', 'build');
@@ -457,10 +530,11 @@
     fact(dl, 'Review', [...reviewText(x).split(/(P[01] \d+)/).map((t, i) => (i % 2 ? h('span', 'crit', t) : t)), ...(x.verdict ? [' · ', h('span', vTone, x.verdict)] : [])]);
     fact(dl, 'Last sign', num(u.ageSec) === null ? NOT_REC : [`written ${ago(u.ageSec)} ago `,
       typeof u.agents !== 'string' ? null : /:working/.test(u.agents) ? badge('working', 'ok') : badge('idle')]);
+    fact(dl, 'Cost so far', x.cost ? costOf(x.cost.total) : x.cost === null ? 'not measured' : NOT_REC);
     const wait = waitingText(u, now);
     // Only a wait on main is coloured: a pass, a subagent or a tool call is the build working.
     fact(dl, 'Waiting on', waits ? [h('span', 'warn', 'main'), wait.slice(4)] : wait);
-    more.push(dl, h('h3', null, 'Issue by issue'));
+    more.push(dl, costTable(x.cost, x.cost === null ? 'not measured' : NOT_REC), h('h3', null, 'Issue by issue'));
     if (issues === null) more.push(h('p', 'meta', `Issue list ${NOT_REC}`));
     else {
       const tags = h('div', 'iss');
@@ -502,11 +576,13 @@
     fact(dl, 'Ended', ended);
     fact(dl, 'Open at merge', left);
     fact(dl, 'Merge commit', typeof f.sha === 'string' && f.sha ? f.sha.slice(0, 8) : NOT_REC);
+    // As the collector last read it before the merge: frozen, never priced again.
+    fact(dl, 'Cost', f.cost && f.cost.total ? `${costOf(f.cost.total)} in ${span(f.cost.total.sec)}` : NOT_REC);
     const merged = how === 'merged';
     const el = block(f.unit, `${how} ${Number.isFinite(t) ? `${ago((now - t) / 1000)} ago` : 'at a time not recorded'}`, tags,
       // Findings open at the merge leave the Merge step amber; a build that ended any other way has a red one.
       BUILD_STEPS.map((s) => (s !== 'Merge' ? [s, merged ? 'done' : ''] : !merged ? [s, 'crit', 'not merged']
-        : open && open.length ? [s, 'done warn', `${open.join(' · ')} open at merge`] : [s, 'done'])), merged ? 100 : 0, cap(ended, open === null ? `open findings ${NOT_REC}` : left), [dl]);
+        : open && open.length ? [s, 'done warn', `${open.join(' · ')} open at merge`] : [s, 'done'])), merged ? 100 : 0, cap(ended, open === null ? `open findings ${NOT_REC}` : left), [dl, costTable(f.cost, NOT_REC)]);
     el.classList.add('finished');
     const close = h('button', null, 'Close');
     close.type = 'button';
@@ -1102,7 +1178,7 @@
       tile('Weekly limit', limit === null ? 'not set' : wholeDollars(limit)),
       tile('Requests', req === null ? null : req.toLocaleString('en-US'), '', 'this host'),
     ]);
-    byId('limit-note').textContent = `${limit === null ? 'Set a weekly limit: add "weeklyLimitUsd" to billing.json in the dashboard folder. ' : ''}`
+    byId('limit-note').textContent = `API billing: no usage windows. ${limit === null ? 'Set a weekly limit: add "weeklyLimitUsd" to billing.json in the dashboard folder. ' : ''}`
       + `Dollars are list prices over this host's logged Claude and Codex tokens since Monday 00:00${
         spent !== null && claude === null ? '; Claude spend is not measured' : ''}${
         spent !== null && codex === null ? '; Codex spend is not measured' : ''}${
@@ -1172,7 +1248,7 @@
 
   function renderSummary(d, hostInfo) {
     const n = d.needsOwner || {};
-    const dec = Array.isArray(n.decisions) ? n.decisions.filter((x) => x && x.answeredAt == null).length : null;
+    const dec = Array.isArray(n.decisions) ? n.decisions.filter((x) => x && x.answeredAt == null && x.waitsOn !== 'main').length : null;
     // Unknown stages and the long-lived seat are shown, not counted.
     const inflight = d.units && Array.isArray(d.units.inFlight) ? d.units.inFlight.filter((u) => u && STAGES.includes(u.stage)).length : null;
     const unp = num(d.mainChain && d.mainChain.unpushed);

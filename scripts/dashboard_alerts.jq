@@ -39,8 +39,6 @@ def a($key; $sev; $text): {key: $key, severity: $sev, text: $text};
       | a("limit-api"; "crit"; "API spend is on pace to pass the weekly limit before Monday: $\(.spentUsd | round) spent, the even pace for now is $\(.goalUsd | round) of $\(.limitUsd | round)")),
     ($d.limit.cacheWritePct24h // null | select(. != null and . > 5)
       | a("cache-write"; "warn"; "\(. | r)% of input tokens over the last 24 h were written to cache, over 5%")),
-    ($d.host // {} | select(.cpus != null and .load != null and .load[0] > .cpus)
-      | a("host-load"; "warn"; "Host overloaded: load \(.load[0]) on \(.cpus) cores")),
     ($d.host.swap // {} | select((.totalMb // 0) > 0 and .usedMb != null and .usedMb * 100 > .totalMb * 75)
       | a("host-swap"; "warn"; "Host swap \(.usedMb * 100 / .totalMb | round)% used (\(.usedMb) of \(.totalMb) MB)")),
     ($projects[] | .key as $p | .value as $v
@@ -52,10 +50,13 @@ def a($key; $sev; $text): {key: $key, severity: $sev, text: $text};
           | a("stage-\($p)/\(.unit)"; "warn"; "\($p): \(.unit) has been in \(.stage) for \(if .stageExact == false then "at least " else "" end)\(($now - (.stageSince | ts)) / 3600 | r) h")
             + {since: (.stageSince | ts)}),
         ($v.needsOwner.decisions // [] | .[] | (.askedAt | ts) as $at | select($at != null and $now - $at > 3600)
-          | a("question-\($p)-\(.id)"; "warn"; "\($p): question waiting on the owner over 1 h: \(.question)") + {since: $at}),
+          | a("question-\($p)-\(.id)"; "warn"; "\($p): question waiting on \(if .waitsOn == "main" then "main (a Builder's)" else "the owner" end) over 1 h: \(.question)") + {since: $at}),
         # A Builder's signals (dashboard_builders.jq), one alert per unit and kind.
         ($v.units.inFlight // [] | .[] | select((.builder.signals | type) == "array") | .unit as $u | .builder.signals[]
           | a("builder-\($p)/\($u)-\(.kind)"; "warn"; "\($p): Builder \($u): \(.kind | ascii_upcase)") + {since: .since}),
+        # A Builder writes no seat rows: its own session's 24 h usage, summed by the collector.
+        ($v.units.inFlight // [] | .[] | .unit as $u | [.builder.cache24h? // empty | {tokens: .}] | rate
+          | select(. != null and . < 95) | a("cache-builder-\($p)/\($u)"; "warn"; "\($p): Builder \($u) cache hit rate over the last 24 h is \(. | r)%, under 95%")),
         # Collector stale: a project's input serving its last good read.
         ($v.sources // {} | to_entries[] | select(.value.status == "stale")
           | a("stale-\($p)/\(.key)"; "warn"; "\($p): collector input \(.key) is stale: \(.value.error // "its last read failed")") + {since: (.value.staleSince | ts)}))
@@ -74,12 +75,12 @@ def a($key; $sev; $text): {key: $key, severity: $sev, text: $text};
      (if $d.limit.billing != "api" then empty elif $d.limit.api.spentUsd == null then "API spend"
       elif $d.limit.api.complete != true then "API spend (incomplete)" else empty end),
      (if $d.limit.cacheWritePct24h == null then "24 h cache write share" else empty end),
-     (if $d.host.load == null or $d.host.cpus == null then "host load" else empty end),
      (if $d.host.swap == null then "host swap" else empty end),
      (if ($src.projects.status // "") == "not-measured" then "a registered project" else empty end),
      ($projects[] | .key as $p | .value as $v
        | (if $v.guardBlocks.lastHour == null or $v.guardBlocks.perHour == null then "\($p): guard blocks per hour" else empty end),
          (if $v.units.inFlight == null then "\($p): units in flight" else empty end),
+         ($v.units.inFlight // [] | .[] | select(.builder != null and (.builder | has("cache24h")) and .builder.cache24h == null) | "\($p): Builder \(.unit) 24 h cache hit rate"),
          (if $v.needsOwner.decisions == null then "\($p): questions for the owner" else empty end),
          (if ($v.sources["builder-logs"].status // "") == "not-measured" then "\($p): Builder event logs" else empty end))
    ]}

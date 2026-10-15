@@ -60,5 +60,5 @@ printf '%s\n' \
   "HELD: this turn ends by asking the owner something, but no decision was recorded, so the Needs Owner card will not show it." \
   "Record the ask, then end the turn again:" \
   "  bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh add <id> '<question>' '<your proposed default, or none>' main" \
-  "the owner's next prompt answers it (ruling-log.sh). If the line was not a question for the owner, end the turn again." >&2
+  "The owner's reply closes it only when it names <id> (ruling-log.sh); otherwise run decision.sh answer <id> '<their answer>'. If the line was not a question for the owner, end the turn again." >&2
 exit 2

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.0-111111?style=flat-square" alt="Version 0.5.0">
+  <img src="https://img.shields.io/badge/version-0.6.0-111111?style=flat-square" alt="Version 0.6.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -264,7 +264,13 @@ are expensive later:
   debugger call on Sonnet and any other unnamed call on Opus. It rewrites the
   call and never refuses one.
 - `no-poll-loops.sh` stops the orchestrator from waiting in a `sleep` loop;
-  it waits on Orca's inbox. `worker-ask-guard.sh` stops a worker or reviewer
+  it waits on Orca's inbox. A bare `orca orchestration check` with none of
+  `--wait`, `--peek`, `--all`, `--ack` or `--terminal` is refused in every
+  pane, and a worker's `sleep` loop is pointed at `run_in_background` or the
+  Monitor tool.
+- `main-worktree-read-guard.sh` stops the orchestrator from reading a
+  worker's worktree; the papers under its `.claude/briefs/` stay open to it.
+  `worker-ask-guard.sh` stops a worker or reviewer
   from opening a question picker in its own pane, where nobody would see it.
 - `write-existing-file-guard.sh` warns when an edit mostly restates lines
   it replaces.
@@ -275,11 +281,10 @@ catch weak tests:
 - `test-skip-only-blocker.sh` blocks an edit that adds `.only`, `.skip`,
   `xit`, `fit` or `it.todo` to a test.
 - `suite-rerun-guard.sh` blocks the same test or type-check command on an
-  unchanged tree within 30 minutes; prefix `RERUN=1` to run it anyway. It
-  recognises npm's test and typecheck scripts, `tsc` and `vitest`.
-- `symbols-before-read.sh` refuses a Builder's first edit to an existing code
-  file once and names the files that use it, in projects that use the serena
-  add-on. Reads are never capped or gated.
+  unchanged tree within 30 minutes, with or without commands chained on;
+  edits under `.claude/briefs/` leave the tree unchanged. Prefix `RERUN=1` to
+  run it anyway. It recognises npm's test and typecheck scripts, `tsc` and
+  `vitest`.
 - `edit-content-tripwires.sh` blocks new CRLF line endings, deferred-work
   markers, comments that suppress TypeScript and `eslint-disable`.
   `file-size-cop.sh` holds a `.ts` file to 500 lines and a `.tsx` file to
@@ -329,7 +334,10 @@ it found and exits, which wakes the pane:
 
 A Stop hook keeps the pane from ending a turn with no inbox watcher alive.
 `scripts/cos-tell.sh <text>` sends text to the pane from a terminal, which is
-how a dictation shortcut reaches it.
+how a dictation shortcut reaches it. `scripts/cos-tell.sh --note <subject>
+<body>` is the orchestrator's note to it: stored in the orchestrator's run,
+where the inbox watcher finds it even if the pane was busy, and it exits 1
+when Orca does not confirm the note was stored.
 
 The decision ledger is `.claude/metrics/decisions.jsonl` in the main
 checkout. Every question the orchestrator puts to you becomes a row, written

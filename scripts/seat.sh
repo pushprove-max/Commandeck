@@ -141,7 +141,7 @@ launch)
   # read-only seat: main transcribes the pane after the verdict.
   if [ "$RT_READONLY" = 1 ]; then
     GREP_RC=0
-    ASKS_WRITE=$(grep -inE '(^|[^a-z_./-])(write|save|append|create)s?[^a-z_./-][^;]{0,60}\.(md|json|jsonl|txt)([^a-z]|$)' "$SPEC") || GREP_RC=$?
+    ASKS_WRITE=$(grep -inE '(^|[^a-z_./-])(write|save|append|create)s?[[:space:]][^;]{0,60}\.(md|json|jsonl|txt)([^a-z]|$)' "$SPEC") || GREP_RC=$?
     [ "$GREP_RC" -gt 1 ] || { ASKS_WRITE=$(grep -viE 'do not|does not|never|cannot|can not|read-only, so|no other' <<<"$ASKS_WRITE" | head -3) || GREP_RC=$?; }
     # Fail closed: grep exits 1 for no match and 2 or more when it could not run the check.
     [ "$GREP_RC" -le 1 ] || { printf 'BLOCKED: %s is a read-only seat and its write check could not run (grep exit %s).\n' "$ROLE" "$GREP_RC" >&2; exit 2; }
@@ -321,8 +321,9 @@ collect)
   H=$(grep '^handle=' "$REC" | cut -d= -f2); T=$(grep '^task=' "$REC" | cut -d= -f2)
   OUT=$(bash "$PP_SCRIPTS/read-verdict.sh" "$H" 400 "" "" "" "" "" "${LAUNCHED:-0}" 2>/dev/null || true)
   # read-verdict.sh prints its one canonical verdict line ahead of the report
-  # slice; a bare VERDICT line inside the slice can be a fenced sample.
-  V=$(printf '%s\n' "$OUT" | sed '/^=== .* : findings + verdict ===$/q' | grep -E '^VERDICT:' | tail -1 || true)
+  # slice; a bare VERDICT line inside the slice can be a fenced sample. With no
+  # banner there is no verdict: the "NO VERDICT YET" tail it prints instead can hold one.
+  V=$(printf '%s\n' "$OUT" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
   if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//' <<<"$OUT")"; then V=$DONE_MARKER; fi
   # A read-only seat cannot have written the report itself, so a file already
   # sitting at that path is a PREVIOUS round's and the pane is the only source
@@ -514,8 +515,10 @@ wait)
       # finished 35 minutes earlier (2026-09-13).
       if [ "${count:-0}" -eq 0 ]; then
         RV=$(bash "$PP_SCRIPTS/read-verdict.sh" "$H" 5 "" "" "" "" "" "${LAUNCHED:-0}" 2>/dev/null) && RVRC=0 || RVRC=$?
-        if grep -qE '^\*{0,2}VERDICT: \*{0,2}[A-Z]' <<<"$RV"; then count=1
-          SEEN_MARK=$(grep -E '^\*{0,2}VERDICT: ' <<<"$RV" | tail -1 | tr -d '*' | sed 's/[[:space:]]*$//')
+        # Only the reader's canonical line ahead of its banner, as collect reads it:
+        # a "no verdict yet" tail can quote one in a fence.
+        RVV=$(printf '%s\n' "$RV" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
+        if [ -n "$RVV" ]; then count=1; SEEN_MARK=$RVV
         elif [ "$RVRC" -eq 5 ] || [ "$RVRC" -eq 6 ]; then
           # Exit 5 is "the pane's turn is over and it never printed the marker";
           # exit 6 is "the pane cannot reach a model", reached here only when the

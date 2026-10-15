@@ -197,7 +197,6 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 .trace .lab small { color: var(--muted); font-size: 11px; }
 .trace .num { display: grid; grid-template-columns: 1fr 0.8fr 0.7fr; gap: 6px; text-align: right; color: #b8bec8; }
 .trace .headnums { color: var(--muted); }
-.trace .tmore { grid-column: 1 / -1; color: var(--muted); }
 .lane { position: relative; height: 12px; border-radius: 3px; background: var(--line-soft);
   background-image: repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%); }
 .lane i { position: absolute; top: 0; bottom: 0; border-radius: 3px; min-width: 3px; }
@@ -281,6 +280,9 @@ a.t:hover { color: var(--accent-ink); }
 .decision { padding: 8px 10px; border-radius: 8px; background: var(--accent-bg); }
 .decision.crit { background: var(--crit-bg); }
 .decision.crit .meta { color: var(--crit-ink); }
+/* A Builder's question waits on main, not the owner: listed apart, muted. */
+.waiting-main-label { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.decision.waiting-main { background: none; border: 1px dashed var(--muted); }
 .question { font-weight: 600; overflow-wrap: anywhere; }
 .default { margin-top: 4px; overflow-wrap: anywhere; }
 .default-label { color: var(--muted); }
@@ -365,3 +367,19 @@ body.look-only .card:not([data-look]) { display: none; }
   .stages { grid-template-columns: repeat(5, minmax(150px, 1fr)); overflow-x: auto; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; transition: none; animation: none; } }
+/* A Builder's time and cost (#94): the top line, the figures under each stage, the compact stage list, the table. */
+.ucost { margin: 4px 0 0; color: #b8bec8; font-size: 12px; }
+.ucost b { color: var(--ink); }
+.ucost small { color: var(--muted); }
+.lane.figs { height: 14px; background: none; }
+.lane.figs i { color: #b8bec8; font-size: 11px; line-height: 14px; padding-left: 5px; white-space: nowrap; overflow: hidden; }
+.trace .stagelist { grid-column: 1 / -1; display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; color: #b8bec8; }
+.stagelist li { display: grid; grid-template-columns: 10px minmax(max-content, 1fr) 90px 120px; gap: 6px; align-items: center; white-space: nowrap; }
+.stagelist li > span:nth-child(n+3) { text-align: right; }
+.stagelist li.total { color: var(--ink); font-weight: 600; border-top: 1px solid var(--line); }
+.stagelist li.hi { color: var(--ink); background: var(--line-soft); }
+.stagelist .sw { width: 10px; height: 10px; border-radius: 2px; }
+.costs { width: 100%; border-collapse: collapse; font-size: 12px; }
+.costs th, .costs td { text-align: right; padding: 2px 6px; border-bottom: 1px solid var(--line); }
+.costs th:first-child, .costs td:first-child { text-align: left; }
+.costs tr.total td { font-weight: 600; }

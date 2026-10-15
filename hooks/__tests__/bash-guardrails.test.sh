@@ -97,11 +97,6 @@ check "bare-pid kill passes" 0 \
 check "a child job the same command started passes" 0 \
   "$(run_hook "$(json 'sleep 30 & W=$!; kill $W')")"
 
-# --- the serena-down marker is read-tracker.sh's alone ---
-check "touching the serena-down marker is refused" 2 \
-  "$(run_hook "$(json 'touch /tmp/claude-serena-down-abc123')")"
-check "an unrelated touch in /tmp passes" 0 \
-  "$(run_hook "$(json 'touch /tmp/claude-other-marker')")"
 
 echo
 echo "$PASS passed, $FAIL failed"

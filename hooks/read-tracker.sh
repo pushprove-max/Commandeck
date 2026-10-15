@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# PostToolUse hook: record what symbols-before-read.sh's first-edit gate asks
-# about -- whether the session asked who uses a file, under serena's own
-# relative_path -- and nudge a worker that searches source with the shell and
-# never asks serena.
+# PostToolUse hook: nudge a worker that searches source with the shell and
+# never asks serena or codebase-memory.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # Strict tier: off unless the project turned it on (lib/project.sh).
@@ -21,13 +19,7 @@ IS_ERROR=$(echo "$INPUT" | jq -r 'if (.tool_response|type) == "object" then (.to
 MCP_UNUSED_AFTER=25
 MCP_KEY=$(echo "$INPUT" | jq -r '.session_id // empty'); MCP_KEY=${MCP_KEY:-${CLAUDE_SESSION_ID:-${PPID}}}
 case "$TOOL_NAME" in mcp__serena__*|mcp__codebase-memory__*) : > "/tmp/claude-mcp-used-$MCP_KEY" ;; esac
-# symbols-before-read.sh lets a worker's first edit to a file through once the
-# session traced a function defined in it.
-if [ "$TOOL_NAME" = mcp__codebase-memory__trace_path ] && [ "$IS_ERROR" != true ]; then
-  FN=$(echo "$INPUT" | jq -r '.tool_input.function_name // empty')
-  [ -n "$FN" ] && echo "trace:$FN" >> "/tmp/claude-serena-tracker-$MCP_KEY"
-fi
-[ "${TOOL_NAME#mcp__codebase-memory__}" != "$TOOL_NAME" ] && exit 0
+[ "${TOOL_NAME#mcp__}" != "$TOOL_NAME" ] && exit 0
 # Only a search naming a source root the symbols gate covers, or a .ts/.tsx/.py
 # file, counts: a builder editing .claude/hooks has nothing for serena to answer,
 # and the nudge fired on one on 2026-09-18.
@@ -86,11 +78,11 @@ PY
   DIR=${CLAUDE_PROJECT_DIR:-$PWD}
   GD=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-dir 2>/dev/null) || return 0
   [ "$GD" = "$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-common-dir 2>/dev/null)" ] && return 0
-  # Orca refuses an escalation without the dispatch capability, and the only
-  # copy is the dispatch preamble in this session's transcript. No capability
-  # means no send: a message Orca rejects tells main nothing.
+  # The send line comes from the dispatch preamble in this session's transcript.
+  # Newer Orca preambles carry no dispatch capability, so it is optional; an
+  # older preamble's capability is kept.
   TP=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
-  LINE=$(grep -oE 'send --from term_[A-Za-z0-9_-]+ --dispatch-capability dcap_[A-Za-z0-9_-]+ --type escalation' "$TP" 2>/dev/null | tail -1)
+  LINE=$(grep -oE 'send --from term_[A-Za-z0-9_-]+( --dispatch-capability dcap_[A-Za-z0-9_-]+)? --type escalation' "$TP" 2>/dev/null | tail -1)
   IDS=$(grep -oE -- '--task-id task_[A-Za-z0-9_]+ --dispatch-id ctx_[A-Za-z0-9_]+' "$TP" 2>/dev/null | tail -1)
   # Unquoted on purpose: both captures are flag/value pairs of [A-Za-z0-9_-].
   [ -z "$LINE" ] || [ -z "$IDS" ] || timeout 10 orca-ide orchestration $LINE \
@@ -101,22 +93,7 @@ PY
   return 2
 }
 
-# An errored serena call is the one unavailability signal the symbols gate
-# stands down on; a later serena answer clears it.
-if [ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ]; then
-  SID=$(echo "$INPUT" | jq -r '.session_id // empty')
-  SERENA_DOWN="/tmp/claude-serena-down-${SID:-${CLAUDE_SESSION_ID:-${PPID}}}"
-  if [ "$IS_ERROR" = true ]; then touch "$SERENA_DOWN"; else rm -f "$SERENA_DOWN"; fi
-fi
 [ "$IS_ERROR" = true ] && exit 0
-
-# A references lookup lets a worker's first edit to that file through
-# symbols-before-read.sh; the two hooks share one session key.
-if [ "$TOOL_NAME" = mcp__serena__find_referencing_symbols ]; then
-  SERENA_PATH=$(echo "$INPUT" | jq -r '.tool_input.relative_path // .tool_input.file_path // empty')
-  [ -n "$SERENA_PATH" ] && echo "refs-file:$SERENA_PATH" >> "/tmp/claude-serena-tracker-$MCP_KEY"
-fi
-[ "${TOOL_NAME#mcp__serena__}" != "$TOOL_NAME" ] && exit 0
 
 if [ "$TOOL_NAME" = Bash ]; then
   CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')

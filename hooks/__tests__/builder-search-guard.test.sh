@@ -18,7 +18,8 @@ sg() { local rc; rc=$(sgr "$1" "$2"); [ "$rc" != 0 ] || ev PostToolUse "$1" "$2"
 tool() { jq -cn --arg t "$1" --argjson i "$2" '{tool_name:$t, tool_input:$i}'; }
 bash_() { tool Bash "$(jq -cn --arg c "$1" '{command:$c}')"; }
 GREP=$(tool Grep '{"pattern":"x","path":"src"}'); GLOB=$(tool Glob '{"pattern":"*.ts","path":"src"}')
-EXPLORE_LINE='This is now a large search (4+ lookups). Hand it to an Explore subagent (Agent, subagent_type Explore).'
+# The refusal names what runs at once: each refusal costs a request, and a retry that guesses costs another.
+EXPLORE_LINE='This is now a large search (4+ lookups in a row). Allowed now, and not counted: the Read tool, or a plain `grep -n <pattern> <file>...` with no -r, for files you already know; mcp__serena__find_symbol or find_referencing_symbols for a symbol; an Explore subagent (Agent, subagent_type Explore) for anything wider. An Edit, Write or Agent call, or 10 minutes with no search, starts the count again.'
 rm -f /tmp/claude-builder-search-streak-gs-*
 check "searches 1-3 of a streak pass" "0 0 0" "$(echo "$(sg gs-1 "$GREP") $(sg gs-1 "$GLOB") $(sg gs-1 "$(bash_ 'rg x src')")")"
 check "the 4th is refused" 2 "$(sg gs-1 "$GREP")"

@@ -314,7 +314,10 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     # file here: only that check knows a GO that covers an older commit from one
     # that covers the tip, and a NO-GO that is a mergeable P2/P3 tail.
     if { [ "$type" = question ] || [ "$type" = escalation ]; } && [[ "$subject" != *"turn complete"* ]]; then
-      echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\""
+      echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
+      # Recorded like an owner's ask, as waiting on main; a replayed message is the same id and adds nothing.
+      bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" --waits-on main >/dev/null 2>&1 \
+        || echo "  (not recorded in the decisions ledger: it is there already, or the ledger refused it)"
     else
       why=""
       if [ "$(jq -r --arg u "$unit" 'index($u) != null' <<<"$3")" = true ]; then why="its driver acts on this; see the driver line below"

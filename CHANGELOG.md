@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.6.0 -- 2026-10-15
+
+Every open issue in one build, plus the tooling fixes from the project this
+plugin grew out of: cost by stage on the unit card, a fresh session for each
+fix round, safer merges and a set of decision-ledger and inbox fixes.
+
+- Decisions: the watcher no longer re-fires an open decision on every restart
+  (#105); `decision.sh answer <id> <answer> --correct` replaces a wrong answer
+  and keeps the old one in its history (#103); a Builder's question lands in
+  the ledger as waiting on main and is never counted as the owner's (#92); a
+  prompt closes a plain-chat ask only when it names its id; a re-asked
+  decision passes for the picker whose header names it; the ruling log is
+  appended under a lock.
+- Inbox and waits: a bare inbox check that never acknowledges its batch is
+  blocked and points at `orca-wait.sh` (#89); a Builder's hand-written poll on
+  test output is nudged to `run_in_background` and the new
+  `wait-test-run.sh`, which also checks the runner is still alive (#84); notes
+  to the relay pane go to main's run and are confirmed stored (#102);
+  `answer-worker.sh` says "queued, not read yet" for a mid-turn pane (#101);
+  main is woken by mail left unread two minutes while it is idle.
+- Builder rounds: a NO-GO pass from the Builder's own pane writes a hand-off
+  that stands alone and starts the next round in a fresh session of the same
+  pane (`builder-fresh-round.sh`); `builder-add-work.sh <unit>` hands added
+  work over the same way. Every later pass is handed the evidence file's
+  `## Main-only (deferred)` list as known. `red-proof.sh` shows a test catches
+  a break from a scratch copy of the tree. `review-cap.sh <unit> <n>` raises
+  one unit's round limit (#100). A Codex pass first proves Codex answers.
+- Brief template: a red hang test sets its own timeout (#109); each evidence
+  heading is written when its item turns green (#90); a changed setting keeps
+  reading the deployed format, and the reviewer checks it (#104); an answer
+  after the done marker is still read (#93); a file that times out twice is one
+  question to main; each test result carries the machine's load.
+- Merge: main is fetched and fast-forwarded before branching or merging (#99);
+  a GO followed only by regenerated build files is accepted (#108); the merge
+  title is the brief's heading, not the pass subject (#88). `board.sh` shows
+  each unit's last pass result (#91).
+- Dashboard: the unit card and the Builds panel show cost so far and cost per
+  stage, with a full-width stage list and a Total row when stages are narrow
+  (#94); dotted and prefixed model ids are priced (#96); the build timeline
+  starts when the build started (#95); usage-limit tiles are hidden when
+  Claude runs through an API (#97); a Builder under 95% cached over 24 hours
+  raises a warning; the host-load alert is gone (swap still alerts).
+- Setup and launch: Builders and the headless reviewer run with the advisor
+  switched off when they name none (#85); every review flag and threshold takes
+  `off` (#87); typed values are asked inside the picker questions (#86).
+- Hooks and tests: main reading a worker's code is refused (#76); a read-only
+  Codex run also drops Stop hooks off its keep-list; the dependency guard
+  returns at once for a command naming no package manager (#81); the tested-
+  tree record ignores the evidence file and counts chained runs (#107); the
+  suite-rerun key keeps every argument; the leak test ignores runtime files
+  (#79); setup.test.sh no longer hashes a directory (#80).
+- /worktreereview: every "Where it could shrink" item is reviewed after each
+  report (#106); refusals are counted by hook and reason; cut windows come off
+  command and helper seconds.
+
 ## 0.5.0 -- 2026-10-14
 
 Every open issue in one build: the read guards are gone, the build review runs

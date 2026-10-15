@@ -146,10 +146,15 @@ if ! mw=$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/main-watch.sh" --statu
 fi
 # The owner's open asks print every turn: an answer given in chat closes nothing on
 # the dashboard's Needs Owner card until main records it.
-open=$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/decision.sh" list 2>/dev/null \
-  | jq -r 'map(select(.answeredAt == null) | .id) | join(", ")' 2>/dev/null)
+led=$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/decision.sh" list 2>/dev/null)
+open=$(jq -r 'map(select(.answeredAt == null and .waitsOn == null) | .id) | join(", ")' <<<"$led" 2>/dev/null)
 if [ -n "$open" ]; then
   out+="Open decisions for the owner: $open\n  when they answer: bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh answer <id> '<answer>'\n\n"; ALWAYS=1
+fi
+# A Builder's question waits on main, not the owner: answer-worker.sh answers it and closes its row.
+mine=$(jq -r 'map(select(.answeredAt == null and .waitsOn == "main") | "\(.id) (\(.source))") | join(", ")' <<<"$led" 2>/dev/null)
+if [ -n "$mine" ]; then
+  out+="Builder questions waiting on you: $mine\n  answer: bash ${BASH_SOURCE[0]%/*}/../scripts/answer-worker.sh <unit> '<text>' <id>\n\n"; ALWAYS=1
 fi
 
 # 2b) Dependency-aware ready/blocked view (beads-lite). Orca's task-list is a

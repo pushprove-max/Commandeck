@@ -115,5 +115,36 @@ print(sum(s.startswith(b"{\"type\":\"api-request") for s in seen))' "$1" "$T" 2>
 check "the dashboard parses none of the new rows" 0 "$(parsed 'load("dashboard_limit").requests(sys.argv[2] + "/v300/projects", sys.argv[2] + "/parse.json", 0, 1791640000)')"
 check "the restart's prompt reader parses none of the new rows" 0 "$(parsed 'load("checkpoint-context").prompt_block(sys.argv[2] + "/v300/projects/p/s.jsonl", 10000)')"
 
+# --- #96: a proxy's form of a model id is priced at its PRICES row; an unknown id stays unpriced ---
+# One million input tokens each, so the price is the row's input rate (Haiku's over-100K one).
+priced() { (cd "$ROOT/scripts" && python3 -c '
+import sys, dashboard_limit as d
+for m in sys.argv[1:]:
+    r = d.request_row({"type": "assistant", "timestamp": "2026-10-10T12:00:00Z", "message": {"model": m, "usage": {"input_tokens": 1000000,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}}})
+    print(r[1], d.price(r), ",".join(d.unpriced_models([r])) or "-")' "$@" 2>&1 | paste -sd' ' -); }
+check "dotted and prefixed ids price at the 5-5 rates" "claude-haiku-5-5 0.5 - claude-sonnet-5-5 2.0 - claude-opus-5-5 4.0 - claude-opus-5-5 4.0 -" \
+  "$(priced claude-haiku-5.5 claude-sonnet-5.5 anthropic/claude-opus-5.5 claude-opus-5-5-20261001)"
+check "an unknown id is still unpriced, by its own name" "claude-mystery-9-9 None claude-mystery-9-9 claude-3-sonnet None claude-3-sonnet" \
+  "$(priced claude-mystery-9.9 claude-3-sonnet)"
+
+# --- #94: a Builder's cost by stage, from its worktree's own transcripts (helpers' included) ---
+# Building 12:00-12:30, a review pass to 12:40, fixing since; now is 12:50. Haiku rows are $0.01 each.
+WT=$T/uc/ws/u1; D=$T/uc/projects/$(printf %s "$WT" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$WT" "$D/s/subagents" "$T/uc/sessions"
+urow() { row "$1" "" | jq -c --arg t "$2" --arg m "${3:-claude-haiku-5-5}" --arg w "$WT" '.timestamp = $t | .cwd = $w | .message.model = $m'; }
+{ urow a1 2026-10-10T12:05:00Z; urow a2 2026-10-10T12:35:00Z claude-mystery-9-9; urow a3 2026-10-10T12:45:00Z; } > "$D/s.jsonl"
+urow h1 2026-10-10T12:10:00Z > "$D/s/subagents/agent-h1.jsonl"
+# The stages are the ones dashboard_builders.jq reads from the Builder's event log: its first row, a pass, a fix.
+printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","use":"t1"}' '{"event":"tool-end","ts":"2026-10-10T12:00:01Z","use":"t1"}' \
+  '{"event":"codex-start","ts":"2026-10-10T12:30:00Z","pass":"adversarial","round":1}' '{"event":"codex-end","ts":"2026-10-10T12:40:00Z","pass":"adversarial","round":1,"rc":0}' > "$T/uc/log.jsonl"
+ucost() { jq -s --argjson now 0 -f "$ROOT/scripts/dashboard_builders.jq" "$T/uc/log.jsonl" | jq -c --arg w "$WT" '[{unit: "u1", worktree: $w, stages: .stageHistory}]' \
+  | python3 "$ROOT/scripts/dashboard_limit.py" units "$(jq -n '"2026-10-10T12:50:00Z" | fromdate')" "$T/uc" "$T/uc/projects" "$T/uc/sessions" 2>&1 \
+  | jq -r '.u1 | (.stages[] | "\(.stage) \(.sec) \(.calls) \(.usd) \(.partial) \(.unpriced | join(","))"), "total \(.total.sec) \(.total.calls) \(.total.usd) \(.total.partial) \(.total.unpriced | join(","))"' 2>&1 | paste -sd'|' -; }
+check "each stage holds the requests made in it, a helper's included, and the total holds all of them" \
+  "building 1800 2 0.02 false |review 600 1 0 true claude-mystery-9-9|fixing 600 1 0.01 false |total 3000 4 0.03 true claude-mystery-9-9" "$(ucost)"
+# An install that runs Claude only has no Codex sessions folder: no Codex review ran, so its cost is none, not unknown.
+rmdir "$T/uc/sessions"
+check "with no Codex sessions folder, the Claude costs still count" "total 3000 4 0.03 true claude-mystery-9-9" "$(ucost | tr '|' '\n' | tail -1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

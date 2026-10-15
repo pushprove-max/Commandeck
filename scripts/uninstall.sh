@@ -36,7 +36,7 @@ if [ -s "$IL_PROJECT" ]; then
   ! il_has "$IL_PROJECT" "$IL_AGENTS" || il_block "$IL_AGENTS"
   ! il_has "$IL_PROJECT" "$IL_EXCLUDE" || il_lines "$IL_PROJECT" "$IL_EXCLUDE"
   S=$PP_MAIN/.claude/settings.json
-  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_workflows "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
+  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_workflows "$IL_PROJECT" "$S" off; il_advisor_off "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
   il_restore "$IL_PROJECT"
   echo "commandeck is out of $PP_MAIN"
 else

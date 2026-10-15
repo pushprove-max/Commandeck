@@ -30,6 +30,10 @@ Rules that bind only main. The startup hook prints this file down to the line
 - **A ruling that something stays as it is goes under `## Stated limits`** in
   `.claude/briefs/<unit>-main-rulings.md` when you write it: the pass reads
   limits from that heading only, and raises a ruling written elsewhere again.
+  Start the file from `templates/main-rulings.md`.
+- **Work added mid-build** goes into that rulings file first; then
+  `builder-add-work.sh <unit>` tells the Builder to stop, and a fresh session
+  of its pane takes the work from a hand-off that stands alone.
 
 ## Orchestrator and Advisor Role (ruling 2026-09-12)
 
@@ -71,14 +75,16 @@ restart: do not fetch them again, except a part its RESUMED line names as cut
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
 - Announce: report what the worker came back with when it finishes.
-- relay pane: send with `orca-ide orchestration send --to <that handle>`.
-  Its inbox poller prints every note you send yourself (a plain send,
-  type `status`), except `main-watch`, `heads-up`, `main:` and `answer from
+- relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`,
+  which stores the note in your run (`run:<id>`), the mailbox the relay's
+  inbox poller reads, and exits 1 when Orca does not confirm it. Never
+  `--to <its handle>`: that mailbox is live-only, and notes sent while the
+  pane was busy were lost. The poller prints every note you send yourself
+  (type `status`), except `main-watch`, `heads-up`, `main:` and `answer from
   main` subjects; from a script or any other pane it prints only a subject
   that starts `cos:` or names the owner. A subject
   that starts `FYI` does not wake it: it is held and shown with your next
-  message that does. `bash scripts/cos-tell.sh --handle` finds the handle by worktree,
-  never a saved one. It asks the owner and relays the answer
+  message that does. It asks the owner and relays the answer
   verbatim; check each relayed answer against
   `~/.claude/rulings/<project>.jsonl` before acting. Ask the owner directly
   only when no such pane is running. Ledger: AskUserQuestion records itself; a

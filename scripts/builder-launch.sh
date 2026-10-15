@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] <unit> <batch-brief>
 # -- open one Builder:
-# a NEW worktree on local main with the Builder profile (worktree-setup.sh
+# a NEW worktree on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
 # --builder), the one-page brief rendered from
 # templates/_builder-brief-template.md into <wt>/.claude/briefs/<unit>.md,
 # and one roles.builder pane (seat.sh launch). --dry-run prints the rendered
@@ -107,7 +107,9 @@ LOOP=
 [ "$CLOSING" != no ] || LOOP+="This project runs no closing pass: skip step 3. The narrowed pass that ends \`VERDICT: GO\` is the one the merge takes, once narrowed passes have read every commit after the first pass; change nothing after it."$'\n'
 T=${T//'{small-build}'/"$SMALL"}
 T=${T//$'{loop-rules}\n'/"$LOOP"}
-T=${T//'{batch}'/"$(cat "$BATCH")"}
+# Its headings go two levels down, so a batch with a level-1 title of its own stays inside "## The batch": the
+# dashboard reads the issues from that section, and its reader takes any "# " line as a heading.
+T=${T//'{batch}'/"$(sed -E 's/^(#+ )/##\1/' "$BATCH")"}
 echo "advisor: $RULE" >&2
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
@@ -122,6 +124,7 @@ if [ "$RISKY" = 1 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
   open_builder
 fi
 
+pp_sync_main "$PP_MAIN" || exit 1
 pp_worktree_new "$UNIT" || exit 1
 bash "$HERE/worktree-setup.sh" "$WT" --builder
 mkdir -p "$WT/.claude/briefs"

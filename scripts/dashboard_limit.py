@@ -13,6 +13,9 @@
       project name to its folders: `today` then holds, per project, the day's
       cost of the sessions run in those folders. Every other figure is the
       account's.
+  dashboard_limit.py units <now-epoch> <cache-dir> <projects-dir> <codex-sessions-dir>
+      Each Builder's cost by stage, from its worktree's own sessions; the units
+      ([{unit, worktree, stages}]) on stdin, {unit: {stages, total} or null} out.
 
 Every figure comes from that reading or from Claude Code's own transcripts; a
 figure with no source is null, never 0 or an estimate. Dollars are list-price
@@ -165,6 +168,13 @@ def request_ids(r):
     return ids or ([u] if isinstance(u, str) and u else [])
 
 
+def model_id(model):
+    """A Claude model id as PRICES keys it: a proxy's 'claude-haiku-5.5', 'anthropic/claude-haiku-5-5' and
+    'claude-haiku-5-5-20261001' are all 'claude-haiku-5-5' (#96). Any other id comes back as it was."""
+    m = re.fullmatch(r"(?:[\w.-]*[/.])?(claude-[a-z]+)-(\d+)[.-](\d+)(?:-\d{8})?", model)
+    return f"{m[1]}-{m[2]}-{m[3]}" if m else model
+
+
 def request_row(r):
     """[time, model, input, 5-min cache write, 1-hour cache write, cache read, output] or None.
 
@@ -188,8 +198,8 @@ def request_row(r):
         return [at, model, n(u, "input_tokens"), w5, w1, n(u, "cache_read_input_tokens"), n(u, "output_tokens")]
 
     its = u.get("iterations") if isinstance(u.get("iterations"), list) else []
-    return counts(u, str(msg.get("model")) + (":fast" if u.get("speed") == "fast" else "")) + [
-        counts(i, str(i.get("model"))) for i in its if isinstance(i, dict) and i.get("type") == "advisor_message"]
+    return counts(u, model_id(str(msg.get("model"))) + (":fast" if u.get("speed") == "fast" else "")) + [
+        counts(i, model_id(str(i.get("model")))) for i in its if isinstance(i, dict) and i.get("type") == "advisor_message"]
 
 
 # List prices in $ per million tokens: (input, output, cache read). Cache writes
@@ -512,17 +522,33 @@ def codex_history(cache_dir, cx, now):
     return [{"at": iso(a), "pct": p} for a, p in rows if start <= a <= now]
 
 
+def api_base_url():
+    """Whether Claude is reached through an API base URL (a proxy): ANTHROPIC_BASE_URL in the environment or in
+    the env block of ~/.claude/settings.json. Such a machine has no subscription usage windows (#97)."""
+    if os.environ.get("ANTHROPIC_BASE_URL"):
+        return True
+    try:
+        with open(os.path.join(os.path.expanduser("~"), ".claude", "settings.json")) as f:
+            env = json.load(f).get("env")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(env, dict) and bool(env.get("ANTHROPIC_BASE_URL"))
+
+
 def billing(cache_dir):
     """("subscription" | "api", weekly limit in dollars or None), from billing.json beside the cache folder.
 
-    The file is {"billing": "api", "weeklyLimitUsd": 1000}. Anything else, or no file, is the subscription panel.
+    The file is {"billing": "api", "weeklyLimitUsd": 1000}. With no "billing" key there, or no file, a machine
+    that reaches Claude through an API base URL is the API panel and any other is the subscription panel; the
+    file's own "billing" word wins over that.
     """
     try:
         with open(os.path.join(os.path.dirname(os.path.abspath(cache_dir)), "billing.json")) as f:
             b = json.load(f)
     except (OSError, ValueError):
-        return "subscription", None
-    if not isinstance(b, dict) or b.get("billing") != "api":
+        b = None
+    b = b if isinstance(b, dict) else {}
+    if b.get("billing", "api" if api_base_url() else "subscription") != "api":
         return "subscription", None
     lim = b.get("weeklyLimitUsd")
     return "api", lim if _num(lim) and lim > 0 else None
@@ -774,9 +800,63 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     return 0
 
 
+def tally(rows, sec):
+    """One stage's figures (#94): seconds, model calls, tokens in (and the cached part), out, list-price $.
+
+    A request with no price leaves the dollars a floor: partial, with the models that have no price named."""
+    parts = [x for r in rows for x in [r] + r[7:]]
+    n = lambda i: sum(x[i] for x in parts if isinstance(x[i], int))
+    priced = [price(r) for r in rows]
+    return {"sec": sec, "calls": len(rows), "input": n(2) + n(3) + n(4) + n(5), "cached": n(5), "output": n(6),
+            "usd": round(sum(p for p in priced if p is not None), 4), "partial": None in priced, "unpriced": unpriced_models(rows)}
+
+
+def unit_costs(units, now, cache_dir, projects, sessions):
+    """Each Builder's cost by stage, from the requests its own worktree's sessions made (#94).
+
+    `units` is [{unit, worktree, stages: [{stage, from, to}]}] (dashboard_builders.jq's stageHistory). A
+    request belongs to the unit when its session ran in the worktree: the Builder, its helpers and Workflow
+    sub-agents (their transcripts sit under the worktree's own projects folder) and its review passes,
+    Claude's or Codex's. Main works in the main checkout, so its own requests are never counted. A request
+    goes to the stage it was made in; one before the first stage (the session's opening) to the first.
+    None for a unit whose requests cannot all be read: a short total would read as the whole.
+    """
+    starts = {u["unit"]: epoch(u["stages"][0]["from"]) for u in units if u.get("stages")}
+    since = min((t for t in starts.values() if t is not None), default=None)
+    if since is None:
+        return {}
+    missed = []
+    # No sessions folder is an install without Codex: no Codex review ran, so it adds nothing rather than unknown.
+    cx = codex_requests(sessions, os.path.join(cache_dir, "unit-codex.json"), since - 600, now, missed, True) if sessions and os.path.isdir(sessions) else []
+    out = {}
+    for u in units:
+        t0, wt = starts.get(u["unit"]), u["worktree"]
+        if t0 is None:
+            continue
+        # Claude Code's folder for a session run in the worktree: every byte that is not a letter or digit becomes "-".
+        folder = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
+        claude = requests(folder, os.path.join(cache_dir, f"unit-requests-{u['unit']}.json"), t0 - 600, now, True) if os.path.isdir(folder) else []
+        if claude is None or cx is None or missed:
+            out[u["unit"]] = None
+            continue
+        rows = sorted([r for r, f in claude + cx if under(f, [wt])], key=lambda r: r[0])
+        bounds = [(epoch(s["from"]), epoch(s["to"]) if s.get("to") else now) for s in u["stages"]]
+        stages = []
+        for i, (s, (a, b)) in enumerate(zip(u["stages"], bounds)):
+            mine = [r for r in rows if (i == 0 or r[0] >= a) and (r[0] < b or (i == len(bounds) - 1 and r[0] <= now))]
+            stages.append({"stage": s["stage"], "from": s["from"], "to": s.get("to"), **tally(mine, round(max(0, b - a)))})
+        # The last stage is always the open one (stageHistory), so the build has run from its start to now.
+        out[u["unit"]] = {"stages": stages, "total": tally([r for r in rows if r[0] <= now], round(max(0, now - t0)))}
+    return out
+
+
 def main(argv):
     if argv[1:] == ["fetch"]:
         return fetch()
+    if len(argv) == 6 and argv[1] == "units":
+        # units <now> <cache dir> <Claude projects folder> <Codex sessions folder>; the units on stdin.
+        json.dump(unit_costs(json.load(sys.stdin), float(argv[2]), argv[3], argv[4], argv[5] or None), sys.stdout)
+        return 0
     if len(argv) in (7, 8, 9) and argv[1] == "build":
         return build(argv[2], argv[3], float(argv[4]), argv[5], argv[6], argv[7] if len(argv) > 7 else None,
                      json.loads(argv[8]) if len(argv) > 8 else None)

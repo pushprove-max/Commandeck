@@ -13,7 +13,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$
 
 STRICT="bash-guardrails batch-independent-looks edit-content-tripwires
 file-size-cop git-ignore-warn new-test-file-guard pane-budget-gate read-tracker script-over-reads
-staged-index-warn suite-rerun-guard symbols-before-read test-skip-only-blocker web-fetch-blocker"
+staged-index-warn suite-rerun-guard test-skip-only-blocker web-fetch-blocker"
 
 # The list above is the tier: a hook gated by accident, or a strict one that
 # lost its gate, changes what a default install refuses.

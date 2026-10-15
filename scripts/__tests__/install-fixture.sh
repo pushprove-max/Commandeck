@@ -86,7 +86,7 @@ run() {
 # own bookkeeping moves with any worktree.
 snap() {
   ( cd "$T" && { find home proj* -path '*/.git/*' -prune -o -type d -print | sed 's/$/\//'
-      find home proj* \( -path '*/.git/*' -prune \) -o \( -type f -o -type l \) -print | while IFS= read -r f; do printf '%s %s\n' "$(sha256sum < "$f" | cut -d' ' -f1)" "$f"; done
+      find home proj* \( -path '*/.git/*' -prune \) -o \( -type f -o -type l \) -print | while IFS= read -r f; do printf '%s %s\n' "$( { [ -d "$f" ] && readlink "$f" || cat "$f"; } | sha256sum | cut -d' ' -f1)" "$f"; done
       for e in proj*/.git/info/exclude; do printf '%s %s\n' "$(sha256sum < "$e" | cut -d' ' -f1)" "$e"; done; } | sort )
 }
 # mf <project dir> -- that project's install manifest.

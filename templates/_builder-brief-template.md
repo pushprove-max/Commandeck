@@ -20,7 +20,26 @@ merges with `merge-unit-local.sh {unit}`.
   whatever comes back is sent again on every later turn of the build.
 - Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
   line per batch item in the evidence file: the build review reads that shape.
-- Tests first: red, then green.
+- Tests first: red, then green. A red test that shows a hang sets its own
+  short timeout (a few seconds), so it fails fast instead of running to the
+  command's time limit. To show a test catches a break without editing your
+  tree, run `bash {scripts}/red-proof.sh <file> <line> <replacement> -- <test
+  command>`: it breaks that line in a scratch copy of your work and says RED
+  or NOT RED.
+- The moment an item's test turns green, add its section to the evidence
+  file: `## #<issue> <title>`, then the guarding test name and file on the
+  next line. The dashboard counts an item built only from that heading and line.
+- A build that changes a setting (a config key, an environment variable, a
+  file format) keeps reading the format already deployed from its first
+  commit, and has a test that the release accepts the deployed format.
+- Never hand-write a loop that polls test output (`until grep ...; do sleep`):
+  start the run with `run_in_background`, which tells you when it exits. To
+  block on it, wait only with `bash {scripts}/wait-test-run.sh <runner-pid>
+  <output-file>`: it checks the runner is still alive when the wait ends, and
+  a runner that died with no result means rerun the needed file alone, never a
+  second wait. It knows a `<n> passed, <n> failed` last line and node:test's
+  summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
+  wait`: its first output line is the runner pid.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product
@@ -34,7 +53,8 @@ merges with `merge-unit-local.sh {unit}`.
   touched cases where the runner can select them.
   ONE whole run of every test file this build touched starts in the background
   beside the closing pass, and never before an earlier pass. A file that times
-  out in that run is rerun alone at once, never in another whole run.
+  out in that run is rerun alone at once, never in another whole run; a
+  second timeout is one question to main.
   A first pass that ends GO with nothing committed after it needs no closing
   pass: that GO merges, and the runs beside it were the closing run. A test file with a case selector says so in its header.
 - The closing run is the test files this build touched, and no others.
@@ -43,8 +63,9 @@ merges with `merge-unit-local.sh {unit}`.
   a red one costs that pass.
 - Not run: every touched test together before review, any test after a GO
   with nothing changed since, a timing run the batch does not ask for.
-- When you read the machine's load average (`uptime`), write it in the
-  evidence file with the time: on a shared machine it explains a slow run.
+- When you read a test result, write the machine's load beside it in the
+  evidence file: `bash -c '. {scripts}/host-services.sh && hs_stamp'` prints
+  it with the time. On a shared machine it explains a slow run.
 - A documented command you write or change (a README line, a usage line) runs
   once from a scratch project outside this repository before you ask for
   review. The evidence file lists each one with its result.
@@ -88,6 +109,9 @@ N the number of the pass that will read it. When you do not take the fix a
 reviewer named, write `Different fix r<N>: <why>` before you ask for pass N.
 Pass N shows both lines to its reviewer, and reads only a line that starts
 with those words: no bullet, no backticks.
+A finding only main can fix (a settings file entry, a file only main edits)
+goes as one line under `## Main-only (deferred)` in the evidence file: every
+later pass is handed that list as known, so it is not raised again.
 When a reviewer finds a way round a guard, list the other ways round the same guard
 and add a test case for each BEFORE asking for the next pass.
 When a pass finds a SECOND variant of a finding you already fixed in this
@@ -113,10 +137,13 @@ fails too, carry on and write `consult not had: <reason>` in the evidence file.
 
 Change nothing after the pass the merge will take (the GO of the closing pass,
 or the one narrowed pass after a P2/P3-only closing pass); a later edit needs
-another pass.
+another pass. The rule is lifted when the merge refuses the branch or main
+tells you to change something: make the change, then take the passes the steps
+above call for.
 
 ## Done
 
 Every batch item built with its tests green, and the last round file a GO, or
 the narrowed pass after a P2/P3-only closing pass with every open finding listed.
-Print `{UNIT}-DONE` as your last line and stop.
+Print `{UNIT}-DONE` as your last line and stop. An answer from main that
+arrives after it is still yours: read it and act on it.

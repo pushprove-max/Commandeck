@@ -33,7 +33,6 @@
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-guardrails.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/no-poll-loops.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/duplicate-agent-guard.sh\"", "onFailure": "block", "timeout": 60},
-        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/symbols-before-read.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/suite-rerun-guard.sh\"", "onFailure": "block", "timeout": 60},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/dependency-addition-guard.sh\"", "onFailure": "block", "timeout": 60}
       ]},
@@ -52,8 +51,8 @@
       {"matcher": "Write", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/new-test-file-guard.sh\""}
       ]},
-      {"matcher": "Read|Grep|Edit|MultiEdit|Write", "hooks": [
-        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/symbols-before-read.sh\"", "onFailure": "block", "timeout": 30}
+      {"matcher": "Read|Grep|Glob", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/main-worktree-read-guard.sh\"", "onFailure": "block", "timeout": 30}
       ]}
     ],
     "PostToolUse": [

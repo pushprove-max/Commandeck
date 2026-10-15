@@ -61,7 +61,11 @@ It reads logs only, so it works after main has removed the worktree:
 
 5. **Write `notes.json`** next to `result.json`. Keys: `title`, `summary`, `stage_notes`
    (by stage code), `pass_findings` (by pass number, one plain sentence each), `lessons`
-   (title and points), `not_measured`, `method`.
+   (title and points), `not_measured`, `method`, and `shrink_review`: one entry for each
+   "Where it could shrink" item, by its bold title, marked covered by an open issue
+   (`{"item": "Long thinking", "issue": "#12"}`, citing it) or uncovered with a one-line
+   proposed fix (`{"item": "Long thinking", "fix": "..."}`). The page lists the marks and
+   names any item left unmarked.
 
 6. **Render and check.**
    ```
@@ -123,6 +127,8 @@ sort the tables, check the rows, and only then write a lesson.
 - The dearest stage and why: open its drilldown (`stages[].detail` holds its clock split,
   longest commands with their results, files edited, guard refusals and the agent's notes).
 - Faults in the tooling the run exposed, and what the agent left for main.
+- Every time: is there a library, a shared helper or a cached step that would significantly
+  speed up builds like this one? Answer it in a lesson, yes with what, or no.
 
 ## Rules for the words
 
@@ -142,8 +148,9 @@ sort the tables, check the rows, and only then write a lesson.
 
 ## A lesson becomes an issue only with the owner's approval
 
-1. Each lesson that proposes a change becomes a draft issue, never an issue: the repo, a title, a body
-   of 2 to 4 lines, the labels, and the source lessons (`<unit> L<n>`).
+1. Each lesson that proposes a change, and each "Where it could shrink" item the page marks
+   uncovered, becomes a draft issue, never an issue: the repo, a title, a body of 2 to 4 lines, the
+   labels, and the source lessons (`<unit> L<n>`) or item.
 2. Put the drafts to the owner one at a time, each with its details, and wait for an answer to each.
 3. File only the drafts the owner approves, as approved. A draft the owner declines or does not answer
    is not filed.

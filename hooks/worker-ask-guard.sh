@@ -44,6 +44,6 @@ printf '%s\n' \
   "BLOCKED: AskUserQuestion in a worker pane is never seen: it draws in this pane only and does not reach main's inbox, so you would wait forever." \
   "Ask main instead, ONCE, with the question, the options and your recommendation in one line:" \
   "  orca-ide orchestration ask --from ${ORCA_TERMINAL_HANDLE:-<your terminal handle>}${run:+ --to run:$run} --timeout-ms 600000 --question '<question>. Options: A) ... B) ... Recommend: ...'" \
-  "Add --dispatch-capability <yours> if your dispatch preamble gave one. It waits and prints main's answer; on a timeout, rerun with --resume <message id>." \
+  "It waits and prints main's answer; on a timeout, rerun with --resume <message id>." \
   "If a reasonable default exists, take it, write it in your evidence, and carry on instead of asking." >&2
 exit 2

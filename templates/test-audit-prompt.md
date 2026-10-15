@@ -29,7 +29,6 @@ TIMING RUN: no
 
 - Read at most 150 lines per read (`sed -n '1,150p' <file>`, or your file-read tool with an offset and limit).
 - Every `rg` or `grep -r` names a literal directory or file inside the repository, typed out. No path, `.`, the repository root, or a shell variable as the path: a hook may block those.
-- If the first read of a production (non-test) file is blocked with a message asking for a symbol overview, do the lookup it names, then read. If you have no such tool, write `subject not read` and continue.
 - Messages that suggest "a script would answer this" or "batch your looks" are advice. Keep reading every file in the batch.
 
 ## Facts about this repository
@@ -81,7 +80,7 @@ A finding needs a sign from this list with its quote. Anything you suspect that 
 
 **T1 Duplicate.** Sign: two tests in the same file whose bodies are the same text apart from the title. Quote both. Different inputs, boundary, error path, file or runner: not a duplicate.
 
-**T2 Cannot fail.** Signs; quote the whole test for S1, the assertion and the assignment lines for the others:
+**T2 Cannot fail.** Signs; for S1 quote the whole test when `sed -n '<first>,<last>p' <file> | wc -c` prints 2500 or less; for a larger test quote only its first and last lines and the output of `sed -n '<first>,<last>p' <file> | grep -c -E 'assert|expect\(|\.rejects|\.throws|t\.assert'`, re-check only those, and set Confidence medium with "whole body not quoted (oversized)"; for the others quote the assertion and the assignment lines:
 - S1 No assertion: the test body and every helper in the same file that it calls contain no `assert`, `expect(`, `.rejects`, `.throws` or `t.assert`. Say "fails only if the call throws".
 - S2 Constant: every argument of the assertion is a literal (`assert.ok(true)`, `expect(1).toBe(1)`).
 - S3 Self-comparison: the actual and expected arguments are the same text, or the expected variable was assigned from the same call with the same arguments as the actual.

@@ -135,6 +135,20 @@ il_workflows() {
     doc=$(jq '.enableWorkflows = true' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].workflows = true'
   fi
 }
+# il_advisor_off <manifest> <settings file> [off] -- the orchestrator is the owner's own claude, started by
+# no launch template, so its routing's "no advisor" lives in the project's settings: Claude Code's one off
+# switch (#85). A value the owner set is left as it is. shortcut: a project that commits this file hands
+# the switch to its worktrees too, where a seat that names an advisor would lose it; none does by default.
+il_advisor_off() {
+  local m=$1 f=$2 doc
+  doc=$(cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  if [ "${3:-}" = off ]; then
+    jq -e --arg p "$f" '.entries[$p].advisorOff == true' "$m" >/dev/null 2>&1 || return 0
+    doc=$(jq 'del(.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL) | if .env == {} then del(.env) else . end' <<<"$doc") && il_write "$f" <<<"$doc"
+  elif ! jq -e '(.env // {}) | has("CLAUDE_CODE_DISABLE_ADVISOR_TOOL")' <<<"$doc" >/dev/null 2>&1; then
+    doc=$(jq '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1"' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].advisorOff = true'
+  fi
+}
 # il_test_audit <root> <file> -- the project's /test-audit: the plugin's script
 # with the two paths it cannot find out written in. A workflow script sees no
 # disk and no environment, and its agents type both paths into shell commands.

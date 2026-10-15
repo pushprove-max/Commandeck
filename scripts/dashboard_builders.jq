@@ -82,6 +82,17 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 # The Builds panel's lines: when the log began, the seconds spent inside Codex passes
 # (an open pass counted to now) and what is open right now. An empty log measures none of them.
 | . + {
+    # The stages the build went through, in order (#94): building from the log's first row to the first pass,
+    # each pass a review, the time after a pass to the next one a fix. The open stage has no end (to: null).
+    stageHistory: (([$r[].ts | ep | select(. != null)] | min) as $t0
+      | if $t0 == null then [] else
+        ([$cx[] | {a: (.c.ts | ep), b: (.e.ts // null | if . == null then null else ep end)} | select(.a != null)] | sort_by(.a)) as $p
+        | [{stage: "building", from: $t0, to: ($p[0].a // null)}]
+          + [range(0; $p | length) as $i | $p[$i] as $x | ($p[$i + 1].a // null) as $nx
+             | {stage: "review", from: $x.a, to: ([$x.b, $nx] | map(numbers) | min)},
+               (if $x.b != null and ($nx == null or $x.b < $nx) then {stage: "fixing", from: $x.b, to: $nx} else empty end)]
+        | map(.from |= todate | .to |= (if . == null then null else todate end))
+      end),
     startedAt: ([$r[].ts | select(ep != null)] | first // null),
     reviewSec: (if $last == null then null else [$cs[] | . as $c | (.ts | ep) as $a
         | (($ce | map(select(.pass == $c.pass and .round == $c.round)) | first | .ts // null | if . == null then $now else ep end)) as $b

@@ -135,7 +135,6 @@ check "a guard that is missing refuses the call" '2:1' "$RC:$(grep -c 'BLOCKED: 
 SECOND='rec.sh pre-bash' run "$T/ours" PreToolUse Bash "$CMD"
 check "the same guards, working, allow it" '0:pre-bash pre-bash' "$RC:$(ran)"
 
-# --- a read-only run keeps the guards on the keep-list and drops the rest ---
 
 # --- a read-only run keeps the guards on the keep-list and drops the rest ---
 # The run is read-only when the session record Codex names says so in EVERY
@@ -168,6 +167,14 @@ check "a record outside a real Codex home skips nothing" 2 "$(ro "$HOME/.codex-o
 check "a record in the run's own folder skips nothing" 2 "$(ro "$T/ours/ro.jsonl")"
 check "nor does a link from the sessions folder to one" 2 "$(ro "$SES/link.jsonl")"
 check "READ_ONLY=1 in the environment skips nothing" 2 "$(READ_ONLY=1 ro "")"
+# A read-only run's Stop drops the same hooks: a turn-end check reads the worktree's pending edits, which are
+# the Builder's, and one that outlasts the pass's record wait ends the review as interrupted.
+printf '{"hooks": {"Stop": [{"matcher": "*", "hooks": [%s]}]}}\n' "$(h "rec.sh \$STOP_MODE")" > "$P/hooks/hooks.json"
+st() { jq -cn --arg c "$T/ours" --arg t "$1" '{session_id: "s1", cwd: $c, hook_event_name: "Stop"} + (if $t == "" then {} else {transcript_path: $t} end)' \
+    | STOP_MODE=json-block bash "$P/hooks/codex-dispatch.sh" >/dev/null 2>&1; echo $?; }
+check "a Stop hook off the keep-list is dropped in a read-only run" 0 "$(st "$SES/ro.jsonl")"
+check "a Stop hook still runs in a write-capable run" 2 "$(st "$SES/write.jsonl")"
+check "a Stop with no session record skips nothing" 2 "$(st "")"
 # A guard on the keep-list runs whatever the run is.
 cp "$P/hooks/rec.sh" "$P/hooks/suite-rerun-guard.sh"
 printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [%s]}]}}\n' "$(h "suite-rerun-guard.sh deny")" > "$P/hooks/hooks.json"

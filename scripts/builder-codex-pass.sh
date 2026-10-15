@@ -106,7 +106,9 @@ GUIDANCE='The diff is in the review input below; do not fetch it again, and do n
 # The Codex plugin's line made every NO-GO pass return exactly one finding.
 ONE='Prefer one strong finding over several weak ones.'
 MANY='List every finding you can defend, worst first. After each one, look for the same mistake elsewhere in the diff and list those too.'
-FOCUS_REVIEW='Correctness bugs, security problems and missing tests in the changed lines.'
+# A build that added a required setting read only the new format; every deployed environment ran the old one.
+SETTINGS='A change that adds or changes a required setting (a config key, an environment variable, a file format) with no test that the release still accepts the format already deployed is P1.'
+FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS"
 # The Claude reviewer's template: the same slots and the same two lines this
 # script replaces, so one function fills both.
 CLAUDE_TEMPLATE="You are reviewing a code change. Target: {{TARGET_LABEL}}.
@@ -121,7 +123,7 @@ $CLOSE
 # it is one reviewer handed all of them (SMALL_BUILD).
 ANGLES=(
   'Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts.'
-  'Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input.'
+  "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS"
   'Angle 3 of 3, tests and words: a changed behaviour with no test, a test that cannot fail, and comments, rule text or docs the change leaves untrue.'
 )
 # The first line of the review input says which pass this is, then "Reviewer <k>
@@ -139,6 +141,7 @@ HEAD_FINAL='Review input: the closing pass, the whole branch diff against main (
 EARLIER_HEAD='Findings of the earlier passes on this branch, already with the author. Report one again only if it is still there, and ask what else in the diff is like these:'
 EARLIER_END='End of the earlier passes.'
 LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is reported as P3 "inside a stated limit", never P0 to P2:'
+DEFERRED_HEAD='Known and deferred to main: each item below needs main'"'"'s own hands (a settings file entry, a file only main edits), and main has it. Do not report a listed item again. Report anything else, a new defect in the same file included, and report a listed item that this branch could fix itself, since that is not main-only:'
 # The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
 # "Other cases checked r<N>: <which>": a fix other than the one a finding named, and the
 # other cases of the same fault a fix covers, go to the reviewer with the diff.
@@ -715,8 +718,6 @@ UNIT=${1:?usage: builder-$BY-pass.sh <unit> <N> adversarial|review|final}; N=${2
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
-[ -z "$MAX_ROUNDS" ] || [ "$N" -le "$MAX_ROUNDS" ] \
-  || die "round $N is over the $MAX_ROUNDS rounds this project allows (reviewLoop.maxRounds, chosen at setup; the round is the N a pass is given, so a pass that failed still used its number). Run no more passes: report to main what is still open"
 case $KIND in adversarial) FOCI=("${ANGLES[@]}") ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
@@ -729,6 +730,14 @@ WT=$PP_WORKSPACES/$UNIT
 # hide main's rulings and state its own limits.
 MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} \
   || die "$WT is not a git worktree"
+# The owner's extra rounds for this unit (review-cap.sh), read from main's checkout only, before the project's limit.
+CAP=$MAIN_OF_WT/.claude/briefs/$UNIT-review-cap.md LIMIT_FROM='reviewLoop.maxRounds, chosen at setup'
+if [ -e "$CAP" ]; then
+  MAX_ROUNDS=$(tr -d '[:space:]' < "$CAP") && [[ $MAX_ROUNDS =~ ^[1-9][0-9]*$ ]] || die "$CAP must hold a whole number of rounds; set it with review-cap.sh $UNIT <rounds>"
+  LIMIT_FROM="review-cap.sh for $UNIT"
+fi
+[ -z "$MAX_ROUNDS" ] || [ "$N" -le "$MAX_ROUNDS" ] \
+  || die "round $N is over the $MAX_ROUNDS rounds this project allows ($LIMIT_FROM; the round is the N a pass is given, so a pass that failed still used its number). Run no more passes: report to main what is still open"
 RULINGS=()
 for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" "$WT/.claude/briefs/$UNIT-main-rulings.md"; do
   [ ! -f "$f" ] || RULINGS+=("$f")
@@ -778,6 +787,32 @@ SCOPE=$(cat ${RULINGS[@]+"${RULINGS[@]}"} "$MAIN_OF_WT/.claude/briefs/$UNIT-buil
 if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCOPE_REC")" ]; }; then
   KIND=final
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
+fi
+# A revoked sign-in made the pass end with no output while `codex login status`
+# still said signed in, so a one-word request is the check. It runs outside the
+# worktree, where the repo's own Codex Stop hooks cannot slow it past 30 s; under
+# load one try can fail, so three tries, COMMANDECK_PROBE_BACKOFF (15 s) then
+# twice that apart. --ephemeral leaves no session for the pass's search to find.
+if [ "$BY" = codex ]; then
+  PROBE_ERR=$(mktemp) || die "cannot make a temp file for the Codex sign-in check"
+  TRY=0 PROBE_OK=0
+  while [ "$TRY" -lt 3 ]; do
+    TRY=$((TRY + 1)) RC=0
+    (cd "${TMPDIR:-/tmp}" && PATH="$HERE/codex-no-helpers:$PATH" timeout 30 codex exec --ephemeral --skip-git-repo-check -s read-only \
+      -m "$MODEL" -c "model_reasoning_effort=\"$EFFORT\"" 'Reply with the one word: ok' </dev/null >/dev/null 2>"$PROBE_ERR") || RC=$?
+    [ "$RC" != 0 ] || { PROBE_OK=1; break; }
+    if [ "$RC" = 124 ]; then WHY="no answer within 30 s"; else WHY=$(grep . "$PROBE_ERR" | tail -1 || true); fi
+    LOAD=$(bash -c '. "$1" && hs_stamp' _ "$HERE/host-services.sh" 2>/dev/null | jq -r '.load1 // empty' 2>/dev/null || true)
+    echo "Codex sign-in probe: try $TRY of 3 failed (load ${LOAD:-unknown}): ${WHY:-Codex said nothing}" >&2
+    [ "$TRY" = 3 ] || sleep $((${COMMANDECK_PROBE_BACKOFF:-15} * TRY))
+  done
+  if [ "$PROBE_OK" = 0 ]; then
+    ERR=$(tail -5 "$PROBE_ERR"); rm -f "$PROBE_ERR"
+    die "launch refused: Codex is not signed in or cannot answer (three one-word requests to $MODEL failed or took over 30 s; codex login status is not trusted for this). Codex said last:
+${ERR:-(nothing)}
+Run codex login, then run the pass again. No commit, no reviewer, no round file."
+  fi
+  rm -f "$PROBE_ERR"
 fi
 
 # Staged whole, then the briefs taken back out: an exclude pathspec naming
@@ -840,7 +875,9 @@ LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_
   [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Stated limits/ { on = 1 }' "$f"
 done)
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
-REST=${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}$'\n'$DIFF
+# Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
+DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+REST=${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
@@ -1015,3 +1052,30 @@ HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
   printf 'Pass: %s\n%s\n%s\n\n%s\n' "$KIND" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
+
+# A fix round starts in a fresh session of the same pane instead of a context grown through the whole build.
+# Only the Builder's own pane (its seat record's handle) running its own pass from its own worktree hands over.
+# The hand-off stands alone: main's rulings are inlined, since a worker cannot read main's checkout.
+SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
+[ "$VERDICT" = "VERDICT: NO-GO" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] \
+  && [ "$(sed -n 's/^handle=//p' "$SEAT" 2>/dev/null | head -1)" = "$ORCA_TERMINAL_HANDLE" ] \
+  && [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$WT" rev-parse --show-toplevel)" ] || exit 0
+HAND=$WT/.claude/briefs/$UNIT-fix-r$N.md
+TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
+{
+  printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
+  printf 'You are the Builder of %s, in a fresh session of the same pane: the session that ran pass %s was cleared, so this file and the files it names are all you have.\n\n' "$UNIT" "$N"
+  printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$ORCA_TERMINAL_HANDLE" "${TASK:-not in $SEAT; ask main}" "$ORCA_TERMINAL_HANDLE"
+  printf -- '- Read the brief whole, it still binds you: %s\n' "$WT/.claude/briefs/$UNIT.md"
+  printf -- '- Read the evidence file whole, it says what is built, verified and left: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
+  printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n\n' "$N" "$((N + 1))"
+  printf '## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
+  printf '\n## Main'"'"'s rulings\n\n'
+  if [ "${#RULINGS[@]}" -gt 0 ]; then for f in "${RULINGS[@]}"; do printf 'From %s:\n\n' "$f"; cat "$f"; echo; done
+  else echo 'None for this unit.'; fi
+  printf '\n## Test files this build touched\n\nA fix round re-runs only the files it touches.\n\n'
+  { git -C "$WT" diff --name-only main...HEAD | grep -E '(__tests__/|\.test\.)' || true; } | sed 's/^/- /'
+} > "$HAND"
+mkdir -p "$PP_SCRATCH"
+bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &
+echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, a fresh session takes the fix round from ${HAND##*/}; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, and the fix round stays here."

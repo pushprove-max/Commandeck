@@ -70,6 +70,9 @@ done < <(git -C "$WT" ls-files --others --exclude-standard)
 #   - uncommitted work in a file the unit also changes is overwritten by the merge.
 git diff --no-relative --cached --quiet \
   || fail "step 1 preconditions" "main has staged changes, which step 4 would sweep into the unit's squash commit: $(git diff --no-relative --cached --name-only | paste -sd, -)"
+# Before the rebase: a release origin marked published must not be rebuilt as a draft here.
+if [ "$DRY_RUN" = 1 ]; then pp_sync_main "$ROOT" --check; else pp_sync_main "$ROOT"; fi \
+  || fail "step 1 preconditions" "main is not up to date with origin's main (above)"
 # --no-renames: a rename is a deletion of the old path too, and the undo in
 # step 4 restores both.
 MERGE_TOUCHES=$(git diff --no-relative --name-only --no-renames "$(git merge-base main "$BRANCH")" "$BRANCH")
@@ -100,9 +103,32 @@ TIP=$(git -C "$WT" rev-parse HEAD)
 # and lists each finding open at merge, in a dry run as in a real merge: main
 # reads these lines and files what stays open. Every unit owes the proof: the
 # worktree's own settings file is the Builder's to edit, so it cannot switch it off.
-BUILDER_PROOF=$(bash "$HERE/builder-codex-pass.sh" --verify "$WT" "$UNIT" "$TIP") \
-  || fail "step 3 proof" "the Builder's review proof is missing or stale (named above)"
+# A tail of commits after the reviewed one that only rebuild the files the project
+# lists as generated (.claude/commandeck.json generatedFiles, main's copy) keeps
+# that review: step 4's check on the merged tree proves them. A deletion, a merge
+# commit or any other path in the tail needs a new pass, as before.
+GEN=$(jq -r '.generatedFiles // [] | .[] | strings' "$ROOT/.claude/commandeck.json" 2>/dev/null || true)
+generated_only() { # <commit>
+  local st p g hit
+  [ -n "$GEN" ] && [ "$(git -C "$WT" rev-list --parents -n1 "$1" | wc -w)" -eq 2 ] || return 1
+  ! git -C "$WT" merge-base --is-ancestor "$1" main || return 1
+  while IFS=$'\t' read -r st p; do
+    [ "$st" != D ] || return 1
+    hit=0
+    # shellcheck disable=SC2053 # each entry is a glob on purpose
+    while IFS= read -r g; do [[ $p == $g ]] && { hit=1; break; }; done <<<"$GEN"
+    [ "$hit" = 1 ] || return 1
+  done < <(git -C "$WT" diff-tree --no-commit-id -r --no-renames --name-status "$1")
+}
+PROVED=$TIP TAIL=0 VERR=$(mktemp) FIRST_ERR=""
+until BUILDER_PROOF=$(bash "$HERE/builder-codex-pass.sh" --verify "$WT" "$UNIT" "$PROVED" 2>"$VERR"); do
+  FIRST_ERR=${FIRST_ERR:-$(cat "$VERR")}
+  generated_only "$PROVED" || { rm -f "$VERR"; echo "$FIRST_ERR" >&2; fail "step 3 proof" "the Builder's review proof is missing or stale (named above)"; }
+  PROVED=$(git -C "$WT" rev-parse "$PROVED^") TAIL=$((TAIL + 1))
+done
+rm -f "$VERR"
 echo "$BUILDER_PROOF"
+[ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
 MERGE_OPEN=$(grep -c '^Open at merge: ' <<<"$BUILDER_PROOF" || true)
 # One issue per finding left open, filed by the merge and not from memory.
@@ -171,6 +197,13 @@ TITLE=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -m1 '^feat(' ||
   if grep -qvE '(^|/)__tests__/|\.test\.[^/]+$|^\.claude/briefs/' < <(git -C "$WT" show --pretty='' --name-only "$sha" | sed '/^$/d'); then TITLE=$subject; break; fi
 done < <(git -C "$WT" log --reverse --format='%H%x09%s' main..HEAD)
 [ -n "$TITLE" ] || TITLE=$(git -C "$WT" log -1 --format=%s)
+# A pass commit's subject says nothing of what shipped: the brief's own first
+# heading does (the rendered brief's title line "# <unit> -- Builder batch" is skipped).
+if [[ $TITLE =~ ^feat\([^\)]*\):\ Builder\ pass\ r[0-9]+$ ]]; then
+  H=$(grep -E '^# ' "$BRIEF" | grep -vxF -- "# $UNIT -- Builder batch" | head -1 | sed -E 's/^# +//; s/[[:space:]]+$//' || true)
+  H=${H#"$UNIT -- "}
+  TITLE="feat($UNIT)${H:+: $H}"
+fi
 # The squash keeps one subject, so every issue ref another unit subject names
 # is appended once. Refs compare as whole tokens: #12345 in the title does not
 # stand in for #12. Bodies and main's commits are not the unit's refs.

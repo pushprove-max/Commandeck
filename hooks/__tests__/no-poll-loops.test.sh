@@ -192,13 +192,34 @@ GIVEUP=$(bare_hook "$(bg $'bash scripts/orca-wait.sh; printf %s $\'a\\\'b\'' fal
 check "a command the parser cannot split blocks when it names a wait" 1 "$(grep -c '^rc=2$' <<<"$GIVEUP")"
 check "and the refusal says it could not be read as shell words" 1 "$(grep -c 'could not be read as shell words' <<<"$GIVEUP")"
 check "a command the parser cannot split passes when it names no wait" 1 \
-  "$(bare_hook "$(bg $'orca-ide orchestration check --json; printf %s $\'a\\\'b\'' false)" | grep -c '^rc=0$')"
+  "$(bare_hook "$(bg $'orca-ide orchestration check --peek --json; printf %s $\'a\\\'b\'' false)" | grep -c '^rc=0$')"
 check "one foreground drain with a quoted argument holding an apostrophe passes" 0 \
   "$(run_hook "$(bg 'bash scripts/orca-wait.sh "it'"'"'s"' false)")"
 check "a sleep loop behind a quoted word holding an apostrophe still blocks" 2 \
   "$(run_hook "$(json 'grep "it'"'"'s" notes.md; while true; do sleep 1; done')")"
 check "an Orca send named only in a comment does not excuse a sleep loop" 2 \
   "$(run_hook "$(json 'while true; do sleep 60; done # orca-ide orchestration send --type status')")"
+
+# #89: a bare inbox check returns a batch and never acknowledges it, so the batch
+# replays on every check and later messages queue behind it, in any pane.
+git -C "$TEST_REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$TEST_REPO" worktree add -q "$TEST_REPO/wt" 2>/dev/null
+run_wt() { (cd "$TEST_REPO/wt" && printf '%s\n' "$1" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR "$HOOK" 2>&1); echo "rc=$?"; }
+for c in 'orca orchestration check' 'orca-ide orchestration check --json' 'cd /tmp && orca orchestration check --run r1'; do
+  check "a bare check blocks: $c" 2 "$(run_hook "$(bg "$c" false)")"
+done
+check "a bare check blocks in a worker pane too" rc=2 "$(run_wt "$(bg 'orca orchestration check --json' false)" | tail -1)"
+check "and the block names orca-wait.sh" 1 "$(run_wt "$(bg 'orca orchestration check --json' false)" | grep -c 'orca-wait.sh')"
+for f in --peek --all --ack '--terminal term_1' --help '--wait --timeout-ms 1'; do
+  check "a check with $f passes" 0 "$(run_hook "$(bg "orca orchestration check $f --json" true)")"
+done
+check "a bare check named in a commit message passes" 0 "$(run_hook "$(bg 'git commit -m "orca orchestration check"' false)")"
+# #84: a Builder's hand-written poll on test output gets pointed at the background run and the one wait helper,
+# which checks the runner is alive: a wait on a dead runner's output once ran 25 minutes.
+NUDGE=$(run_wt "$(bg 'until grep -q passed /tmp/t.log; do sleep 5; done' false)")
+check "a worker's sleep loop on a test log passes" rc=0 "$(tail -1 <<<"$NUDGE")"
+check "with a nudge naming run_in_background and wait-test-run.sh" 1 "$(grep -c 'run_in_background.*wait-test-run.sh' <<<"$NUDGE")"
+check "a worker's plain command gets no nudge" rc=0 "$(run_wt "$(bg 'sleep 1 && date' false)")"
 
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.

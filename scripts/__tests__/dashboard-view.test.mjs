@@ -31,7 +31,7 @@ const onDisk = () => JSON.parse(fs.readFileSync(path.join(dir, 'layout.js'), 'ut
 // One page, as the browser opens it: layout.js read from the host's folder, then app.js. `store` is the
 // localStorage a page before it left (a reload). Every save goes to the real host; w.puts counts them and
 // w.reloads counts the page asking to reload itself (jsdom reports that as navigation it cannot do).
-function boot(store = {}, project = 'demo') {
+function boot(store = {}, project = 'demo', clock = Date) {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(html, { url: `http://127.0.0.1:${port}/index.html?project=${project}`, virtualConsole });
   const w = dom.window;
@@ -42,7 +42,7 @@ function boot(store = {}, project = 'demo') {
   w.DASH_LAYOUT = onDisk();
   w.fetch = (url, opt) => { w.puts += 1; return fetch(`http://127.0.0.1:${port}/${url}`, opt); };
   const none = () => 0;
-  vm.runInNewContext(appSrc, { window: w, document: w.document, setInterval: none, clearInterval: none, setTimeout, clearTimeout, Date, console });
+  vm.runInNewContext(appSrc, { window: w, document: w.document, setInterval: none, clearInterval: none, setTimeout, clearTimeout, Date: clock, console });
   return w;
 }
 // Saves and their answers are real requests: wait until a page has sent nothing new for a while.
@@ -97,7 +97,7 @@ function show(w, p, sources = {}) {
   w.DASH = { updatedAt: iso(NOW), home: 'demo', sources, projects: { demo: p } };
   s.dispatchEvent(new w.Event('load'));
 }
-const fresh = () => { fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {}}, "rev": 1};\n'); return boot(); };
+const fresh = (clock) => { fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {}}, "rev": 1};\n'); return boot({}, 'demo', clock); };
 const builder = (over = {}) => ({
   unit: 'batch-g', branch: 'work/batch-g', dirty: 17, diffStat: '13 files changed, 231 insertions(+), 56 deletions(-)', agents: 'claude:working',
   stage: 'building', stageSince: iso(NOW - 24 * 60000), ageSec: 9, seat: { model: 'claude-opus-5-5', effort: 'medium' },
@@ -140,11 +140,63 @@ test('the unit card is a run trace: state in words, the diff once, a quiet gap, 
   assert.ok(card.querySelector('.ufacts .hot'), 'a quiet Builder\'s last sign stands out');
   assert.ok(card.querySelector('.lane.pulse .gap'), 'the silence since the last sign is drawn');
   const rows = [...card.querySelectorAll('.trace .lab')].map(text);
-  assert.deepEqual(rows, ['Stage', 'Last sign', 'Codex adversarial, round 1', 'Explore Haiku 5.5']);
-  assert.deepEqual([...card.querySelectorAll('.trace .num:not(.headnums)')].map((n) => [...n.children].map((c) => c.textContent)), [['', '', 'running'], ['61,402', '4,910', '2:00']]);
+  assert.deepEqual(rows, ['Stage', 'Last sign', 'Codex adversarial, round 1', 'Explore Haiku 5.5', 'Plan Sonnet 5.5'], 'a run 70 minutes old is drawn');
+  assert.deepEqual([...card.querySelectorAll('.trace .num:not(.headnums)')].map((n) => [...n.children].map((c) => c.textContent)),
+    [['', '', 'running'], ['61,402', '4,910', '2:00'], ['1', '1', '5:00']]);
   assert.ok(card.querySelector('.lane .h.codex.live'), 'a pass still running reaches now');
-  assert.match(text(card.querySelector('.tmore')), /^1 earlier helper run before /);
+  assert.equal(card.querySelector('.tmore'), null, 'no "earlier runs" note: no run is left off the clock');
   assert.equal(text(card.querySelector('.branch')), 'Branch work/batch-g, agents claude:working');
+});
+
+// #95: the clock runs from the build's own start to now. A fixed clock keeps the tick labels off a minute's edge.
+class Fixed extends Date { constructor(...a) { super(...(a.length ? a : [NOW])); } static now() { return NOW; } }
+const pad2 = (n) => String(n).padStart(2, '0');
+const hm = (ms) => { const d = new Date(ms); return `${d.getHours() % 12 || 12}:${pad2(d.getMinutes())} ${d.getHours() < 12 ? 'AM' : 'PM'}`; };
+const ago = (min) => NOW - min * 60000;
+// trace <unit> -> [axis labels, the stage band's left, each helper bar's left]
+function trace(u) {
+  const w = fresh(Fixed);
+  show(w, { units: { inFlight: [u] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.ok(!card.innerHTML.includes('NaN'), 'every position is a number');
+  return [[...card.querySelectorAll('.trace .axis span')].map(text), card.querySelector('.lane.stages i')?.style.left ?? null,
+    [...card.querySelectorAll('.lane .h')].map((b) => b.style.left)];
+}
+const run = (startMin, stopMin) => ({ kind: 'subagent', type: 'Explore', model: 'claude-haiku-5-5', tokens: { input: 1, output: 1 }, start: iso(ago(startMin)), stop: iso(ago(stopMin)) });
+
+test('the build timeline starts when the build started and ends now, in four equal parts', () => {
+  const old = trace(builder({ stageSince: iso(ago(30)), builder: { ...builder().builder, startedAt: iso(ago(90)), steps: [run(45, 40)] } }));
+  assert.deepEqual(old[0], [hm(ago(90)), hm(ago(67.5)), hm(ago(45)), hm(ago(22.5)), `now ${hm(NOW)}`], 'a 90-minute build: its start, then equal quarters to now');
+  assert.equal(old[1], '66.7%', 'the stage band starts 60 of the 90 minutes in');
+  assert.deepEqual(old[2], ['50%'], 'a run 45 minutes back sits halfway');
+  const young = trace(builder({ stageSince: iso(ago(10)), builder: { ...builder().builder, startedAt: iso(ago(20)) } }));
+  assert.equal(young[0][0], hm(ago(20)), 'a 20-minute build starts at its start, not 40 minutes back');
+  assert.equal(young[1], '50%');
+});
+
+test('the timeline reaches back to a run older than the build start; no start keeps 40 minutes; a new build spans a second', () => {
+  assert.equal(trace(builder({ builder: { ...builder().builder, startedAt: iso(ago(20)), steps: [run(70, 65)] } }))[0][0], hm(ago(70)),
+    'a helper run that began before the build start is not hidden');
+  assert.equal(trace(builder({ stageSince: iso(ago(24)) }))[0][0], hm(ago(24)), 'with no build start, the stage start');
+  assert.equal(trace(builder({ stageSince: null }))[0][0], hm(ago(40)), 'with no start at all, the last 40 minutes');
+  const now = trace(builder({ stageSince: iso(NOW), builder: { ...builder().builder, startedAt: iso(NOW) } }));
+  assert.equal(now[0].at(-1), `now ${hm(NOW)}`, 'a build started this instant still draws, on a one-second span');
+});
+
+// #97: a machine on an API base URL (a proxy) has no usage windows: no 5-hour or 7-day figure, one note saying so.
+test('API billing leaves out the usage-window tiles and says why; a subscription keeps them', () => {
+  const w = fresh();
+  show(w, { limit: { billing: 'api', api: { spentUsd: 12, complete: true } } });
+  const doc = w.document;
+  assert.ok(!/7-day/.test(text(doc.getElementById('summary'))), 'no 7-day tile in the top strip');
+  // The chart legend's 5-hour key is .sub-only, which the card's api class hides.
+  assert.ok(doc.getElementById('limit').classList.contains('api'));
+  assert.ok(!/5-hour/.test(text(doc.getElementById('limit-facts')) + text(doc.getElementById('limit-tiles'))), 'no 5-hour figure in the limit card');
+  assert.match(text(doc.getElementById('limit-note')), /^API billing: no usage windows\. /);
+  const v = fresh();
+  show(v, { limit: { billing: 'subscription', usedPct: 40, fiveHour: { usedPct: 10 } } });
+  assert.match(text(v.document.getElementById('summary')), /Claude 7-day/);
+  assert.match(text(v.document.getElementById('limit-facts')), /5-hour/);
 });
 
 const pr = (n, over) => ({ number: n, title: `PR ${n}`, url: `${REPO}/pull/${n}`, draft: false, branch: `work/b${n}`, review: 'APPROVED', mergeable: 'MERGEABLE', mergeState: 'CLEAN',
@@ -224,4 +276,93 @@ test('the GitHub panes are panels like the others: hidden through the same layou
   w.document.querySelector('#held .card-head button[data-hide]').click();
   await settled(w);
   assert.deepEqual(onDisk().projects.demo.hidden, ['held']);
+});
+
+// A Builder's question to main is in the decisions ledger (waitsOn "main") so it is answered and closed like an
+// owner's ask, but the owner's card must never ask the owner to answer it: listed apart, never counted.
+test("a Builder's question waiting on main is listed apart on the owner's card and never counted as the owner's", () => {
+  const owner = { id: 'deploy-2026-10-15', question: 'Deploy now?', proposedDefault: 'wait', source: 'main', askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  const builder = { id: 'u1-msg_q1', question: 'question (u1): which option?', proposedDefault: 'none', source: 'u1 asks', waitsOn: 'main', askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [owner, builder] } });
+  assert.equal(w.document.querySelector('[data-count="decisions"]').textContent, '1', 'only the owner\'s question is counted');
+  const items = [...w.document.querySelectorAll('#decisions li')].map((li) => `${li.className}: ${text(li).slice(0, 40)}`);
+  assert.deepEqual(items, ['decision: Deploy now?If no answer: waitdeploy-2026', 'waiting-main-label: Waiting on main',
+    'decision waiting-main: question (u1): which option?u1-msg_q1, f'], 'the Builder\'s question sits under its own label, with no default for the owner');
+  const v = fresh();
+  show(v, { needsOwner: { decisions: [builder] } });
+  assert.equal(v.document.querySelector('[data-count="decisions"]').textContent, '0');
+  assert.equal(text(v.document.querySelector('#decisions li')), 'No open decisions', 'nothing waits on the owner');
+  assert.match(text(v.document.getElementById('summary')), /Waiting on the owner00 open decisions/, 'and the summary tile counts nothing for the owner');
+});
+
+// #94: a Builder's time and cost, per stage, from the collect's stageHistory and its unit cost.
+const tally = (usd, over = {}) => ({ sec: 1800, calls: 4, input: 200000, cached: 150000, output: 3000, usd, partial: false, unpriced: [], ...over });
+const UNPRICED = { partial: true, unpriced: ['claude-mystery-9-9'] };
+const stage = (s, fromMin, toMin) => ({ stage: s, from: iso(ago(fromMin)), to: toMin === null ? null : iso(ago(toMin)) });
+function costed(hist, costs, total) {
+  return builder({ builder: { ...builder().builder, startedAt: hist[0].from, stageHistory: hist,
+    cost: { stages: hist.map((g, i) => ({ ...g, ...costs[i] })), total } } });
+}
+
+test("a Builder's card gives its time and cost so far, and each stage's time and cost under the stage, an unpriced model named", () => {
+  const w = fresh(Fixed);
+  const hist = [stage('building', 90, 60), stage('review', 60, 30), stage('fixing', 30, null)];
+  show(w, { units: { inFlight: [costed(hist, [tally(1.5), tally(0.25, UNPRICED), tally(0.4)], tally(2.15, { sec: 5400, ...UNPRICED }))] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.equal(text(card.querySelector('.ucost')),
+    "Total time 1h 30m · Cost so far $2.15+ partial, claude-mystery-9-9 not priced · main's own tokens not counted",
+    'a total with an unpriced request is a floor and names the model, never a whole figure');
+  assert.deepEqual([...card.querySelectorAll('.lane.stages i')].map((b) => [b.textContent, b.style.left]),
+    [['Building', '0%'], ['In review', '33.3%'], ['Fixing', '66.7%']], 'one band per stage, where it ran');
+  assert.deepEqual([...card.querySelectorAll('.lane.figs')].map((l) => [...l.children].map((i) => i.textContent)),
+    [['30:00', '30:00', '30:00 so far'], ['$1.50', '$0.25+ partial, claude-mystery-9-9 not priced', '$0.40']], 'every stage is wide enough: its figures sit under it');
+  assert.equal(card.querySelector('.stagelist'), null);
+  // The Builds panel keeps the table: each stage, then the unit total.
+  const rows = [...w.document.querySelectorAll('#builds table.costs tr')].map((r) => [...r.children].map(text));
+  assert.deepEqual(rows.map((r) => [r[0], r[5]]), [['Stage', 'Cost'], ['Building', '$1.50'], ['In review', '$0.25+ partial, claude-mystery-9-9 not priced'],
+    ['Fixing', '$0.40'], ['Unit total', '$2.15+ partial, claude-mystery-9-9 not priced']]);
+  assert.deepEqual(rows[1].slice(1, 5), ['30:00', '4', '200,000 (75% cached)', '3,000']);
+  assert.match(text(w.document.querySelector('#builds')), /Cost so far\$2\.15\+ partial/);
+  assert.match(text(w.document.querySelector('#builds')), /main's own tokens are not counted/);
+});
+
+test('a stage too narrow for its figures moves every stage to a list under the bar; a wide band keeps its own and hovering marks its line', () => {
+  const w = fresh(Fixed);
+  const hist = [stage('building', 100, 20), stage('review', 20, 3), stage('fixing', 3, null)];
+  show(w, { units: { inFlight: [costed(hist, [tally(3), tally(0.5), tally(0.05)], tally(3.55, { sec: 6000 }))] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.equal(card.querySelector('.lane.figs'), null, 'a 3-minute fix in a 100-minute build cannot hold its figures');
+  // The list spans the card under the bar, one stage per line, then a Total row: in the bar's own column, two
+  // to a line, a stage name wrapped one letter per line.
+  const list = card.querySelector('.trace > .stagelist');
+  assert.ok(list, 'the list is a row of the trace grid of its own, not inside the bar column');
+  const lines = [...list.querySelectorAll('li:not(.total)')];
+  assert.deepEqual(lines.map((l) => [...l.children].slice(1).map(text)),
+    [['Building', '80:00', '$3.00'], ['In review', '17:00', '$0.50'], ['Fixing', '3:00 so far', '$0.05']], 'one line per stage, in the order they ran');
+  assert.deepEqual([...list.lastChild.children].slice(1).map(text), ['Total', '1h 40m', '$3.55'], "a Total row closes the list: the build's time and cost");
+  assert.ok(list.lastChild.classList.contains('total'));
+  const css = fs.readFileSync(path.join(ROOT, 'dashboard', 'app.css'), 'utf8');
+  assert.match(css, /\.trace \.stagelist \{[^}]*grid-column: 1 \/ -1/, 'the list spans the whole card');
+  assert.match(css, /\.stagelist li \{[^}]*white-space: nowrap/, 'a stage name never wraps');
+  const bands = [...card.querySelectorAll('.lane.stages i')];
+  assert.equal(bands[0].textContent, 'Building 80:00 · $3.00', 'the wide band still says its own figures');
+  assert.equal(bands[2].textContent, 'Fixing', 'the narrow band holds its name only');
+  bands[2].dispatchEvent(new w.Event('mouseenter'));
+  assert.deepEqual(lines.map((l) => l.classList.contains('hi')), [false, false, true]);
+  bands[2].dispatchEvent(new w.Event('mouseleave'));
+  assert.ok(!lines[2].classList.contains('hi'));
+});
+
+test("a finished build keeps the cost it had at its merge; one with none kept says so, never $0", () => {
+  const w = fresh(Fixed);
+  const fin = (unit, sha, cost) => ({ unit, sha, at: iso(ago(5)), how: 'merged', open: { P1: 0, P2: 0, P3: 0 }, cost });
+  const cost = { stages: [{ ...stage('building', 120, 60), ...tally(4) }, { ...stage('review', 60, null), ...tally(1.25) }], total: tally(5.25, { sec: 7200 }) };
+  show(w, { units: { inFlight: [], finishedBuilds: [fin('done-a', 'aaaaaaaa1', cost), fin('done-b', 'bbbbbbbb2', null)] } });
+  const [a, b] = [...w.document.querySelectorAll('#builds .build')];
+  assert.match(text(a), /Cost\$5\.25 in 2h 00m/);
+  assert.deepEqual([...a.querySelectorAll('table.costs tr')].map((r) => text(r.children[5])), ['Cost', '$4.00', '$1.25', '$5.25']);
+  assert.match(text(b), /Costnot recorded/);
+  assert.match(text(b), /Cost by stage not recorded/);
+  assert.equal(b.querySelector('table.costs'), null);
 });

@@ -7,12 +7,13 @@
 # page lists the passes after the closing one (#64); idle after DONE stays on
 # the clock unless an owner decision is open (#70); Claude Code 2.1.300's
 # api-request rows are neither counted nor parsed (#71); a result saved before
-# idle gaps recorded what they waited on still renders (#16).
+# idle gaps recorded what they waited on still renders (#16); a written review
+# marks each "Where it could shrink" item, and an unmarked one is named.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 python3 - "$ROOT/skills/worktreereview/scripts" "$T" <<'PY'
-import contextlib, io, itertools, json, os, re, subprocess, sys
+import contextlib, io, itertools, json, math, os, re, subprocess, sys
 from datetime import datetime, timezone
 HERE, TMP = sys.argv[1], sys.argv[2]
 os.environ['HOME'] = TMP + '/home'
@@ -120,6 +121,13 @@ check('13 minutes of tests in a 30-minute build is flagged and names its largest
 box = re.search(r'<div class="box flag">.*?</div>', rendered('long', r))
 check("and the flagged page's flag box names it", True, bool(box) and '&quot;run the tests (whole suite)&quot;, 13:00' in box.group())
 
+# --- #87: with the review flags off, the build that trips the share flag above is flagged for nothing. ---
+os.makedirs(f'{TMP}/main-off/.claude', exist_ok=True)
+subprocess.run(['git', 'init', '-q', f'{TMP}/main-off'], check=True)
+json.dump({'reviewLoop': {'maxReviewMinutes': 'off', 'maxTestPercent': 'off', 'maxUsd': 'off'}}, open(f'{TMP}/main-off/.claude/commandeck.json', 'w'))
+check('review flags set to off raise no flag', [], collected('long-off', long_run, '--main', f'{TMP}/main-off')['flags'])
+check('and the setting reads off', (math.inf,) * 3, collect.loop_limits(f'{TMP}/main-off'))
+
 # --- #64: a long pass, and a pass after the closing one. ---
 wt = f'{TMP}/ws/passes'
 # Findings in each form the merge reads: a '- ' bullet, a '* ' bullet, or none.
@@ -171,6 +179,68 @@ for g in r['idle_gaps']:
     del g['waiting']
 page = rendered('older', r)
 check('a saved result without the waiting field renders, the wait shown as unknown', True, '<td>Unknown</td>' in page)
+
+# --- a written review marks each "Where it could shrink" item; one left unmarked is named. ---
+r = collected('marks', short)
+def page_with(notes):
+    json.dump(notes, open(f'{TMP}/out/marks/notes.json', 'w'))
+    subprocess.run([sys.executable, f'{HERE}/render.py', f'{TMP}/out/marks/result.json', f'{TMP}/out/marks/notes.json', f'{TMP}/out/marks/page.html'],
+                   capture_output=True, check=True)
+    return open(f'{TMP}/out/marks/page.html').read()
+lesson = {'lessons': [{'title': 'One lesson', 'points': ['a point']}]}
+left = re.search(r'<b>Not reviewed yet</b>: ([^<]+)', page_with(lesson))
+items = left[1].split(', ') if left else []
+check('with no marks, the page names every item as not reviewed', True, len(items) > 0)
+covered = page_with({**lesson, 'shrink_review': [{'item': i, 'issue': '#12'} for i in items]})
+check('an item an open issue covers cites it, and none is left unreviewed', (len(items), False), (covered.count(': covered by #12'), 'Not reviewed yet' in covered))
+fixes = page_with({**lesson, 'shrink_review': [{'item': i, 'fix': 'send the looks together'} for i in items]})
+check('an uncovered item carries its proposed fix', len(items), fixes.count('not covered; proposed fix: send the looks together'))
+skill = ' '.join(open(f'{HERE}/../SKILL.md').read().split())
+check('the skill asks for the marks, drafts the uncovered items, and asks the standing speed-up question', [True] * 3,
+      ['`shrink_review`' in skill, 'each "Where it could shrink" item the page marks uncovered, becomes a draft issue' in skill,
+       'is there a library, a shared helper or a cached step that would significantly speed up builds like this one?' in skill])
+check('a page with no written lessons carries no review list', False, 'Each item against the open issues' in page_with({}))
+
+# --- A cut takes its seconds off every part of a duration, not only the whole: else the page shows
+# a helper working after its time was cut, or a Codex pass whose commands outlast it. ---
+def parts(unit, window):
+    wt = f'{TMP}/ws/{unit}'
+    # A helper: requests 5-10 and 20-30, one tool call 10-20.
+    write(f'{TMP}/home/.claude/projects/{re.sub(r"[^A-Za-z0-9]", "-", wt)}/s1/subagents/agent-a1.jsonl',
+          [user(5), bash(10, 'toolu_h1', 'ls', 'look'), result(20, 'toolu_h1'), say(30, 'found it')])
+    # A Codex pass 1-50 whose one command ran 30 s, 15-45.
+    write(f'{TMP}/home/.codex/sessions/2026/10/10/rollout-2026-10-10T12-00-00-{unit}.jsonl', [
+        {'timestamp': at(1), 'type': 'turn_context', 'payload': {'cwd': wt, 'model': 'gpt-5.5', 'effort': 'high'}},
+        {'timestamp': at(15), 'type': 'response_item', 'payload': {'type': 'custom_tool_call', 'call_id': 'c1', 'input': 'make test'}},
+        {'timestamp': at(45), 'type': 'response_item', 'payload': {'type': 'custom_tool_call_output', 'call_id': 'c1', 'output': 'Wall time 30 seconds\nok'}},
+        {'timestamp': at(50), 'type': 'event_msg', 'payload': {'type': 'task_complete', 'last_agent_message': 'VERDICT: GO'}}])
+    try:
+        got = collected(unit, [user(0), say(100, 'Done.'), turn_end(110)], '--exclude', window)
+        hp, ps = got['helpers'][0], got['passes'][0]
+    except BaseException as e:
+        return {'error': repr(e)[:300]}
+    return {'helper': (round(hp['seconds']), round(hp['claude_s']), round(hp['tool_s'])),
+            'codex': (round(ps['end'] - ps['start'] - ps['cut_s']), round(ps['command_s']), [round(s) for s, *_ in ps['longest']])}
+whole_cut, part_cut = parts('cut-all', f'{at(0)}={at(110)}'), parts('cut-part', f'{at(25)}={at(50)}')
+check('a helper cut end to end keeps no request or tool time', (0, 0, 0), whole_cut.get('helper', whole_cut))
+check('a helper cut 25-50 loses only the overlap: 5 s of wall time and of its second request, none of its tool call',
+      (20, 10, 10), part_cut.get('helper', part_cut))
+check('a Codex pass cut end to end keeps no command time', (0, 0, [0]), whole_cut.get('codex', whole_cut))
+check('a pass cut 25-50 keeps 24 s, its command the 10 s of 15-25', (24, 10, [10]), part_cut.get('codex', part_cut))
+
+# --- A refusal is kept by its hook and its reason: a hook name alone cannot be sorted. A hook run by its
+# interpreter has its path quoted, and is named all the same. ---
+refusals = ['["$CLAUDE_PROJECT_DIR"/hooks/bash-guardrails.sh]: BLOCKED: an in-place write to src/a.test.ts from the shell skips every Edit/Write hook. Use Edit',
+            '["$CLAUDE_PROJECT_DIR"/hooks/bash-guardrails.sh]: BLOCKED: an in-place write to \'web/b c.ts\' from the shell skips every Edit/Write hook. Use Edit',
+            '["$CLAUDE_PROJECT_DIR"/hooks/bash-guardrails.sh]: BLOCKED: rg over an unbounded path: $f. Name a directory',
+            '["/usr/bin/python3" "/opt/hooks/validation_guard.py"]: BLOCKED (a guard): this tree already has 2 passing run(s), the budget is 1. Batch']
+why = [user(0)] + [r for i, body in enumerate(refusals) for r in (bash(10 + 2 * i, f'w{i}', 'x', 'try'), result(11 + 2 * i, f'w{i}', 'PreToolUse:Bash hook error: ' + body, True))]
+r = collected('why', why)
+check('a refusal is sorted by its hook and its reason, a quoted interpreter path included', {
+    'bash-guardrails.sh: an in-place write to … from the shell skips every Edit/Write hook': 2,
+    'bash-guardrails.sh: rg over an unbounded path': 1,
+    'validation_guard.py: this tree already has N passing run(s), the budget is N': 1}, r['blocked'])
+check('and the page counts them by hook', True, 'Guards refused 4 tool call(s): bash-guardrails.sh 3, validation_guard.py 1.' in rendered('why', r))
 
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)

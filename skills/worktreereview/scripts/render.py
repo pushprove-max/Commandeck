@@ -6,7 +6,8 @@ Usage: render.py <result.json> [<notes.json>] <out.html>
 Without notes.json the page is fully automatic: the summary and "What the numbers say"
 are computed. notes.json adds the reviewer's judgement; every key is optional:
   title, summary, stage_notes {stage code: text}, pass_findings {pass number: text},
-  lessons [{title, points [text]}], not_measured [text], method [text]
+  lessons [{title, points [text]}], not_measured [text], method [text],
+  shrink_review [{item, issue | fix}]: each "Where it could shrink" item, by its bold title
 Text may use **bold** and `code`; everything else is escaped.
 """
 import collections
@@ -170,7 +171,7 @@ for s in R['stages']:
     if d['edits']:
         facts.append('Files edited: ' + ', '.join(f'`{f}` ({c})' for f, c in d['edits'].items()) + '.')
     if d['blocked']:
-        facts.append('Tool calls a guard refused: ' + ', '.join(f'{k} {v}' for k, v in d['blocked'].items()) + '.')
+        facts.append('Tool calls a guard refused, by hook and reason: ' + '; '.join(f'{k} ({v})' for k, v in d['blocked'].items()) + '.')
     notes = ''.join(f'<li><span class="tag">{local(t, "%-I:%M:%S")}</span> {txt(text)}</li>' for t, text in d['notes'])
     drill.append(
         f'<details><summary><b>{s["code"]}. {txt(s["name"])}</b> &middot; {hm(span)} &middot; ${cost:,.2f}</summary><div class="cols">'
@@ -248,7 +249,10 @@ says.append(f'{n(T["builder"].get("calls", 0))} {AGENT} calls at an average cont
 if T['advisor'].get('calls'):
     says.append(f'{T["advisor"]["calls"]} advisor call(s) sent {n(T["advisor"].get("in", 0))} uncached tokens to {MODEL["advisor"]}: ${T["advisor"].get("usd", 0):,.2f} at list price.')
 if R['blocked']:
-    says.append('Guards refused ' + str(sum(R['blocked'].values())) + ' tool call(s): ' + ', '.join(f'{k} {v}' for k, v in sorted(R['blocked'].items(), key=lambda x: -x[1])) + '.')
+    by_hook = collections.Counter()
+    for k, v in R['blocked'].items():
+        by_hook[k.split(': ')[0]] += v
+    says.append('Guards refused ' + str(sum(R['blocked'].values())) + ' tool call(s): ' + ', '.join(f'{k} {v}' for k, v in by_hook.most_common()) + '.')
 flagged = R.get('flags') or []
 flagbox = (f'<div class="box flag"><b>Flagged for a written review:</b>{ul(flagged)}</div>' if flagged and not N.get('lessons')
            else '')
@@ -258,7 +262,7 @@ summary = N.get('summary') or (f'**Automatic report, no reviewer words.** {AGENT
 facts = [f'Largest context in one call: {n(R["context"]["peak"])} tokens; average {n(R["context"]["mean"])}.']
 facts += [f'Compaction at {n(c["before"] or 0)} tokens, down to {n(c["after"] or 0)}, taking {round(c["end"] - c["start"])} s.' for c in R['compactions']]
 if R['blocked']:
-    facts.append('Tool calls a guard refused: ' + ', '.join(f'{k} {v}' for k, v in sorted(R['blocked'].items(), key=lambda x: -x[1])) + '.')
+    facts.append('Tool calls a guard refused, by hook and reason: ' + '; '.join(f'{k} ({v})' for k, v in sorted(R['blocked'].items(), key=lambda x: -x[1])) + '.')
 facts += [f'Helper "{h["what"]}": {nice(h["model"])}, {hm(h["seconds"])}, {M(allof(h["tokens"]))} tokens, ${h["tokens"].get("usd", 0):,.2f}.' for h in R['helpers']]
 method = N.get('method', []) + [
     'Agent tokens and times: its Claude session log, one row per model call, each call counted once.',
@@ -484,6 +488,16 @@ if lost:
 refused = [c for c in TOOLS if c['refused']]
 if refused:
     ideas.append(f'**Tool calls a guard refused.** {len(refused)}; each cost the request that asked ({sec(med(r["s"] for r in REQ))} at the median) and usually a second one to retry.')
+# A written review marks each item: covered by an open issue, cited, or not, with a one-line proposed
+# fix. An item it leaves out is named, so an unreviewed lead shows on the page.
+review = []
+if ideas and N.get('lessons'):
+    marks = [x for x in N.get('shrink_review') or [] if isinstance(x, dict) and x.get('item')]
+    review = [f'**{x["item"]}**: ' + (f'covered by {x["issue"]}' if x.get('issue') else f'not covered; proposed fix: {x.get("fix") or "none given"}')
+              for x in marks]
+    left = [t for t in (re.match(r'\*\*(.+?)\.\*\*', i)[1] for i in ideas) if t not in {x['item'].rstrip('.') for x in marks}]
+    if left:
+        review.append('**Not reviewed yet**: ' + ', '.join(left))
 on_box = [f'**{len(REQ)} requests took {dur(RT)}** ({100 * RT / TOTAL:.0f}% of the run): {sec(med(r["s"] for r in REQ))} at the median, 9 in 10 under {sec(p90([r["s"] for r in REQ]))}, the longest {sec(max(r["s"] for r in REQ))}.',
           f'Logged thinking: {dur(sum(r["think"] for r in REQ))} ({100 * sum(r["think"] for r in REQ) / RT:.0f}% of request time). The rest is waiting for the reply to start and writing it.',
           f'{n(sum(r["out"] for r in REQ))} output tokens, {sum(r["out"] for r in REQ) / RT:.0f} a second over the whole request time.'
@@ -492,6 +506,7 @@ if waits:
     on_box.insert(2, f'Wait before the model began, where it can be read ({len(waits)} requests that opened with thinking): {sec(med(waits))} at the median, 9 in 10 under {sec(p90(waits))}.')
 on_html = (f'<h2>Time on Claude\'s servers, request by request</h2><div class="box">{ul(on_box)}</div>'
            + (f'<h4>Where it could shrink</h4><div class="box">{ul(ideas)}</div>' if ideas else '')
+           + (f'<h4>Each item against the open issues</h4><div class="box">{ul(review)}</div>' if review else '')
            + '<h4>By what the request did</h4>' + table(['Request made'] + REQ_HEADS, act_rows[:20])
            + '<h4>By stage</h4>' + table(['Stage'] + REQ_HEADS, stage_rows)
            + '<h4>By context size: does a larger context slow a request?</h4>' + table(['Context sent'] + REQ_HEADS, ctx_rows)

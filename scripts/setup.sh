@@ -7,7 +7,7 @@
 #          [--builder-model <alias>] [--codex-fast|--no-codex-fast]
 #          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
 #          [--global-claude|--global-rules install|block|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>] [--max-review-min <minutes>] [--max-test-percent <n>] [--max-usd <n>]
+#          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
 # the answers given and keeps the rest; update.sh is this script with none.
@@ -79,7 +79,7 @@ RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2
 # default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.
 rl() { [ -z "$2" ] || [[ $2 =~ $3 ]] || die "$4 takes $5; '$2' was not saved, and nothing was changed"
   RL=$(jq -c --arg k "$1" --arg v "$2" 'if $v == "" then del(.[$k]) else .[$k] = $v end' <<<"$RL"); }
-INT='^[1-9][0-9]*$' NUM='^[0-9]+([.][0-9]+)?$'
+INT='^[1-9][0-9]*$' NUM='^[0-9]+([.][0-9]+)?$' OFFNUM='^(off|[0-9]+([.][0-9]+)?)$'
 SCOPE=$(jq -r '.scope // empty' "$IL_PROJECT" 2>/dev/null || true)
 BIND=$(jq -r '.dashboard.bind // empty' "$IL_MACHINE" 2>/dev/null || true)
 PORT=$(jq -r '.dashboard.port // empty' "$IL_MACHINE" 2>/dev/null || true)
@@ -91,7 +91,7 @@ WAS=$SCOPE DASHBOARD=1 STATUS= NWRAP= GCLAUDE= GRULES=
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $1 in
-    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--codex-model|--notify-wrapper|--global-claude|--global-rules|--max-rounds|--closing-pass|--small-build|--max-review-min|--max-test-percent|--max-usd) [ $# -ge 2 ] || usage ;;
+    --profile|--scope|--name|--persona|--test-command|--bind|--port|--hosts|--status-line|--builder-model|--codex-model|--notify-wrapper|--global-claude|--global-rules|--max-rounds|--closing-pass|--small-build|--max-review-min|--max-test-percent|--max-usd|--review-flags) [ $# -ge 2 ] || usage ;;
   esac
   case $1 in
     --profile) PROFILE=$2; shift 2 ;;
@@ -114,10 +114,12 @@ while [ $# -gt 0 ]; do
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
     --max-rounds) rl maxRounds "$2" "$INT" "$1" "a whole number of passes"; shift 2 ;;
     --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
-    --small-build) rl smallBuild "$2" "$INT" "$1" "a whole number of changed lines"; shift 2 ;;
-    --max-review-min) rl maxReviewMinutes "$2" "$NUM" "$1" "a number of minutes"; shift 2 ;;
-    --max-test-percent) rl maxTestPercent "$2" "$NUM" "$1" "a number (percent)"; shift 2 ;;
-    --max-usd) rl maxUsd "$2" "$NUM" "$1" "a number of dollars"; shift 2 ;;
+    # off is saved as the word: that check never applies (#87).
+    --small-build) rl smallBuild "$2" "$INT" "$1" "a whole number of changed lines (no off: 1 makes no build small)"; shift 2 ;;
+    --max-review-min) rl maxReviewMinutes "$2" "$OFFNUM" "$1" "a number of minutes, or off"; shift 2 ;;
+    --max-test-percent) rl maxTestPercent "$2" "$OFFNUM" "$1" "a number (percent), or off"; shift 2 ;;
+    --max-usd) rl maxUsd "$2" "$OFFNUM" "$1" "a number of dollars, or off"; shift 2 ;;
+    --review-flags) [ "$2" = off ] || usage; for k in maxReviewMinutes maxTestPercent maxUsd; do rl "$k" off '^off$'; done; shift 2 ;;
     --strict) STRICT=true; shift ;;
     --no-strict) STRICT=false; shift ;;
     --serena) SERENA=true; shift ;;
@@ -238,6 +240,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
 ln -sfn "$IL_ROOT" "$IL_LINK"
 il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"
+! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
 il_lines "$IL_PROJECT" "$IL_EXCLUDE" "${IL_STATE[@]}"

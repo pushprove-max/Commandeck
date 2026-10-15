@@ -48,6 +48,7 @@ WAITING_S=120   # 2 min in a state that is neither working nor done
 HOLD_S=3600     # 1 h at most that a Builder waiting on its helpers is held unposted (#41)
 TICK=${COMMANDECK_MAIN_WATCH_TICK_S:-60}
 REPOST=${COMMANDECK_MAIN_WATCH_REPOST_S:-300}
+MAIL_S=${COMMANDECK_MAIN_WATCH_MAIL_S:-120}
 SCRATCH=$PP_SCRATCH
 ST=$SCRATCH/main-watch
 WS=$PP_WORKSPACES
@@ -366,6 +367,28 @@ listing() {
 # A fourth line is arm_diag's diagnostic: what Orca refused, typed whatever
 # became of the tasks, and never called inbox mail.
 WAKE_TRIES=3
+# mail_wake -- mail from any other pane that sat unread for MAIL_S while main was
+# idle arms the same proven wake: two orders once sat 13 minutes with main idle,
+# because only this watcher's own posts ever got a wake. The age is the first
+# tick that saw unread mail; after a wake it restarts, so an unanswered main is
+# typed at most once per MAIL_S. Heads-up notes are inbox only and main's own
+# sends are not news to main. A full page is not read: the inbox is the whole
+# machine's, newest first, as wake() reads it.
+mail_wake() {
+  local n
+  n=$(orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -er --arg to "run:$RUN" --arg me "${MAIN_H:-}" \
+    '.result.messages | if type == "array" and length < 500 then [.[] | select(.to_handle == $to and .read == 0 and .type != "heartbeat"
+       and ((.subject // "") | startswith("heads-up:") | not) and ($me == "" or (.from_handle // "") != $me))] | length else error end' 2>/dev/null) \
+    || return 0
+  [ "$n" != 0 ] || { rm -f "$ST/unread-since"; return 0; }
+  [ -e "$ST/unread-since" ] || { echo "$NOW" > "$ST/unread-since"; return 0; }
+  [ ! -e "$ST/wake" ] || return 0
+  case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
+  [ $((NOW - $(cat "$ST/unread-since"))) -ge "$MAIL_S" ] || return 0
+  # A task id nothing knows reads as open in wake(), which then re-checks the inbox itself.
+  printf '0\nmail\n%s\n' "$RUN" > "$ST/wake"
+  echo "$NOW" > "$ST/unread-since"
+}
 wake() {
   [ -e "$ST/wake" ] || return 0
   local tries tasks t open=0 screen r diag text
@@ -985,6 +1008,7 @@ tick() {
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   flush
   arm_diag
+  mail_wake
   wake
   # Heads-up notes are their own batch, after the typed wake and its diagnostic:
   # inbox only, success or refusal.

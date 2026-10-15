@@ -21,8 +21,8 @@
 # check is an explicit `RERUN=1` prefix on the command.
 #
 # "Tree state" is HEAD plus tracked worktree/index state and untracked path plus
-# content identity, hashed BEFORE the run. A golden-file rewrite by the run
-# itself, or any meaningful input edit, unlocks the next run.
+# content identity outside .claude/briefs/, hashed BEFORE the run. A golden-file
+# rewrite by the run itself, or any meaningful input edit, unlocks the next run.
 #
 # The state is keyed on the EFFECTIVE directory, not the payload's cwd:
 # `cd infra && npm test` runs a different suite over a different tree than the
@@ -48,22 +48,44 @@ CWD=$(cd "$CWD" && pwd -P)
 # with its target. A line whose quote is still open is split together with the
 # lines that close it: split alone, a quoted string spanning lines lost its
 # quotes and its prose ran as a command.
+# With a second argument, every word is kept, re-quoted, whitespace folded: the
+# run key needs them, since `-t "one case"` picks the tests and is not the two
+# words `-t one case`. Each segment then ends with \x1f and the operator after it.
+# A quoted or escaped ; & | < > is a word, never an operator: shlex hands both back
+# alike, so such characters are swapped out before it splits and back after.
 chain_segments() {
-  CMD=$1 python3 -c '
+  KEEP_QUOTED=${2:-} CMD=$1 python3 -c '
 import os, re, shlex
+keep = os.environ["KEEP_QUOTED"]
+HIDE = str.maketrans(";&|<>", "\ue000\ue001\ue002\ue003\ue004")
+SHOW = {v: k for k, v in HIDE.items()}
 def emit(toks):
     seg, skip = [], False
     for t in toks:
         if skip:
             skip = False
-        elif t and set(t) <= set(";&|"):
-            print(" ".join(seg)); seg = []
-        elif t and set(t) <= set("<>&"):
+            continue
+        if t and set(t) <= set(";&|"):
+            print(" ".join(seg) + ("\x1f" + t if keep else "")); seg = []
+            continue
+        if t and set(t) <= set("<>&|"):
             skip = True
+            continue
+        t = t.translate(SHOW)
+        if keep:
+            # Verbatim: a filter is a regex, so its spacing selects. A newline is
+            # written as an ANSI-C quoted \n (dollar-quote) so it stays off the
+            # segment line and unlike a typed backslash-n. Bash quotes end the
+            # python -c text, hence \x27.
+            seg.append(shlex.quote(t).replace("\n", "\x27$\x27\\n\x27\x27"))
         elif "$(" in t or not any(c.isspace() for c in t):
-            seg.append(t)
-    print(" ".join(seg))
+            seg.append(t.replace("\n", " "))  # one line per segment, as in keep mode
+    print(" ".join(seg) + ("\x1f;" if keep else ""))
+# The fd number of `2>x` belongs to the redirection, but shlex splits it off as
+# a word of its own. Quoted and escaped text is left as it is.
+FD = re.compile(r"""\\.|\x27[^\x27]*\x27|"(?:\\.|[^"\\])*"|(?<![^\s;&|()])\d+(?=[<>])""")
 def lex(text):
+    text = FD.sub(lambda m: "" if m.group(0)[0].isdigit() else m.group(0).translate(HIDE), text)
     lex = shlex.shlex(text, posix=True, punctuation_chars=";&|<>")
     lex.whitespace_split = True
     return list(lex)
@@ -126,7 +148,7 @@ printf '%s' "$CMD" | grep -qE "$SUITE_RE" || exit 0
 
 # The directory the suite runs in: the rerun state below is keyed on it, not on
 # the payload's cwd.
-D=$CWD
+D=$CWD CWD0=$CWD
 RUN_CWD=""
 while IFS= read -r SEG; do
   D=$(seg_cd "$D" "$SEG")
@@ -142,25 +164,51 @@ printf '%s' "$SEGS" | grep -qE "$SUITE_RE" || exit 0
 # --- same run, same tree, within 30 minutes -----------------------------------
 printf '%s' "$SEGS" | grep -qE '(^|[[:space:];&|(])RERUN=1([[:space:]]|$)' && exit 0
 
-# The key is the command with its cd-prefix, pipes and redirections stripped:
-# `npm run test:unit 2>&1 | tail -40` and `npm run test:unit | grep FAIL` are
-# the same run.
-KEY=$(printf '%s' "$CMD" \
-  | sed -E 's/^[[:space:]]*cd [^;&|]*(&&|;)[[:space:]]*//' \
-  | sed -E 's/[[:space:]]*(2>&1|[0-9]?>>?[[:space:]]*[^[:space:]|;&]+|\|.*)//g' \
-  | tr -s '[:space:]' ' ' | sed -E 's/^ | $//g')
+# The key is the suite's own words, every argument kept, only when the suite
+# opens the command, or follows one leading `cd <folder> &&` (or `;`) into a
+# folder that is there, and no second suite is named anywhere in the text. Then pipe stages,
+# redirections and what comes after it cannot change whether it ran: `npm run
+# test:unit 2>&1 | tail -40`, `cd x && npm run test:unit > log` and `npm run
+# test:unit && echo done` are the same run (a chained run counts). Any other
+# shape (a cd with another word or an option, anything else before the suite,
+# a second suite) is keyed on the whole command: whether a suite ran there
+# hangs on control flow (`false && npm test`, `cd . || npm test`), and a
+# missed block costs a rerun while a wrong one costs a run that never happened.
+mapfile -t PLAIN <<< "$SEGS"
+mapfile -t KEPT < <(chain_segments "$CMD" keep)
+seg() { printf '%s' "${KEPT[$1]%$'\x1f'*}"; }
+suite() { seg "$1" | grep -qE "$SUITE_RE"; }
+S=0
+read -r -a W <<< "${PLAIN[0]:-}"
+T=${W[1]:-}; case $T in /*) ;; ?*) T=$CWD0/$T ;; esac
+# Only the plain form, read off the command's own text (the segments have lost quotes and redirections):
+# another word, an option or a redirection can make bash refuse the cd or go elsewhere.
+C=${CMD#"${CMD%%[![:space:]]*}"}
+if [ "${#W[@]}" = 2 ] && [ "${W[0]}" = cd ] && [[ ${W[1]} != -* ]] && [ -d "$T" ] \
+  && [[ $C == "cd ${W[1]}"* ]] && [[ ${C#"cd ${W[1]}"} =~ ^[[:space:]]*(\&\&|;) ]]; then
+  S=1
+fi
+KEY=$CMD
+# A second suite named anywhere in the text, a quoted `bash -c "..."` body included, keys on the whole command.
+if suite "$S" && [ "$(printf '%s' "$CMD" | tr "\"'" '  ' | grep -oE "$SUITE_RE" | wc -l)" -le 1 ]; then
+  KEY=$(seg "$S")
+  for ((i = S + 1; i < ${#KEPT[@]}; i++)); do suite "$i" && { KEY=$CMD; break; }; done
+fi
 
+# The build's own papers under .claude/briefs/ (brief, evidence, round files)
+# are not code: an evidence line written after a run keeps its record.
+PAPERS=':(top,exclude).claude/briefs'
 TREE=$( {
   git -C "$CWD" rev-parse HEAD 2>/dev/null
   printf 'WORKTREE\0'
-  git -C "$CWD" diff 2>/dev/null
+  git -C "$CWD" diff -- "$PAPERS" 2>/dev/null
   printf 'INDEX\0'
-  git -C "$CWD" diff --cached 2>/dev/null
+  git -C "$CWD" diff --cached -- "$PAPERS" 2>/dev/null
   printf 'UNTRACKED\0'
   while IFS= read -r -d '' file; do
     printf '%s\0' "$file"
     git -C "$CWD" hash-object -- "$file" 2>/dev/null || printf 'missing\n'
-  done < <(git -C "$CWD" ls-files --others --exclude-standard -z 2>/dev/null)
+  done < <(git -C "$CWD" ls-files --others --exclude-standard -z -- "$PAPERS" 2>/dev/null)
 } | sha1sum | cut -c1-40)
 [ -n "$TREE" ] || exit 0
 

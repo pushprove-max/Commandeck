@@ -32,7 +32,8 @@ items() {
     else l=$(sed -E 's/^[[:space:]]+//; s/[[:space:]:.]+$//' <<<"$l"); [ -z "$l" ] || printf '=%s\n' "$l"; fi
   done
 }
-SEC=$(awk '/^#+ /{on = ($0 ~ /^#+ The issues/)} on' <<<"$B")
+# Up to the next heading of the same or a higher level: "### #12 ..." issue headings stay inside "## The issues".
+SEC=$(awk '/^#+ /{ l = length($1); if (on && l <= lv) on = 0; if (!on && $0 ~ /^#+ The issues/) { on = 1; lv = l } } on' <<<"$B")
 OUT=$(grep -E '^[0-9]+\. ' <<<"$SEC" | sed -E 's/^[0-9]+\. +//' | items)
 [ -n "$OUT" ] || OUT=$(grep -oE '#[0-9]+' <<<"$SEC")
 if [ -z "$OUT" ] && grep -qE '^#+ +([0-9]+\. +)?#[0-9]+' <<<"$B"; then

@@ -42,6 +42,14 @@ check "setup says it left the status line alone and how to set one" 1 "$(grep -c
 # --- the default Builder: Opus at effort high, no advisor, a risky build included (owner's default) ---
 builder_seat() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR PATH="$BIN:$PATH" bash -c '. "$0" && pp_route_json builder | jq -c "[.model, .effort, .advisor]"' "$PLUGIN/scripts/paths.sh"); }
 check "the default Builder is Opus at effort high with no advisor" '["opus","high",null]' "$(builder_seat)"
+# #85: a launch that leaves out --advisor gets Claude Code's default advisor; its one off switch is a variable.
+OFF=CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
+cmd_of() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR PATH="$BIN:$PATH" "${@:2}" bash -c '. "$0" && pp_route_json "$1" | jq -r ".cmd // (.argv | join(\" \"))"' "$PLUGIN/scripts/paths.sh" "$1"); }
+check "a Builder and the headless reviewer launch with the advisor switched off" "1 1" "$(cmd_of builder | grep -c "$OFF") $(cmd_of claude-reviewer | grep -c "$OFF")"
+jq '.roles["design-coauthor"].advisor = "opus"' "$PLUGIN/config/routing.json" > "$T/routing.json"
+check "a seat that names an advisor keeps it, switched on" "1 0" \
+  "$(cmd_of design-coauthor COMMANDECK_ROUTING="$T/routing.json" | grep -c -- '--advisor opus') $(cmd_of design-coauthor COMMANDECK_ROUTING="$T/routing.json" | grep -c "$OFF")"
+check "the orchestrator, the owner's own session, has it off in the project's settings" '"1"' "$(jq -c '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL' "$PROJ/.claude/settings.json")"
 printf '## The issues\n1. #1: toy\n' > "$T/batch.md"
 run "$PROJ" builder-launch.sh --dry-run --risky toy-unit "$T/batch.md" >"$T/brief" 2>"$T/err"
 check "a risky launch gets no advisor either, and says so" '1:0' "$(grep -c '^advisor: none' "$T/err"):$(grep -c 'advisor consult' "$T/brief")"
@@ -56,6 +64,12 @@ for a in opus none; do
     "$(grep -c '^advisor: none' "$T/err"):$(grep -c '^This build has no advisor\.' "$T/brief"):$(grep -c 'advisor consult' "$T/brief")"
 done
 jq 'del(.builder)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+# The dashboard's issue list is read from the rendered brief. A batch with a title of its own and an issue per
+# sub-heading keeps every issue inside "The issues", and the batch's title does not end "## The batch".
+printf '# Export batch\n## The issues\n### #3 Export times out\nSee #9 for the old report.\n### #4 Retry the upload\n' > "$T/batch2.md"
+run "$PROJ" builder-launch.sh --dry-run toy-unit "$T/batch2.md" >"$T/brief2" 2>"$T/err"
+check "a batch's issue sub-headings stay inside The issues; its own title stays inside The batch" '[3,9,4]:1' \
+  "$(bash "$PLUGIN/scripts/brief-issues.sh" "$T/brief2" | jq -c .):$(grep -c '^### Export batch$' "$T/brief2")"
 # Main writes a "leave as is" ruling under the heading its rules name; the pass reads limits from
 # one heading only, so a ruling under any other is raised again as a blocker.
 H=$(sed -n 's/.*stays as it is goes under `\(#[^`]*\)`.*/\1/p' "$PLUGIN/templates/main-session.md")
@@ -66,8 +80,14 @@ check "a 'leave as is' ruling under the heading main's rules name is the limit t
 echo "review this" > "$T/spec.md"; mkdir -p "$HOME/orca/workspaces/proj/seat-unit"
 run "$PROJ" seat.sh launch claude-reviewer seat-unit "$T/spec.md" >"$T/out" 2>&1
 check "a headless role is still refused as a pane seat" "2:1" "$?:$(grep -c 'is not a pane seat' "$T/out")"
+# A read-only seat is refused a spec that asks it to write a file, but a verb that ends a clause is prose.
+printf 'Write the findings to out.md.\n' > "$T/spec-w.md"; printf 'Read the fenced write). Map: x.md\n' > "$T/spec-p.md"
+check "a read-only seat asked to write a file is refused; a clause ending on the verb is not an ask" '1:0' \
+  "$(run "$PROJ" seat.sh launch codex-reviewer seat-unit "$T/spec-w.md" 2>&1 | grep -c 'spec asks it to write'):$(run "$PROJ" seat.sh launch codex-reviewer seat-unit "$T/spec-p.md" 2>&1 | grep -c 'spec asks it to write')"
 
 # --- the manifest names every changed path, with what was there before ---
+# A hash read off a folder link fails, and the path then compares as unchanged (#80).
+check "every path setup left is read for the comparison" '' "$(snap 2>&1 >/dev/null)"
 AFTER=$(snap)
 NAMED=$(jq -r '.entries | keys[]' "$MF"/*.json | sort -u)
 MISSING=$(diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | sed -n 's/^[<>] [0-9a-f]* //p' | sort -u | grep -v '^home/\.commandeck/' \
@@ -101,6 +121,17 @@ jq 'del(.builder)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
 seat >"$T/out" 2>&1
 check "once the project's Builder model changed, the live pane is refused, and the refusal says why" '2:0:1' \
   "$?:$(grep -c 'state=reused' "$T/out"):$(grep -c 'REFUSED: live builder seat h1 for seat-builder was opened with other launch settings' "$T/out")"
+# A pane with no verdict yet whose last lines quote one in a fence is still working: the
+# reader prints those lines under "NO VERDICT YET", and reading a verdict there closed the seat.
+cat > "$BIN/orca-ide" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "terminal read"*) jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n```\nVERDICT: GO\n```\nStill reading the diff."}}}' ;;
+  *) echo '{"ok":true,"result":{}}' ;;
+esac
+EOF
+run "$PROJ" seat.sh collect builder seat-builder >"$T/out" 2>&1
+check "a fenced verdict in an unfinished pane's last lines is no verdict" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
 cp "$T/orca-ide.kept" "$BIN/orca-ide"
 
 # --- another tool's entries are left exactly as they were ---
@@ -154,6 +185,14 @@ run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude install --global-rules inst
 check "the review-loop answers taken back to the defaults leave no setting" false "$(jq 'has("reviewLoop")' "$CFG")"
 check "and leaves the owner's file exactly as it was, saying how to add a block" '# Mine||Keep it short.|2' \
   "$(paste -sd'|' - < "$G")|$(grep -c "^global .*: $G exists, left as it is; to add it as a marked block: --global-.* block$" "$T/out")"
+# #87: off is an answer of its own, saved as the word: for the flag set, and for each flag.
+run "$PROJ" setup.sh "${ANSWERS[@]}" --review-flags off >"$T/out" 2>&1
+check "--review-flags off saves each review flag as off" '0:{"maxReviewMinutes":"off","maxTestPercent":"off","maxUsd":"off"}' "$?:$(jq -cS .reviewLoop "$CFG")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --max-review-min '' --max-test-percent 40 --max-usd off >"$T/out" 2>&1
+check "one flag back to its default, one a number, one off" '0:{"maxTestPercent":"40","maxUsd":"off"}' "$?:$(jq -cS .reviewLoop "$CFG")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --small-build off >"$T/out" 2>&1
+check "small build has no off, and says what to use" "1:1" "$?:$(grep -c 'no off: 1 makes no build small' "$T/out")"
+run "$PROJ" setup.sh "${ANSWERS[@]}" --max-test-percent '' --max-usd '' >"$T/out" 2>&1; check "and back to the defaults" "0:false" "$?:$(jq 'has("reviewLoop")' "$CFG")"
 run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude block --global-rules block >"$T/out" 2>&1; check "adding both as blocks succeeds" 0 $?
 run "$PROJ" setup.sh "${ANSWERS[@]}" --global-claude block --global-rules block >"$T/out" 2>&1
 check "a second run replaces its blocks: one of each, the owner's text first" '1:1:1' \

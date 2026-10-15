@@ -56,6 +56,15 @@ if [ -d "$TMP/TREE" ]; then
   bash "$REAL/ci/leak-test.sh" "$TMP/TREE" >/dev/null 2>&1; check "a checkout reached through other letter case skips its ignored files" 0 "$?"
 else echo "skip a checkout reached through other letter case: this file system tells case apart"; fi
 
+# #79: the plugin's own checkout runs the plugin, so every runtime file it writes
+# there (install-lib.sh's IL_STATE) is ignored, or the scan below reads it.
+mapfile -t STATE < <(bash -c '. "$1/scripts/install-lib.sh" >/dev/null 2>&1; printf "%s\n" "${IL_STATE[@]}"' _ "$REAL")
+check "install-lib.sh's runtime list was read" 1 "$([ "${#STATE[@]}" -gt 5 ] && echo 1)"
+for p in "${STATE[@]}"; do
+  case $p in */) p=${p}x.md ;; esac
+  check "this repository ignores the runtime file $p" 0 "$(git -C "$REAL" check-ignore -q --no-index -- "$p"; echo $?)"
+done
+
 out=$(bash "$REAL/ci/leak-test.sh" 2>&1); rc=$?
 check "the tree as committed is clean" 0 "$rc"
 [ "$rc" = 0 ] || printf '%s\n' "$out" | head -20

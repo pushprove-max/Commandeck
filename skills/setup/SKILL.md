@@ -14,7 +14,7 @@ uninstall.
 
 Rule: a refused or failed question call is not an answer; ask the same thing again in plain text and never assume a default.
 
-Rule: fixed choices go through `AskUserQuestion`, in the calls below, with exactly the headers and options written here; names and commands are asked in plain text.
+Rule: every question goes through `AskUserQuestion`, in the calls below, with exactly the headers and options written here; the guard's decoy goes first, so a question has at most three options of its own. A typed value is a question too: its options are the likely values (the saved one, a common one), and the picker's own free-text answer takes any other. Never print a list of follow-up questions in plain text. An answer setup cannot use as given is asked again as a picker that offers only the choices setup supports.
 
 Rule: free text the owner types (the relay's name and its line, the merge check command, a host name, a status line command) is passed to `setup.sh` exactly as typed, never corrected, completed or reformatted; a suspected slip may be asked about before anything is sent, and the original is sent unless the owner changes it.
 
@@ -33,7 +33,7 @@ edit, switch off or work round the project's own guard.
    Ask "Profile": claude-openai | claude
    Ask "Permissions": project | machine
    Ask "Strict hooks": off | on
-   Ask "Relay": none | name one
+   Ask "Relay": none | Chief of Staff | <saved name, if any>
 
    - **Profile.** Sent as `--profile <p>`, and Permissions as `--scope <s>`.
      `claude-openai` (Codex reviews each batch; needs the Codex
@@ -45,31 +45,37 @@ edit, switch off or work round the project's own guard.
      or on (also the hooks that hold a session to searching before reading
      and to one test run per change). On sends `--strict`, off sends
      `--no-strict`.
-   - **Relay.** The Chief of Staff. On "name one", ask in plain text for the
-     name the relay answers to and one line on how it should sound. On
-     "none", pass `--name '' --persona ''`.
-2. Send these four calls, then ask in plain text for what a "name one", "set
-   one", "set a number", "set numbers" or "another name" answer needs:
+   - **Relay.** The Chief of Staff: the name it answers to, `--name <n>`
+     (typed in the free-text answer for another name). "Relay voice" in
+     Call 2 is its one line on how it should sound, `--persona <text>`. On
+     "none", pass `--name '' --persona ''` and ignore "Relay voice".
+2. Send these four calls:
 
    Call 2 (`AskUserQuestion`)
    Ask "Model": plugin default | sonnet
    Ask "Context": 200K | larger
    Ask "Codex fast": off | on
+   Ask "Relay voice": plain and brief | <saved line, if any>
 
    Call 3 (`AskUserQuestion`)
-   Ask "Merge check": none | name one
-   Ask "Host name": this machine only | another name
-   Ask "Status line": none | set one
+   Ask "Merge check": none | npm test | <saved command, if any>
+   Ask "Host name": this machine only | <saved names, if any>
+   Ask "Status line": none | <saved command, if any>
 
    Call 4 (`AskUserQuestion`)
    Ask "Global CLAUDE.md": skip | install | add block
    Ask "Global rules": skip | install | add block
 
    Call 5 (`AskUserQuestion`)
-   Ask "Review rounds": no cap | set a number
+   Ask "Review rounds": no cap | 5 | 10
    Ask "Closing pass": runs | none
-   Ask "Small build": 200 lines | set a number
-   Ask "Review flags": defaults | set numbers
+   Ask "Small build": 200 lines | 400 | 1
+   Ask "Review flags": defaults | off | set each
+
+   Only on "Review flags: set each", Call 5b (`AskUserQuestion`):
+   Ask "Review minutes": 30 | off | 60
+   Ask "Test share": 33 | off | 50
+   Ask "List price": 30 | off | 100
 
    - **Model.** Which model builds, at effort high and with no advisor, a
      risky build included: the plugin's own, Opus (`--builder-model ''`), or
@@ -77,13 +83,13 @@ edit, switch off or work round the project's own guard.
    - **Context.** `200K` adds `--standard-context`: the account's model
      holds 200K; `larger` adds `--no-standard-context`.
    - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
-   - **Codex model.** Not asked up front. When setup refuses because it found no model of the Codex family (it says whether Codex goes through a proxy), ask in plain text for the model id, such as `gpt-6.1-sol`, and run setup again with `--codex-model codex-reviewer=<id>`. It is saved in this project's config, so a plugin update keeps it. `--codex-model codex-reviewer=` clears it.
-   - **Merge check.** On "name one", ask for the one command that must pass
-     before a merge: `--test-command '<cmd>'`. On "none", pass
+   - **Codex model.** Not asked up front. When setup refuses because it found no model of the Codex family (it says whether Codex goes through a proxy), ask for the model id with `AskUserQuestion` (Ask "Codex model": gpt-6.1-sol | <an id setup printed>; the free-text answer takes any other) and run setup again with `--codex-model codex-reviewer=<id>`. It is saved in this project's config, so a plugin update keeps it. `--codex-model codex-reviewer=` clears it.
+   - **Merge check.** The one command that must pass before a merge, an
+     option or typed: `--test-command '<cmd>'`. On "none", pass
      `--test-command ''`.
-   - **Host name.** On "another name", ask for the name the dashboard is
-     opened under, a tailnet name: `--hosts <name>[,<name>]`; without it
-     such a name gets a 403. On "this machine only", pass `--hosts ''`.
+   - **Host name.** Another name the dashboard is opened under, a tailnet
+     name, an option or typed: `--hosts <name>[,<name>]`; without it such a
+     name gets a 403. On "this machine only", pass `--hosts ''`.
    - **Global CLAUDE.md.** The plugin's general global instructions (working
      rules, code exploration, root-cause discipline). `install` writes
      `~/.claude/CLAUDE.md` only when there is none (`--global-claude
@@ -95,7 +101,7 @@ edit, switch off or work round the project's own guard.
      the same three ways: `--global-rules install|block|skip`.
    - **Review rounds.** The most Codex review passes a build may run,
      counted by the round number each pass is given. "no cap" (today's
-     rule) sends `--max-rounds ''`; on "set a number", ask for it:
+     rule) sends `--max-rounds ''`; a number, an option or typed, sends
      `--max-rounds <n>`.
    - **Closing pass.** "runs" (today's rule: after the narrowed passes end
      GO, one more pass reads the whole branch, and its GO is the one that
@@ -105,16 +111,25 @@ edit, switch off or work round the project's own guard.
      either way.
    - **Small build.** A first pass is one reviewer under this many changed
      lines (and no `--risky` launch), else three. "200 lines" sends
-     `--small-build ''`; on "set a number", ask for it: `--small-build <n>`.
+     `--small-build ''`; a number, an option or typed, sends
+     `--small-build <n>`. It has no off: one reviewer for every build would
+     drop the three-reviewer pass a large build needs, and "1" already makes
+     no build small. Say so if the owner asks for off.
    - **Review flags.** When a finished build is flagged for a written
      review: over 30 minutes of Codex review, over a third of the clock on
      tests or idle waits (and over 10 minutes of them), over $30 at list price. "defaults" sends
-     `--max-review-min '' --max-test-percent '' --max-usd ''`; on "set
-     numbers", ask for the three (minutes, percent, dollars) and send each
-     one given: `--max-review-min <n> --max-test-percent <n> --max-usd <n>`.
+     `--max-review-min '' --max-test-percent '' --max-usd ''`; "off" sends
+     `--review-flags off` (no build is flagged). On "set each", Call 5b's
+     three answers send `--max-review-min <n|off> --max-test-percent <n|off>
+     --max-usd <n|off>`: "off" turns that one check off, a default answer
+     (30, 33, 30) sends `''`.
    - Numbers are passed exactly as typed. Setup refuses one it cannot use
-     and changes nothing; read its line to the owner and ask again.
-   - **Status line.** On "none", no flag: it keeps the saved setting, by design. On "set one", ask for the owner's own command:
+     and changes nothing; read its line to the owner and ask that question
+     again as a picker.
+   - Every threshold setup asks but Small build can be turned off: "no cap"
+     for Review rounds, "off" for the review flags. Off is saved as the word,
+     not a large number.
+   - **Status line.** On "none", no flag: it keeps the saved setting, by design. Otherwise the owner's own command, an option or typed:
      `--status-line '<command>'`. The plugin ships none, and uninstall puts
      the earlier one back.
 

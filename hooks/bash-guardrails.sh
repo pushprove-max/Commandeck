@@ -24,14 +24,6 @@ type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} coul
 ODD=$(strip_odd_end "$CMD")
 [ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
 
-# The serena-down marker stands the symbols gate down. read-tracker.sh writes
-# it on an errored serena call and is the only writer; a hand-made one ran a
-# whole worker cut with the gates off (2026-09-18).
-case "$CMD" in *claude-serena-down*)
-  echo "BLOCKED: only hooks/read-tracker.sh writes the claude-serena-down marker, on an errored serena call. If serena is missing from this session, stop and tell main; do not stand the symbols gate down by hand." >&2
-  exit 2 ;;
-esac
-
 # Block node's test runner without the 4 GB heap cap.
 # Root cause of four WSL crashes on 2026-08-24: one uncapped
 # `node --test` child grew at 1.45 GB/s to 29 GB and took the workstation.

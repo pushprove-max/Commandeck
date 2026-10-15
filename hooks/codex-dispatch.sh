@@ -275,8 +275,9 @@ run_matcher() {
       continue
     fi
 
-    if [ -n "$tool" ] && [[ $READ_ONLY_KEEP != *" ${script##*/} "* ]] && read_only_run; then
-      printf '%s\t%s\t%s\tskipped-read-only\n' "$(date -Is)" "$tool" "${script##*/}" >>"$LOG" 2>/dev/null
+    # Stop too: a turn-end check reads the worktree's pending edits, never a read-only run's own.
+    if { [ -n "$tool" ] || [ "$event" = Stop ]; } && [[ $READ_ONLY_KEEP != *" ${script##*/} "* ]] && read_only_run; then
+      printf '%s\t%s\t%s\tskipped-read-only\n' "$(date -Is)" "${tool:-$event}" "${script##*/}" >>"$LOG" 2>/dev/null
       trace "skip-read-only ${script##*/}"
       continue
     fi
