@@ -37,6 +37,17 @@ for i in "${!PATHS[@]}"; do
   elif [ -e "${PATHS[$i]}" ]; then cp -p "${PATHS[$i]}" "$KEEP/$i"; elif [ -L "${PATHS[$i]}" ]; then : > "$KEEP/$i.link"; fi
 done
 back() {
+  local prior p
+  # A path the older manifests never named (this version writes a file the last one did not) goes back
+  # to what this run's setup recorded before writing it, before the manifests themselves are put back.
+  while IFS=$'\t' read -r prior p; do
+    printf '%s\n' "${PATHS[@]}" | grep -qxF -- "$p" && continue
+    case $prior in
+      sha256:*) cp "$IL_DIR/blobs/${prior#sha256:}" "$p" || true ;;
+      "dangling link") [ ! -e "$p" ] || rm -f "$(readlink -f "$p")" ;;
+      *) rm -f "$p" ;;
+    esac
+  done < <(jq -r '.entries | to_entries[] | select(.value.kind != "dir") | [.value.prior, .key] | @tsv' "$IL_PROJECT" "$IL_MACHINE" 2>/dev/null)
   for i in "${!PATHS[@]}"; do
     # A file kept read-only refuses the copy; it gets its mode back from the copy.
     if [ -e "$KEEP/$i.dirlink" ]; then ln -sfn "$(cat "$KEEP/$i.dirlink")" "${PATHS[$i]}"

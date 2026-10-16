@@ -214,6 +214,14 @@ jq -n '{reviewLoop: {smallBuild: "lots"}}' > "$REPO/.claude/commandeck.json"
 (cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-2 \
   bash "$PASS_SH" cap 2 review >/dev/null 2>"$TMP/pass.err"); RC=$?
 check "a saved setting that is not a number stops the pass, naming the key" "2:1" "$RC:$(grep -c 'reviewLoop.smallBuild' "$TMP/pass.err")"
+# Small build "off" (owner ruling 2026-10-15): no build is small, so a one-line build's first pass gets three reviewers.
+reviewers() { # <unit> <commandeck.json>: the first pass's reviewer count, for a launch main's brief says was not risky
+  mk "$1"; mkdir -p "$REPO/.claude/briefs"; echo "bash x/builder-codex-pass.sh $1 1 adversarial" > "$REPO/.claude/briefs/$1-builder-brief.md"; echo "$2" > "$REPO/.claude/commandeck.json"
+  (cd "$TMP/ws/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-1 \
+    bash "$PASS_SH" "$1" 1 adversarial 2>/dev/null) | sed -n 's/^Reviewers: \([0-9]*\) .*/\1/p'
+}
+check "a one-line build is small by default, and small build off gives it three reviewers" "1:3" \
+  "$(reviewers smallon '{}'):$(reviewers smalloff '{"reviewLoop": {"smallBuild": "off"}}')"
 jq -n '{reviewLoop: {maxRounds: false}}' > "$REPO/.claude/commandeck.json"
 (cd "$TMP/ws/cap" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-cap-2 \
   bash "$PASS_SH" cap 2 review >/dev/null 2>"$TMP/pass.err"); RC=$?

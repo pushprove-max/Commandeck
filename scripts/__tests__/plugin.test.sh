@@ -50,6 +50,16 @@ check "and each one is a runnable word under a root with a space in it" "" \
   "$(jq -r '.hooks[][].hooks[].command' "$H" | while IFS= read -r c; do CLAUDE_PLUGIN_ROOT="$TMP/a root" bash -c "set -- $c; [ -x \"\$1\" ]" 2>/dev/null || echo "$c"; done | head -3)"
 check "every registered hook is an executable file in the repo" "" "$(hook_files | while read -r f; do [ -x "$REAL/$f" ] || echo "$f"; done)"
 check "hooks.json registers hooks" yes "$([ "$(hook_files | wc -l)" -ge 10 ] && echo yes || echo no)"
+# Main may read any file in a worker's worktree (owner ruling 2026-10-15, restoring 2026-09-25): every
+# hook that runs before main's Read, Grep or Glob lets a worktree path through.
+git init -q "$TMP/main"; mkdir -p "$TMP/main/.claude"; echo '{"version": 1}' > "$TMP/main/.claude/commandeck.json"; W=$TMP/main/orca/workspaces/u/src/a.sh
+refused=$(for t in Read Grep Glob; do
+  jq -r --arg t "$t" '.hooks.PreToolUse[] | select(.matcher as $m | $t | test("^(" + $m + ")$")) | .hooks[].command' "$H" | while IFS= read -r c; do
+    jq -n --arg t "$t" --arg w "$W" --arg d "$TMP/main" '{tool_name: $t, cwd: $d, session_id: "s", tool_input: {file_path: $w, path: $w, pattern: $w}}' \
+      | (cd "$TMP/main" && CLAUDE_PLUGIN_ROOT=$REAL CLAUDE_PROJECT_DIR=$TMP/main HOME=$TMP bash -c "set -- $c; \"\$@\"" >/dev/null 2>&1) || echo "$t: $c"
+  done
+done)
+check "no hook refuses main a read in a worker's worktree" "" "$refused"
 # Claude Code offers every skill under skills/ too. /handoff ends by leaving a
 # marker for the context-clear Stop hook: offered without that hook registered,
 # it would write the marker and restart nothing.
@@ -80,13 +90,18 @@ stage '{"name": "p", "version": "0.1.0", "hooks": {"Stop": [{"hooks": [{"type": 
 check "an inline hook whose script does not exist fails" 1 "$(ok)"
 
 # #86: setup asks every value in a picker. A "name one" option sent the owner a typed follow-up list in
-# chat, past the picker's record and its stray-keypress decoy; the decoy leaves room for three options.
+# chat, past the picker's record. The decoy is off while setup asks (owner ruling Q5), so a question
+# has the picker's four options of its own.
 SETUP=$REAL/skills/setup/SKILL.md
 ASKS=$(grep -E '^ +Ask "[^"]+": ' "$SETUP")
 check "setup asks its questions in pickers" 1 "$([ "$(wc -l <<<"$ASKS")" -ge 15 ] && echo 1)"
-check "no setup question has more than three options of its own" "" "$(awk -F' [|] ' 'NF > 3' <<<"$ASKS")"
+check "no setup question has more than four options of its own" "" "$(awk -F' [|] ' 'NF > 4' <<<"$ASKS")"
 check "no setup option defers a typed value to a follow-up" "" "$(grep -E '(: |[|] )(name one|set one|set a number|set numbers|another name)( [|]|$)' <<<"$ASKS")"
 check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in plain text for' "$SETUP")"
+# A first-time owner sees which answer to take: one option of every question is marked, and a
+# question is titled in words, never by a rule's hash.
+check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS"; grep '(recommended).*(recommended)' <<<"$ASKS")"
+check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a-f]{8})"' <<<"$ASKS")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

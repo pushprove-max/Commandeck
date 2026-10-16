@@ -91,6 +91,15 @@ MSG=$(q "Real choice" | CLAUDE_PROJECT_DIR=$WT bash "$HOOK" 2>&1 >/dev/null)
 case "$MSG" in *"orchestration ask"*) R=0 ;; *) R=1 ;; esac
 check "a worker's block is today's message, not the decoy refusal" 0 "$R"
 
+# Setup's questions are asked without the decoy (owner ruling Q5): setup.sh --questions begin
+# leaves a marker in git's folder, and the end of setup takes it away. A worker stays blocked.
+date +%s > "$MAIN/.git/commandeck-setup-questions"
+check "while setup asks, main needs no decoy" 0 "$(q "Real choice" | hookq "$MAIN")"
+check "and a worker is still blocked" 2 "$(q "Real choice" | hookq "$WT")"
+echo $(( $(date +%s) - 7200 )) > "$MAIN/.git/commandeck-setup-questions"
+check "a marker two hours old is stale: the decoy is back" 2 "$(q "Real choice" | hookq "$MAIN")"
+rm -f "$MAIN/.git/commandeck-setup-questions"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

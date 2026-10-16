@@ -54,6 +54,15 @@ else
   else bad "install manifest: none for this project, so uninstall cannot put it back; run: bash $(printf '%q' "$HERE")/setup.sh"; fi
   [ "$(jq -r '.root // empty' "$IL_PROJECT" 2>/dev/null)" = "$IL_ROOT" ] || [ ! -s "$IL_PROJECT" ] \
     || bad "plugin folder: setup ran from $(jq -r .root "$IL_PROJECT") and the plugin is now at $IL_ROOT; run: bash $(printf '%q' "$HERE")/update.sh"
+  # The project's own copy of a startup file loads instead of the plugin's whole version (agent-startup-context.sh).
+  for f in AGENT_STARTUP.md .claude/main-session.md; do
+    [ -f "$PP_MAIN/$f" ] || continue
+    case $(jq -r --arg f "$f" '.ownFiles[$f] // empty' "$IL_CONFIG") in
+      replace) ok "startup file: sessions load the plugin's $f; the project's own stays on disk, unread" ;;
+      merge) ok "startup file: the project's own $f loads, with the plugin's rules it lacked in a marked block" ;;
+      *) warn "startup file: the project's own $f loads instead of the plugin's whole version; to choose: bash $(printf '%q' "$HERE")/setup.sh --own-$([ "$f" = AGENT_STARTUP.md ] && echo startup || echo main-session) replace|merge|skip" ;;
+    esac
+  done
 fi
 
 # Running state that git tracks leaves the main checkout changed after every write.
@@ -80,8 +89,10 @@ if [ -n "$PROFILE" ]; then
   for s in serena codebase-memory; do
     if jq -e --arg s "$s" --arg p "$PP_MAIN" '.mcpServers[$s] // .projects[$p].mcpServers[$s]' "$HOME/.claude.json" >/dev/null 2>&1 \
       || jq -e --arg s "$s" '.mcpServers[$s]' "$PP_MAIN/.mcp.json" >/dev/null 2>&1; then ok "add-on server $s: present"
-    else ok "add-on server $s: not installed (optional; setup prints its command)"; fi
+    else ok "add-on server $s: not installed (optional; setup.sh --addons $s installs it)"; fi
   done
+  # The value the hooks read, the one setup reported.
+  ok "serena hooks (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG" 2>/dev/null)"
   if MW=$(bash "$HERE/main-watch.sh" --status 2>&1); then ok "main-watch"
   else bad "main-watch: not running, so nothing wakes the orchestrator; run: bash $(printf '%q' "$HERE")/main-watch.sh --install"; fi
   PASS=claude; [ "$PROFILE" != claude-openai ] || PASS=codex

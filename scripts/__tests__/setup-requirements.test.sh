@@ -47,6 +47,16 @@ check "the old one-line refusal is gone" 0 "$(grep -c 'missing on PATH' "$T/out"
 check "nothing was installed without the flag" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
 check "and nothing on the machine changed" "$BEFORE" "$(snap)"
 WANT=$(printed)
+# A value is never a flag: an option missing its value does not turn --install-missing into the owner's yes.
+BAD=
+for o in --addons --cache-ttl --own-startup --own-main-session --rules --rules-drop --rules-keep --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags; do
+  go setup.sh --profile claude "$o" --install-missing >"$T/out" 2>&1
+  [ ! -e "$T/pm" ] || { BAD+=" $o"; rm "$T/pm"; }
+done
+check "an option given --install-missing as its value installs nothing" '' "$BAD"
+# The decoy's pause starts only once --questions begin has passed its checks.
+go setup.sh --questions begin >"$T/out" 2>&1
+check "a --questions begin that stops on a missing requirement leaves the decoy on" '1:gone' "$?:$([ -e "$PROJ/.git/commandeck-setup-questions" ] || echo gone)"
 
 mv "$T/keep/orca-ide" "$BIN/"
 # --- an install that works: setup carries on, in the same run ---

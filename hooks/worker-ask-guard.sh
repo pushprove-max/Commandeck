@@ -25,7 +25,11 @@ if [ "$GITDIR" = "$COMMON" ] || [ "${TOP##*/}" = Chief-of-Staff ]; then
   # Main's pickers must lead with the decoy: an Orca alert typed into
   # an open picker answers its first option, at any latency.
   . "${BASH_SOURCE[0]%/*}/lib/ask-decoy.sh"
-  if ! ask_decoy_first "$INPUT"; then
+  # Setup's own questions go without it (owner ruling Q5): setup.sh --questions begin leaves this
+  # marker, and the end of setup, or --questions end, takes it away. One older than an hour is stale.
+  ASKING=$(cat "$COMMON/commandeck-setup-questions" 2>/dev/null)
+  if [ "$GITDIR" = "$COMMON" ] && [[ $ASKING =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - ASKING )) -lt 3600 ]; then :
+  elif ! ask_decoy_first "$INPUT"; then
     printf '%s\n' \
       "BLOCKED: every question's FIRST option must be the decoy, label exactly: $ASK_DECOY" \
       "An Orca alert typed into an open picker picks the first option; the decoy makes that pick void. Put it first (description: \"Stray keypress guard, never pick this\") and ask again." >&2

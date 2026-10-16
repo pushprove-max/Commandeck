@@ -40,16 +40,31 @@ IL_BEGIN='<!-- commandeck:begin -->' IL_END='<!-- commandeck:end -->'
 IL_EXCLUDE=$PP_MAIN/.git/info/exclude
 IL_AGENTS=$PP_MAIN/AGENTS.md
 IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin adds only marked blocks (il_global)
+# Setup's visible copy of an owner's file it is about to change (il_backup) is the owner's to keep or
+# delete, never git's: the first entry below.
 # The project's running state: every path a plugin script or hook, or the
 # session itself (a build's papers, main's to-do), writes during ordinary
 # running. The one list: setup hides these from git, the doctor reports one
 # git tracks, and uninstall takes out the lines setup's manifest recorded.
-IL_STATE=(.claude/settings.local.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
+IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
   .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock .claude/briefs/ .claude/routing-log todo/main-todo.md
   .claude/workflows/test-audit.js)   # setup's copy holds this machine's paths (il_test_audit)
 
 il_sha() { sha256sum < "$1" | cut -d' ' -f1; }
 
+# IL_PLAN (setup.sh --plan): nothing is written. il_write prints what it would
+# write (a new file by its length, a changed one as a diff) and still notes it in
+# IL_WROTE, keeping the content beside it (il_shadow), so a later step of the
+# plan reads what an earlier one would have written (il_cat), as apply does;
+# il_record and il_set change no manifest.
+il_shadow() { printf '%s.%s' "${IL_WROTE:-/dev/null}" "$(printf %s "$1" | cksum | cut -d' ' -f1)"; }
+# il_cat <path> -- the file as setup has it so far: in a plan, what il_write would have made it.
+il_cat() {
+  local p=$1 s
+  [ ! -L "$p" ] || p=$(readlink -f "$p")
+  s=$(il_shadow "$p")
+  if [ -n "${IL_PLAN:-}" ] && [ -n "${IL_WROTE:-}" ] && [ -e "$s" ]; then cat "$s"; else cat "$p"; fi
+}
 # il_write <path> -- stdin becomes the file, whole or not at all. A link is
 # written through, and an existing file keeps its mode. Every write of the
 # install goes through here, so this is also where setup learns what it really
@@ -58,8 +73,23 @@ il_sha() { sha256sum < "$1" | cut -d' ' -f1; }
 # write of the same bytes is no line. A file, not a variable: half the callers
 # are the far end of a pipe.
 il_write() {
-  local p=$1 t k=created
+  local p=$1 t s k=created
   [ ! -L "$p" ] || p=$(readlink -f "$p")
+  if [ -n "${IL_PLAN:-}" ]; then
+    t=$(mktemp) && cat > "$t" || return 1
+    s=$(il_shadow "$p")
+    # A second change to one path was made from the first (il_cat): shown as a change to that.
+    if [ -n "${IL_WROTE:-}" ] && [ -e "$s" ]; then k=changed
+      cmp -s "$s" "$t" || { echo "plan: and, on top of the change above, $p:"
+        { diff -u --label "$p (planned above)" --label "$p (after setup)" "$s" "$t" || true; } | sed 's/^/    /'; }
+    elif [ ! -e "$p" ]; then k=created; echo "plan: would create $p ($(wc -l < "$t" | tr -d ' ') lines)"
+      [ "$(wc -l < "$t")" -gt 30 ] || sed 's/^/    +/' "$t"
+    elif cmp -s "$t" "$p"; then k=
+    else k=changed; echo "plan: would change $p:"; { diff -u --label "$p (now)" --label "$p (after setup)" "$p" "$t" || true; } | sed 's/^/    /'; fi
+    [ -z "$k" ] || [ -z "${IL_WROTE:-}" ] || { printf '%s\t%s\n' "$k" "$p" >> "$IL_WROTE"; cp "$t" "$s"; }
+    rm -f "$t"
+    return 0
+  fi
   t=$p.new.$$
   { mkdir -p "${p%/*}" && cat > "$t" && { [ ! -e "$p" ] || { k=changed; ! cmp -s "$t" "$p" || k=; chmod --reference="$p" "$t"; }; } && mv -f "$t" "$p"; } \
     || { rm -f "$t"; echo "commandeck: could not write $p" >&2; return 1; }
@@ -72,6 +102,7 @@ il_write() {
 il_record() {
   local m=$1 kind=$2 j p d prior
   shift 2
+  [ -z "${IL_PLAN:-}" ] || return 0
   mkdir -p "$IL_DIR/blobs" && chmod 700 "$IL_DIR" || return 1
   j=$(cat "$m" 2>/dev/null) && [ -n "$j" ] || j='{"version": 1, "entries": {}}'
   for p; do
@@ -89,7 +120,7 @@ il_record() {
   il_write "$m" <<<"$j"
 }
 # il_set <manifest> <jq filter> [jq args] -- change the manifest in place.
-il_set() { local m=$1 j; shift; j=$(jq "$@" "$m") && il_write "$m" <<<"$j"; }
+il_set() { local m=$1 j; shift; [ -z "${IL_PLAN:-}" ] || return 0; j=$(jq "$@" "$m") && il_write "$m" <<<"$j"; }
 # il_has <manifest> <path> -- setup recorded this path.
 il_has() { jq -e --arg p "$2" '.entries | has($p)' "$1" >/dev/null 2>&1; }
 # il_projects -- every project manifest on this machine, one a line.
@@ -106,8 +137,8 @@ il_allow() {
 il_allow_set() {
   local m=$1 f=$2 new=$3 old j added doc
   # No file, or an empty one, is an empty object: jq prints nothing for no input.
-  doc=$(cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
-  old=$(jq -c --arg p "$f" '.entries[$p].added // []' "$m") || return 1
+  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  old=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -c --arg p "$f" '.entries[$p].added // []') || return 1
   # Only what the owner did not already have is the plugin's to take back out.
   added=$(jq -c --argjson old "$old" --argjson new "$new" '$new - ((.permissions.allow // []) - $old)' <<<"$doc" 2>/dev/null) || added=$new
   j=$(jq --argjson old "$old" --argjson new "$new" '
@@ -125,7 +156,7 @@ il_allow_set() {
 # takes out only a true that setup put there.
 il_workflows() {
   local m=$1 f=$2 doc
-  doc=$(cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     jq -e --arg p "$f" '.entries[$p].workflows == true' "$m" >/dev/null 2>&1 && jq -e '.enableWorkflows == true' <<<"$doc" >/dev/null 2>&1 || return 0
     doc=$(jq 'del(.enableWorkflows)' <<<"$doc") && il_write "$f" <<<"$doc"
@@ -141,12 +172,31 @@ il_workflows() {
 # the switch to its worktrees too, where a seat that names an advisor would lose it; none does by default.
 il_advisor_off() {
   local m=$1 f=$2 doc
-  doc=$(cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     jq -e --arg p "$f" '.entries[$p].advisorOff == true' "$m" >/dev/null 2>&1 || return 0
     doc=$(jq 'del(.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL) | if .env == {} then del(.env) else . end' <<<"$doc") && il_write "$f" <<<"$doc"
   elif ! jq -e '(.env // {}) | has("CLAUDE_CODE_DISABLE_ADVISOR_TOOL")' <<<"$doc" >/dev/null 2>&1; then
     doc=$(jq '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1"' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].advisorOff = true'
+  fi
+}
+# il_cache_ttl <manifest> <settings file> [off] -- prompt-cache lifetimes: the main conversation 1 hour,
+# everything else 5 minutes (measured on real transcripts: 5 minutes cost main about 19% more than 1 hour,
+# and saved subagents about 8%). A key the owner set is left as it is; off takes out only a value setup
+# wrote and nobody changed since.
+il_cache_ttl() {
+  local m=$1 f=$2 doc s
+  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  if [ "${3:-}" = off ]; then
+    s=$(jq -c --arg p "$f" '.entries[$p].cacheTtl // {}' "$m" 2>/dev/null) || s='{}'
+    [ "$s" != '{}' ] || return 0
+    doc=$(jq --argjson s "$s" 'reduce ($s | to_entries[]) as $e (.; if .[$e.key] == $e.value then del(.[$e.key]) else . end)' <<<"$doc") \
+      && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" 'del(.entries[$p].cacheTtl)'
+  else
+    s=$(jq -c '{promptCacheTtl: "1h", subagentPromptCacheTtl: "5m"} | with_entries(select(.key as $k | $d | has($k) | not))' --argjson d "$doc" -n)
+    [ "$s" != '{}' ] || return 0
+    doc=$(jq --argjson s "$s" '. + $s' <<<"$doc") && il_write "$f" <<<"$doc" \
+      && il_set "$m" --arg p "$f" --argjson s "$s" '.entries[$p].cacheTtl = ((.entries[$p].cacheTtl // {}) + $s)'
   fi
 }
 # il_test_audit <root> <file> -- the project's /test-audit: the plugin's script
@@ -164,7 +214,8 @@ il_test_audit() {
 # which is what Codex keys their trust by. No root takes the entries out.
 il_codex_hooks() {
   local f=$IL_CODEX/hooks.json j
-  [ -s "$f" ] || { [ -n "$1" ] || return 0; echo '{}' | il_write "$f" || return 1; }
+  # No file yet is an empty object, read as one: a plan has nothing on disk to read back.
+  j=$(il_cat "$f" 2>/dev/null) || j=; [ -n "${j//[[:space:]]/}" ] || { [ -n "$1" ] || return 0; j='{}'; }
   if [ -n "$1" ]; then
     j=$(jq --arg m "$IL_OURS_RE" --arg r "$(il_shq "$1")" --slurpfile t "$IL_ROOT/templates/codex-hooks.json" '
         def ours: (.command // "") | test($m);
@@ -172,11 +223,11 @@ il_codex_hooks() {
         | .hooks = reduce ($th | keys_unsorted[]) as $e (.hooks // {};
             if any(.[$e][]?.hooks[]?; ours)
             then .[$e] |= map(.hooks |= map(if ours then . + $th[$e][0].hooks[0] else . end))
-            else .[$e] = (.[$e] // []) + $th[$e] end)' "$f")
+            else .[$e] = (.[$e] // []) + $th[$e] end)' <<<"$j")
   else
     j=$(jq --arg m "$IL_OURS_RE" '
         .hooks |= with_entries(.value |= map(.hooks |= map(select((.command // "") | test($m) | not)) | select(.hooks != [])) | select(.value != []))
-        | if .hooks == {} then del(.hooks) else . end' "$f")
+        | if .hooks == {} then del(.hooks) else . end' <<<"$j")
   fi || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
   il_write "$f" <<<"$j"
 }
@@ -253,38 +304,114 @@ il_notify_repoint() {
   esac
 }
 il_notify() {
-  local f=$IL_CODEX/config.toml rest
-  [ -e "$f" ] || { [ -n "$1" ] || return 0; : | il_write "$f" || return 1; }
-  rest=$(grep -vE '^notify = \[".*/hooks/codex-notify\.sh"\]$' "$f" || true)
+  local f=$IL_CODEX/config.toml rest cur
+  cur=$(il_cat "$f" 2>/dev/null) || { [ -n "$1" ] || return 0; cur=; }
+  rest=$(grep -vE '^notify = \[".*/hooks/codex-notify\.sh"\]$' <<<"$cur" || true)
   [ -z "$1" ] || grep -qE '^[[:space:]]*notify[[:space:]]*=' <<<"$rest" || rest=$(il_notify_line "$1")${rest:+$'\n'$rest}
-  [ "$rest" = "$(cat "$f")" ] || printf '%s\n' "$rest" | il_write "$f"
+  [ "$rest" = "$cur" ] || printf '%s\n' "$rest" | il_write "$f"
 }
 
 # il_block <file> [text file] -- the plugin's marked block in an instruction
 # file: replaced by <text file>'s content, or taken out when none is given.
 il_block() {
-  local f=$1 body=''
-  [ ! -e "$f" ] || body=$(awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' "$f")
-  if [ -n "${2:-}" ]; then
-    { [ -z "$body" ] || printf '%s\n\n' "$body"; printf '%s\n' "$IL_BEGIN"; cat "$2"; printf '%s\n' "$IL_END"; } | il_write "$f"
-  elif [ -e "$f" ] && [ "$body" != "$(cat "$f")" ]; then
-    printf '%s\n' "$body" | il_write "$f"
-  fi
+  local new
+  if [ -n "${2:-}" ]; then il_block_text "$1" "$2" | il_write "$1"
+  elif [ -e "$1" ]; then new=$(il_block_text "$1"); [ "$new" = "$(il_cat "$1")" ] || printf '%s\n' "$new" | il_write "$1"; fi
+}
+# il_block_text <file> [text file] -- the file's text with that block replaced (or taken out), the owner's text as it was.
+il_block_text() {
+  local body=''
+  body=$({ il_cat "$1" 2>/dev/null || true; } | awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }')
+  if [ -n "${2:-}" ]; then { [ -z "$body" ] || printf '%s\n\n' "$body"; printf '%s\n' "$IL_BEGIN"; cat "$2"; printf '%s\n' "$IL_END"; }
+  else printf '%s\n' "$body"; fi
+}
+# il_put <manifest> <file> <text> -- an owner's file becomes <text>, with a backup first; the same text writes nothing.
+il_put() {
+  [ ! -e "$2" ] || [ "$3" != "$(il_cat "$2")" ] || return 0
+  il_backup "$1" "$2" && printf '%s\n' "$3" | il_write "$2"
 }
 
-# il_global <install|block|skip|''> <tag> <template> <flag> -- the template as the
+# il_global <install|block|merge|skip|''> <tag> <template> <flag> -- the template as the
 # plugin's own marked block in IL_GLOBAL. install writes it only into a file
 # setup itself created; block adds it to the owner's file, or replaces the one
-# an earlier run added; skip and no answer leave the file as it is. Run after
+# an earlier run added; merge does the same with only the rules the owner's file
+# does not already have (merge-rules.py: exact matches); skip and no answer leave
+# the file as it is. The owner's own text is never changed, and a copy of the file
+# is kept beside it before the first change of the day (il_backup). Run after
 # IL_GLOBAL is recorded in the machine manifest, which says whether setup made it.
 il_global() {
+  local body
   case $1 in
+    # The same check in a plan: one writes nothing, so a file the run itself would create is still not on disk.
     install) [ ! -e "$IL_GLOBAL" ] || [ "$(jq -r --arg p "$IL_GLOBAL" '.entries[$p].prior // empty' "$IL_MACHINE" 2>/dev/null)" = "did not exist" ] \
-      || { echo "global $2: $IL_GLOBAL exists, left as it is; to add it as a marked block: $4 block"; return 0; } ;;
-    block) ;;
+      || { echo "global $2: $IL_GLOBAL exists, left as it is; to add it as a marked block: $4 block, or only what it lacks: $4 merge"; return 0; }
+      body=$(cat "$3") ;;
+    block) body=$(cat "$3") ;;
+    merge) body=$(python3 "$IL_ROOT/scripts/merge-rules.py" "$3" --against "$IL_GLOBAL") || return 1
+      [ -z "${IL_PLAN:-}" ] || python3 "$IL_ROOT/scripts/merge-rules.py" "$3" --against "$IL_GLOBAL" --report | sed "s/^/plan: global $2: /" ;;
     *) return 0 ;;
   esac
-  IL_BEGIN="<!-- commandeck:$2:begin -->" IL_END="<!-- commandeck:$2:end -->" il_block "$IL_GLOBAL" "$3"
+  il_put "$IL_MACHINE" "$IL_GLOBAL" "$(IL_BEGIN="<!-- commandeck:$2:begin -->" IL_END="<!-- commandeck:$2:end -->" il_block_text "$IL_GLOBAL" <(printf '%s\n' "$body"))"
+}
+
+# il_backup <manifest> <file> -- a copy of an owner's file, <file>.commandeck-bak-<date>, made before setup
+# first changes it that day, beside it where the owner sees it. Recorded as kind "backup": uninstall
+# removes it once the file is back to the bytes it copies, and keeps it otherwise. An existing one is kept.
+il_backup() {
+  local b=$2.commandeck-bak-$(date +%Y%m%d)
+  # A file setup itself created holds nothing of the owner's to keep.
+  [ -s "$2" ] && [ ! -e "$b" ] && [ "$(jq -r --arg p "$2" '.entries[$p].prior // empty' "$1" 2>/dev/null)" != "did not exist" ] || return 0
+  if [ -n "${IL_PLAN:-}" ]; then echo "plan: would copy $2 to $b first (a backup; yours to keep)"; return 0; fi
+  il_record "$1" backup "$b" && cp -p "$2" "$b" && { [ -z "${IL_WROTE:-}" ] || printf 'backup\t%s\n' "$b" >> "$IL_WROTE"; }
+}
+
+# il_rules_against -- the project's own rule files main loads, as merge-rules.py arguments: CLAUDE.md and
+# .claude/rules/*.md, and the settings' excludes (claudeMdExcludes), which merge-rules.py matches as Claude Code
+# does. A path-scoped rules file loads only for its paths: merge-rules.py counts it for nothing.
+il_rules_against() {
+  local f
+  for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
+    jq -r '.claudeMdExcludes[]? | strings | "--exclude", .' "$f" 2>/dev/null || true; done
+  for f in "$PP_MAIN/CLAUDE.md" "$PP_MAIN"/.claude/rules/*.md; do [ ! -f "$f" ] || printf -- '--against\n%s\n' "$f"; done
+}
+# il_own <manifest> <owner's file> <plugin template> <replace|merge|skip|''> [drop id...] -- the owner's
+# own AGENT_STARTUP.md or .claude/main-session.md, which the session hook loads instead of the plugin's.
+# replace changes no file: the answer, saved in the config (ownFiles), has the hook load the plugin's
+# version; merge adds, in a marked block, the plugin's rules it lacks (merge-rules.py: exact matches
+# against it; the drop ids are rules the owner keeps their own wording for); skip, or no answer, leaves it
+# as it is. A merge into main-session.md goes ahead of the owner's "## Details (not injected)" heading, which
+# ends what the hook loads, and only the part above it counts as the owner's. The block is committed and each
+# seat's settings may exclude other project rules, so the session hook, not setup, leaves out of it what the
+# project's CLAUDE.md and .claude/rules/ state for the seat it starts (the plan shows main's count).
+il_own() {
+  local m=$1 f=$2 t=$3 c=$4 a=() d body rest n
+  shift 4
+  [ -f "$f" ] || return 0
+  # A merge block an earlier run added comes out on any other answer.
+  [ "$c" = merge ] || ! il_cat "$f" | grep -qxF '<!-- commandeck:merge:begin -->' \
+    || il_put "$m" "$f" "$(IL_BEGIN='<!-- commandeck:merge:begin -->' IL_END='<!-- commandeck:merge:end -->' il_block_text "$f")"
+  case $c in
+    merge) il_record "$m" merge "$f"
+      # main-session.md's first line is its persona and its Details stay on disk: neither is a rule to add.
+      if [ "${f##*/}" = main-session.md ]; then body=$(tail -n +2 "$t" | awk '/^## Details \(not injected\)/ {exit} 1')
+      else body=$(cat "$t"); fi
+      for d; do a+=(--drop "$d"); done
+      [ -z "${IL_PLAN:-}" ] || python3 "$IL_ROOT/scripts/merge-rules.py" - --against "$f" ${a[@]+"${a[@]}"} --report <<<"$body" | sed "s|^|plan: $f: |"
+      # The block keeps the plugin's own scripts/... paths: the file is committed, and the session hook
+      # writes this machine's plugin folder into the block as it loads it.
+      body=$(python3 "$IL_ROOT/scripts/merge-rules.py" - --against "$f" ${a[@]+"${a[@]}"} <<<"$body") || return 1
+      if [ -n "${IL_PLAN:-}" ]; then
+        while IFS= read -r d; do a+=("$d"); done < <(il_rules_against)
+        python3 "$IL_ROOT/scripts/merge-rules.py" - ${a[@]+"${a[@]}"} --report <<<"$body" | sed "s|^|plan: $f: when main starts, of the block: |"
+      fi
+      rest=$(il_cat "$f" | awk -v b="<!-- commandeck:merge:begin -->" -v e="<!-- commandeck:merge:end -->" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }')
+      n=$(grep -n -m1 '^## Details (not injected)' <<<"$rest" | cut -d: -f1) || n=
+      if [ -n "$n" ]; then
+        il_put "$m" "$f" "$(head -n $((n - 1)) <<<"$rest"; printf '%s\n%s\n\n%s\n' "<!-- commandeck:merge:begin -->" "$body" "<!-- commandeck:merge:end -->"; tail -n +"$n" <<<"$rest")"
+      else
+        il_put "$m" "$f" "$(IL_BEGIN="<!-- commandeck:merge:begin -->" IL_END="<!-- commandeck:merge:end -->" il_block_text "$f" <(printf '%s\n' "$body"))"
+      fi ;;
+  esac
 }
 # il_global_out -- both blocks out of IL_GLOBAL; the owner's text stays.
 il_global_out() {
@@ -297,8 +424,8 @@ il_global_out() {
 il_lines() {
   local m=$1 f=$2 old l body
   shift 2
-  old=$(jq -r --arg p "$f" '.entries[$p].added // [] | .[]' "$m") || return 1
-  body=$(cat "$f" 2>/dev/null || true)
+  old=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -r --arg p "$f" '.entries[$p].added // [] | .[]') || return 1
+  body=$(il_cat "$f" 2>/dev/null || true)
   [ -z "$old" ] || body=$(grep -vxFf <(printf '%s\n' "$old") <<<"$body" || true)
   old='[]'
   for l; do
@@ -330,7 +457,11 @@ il_restore() {
   local m=$1 kind prior p blob
   while IFS=$'\t' read -r kind prior p; do
     blob=$IL_DIR/blobs/${prior#sha256:}
-    if [ "$prior" = "dangling link" ]; then
+    if [ "$kind" = backup ]; then
+      # Last (sorted so): the file it copies is back by now, or was left as the owner changed it.
+      if cmp -s "$p" "${p%.commandeck-bak-*}"; then rm -f "$p"
+      elif [ -e "$p" ]; then echo "kept setup's copy of ${p%.commandeck-bak-*} as it was before setup: $p"; fi
+    elif [ "$prior" = "dangling link" ]; then
       # What setup wrote through the link goes; the link stays as it was.
       [ -L "$p" ] && [ -e "$p" ] || continue
       if [ "$kind" = own ] || il_empty "$p"; then rm -f "$(readlink -f "$p")"
@@ -344,7 +475,7 @@ il_restore() {
     elif [ ! -e "$p" ] || [ "$kind" = own ] || il_same "$p" "$blob"; then
       [ -e "$p" ] && [ "$(il_sha "$p")" = "${prior#sha256:}" ] || il_write "$p" < "$blob"
     else echo "changed since setup, left as it is: $p"; fi
-  done < <(jq -r '.entries | to_entries[] | select(.value.kind != "dir") | [.value.kind, .value.prior, .key] | @tsv' "$m")
+  done < <(jq -r '.entries | to_entries | sort_by(.value.kind == "backup")[] | select(.value.kind != "dir") | [.value.kind, .value.prior, .key] | @tsv' "$m")
   # The folders setup made, deepest first; one that now holds something stays.
   jq -r '.entries | to_entries[] | select(.value.kind == "dir") | .key' "$m" | awk '{ print length($0) "\t" $0 }' | sort -rn | cut -f2- \
     | while IFS= read -r p; do rmdir "$p" 2>/dev/null || true; done

@@ -144,7 +144,7 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 #    Proof on a launched Builder: builder-cache-check.sh.
 if [ "$BUILDER" = 1 ]; then
   RULES="$(cd "$WT" && pwd)/.claude/rules"
-  BX=$(jq -cn --arg r "$RULES" '["orchestration", "agents", "planning", "adversarial-reviews", "worktree-sessions"] | map("\($r)/\(.).md")')
+  BX=$(jq -cn --arg r "$RULES" --arg n "$PP_BUILDER_RULES_OFF" '$n | split(" ") | map("\($r)/\(.).md")')
   jq --argjson bx "$BX" --arg cmd "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/builder-event-log.sh\"" \
     --arg gcmd "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/builder-search-guard.sh\"" --arg s "$PP_SCRIPTS_Q" '
     def reg($m): [{hooks: [{type: "command", command: $cmd}]} + (if $m then {matcher: $m} else {} end)];

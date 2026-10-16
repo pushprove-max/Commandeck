@@ -100,11 +100,13 @@ T=${T//'{pass-script}'/"builder-$BY-pass.sh"}
 T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
-SMALL=$(pp_review_loop smallBuild 200 '^[1-9][0-9]*$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
+SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 LOOP=
 [ -z "$MAXR" ] || LOOP+="This project allows at most $MAXR rounds: a pass numbered over $MAXR is refused. Before that, stop and report to main what is still open."$'\n'
 [ "$CLOSING" != no ] || LOOP+="This project runs no closing pass: skip step 3. The narrowed pass that ends \`VERDICT: GO\` is the one the merge takes, once narrowed passes have read every commit after the first pass; change nothing after it."$'\n'
+# Small build off: no build is small, so the first pass is always three reviewers.
+[ "$SMALL" != off ] || T=${T//$'or one when the build\n   is under {small-build} changed lines and main did not launch it with `--risky` (the\n   pass prints which)'/'never one: this project turned the small build off'}
 T=${T//'{small-build}'/"$SMALL"}
 T=${T//$'{loop-rules}\n'/"$LOOP"}
 # Its headings go two levels down, so a batch with a level-1 title of its own stays inside "## The batch": the

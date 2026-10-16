@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.7.0 -- 2026-10-16
+
+Setup asks better questions, shows every change before it makes one, and can
+merge its rules with yours instead of replacing them.
+
+- Setup checks the requirements before its first question and says what it
+  found: your own startup files, your project rules, your global
+  `CLAUDE.md`, your model's context window when a setting names it, and
+  whether Codex and its fast mode are ready. Each question explains its
+  choices, marks the recommended one "(recommended)" and offers it first,
+  and is asked only when it applies. While setup asks, the picker's stray-keypress option is
+  off; it comes back when setup ends, fails or is cancelled.
+- `setup.sh --plan` prints every file a run would create or change (a diff
+  for a changed one), every copy, job and add-on, and writes nothing. The
+  skill shows it and asks Apply, Change an answer, or Cancel.
+- Your rules: setup can merge the plugin's rules with your `CLAUDE.md` and
+  `.claude/rules/` (exact matches are left out; you choose for a rule that
+  only says the same in other words, or disagrees, seeing both texts, and a
+  rerun keeps your answer). Only a rule a session really loads counts: not
+  one in a path-scoped rules file (or one whose frontmatter setup cannot
+  read for sure), one a Builder's settings leave out, or
+  one under main-session.md's "Details (not injected)". It also merges with
+  your own
+  `AGENT_STARTUP.md` and `.claude/main-session.md` (merge, replace or skip,
+  asked each time). Global rules gain merge. Your own text is never changed:
+  the plugin's rules go in marked blocks, a copy of your file is kept beside
+  it first, and uninstall takes out only the blocks.
+- Project permission rules now go in `.claude/settings.local.json`, which git
+  never sees, since they name this machine's plugin folder; a rerun moves
+  them out of `.claude/settings.json`. A new scope moves them instead of
+  asking for an uninstall first.
+- The dashboard, ponytail and add-ons are questions now. Add-ons you pick are
+  installed for the main checkout and reported as installed or failed, with
+  the command (#113). The relay pane explains why its servers read as
+  blocked "by enterprise policy", and the serena line setup and the doctor
+  print reads the saved config (#114).
+- Setup ends with a short summary: done, needs you, optional, and how to
+  change an answer later. The doctor says when your own startup file loads
+  instead of the plugin's.
+- Setup asks for the prompt-cache lifetimes: recommended is 1 hour for main
+  and the Claude panes and 5 minutes for subagents, written to the project's
+  `.claude/settings.json` (a value you set stays; uninstall takes out only
+  setup's). On real transcripts 5 minutes cost main about 19% more than 1
+  hour, and 1 hour cost subagents about 8% more.
+- Small build can be turned off: every first pass then has three reviewers.
+- The dashboard loop picks up a changed view file on its own, without
+  `--install`.
+- Removed: the hook that refused main a read inside a worker's worktree.
+  Restored: the hint that a plugin script answers `--help`, when main reads
+  one.
+
 ## 0.6.0 -- 2026-10-15
 
 Every open issue in one build, plus the tooling fixes from the project this

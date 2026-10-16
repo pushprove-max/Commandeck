@@ -25,6 +25,7 @@ INPUT=$(cat)
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty'); [ -d "$CWD" ] || CWD=$PWD
 
 # A FAILED read is not a read. PostToolUse fires either way, and counting a
 # refused read inflates a family toward the threshold with files nobody saw.
@@ -48,7 +49,6 @@ case "$TOOL" in
     # `sed -n`, `head`, `tail`. Those are the same sweep and must count, or the
     # hook is blind in exactly the worker seats it exists for.
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-    CWD=$(echo "$INPUT" | jq -r '.cwd // empty'); [ -d "$CWD" ] || CWD=$PWD
     PATHS=$(printf '%s\n' "$CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/|/\n/g' -e 's/;/\n/g' \
       | while IFS= read -r SEG; do
           printf '%s' "$SEG" | grep -qE '^[[:space:]]*(cat|sed|head|tail|less|bat|nl)[[:space:]]' || continue
@@ -62,6 +62,20 @@ case "$TOOL" in
   *) exit 0 ;;
 esac
 [ -n "$PATHS" ] || exit 0
+
+# MAIN READS A DRIVER'S --help, NOT ITS SOURCE. Main opened script source dozens
+# of times a day to learn how to call it, and every read stays in its context. A
+# read of a scripts/*.sh that answers --help carries a hint, as advice: refusing
+# it cost a turn and redirected nothing (owner ruling 2026-10-01; restored
+# 2026-10-15 after it was lost with symbols-before-read.sh). Workers are exempt.
+HINT=
+if [ "$(git -C "$CWD" rev-parse --git-dir 2>/dev/null)" = "$(git -C "$CWD" rev-parse --git-common-dir 2>/dev/null)" ]; then
+  while IFS= read -r P; do
+    case $P in */scripts/__tests__/*) continue ;; */scripts/*.sh) ;; *) continue ;; esac
+    grep -qF -- '--help|-h)' "$P" 2>/dev/null || continue
+    HINT="Hint: 'bash $P --help' prints its flags and an example; read the source only to debug it."; break
+  done <<<"$PATHS"
+fi
 
 FAMS=""
 while IFS= read -r P; do
@@ -103,7 +117,7 @@ Raw output goes to a file under the scratchpad; only the answer comes back.
 If you genuinely need each file's own content in context, say so and carry on.
 EOF
 }
-  ADVICE=$(advice)
+  ADVICE=$(advice)${HINT:+$'\n\n'$HINT}
   HOOK_FIRE_ADVISE=1
   printf '%s\n' "$ADVICE" >&2
   jq -cn --arg message "$ADVICE" '{
@@ -115,4 +129,5 @@ done <<EOF
 $(printf '%s' "$FAMS" | sort -u)
 EOF
 
+[ -z "$HINT" ] || { HOOK_FIRE_ADVISE=1; jq -cn --arg m "$HINT" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$m}}'; }
 exit 0

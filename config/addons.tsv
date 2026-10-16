@@ -1,5 +1,5 @@
-# name<TAB>install command<TAB>what it costs. Setup prints these and installs none but the ponytail skill.
-serena	claude mcp add serena -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project "$(pwd)"	one language-server process per project; then set "serena": true (setup.sh --serena) for the symbol-first hooks
+# name<TAB>install command<TAB>what it costs. Setup installs the ones the owner picks (setup.sh --addons) and prints the rest.
+serena	claude mcp add serena -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project "$(pwd)"	one language-server process per project; setup.sh --addons serena also turns on the hooks that use it (the read-tracker nudge and the pane-budget gate)
 codebase-memory	see https://github.com/DeusData/codebase-memory-mcp for its installer	one background indexer; its tool list rides in every session
 agent-browser	npm install -g agent-browser && agent-browser install	a browser download of a few hundred MB
 ponytail	claude plugin marketplace add DietrichGebert/ponytail && claude plugin install ponytail@ponytail	about 1 KB of rules at every session start; setup installs its skill alone (/ponytail), which costs nothing until asked for

@@ -322,8 +322,8 @@ round_files() {
 
 # A first pass is ONE reviewer when the commit it reads is under this many
 # changed lines and main did not launch the build with --risky, else three.
-# The owner's number, asked at setup; 200 when not answered.
-SMALL_BUILD=$(pp_review_loop smallBuild 200 '^[1-9][0-9]*$') || exit 2
+# The owner's number, asked at setup; 200 when not answered; off makes no build small.
+SMALL_BUILD=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') || exit 2
 # Whether a closing pass over the whole branch runs (asked at setup): with "no",
 # a narrowed GO that follows the first pass over every commit merges.
 CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
@@ -356,13 +356,16 @@ size_words() {
   echo "$n lines changed$([ "$u" = 0 ] || echo " and $u file(s) git gives no line count for"), $r"
 }
 # one_reviewer_fits <"lines unknown risky"> -- the rule itself.
-one_reviewer_fits() { [ "$1" != "${1% 0 0}" ] && [ "${1%% *}" -lt "$SMALL_BUILD" ]; }
+one_reviewer_fits() { [ "$SMALL_BUILD" != off ] && [ "$1" != "${1% 0 0}" ] && [ "${1%% *}" -lt "$SMALL_BUILD" ]; }
+# The rule in words, for the pass's line and its refusal.
+SMALL_WORDS="one reviewer under $SMALL_BUILD changed lines and no risky launch"
+[ "$SMALL_BUILD" != off ] || SMALL_WORDS="never one reviewer: this project turned the small build off"
 # one_reviewer_allowed <worktree> <commit a one-reviewer first pass read> <what to call that pass> -- refuse unless the rule allowed it there.
 one_reviewer_allowed() {
   local size
   size=$(build_size "$1" "$2") || exit 2
   one_reviewer_fits "$size" \
-    || die "$3 is a first pass of one reviewer on a commit of $(size_words "$size"): one reviewer is allowed only under $SMALL_BUILD changed lines and no risky launch. Run: builder-$BY-pass.sh $UNIT <N> adversarial"
+    || die "$3 is a first pass of one reviewer on a commit of $(size_words "$size"): the rule is $SMALL_WORDS. Run: builder-$BY-pass.sh $UNIT <N> adversarial"
 }
 
 # pass_threads <worktree> -- "<session id> <round>" for every pass the reviewer $BY names
@@ -839,7 +842,7 @@ RULE_LINE=""
 if [ "$KIND" = adversarial ]; then
   SIZE=$(build_size "$WT" "$SHA") || exit 2
   ! one_reviewer_fits "$SIZE" || FOCI=("All three angles, in this one review. ${ANGLES[*]}")
-  RULE_LINE="Reviewers: ${#FOCI[@]} ($(size_words "$SIZE"); one reviewer under $SMALL_BUILD lines and no risky launch, else three)"
+  RULE_LINE="Reviewers: ${#FOCI[@]} ($(size_words "$SIZE"); $SMALL_WORDS, else three)"
   echo "$RULE_LINE"
 fi
 FROM=""; [ -z "$PREV" ] || FROM=$(sed -n 's/^Reviewed: \([0-9a-f]*\)$/\1/p' "$PREV" | head -1)

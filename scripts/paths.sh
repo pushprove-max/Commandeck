@@ -45,6 +45,9 @@ export PP_MAIN PP_WORKSPACES PP_MAIN_SLUG PP_WORKSPACES_SLUG PP_SCRATCH
 PP_SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The same path as one shell word, for a command that is printed to be run.
 PP_SCRIPTS_Q=$(printf '%q' "$PP_SCRIPTS")
+# The project rules a Builder never loads (worktree-setup.sh --builder excludes them; every worker
+# excludes the first).
+PP_BUILDER_RULES_OFF="orchestration agents planning adversarial-reviews worktree-sessions"
 
 # The code-graph project for the primary checkout, chosen by root path from
 # list_projects. Each machine indexes the checkout under its own home, so the

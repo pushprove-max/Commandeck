@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.0-111111?style=flat-square" alt="Version 0.6.0">
+  <img src="https://img.shields.io/badge/version-0.7.0-111111?style=flat-square" alt="Version 0.7.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -84,7 +84,7 @@ Then, in each project, in a Claude Code session:
 
 | Command | Does |
 |---|---|
-| `/commandeck:setup` | asks its questions once, then writes the project's config, the permission rules, the dashboard and watcher jobs and, for `claude-openai`, Codex's hooks. Every file it changes is recorded first |
+| `/commandeck:setup` | checks the requirements, asks its questions once, shows every change it would make (`setup.sh --plan`), and only on your Apply writes the project's config, the permission rules, the watcher job and the answers you chose. Every file it changes is recorded first, and a file of yours is copied beside it (`<file>.commandeck-bak-<date>`) |
 | `/commandeck:doctor` | checks the wiring and changes nothing; each `FAIL` line ends with the command that fixes it |
 | `/commandeck:update` | after `claude plugin update`: points everything at the plugin's new folder, runs the doctor, and puts the files back if it fails |
 | `/commandeck:uninstall` | puts every file back as it was; the gathered data is kept unless you say delete |
@@ -101,24 +101,35 @@ line to run.
 
 ### What setup asks
 
+Each question says what its choices do, offers the recommended one first
+(a saved answer first on a rerun), and is asked only when it applies. While
+setup asks, the picker guard's stray-keypress option is off.
+
 | Question | Choices |
 |---|---|
-| Profile | `claude-openai`: Codex reviews each batch. `claude`: a second Claude on a different model family than the Builder's reviews it |
-| Permissions | `project`: the rules go in this project's `.claude/settings.json`. `machine`: in `~/.claude/settings.json`, for every project |
+| Reviewer | `claude`: a second Claude on a different model family reviews each build. `claude-openai`: Codex reviews it (offered when the Codex CLI is ready) |
+| Permissions | this project: the rules go in `.claude/settings.local.json`, which git never sees (they name this machine's plugin folder). Every project: in `~/.claude/settings.json`. A changed answer moves them |
+| Your rules | asked when the project has a `CLAUDE.md` or `.claude/rules/`: merge (sessions leave out the plugin's rules yours already state word for word; for a rule that only says the same in other words, or disagrees, you choose keep mine, use the plugin's or keep both) or keep both |
+| Your own startup files | asked each time for a project's own `AGENT_STARTUP.md` and `.claude/main-session.md`, which otherwise load instead of the plugin's: merge (the plugin's rules yours lack are added in a marked block), replace (sessions load the plugin's; yours stays on disk) or skip |
+| Global rules, global CLAUDE.md | when `~/.claude/CLAUDE.md` exists: merge (only the rules it lacks), add as block, or skip; when it does not: install or skip. Your own text is never changed; uninstall takes out only the plugin's blocks |
+| Builder model, context | Opus (the default) or Sonnet for less usage; every Builder runs at effort high with no advisor. 200K or a larger window |
+| Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
+| Dashboard | on for this machine only, off, or on plus another name it answers to (a tailnet's) |
+| Merge check | the command that must pass before a merge, or none |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
-| Chief of Staff | a name and one line on how the relay pane should sound, or none |
-| Codex fast | off (the default) or on. On, the Codex review passes run on the fast tier, which costs more per token; off, they are held to the normal tier whatever your Codex config says |
-| Builder model | Opus (the default) or Sonnet for less usage; every Builder runs at effort high with no advisor, a risky build included, and a rerun drops an advisor an older setup saved |
-| Global CLAUDE.md | skip, install (writes `~/.claude/CLAUDE.md` only when there is none) or add block (a marked block in your own file); the plugin's general working rules, code exploration and root-cause rules |
-| Global rules | the same three choices for the plugin's working, review, agent and test rules; uninstall takes out only the plugin's blocks |
-| Review loop | the most review rounds a build may run (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
+| Ponytail | on (the skill is installed) or off |
+| Prompt cache | recommended (`promptCacheTtl` 1 hour for main and Claude panes, `subagentPromptCacheTtl` 5 minutes, in `.claude/settings.json`; a value you set stays) or Claude Code's default (writes nothing) |
+| Add-ons | any of serena, codebase-memory, agent-browser, or none (see [Add-ons](#add-ons)) |
+| Review loop | defaults, keep saved, or tune: the most review rounds (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200; off gives every first pass three reviewers), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
+| Codex fast, Codex model | with the Codex reviewer only: fast mode, offered when your Codex config allows it, and a model id when setup found none |
 
-Setup also creates the project's Orca run, or prints the one command for it,
-and ends with the list of project files it created or changed and which of
-them to commit. It takes a test command that must pass before a merge
-(`--test-command`), `--standard-context` when your account's model holds
-200K tokens, other names the dashboard may be opened under (`--hosts`), and
-your own status line (`--status-line`; uninstall puts the earlier one back).
+Then setup prints the plan, every file it would create or change with a
+diff, and asks Apply, Change an answer, or Cancel. Its summary ends in three
+parts: what it did, what needs you (a command it could not run, files to
+commit), and what is optional, with how to change any answer later: run
+`/commandeck:setup` again, or `setup.sh` with only that flag. It also creates
+the project's Orca run, or prints the one command for it. Your own status
+line is set with `--status-line` (uninstall puts the earlier one back).
 
 ## The first build
 
@@ -268,9 +279,7 @@ are expensive later:
   `--wait`, `--peek`, `--all`, `--ack` or `--terminal` is refused in every
   pane, and a worker's `sleep` loop is pointed at `run_in_background` or the
   Monitor tool.
-- `main-worktree-read-guard.sh` stops the orchestrator from reading a
-  worker's worktree; the papers under its `.claude/briefs/` stay open to it.
-  `worker-ask-guard.sh` stops a worker or reviewer
+- `worker-ask-guard.sh` stops a worker or reviewer
   from opening a question picker in its own pane, where nobody would see it.
 - `write-existing-file-guard.sh` warns when an edit mostly restates lines
   it replaces.
@@ -488,10 +497,14 @@ bash scripts/proof-run.sh --profile claude     # one
 
 ## Add-ons
 
-Setup installs one add-on, the [Ponytail](https://github.com/DietrichGebert/ponytail)
-skill (`templates/ponytail`, left alone when you already have it). For every
-other one it prints the install command and what it costs you, and installs
-nothing. The list is `config/addons.tsv`.
+Setup asks which add-ons to install, in one question that takes several
+answers. Each one you pick is installed for the project's main checkout by
+its command in `config/addons.tsv`, and setup reports it as installed or, with
+the command to run, as failed. One you do not pick installs nothing; setup
+prints its command and what it costs you. Picking serena also turns on the
+hooks that use it (`--serena`). The [Ponytail](https://github.com/DietrichGebert/ponytail)
+skill (`templates/ponytail`) is its own question, on by default, and left
+alone when you already have it.
 
 | Add-on | What it adds | What it costs |
 |---|---|---|

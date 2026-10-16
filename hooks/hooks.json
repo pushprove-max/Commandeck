@@ -50,9 +50,6 @@
       ]},
       {"matcher": "Write", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/new-test-file-guard.sh\""}
-      ]},
-      {"matcher": "Read|Grep|Glob", "hooks": [
-        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/main-worktree-read-guard.sh\"", "onFailure": "block", "timeout": 30}
       ]}
     ],
     "PostToolUse": [

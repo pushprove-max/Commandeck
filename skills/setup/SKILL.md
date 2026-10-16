@@ -2,21 +2,23 @@
 name: setup
 description: Set this project up for the commandeck workflow. Use when the owner runs /commandeck:setup or says "set up commandeck", "install the workflow here". Run it in the project's main checkout.
 disable-model-invocation: true
-allowed-tools: Bash(bash *), AskUserQuestion
+allowed-tools: Bash(bash *), Bash(python3 *), AskUserQuestion
 ---
 
 # /commandeck:setup
 
-Ask each question once, then run one script. Do not re-ask what the owner
-answered, and do not edit any settings file yourself: `setup.sh` records what
-was there before it changes it, and an edit made around it cannot be undone by
-uninstall.
+Ask each question once, show the owner every change before it is made, then
+run one script. Do not edit any settings or rules file yourself: `setup.sh`
+records what was there before it changes it and copies an owner's file beside
+it first, and an edit made around it cannot be undone by uninstall.
 
 Rule: a refused or failed question call is not an answer; ask the same thing again in plain text and never assume a default.
 
-Rule: every question goes through `AskUserQuestion`, in the calls below, with exactly the headers and options written here; the guard's decoy goes first, so a question has at most three options of its own. A typed value is a question too: its options are the likely values (the saved one, a common one), and the picker's own free-text answer takes any other. Never print a list of follow-up questions in plain text. An answer setup cannot use as given is asked again as a picker that offers only the choices setup supports.
+Rule: every question goes through `AskUserQuestion`, with exactly the headers and options written here, recommended option first, and each option's one-line description as written. The recommended option's label ends in " (recommended)", as written below, in every question. While setup asks, the picker guard's decoy is off (`--questions begin` below), so a question has up to four options of its own. A typed value is a question too: its options are the likely values (the saved one first when there is one), and the picker's own free-text answer takes any other. Never print a list of follow-up questions in plain text. An answer setup cannot use as given is asked again as a picker that offers only the choices setup supports.
 
-Rule: free text the owner types (the relay's name and its line, the merge check command, a host name, a status line command) is passed to `setup.sh` exactly as typed, never corrected, completed or reformatted; a suspected slip may be asked about before anything is sent, and the original is sent unless the owner changes it.
+Rule: free text the owner types (the relay's name and its line, the merge check command, a host name) is passed to `setup.sh` exactly as typed, never corrected, completed or reformatted; a suspected slip may be asked about before anything is sent, and the original is sent unless the owner changes it.
+
+Rule: a saved answer is offered first, marked "(saved)" (and "(recommended)" too when it is that one). Only the questions that apply are asked: the step says when one is skipped.
 
 Before the first question, run one probe: `bash -c 'command -v orca-ide; true'`.
 It changes nothing, and no answer from it is a failure. If a hook that is not
@@ -27,160 +29,205 @@ own terminal, in this folder, with the plugin's folder written out:
 `bash <plugin folder>/scripts/setup.sh --profile claude|claude-openai`. Never
 edit, switch off or work round the project's own guard.
 
-1. Send this call:
+## 0. Check first
 
-   Call 1 (`AskUserQuestion`)
-   Ask "Profile": claude-openai | claude
-   Ask "Permissions": project | machine
-   Ask "Strict hooks": off | on
-   Ask "Relay": none | Chief of Staff | <saved name, if any>
+Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --questions begin`. It checks
+the requirements, says what it found, and turns the picker guard's decoy off
+until setup ends. It writes nothing else.
 
-   - **Profile.** Sent as `--profile <p>`, and Permissions as `--scope <s>`.
-     `claude-openai` (Codex reviews each batch; needs the Codex
-     CLI signed in and the Codex plugin) or `claude` (a second Claude reviews).
-   - **Permissions.** `project` (the rules go in this project's
-     `.claude/settings.json`) or `machine` (in `~/.claude/settings.json`, for
-     every project).
-   - **Strict hooks.** Off (the hooks that stop lost work and wrong commits)
-     or on (also the hooks that hold a session to searching before reading
-     and to one test run per change). On sends `--strict`, off sends
-     `--no-strict`.
-   - **Relay.** The Chief of Staff: the name it answers to, `--name <n>`
-     (typed in the free-text answer for another name). "Relay voice" in
-     Call 2 is its one line on how it should sound, `--persona <text>`. On
-     "none", pass `--name '' --persona ''` and ignore "Relay voice".
-2. Send these four calls:
+If it stops on `requirements are missing`, show what it printed, as printed.
+The "yours to do" lines are the owner's: plain text, never a question. If
+there is a "can install" group, show its commands exactly as printed, then ask:
 
-   Call 2 (`AskUserQuestion`)
-   Ask "Model": plugin default | sonnet
-   Ask "Context": 200K | larger
-   Ask "Codex fast": off | on
-   Ask "Relay voice": plain and brief | <saved line, if any>
+   Ask "Install": Install (recommended) | I'll do it myself | Stop
+   - Install: runs the commands shown above, and no other.
+   - I'll do it myself: stop now; run /commandeck:setup again after.
+   - Stop: set nothing up.
 
-   Call 3 (`AskUserQuestion`)
-   Ask "Merge check": none | npm test | <saved command, if any>
-   Ask "Host name": this machine only | <saved names, if any>
-   Ask "Status line": none | <saved command, if any>
+Only "Install" runs `setup.sh --questions begin --install-missing`; any other
+answer runs `setup.sh --questions end` and stops.
 
-   Call 4 (`AskUserQuestion`)
-   Ask "Global CLAUDE.md": skip | install | add block
-   Ask "Global rules": skip | install | add block
+Then tell the owner, in three lines: Commandeck turns this session into an
+orchestrator that hands each build to a Builder pane in its own worktree, has
+each build reviewed, and merges it locally only after review and tests pass.
+Setup will write its config (`.claude/commandeck.json`), permission rules,
+git's local exclude list, two background jobs (a watcher and, if chosen, the
+dashboard), and only what the answers below choose; nothing is written until
+the owner has seen the full list and said Apply. Then read back the "Found"
+lines `--questions begin` printed, in plain words.
 
-   Call 5 (`AskUserQuestion`)
-   Ask "Review rounds": no cap | 5 | 10
-   Ask "Closing pass": runs | none
-   Ask "Small build": 200 lines | 400 | 1
-   Ask "Review flags": defaults | off | set each
+## 1. The questions
 
-   Only on "Review flags: set each", Call 5b (`AskUserQuestion`):
-   Ask "Review minutes": 30 | off | 60
-   Ask "Test share": 33 | off | 50
-   Ask "List price": 30 | off | 100
+Ask them in this order, up to four questions per call.
 
-   - **Model.** Which model builds, at effort high and with no advisor, a
-     risky build included: the plugin's own, Opus (`--builder-model ''`), or
-     `sonnet`, for less usage (`--builder-model sonnet`).
-   - **Context.** `200K` adds `--standard-context`: the account's model
-     holds 200K; `larger` adds `--no-standard-context`.
-   - **Codex fast.** Off sends `--no-codex-fast`: Codex's review passes run on the standard tier, whatever the Codex config on this machine says. On sends `--codex-fast`: they run on Codex's fast tier, which answers sooner and raises what each pass costs. Only the answer "on" sends `--codex-fast`.
-   - **Codex model.** Not asked up front. When setup refuses because it found no model of the Codex family (it says whether Codex goes through a proxy), ask for the model id with `AskUserQuestion` (Ask "Codex model": gpt-6.1-sol | <an id setup printed>; the free-text answer takes any other) and run setup again with `--codex-model codex-reviewer=<id>`. It is saved in this project's config, so a plugin update keeps it. `--codex-model codex-reviewer=` clears it.
-   - **Merge check.** The one command that must pass before a merge, an
-     option or typed: `--test-command '<cmd>'`. On "none", pass
-     `--test-command ''`.
-   - **Host name.** Another name the dashboard is opened under, a tailnet
-     name, an option or typed: `--hosts <name>[,<name>]`; without it such a
-     name gets a 403. On "this machine only", pass `--hosts ''`.
-   - **Global CLAUDE.md.** The plugin's general global instructions (working
-     rules, code exploration, root-cause discipline). `install` writes
-     `~/.claude/CLAUDE.md` only when there is none (`--global-claude
-     install`); `add block` puts them in the owner's file as a marked block,
-     which a later run replaces and uninstall takes out (`--global-claude
-     block`); `skip` sends `--global-claude skip`. The owner's own text is
-     never changed.
-   - **Global rules.** The plugin's working, review, agent and test rules,
-     the same three ways: `--global-rules install|block|skip`.
-   - **Review rounds.** The most Codex review passes a build may run,
-     counted by the round number each pass is given. "no cap" (today's
-     rule) sends `--max-rounds ''`; a number, an option or typed, sends
-     `--max-rounds <n>`.
-   - **Closing pass.** "runs" (today's rule: after the narrowed passes end
-     GO, one more pass reads the whole branch, and its GO is the one that
-     merges) sends `--closing-pass yes`. "none" sends `--closing-pass no`:
-     the narrowed pass that ends GO merges, once narrowed passes have read
-     every commit after the first pass. A first pass that ends GO merges
-     either way.
-   - **Small build.** A first pass is one reviewer under this many changed
-     lines (and no `--risky` launch), else three. "200 lines" sends
-     `--small-build ''`; a number, an option or typed, sends
-     `--small-build <n>`. It has no off: one reviewer for every build would
-     drop the three-reviewer pass a large build needs, and "1" already makes
-     no build small. Say so if the owner asks for off.
-   - **Review flags.** When a finished build is flagged for a written
-     review: over 30 minutes of Codex review, over a third of the clock on
-     tests or idle waits (and over 10 minutes of them), over $30 at list price. "defaults" sends
-     `--max-review-min '' --max-test-percent '' --max-usd ''`; "off" sends
-     `--review-flags off` (no build is flagged). On "set each", Call 5b's
-     three answers send `--max-review-min <n|off> --max-test-percent <n|off>
-     --max-usd <n|off>`: "off" turns that one check off, a default answer
-     (30, 33, 30) sends `''`.
-   - Numbers are passed exactly as typed. Setup refuses one it cannot use
-     and changes nothing; read its line to the owner and ask that question
-     again as a picker.
-   - Every threshold setup asks but Small build can be turned off: "no cap"
-     for Review rounds, "off" for the review flags. Off is saved as the word,
-     not a large number.
-   - **Status line.** On "none", no flag: it keeps the saved setting, by design. Otherwise the owner's own command, an option or typed:
-     `--status-line '<command>'`. The plugin ships none, and uninstall puts
-     the earlier one back.
+1. Who reviews each build?
+   Ask "Reviewer": Claude (recommended) | Codex
+   - Claude: a second Claude session reviews; nothing else to install. `--profile claude`
+   - Codex: OpenAI's Codex CLI reviews (it must be signed in). `--profile claude-openai`
+   Offer Codex only if the check said "Codex reviewer: ready".
+2. Where do permission rules go?
+   Ask "Permissions": This project (recommended) | Every project
+   - This project: in `.claude/settings.local.json`, which git never sees. `--scope project`
+   - Every project: in `~/.claude/settings.json`, for every project on this machine. `--scope machine`
+   A changed answer moves the rules; setup says so.
+3. Only when the check printed "your project rules":
+   Ask "Your rules": Merge (recommended) | Keep both
+   - Merge: sessions leave out the plugin's rules your CLAUDE.md and `.claude/rules/` already state word for word. `--rules merge`
+   - Keep both: sessions load the plugin's rules as they are, beside yours. `--rules skip`
+   On Merge, find rules that say the same thing in other words, or disagree:
+   run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/merge-rules.py ${CLAUDE_PLUGIN_ROOT}/templates/AGENT_STARTUP.md --against <each rules file> --units`
+   (and the same for `templates/main-session.md`), read each printed rule
+   against the owner's files, and for each one that matches only in meaning or
+   conflicts, ask one question (up to four per call). Its header is "Rule <n>",
+   counting from 1 (keep the printed id for the flag; never show it). Its question
+   says in words what the two rules have in common, then quotes both texts whole:
+   the owner's line, with its file, and the plugin's rule. For example: "Your
+   CLAUDE.md and the plugin both set when to run tests. Yours: 'Run the suite
+   before every commit.' The plugin's: 'Run the smallest set of tests that would
+   fail.' Which should sessions follow?"
+   Ask "Rule <n>": Keep mine (recommended) | Use the plugin's | Keep both
+   - Keep mine: sessions leave the plugin's rule out. `--rules-drop <id>`
+   - Use the plugin's / Keep both: both load (setup never edits your own text). `--rules-keep <id>`
+   `--rules-drop ''` clears every earlier answer. On a rerun, an id
+   already under `mergeDecisions` in `.claude/commandeck.json` is not asked
+   again: only new or changed plugin rules are (a changed rule has a new id).
+4. For each "your own AGENT_STARTUP.md" or "your own .claude/main-session.md"
+   line the check printed, every time setup runs:
+   Ask "Own startup": Merge (recommended) | Replace | Skip
+   Ask "Own main": Merge (recommended) | Replace | Skip
+   - Merge: yours keeps loading, and the plugin's rules it lacks are added in a marked block (shown in the preview; uninstall takes the block out); each session leaves out of the block what the project rules it loads already state. `--own-startup merge` / `--own-main-session merge`
+   - Replace: sessions load the plugin's version; yours stays on disk, untouched. `replace`
+   - Skip: yours loads instead of the plugin's whole version, as today. `skip`
+5. Only when the check printed "your global rules", else offer Install (recommended) | Skip:
+   Ask "Global rules": Merge (recommended) | Add as block | Skip
+   Ask "Global CLAUDE": Merge (recommended) | Add as block | Skip
+   - Merge: only the plugin's rules your `~/.claude/CLAUDE.md` lacks, in a marked block. `--global-rules merge` / `--global-claude merge`
+   - Add as block: all of them, in a marked block. `block`
+   - Install (no file yet): creates the file with them. `install`
+   - Skip: the file is left alone. `skip`
+   "Global rules" are the plugin's working, review, agent and test rules; "Global CLAUDE" its general instructions (working rules, code exploration, root-cause discipline). Your own text is never changed, and a copy of the file is made first.
+6. Which model builds?
+   Ask "Builder model": Opus (recommended) | Sonnet
+   - Opus: best quality, at effort high with no advisor. `--builder-model ''`
+   - Sonnet: uses less of your plan. `--builder-model sonnet`
+   Ask "Context": 200K (recommended) | Larger
+   - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
+   - Larger: your model holds more (a 1M window). `--no-standard-context`
+   Read the check's "context window" line first. When it says 1M, or your own
+   model id ends in `[1m]`, Larger goes first and is the one marked
+   "(recommended)". When it found no model setting, add to the question: "Not
+   sure? /model shows your model: one marked 1M, or an id that ends in [1m], is
+   Larger."
+7. An assistant pane?
+   Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
+   - None: no assistant pane. `--name '' --persona ''`
+   - Chief of Staff: a pane that relays between you and the orchestrator, so you can talk to one place. `--name 'Chief of Staff'`
+   A typed name is sent as `--name <n>`. With a relay:
+   Ask "Relay voice": Plain and brief (recommended) | <saved line, if any>
+   - its one line on how it should sound. `--persona <text>`
+8. A dashboard?
+   Ask "Dashboard": On, this machine only (recommended) | Off | <saved names, if any>
+   - On, this machine only: a local web page of builds and costs, served by a background job. `--dashboard --hosts ''`
+   - Off: no job, no port. `--no-dashboard`
+   - On plus another name: the page also answers to a name such as a tailnet's, typed as the picker's own text answer (or the saved names). `--dashboard --hosts <name>[,<name>]`
+9. What must pass before a merge?
+   Ask "Merge check": <detected command> (recommended) | None | <saved command, if any>
+   - The one command that must pass before a merge, e.g. the project's test script. `--test-command '<cmd>'`
+   - None: merges wait for review only. `--test-command ''`
+   Detect it first (package.json `test` script, a Makefile `test` target), and offer it first. With none detected, None is the one marked "(recommended)".
+10. Strict hooks?
+    Ask "Strict hooks": Off (recommended) | On
+    - Off: only the safety hooks (lost work, wrong commits). `--no-strict`
+    - On: also search before reading, and one test run per change. `--strict`
+11. The ponytail skill?
+    Ask "Ponytail": On (recommended) | Off
+    - On: the ponytail skill (/ponytail), smallest-change coding rules; costs nothing until asked for. `--ponytail`
+    - Off: not installed; a copy an earlier setup installed is removed. `--no-ponytail`
+    Then, how long Claude keeps a conversation's prompt cache:
+    Ask "Prompt cache": 1h and 5m (recommended) | Leave default
+    - 1h and 5m: main and Claude panes 1 hour, subagents 5 minutes, in `.claude/settings.json`; on real transcripts 5 minutes cost main about 19% more, and 1 hour cost subagents about 8% more. `--cache-ttl recommended`
+    - Leave default: writes nothing; Claude Code picks (and a value an earlier setup wrote is taken out). `--cache-ttl default`
+12. Add-ons, one multi-select question (`multiSelect: true`):
+    Ask "Add-ons": serena (recommended) | codebase-memory | agent-browser | None
+    - serena: code navigation by symbol; one language-server process per project. Choosing it also turns on the two hooks that read it (`--serena`): the read-tracker nudge and the pane-budget gate.
+    - codebase-memory: a whole-repo code graph; one background indexer (setup prints its installer's page).
+    - agent-browser: a browser for agents; a download of a few hundred MB.
+    - None: install nothing; setup prints each command to run later.
+    The chosen ones are sent as `--addons <a>,<b>`, None as `--addons none`.
+    Setup installs them for this main checkout and reports each as installed or failed, with the command.
+13. The review loop.
+    Ask "Review": Use defaults (recommended) | Tune now | Keep saved
+    - Use defaults: no round cap, a closing pass, one reviewer under 200 changed lines, the default review flags. `--max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd ''`
+    - Tune now: the questions below.
+    - Keep saved: sends none of these flags.
+    On "Tune now", one call:
+    Ask "Review rounds": No cap (recommended) | 5 | 10
+    - The most review passes a build may run. `--max-rounds ''` or `--max-rounds <n>`
+    Ask "Closing pass": Runs (recommended) | None
+    - Runs: after the narrowed passes end GO, one more pass reads the whole branch, and its GO merges. `--closing-pass yes`
+    - None: the narrowed pass that ends GO merges. `--closing-pass no`
+    Ask "Small build": 200 lines (recommended) | 400 | Off
+    - A first pass is one reviewer under this many changed lines, else three. `--small-build ''` or `<n>`
+    - Off: every first pass has three reviewers. `--small-build off`
+    Ask "Review flags": Defaults (recommended) | Off | Set each
+    - When a finished build is flagged for a written review: over 30 minutes of review, over a third of the time on tests or idle waits, over $30 at list price. Defaults: `--max-review-min '' --max-test-percent '' --max-usd ''`; Off: `--review-flags off`.
+    On "Set each":
+    Ask "Review minutes": 30 (recommended) | Off | 60
+    Ask "Test share": 33 (recommended) | Off | 50
+    Ask "List price": 30 (recommended) | Off | 100
+    - "Off" sends `off` for that flag; a default (30, 33, 30) sends `''`; another number is sent as typed.
+14. Only with the Codex reviewer:
+    Ask "Codex fast": Off (recommended) | On
+    - Off: the review passes run on Codex's standard tier. `--no-codex-fast`
+    - On: the fast tier, which answers sooner and costs more per pass. `--codex-fast`
+    Offer On only when the check said "Codex fast mode: available".
+    When the check said "Codex model: not found", ask:
+    Ask "Codex model": <an id the check printed> (recommended) | gpt-6.1-sol
+    - the model id for the review pass; saved in this project's config. `--codex-model codex-reviewer=<id>`
 
-   A flag left out keeps the answer of an earlier run, so every answer
-   above sends its flag, except "Status line: none", which sends none
-   (setup.sh never keeps a status line in its config, and refuses an empty
-   one).
+Numbers and typed values are passed exactly as typed. Setup refuses one it
+cannot use and changes nothing; read its line to the owner and ask that
+question again as a picker.
 
-   Then run it with the answers:
-   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --profile <p> --scope <s> --strict|--no-strict --name <n> --persona <text>`
-   plus the flags above. If it stops, it changed nothing or says what it
-   changed: read the line to the owner;
-   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/uninstall.sh` puts a half-done setup
-   back.
+## 2. Preview, then apply
 
-   If it stops on `requirements are missing`, it changed nothing. Show the
-   owner what it printed, as printed. The "yours to do" lines are the
-   owner's: plain text, never a question. If there is a "can install" group,
-   show its commands exactly as printed, then send:
+Run the same command with every answer's flags and `--plan`:
+`bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh <flags> --plan`. It prints every
+file it would create or change (a diff for a changed one), every copy it would
+make, every job and add-on, and writes nothing. Show it to the owner, then:
 
-   Call 6 (`AskUserQuestion`)
-   Ask "Install": install | stop
+   Ask "Apply": Apply (recommended) | Change an answer | Cancel
+   - Apply: make exactly these changes.
+   - Change an answer: name the question; ask it again, then preview again.
+   - Cancel: nothing is written.
 
-   - **Install.** On "install", run the same `setup.sh` command again with
-     `--install-missing` added: it runs the commands it printed and no
-     other, then checks again. On "stop", run nothing more. Only the answer
-     "install" sends the flag; a refused call, or any other answer, never
-     does.
+On Cancel run `setup.sh --questions end` and stop. On Apply run the same
+command without `--plan`. If it stops, it changed nothing or says what it
+changed: read the line to the owner;
+`bash ${CLAUDE_PLUGIN_ROOT}/scripts/uninstall.sh` puts a half-done setup back.
+A real run ends the decoy's pause, whether it succeeds or fails.
 
-   If it printed a `codex notify: ASK:` line, Codex's notify runs the owner's
-   own wrapper script, and it calls an older plugin version's hook. Setup
-   changed nothing in it. Show the owner the old line and the new one as
-   printed, then send:
+If it printed a `codex notify: ASK:` line, Codex's notify runs the owner's own
+wrapper script, and it calls an older plugin version's hook. Show the old line
+and the new one as printed, then ask (the decoy is back: it goes first):
 
-   Call 7 (`AskUserQuestion`)
-   Ask "Notify wrapper": change it | leave it
+   Ask "Notify wrapper": Change it (recommended) | Leave it
+   - Change it: run the same command with `--notify-wrapper yes`.
+   - Leave it: run it with `--notify-wrapper no`; the doctor will warn.
 
-   - **Notify wrapper.** Run the same `setup.sh` command again with
-     `--notify-wrapper yes` on "change it", or `--notify-wrapper no` on
-     "leave it", and read its `codex notify:` line to the owner. Only
-     "change it" sends yes.
-3. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh` and show every line that
-   is not `ok`.
-   Tell the owner what setup added for tests: `/test-audit <scope dir...>
-   [basic|full] [N agents]`, a report-only audit of a test directory by Haiku
-   agents, checked at the end by a Sonnet agent. It needs the Workflow tool,
-   which setup switched on in the project's `.claude/settings.json`
-   (`"enableWorkflows": true`). After an edit to
-   `.claude/workflows/test-audit.js` it needs a new session.
-4. Show the owner the add-on list setup printed, as printed. Install none:
-   setup has installed the one it installs, the ponytail skill.
-5. Offer the toy unit: one small brief (`${CLAUDE_PLUGIN_ROOT}/templates/_builder-brief-template.md`)
-   launched with `builder-launch.sh`, to see a Builder, a review pass and a
-   local merge end to end. Then ask for the first real request.
+## 3. After
+
+Show setup's summary as printed: Done, Needs you, Optional, and how to change
+an answer later. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh` and show
+every line that is not `ok`.
+
+Tell the owner, in plain words: setup added `/test-audit <test folder>`, which
+checks a folder of tests for ones that cannot fail or test nothing, writes a
+report and changes no file; it runs as a workflow, which setup switched on in
+`.claude/settings.json`.
+
+Then ask (setup has ended, so the decoy is back and goes first):
+
+   Ask "Demo build": Yes (recommended) | Skip
+   - Yes: one small brief (`${CLAUDE_PLUGIN_ROOT}/templates/_builder-brief-template.md`) launched with `builder-launch.sh`, to see a Builder, a review pass and a local merge end to end.
+   - Skip: go straight to the first real request.

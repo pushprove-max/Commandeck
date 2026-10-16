@@ -857,10 +857,7 @@ install() {
   # The job has no folder of its own: with no registry it collects the project it was installed from.
   export COMMANDECK_DASHBOARD_PORT=$PORT COMMANDECK_DASHBOARD_BIND=$BIND COMMANDECK_MAIN=$PP_MAIN
   mkdir -p "$OUT" || return 1
-  for f in "${VIEW[@]}"; do
-    { cp "$src/$f" "$OUT/.$f.new.$$" && mv -f "$OUT/.$f.new.$$" "$OUT/$f"; } 2>/dev/null \
-      || { rm -f "$OUT/.$f.new.$$"; echo "dashboard: could not copy $src/$f into $OUT" >&2; return 1; }
-  done
+  for f in "${VIEW[@]}"; do view_put "$f" || { echo "dashboard: could not copy $src/$f into $OUT" >&2; return 1; }; done
   local -a keep=(PATH HOME COMMANDECK_MAIN COMMANDECK_DASHBOARD_PORT COMMANDECK_DASHBOARD_BIND COMMANDECK_DASHBOARD_HOSTS COMMANDECK_DASHBOARD_NAME COMMANDECK_DASHBOARD_DIR CODEX_HOME)
   if [ "$(hs_os)" = Darwin ]; then
     local plist=$HOME/Library/LaunchAgents/$HS_PREFIX$NAME.plist
@@ -905,11 +902,26 @@ EOF
   fi
 }
 
+# view_put <file> -- one view file copied whole from the plugin's own into $OUT, or not at all.
+view_put() {
+  { cp "$HERE/../dashboard/$1" "$OUT/.$1.new.$$" && mv -f "$OUT/.$1.new.$$" "$OUT/$1"; } 2>/dev/null || { rm -f "$OUT/.$1.new.$$" 2>/dev/null; return 1; }
+}
+# view_refresh -- each view file whose served copy differs from the plugin's own is copied again: a merged
+# change to the view otherwise waited for the next --install, which no merge runs. A failed copy keeps the old file.
+view_refresh() {
+  local f
+  for f in "${VIEW[@]}"; do
+    [ -s "$HERE/../dashboard/$f" ] && ! cmp -s "$HERE/../dashboard/$f" "$OUT/$f" || continue
+    view_put "$f" || echo "dashboard: could not refresh $OUT/$f from $HERE/../dashboard/$f; the old copy stays" >&2
+  done
+}
+
 # alive -- the --loop heartbeat, $OUT/alive.js: the time now and the cycle stamps
 # the loop left in $OUT/.cycle. The page tells a slow cycle (fresh heartbeat,
 # old data.js) from a dead collector (no heartbeat) by it, and reloads itself
 # when `view`, the checksum of the installed view files, changes under it.
 alive() {
+  view_refresh
   printf 'window.DASH_ALIVE = {"at":"%s","view":"%s",%s};\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "$(cat "${VIEW[@]/#/$OUT/}" 2>/dev/null | cksum | cut -d' ' -f1)" \
     "$(cat "$OUT/.cycle" 2>/dev/null || echo '"cycleStartedAt":null,"lastCycleSec":null')" > "$OUT/.alive.js.$BASHPID" \
@@ -945,8 +957,8 @@ case "${1:-}" in
   --project) project "${2:?}" || { echo "dashboard: collecting $PP_MAIN FAILED" >&2; exit 1; } ;;
   --loop) mkdir -p "$OUT" || exit 1
           rm -f "$OUT/.cycle"
-          # Every 15 s while this loop lives; a cycle's start and end also write it at once.
-          { while kill -0 $$ 2>/dev/null; do alive; sleep 15; done; } & ALV=$!
+          # Every 15 s while this loop lives (COMMANDECK_DASHBOARD_ALIVE_S, for the self-test), and each refreshes the view files; a cycle's start and end also write it at once.
+          { while kill -0 $$ 2>/dev/null; do alive; sleep "${COMMANDECK_DASHBOARD_ALIVE_S:-15}"; done; } & ALV=$!
           last=null
           while :; do
             # Restarted here if it died; request lines would flood dashboard.log.
