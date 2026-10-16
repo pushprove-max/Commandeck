@@ -37,7 +37,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$
 json() { jq -cn --arg cmd "$1" --arg cwd "${2:-$REPO}" '{tool_input:{command:$cmd},cwd:$cwd}'; }
 
 # --- same run, same tree ----------------------------------------------------
-FIRST=$(json 'npm run test:unit 2>&1 | tail -40')
+FIRST=$(json 'npm run test:unit > /tmp/u.log 2>&1')
 check "first run passes" 0 "$(run_hook "$FIRST")"
 complete "$FIRST"
 check "same run, same tree, different pipe blocks" 2 \
@@ -48,13 +48,13 @@ check "RERUN=1 lets a flake check through" 0 \
   "$(run_hook "$(json 'RERUN=1 npm run test:unit 2>&1 | tail -5')")"
 check "a different suite is a different run" 0 \
   "$(run_hook "$(json 'npm run test:guards 2>&1 | tail -40')")"
-TSC=$(json 'npx tsc --noEmit -p tsconfig.json 2>&1 | head -20')
+TSC=$(json 'npx tsc --noEmit -p tsconfig.json > /tmp/t.log 2>&1')
 check "tsc is guarded too: first passes" 0 "$(run_hook "$TSC")"
 complete "$TSC"
 check "tsc rerun on the same tree blocks" 2 \
   "$(run_hook "$(json 'npx tsc --noEmit -p tsconfig.json 2>&1 | tail -3; echo done')")"
 # the configured typecheck scripts are tsc runs by another name.
-TYPECHECK=$(json 'npm run typecheck:backend 2>&1 | tail -20')
+TYPECHECK=$(json 'npm run typecheck:backend > /tmp/c.log 2>&1')
 check "npm run typecheck is guarded too: first passes" 0 "$(run_hook "$TYPECHECK")"
 complete "$TYPECHECK"
 check "npm run typecheck rerun on the same tree blocks" 2 \
@@ -64,7 +64,7 @@ echo 'export const a = 2;' > "$REPO/a.ts"
 check "an edit to a tracked file unlocks the rerun" 0 \
   "$(run_hook "$(json 'npm run test:unit 2>&1 | tail -40')")"
 echo 'x' > "$REPO/new-untracked.ts"
-UNTRACKED=$(json 'npm run test:unit 2>&1 | tail -40')
+UNTRACKED=$(json 'npm run test:unit > /tmp/u.log 2>&1')
 check "a new untracked file unlocks it too" 0 "$(run_hook "$UNTRACKED")"
 complete "$UNTRACKED"
 check "and the tree is fixed again after that" 2 \
@@ -125,10 +125,10 @@ check "and the root run is still blocked"                2 "$(run_hook "$ROOT_RU
 # --- a longer command is not a repeat of its first words ----------------------
 # A full verification refused as "already ran" would be reported as passed
 # without ever running.
-SMALL=$(json 'LOG=/tmp/v.log; npm run test:unit 2>&1 | tee $LOG')
+SMALL=$(json 'LOG=/tmp/v.log; npm run test:unit > $LOG 2>&1')
 ran "$SMALL"
 check "a later suite after the same first words is a new run" 0 \
-  "$(run_hook "$(json 'LOG=/tmp/v.log; npm run test:unit 2>&1 | tee $LOG; npm run typecheck:backend')")"
+  "$(run_hook "$(json 'LOG=/tmp/v.log; npm run test:unit > $LOG 2>&1; npm run typecheck:backend')")"
 check "and the smaller run itself still blocks" 2 "$(run_hook "$SMALL")"
 
 # --- the key keeps every argument and drops only redirections -----------------
@@ -216,9 +216,13 @@ ran "$(json 'cd . < /nonexistent-input && npm run test:nu')"
 check "a leading cd with a redirection that fails ran nothing" 0 "$(run_hook "$(json 'npm run test:nu')")"
 ran "$(json 'npm run test:xi')"
 check "a second suite inside a quoted shell body is a new run" 0 "$(run_hook "$(json 'npm run test:xi && bash -c "npm run typecheck"')")"
+# Quotes the shell takes out (escaped, or inside a word) still hide no suite from the count.
+check "a second suite behind escaped quotes in a shell body is a new run" 0 "$(run_hook "$(json 'npm run test:xi && bash -c "npm run \"typecheck\""')")"
+check "a second suite spelt with a quote inside a word is a new run" 0 "$(run_hook "$(json 'npm run test:xi && bash -c "np\"m\" run typecheck"')")"
+check "a second suite spelt with a backslash inside a word is a new run" 0 "$(run_hook "$(json 'npm run test:xi && n\pm run typecheck')")"
 ran "$(json 'cd - && npm run test:lambda')"
 check "a leading cd to an option, not a folder, keeps its place in the key" 0 "$(run_hook "$(json 'npm run test:lambda')")"
-ran "$(json 'npm run test:delta | tail -3 || echo failed')"
+ran "$(json 'npm run test:delta > /tmp/d.log && echo passed')"
 check "what follows the last suite still makes no new run" 2 "$(run_hook "$(json 'npm run test:delta')")"
 ran "$(json 'npx vitest run -t ">"')"
 check "a quoted > filter is a filter, not a redirection" 0 "$(run_hook "$(json 'npx vitest run -t "<"')")"
@@ -228,6 +232,89 @@ check "and the same quoted filter again blocks" 2 "$(run_hook "$(json 'npx vites
 check "an escaped > is the quoted > filter, which ran" 2 "$(run_hook "$(json 'npx vitest run -t \>')")"
 ran "$(json 'npx vitest run -t \&')"
 check "an escaped & is a filter, not a separator" 0 "$(run_hook "$(json 'npx vitest run -t \|')")"
+
+# --- only a run whose own exit status is the command's is recorded --------
+# The completion hook hears exit 0 only. Piped into tail, or followed by `;` or `||`, that 0 is another command's,
+# so a FAILING suite was recorded, and its rerun refused as "already ran".
+for c in 'npm run test:pi 2>&1 | tail -3' 'npm run test:pi; echo done' 'npm run test:pi || true' 'npm run test:pi & wait'; do
+  ran "$(json "$c")"
+  check "a run whose status is another command's is not recorded: $c" 0 "$(run_hook "$(json 'npm run test:pi')")"
+done
+RHO=$(json 'set -o pipefail; npm run test:rho 2>&1 | tail -3'); ran "$RHO"
+check "a piped run under pipefail is recorded: its status is the suite's" 2 "$(run_hook "$RHO")"
+ran "$(json 'cd . && npm run test:sigma > /tmp/s.log 2>&1 && echo ok')"
+check "a run with only && after it is recorded" 2 "$(run_hook "$(json 'npm run test:sigma')")"
+TAU=$(json 'echo "set -o pipefail"; npm run test:tau | tail -3'); ran "$TAU"
+check "pipefail named only in quoted text does not make the pipe's status the suite's" 0 "$(run_hook "$TAU")"
+# Only a `set` that surely turns pipefail on in this shell counts, and nothing before the suite may turn it off or
+# hide what it does (pass 1: `set +o pipefail` and `set -- pipefail` were read as on, so a failing suite was recorded).
+# Pass 2: `command eval "$OFF"` got past a list of the commands that run code, so every wrapper is a case here.
+for c in 'set +o pipefail; npm run test:phi | tail -3' 'set -- pipefail; npm run test:phi | tail -3' \
+  'set -e pipefail; npm run test:phi | tail -3' 'set -oe pipefail; npm run test:phi | tail -3' \
+  'set -o pipefail; set +o pipefail; npm run test:phi | tail -3' 'set -o pipefail; set +eo pipefail; npm run test:phi | tail -3' \
+  'set -o pipefail; shopt -uo pipefail; npm run test:phi | tail -3' 'set -o pipefail; unsetopt PIPE_FAIL; npm run test:phi | tail -3' \
+  'set -o pipefail; set +o $P; npm run test:phi | tail -3' 'set -o pipefail; eval "$OFF"; npm run test:phi | tail -3' \
+  'set -o pipefail; . ./env.sh; npm run test:phi | tail -3' 'f() { set +o pipefail; }; set -o pipefail; f; npm run test:phi | tail -3' \
+  'false && set -o pipefail; npm run test:phi | tail -3' 'true || set -o pipefail; npm run test:phi | tail -3' \
+  'set -o pipefail & npm run test:phi | tail -3' 'set -o pipefail | cat; npm run test:phi | tail -3' \
+  '(set -o pipefail); npm run test:phi | tail -3' \
+  'set -o pipefail; command eval "$OFF"; npm run test:phi | tail -3' 'set -o pipefail; builtin eval "$OFF"; npm run test:phi | tail -3' \
+  'set -o pipefail; \eval "$OFF"; npm run test:phi | tail -3' 'set -o pipefail; "eval" "$OFF"; npm run test:phi | tail -3' \
+  'set -o pipefail; X=1 eval "$OFF"; npm run test:phi | tail -3' 'set -o pipefail; time eval "$OFF"; npm run test:phi | tail -3' \
+  'set -o pipefail; { eval "$OFF"; }; npm run test:phi | tail -3' 'set -o pipefail; if :; then eval "$OFF"; fi; npm run test:phi | tail -3' \
+  'set -o pipefail; $E "$OFF"; npm run test:phi | tail -3' 'trap "$OFF" DEBUG; set -o pipefail; npm run test:phi | tail -3' \
+  'g() { eval "$OFF"; }; set -o pipefail; g; npm run test:phi | tail -3' 'set -o pipefail; exec 3>&1; npm run test:phi | tail -3'; do
+  ran "$(json "$c")"
+  check "pipefail not surely on: the piped run is not recorded: $c" 0 "$(run_hook "$(json "$c")")"
+done
+# Pass 3: a redirection that fails skips the `set`, and the segment had lost it. Bash also refuses a whole set over
+# one word it does not take (`"-a b"`, `-Z`), so pipefail stays off; and `set -n` or `exit` before the suite means
+# it never ran, with exit 0.
+for c in 'set -o pipefail > /dev/null/no-file; npm run test:psi | tail -3' 'set -o pipefail < /no/such/file; npm run test:psi | tail -3' \
+  'set -o pipefail 2> /dev/null/no-file; npm run test:psi | tail -3' '> /dev/null/no-file set -o pipefail; npm run test:psi | tail -3' \
+  'set -o pipefail "-a b"; npm run test:psi | tail -3' 'set -o pipefail -Z; npm run test:psi | tail -3' \
+  'set -Zo pipefail; npm run test:psi | tail -3' 'set -o pipefail -o nosuch; npm run test:psi | tail -3' \
+  'set -n; npm run test:psi && echo ok' 'set -o noexec; npm run test:psi' 'exit 0; npm run test:psi' \
+  'eval "$X"; npm run test:psi && echo ok' 'X=1 eval "$X"; npm run test:psi && echo ok' 'L=$(eval "$X"); npm run test:psi && echo ok'; do
+  ran "$(json "$c")"
+  check "a set that may not run, or a command that may stop the suite running, is not recorded: $c" 0 "$(run_hook "$(json "$c")")"
+done
+# Pass 4: the parser broke lines and words where bash does not. Bash ends a line at a newline alone and a word at a
+# space, tab or newline; `pipefail\r` (CRLF) or `-o\rpipefail` is a word set refuses, and a \v, \f, \x1c-\x1e or a
+# Unicode line separator (U+0085, U+2028, U+2029) is a letter of the word, not a line break.
+for s in 'set -o pipefail\r\nnpm run test:omega | tail -3' 'set -o\rpipefail; npm run test:omega | tail -3' \
+  'set -o pipefail\vnpm run test:omega | tail -3' 'set -o pipefail\fnpm run test:omega | tail -3' \
+  'set -o pipefail\x1cnpm run test:omega | tail -3' 'set -o pipefail\x1dnpm run test:omega | tail -3' \
+  'set -o pipefail\x1enpm run test:omega | tail -3' 'set -o pipefail\xc2\x85npm run test:omega | tail -3' \
+  'set -o pipefail\xe2\x80\xa8npm run test:omega | tail -3' 'set -o pipefail\xe2\x80\xa9npm run test:omega | tail -3' \
+  'echo x\vnpm run test:omega && echo ok'; do
+  c=$(printf "$s")
+  ran "$(json "$c")"
+  check "a line or word bash does not break is not broken: not recorded: $s" 0 "$(run_hook "$(json "$c")")"
+done
+LF=$(json "$(printf 'set -o pipefail\nnpm run test:omega | tail -3')"); ran "$LF"
+check "pipefail set on the line before (a plain newline) is surely on: the piped run is recorded" 2 "$(run_hook "$LF")"
+for c in 'set -euo pipefail; npm run test:chi 2>&1 | tail -3' 'set -o pipefail && npm run test:chi | tail -3' \
+  'set -o pipefail -o nounset; set -e; npm run test:chi | tail -3' 'set -o pipefail; cd . && npm run test:chi | tail -3' \
+  'set -o pipefail; export CI=1; git status >/dev/null; npm run test:chi | tail -3' \
+  'set -o pipefail; LOG=$SCRATCH/u.log; npm run test:chi > "$LOG" | tail -3'; do
+  ran "$(json "$c")"
+  check "pipefail surely on: the piped run is recorded: $c" 2 "$(run_hook "$(json "$c")")"
+done
+# Pass 6: the suite's own segment was trusted to run the suite as its command. `!` turns its failure into exit 0, and
+# so does any word before it that is not a plain assignment (`coproc` exits 0 at once, `if` without else, a backtick
+# runs its output): only assignments may come before the suite's first word. The first case is the reviewer's: its
+# suite exits 1, `!` makes Bash exit 0, the completion hook fires (as `ran` does), and the retry must still run.
+for c in 'set -o pipefail; ! npm run test:unit | tail -3' '! npm run test:upsilon' '! npm run test:upsilon && echo ok' \
+  'time ! npm run test:upsilon' '! { npm run test:upsilon; }' 'if ! npm run test:upsilon; then :; fi' \
+  'coproc npm run test:upsilon' 'X=1 ! npm run test:upsilon' '`npm run test:upsilon`' 'echo x; ! npm run test:upsilon'; do
+  ran "$(json "$c")"
+  check "a word before the suite that may change its status: not recorded: $c" 0 "$(run_hook "$(json "$c")")"
+done
+for c in 'CI=1 npm run test:zeta > /tmp/z.log' 'set -o pipefail; CI=1 LOG=$SCRATCH/z.log npm run test:zeta | tail -3'; do
+  ran "$(json "$c")"
+  check "assignments before the suite leave its status its own: recorded: $c" 2 "$(run_hook "$(json "$c")")"
+done
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

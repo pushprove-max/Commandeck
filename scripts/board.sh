@@ -187,7 +187,7 @@ echo "== panes that have stopped, and their last words"
 # fifteen seconds to every wake.
 LIVE=$(orca-ide terminal list --json 2>/dev/null || true)
 STOPPED=$(mktemp -d)
-trap 'rm -rf "$STOPPED"' EXIT
+trap 'pp_rm_rf "$STOPPED"' EXIT
 for r in ${SEATS[@]+"${SEATS[@]}"}; do
   u=$(grep '^unit=' "$r" | cut -d= -f2)
   [ -z "$ONLY" ] || [ "$u" = "$ONLY" ] || continue

@@ -112,7 +112,17 @@ check "the prompt carries this round's different-fix and other-cases lines, and 
 
 # The brief unchanged since: the next review pass is narrowed again.
 printf 'echo three\n' > "$W/a.sh"
+# The pass lock sits in the worktree's git folder, which pp_rm_rf refuses: released through it, it stayed, and every
+# later pass of the worktree was refused. A live holder still refuses a pass; a dead one's lock is taken over.
+L=$(git -C "$W" rev-parse --absolute-git-dir)/builder-pass.lock
+mkdir "$L"; echo $$ > "$L/pid"
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-4 bash "$PASS_SH" "$U" 4 review >/dev/null 2>"$TMP/err")
+check "a pass while another holds the lock is refused, and the holder's lock stays" "1 1" \
+  "$(grep -c "another pass of $U is still running (pid $$)" "$TMP/err") $(ls "$L/pid" | wc -l | tr -d ' ')"
+echo "$(sh -c 'echo $$')" > "$L/pid"
 pass 4 review
+check "a dead holder's lock is taken over, and the pass releases it" "1 0" \
+  "$(grep -cx 'Pass: review' "$B/$U-r4-reports.md") $(ls -d "$L" 2>/dev/null | wc -l | tr -d ' ')"
 check "every later pass is handed the evidence file's main-only list as known, and nothing under the next heading" "1 1 1 0" \
   "$(input 3 | grep -c '^Known and deferred to main') $(input 3 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -c 'not deferred')"
 check "with the brief unchanged since the last pass, a review pass stays narrowed" "1 0" \
@@ -169,6 +179,7 @@ cat > "$FB/orca-ide" <<'SH'
 echo "$*" >> "$FRS_CALLS"
 case "$*" in
   *"terminal wait"*) exit "${FRS_IDLE:-0}" ;;
+  *"--text /clear"*) [ -z "${FRS_SEND_FAILS:-}" ] || { echo "orca: PROBE-REFUSAL" >&2; exit 1; } ;;
   *"Your task spec is the file"*) printf '%s\n' "$*" > "$FRS_PROJ/new-sid.jsonl"; touch -t 209901010000 "$FRS_PROJ/new-sid.jsonl" ;;
 esac
 exit 0
@@ -203,6 +214,13 @@ check "a GO pass hands nothing over" "0 0 0" \
 printf 'echo ten\n' > "$W/a.sh"
 check "a NO-GO pass from another pane (its handle not the seat record's) hands nothing over" "0 0 0" \
   "$(fpass "$W" 10 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(ls "$B/$U-fix-r10.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | wc -l | tr -d ' ')"
+# A hand-off the pane never took reaches main, with Orca's own answer. The send's output went to /dev/null
+# and the log was the only trace, so main never heard that fix round 2 of commandeck-speedups-0-7-2 had not started.
+rm -f "$TMP/frs-calls"
+(cd "$W" && env PATH=$FB:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 FRS_CALLS=$TMP/frs-calls FRS_PROJ=$PROJ FRS_SEND_FAILS=1 \
+  timeout 30 bash "$REAL/scripts/builder-fresh-round.sh" term_frs "$H7" > "$TMP/frs.out" 2>&1); R=$?
+check "a /clear Orca refuses: exit 1, Orca's answer in the log, and main is told" "1 1 1" \
+  "$R $(grep -c 'typing /clear into term_frs failed (orca: PROBE-REFUSAL)' "$TMP/frs.out") $(cat "$TMP/frs-calls" "$SC/queue/main.jsonl" 2>/dev/null | grep -c "fresh round not started: ${H7##*/}")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -251,15 +251,15 @@ a.pr:hover .title { color: var(--accent-ink); }
 .mile h3 { margin-top: 0; }
 .mile h3 span { margin-left: 8px; text-transform: none; letter-spacing: 0; }
 .prog-note { color: var(--muted); font-size: 12px; margin: 4px 0 6px; }
-.issues li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
-.issues .t { color: inherit; overflow-wrap: anywhere; }
+.issues li { display: grid; grid-template-columns: 28px minmax(10em, 1fr) minmax(0, max-content); gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.issues .t { color: inherit; overflow-wrap: break-word; }
 a.t:hover { color: var(--accent-ink); }
 .issues small { display: block; color: var(--muted); font-size: 12px; }
 .inum { font-family: var(--mono); color: var(--muted); margin-right: 6px; }
 .pri { font: 600 11px var(--mono); text-align: center; border-radius: 4px; padding: 1px 0; background: var(--chip); color: var(--muted); }
 .pri.p0, .pri.p1 { background: var(--crit-bg); color: var(--crit-ink); }
 .pri.p2 { background: var(--warn-bg); color: var(--warn-ink); }
-.holder { font: 12px var(--mono); color: #b8bec8; }
+.holder { font: 12px var(--mono); color: #b8bec8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .holder.none { color: var(--crit-ink); font-weight: 600; }
 .holder.free { color: var(--dim); }
 

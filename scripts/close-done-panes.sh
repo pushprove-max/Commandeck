@@ -79,19 +79,19 @@ NOW=$(( $(date +%s) * 1000 ))
 rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$WT_JSON" \
   --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --arg prot "$PROTECT" --arg claim "$CLAIMED" \
   --argjson now "$NOW" --argjson cutoff "$(( NOW - QUIET_SECONDS * 1000 ))" \
-  --argjson orphan "$(( NOW - ORPHAN_SECONDS * 1000 ))" '
-  ($prot | split("\n")) as $prot
+  --argjson orphan "$(( NOW - ORPHAN_SECONDS * 1000 ))" "$PP_PNORM"'
+  ($prot | split("\n")) as $prot | ($ws | pnorm) as $ws | ($main | pnorm) as $main
   | ($claim | split("\n")) as $claim
   | ($ts.result | if type == "array" then . else .terminals end) as $ts
   | [ $wl.result.worktrees[]
       | select(.cliProvenance.kind == "created-by-cli" and .isMainWorktree != true
-               and (.path | startswith($ws + "/"))
+               and (.path | pnorm | startswith($ws + "/"))
                and (.displayName | IN("Research", "E2EWalkthroughs") | not)
                and (.path | split("/") | last | IN("Research", "E2EWalkthroughs") | not))
-      | .path ] as $owned
+      | .path | pnorm ] as $owned
   | [ $ps.result.worktrees[]? | .agents[]? ] as $agents
   | $ts[]
-  | select(.handle != $self and .worktreePath != $main and (.worktreePath | IN($owned[]))
+  | select(.handle != $self and (.worktreePath | pnorm) != $main and (.worktreePath | pnorm | IN($owned[]))
            and (.handle | IN($prot[]) | not))
   | "\(.tabId):\(.leafId)" as $k
   | [ $agents[] | select(.paneKey == $k) ] as $a

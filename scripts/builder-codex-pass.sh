@@ -514,6 +514,18 @@ if [ "${1:-}" = --verify ]; then
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
   SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
   FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
+  # A finding main ruled out is named under "Cleared findings" in main's rulings file by its own first two parts,
+  # "<title> -- <file>:<line>": it then blocks nothing and is not open at merge, and the proof prints it as cleared.
+  # Read from main's checkout only, as the limits are: the Builder can write the worktree's copy.
+  MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
+  export PP_CLEARED; PP_CLEARED=$(awk 'on && /^#/ { on = 0 } on && NF { sub(/^[[:space:]]*[-*][[:space:]]*/, ""); sub(/^\[P[0-3]\][[:space:]]*/, ""); print }
+    /^#+ Cleared findings/ { on = 1 }' "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null || true)
+  CLEARED=$(mktemp) || die "cannot make a temp file"; trap 'rm -f "$CLEARED"' EXIT
+  # uncleared -- the finding lines on stdin less those main's ruling clears, which go to $CLEARED.
+  uncleared() { awk -v out="$CLEARED" 'BEGIN { n = split(ENVIRON["PP_CLEARED"], c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
+    { s = $0; sub(/^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\][[:space:]]*/, "", s); split(s, f, " -- ")
+      if ((f[1] " -- " f[2]) in want) { sub(/^[[:space:]]*/, ""); print "Cleared by main'\''s ruling: " $0 >> out } else print }'; }
+  cleared() { [ ! -s "$CLEARED" ] || awk '!seen[$0]++' "$CLEARED"; }
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
@@ -524,22 +536,22 @@ if [ "${1:-}" = --verify ]; then
       final) NOW="closing pass" RULE="closing GO"
         # session_proof has just bound this pass to the tip, so nothing was committed after it and
         # there is no fix for a narrowed pass to read. What it left open is weighed here, as a narrowed pass's is.
-        FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true)
+        ALL=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); FOUND=$(uncleared <<<"$ALL")
         # A passing whole-branch pass may still name a finding; it is open at merge like any other.
         if [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ]; then LEFT+=${FOUND:+$FOUND$'\n'}
         else
           ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}), the closing pass, found a P0 or P1: only a closing pass that left P2 and P3 alone merges without a GO. Fix it, then run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
-          [ -n "$FOUND" ] || die "$NAME $TID (${LAST##*/}), the closing pass, ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
-          RULE="P2 tail" LEFT+=$FOUND$'\n'
+          [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}), the closing pass, ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
+          RULE="P2 tail" LEFT+=${FOUND:+$FOUND$'\n'}
         fi ;;
       # session_proof has just bound this GO to the tip, so a closing pass would read the same commit again.
       full) NOW="first pass" RULE="first-pass GO"
-        FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); LEFT+=${FOUND:+$FOUND$'\n'} ;;
+        FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" | uncleared || true); LEFT+=${FOUND:+$FOUND$'\n'} ;;
       fix) NOW="narrowed pass" RULE="P2 tail"
-        FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true)
+        ALL=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); FOUND=$(uncleared <<<"$ALL")
         ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}) found a P0 or P1: only a tail of P2 and P3 merges without a closing GO. Fix it, then run the closing pass: builder-$BY-pass.sh $UNIT <N> final"
         [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || NOT_GO=1
-        [ -z "$NOT_GO" ] || [ -n "$FOUND" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
+        [ -z "$NOT_GO" ] || [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
         LEFT+=${FOUND:+$FOUND$'\n'} STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
       *) die "$NAME $TID (${LAST##*/}) is not a pass of builder-codex-pass.sh" ;;
     esac
@@ -597,7 +609,7 @@ if [ "${1:-}" = --verify ]; then
     # whole branch, checked above like a closing GO, and every finding it left is printed as open.
     echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $(paste -sd' ' - <<<"$TIDS")) left P2/P3 only and no commit came after it, in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
     sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT"
-    exit 0
+    cleared; exit 0
   fi
   if [ "$RULE" = "P2 tail" ]; then
     # The P2 tail rule: the last closing pass ended NO-GO on P2/P3
@@ -621,8 +633,8 @@ if [ "${1:-}" = --verify ]; then
       [ -n "${C_TID:-}" ] || die "${LAST##*/} is a narrowed pass with no closing pass before it: it read only the changes since the pass before it, and its GO merges nothing. $AGAIN"
       [ "$C_SAID" != none ] || die "the reviewer's record of the closing pass (thread $C_TID) holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
       [ "$C_SAID" = NO-GO ] || die "the closing pass ($NAME $C_TID) ended GO and commits came after it: a narrowed pass over them merges nothing. $AGAIN"
-      FOUND=$(found_by "$C_TID")
-      [ -n "$FOUND" ] || die "the closing pass ($NAME $C_TID) ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. $AGAIN"
+      ALL=$(found_by "$C_TID"); FOUND=$(uncleared <<<"$ALL")
+      [ -n "$ALL" ] || die "the closing pass ($NAME $C_TID) ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. $AGAIN"
       ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the closing pass ($NAME $C_TID) found a P0 or P1: only a closing pass that left P2 and P3 alone can be followed by narrowed passes. $AGAIN"
     fi
     # Each pass after the closing one, oldest first, then the pass under merge.
@@ -631,9 +643,9 @@ if [ "${1:-}" = --verify ]; then
       [ -n "$TID" ] || continue
       [ "$READ" = fix ] || die "a whole-branch pass ($NAME $TID) ran after the $ANCHOR $C_TID and is not the pass under merge. $AGAIN"
       [ "$SAID" != none ] || die "the reviewer's record of the narrowed pass $TID holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
-      FOUND=$(found_by "$TID")
+      ALL=$(found_by "$TID"); FOUND=$(uncleared <<<"$ALL")
       [ -n "$NOCLOSE" ] || ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the narrowed pass $TID, after the closing pass $C_TID, found a P0 or P1: a later narrowed GO does not clear it. $AGAIN"
-      [ "$SAID" = GO ] || [ -n "$FOUND" ] || die "the narrowed pass $TID ended NO-GO and names no finding with a severity, so what it left open cannot be read. $AGAIN"
+      [ "$SAID" = GO ] || [ -n "$ALL" ] || die "the narrowed pass $TID ended NO-GO and names no finding with a severity, so what it left open cannot be read. $AGAIN"
       STEPS="$TID $WAS_READ $SINCE"$'\n'$STEPS
     done <<<"$(sort -r <<<"$AFTER")"
     while read -r TID WAS_READ SINCE; do
@@ -646,18 +658,18 @@ if [ "${1:-}" = --verify ]; then
     if [ -n "$NOCLOSE" ]; then
       echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
       [ -n "$LEFT" ] && sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" || echo "Nothing open at merge: the last narrowed pass ended GO and named no finding"
-      exit 0
+      cleared; exit 0
     fi
     echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $C_TID) left P2/P3 only and narrowed passes read every commit after it, the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
     # What merges open, by Codex's record: the merge cannot read the Builder's DONE report.
     # One "Open at merge:" line per finding and no other line with those words: the merge counts them.
     [ -n "$LEFT" ] && sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" || echo "Nothing open at merge: the last narrowed pass ended GO and named no finding"
-    exit 0
+    cleared; exit 0
   fi
   echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
   # What a passing whole-branch pass still named, once however many of its reviewers named it.
   [ -z "$LEFT" ] || sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" | awk '!seen[$0]++'
-  exit 0
+  cleared; exit 0
 fi
 
 pass_waits
@@ -764,14 +776,16 @@ $(cat "$STOP")"
 # runs is built without that one's findings.
 # shortcut: a lock whose holder is gone is taken over without a second lock around the takeover; the merge's check is what refuses a closing pass another pass overlapped.
 LOCK=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-pass.lock || die "$WT is not a git worktree"
+# The lock is in the git folder, which pp_rm_rf refuses; it holds one pid file, and rmdir cannot remove more.
+unlock() { rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true; }
 if ! mkdir "$LOCK" 2>/dev/null; then
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
   [[ $HOLDER =~ ^[0-9]+$ ]] && kill -0 "$HOLDER" 2>/dev/null \
     && die "another pass of $UNIT is still running (pid $HOLDER). One pass at a time: wait for it to end, then run this one"
-  rm -rf "$LOCK"; mkdir "$LOCK" || die "cannot take the pass lock $LOCK"
+  unlock; mkdir "$LOCK" || die "cannot take the pass lock $LOCK"
 fi
 echo $$ > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+trap unlock EXIT
 # The passes before this one. The last round file's reviewed commit bounds a
 # narrowed pass. What they found goes to this pass's reviewers, each finding
 # once, from the reviewer's records and not from the round files.
@@ -875,7 +889,7 @@ DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color -U100000 "$RANGE
 # main's checkout only (the launcher's copy of the brief, main's rulings file):
 # a limit makes a blocker a P3, and the Builder can write the worktree's copies.
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
-  [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Stated limits/ { on = 1 }' "$f"
+  [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ (Stated limits|Cleared findings)/ { on = 1 }' "$f"
 done)
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
@@ -891,7 +905,7 @@ BROKERS=()
 pass_end() { # rc -- each broker and the Codex under it, the temp folder, then the log row
   local b
   for b in ${BROKERS[@]+"${BROKERS[@]}"}; do pkill -P "$b" 2>/dev/null || true; kill "$b" 2>/dev/null || true; done
-  rm -rf "$SOCKS" "$LOCK" || true
+  pp_rm_rf "$SOCKS" || true; unlock
   log_codex codex-end ",\"rc\":$1"
 }
 trap 'pass_end $?' EXIT
@@ -1081,4 +1095,4 @@ TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
 } > "$HAND"
 mkdir -p "$PP_SCRATCH"
 bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &
-echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, a fresh session takes the fix round from ${HAND##*/}; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, and the fix round stays here."
+echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, a fresh session takes the fix round from ${HAND##*/}; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, main is told, and the fix round stays here."

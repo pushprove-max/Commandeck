@@ -148,13 +148,13 @@ Ask them in this order, up to four questions per call.
     - 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`
     - Leave default: writes nothing; Claude Code picks (and a value an earlier setup wrote is taken out). `--cache-ttl default`
 12. Add-ons, one multi-select question (`multiSelect: true`):
-    Ask "Add-ons": serena (recommended) | codebase-memory | agent-browser | None
+    Ask "Add-ons": All (recommended) | serena | agent-browser | None
+    - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open; the ponytail plugin only when you have it and ponytail is on. Sends no `--addons`.
     - serena: code navigation by symbol; one language-server process per project. Choosing it also turns on the two hooks that read it (`--serena`): the read-tracker nudge and the pane-budget gate.
-    - codebase-memory: a whole-repo code graph; one background indexer (setup prints its installer's page).
     - agent-browser: a browser for agents; a download of a few hundred MB.
     - None: install nothing; setup prints each command to run later.
-    The chosen ones are sent as `--addons <a>,<b>`, None as `--addons none`.
-    Setup installs them for this main checkout and reports each as installed or failed, with the command.
+    All sends nothing; the other chosen ones are sent as `--addons <a>,<b>`, None as `--addons none`.
+    Setup runs them for this main checkout and reports each as installed or failed, with the command.
 13. The review loop.
     Ask "Review": Use defaults (recommended) | Tune now | Keep saved
     - Use defaults: no round cap, a closing pass, one reviewer under 200 changed lines, the default review flags. `--max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd ''`

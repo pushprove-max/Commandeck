@@ -25,9 +25,9 @@ title="Main Orchestrator"
 # rewrites as it boots. Only main sessions run in the main checkout.
 main_panes() {
   local l; l=$(orca-ide terminal list --json 2>>"$log") || return 1
-  printf '%s' "$l" | jq -r --arg w "$PP_MAIN" --arg o "$old" '
-    (.result.terminals // .result // .)[]
-    | select(.worktreePath == $w and .handle != $o) | .handle' 2>>"$log"
+  printf '%s' "$l" | jq -r --arg w "$PP_MAIN" --arg o "$old" "$PP_PNORM"'
+    ($w | pnorm) as $w | (.result.terminals // .result // .)[]
+    | select((.worktreePath | pnorm) == $w and .handle != $o) | .handle' 2>>"$log"
 }
 # Without a snapshot a leftover main pane is indistinguishable from the late one.
 before=$(main_panes) || adopt_tries=0

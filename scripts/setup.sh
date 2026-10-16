@@ -30,9 +30,9 @@
 # changes. --scope says where the permission rules go: the project's own
 # .claude/settings.local.json (git never sees it: the rules name this machine's
 # paths), or ~/.claude/settings.json for every project. An owner's file setup
-# changes is copied beside it first (<file>.commandeck-bak-<date>). The add-ons
-# chosen with --addons are installed, each by its config/addons.tsv command; the
-# rest are printed. The ponytail skill is installed unless --no-ponytail.
+# changes is copied beside it first (<file>.commandeck-bak-<date>). Every add-on
+# (or those --addons names) is installed or updated to its latest by its
+# config/addons.tsv command; the rest are printed. The ponytail skill is installed unless --no-ponytail.
 # --cache-ttl recommended writes the prompt-cache lifetimes (main 1 hour,
 # subagents 5 minutes) into the project's .claude/settings.json; default
 # leaves Claude Code's own, and takes out what an earlier run wrote. A
@@ -104,7 +104,7 @@ PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfSta
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) FAST=$(old .codexFast)
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl)
-DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS=
+DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
@@ -184,8 +184,8 @@ while [ $# -gt 0 ]; do
     # --rules-keep: both load, and the answer is saved so a rerun does not ask it again.
     --rules-drop|--rules-keep) case $2 in '') DROPS='{}' ;; *) [[ $2 =~ ^[0-9a-f]{8}$ ]] || die "$1 takes a rule id, 8 hex digits as merge-rules.py --units prints it, not '$2'. Nothing was changed"
                   DROPS=$(jq -c --arg i "$2" --arg v "$([ "$1" = --rules-drop ] && echo keep-mine || echo keep-both)" '.[$i] = $v' <<<"$DROPS") ;; esac; shift 2 ;;
-    # The add-ons to install this run (config/addons.tsv names), never saved.
-    --addons) ADDONS=${2//,/ }; [ "$2" != none ] || ADDONS=; shift 2 ;;
+    # The add-ons to install or update this run (config/addons.tsv names), never saved; with none given, every one.
+    --addons) ADDONS=${2//,/ } ADDONS_SET=1; [ "$2" != none ] || ADDONS=; shift 2 ;;
     --ponytail) PONYTAIL=true; shift ;;
     --no-ponytail) PONYTAIL=false; shift ;;
     --cache-ttl) case $2 in recommended|default) CACHE=$2 ;; *) die "--cache-ttl takes recommended or default, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
@@ -251,11 +251,11 @@ MINE=${PP_MAIN##*/}; MINE=${MINE//[^A-Za-z0-9_.-]/-}
 # The install record and the scratch folder are named for the whole path with
 # every odd character a dash, so /x/a-b and /x/a_b are one record.
 o=$(jq -r '.project // empty' "$IL_PROJECT" 2>/dev/null || true)
-[ -z "$o" ] || [ "$o" = "$PP_MAIN" ] \
+[ -z "$o" ] || [ "$(pp_norm "$o")" = "$(pp_norm "$PP_MAIN")" ] \
   || die "the install record this checkout would use ($IL_PROJECT) belongs to another project, which is set up at $o: the two paths are one name once every odd character is a dash. Rename one checkout's folder, or uninstall the other first. Nothing was changed"
 while IFS= read -r m; do
   o=$(jq -r '.project // empty' "$m" 2>/dev/null); n=${o##*/}
-  [ -z "$o" ] || [ "$o" = "$PP_MAIN" ] || [ "${n//[^A-Za-z0-9_.-]/-}" != "$MINE" ] \
+  [ -z "$o" ] || [ "$(pp_norm "$o")" = "$(pp_norm "$PP_MAIN")" ] || [ "${n//[^A-Za-z0-9_.-]/-}" != "$MINE" ] \
     || die "another project named ${PP_MAIN##*/} is set up at $o. The watcher's job and the logs under ~/.claude are named for the folder name, so the two would share them: rename one checkout's folder, or uninstall the other first"
 done < <(il_projects)
 PASS=claude
@@ -300,6 +300,13 @@ PONY=$HOME/.claude/skills/ponytail PONY_OURS=
 if il_has "$IL_MACHINE" "$PONY/SKILL.md" || { [ ! -e "$PONY" ] && [ ! -L "$PONY" ] \
   && ! jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1; }; then
   PONY_OURS=1; [ "$PONYTAIL" = false ] || il_record "$IL_MACHINE" own "$PONY/SKILL.md" "$PONY/LICENSE"
+fi
+# No --addons answer: every add-on, each run, so each is updated to its latest. The ponytail plugin only when the
+# owner has it on and wants ponytail: beside a ponytail skill it would load the same rules twice.
+if [ -z "$ADDONS_SET" ]; then
+  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != false ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
+  # Installing serena turns its hooks on, as --addons serena does, unless an earlier or given answer says otherwise.
+  SERENA=${SERENA:-true}
 fi
 if [ -n "$STATUS" ]; then
   il_record "$IL_MACHINE" merge "$HOME/.claude/settings.json"
@@ -361,14 +368,14 @@ if [ -n "$PLAN" ]; then
   [ -e "$WATCH_JOB" ] || echo "plan: would install the main-watch job ($WATCH_JOB), which wakes this session when a build needs it"
 elif [ -n "$DASHBOARD" ]; then
   # A line the owner put there before setup is the owner's: uninstall takes out only setup's own.
-  grep -qxF -- "$PP_MAIN" "$HOME/.commandeck/dashboard/projects" 2>/dev/null || il_set "$IL_PROJECT" '.registered = true'
+  pp_registered || il_set "$IL_PROJECT" '.registered = true'
   bash "$HERE/dashboard.sh" --register "$PP_MAIN" >/dev/null
   COMMANDECK_DASHBOARD_BIND=${BIND:-127.0.0.1} COMMANDECK_DASHBOARD_PORT=$PORT COMMANDECK_DASHBOARD_HOSTS=$HOSTS bash "$HERE/dashboard.sh" --install >/dev/null
   PORT=$(grep -oE 'COMMANDECK_DASHBOARD_PORT[^0-9]*[0-9]+' "$DASH_JOB" | grep -oE '[0-9]+$' | head -1)
   il_set "$IL_MACHINE" --arg b "${BIND:-127.0.0.1}" --arg p "$PORT" --arg h "$HOSTS" '.dashboard = {bind: $b, port: $p, hosts: $h}'
 else
   # Declined after it was on: the project comes off the dashboard. The job is every project's and stays.
-  ! jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1 || ! grep -qxF -- "$PP_MAIN" "$HOME/.commandeck/dashboard/projects" 2>/dev/null \
+  ! jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1 || ! pp_registered \
     || { bash "$HERE/dashboard.sh" --unregister "$PP_MAIN" >/dev/null; il_set "$IL_PROJECT" 'del(.registered)'; }
 fi
 [ -n "$PLAN" ] || bash "$HERE/main-watch.sh" --install >/dev/null
@@ -409,7 +416,11 @@ done
 [ "$RULES" != merge ] || NOTES+=("rules: sessions leave out the plugin's rules your CLAUDE.md and .claude/rules/ already state word for word$(n=$(jq '[.[] | select(. == "keep-mine")] | length' <<<"$DROPS"); [ "$n" = 0 ] || echo ", and the $n you keep your own wording for")")
 
 if [ -n "$PLAN" ]; then
-  for a in $ADDONS; do echo "plan: would install the add-on $a, in $PP_MAIN: $(addon_cmd "$a")"; done
+  for a in $ADDONS; do
+    c=$(addon_cmd "$a")
+    if [ "$a" = codebase-memory ] && command -v codebase-memory-mcp >/dev/null; then echo "plan: would update the add-on codebase-memory if no session is open, then check that a new session reaches it"
+    else case $c in see\ *) echo "plan: would list the add-on $a: $c" ;; *) echo "plan: would install the add-on $a, or update it to its latest, in $PP_MAIN: $c" ;; esac; fi
+  done
   [ -z "$NAME" ] || [ -d "$PP_WORKSPACES/Chief-of-Staff" ] || echo "plan: would create $NAME's worktree $PP_WORKSPACES/Chief-of-Staff and open its pane"
   [ -s "$PP_RUN_FILE" ] || echo "plan: would use this terminal's Orca run, or create one for this project"
   for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "plan: $n"; done
@@ -483,12 +494,31 @@ else
   done <<<"$WROTE"
   echo
 fi
+# codebase-memory runs one daemon for every session, and it refuses a client of another version: it is updated only
+# while no session holds a client (the daemon is stopped first, and the next client starts it on the new version).
+# Whatever happened, a new client must then get its tool list, or new sessions would start without it.
+cbm_update() {
+  local was now K=--cbm-daemon-internal
+  was=$(codebase-memory-mcp --version 2>/dev/null) || was='version unknown'
+  if pgrep -f 'codebase-memory-mcp$' >/dev/null; then
+    NEED+=("add-on codebase-memory: not updated ($was): open sessions use its daemon, which refuses a client of another version. Close every Claude and Codex session, then run: pkill -f -- $K; codebase-memory-mcp update -y; then run setup again")
+  elif { pkill -f -- "$K"; codebase-memory-mcp update -y >/dev/null 2>&1; }; then
+    now=$(codebase-memory-mcp --version 2>/dev/null) || now='version unknown'
+    echo "add-on codebase-memory: updated ($was to $now); restart any Claude or Codex session that was open before"
+  else NEED+=("add-on codebase-memory: the update FAILED; to try again with every session closed: pkill -f -- $K; codebase-memory-mcp update -y"); fi
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"commandeck-setup","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+    | timeout 30 codebase-memory-mcp 2>/dev/null | jq -eR 'fromjson? | select(.id == 2) | .result.tools | length > 0' >/dev/null \
+    || NEED+=("add-on codebase-memory: a new session cannot reach it (FAILED: its server gave no tool list). Close every session, run pkill -f -- $K, start one session and check that its codebase-memory tools load")
+}
 INSTALLED=' '
 for a in $ADDONS; do
   c=$(addon_cmd "$a")
+  if [ "$a" = codebase-memory ] && command -v codebase-memory-mcp >/dev/null; then cbm_update; INSTALLED+="$a "; continue; fi
   case $c in
-    see\ *) NEED+=("add-on $a: it has no one-line installer; $c") ;;
-    *) if out=$(cd "$PP_MAIN" && bash -c "$c" 2>&1); then echo "add-on $a: installed, for $PP_MAIN ($c)"; INSTALLED+="$a "
+    # One with no one-line installer is the owner's to install: under Needs you only when asked for by name.
+    see\ *) [ -z "$ADDONS_SET" ] || NEED+=("add-on $a: it has no one-line installer; $c") ;;
+    *) if out=$(cd "$PP_MAIN" && bash -c "$c" 2>&1); then echo "add-on $a: installed at its latest, for $PP_MAIN ($c)"; INSTALLED+="$a "
        else NEED+=("add-on $a: the install FAILED ($(tail -n 1 <<<"$out")); to try again, run in $PP_MAIN: $c"); fi ;;
   esac
 done

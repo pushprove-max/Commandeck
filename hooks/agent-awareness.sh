@@ -73,10 +73,10 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     out+="Orca state NOT CHECKED (no answer in 20s):$late -- the lists below may be missing live work\n\n"; ALWAYS=1
   fi
   # Orca lists every repo's worktrees; only this project's are main's to verify.
-  # project-main.sh drops a trailing / or /. from PP_WORKSPACES, the one shared fix for every such compare.
-  wts=$(jq -r --arg ws "$PP_WORKSPACES" '
-    .result.worktrees[]? | select(.isMainWorktree != true)
-    | select(.path | startswith($ws + "/"))
+  # Both sides as text with no // or /. parts (pnorm): any spelling of the folder lists its worktrees.
+  wts=$(jq -r --arg ws "$PP_WORKSPACES" "$PP_PNORM"'
+    ($ws | pnorm) as $ws | .result.worktrees[]? | select(.isMainWorktree != true)
+    | select(.path | pnorm | startswith($ws + "/"))
     | select(.isArchived != true)
     | "  \(.displayName) [\(.branch | sub("^refs/heads/";""))] status=\(.workspaceStatus) terminals=\(.liveTerminalCount // 0)"
       + ((.agents // []) | map(" orca-says=\(.agentType):\(.state)") | join(""))' <"$OT/wts" 2>/dev/null)
@@ -247,7 +247,7 @@ fi
 # A Codex plugin helper (app-server-broker.mjs + its codex app-server child) is
 # not a worker: one runs per worktree. Only a pair whose worktree is gone needs
 # action, and the action is a kill by pid.
-orphans=$(<"$OT/orphans"); rm -rf "$OT"
+orphans=$(<"$OT/orphans"); pp_rm_rf "$OT"
 if [ -n "$orphans" ]; then
   out+="$(echo $orphans | wc -w) orphaned Codex helper process(es) whose worktree is gone -- kill $orphans\n"
 fi

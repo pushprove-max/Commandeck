@@ -178,9 +178,10 @@ handle_units() {  # {"term_x":"wt1168-retry-runtime", ...} -- every pane that si
   # pane is the checkout, not a worktree. So a driver wake is never in this map
   # and always passes the filter below; only a seat's own messages can match.
   local m
-  m=$(orca-ide terminal list --json 2>/dev/null | jq -c --arg ws "$WS/" '
-    [ (.result | if type == "array" then . else (.terminals // []) end)[]? | select(((.worktreePath // "") | startswith($ws)))
-      | { key: .handle, value: ((.worktreePath | ltrimstr($ws)) | split("/")[0]) } ]
+  m=$(orca-ide terminal list --json 2>/dev/null | jq -c --arg ws "$WS" "$PP_PNORM"'
+    ($ws | pnorm + "/") as $ws
+    | [ (.result | if type == "array" then . else (.terminals // []) end)[]? | select(((.worktreePath // "") | pnorm | startswith($ws)))
+      | { key: .handle, value: ((.worktreePath | pnorm | ltrimstr($ws)) | split("/")[0]) } ]
     | from_entries' 2>/dev/null)
   [ -n "$m" ] || m='{}'
   printf '%s\n' "$m"

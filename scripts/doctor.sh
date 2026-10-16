@@ -78,7 +78,7 @@ if [ -n "$PROFILE" ]; then
   # Setup's stored answer: a project that declined the dashboard is not failed for lacking it.
   if [ "$(jq -r '.dashboard' "$IL_PROJECT" 2>/dev/null)" = false ]; then ok "dashboard: declined for this project (setup.sh --no-dashboard)"
   else
-    if grep -qxF -- "$PP_MAIN" "$HOME/.commandeck/dashboard/projects" 2>/dev/null; then ok "dashboard registry"
+    if pp_registered; then ok "dashboard registry"
     else bad "dashboard registry: this project is not on the dashboard; run: bash $(printf '%q' "$HERE")/dashboard.sh --register $PP_MAIN"; fi
     if bash "$HERE/dashboard.sh" --status >/dev/null 2>&1; then ok "dashboard job"
     else bad "dashboard job: not running; run: bash $(printf '%q' "$HERE")/dashboard.sh --install"; fi

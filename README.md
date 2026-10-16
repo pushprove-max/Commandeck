@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.2-111111?style=flat-square" alt="Version 0.7.2">
+  <img src="https://img.shields.io/badge/version-0.8.0-111111?style=flat-square" alt="Version 0.8.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -497,12 +497,17 @@ bash scripts/proof-run.sh --profile claude     # one
 
 ## Add-ons
 
-Setup asks which add-ons to install, in one question that takes several
-answers. Each one you pick is installed for the project's main checkout by
-its command in `config/addons.tsv`, and setup reports it as installed or, with
-the command to run, as failed. One you do not pick installs nothing; setup
-prints its command and what it costs you. Picking serena also turns on the
-hooks that use it (`--serena`). The [Ponytail](https://github.com/DietrichGebert/ponytail)
+Setup installs every add-on, and on each later run updates each one to its
+latest; no command names a version. Its question (several answers) can narrow
+that: each one you pick is run for the project's main checkout by its command
+in `config/addons.tsv`, and setup reports it as installed or, with the command
+to run, as failed. One you do not pick installs nothing; setup prints its
+command and what it costs you. Installing serena also turns on the hooks that
+use it (`--serena`). codebase-memory is installed from its own page; once it is
+there, setup updates it only while no Claude or Codex session is open (its one
+daemon refuses a client of another version), then checks that a new session
+reaches it and says FAILED under Needs you if not. The ponytail plugin is
+installed only when you already have it and ponytail is on. The [Ponytail](https://github.com/DietrichGebert/ponytail)
 skill (`templates/ponytail`) is its own question, on by default, and left
 alone when you already have it.
 

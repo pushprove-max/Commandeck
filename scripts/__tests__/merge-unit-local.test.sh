@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# timeout: 300 -- 78 s in the runner at load 7 to 13 (2026-10-16); at higher load it ran past the 120 s default
 # merge-unit-local.sh is the only gate between a Builder's branch and main:
 # nothing is pushed and no chain runs, so what it lets through IS main. What
 # this pins: a branch with no review pass, or a hand-written GO, is refused, a branch whose pass ended
@@ -96,6 +97,16 @@ printf 'Reviewed: %s\nCodex thread: thr-none\n\nVERDICT: GO\n' "$(git -C "$TMP/w
 check "a hand-written round file naming no real session is refused" 1 "$(merge hand)"
 printf 'VERDICT: GO\n' > "$TMP/ws/hand/.claude/briefs/hand-r2-reports.md"
 check "a hand-written round file with no session id is refused" 1 "$(merge hand)"
+
+# Step 5 has Orca remove the unit's folder; a folder that is a checkout of its own, not a linked worktree, is
+# refused before anything else is done.
+git clone -q "$REPO" "$TMP/ws/clone" && git -C "$TMP/ws/clone" checkout -q -b builder/clone
+mkdir -p "$TMP/ws/clone/.claude/briefs"; echo brief > "$TMP/ws/clone/.claude/briefs/clone.md"
+echo c > "$TMP/ws/clone/c.txt"; git -C "$TMP/ws/clone" add c.txt; git -C "$TMP/ws/clone" -c user.name=t -c user.email=t@t commit -qm "feat(clone): x"
+git -C "$REPO" fetch -q "$TMP/ws/clone" builder/clone:builder/clone
+check "a unit folder that is a checkout of its own is refused at step 1, and kept" "1 1 yes" \
+  "$(merge clone) $(grep -c '^FAILED step 1 preconditions: .*is not a linked worktree' "$TMP/out") $([ -d "$TMP/ws/clone/.git" ] && echo yes)"
+git -C "$REPO" branch -q -D builder/clone
 
 mk nogo
 STUB_REPLY=$'- [P1] a blocker -- nogo.txt:1\nVERDICT: NO-GO' pass nogo 1 adversarial
@@ -204,6 +215,22 @@ check "with no closing pass, a narrowed pass that ends NO-GO does not merge" 1 "
 echo two > "$TMP/ws/nofin3/nofin3.txt"; git -C "$TMP/ws/nofin3" commit -qam "fix(nofin3): two"
 pass nofin3 3 review
 check "and the narrowed GO that was handed its finding does" 0 "$(merge nofin3)"
+# Main rules a finding out by naming it under "Cleared findings" in its own rulings file: the closing pass that
+# raised it again then merges, the proof says which ruling cleared it, and the reviewer was handed it as a limit.
+jq -n '{}' > "$REPO/.claude/commandeck.json"
+mk ruled
+STUB_REPLY=$'- [P1] keep the legacy folders -- ruled.txt:1 -- why -- how\nVERDICT: NO-GO' pass ruled 1 adversarial
+RUL=$REPO/.claude/briefs/ruled-main-rulings.md; mkdir -p "${RUL%/*}"
+printf '# ruled\n\n## Cleared findings\n- [P1] keep the legacy folders -- ruled.txt:1\n' > "$RUL"
+(cd "$TMP/ws/ruled" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json bash "$PASS_SH" --ack-rulings ruled >/dev/null 2>"$TMP/pass.err") \
+  || echo "FAIL the rulings were not acknowledged: $(cat "$TMP/pass.err")"
+STUB_REPLY=$'- [P1] keep the legacy folders -- ruled.txt:1 -- why -- how\nVERDICT: NO-GO' pass ruled 2 final
+mv "$RUL" "$TMP/rulings.kept"; AFTER=$(head_main)
+check "a closing pass that found a P1 main never ruled on is refused" "1|$AFTER" "$(merge ruled)|$(head_main)"
+mv "$TMP/rulings.kept" "$RUL"
+check "the same pass merges once main's rulings clear that finding, and the proof names it, open nowhere" "0 1 0 1" \
+  "$(merge ruled) $(grep -cx "Cleared by main's ruling: - \[P1\] keep the legacy folders -- ruled.txt:1 -- why -- how" "$TMP/out") $(grep -c '^Open at merge: ' "$TMP/out") \
+$(grep -cxF -- '- [P1] keep the legacy folders -- ruled.txt:1' "$CODEX_HOME/builder-pass-prompts/thr-ruled-2-1")"
 mk cap
 jq -n '{reviewLoop: {maxRounds: "2"}}' > "$REPO/.claude/commandeck.json"
 STUB_REPLY=$'- [P1] a blocker -- cap.txt:1\nVERDICT: NO-GO' pass cap 1 adversarial
@@ -281,5 +308,8 @@ echo local > "$REPO/local.txt"; git -C "$REPO" add local.txt; git -C "$REPO" com
 mk dv; go dv; AFTER=$(head_main)
 check "with main diverged from origin, the merge refuses and says so" "1 1 $AFTER" \
   "$(merge dv) $(grep -c 'cannot fast-forward' "$TMP/out") $(head_main)"
+# A merge of Commandeck itself runs no check unless its own config names one; it names the suite CI runs.
+check "this repo's merge check is the shell suite CI runs" "bash scripts/run-shell-tests.sh" \
+  "$(jq -r '.testCommand // empty' "$REAL/.claude/commandeck.json" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -47,7 +47,7 @@ BIND=${COMMANDECK_DASHBOARD_BIND:-127.0.0.1}
 PORT=${COMMANDECK_DASHBOARD_PORT:-8791}
 RUN='' PUB='' SRV='' ALV=''
 # The heartbeat dies with the loop, or the page would read a dead collector as alive.
-trap 'rm -rf "${RUN:-}" "${PUB:-}"; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null; [ -z "$ALV" ] || kill "$ALV" 2>/dev/null' EXIT
+trap 'pp_rm_rf "${RUN:-}" "${PUB:-}"; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null; [ -z "$ALV" ] || kill "$ALV" 2>/dev/null' EXIT
 trap 'exit 143' TERM
 
 iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
@@ -166,7 +166,7 @@ seat_actual() {
 # and main's rulings file for the unit: an issue is its number, an item with no issue number its own text.
 # Built ones are the items its evidence file heads a section with, findings the newest round report's finding lines.
 builder_progress() {
-  local d=$1/.claude/briefs u=${2##*/} is=null bu=null fi_=null f t
+  local d=$1/.claude/briefs u=${2##*/} is=null bu=null fi_=null f t tb
   [ ! -f "$d/$u.md" ] || is=$(bash "$HERE/brief-issues.sh" "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md")
   # The file's title names the unit's issue before anything is built: only a section heading counts.
   # A heading "Item N" with no issue number stands for the items on numbered line N of the brief
@@ -175,8 +175,13 @@ builder_progress() {
   # shortcut: two numbered lists that both name listed issues on line N are both read; mark the list if one ever does.
   # A heading counts once something is written under it, before the next heading: one with nothing under it is
   # a section laid out ahead of the work. What is written under a sub-heading is written under its item too.
+  # A table with Issue and Status columns, under "## Per issue" or anywhere, rules for each issue a row starts with:
+  # a status starting "built" is built, any other ("partly built", "blocked") is not, a heading naming it or not.
   [ ! -f "$d/$u-evidence.md" ] || bu=false
-  [ ! -f "$d/$u-evidence.md" ] || [ ! -r "$d/$u-evidence.md" ] || bu=$(awk '/^#+ /{ l = length($1); for (k in h) if (k + 0 >= l) delete h[k]; h[l] = $0; next }
+  [ ! -f "$d/$u-evidence.md" ] || [ ! -r "$d/$u-evidence.md" ] || tb=$(awk -F'|' '/^\|/ { a = $2; s = $3; gsub(/^[ \t]+|[ \t]+$/, "", a); gsub(/^[ \t]+|[ \t]+$/, "", s)
+      if (tolower(a) == "issue" && tolower(s) == "status") { on = 1; next }
+      if (on && match(a, /^#[0-9]+/)) print (tolower(s) ~ /^built([^a-z]|$)/ ? "+" : "-") substr(a, RSTART, RLENGTH); next } { on = 0 }' "$d/$u-evidence.md") \
+    && bu=$({ awk '/^#+ /{ l = length($1); for (k in h) if (k + 0 >= l) delete h[k]; h[l] = $0; next }
       NF { for (k in h) if (k + 0 >= 2) { print h[k]; delete h[k] } }' "$d/$u-evidence.md" | while IFS= read -r f; do
       grep -oE '#[0-9]+' <<<"$f"
       [ "$is" != null ] || continue
@@ -186,7 +191,7 @@ builder_progress() {
       t=$(grep -hE "^${BASH_REMATCH[1]}\. " "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md" 2>/dev/null)
       grep -oE '#[0-9]+' <<<"$t" | grep -xFf <(jq -r '.[] | numbers | "#\(.)"' <<<"$is")
       sed -E 's/^[0-9]+\. +//; s/[[:space:]:.]+$//' <<<"$t" | grep -xFf <(jq -r '.[] | strings' <<<"$is") | sed 's/^/=/'
-    done | bash "$HERE/brief-issues.sh" --list)
+    done; sed -n 's/^+//p' <<<"$tb"; } | grep -vxFf <(sed -n 's/^-//p' <<<"$tb") | bash "$HERE/brief-issues.sh" --list)
   f=$(ls -t "$d/$u"-r*-reports.md 2>/dev/null | head -1)
   [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
   jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" '{issues: $is, built: $bu, findings: $fi}'
@@ -732,8 +737,9 @@ part() {
 # in <run dir>/project.json. The run directory is the caller's: it reads the
 # file and removes the directory.
 project() {
-  RUN=$1 NOW=${DASH_NOW:?} CACHE=$CACHE/$PP_PROJECT
+  # The trap goes first: a run folder taken before a failed check here was removed by it.
   trap - EXIT
+  RUN=$1 NOW=${DASH_NOW:?} CACHE=$CACHE/$PP_PROJECT
   mkdir -p "$CACHE" "$RUN/src" "$RUN/parts" || return 1
   cd "$PP_MAIN" || return 1
   # A session records its folder as the OS gives it. On a Mac a workspace path typed in another letter case finds
@@ -803,7 +809,7 @@ render() {
   ! grep -q '[{,]"__proto__":' "$PUB" \
     || { sed 's/\([{,]\)"__proto__":/\1["__proto__"]:/g' "$PUB" > "$PUB.k" && mv -f "$PUB.k" "$PUB"; } || return 1
   chmod 644 "$PUB" && mv -f "$PUB" "$OUT/data.js" || return 1
-  rm -rf "$RUN"; RUN='' PUB=''
+  pp_rm_rf "$RUN"; RUN='' PUB=''
 }
 
 # register <repo> / unregister <repo> -- the registry holds each main checkout
@@ -968,7 +974,7 @@ case "${1:-}" in
             [ -n "$SRV" ] && kill -0 "$SRV" 2>/dev/null \
               || { python3 "$HERE/dashboard_serve.py" "$PORT" "$BIND" "$OUT" >/dev/null 2>&1 & SRV=$!; }
             t0=$(date +%s); cycle "$t0" "$last"
-            render || echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; rm -rf "${RUN:-}" "${PUB:-}"
+            render || echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; pp_rm_rf "${RUN:-}" "${PUB:-}"
             last=$(( $(date +%s) - t0 )); cycle "$t0" "$last"
             [ "$last" -le 60 ] || echo "dashboard: cycle took $last s" >&2
             sleep 60 & wait $!; done ;;  # a foreground sleep would hold off the TERM trap that stops the server

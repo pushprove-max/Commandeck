@@ -50,7 +50,8 @@ CWD=$(cd "$CWD" && pwd -P)
 # quotes and its prose ran as a command.
 # With a second argument, every word is kept, re-quoted, whitespace folded: the
 # run key needs them, since `-t "one case"` picks the tests and is not the two
-# words `-t one case`. Each segment then ends with \x1f and the operator after it.
+# words `-t one case`. Each segment then ends with \x1f and the operator after it, and
+# with \x1e before that when it had a redirection (one that fails skips the command).
 # A quoted or escaped ; & | < > is a word, never an operator: shlex hands both back
 # alike, so such characters are swapped out before it splits and back after.
 chain_segments() {
@@ -60,16 +61,16 @@ keep = os.environ["KEEP_QUOTED"]
 HIDE = str.maketrans(";&|<>", "\ue000\ue001\ue002\ue003\ue004")
 SHOW = {v: k for k, v in HIDE.items()}
 def emit(toks):
-    seg, skip = [], False
+    seg, skip, redir = [], False, ""
     for t in toks:
         if skip:
             skip = False
             continue
         if t and set(t) <= set(";&|"):
-            print(" ".join(seg) + ("\x1f" + t if keep else "")); seg = []
+            print(" ".join(seg) + (redir + "\x1f" + t if keep else "")); seg, redir = [], ""
             continue
         if t and set(t) <= set("<>&|"):
-            skip = True
+            skip, redir = True, "\x1e"
             continue
         t = t.translate(SHOW)
         if keep:
@@ -78,16 +79,17 @@ def emit(toks):
             # segment line and unlike a typed backslash-n. Bash quotes end the
             # python -c text, hence \x27.
             seg.append(shlex.quote(t).replace("\n", "\x27$\x27\\n\x27\x27"))
-        elif "$(" in t or not any(c.isspace() for c in t):
+        elif "$(" in t or not any(c in " \t\n" for c in t):
             seg.append(t.replace("\n", " "))  # one line per segment, as in keep mode
-    print(" ".join(seg) + ("\x1f;" if keep else ""))
+    print(" ".join(seg) + (redir + "\x1f;" if keep else ""))
 # The fd number of `2>x` belongs to the redirection, but shlex splits it off as
 # a word of its own. Quoted and escaped text is left as it is.
-FD = re.compile(r"""\\.|\x27[^\x27]*\x27|"(?:\\.|[^"\\])*"|(?<![^\s;&|()])\d+(?=[<>])""")
+FD = re.compile(r"""\\.|\x27[^\x27]*\x27|"(?:\\.|[^"\\])*"|(?<![^ \t\n;&|()])\d+(?=[<>])""")
 def lex(text):
     text = FD.sub(lambda m: "" if m.group(0)[0].isdigit() else m.group(0).translate(HIDE), text)
     lex = shlex.shlex(text, posix=True, punctuation_chars=";&|<>")
     lex.whitespace_split = True
+    lex.whitespace = " \t\n"  # the blanks of bash: shlex adds \r, and `pipefail\r` is a word set refuses
     return list(lex)
 # Only a `#` that starts a word starts a comment; shlex ends a word at any `#`,
 # which hid the commands after `a#b`. Escaped, a mid-word `#` stays a letter;
@@ -97,19 +99,19 @@ def midword_hash(m):
     if len(run) % 2 or (not run and (at == 0 or text[at - 1] in " \t;&|()<>")):
         return m.group(0)
     return run + "\\#"
-lines = [re.sub(r"(\\*)#", midword_hash, l) for l in os.environ["CMD"].replace("\\\n", "").splitlines()]
+lines = [re.sub(r"(\\*)#", midword_hash, l) for l in os.environ["CMD"].replace("\\\n", "").split("\n")]
 # FAIL CLOSED on a heredoc (main ruling 2026-10-10): a body apostrophe could
 # open a quote that hides the commands after the body, and parsing delimiters
 # missed a form every round. Any `<<` outside a comment (a `#` that starts a
 # word with no quote before it) means one line at a time, body included: a
 # suite named in a body blocks, one after it is never hidden.
-COMMENT = re.compile(r"^([^\x27\x22#]*?)(?:^|(?<=\s))#.*")
+COMMENT = re.compile(r"^([^\x27\x22#]*?)(?:^|(?<=[ \t]))#.*")
 if any("<<" in COMMENT.sub(r"\1", l) for l in lines):
     for line in lines:
         try:
             toks = lex(line)
         except ValueError:
-            toks = line.split()
+            toks = re.findall(r"[^ \t]+", line)
         emit(toks)
     raise SystemExit
 i = 0
@@ -122,7 +124,7 @@ while i < len(lines):
             pass
     else:
         # A quote that never closes costs only its own line.
-        j, toks = i, lines[i].split()
+        j, toks = i, re.findall(r"[^ \t]+", lines[i])
     emit(toks)
     i = j + 1
 '
@@ -140,7 +142,7 @@ seg_cd() {
   if [ -d "$target" ]; then (cd "$target" && pwd -P); else printf '%s' "$1"; fi
 }
 
-SUITE_RE='(^|[[:space:];&|(`])(npm[[:space:]]+(run[[:space:]]+)?(test|typecheck)(:[a-z:-]+)?|npx[[:space:]]+tsc|tsc[[:space:]]|npx[[:space:]]+vitest|vitest[[:space:]])'
+SUITE_RE='(^|[[:blank:];&|(`])(npm[[:blank:]]+(run[[:blank:]]+)?(test|typecheck)(:[a-z:-]+)?|npx[[:blank:]]+tsc|tsc[[:blank:]]|npx[[:blank:]]+vitest|vitest[[:blank:]])'
 
 # shortcut: knows npm, tsc and vitest runs only; add the project's testCommand
 # here when a project with another runner turns the strict tier on.
@@ -176,7 +178,7 @@ printf '%s' "$SEGS" | grep -qE '(^|[[:space:];&|(])RERUN=1([[:space:]]|$)' && ex
 # missed block costs a rerun while a wrong one costs a run that never happened.
 mapfile -t PLAIN <<< "$SEGS"
 mapfile -t KEPT < <(chain_segments "$CMD" keep)
-seg() { printf '%s' "${KEPT[$1]%$'\x1f'*}"; }
+seg() { local s=${KEPT[$1]%$'\x1f'*}; printf '%s' "${s%$'\x1e'}"; }
 suite() { seg "$1" | grep -qE "$SUITE_RE"; }
 S=0
 read -r -a W <<< "${PLAIN[0]:-}"
@@ -190,7 +192,10 @@ if [ "${#W[@]}" = 2 ] && [ "${W[0]}" = cd ] && [[ ${W[1]} != -* ]] && [ -d "$T" 
 fi
 KEY=$CMD
 # A second suite named anywhere in the text, a quoted `bash -c "..."` body included, keys on the whole command.
-if suite "$S" && [ "$(printf '%s' "$CMD" | tr "\"'" '  ' | grep -oE "$SUITE_RE" | wc -l)" -le 1 ]; then
+# Counted twice, quotes read as spaces and then with quotes and backslashes taken out as the shell does (
+# `bash -c "npm run \"typecheck\""`); either count over one is a second suite.
+suites() { grep -oE "$SUITE_RE" | wc -l; }
+if suite "$S" && [ "$(printf '%s' "$CMD" | tr "\"'" '  ' | suites)" -le 1 ] && [ "$(printf '%s' "$CMD" | tr -d "\"'\\\\" | suites)" -le 1 ]; then
   KEY=$(seg "$S")
   for ((i = S + 1; i < ${#KEPT[@]}; i++)); do suite "$i" && { KEY=$CMD; break; }; done
 fi
@@ -217,8 +222,78 @@ mkdir -p "$DIR" 2>/dev/null || exit 0
 STATE="$DIR/$(printf '%s|%s' "$CWD" "$KEY" | sha1sum | cut -c1-40)"
 NOW=$(date +%s)
 
+# own_status -- 0 when the command's exit status is the suite's own. The completion hook hears exit 0
+# alone, and after a pipe, a `;`, an `||` or a `&` that 0 is another command's: a failing suite piped into tail was
+# recorded, and its rerun refused. Only `&&` may follow the first suite, or a pipe once pipefail is surely on: a
+# `set` that surely runs, one `-o pipefail`, run in this shell whatever came before (first, or after `;` or `&`).
+# Any segment before the suite that could turn it off, stop the suite running (`exit`, `set -n`: exit 0 with no
+# suite run) or hide what it does makes the run unsure, piped or not: one naming pipefail (PIPE_FAIL included), a
+# set that may not run, or any command but a few plain builtins and a program on PATH, since a builtin, keyword,
+# function or wrapper may run code in this shell (`command eval "$OFF"`, `{ ...; }`, `X=1 eval`, trap).
+# Unsure is not recorded: a missed record costs a rerun, a wrong one blocks the retry of a failed suite.
+# set_ok -- 0 when the segment is a `set` that surely runs and leaves the commands after it running: no redirection
+# (a failed one skips the set), and its words all options bash takes, n (noexec) excepted: over one word it refuses
+# (`"-a b"`, `-Z`) bash changes nothing. Sets PF to on or off when it names pipefail.
+set_ok() {
+  local w o= W
+  PF=
+  [[ ${KEPT[$1]} == *$'\x1e\x1f'* ]] && return 1
+  read -r -a W <<< "$(seg "$1")"
+  [ "${W[0]:-}" = set ] || return 1
+  for w in "${W[@]:1}"; do
+    if [ -n "$o" ]; then
+      [[ $w =~ ^(pipefail|errexit|nounset|xtrace|verbose)$ ]] || return 1
+      [ "$w" = pipefail ] && { [ "$o" = - ] && PF=on || PF=off; }
+      o=
+    elif [[ $w =~ ^([-+])[abefhkmptuvxBCEHPT]*o$ ]]; then o=${BASH_REMATCH[1]}
+    elif [[ ! $w =~ ^[-+][abefhkmptuvxBCEHPT]+$ ]]; then return 1; fi
+  done
+  [ -z "$o" ]
+}
+pf_on() { set_ok "$1" && [ "$PF" = on ]; }
+pf_off() {
+  local W
+  seg "$1" | tr -d _ | grep -qi pipefail && return 0
+  read -r -a W <<< "${PLAIN[$1]:-}"
+  case ${W[0]:-} in
+    set) ! set_ok "$1" ;;
+    cd|pushd|popd|echo|printf|true|:|pwd|test|\[|export) return 1 ;;
+    # Assignments alone (`LOG=/tmp/v.log;`) run nothing; a value with `$(` or a backtick runs a command, so is unsure.
+    *=*) [[ ! ${PLAIN[$1]} =~ ^([A-Za-z_][A-Za-z0-9_]*=([^\$\`[:space:]]|\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?)*[[:space:]]*)+$ ]] ;;
+    *) [ "$(type -t -- "${W[0]:-}")" != file ] ;;
+  esac
+}
+# head_ok -- 0 when the suite opens its own segment, after plain assignments only: `!` turns its failure into exit 0,
+# and so may any other word before it (`coproc`, `time !`, a backtick that runs the suite's output).
+head_ok() {
+  local rest=${PLAIN[$1]:-}
+  while [[ $rest =~ ^[[:blank:]]*[A-Za-z_][A-Za-z0-9_]*=([^\$\`[:space:]]|\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?)*[[:blank:]]+(.*)$ ]]; do
+    rest=${BASH_REMATCH[2]}
+  done
+  rest=${rest#"${rest%%[![:blank:]]*}"}
+  [[ $rest =~ $SUITE_RE ]] && [[ $rest == "${BASH_REMATCH[2]}"* ]]
+}
+own_status() {
+  local i op prev=';' seen=0 pf=0
+  for ((i = 0; i < ${#KEPT[@]} - 1; i++)); do
+    op=${KEPT[$i]##*$'\x1f'}
+    [ "$seen" = 1 ] || { suite "$i" && { head_ok "$i" || return 1; } && seen=1; }
+    if [ "$seen" = 0 ]; then
+      if pf_on "$i"; then
+        case $prev/$op in ';/;'|';/&&'|';/||'|'&/;'|'&/&&'|'&/||') pf=1 ;; esac
+      elif pf_off "$i"; then return 1
+      fi
+      prev=$op; continue
+    fi
+    case $op in '&&') ;; '|'|'|&') [ "$pf" = 1 ] || return 1 ;; *) return 1 ;; esac
+  done
+  # The suite is the last segment: nothing follows it, but its own head still counts.
+  [ "$seen" = 1 ] || head_ok "$i"
+}
+
 # --- PostToolUse: the run finished, so it counts ------------------------------
 if [ "$MODE" = complete ]; then
+  own_status || { rm -f "$STATE"; exit 0; }
   # An interrupted call produced no result to read, so it must not stand in
   # for one.
   if [ "$(printf '%s' "$INPUT" | jq -r '.tool_response.interrupted // false' 2>/dev/null)" = true ]; then

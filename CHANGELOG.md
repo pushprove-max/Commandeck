@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.8.0 -- 2026-10-16
+
+- No script can remove a main checkout any more. `dashboard.sh --project` run by hand
+  with no DASH_NOW removed the folder it was given (how ~/repos/Commandeck was lost);
+  every computed removal now refuses a checkout, a git folder, HOME or `/`, and the
+  merge refuses a unit folder that is not a linked worktree.
+- A fix round the Builder's pane never took is now told to main, with Orca's own answer,
+  instead of only written to a log.
+- The suite re-run guard records a run as passed only when its exit status is the
+  suite's own: a piped or chained failing run is no longer taken for a pass.
+- Escaped quotes no longer hide a second suite from the re-run guard.
+- A COMMANDECK_MAIN or COMMANDECK_WORKSPACES spelled with `/./`, `//` or a trailing `/`
+  now matches the paths Orca, transcripts and setup's records give, on both sides of
+  each compare; nothing stored is renamed.
+- Main can clear a review finding it ruled out: a line under "Cleared findings" in its
+  rulings file. The merge then counts it as cleared, not as a blocker, and the reviewer
+  is handed it with the stated limits.
+- A merge of Commandeck itself runs the shell suite (`.claude/commandeck.json`
+  testCommand).
+- setup.test.sh (600 s) and merge-unit-local.test.sh (300 s) carry their own allowance
+  (`# timeout:`), so the runner no longer reports them HUNG at the 120 s cap; every
+  other file keeps that cap.
+- Setup installs every add-on and updates each to its latest on every run (`--addons`
+  narrows the list); no command names a version. codebase-memory is updated only while
+  no session is open, and setup says FAILED when a new session cannot reach it.
+- Dashboard: a long Builder name in "Who holds what" no longer squeezes the issue
+  number and title to a letter per line; the name is cut short, whole on hover.
+- Dashboard: a build's "Cost so far" shows its Claude and Codex parts.
+- Dashboard: a Builder's issues built are also read from its evidence's Issue and
+  Status table; a row that says partly built, blocked or not built does not count.
+- The relay pane follows the owner's ponytail setting instead of turning it off, no
+  profile names typescript-lsp, and the worktree summary has its space back after
+  "memoir off,".
+
 ## 0.7.2 -- 2026-10-16
 
 - Main's startup text is 497 bytes shorter (main-session.md, 10,198 to 9,701

@@ -50,14 +50,16 @@ PLUGINS_OFF='{"customer-support@synced":false,"design@synced":false,"operations@
 # Same seat test as agent-startup-context.sh: the worktree's directory name.
 if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Staff ]; then
   COS_MCP_DENY='[{"serverName":"serena"},{"serverName":"codebase-memory"},{"serverName":"context7"},{"serverName":"aws-knowledge"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"},{"serverName":"claude-in-chrome"},{"serverName":"alphaxiv"}]'
-  COS_PLUGINS_OFF='{"ponytail@ponytail":false,"typescript-lsp@claude-plugins-official":false,"skill-creator@claude-plugins-official":false,"canvas@claude-canvas":false,"mattpocock-skills@claude-plugins-official":false,"stripe@claude-plugins-official":false,"memoir@memoir":false}'
+  COS_PLUGINS_OFF='{"skill-creator@claude-plugins-official":false,"canvas@claude-canvas":false,"mattpocock-skills@claude-plugins-official":false,"stripe@claude-plugins-official":false,"memoir@memoir":false}'
   # The orca commands the relay pane needs to reach main (owner ruling 2026-10-09); nothing broader.
   COS_ALLOW='["Bash(orca-ide terminal list:*)","Bash(orca-ide terminal send:*)","Bash(orca-ide terminal read:*)","Bash(orca-ide terminal wait:*)","Bash(orca-ide orchestration send:*)","Bash(orca-ide orchestration check:*)","Bash(orca-ide orchestration reply:*)","Bash(orca-ide orchestration inbox:*)"]'
   # Its own watcher scripts and the decision script, each by the full path the
   # startup text names (owner ruling 2026-10-12); no other script.
   COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
+  # Ponytail runs in every seat, the relay pane too (owner, 2026-10-16): the off an earlier run wrote goes, and the
+  # pane follows the owner's own setting. The typescript-lsp plugin is gone, and so is the key for it.
   jq --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" '
-    .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff)
+    .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
     | .disableClaudeAiConnectors = true
     | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
     | .permissions.allow = ((.permissions.allow // []) + $callow | unique)' "$F" > "$tmp"
@@ -87,11 +89,6 @@ PROJECT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/
 #    Fewer tool definitions in the window is also less to attend to (19 tools
 #    beat 46 in the same window in the context-engineering literature).
 DENY='["Agent","Artifact","NotebookEdit","EnterPlanMode","ExitPlanMode","EnterWorktree","ExitWorktree","WebSearch","WebFetch","SendUserFile","PushNotification","CronCreate","CronDelete","CronList"]'
-# 5. The typescript-lsp plugin is off in worktrees: every Claude pane already
-#    runs Serena's TypeScript server, and the plugin starts a second one for
-#    the same tree. Measured 2026-09-04: 21 tsserver processes, 13.9 GB of a
-#    31.5 GB cage, two per pane at 1 to 3 GB each. Workers navigate through
-#    Serena (`AGENT_STARTUP.md` 1b) and never call the plugin's LSP tool.
 # 6. Workers stay in `auto` mode and the commands a worker actually needs are
 #    allowlisted, so the classifier never prompts for a read, a test run or
 #    a git query (it stalled the prod-config-to-dev implementer on a plain
@@ -123,7 +120,7 @@ jq --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-wo
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
   | .hooks = ((.hooks // {}) | map_values(map(select(((.hooks // []) | length) > 0 and all(.hooks[]; stale) | not))))
-  | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false, "typescript-lsp@claude-plugins-official": false} + $poff)
+  | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false} + $poff | del(.["typescript-lsp@claude-plugins-official"]))
   | .disableClaudeAiConnectors = true
   | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
   | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
@@ -133,7 +130,7 @@ mv "$tmp" "$F"
 # The Stop hook (ruling 2026-09-07) sends an Orca worker_done when any Claude
 # pane in the worktree finishes a turn, the twin of the Codex `notify` hook, so
 # main's blocking wait wakes at once instead of at its timeout.
-echo "$WT: node_modules linked where main has them, compact window $WINDOW, memoir off, typescript-lsp plugin off, $(echo "$DENY" | jq length) unused tools denied, auto mode with $(echo "$ALLOW" | jq length) allowed command patterns, Stop notify hook, orchestration.md excluded, business plugins + claude.ai connectors + chrome/CloudWatch off"
+echo "$WT: node_modules linked where main has them, compact window $WINDOW, memoir off, $(echo "$DENY" | jq length) unused tools denied, auto mode with $(echo "$ALLOW" | jq length) allowed command patterns, Stop notify hook, orchestration.md excluded, business plugins + claude.ai connectors + chrome/CloudWatch off"
 
 # 9. --builder: a Builder runs its own Explore subagents (Agent allowed)
 #    and the Codex companion (node), carries no orchestration rules, and logs

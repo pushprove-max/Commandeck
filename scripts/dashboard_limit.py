@@ -811,6 +811,15 @@ def tally(rows, sec):
             "usd": round(sum(p for p in priced if p is not None), 4), "partial": None in priced, "unpriced": unpriced_models(rows)}
 
 
+def by_agent(claude, codex):
+    """A total's Claude and Codex parts: None for an agent with an unpriced call, never $0 or a guess; 0 with no call."""
+    out = {}
+    for agent, rows in (("claude", claude), ("codex", codex)):
+        t = tally(rows, 0)
+        out[agent] = None if t["partial"] else t["usd"]
+    return out
+
+
 def unit_costs(units, now, cache_dir, projects, sessions):
     """Each Builder's cost by stage, from the requests its own worktree's sessions made (#94).
 
@@ -846,7 +855,8 @@ def unit_costs(units, now, cache_dir, projects, sessions):
             mine = [r for r in rows if (i == 0 or r[0] >= a) and (r[0] < b or (i == len(bounds) - 1 and r[0] <= now))]
             stages.append({"stage": s["stage"], "from": s["from"], "to": s.get("to"), **tally(mine, round(max(0, b - a)))})
         # The last stage is always the open one (stageHistory), so the build has run from its start to now.
-        out[u["unit"]] = {"stages": stages, "total": tally([r for r in rows if r[0] <= now], round(max(0, now - t0)))}
+        mine = lambda src: [r for r, f in src if under(f, [wt]) and r[0] <= now]
+        out[u["unit"]] = {"stages": stages, "total": {**tally([r for r in rows if r[0] <= now], round(max(0, now - t0))), "byAgent": by_agent(mine(claude), mine(cx))}}
     return out
 
 

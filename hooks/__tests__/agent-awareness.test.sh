@@ -35,6 +35,11 @@ for s in / // /.; do
   OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_WORKSPACES="$T/ws$s" COMMANDECK_AWARENESS_DIR="$T/aw-$n" bash "$HERE/hooks/agent-awareness.sh")
   check "a worktrees folder given ending in $s still lists this project's worktree" 1 "$(case "$OUT" in *'Ours [ours]'*) echo 1 ;; *) echo 0 ;; esac)"
 done
+# A /./ or // inside the path is a valid spelling too.
+for w in "$T/./ws" "$T//ws/./"; do
+  n=$((n+1)); OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_WORKSPACES="$w" COMMANDECK_AWARENESS_DIR="$T/aw-$n" bash "$HERE/hooks/agent-awareness.sh")
+  check "a worktrees folder given as <tmp>${w#"$T"} still lists this project's worktree" 1 "$(case "$OUT" in *'Ours [ours]'*) echo 1 ;; *) echo 0 ;; esac)"
+done
 # Orca names a worktree as it was made, a link's spelling too: the folder given by that spelling still lists it.
 OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_WORKSPACES="$T/lnk" COMMANDECK_AWARENESS_DIR="$T/aw-lnk" bash "$HERE/hooks/agent-awareness.sh")
 check "a worktrees folder given by a link's spelling lists the worktree Orca names by it" 1 "$(case "$OUT" in *'Linked [linked]'*) echo 1 ;; *) echo 0 ;; esac)"

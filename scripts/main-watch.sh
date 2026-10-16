@@ -64,7 +64,7 @@ others_job() {
   local f o
   [ "$(hs_os)" = Darwin ] && f=$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist || f=$HOME/.config/systemd/user/$UNIT
   o=$(sed -n -e 's/^Environment="COMMANDECK_MAIN=\(.*\)"$/\1/p' -e 's/.*<key>COMMANDECK_MAIN<\/key><string>\([^<]*\)<.*/\1/p' "$f" 2>/dev/null | head -1)
-  [ -n "$o" ] && [ "$o" != "$PP_MAIN" ] && [ -d "$o" ] && printf '%s\n' "$o"
+  [ -n "$o" ] && [ "$(pp_norm "$o")" != "$(pp_norm "$PP_MAIN")" ] && [ -d "$o" ] && printf '%s\n' "$o"
 }
 install() {
   local o
@@ -337,8 +337,8 @@ resolve_main() {
   COORD=$(orca-ide orchestration run-list --json 2>/dev/null | jq -er --arg r "$RUN" \
     '.result.runs | if type == "array" then (first(.[] | select(.id == $r) | .coordinator_handle) // "") else error end' 2>/dev/null) || COORD='?'
   COORD_LIVE=$(jq -r --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $c)] | length' <<<"$2" 2>/dev/null)
-  MAIN_H=$(jq -r --arg m "$PP_MAIN" --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]?
-    | select(.worktreePath == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
+  MAIN_H=$(jq -r --arg m "$PP_MAIN" --arg c "$COORD" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select((.worktreePath | pnorm) == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
   MAIN_STATE=$(jq -rn --argjson ps "$1" --argjson ts "$2" --arg h "$MAIN_H" '
     ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
     | first(($ts.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h)
@@ -928,8 +928,8 @@ heads_up_post() {
     done
     # Never guessed as main: a source with no checkout yet waits, visibly. It
     # holds back no note already known to be this project's: that one goes now.
-    if jq -e --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" '.groups[$k].members | any(.[]; .cwd == null)
-        and (any(.[]; .cwd != null and (.cwd == $m or (.cwd | startswith($m + "/")) or (.cwd | startswith($w + "/")))) | not)' >/dev/null <<<"$led"; then
+    if jq -e --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" "$PP_PNORM"'($m | pnorm) as $m | ($w | pnorm) as $w | .groups[$k].members | any(.[]; .cwd == null)
+        and (any(.[]; .cwd != null and (.cwd | pnorm | . == $m or startswith($m + "/") or startswith($w + "/"))) | not)' >/dev/null <<<"$led"; then
       # It waits while the offer is still shown. Once the offer is gone and no
       # transcript ever named the session, it would wait for good: it is put on
       # the handled list unsent, and said so; its text stays in the archive.
@@ -943,12 +943,12 @@ heads_up_post() {
     # The offer store is the machine's and every project runs a watcher: only
     # notes from this project's checkouts go to this project's main, and only
     # those members are quoted.
-    led=$(jq -c --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" '.groups[$k].members |= map(select(.cwd != null and (.cwd == $m or (.cwd | startswith($m + "/")) or (.cwd | startswith($w + "/")))))' <<<"$led")
+    led=$(jq -c --arg k "$k" --arg m "$PP_MAIN" --arg w "$WS" "$PP_PNORM"'($m | pnorm) as $m | ($w | pnorm) as $w | .groups[$k].members |= map(select(.cwd != null and (.cwd | pnorm | . == $m or startswith($m + "/") or startswith($w + "/"))))' <<<"$led")
     jq -e --arg k "$k" '.groups[$k].members | length > 0' >/dev/null <<<"$led" || continue
-    subj=$(jq -r --arg k "$k" --arg m "$PP_MAIN" '.groups[$k] | "heads-up: \([.members[] | if .cwd == $m then "main" else (.cwd | split("/") | last) end] | unique | join(", ")) -- \(.line)"' <<<"$led")
-    body=$(jq -r --arg k "$k" --arg m "$PP_MAIN" --arg log "$HU_LOG" '.groups[$k]
+    subj=$(jq -r --arg k "$k" --arg m "$PP_MAIN" "$PP_PNORM"'($m | pnorm) as $m | .groups[$k] | "heads-up: \([.members[] | if (.cwd | pnorm) == $m then "main" else (.cwd | split("/") | last) end] | unique | join(", ")) -- \(.line)"' <<<"$led")
+    body=$(jq -r --arg k "$k" --arg m "$PP_MAIN" --arg log "$HU_LOG" "$PP_PNORM"'($m | pnorm) as $m | .groups[$k]
       | "This note is another model'"'"'s unverified claim. Main must verify it against code or live state before acting.\nLine: \(.line)\n\n"
-        + ([.members[] | "From \(if .cwd == $m then "main" else (.cwd | split("/") | last) end): session \(.id), shown \(.utc) (shownAt \(.shownAt) ms)\nCheckout: \(.cwd)\nExplanation:\n\(.explanation)"] | join("\n\n"))
+        + ([.members[] | "From \(if (.cwd | pnorm) == $m then "main" else (.cwd | split("/") | last) end): session \(.id), shown \(.utc) (shownAt \(.shownAt) ms)\nCheckout: \(.cwd)\nExplanation:\n\(.explanation)"] | join("\n\n"))
         + "\n\nFull text archived in \($log)."' <<<"$led")
     post "$k" "" "$subj" "$body" once
     # In the tick that marks it, not the next: the temp folder may be gone by then.

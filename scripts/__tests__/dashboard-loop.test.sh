@@ -25,8 +25,11 @@ mkdir -p "$T/out"; for f in index.html app.css app.js; do cp "$T/plugin/dashboar
 (cd "$T/proj" && exec bash "$T/plugin/scripts/dashboard.sh" --loop >/dev/null 2>"$T/loop.err") & LOOP=$!
 wait_for 20 test -s "$T/out/alive.js"; check "the loop is up" 0 $?
 
+# A view file that did not change is not written again: same file, same old time.
+touch -t 200001010000 "$T/out/index.html"; touch -t 200001010001 "$T/old"; INO=$(ls -i "$T/out/index.html" | awk '{print $1}')
 printf '/* merged fix */\n' >> "$T/plugin/dashboard/app.css"
 wait_for 10 same app.css; check "a changed view file reaches the served copy with no --install" 0 $?
+check "an unchanged view file is not rewritten" "$INO old" "$(ls -i "$T/out/index.html" | awk '{print $1}') $([ "$T/out/index.html" -nt "$T/old" ] || echo old)"
 check "the page sees the new view by its checksum" 1 "$(wait_for 5 grep -q "\"view\":\"$(cat "$T/out/index.html" "$T/out/app.css" "$T/out/app.js" | cksum | cut -d' ' -f1)\"" "$T/out/alive.js" && echo 1)"
 
 chmod a-w "$T/out"; printf '// another\n' >> "$T/plugin/dashboard/app.js"

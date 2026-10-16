@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# timeout: 600 -- 142 s alone at load 4.8 and 256 s in the runner at load 7 to 13 (2026-10-16), past the runner's 120 s default
 # setup.test.sh -- setup is the one command between "plugin installed" and a
 # working project. What this pins: it takes every answer in one pass and asks
 # nothing itself; a failed preflight changes nothing; the manifest names every
@@ -29,9 +30,22 @@ check "the project's profile is the one the review pass uses" codex "$(cd "$PROJ
 check "the project is registered with the dashboard" "$PROJ" "$(cat "$HOME/.commandeck/dashboard/projects")"
 check "the dashboard job is installed, local only" 1 "$(grep -c '^Environment="COMMANDECK_DASHBOARD_BIND=127.0.0.1"$' "$HOME/.config/systemd/user/commandeck-dashboard.service")"
 check "the project's watcher job is installed" 1 "$(ls "$HOME/.config/systemd/user" | grep -c '^commandeck-main-watch-proj.service$')"
-check "setup prints the add-ons as commands" 1 "$(grep -c '^  serena  *claude mcp add' "$T/out")"
-check "every add-on has a command: none is a placeholder" 0 "$(grep -c 'no public source' "$T/out")"
-check "every add-on has a cost line" "$(grep -vc '^#' "$PLUGIN/config/addons.tsv")" "$(grep -c '^  *cost: .' "$T/out")"
+check "every add-on has a command and a cost: none is a placeholder" 0 \
+  "$(grep -v '^#' "$PLUGIN/config/addons.tsv" | awk -F'\t' '$2 == "" || $3 == "" || /no public source/' | wc -l | tr -d ' ')"
+# The owner wants every add-on installed and kept at its latest, no version pinned: with no --addons answer each one
+# with a command runs on every setup. One with no one-line installer is listed with its page, not under Needs you.
+check "with no add-ons named, setup installs or updates each one that has a command" 'serena agent-browser ui-themes' \
+  "$(sed -n 's/^add-on \([a-z-]*\): installed at its latest, for .*/\1/p' "$T/out" | paste -sd' ' -)"
+check "no add-on command names a version, and agent-browser comes from npm's latest" '0:1' \
+  "$(grep -v '^#' "$PLUGIN/config/addons.tsv" | cut -f2 | grep -cE '@[0-9]|==|--version[ =]?[0-9]'):$(grep -c '^npm install -g agent-browser@latest$' "$T/addons.log")"
+check "the ponytail plugin is left out while setup's own ponytail skill is in use: the rules would load twice" 0 "$(grep -c '^add-on ponytail' "$T/out")"
+check "the add-on with no one-line installer is listed with its page, not put under Needs you" '1:0' \
+  "$(grep -c '^  mattpocock-skills  *see https://github.com/mattpocock/skills' "$T/out"):$(grep -c '^  add-on mattpocock-skills' "$T/out")"
+# codebase-memory's one daemon refuses a client of another version: it is stopped before the update, and a new
+# client must get a tool list afterwards.
+check "codebase-memory is updated with its daemon stopped first, then a new client is tried" \
+  'add-on codebase-memory: updated (codebase-memory-mcp 1.0.0 to codebase-memory-mcp 1.1.0); restart any Claude or Codex session that was open before|pkill -f -- --cbm-daemon-internal>codebase-memory-mcp update -y>codebase-memory-mcp ' \
+  "$(grep '^add-on codebase-memory' "$T/out")|$(grep -E '^(pkill|codebase-memory-mcp (update|$))' "$T/addons.log" | paste -sd'>' -)"
 # The ponytail skill is the one add-on setup installs, with the rule that keeps its name out of code comments.
 check "setup installs the ponytail skill and no other" 'ponytail' "$(ls "$HOME/.claude/skills" | paste -sd' ' -)"
 check "the installed skill is the shipped one" 0 "$(cmp -s "$PLUGIN/templates/ponytail/SKILL.md" "$HOME/.claude/skills/ponytail/SKILL.md"; echo $?)"
@@ -162,6 +176,7 @@ check "a round cap that is not a whole number is refused, and nothing is saved" 
 jq '.builder = {model: "sonnet", advisor: "opus"}' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
 PLUGIN_DIR=$HOME/.commandeck/plugin run "$PROJ" setup.sh "${ANSWERS[@]}" --name Grace --max-rounds 6 --closing-pass no --small-build 150 --max-review-min 45.50 --max-test-percent 40 --max-usd 25 >"$T/out" 2>&1; check "a second setup succeeds" 0 $?
 check "the new answer is taken" Grace "$(jq -r '.chiefOfStaff.name' "$CFG")"
+check "a second setup updates the add-ons again" 2 "$(grep -c '^npm install -g agent-browser@latest$' "$T/addons.log")"
 check "a rerun keeps the Builder model an older set-up stored and drops its advisor" '{"model":"sonnet"}' "$(jq -c '.builder' "$CFG")"
 check "setup run through the stable link keeps the link on the plugin" "$PLUGIN" "$(readlink "$HOME/.commandeck/plugin")"
 run "$PROJ" update.sh >"$T/out" 2>&1; check "an update with the link recorded succeeds" 0 $?
@@ -231,7 +246,7 @@ printf 'Our persona.\n\n## Ours\n\n- Main merges.\n\n## Details (not injected)\n
 mkdir -p "$P2/.claude/rules"; printf '# House\n\n%s\n' "$M1" > "$P2/.claude/rules/house.md"
 git -C "$P2" add -A && git -C "$P2" -c user.name=t -c user.email=t@t commit -qm own
 printf '# Mine\n\n%s\n' "$G1" > "$G"
-printf '#!/usr/bin/env bash\necho "$PWD $*" >> %q\n[ ! -e %q ]\n' "$T/claude.log" "$T/claude-fails" > "$BIN/claude"
+printf '#!/usr/bin/env bash\necho "$PWD $*" >> %q\n[ "$1 $2" != "mcp get" ] || exit 1\n[ ! -e %q ]\n' "$T/claude.log" "$T/claude-fails" > "$BIN/claude"   # no serena server yet
 STARTUP() { (cd "$P2" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN PATH="$BIN:$PATH" bash "$PLUGIN/hooks/agent-startup-context.sh" </dev/null 2>/dev/null); }
 ASK=(--own-startup merge --own-main-session replace --rules merge --global-rules merge --addons serena --cache-ttl recommended)
 
@@ -274,7 +289,11 @@ cp "$T/c.kept" "$C"
 check "global merge adds a block without the rule the owner's file already has" '1:1:1' \
   "$(grep -c '^<!-- commandeck:rules:begin -->$' "$G"):$(grep -cxF -- "$G1" "$G"):$(head -1 "$G" | grep -c '^# Mine$')"
 check "the chosen add-on is installed for the main checkout, and its hooks are on" "1:1:1:true" \
-  "$(grep -c "^$P2 mcp add serena" "$T/claude.log"):$(grep -c "^add-on serena: installed, for $P2" "$T/out"):$(grep -c '^serena (read-tracker nudge and pane-budget gate): on$' "$T/out"):$(jq .serena "$P2/.claude/commandeck.json")"
+  "$(grep -c "^$P2 mcp add serena" "$T/claude.log"):$(grep -c "^add-on serena: installed at its latest, for $P2" "$T/out"):$(grep -c '^serena (read-tracker nudge and pane-budget gate): on$' "$T/out"):$(jq .serena "$P2/.claude/commandeck.json")"
+# Pass 1: a found registration skipped the add, so an old or broken one (`mcp add serena -- /bin/false`) stayed under
+# "installed at its latest". Setup now takes the project's own registration out and adds the current one each run.
+check "serena's project registration is replaced, never kept because one is found" "$P2 mcp remove serena -s local|$P2 mcp add serena" \
+  "$(grep -oE "^$P2 mcp (get serena|remove serena -s local|add serena)" "$T/claude.log" | paste -sd'|' -)"
 check "the commit advice names the merged startup file, never the machine's settings" '1:0' \
   "$(grep -c '^  not committed yet: .*AGENT_STARTUP.md' "$T/out"):$(grep -c 'not committed yet: .*settings.local.json' "$T/out")"
 # Prompt-cache lifetimes (main's ruling): recommended writes both into the project's settings and says so.
@@ -305,6 +324,23 @@ touch "$T/claude-fails"
 run "$P2" setup.sh "${ANSWERS[@]}" --own-startup skip --addons serena >"$T/out" 2>&1
 check "skip after merge leaves the owner's file exactly as committed" '0:0' "$?:$(git -C "$P2" diff --quiet HEAD -- AGENT_STARTUP.md; echo $?)"
 check "an add-on that fails to install is under Needs you, with its command" 1 "$(grep -c '^  add-on serena: the install FAILED .*run in .*claude mcp add serena' "$T/out")"
+
+# An open session holds a codebase-memory client: the daemon it talks to is not stopped or updated under it.
+printf '#!/usr/bin/env bash\n[ "$*" = "-f codebase-memory-mcp$" ]\n' > "$BIN/pgrep"; : > "$T/addons.log"
+run "$P2" setup.sh "${ANSWERS[@]}" --own-startup skip --addons codebase-memory >"$T/out" 2>&1
+check "with a session open codebase-memory is neither stopped nor updated, and Needs you says how" '0:0:1' \
+  "$(grep -c '^pkill' "$T/addons.log"):$(grep -c ' update' "$T/addons.log"):$(grep -c '^  add-on codebase-memory: not updated (codebase-memory-mcp 1.1.0): open sessions use its daemon.*Close every Claude and Codex session' "$T/out")"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/pgrep"; touch "$T/cbm-down"
+run "$P2" setup.sh "${ANSWERS[@]}" --own-startup skip --addons codebase-memory >"$T/out" 2>&1
+check "a new session that cannot reach codebase-memory is a loud failure under Needs you" 1 "$(grep -c '^  add-on codebase-memory: a new session cannot reach it (FAILED' "$T/out")"
+check "and the add-ons not run are listed as commands" 1 "$(grep -c '^  serena  *claude mcp remove serena' "$T/out")"
+rm "$T/cbm-down"
+# An owner who has the ponytail plugin on gets it updated with the rest.
+cp "$HOME/.claude/settings.json" "$T/settings-before.json"; rm "$T/claude-fails"; : > "$T/claude.log"
+jq '.enabledPlugins["ponytail@ponytail"] = true' "$T/settings-before.json" > "$HOME/.claude/settings.json"
+run "$P2" setup.sh "${ANSWERS[@]}" --own-startup skip >"$T/out" 2>&1
+check "the ponytail plugin the owner has on is updated with the rest" 1 "$(grep -c "^$P2 plugin update ponytail@ponytail$" "$T/claude.log")"
+cp "$T/settings-before.json" "$HOME/.claude/settings.json"; touch "$T/claude-fails"
 # Off: the ponytail skill an earlier setup installed goes, and the answer is saved.
 run "$P2" setup.sh "${ANSWERS[@]}" --no-ponytail >"$T/out" 2>&1
 check "ponytail off removes setup's copy and saves the answer" '0:gone:false' "$?:$([ -e "$HOME/.claude/skills/ponytail" ] || echo gone):$(jq .ponytail "$P2/.claude/commandeck.json")"
@@ -326,6 +362,19 @@ check "and back, leaving the machine's file the other tool's" '0:["Bash(ls:*)"]'
 # The relay pane says why its servers read as blocked "by enterprise policy".
 git -C "$P2" worktree add -q "$T/wt/Chief-of-Staff" 2>/dev/null
 check "the relay pane explains the enterprise-policy block" 1 "$(cd "$T/wt/Chief-of-Staff" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN PATH="$BIN:$PATH" bash "$PLUGIN/hooks/agent-startup-context.sh" </dev/null 2>/dev/null | grep -c 'enterprise policy')"
+# The owner wants ponytail at full for every role, the relay pane included (2026-10-16); the typescript-lsp
+# plugin is gone, so no profile writes a key for it.
+git -C "$P2" worktree add -q "$T/wt/plain" 2>/dev/null; git -C "$P2" worktree add -q "$T/wt/bld" 2>/dev/null
+# An earlier run turned ponytail and typescript-lsp off in every profile.
+for w in Chief-of-Staff plain bld; do mkdir -p "$T/wt/$w/.claude"; echo '{"enabledPlugins":{"ponytail@ponytail":false,"typescript-lsp@claude-plugins-official":false}}' > "$T/wt/$w/.claude/settings.local.json"; done
+run "$T/wt/Chief-of-Staff" worktree-setup.sh "$T/wt/Chief-of-Staff" >/dev/null 2>&1
+run "$T/wt/plain" worktree-setup.sh "$T/wt/plain" >"$T/wout" 2>&1
+run "$T/wt/bld" worktree-setup.sh "$T/wt/bld" --builder >/dev/null 2>&1
+check "the relay pane no longer turns ponytail off: it follows the owner's setting" null "$(jq '.enabledPlugins["ponytail@ponytail"]' "$T/wt/Chief-of-Staff/.claude/settings.local.json")"
+check "no worktree, relay or Builder profile names typescript-lsp" 0 \
+  "$(cat "$T/wt"/{plain,Chief-of-Staff,bld}/.claude/settings.local.json | jq -s '[.[].enabledPlugins | keys[] | select(startswith("typescript-lsp"))] | length')"
+check "the worktree summary says memoir off, then the denied tools, a space between" 1 "$(grep -c 'memoir off, [0-9]* unused tools denied' "$T/wout")"
+git -C "$P2" worktree remove --force "$T/wt/plain"; git -C "$P2" worktree remove --force "$T/wt/bld"
 git -C "$P2" worktree remove --force "$T/wt/Chief-of-Staff"
 run "$P2" uninstall.sh >"$T/out" 2>&1
 check "uninstall puts the owner's files back and removes setup's backup and local settings" '0:0:gone:gone' \

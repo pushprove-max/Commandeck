@@ -17,6 +17,27 @@
 # project-folder naming, so PP_MAIN_SLUG and PP_WORKSPACES_SLUG also name the
 # ~/.claude/projects folders the ledgers read.
 pp_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
+# pp_rm_rf <path>... -- rm -rf, removing nothing when any path is in a git folder (a file too), is a .git, or is a
+# folder that holds a .git or a git folder at any depth, holds this project's checkout, or is HOME or / (dashboard.sh's
+# exit trap once removed a main checkout). A git folder is known by what it holds (a HEAD file beside an objects
+# folder, git's own test), never by its name or by asking git, whose answer the caller's GIT_* variables change.
+# Every script that reads this file removes a folder through it; project-main.test.sh lists the few that may not.
+pp_rm_rf() {
+  local p r d m
+  m=$(cd "${PP_MAIN:-/nonexistent}" 2>/dev/null && pwd -P) || m=
+  for p in "$@"; do
+    [ -n "$p" ] && [ -e "$p" ] && [ ! -L "$p" ] || continue
+    if [ -d "$p" ]; then r=$(cd "$p" && pwd -P); else r=$(cd "$(dirname -- "$p")" && pwd -P); fi || return 1
+    d=$r; while [ ! -f "$d/HEAD" ] || [ ! -d "$d/objects" ]; do [ "$d" = / ] && { d=; break; }; d=$(dirname -- "$d"); done
+    if [ -n "$d" ] || [ "${p##*/}" = .git ] \
+      || { [ -d "$p" ] && { [ "$r" = / ] || [ "$r" = "$(cd "$HOME" && pwd -P)" ] || case $m/ in "$r"/*) true ;; *) false ;; esac \
+        || [ -n "$(find "$r" \( -name .git -o -name HEAD -type f -exec sh -c 'test -d "${1%/*}/objects"' _ {} \; \) -print -quit 2>/dev/null)" ]; }; }; then
+      echo "paths.sh: refusing to remove $p: it is or holds a checkout or git data, HOME, / or $PP_MAIN; nothing was removed" >&2
+      return 1
+    fi
+  done
+  rm -rf -- "$@"
+}
 
 # Preflight. requirements.sh puts Homebrew's folders ahead of the system ones
 # on a Mac's PATH, starts a script the Mac's own Bash 3.2 ran again under
@@ -405,6 +426,13 @@ pp_codex_model() { # <family or model id> [role]
   fi
   printf '%s\n' "$id"
 }
+# pp_registered -- the dashboard's registry has a line naming this project, both sides through pp_norm.
+pp_registered() {
+  local q m f=$HOME/.commandeck/dashboard/projects; m=$(pp_norm "$PP_MAIN")
+  [ -f "$f" ] || return 1
+  while IFS= read -r q; do [ "$(pp_norm "$q")" != "$m" ] || return 0; done < "$f"
+  return 1
+}
 # pp_pane_of <worktree path> -- the live Claude pane in that worktree, found at
 # the moment of asking: a pane's handle changes each time its session restarts,
 # so a handle saved earlier may name a pane that is gone. Nothing when none is live.
@@ -412,8 +440,8 @@ pp_codex_model() { # <family or model id> [role]
 # shortcut: a review pane is told from the seat by its launch title; one that retitled itself is not, when a pane is a reviewer by more than its title, match that.
 pp_pane_of() {
   timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$1" \
-    'first((.result | if type == "array" then . else (.terminals // []) end)[]?
-      | select(.worktreePath == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
+    "$PP_PNORM"'($wt | pnorm) as $wt | first((.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select((.worktreePath | pnorm) == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
       | select((.title // "") | test("^(Reviewer|Claude reviewer|Codex reviewer|Luna reviewer|Refuter|Certifier|Judge)\\b") | not) | .handle) // empty' 2>/dev/null
 }
 # pp_seat_pane <seat key> <worktree> -- the live pane of main (key main) or of a
@@ -426,8 +454,8 @@ pp_seat_pane() {
   local h; h=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
   [ -n "$h" ] || { [ "$1" != main ] || pp_pane_of "$2"; return 0; }
   timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg h "$h" \
-    'first((.result | if type == "array" then . else (.terminals // []) end)[]?
-      | select(.handle == $h and .worktreePath == $wt and .connected != false and .orphaned != true) | .handle) // empty' 2>/dev/null
+    "$PP_PNORM"'($wt | pnorm) as $wt | first((.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select(.handle == $h and (.worktreePath | pnorm) == $wt and .connected != false and .orphaned != true) | .handle) // empty' 2>/dev/null
 }
 # pp_worktree_new <name> -- a new Orca worktree of this project at
 # $PP_WORKSPACES/<name>, on local main and not Orca's origin/main default. The

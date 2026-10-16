@@ -33,4 +33,4 @@ orca-ide orchestration send --to "$H" --type status --subject "work added to $UN
 mkdir -p "$PP_SCRATCH"
 # A plain background child, as builder-codex-pass.sh starts a fix round.
 bash "$HERE/builder-fresh-round.sh" "$H" "$HAND" "$PP_SCRATCH/seat-$UNIT-builder.txt" > "$PP_SCRATCH/$UNIT-added.log" 2>&1 &
-echo "builder-add-work: $UNIT ($H) told to stop; a fresh session takes ${HAND##*/} once the pane settles. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-added.log says why."
+echo "builder-add-work: $UNIT ($H) told to stop; a fresh session takes ${HAND##*/} once the pane settles. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-added.log says why, and main is told."

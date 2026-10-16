@@ -146,5 +146,18 @@ check "each stage holds the requests made in it, a helper's included, and the to
 rmdir "$T/uc/sessions"
 check "with no Codex sessions folder, the Claude costs still count" "total 3000 4 0.03 true claude-mystery-9-9" "$(ucost | tr '|' '\n' | tail -1)"
 
+# The build's total split between Claude and Codex: an agent with an unpriced call reads "not priced" (null),
+# never $0 or a guess, and an agent with no call at all is $0.
+check "the total's Claude part is unpriced and its Codex part, with no Codex call, is 0" "null 0" \
+  "$(jq -s --argjson now 0 -f "$ROOT/scripts/dashboard_builders.jq" "$T/uc/log.jsonl" | jq -c --arg w "$WT" '[{unit: "u1", worktree: $w, stages: .stageHistory}]' \
+  | python3 "$ROOT/scripts/dashboard_limit.py" units "$(jq -n '"2026-10-10T12:50:00Z" | fromdate')" "$T/uc" "$T/uc/projects" "$T/uc/sessions" 2>&1 | jq -r '.u1.total.byAgent | "\(.claude) \(.codex)"')"
+split() { (cd "$ROOT/scripts" && python3 -c '
+import dashboard_limit as d
+row = lambda m: d.request_row({"type": "assistant", "timestamp": "2026-10-10T12:00:00Z", "message": {"model": m, "usage": {"input_tokens": 1000000,
+    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}}})
+b = d.by_agent([row("claude-haiku-5-5"), row("claude-haiku-5-5")], [row("claude-sonnet-5-5")])
+u = d.by_agent([row("claude-haiku-5-5")], [row("claude-mystery-9-9")])
+print(b["claude"], b["codex"], u["claude"], u["codex"])' 2>&1); }
+check "a mixed build's parts add up to its total; an unpriced Codex call leaves the Codex part unpriced" "1.0 2.0 0.5 None" "$(split)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

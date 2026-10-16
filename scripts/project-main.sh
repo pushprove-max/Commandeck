@@ -42,6 +42,17 @@ pp_real() {
   p=$(cd "$p" 2>/dev/null && pwd -P) || return 1
   printf '%s%s' "${p%/}" "$rest"
 }
+# pp_norm <path>: the path as text with no //, no /./ and no / or /. at its end. A compare of PP_MAIN or
+# PP_WORKSPACES with a path Orca, a transcript or a record reports puts both sides through it, or through jq's
+# pnorm (PP_PNORM, the same rule), so the owner's spelling matches; nothing stored is respelled, no link followed.
+pp_norm() {
+  local p=$1/
+  while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
+  while [[ $p == */./* ]]; do p=${p//\/.\//\/}; done
+  [ "$p" = / ] || p=${p%/}
+  printf '%s' "$p"
+}
+PP_PNORM='def pnorm: if type == "string" then (. + "/") | gsub("/+"; "/") | gsub("/(\\./)+"; "/") | if . == "/" then . else rtrimstr("/") end else . end;'
 # pp_git <args...>: git with none of its routing variables (GIT_DIR, GIT_WORK_TREE
 # and the rest git lists, and the ceiling that stops its search): a Builder sets
 # them in its own shell, and they would make its worktree read as a main checkout.

@@ -56,6 +56,8 @@ WT=$PP_WORKSPACES/$UNIT
 BRIEF=$WT/.claude/briefs/$UNIT.md
 WTID="path:$WT"
 [ -d "$WT" ] || fail "step 1 preconditions" "worktree does not exist: $WT"
+# Step 5 removes this folder: a checkout of its own (a .git folder, not a linked worktree's .git file) never gets there.
+[ -f "$WT/.git" ] || fail "step 1 preconditions" "$WT is not a linked worktree (its .git is not a file), and step 5 would remove it"
 [ -f "$BRIEF" ] || fail "step 1 preconditions" "unit brief does not exist: $BRIEF"
 BRANCH=$(git -C "$WT" branch --show-current)
 [ -n "$BRANCH" ] && [ "$BRANCH" != main ] || fail "step 1 preconditions" "worktree $WT is on '${BRANCH:-no branch}', not on a branch of its own"
@@ -259,7 +261,7 @@ if [ "$DRY_RUN" = 0 ]; then
   drop_copy() {
     [ -n "${COPY:-}" ] || return 0
     git -C "$ROOT" worktree remove --force "$COPY/tree" >/dev/null 2>&1 || true
-    rm -rf -- "$COPY"; git -C "$ROOT" worktree prune; COPY=
+    pp_rm_rf "$COPY"; git -C "$ROOT" worktree prune; COPY=
   }
   undo_squash() {
     local staged=() added=() kept=() p
@@ -389,7 +391,7 @@ echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide w
 if [ "$DRY_RUN" = 0 ]; then
   # `terminal close --worktree --all` reports terminal_close_incomplete for a
   # finished reviewer pane; closing by handle succeeds every time.
-  orca-ide terminal list --json | jq -r --arg wt "$WT" '(.result | if type == "array" then . else (.terminals // []) end)[] | select(.worktreePath==$wt) | .handle' \
+  orca-ide terminal list --json | jq -r --arg wt "$WT" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . else (.terminals // []) end)[] | select((.worktreePath | pnorm) == $wt) | .handle' \
     | while read -r h; do orca-ide terminal close --terminal "$h" --json >/dev/null || echo "pane $h did not close" >&2; done
   orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"
   bash "$HERE/codex-helpers.sh" stop "$WT" || true

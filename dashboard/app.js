@@ -252,6 +252,10 @@
   const took = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
   // A tally's list-price dollars (#94). A request with no price leaves the sum a floor: it says so and names the models.
   const costOf = (t) => (!t ? 'not measured' : t.partial ? `${money(t.usd)}+ partial, ${t.unpriced && t.unpriced.length ? t.unpriced.join(', ') : 'a model'} not priced` : money(t.usd));
+  // A build's total with its Claude and Codex parts, as the collector priced them: an unpriced part is "not priced",
+  // a missing one "not measured".
+  const part = (v) => (v === null ? 'not priced' : num(v) === null ? 'not measured' : money(v));
+  const splitOf = (t) => (!t ? costOf(t) : `${costOf(t)} (Claude ${part((t.byAgent || {}).claude)}, Codex ${part((t.byAgent || {}).codex)})`);
   // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
   const STAGE_MIN_PCT = 12;
   function unitCard(u, now) {
@@ -269,7 +273,7 @@
       const t0b = parseTime(u.builder.startedAt);
       const top = h('p', 'ucost');
       top.append('Total time ', strong(Number.isFinite(t0b) ? span((now - t0b) / 1000) : 'not measured'),
-        ' · Cost so far ', strong(cost ? costOf(cost.total) : cost === null ? 'not measured' : NOT_REC), h('small', null, " · main's own tokens not counted"));
+        ' · Cost so far ', strong(cost ? splitOf(cost.total) : cost === null ? 'not measured' : NOT_REC), h('small', null, " · main's own tokens not counted"));
       li.append(top);
     }
     // A Builder is drawn from its own event log: one badge per signal the state word does not already say.
@@ -530,7 +534,7 @@
     fact(dl, 'Review', [...reviewText(x).split(/(P[01] \d+)/).map((t, i) => (i % 2 ? h('span', 'crit', t) : t)), ...(x.verdict ? [' · ', h('span', vTone, x.verdict)] : [])]);
     fact(dl, 'Last sign', num(u.ageSec) === null ? NOT_REC : [`written ${ago(u.ageSec)} ago `,
       typeof u.agents !== 'string' ? null : /:working/.test(u.agents) ? badge('working', 'ok') : badge('idle')]);
-    fact(dl, 'Cost so far', x.cost ? costOf(x.cost.total) : x.cost === null ? 'not measured' : NOT_REC);
+    fact(dl, 'Cost so far', x.cost ? splitOf(x.cost.total) : x.cost === null ? 'not measured' : NOT_REC);
     const wait = waitingText(u, now);
     // Only a wait on main is coloured: a pass, a subagent or a tool call is the build working.
     fact(dl, 'Waiting on', waits ? [h('span', 'warn', 'main'), wait.slice(4)] : wait);
@@ -731,8 +735,9 @@
         name.append(h('span', 'inum', `#${i.number}`), i.title);
         const pr = open.find((p) => Array.isArray(p.closes) && p.closes.includes(i.number));
         if (pr) name.append(h('small', null, `PR #${pr.number}: ${prBlock(pr)[1]}`));
-        li.append(h('span', `pri p${pri(i)}`, pri(i) < 9 ? `P${pri(i)}` : '–'), name,
-          h('span', `holder${who ? '' : urgent ? ' none' : ' free'}`, who ? who.join(', ') : urgent ? 'Nobody' : 'Free'));
+        const holder = h('span', `holder${who ? '' : urgent ? ' none' : ' free'}`, who ? who.join(', ') : urgent ? 'Nobody' : 'Free');
+        holder.title = holder.textContent; // the pill is cut short on one line; the whole name shows on hover
+        li.append(h('span', `pri p${pri(i)}`, pri(i) < 9 ? `P${pri(i)}` : '–'), name, holder);
         ul.append(li);
       }
       sec.append(ul);

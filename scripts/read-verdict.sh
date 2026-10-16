@@ -595,11 +595,11 @@ if [ -n "$WTP" ] && { [ "$AGENT" = codex ] || [ -z "$AGENT" ]; }; then
   CODEX_LOGS=()
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    identity=$(head -n 2000 "$f" | jq -c --arg cwd "$WTP" --arg model "$MODEL" '
-      select(
+    identity=$(head -n 2000 "$f" | jq -c --arg cwd "$WTP" --arg model "$MODEL" "$PP_PNORM"'
+      ($cwd | pnorm) as $cwd | select(
         (.type == "session_meta" or .type == "turn_context" or
          .payload.type == "session_meta" or .payload.type == "turn_context") and
-        .payload.cwd == $cwd and
+        (.payload.cwd | pnorm) == $cwd and
         ($model == "" or .payload.model == $model)
       )
     ' 2>/dev/null | head -1)

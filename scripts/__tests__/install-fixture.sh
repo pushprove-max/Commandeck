@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-fixture.sh -- sourced by setup.test.sh, setup-requirements.test.sh and
+# install-fixture.sh -- sourced by setup.test.sh, setup-requirements.test.sh, doctor.test.sh and
 # uninstall-snapshot.test.sh. One machine in a temp folder: a HOME that another tool has
 # already written to (its own Codex hook and trust entry, its own permission
 # list, status line, background job and instruction file), a project, and the
@@ -33,6 +33,19 @@ printf '#!/usr/bin/env bash\necho "$*" >> %q\ncase "$*" in *is-active*) [ -e %q 
 printf '#!/usr/bin/env bash\n[ "$*" = "login status" ] && [ ! -e %q ]\n' "$T/signed-out" > "$BIN/codex"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/pgrep"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/claude"
+# Setup installs or updates every add-on: each installer is a stub that logs its call, and pkill too, so no test
+# reaches the network or stops the machine's real codebase-memory daemon. Its stub's server answers a tool list
+# unless $T/cbm-down exists, and its update raises the version it prints.
+for c in npm uvx agent-browser pkill; do printf '#!/usr/bin/env bash\necho "%s $*" >> %q\n' "$c" "$T/addons.log" > "$BIN/$c"; done
+cat > "$BIN/codebase-memory-mcp" <<EOF
+#!/usr/bin/env bash
+echo "codebase-memory-mcp \$*" >> "$T/addons.log"
+case "\${1:-}" in
+  --version) echo "codebase-memory-mcp \$(cat "$T/cbm-version" 2>/dev/null || echo 1.0.0)" ;;
+  update) echo 1.1.0 > "$T/cbm-version" ;;
+  '') cat > /dev/null; [ -e "$T/cbm-down" ] || printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search_graph"}]}}' ;;
+esac
+EOF
 # gh is never the real one: signed in, and a project's issues are the file named after the folder gh runs in, else gh fails.
 printf '#!/usr/bin/env bash\n[ "$*" != "auth token" ] || exit 0\ncat %q/"${PWD##*/}".json 2>/dev/null\n' "$T/gh" > "$BIN/gh"
 chmod +x "$BIN"/*

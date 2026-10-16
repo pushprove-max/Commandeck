@@ -247,6 +247,19 @@ test('Who holds what: issues by milestone, most urgent first, with the Builder h
   assert.equal(text(miles[1].querySelector('.holder')), 'Free');
 });
 
+test('Who holds what: a long Builder name never squeezes the issue number and title', () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [builder({ unit: 'help-email-batch-2026-10-16' })] }, github: GH });
+  const li = w.document.querySelector('#held-list .issue');
+  const holder = li.querySelector('.holder');
+  assert.equal(holder.title, 'help-email-batch-2026-10-16', 'the whole name shows on hover');
+  const css = fs.readFileSync(path.join(ROOT, 'dashboard', 'app.css'), 'utf8');
+  // jsdom lays nothing out, so the rules that keep the row whole are read from the sheet.
+  assert.match(css, /\.issues li \{[^}]*grid-template-columns: 28px minmax\(10em, 1fr\) minmax\(0, max-content\)/, 'the title column keeps its width; the holder column gives way');
+  assert.doesNotMatch(css, /\.issues \.t \{[^}]*overflow-wrap: anywhere/, 'a title never breaks between any two letters');
+  assert.match(css, /\.holder \{[^}]*white-space: nowrap; overflow: hidden; text-overflow: ellipsis/, 'a long name is cut short on one line');
+});
+
 test('Next push: the commits under the issue each names, and what should stop the push first', () => {
   const w = fresh();
   show(w, { units: { inFlight: [] }, github: GH, nextPush: PUSH });
@@ -311,7 +324,7 @@ test("a Builder's card gives its time and cost so far, and each stage's time and
   show(w, { units: { inFlight: [costed(hist, [tally(1.5), tally(0.25, UNPRICED), tally(0.4)], tally(2.15, { sec: 5400, ...UNPRICED }))] } });
   const card = w.document.querySelector('#units li.unit');
   assert.equal(text(card.querySelector('.ucost')),
-    "Total time 1h 30m · Cost so far $2.15+ partial, claude-mystery-9-9 not priced · main's own tokens not counted",
+    "Total time 1h 30m · Cost so far $2.15+ partial, claude-mystery-9-9 not priced (Claude not measured, Codex not measured) · main's own tokens not counted",
     'a total with an unpriced request is a floor and names the model, never a whole figure');
   assert.deepEqual([...card.querySelectorAll('.lane.stages i')].map((b) => [b.textContent, b.style.left]),
     [['Building', '0%'], ['In review', '33.3%'], ['Fixing', '66.7%']], 'one band per stage, where it ran');
@@ -325,6 +338,22 @@ test("a Builder's card gives its time and cost so far, and each stage's time and
   assert.deepEqual(rows[1].slice(1, 5), ['30:00', '4', '200,000 (75% cached)', '3,000']);
   assert.match(text(w.document.querySelector('#builds')), /Cost so far\$2\.15\+ partial/);
   assert.match(text(w.document.querySelector('#builds')), /main's own tokens are not counted/);
+});
+
+test("a Builder's cost splits between Claude and Codex, and the parts add up to the total", () => {
+  const hist = [stage('building', 90, 60), stage('review', 60, 30), stage('fixing', 30, null)];
+  const cost = (total) => {
+    const w = fresh(Fixed);
+    show(w, { units: { inFlight: [costed(hist, [tally(1), tally(1), tally(1)], total)] } });
+    return [text(w.document.querySelector('#units li.unit .ucost')).replace(/^Total time \S+ \S+ · /, '').replace(/ · main's own.*/, ''),
+      text(w.document.querySelector('#builds')).match(/Cost so far(.*?)Waiting on/)[1]];
+  };
+  const mixed = 'Cost so far $15.86 (Claude $12.10, Codex $3.76)';
+  assert.deepEqual(cost(tally(15.86, { byAgent: { claude: 12.1, codex: 3.76 } })), [mixed, mixed.slice(12)], 'a mixed build, on the card and in the Builds panel');
+  assert.equal(cost(tally(2, { byAgent: { claude: 2, codex: 0 } }))[0], 'Cost so far $2.00 (Claude $2.00, Codex $0.00)', 'Codex $0.00 only when no Codex call was made');
+  assert.equal(cost(tally(1.5, { partial: true, unpriced: ['gpt-9-codex'], byAgent: { claude: 1.5, codex: null } }))[0],
+    'Cost so far $1.50+ partial, gpt-9-codex not priced (Claude $1.50, Codex not priced)', 'an unpriced Codex call: that part is not priced, never $0, and the total stays partial');
+  assert.equal(cost(tally(1))[0], 'Cost so far $1.00 (Claude not measured, Codex not measured)', 'a total collected before the split says so');
 });
 
 test('a stage too narrow for its figures moves every stage to a list under the bar; a wide band keeps its own and hovering marks its line', () => {

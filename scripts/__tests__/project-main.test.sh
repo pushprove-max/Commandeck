@@ -50,5 +50,71 @@ check "off main, the main branch itself is fast-forwarded" "rc=0 release: next" 
 git -C "$O" checkout -q main; git -C "$O" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "local only"; push "release: third"
 check "a diverged main refuses with the reason" "1 rc=1 local only" "$(sync | grep -c 'cannot fast-forward') $(sync | tail -1) $(git -C "$O" log -1 --format=%s main)"
 
+# No script removes a main checkout. dashboard.sh --project took the folder it was handed as its run folder
+# before its DASH_NOW check, and the exit trap then ran rm -rf on it: typed by hand with no DASH_NOW,
+# `dashboard.sh --project ~/repos/commandeck` removed the whole main checkout (2026-10-15).
+V=$T/victim; mkdir -p "$V" "$T/home" && git init -q -b main "$V" && git -C "$V" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
+( cd "$V" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u DASH_NOW HOME="$T/home" COMMANDECK_MAIN="$V" timeout 20 bash "$REAL/scripts/dashboard.sh" --project "$V" >/dev/null 2>&1 )
+check "dashboard.sh --project handed the main checkout, with no DASH_NOW, leaves it in place" yes "$([ -d "$V/.git" ] && echo yes)"
+# pp_rm_rf is the one recursive removal of the scripts that read paths.sh: it removes nothing when any path it is
+# given is a main checkout, a git folder, a folder holding the project's checkout, HOME or /.
+mkdir -p "$V/nest" && git init -q -b main "$V/nest/proj" && git -C "$V/nest/proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
+rmrf() { ( cd "$V/nest/proj" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES HOME="$T/home" COMMANDECK_MAIN="$V/nest/proj" bash -c '. "$0" && pp_rm_rf "$@"' "$REAL/scripts/paths.sh" "$@" >/dev/null 2>&1; echo "rc=$?" ); }
+ln -s "$V" "$T/vlink"
+# Git data at any depth too: COMMANDECK_SCRATCH=<main>/.git/objects made uninstall --delete-data take the history
+# (pass 1). Also a file in a git folder, a linked worktree's .git file, a bare repository and a path inside it, and
+# a folder that holds some other checkout or bare repository deeper down.
+git init -q --bare "$T/bare.git"; mkdir -p "$T/holds/a/b" && git init -q "$T/holds/a/b/repo"; mkdir -p "$T/holdsbare/x" && git init -q --bare "$T/holdsbare/x/y.git"
+# A bare repository is known by what it holds, not by its name (pass 2: a bare backup named "backup").
+mkdir -p "$T/holdsplain/x" && git init -q --bare "$T/holdsplain/x/backup"
+git -C "$V/nest/proj" worktree add -q --detach "$T/linked" 2>/dev/null
+n=0
+for p in "$V/nest/proj" "$T/vlink/nest/proj/." "$V/nest" "$V/nest/proj/.git" "$V" "$T/home" \
+  "$V/nest/proj/.git/objects" "$V/nest/proj/.git/HEAD" "$T/linked/.git" "$T/bare.git" "$T/bare.git/objects" "$T/holds" "$T/holdsbare" \
+  "$T/holdsplain" "$T/holdsplain/x/backup/objects"; do
+  n=$((n + 1)); mkdir -p "$T/junk$n"
+  check "pp_rm_rf refuses $p and removes nothing, the other path either ($n)" "rc=1 kept kept kept" \
+    "$(rmrf "$T/junk$n" "$p") $([ -d "$T/junk$n" ] && echo kept) $([ -d "$V/nest/proj/.git" ] && [ -d "$V/.git" ] && echo kept) $([ -e "$p" ] && echo kept)"
+done
+# Nothing in the caller's environment changes the answer: git's routing and discovery variables (pass 2:
+# GIT_CEILING_DIRECTORIES naming the git folder hid it from git), and a PATH with no git on it.
+for e in "GIT_DIR=$T/bare.git" "GIT_WORK_TREE=$T" "GIT_CEILING_DIRECTORIES=$V/nest/proj/.git" \
+  "GIT_CEILING_DIRECTORIES=$T/holdsplain/x/backup" "GIT_DISCOVERY_ACROSS_FILESYSTEM=0"; do
+  check "pp_rm_rf refuses git data with $e in the caller's environment" "rc=1 kept kept" \
+    "$(export "$e"; rmrf "$V/nest/proj/.git/objects" "$T/holdsplain/x/backup/objects") $([ -d "$V/nest/proj/.git/objects" ] && echo kept) $([ -d "$T/holdsplain/x/backup/objects" ] && echo kept)"
+done
+mkdir -p "$T/junk/a" "$V/nest/proj/.claude/metrics"; : > "$T/junk-file"; : > "$V/nest/proj/.claude/metrics/decisions.jsonl"
+check "pp_rm_rf removes a plain folder, a file, and a file in a checkout's work tree (uninstall's metrics)" "rc=0 gone" \
+  "$(rmrf "$T/junk" "$T/junk-file" "$V/nest/proj/.claude/metrics/decisions.jsonl") $([ -e "$T/junk" ] || [ -e "$T/junk-file" ] || [ -e "$V/nest/proj/.claude/metrics/decisions.jsonl" ] || echo gone)"
+# Every other raw rm -rf removes a folder its own script made with mktemp; a new one is read here before it ships.
+check "only the scripts that remove their own mktemp folder use a raw rm -rf" \
+  "scripts/paths.sh scripts/proof-run.sh scripts/red-proof.sh scripts/run-shell-tests.sh scripts/startup-size.sh scripts/update.sh" \
+  "$(cd "$REAL" && grep -lE 'rm -(rf|fr|r) ' hooks/*.sh hooks/lib/*.sh scripts/*.sh | while read -r f; do grep -E 'rm -(rf|fr|r) ' "$f" | grep -qv 'pp_rm_rf\|^[[:space:]]*#\|warn "running state' && echo "$f"; done | sort | paste -sd' ' -)"
+
+# COMMANDECK_MAIN is kept as given and a worktrees folder loses only a trailing / or /., so each compare
+# with a path Orca, a transcript or a record reports puts both sides through one rule, in Bash and in jq alike.
+pm() { bash -c '. "$0"; "$@"' "$REAL/scripts/project-main.sh" "$@"; }
+while IFS='|' read -r in want; do
+  check "pp_norm and jq's pnorm both spell [$in] as [$want]" "$want $want" \
+    "$(pm pp_norm "$in") $(bash -c '. "$0"; jq -nr --arg p "$1" "$PP_PNORM \$p | pnorm"' "$REAL/scripts/project-main.sh" "$in")"
+done <<'EOF2'
+/a/|/a
+/a/.|/a
+/a//b/./c/.|/a/b/c
+/a/././b|/a/b
+//|/
+/x y/./z//|/x y/z
+/a/.b/..|/a/.b/..
+EOF2
+mkdir -p "$T/home/.commandeck/dashboard" "$T/bin"; printf '%s\n' "$T/elsewhere" "$V" > "$T/home/.commandeck/dashboard/projects"
+cat > "$T/bin/orca-ide" <<EOF2
+#!/usr/bin/env bash
+echo '{"result":{"terminals":[{"handle":"h-main","worktreePath":"$V","agentIdentity":"claude"}]}}'
+EOF2
+chmod +x "$T/bin/orca-ide"
+pths() { ( cd "$V" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$1" bash -c '. "$0" && eval "$1"' "$REAL/scripts/paths.sh" "$2" 2>/dev/null ); }
+check "a main checkout given as <tmp>/victim/./ is the one the dashboard registry names, and the one Orca's pane is in" "yes h-main" \
+  "$(pths "$V/./" 'pp_registered && echo yes') $(pths "$V/./" 'pp_pane_of "$PP_MAIN"')"
+check "another checkout is neither" "no" "$(pths "$V/nest/proj" 'pp_registered && echo yes || echo no; pp_pane_of "$PP_MAIN"')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

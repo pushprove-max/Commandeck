@@ -26,7 +26,7 @@ case ${1:-} in '') ;; --delete-data) DELETE=1 ;; *) echo "usage: uninstall.sh [-
 # The install record is named for the path with every odd character a dash, so
 # /x/a-b and /x/a_b are one record: it is this checkout's only if it says so.
 OWNER=$(jq -r '.project // empty' "$IL_PROJECT" 2>/dev/null || true)
-[ -z "$OWNER" ] || [ "$OWNER" = "$PP_MAIN" ] \
+[ -z "$OWNER" ] || [ "$(pp_norm "$OWNER")" = "$(pp_norm "$PP_MAIN")" ] \
   || { echo "uninstall: the install record $IL_PROJECT belongs to the project at $OWNER, not to $PP_MAIN. Nothing was changed; run this in $OWNER to take that project out." >&2; exit 1; }
 
 if [ -s "$IL_PROJECT" ]; then
@@ -74,7 +74,7 @@ if [ -n "$LAST" ] && [ -s "$IL_MACHINE" ]; then
     else echo "the status line changed since setup, left as it is: $S"; fi
   fi
   il_restore "$IL_MACHINE"
-  rm -rf "$IL_DIR/blobs"; rmdir "$IL_DIR" 2>/dev/null || true
+  pp_rm_rf "$IL_DIR/blobs"; rmdir "$IL_DIR" 2>/dev/null || true
   echo "commandeck is out of this machine: Codex's hooks, the dashboard job and the permission rules"
 elif [ -z "$LAST" ]; then
   echo "the machine's parts stay for: $(il_projects | xargs -n1 jq -r .project | paste -sd' ' -)"
@@ -83,14 +83,14 @@ fi
 if [ -n "$DELETE" ]; then
   # Only the plugin's own ledgers (and their locks): the folder may hold the
   # owner's or another tool's files, which setup never recorded.
-  rm -rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,subagent-usage}.jsonl* "$PP_SCRATCH"
+  pp_rm_rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,subagent-usage}.jsonl* "$PP_SCRATCH"
   rmdir "$PP_MAIN/.claude/metrics" 2>/dev/null || true
   # These three are kept by folder name. A project set up at another path
   # under the same name (this checkout moved) writes them now: they are its.
   SAME=
   while IFS= read -r m; do
     o=$(jq -r '.project // empty' "$m" 2>/dev/null || true); n=${o##*/}
-    if [ -n "$o" ] && [ "$o" != "$PP_MAIN" ] && [ "${n//[^A-Za-z0-9_.-]/-}" = "$PROJECT" ]; then SAME=$o; fi
+    if [ -n "$o" ] && [ "$(pp_norm "$o")" != "$(pp_norm "$PP_MAIN")" ] && [ "${n//[^A-Za-z0-9_.-]/-}" = "$PROJECT" ]; then SAME=$o; fi
   done < <(il_projects)
   if [ -n "$SAME" ]; then
     echo "kept: the hook log, rulings and Chief-of-Staff state named $PROJECT; the project set up at $SAME uses them now"
@@ -117,11 +117,11 @@ if [ -n "$DELETE" ]; then
   if [ -n "$LAST" ]; then
     # Kept by session, not by project, so they can only go with the last one: the hook
     # log's retry markers and the restart hook's own log.
-    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/commandeck" "$HOME/.claude/hook-fire-log/pending"
+    pp_rm_rf "${XDG_CACHE_HOME:-$HOME/.cache}/commandeck" "$HOME/.claude/hook-fire-log/pending"
     rm -f "$HOME/.claude/checkpoints/clear-hook.log"
     # A project registered by hand keeps its line; the rest of the folder is the collector's output.
     D=$HOME/.commandeck/dashboard
-    if [ -s "$D/projects" ]; then find "$D" -mindepth 1 ! -name projects -delete; else rm -rf "$D"; fi
+    if [ -s "$D/projects" ]; then find "$D" -mindepth 1 ! -name projects -delete; else pp_rm_rf "$D"; fi
   fi
   # Only what is empty now: another project's data, or the owner's own folders, stay.
   for d in "$HOME/.claude/hook-fire-log" "$HOME/.claude/rulings" "$HOME/.claude/checkpoints" "$HOME/.commandeck/scratch" "$HOME/.commandeck/chief-of-staff" \
