@@ -1,49 +1,59 @@
 #!/usr/bin/env bash
-# setup-requirements.test.sh -- on a fresh Mac setup stopped on the first
-# missing tool, named one at a time, and told the owner to edit a shell start
-# file. What this pins: one check names everything missing at once, in two
-# groups (what a package manager can install, with the one command; what only
-# the owner can do, with its step); nothing is installed without
-# --install-missing, and with it setup carries on in the same run; and a script
-# the Mac's Bash 3.2 started carries on under Homebrew's, once, with its
-# arguments and input.
-# No package is installed: brew, apt-get and sudo are stand-ins that record
-# their arguments, on a PATH that holds nothing but the fixture's folders.
-# The Bash 3.2 cases need the Mac's own /bin/bash; where there is none they
-# are printed as not run (CI runs them in its macOS job).
+# requirements.test.sh -- on a fresh Mac setup stopped on the first missing tool, named one at a time, and told the
+# owner to edit a shell start file. What this pins: one check names everything missing at once, in two groups (what
+# a package manager can install, with the one command; what only the owner can do, with its step); nothing is
+# installed without --install-missing, and with it the printed command runs once and setup carries on in the same
+# run; and a script the Mac's Bash 3.2 started carries on under Homebrew's, once, with its arguments and input.
+# Every setup.sh run here stops at the requirements check or at its own argument check, before it writes
+# anything: no run of setup.sh goes further.
+# No package is installed: brew, apt-get and sudo are stand-ins that record their arguments, on a PATH that holds
+# nothing but the test's folders. The Bash 3.2 cases need the Mac's own /bin/bash; where there is none they are
+# printed as not run (CI runs them in its macOS job).
 set -uo pipefail
-. "$(dirname "$0")/install-fixture.sh"
+SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
+T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
+PASS=0 FAIL=0
+check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
+export HOME=$T/home
+BIN=$T/bin PLUGIN=$T/plugin PROJ=$T/proj
+mkdir -p "$HOME" "$BIN" "$PLUGIN"
+# A copy outside any checkout: the Bash 3.2 cases add a probe script to it.
+for d in scripts config templates hooks; do cp -R "$SOURCE/$d" "$PLUGIN/"; done
+git init -q -b main "$PROJ"
 . "$SOURCE/scripts/requirements.sh"
 NEW=$BASH
+printf '#!/usr/bin/env bash\ncase "$*" in *--help*) echo worktree ;; *) echo "{\\"ok\\":true}" ;; esac\n' > "$BIN/orca-ide"
+printf '#!/usr/bin/env bash\n[ "$*" != "auth token" ] || exit 0\n' > "$BIN/gh"
+printf '#!/usr/bin/env bash\n[ "$*" = "login status" ]\n' > "$BIN/codex"
 # Every tool on this machine, as links in one folder, so that taking one out makes it missing.
 FARM=$T/farm; mkdir -p "$FARM" "$HOME/.local/bin" "$T/nobrew" "$T/brew/bin" "$T/keep"
 IFS=: read -ra DIRS <<<"$PATH"
 for d in "${DIRS[@]}"; do [ ! -d "$d" ] || ln -s "$d"/* "$FARM/" 2>/dev/null; done
 for t in sed stat date readlink grep; do [ -e "$FARM/g$t" ] || ln -s "$(command -v "$t")" "$FARM/g$t"; done
 rm -f "$FARM"/{orca-ide,orca,gh,codex,claude,brew,apt-get,sudo,systemctl,pgrep}
-OS=Linux BREW=$T/nobrew MORE=
+OS=Linux BREW=$T/nobrew
 # go <script> [args] -- a plugin script in the project, on the scratch PATH alone.
 go() {
   ( cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u CODEX_HOME -u COMMANDECK_DASHBOARD_DIR \
-      -u COMMANDECK_HOOK_FIRE_LOG -u COMMANDECK_ROUTING PATH="$BIN:$FARM$MORE" COMMANDECK_BREW_PREFIX="$BREW" COMMANDECK_HOST_OS="$OS" "${SHELL_UNDER_TEST:-$NEW}" "$PLUGIN/scripts/$1" "${@:2}" </dev/null )
+      -u COMMANDECK_HOOK_FIRE_LOG -u COMMANDECK_ROUTING PATH="$BIN:$FARM" COMMANDECK_BREW_PREFIX="$BREW" COMMANDECK_HOST_OS="$OS" "${SHELL_UNDER_TEST:-$NEW}" "$PLUGIN/scripts/$1" "${@:2}" </dev/null )
 }
 # group <name> -- that group's lines of the last output, without the other's.
 group() { awk -v g="$1" '/^(can install|yours to do)/ { on = index($0, g) == 1 } on' "$T/out"; }
 printed() { group 'can install' | sed -n 's/^  //p'; }
+snap() { (cd "$T" && find home proj -path '*/.git/*' -prune -o -print | sort); }
 printf '#!/bin/sh\nprintf "sudo " >> %q\nexec "$@"\n' "$T/pm" > "$BIN/sudo"
 printf '#!/bin/sh\necho "apt-get $*" >> %q\n[ ! -e %q ] || ln -s %q %q %q/\n' "$T/pm" "$T/pm-works" "$(command -v jq)" "$(command -v flock)" "$BIN" > "$BIN/apt-get"
 printf '#!/bin/sh\necho "brew $*" >> %q\n[ ! -e %q ] || ln -s %q %q/bash\n' "$T/pm" "$T/pm-works" "$NEW" "$T/brew/bin" > "$T/keep/brew"
-chmod +x "$BIN/sudo" "$BIN/apt-get" "$T/keep/brew"
+chmod +x "$BIN"/* "$T/keep/brew"
 BEFORE=$(snap)
 
 # --- three things missing: one message, two groups, one command, nothing run ---
 rm "$FARM/jq" "$FARM/flock"; mv "$BIN/orca-ide" "$T/keep/"
-go setup.sh "${ANSWERS[@]}" >"$T/out" 2>&1; check "setup stops when requirements are missing" 1 $?
+go setup.sh --profile claude-openai --name Ada >"$T/out" 2>&1; check "setup stops when requirements are missing" 1 $?
 check "the two tools a package manager supplies are in the installable group" '1 1' "$(group 'can install' | head -1 | grep -c 'jq') $(group 'can install' | head -1 | grep -c 'flock')"
 check "with the one command for this machine" 'sudo apt-get install -y util-linux jq' "$(printed)"
 check "Orca is the owner's to do, named with its address" 1 "$(group 'yours to do' | grep -c "orca-ide.*Orca (https://github.com/stablyai/orca).*\.deb.*https://github.com/stablyai/orca/releases")"
 check "and not in the installable group" 0 "$(group 'can install' | grep -ci orca)"
-check "the old one-line refusal is gone" 0 "$(grep -c 'missing on PATH' "$T/out")"
 check "nothing was installed without the flag" 0 "$([ -e "$T/pm" ] && echo 1 || echo 0)"
 check "and nothing on the machine changed" "$BEFORE" "$(snap)"
 WANT=$(printed)
@@ -54,16 +64,20 @@ for o in --addons --cache-ttl --own-startup --own-main-session --rules --rules-d
   [ ! -e "$T/pm" ] || { BAD+=" $o"; rm "$T/pm"; }
 done
 check "an option given --install-missing as its value installs nothing" '' "$BAD"
+# A plan writes nothing, so it installs nothing either.
+go setup.sh --profile claude --plan --install-missing >"$T/out" 2>&1
+check "a plan with --install-missing installs nothing" 1:0 "$?:$([ -e "$T/pm" ] && echo 1 || echo 0)"
 # The decoy's pause starts only once --questions begin has passed its checks.
 go setup.sh --questions begin >"$T/out" 2>&1
 check "a --questions begin that stops on a missing requirement leaves the decoy on" '1:gone' "$?:$([ -e "$PROJ/.git/commandeck-setup-questions" ] || echo gone)"
 
 mv "$T/keep/orca-ide" "$BIN/"
-# --- an install that works: setup carries on, in the same run ---
+# --- an install that works: setup carries on in the same run, to its own argument check ---
 touch "$T/pm-works"
-go setup.sh "${ANSWERS[@]}" --install-missing >"$T/out" 2>&1; check "after an install that supplies everything setup carries on" 0 $?
-check "having run the printed command once" "$WANT" "$(cat "$T/pm" 2>/dev/null)"
-check "and the project is set up" claude-openai "$(jq -r .profile "$PROJ/.claude/commandeck.json" 2>/dev/null)"
+go setup.sh --profile nonsense --install-missing >"$T/out" 2>&1
+check "after an install that supplies everything setup carries on, having run the printed command once" "2:$WANT" "$?:$(cat "$T/pm" 2>/dev/null)"
+check "and nothing on the machine changed" "$BEFORE" "$(snap)"
+rm -f "$T/pm"
 
 # --- Bash 3.2 on a Mac: carry on under Homebrew's, once ---
 OS=Darwin BREW=$T/brew
@@ -101,4 +115,6 @@ else
   rm -f "$PLUGIN/scripts/probe.sh"
 fi
 
-done_tests
+[ "$FAIL" = 0 ] || { echo "--- last output"; tail -15 "$T/out"; }
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" = 0 ]

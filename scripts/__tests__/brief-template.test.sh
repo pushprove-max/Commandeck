@@ -24,8 +24,20 @@ check "a file that times out twice is one question to main, not a third run" "a 
 check "a red proof goes through red-proof.sh, never a hand-broken tree" "/red-proof.sh <file> <line> <replacement> -- <test"
 check "a main-only finding goes under the deferred heading every later pass reads" "goes as one line under \`## Main-only (deferred)\` in the evidence file"
 check "a test result carries the machine's load and time beside it" "\`bash -c '. {scripts}/host-services.sh && hs_stamp'\` prints it with the time"
+check "a fix-round session starts from its hand-off and opens the brief only when a finding needs it" "A fix-round session starts from its hand-off alone, and opens this brief and the evidence file only when a finding needs them."
+check "every launch is checked first with the pass script's --check, which commits nothing" "Before every launch run \`bash {scripts}/{pass-script} --check {unit} <N> <kind>\`"
+check "no Builder writes a new end-to-end test" "Builders never write new end-to-end tests: no test installs or uninstalls the plugin, or runs setup.sh or uninstall.sh whole."
 # main's rulings file: the pass reads stated limits from one heading only, so the template must carry it.
 BODY=$(cat "${T%/*}/main-rulings.md")
 check "the rulings template has the heading the pass reads limits from" "## Stated limits"
+# Main writes a "leave as is" ruling under the heading its rules name; a ruling under any other is raised again as a blocker.
+H=$(sed -n 's/.*stays as it is goes under `\(#[^`]*\)`.*/\1/p' "${T%/*}/main-session.md")
+LIMITS_AWK=$(grep -o "awk '[^']*Stated limits[^']*'" "${T%/templates/*}/scripts/builder-codex-pass.sh")
+BODY=$(printf '# Rulings\n%s\n- the retry stays as it is.\n## Later\n- not a limit\n' "$H" | eval "$LIMITS_AWK")
+[ "$BODY" = "- the retry stays as it is." ] && BODY="limits read: exactly the ruling"
+check "a 'leave as is' ruling under the heading main's rules name is the limit the pass reads, and nothing else is" "limits read: exactly the ruling"
+# The plugin's own test rules carry the same rule.
+BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/templates/*}/CONTRIBUTING.md" | sed -E 's/ +/ /g')
+check "the contributor test rules forbid a new end-to-end test" "No test installs or uninstalls the plugin, or runs \`setup.sh\` or \`uninstall.sh\` whole"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

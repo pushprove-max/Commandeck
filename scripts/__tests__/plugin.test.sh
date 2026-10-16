@@ -105,5 +105,13 @@ check "every setup question marks exactly one answer (recommended)" "" "$(grep -
 check "the prompt-cache question says the recommended mix cost least" '1:1' "$(grep -cxF '    Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default' "$SETUP"):$(grep -cF -- '- 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`' "$SETUP")"
 check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a-f]{8})"' <<<"$ASKS")"
 
+# The add-on list and the ponytail skill setup installs, as shipped, read without a setup run. The owner wants
+# every add-on kept at its latest, no version pinned; the skill's own rule keeps its name out of code comments.
+check "every add-on has a command and a cost: none is a placeholder" 0 \
+  "$(grep -v '^#' "$REAL/config/addons.tsv" | awk -F'\t' '$2 == "" || $3 == "" || /no public source/' | wc -l | tr -d ' ')"
+check "no add-on command names a version" 0 "$(grep -v '^#' "$REAL/config/addons.tsv" | cut -f2 | grep -cE '@[0-9]|==|--version[ =]?[0-9]')"
+check "the ponytail skill says never to write its name in a comment" '1:0' \
+  "$(grep -c 'Never write "ponytail" in a comment' "$REAL/templates/ponytail/SKILL.md"):$(grep -c '`ponytail:` comment' "$REAL/templates/ponytail/SKILL.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

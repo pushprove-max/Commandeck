@@ -23,6 +23,13 @@ builder() {
   cp "$SOURCE/scripts/__tests__/fixtures/evidence/$1-evidence.md" "$WS/$1/.claude/briefs/"
 }
 builder help-email-batch-2026-10-16; builder api-batch-2026-10-16
+# Each round file's own verdict, so each finished pass shows its own. r1 is older than
+# r2, so r2 stays the newest report; a round file named with no number has no round.
+V=$WS/u-verdicts/.claude/briefs; mkdir -p "$V" && touch "$WS/u-verdicts/.git"
+echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$WS/u-verdicts/.claude/settings.local.json"
+printf 'Round 2 review.\nVERDICT: GO\n\n' > "$V/u-verdicts-r2-reports.md"
+printf 'Round 1 review.\n- [P1] one -- f:1 -- why\nVERDICT: NO-GO\n' > "$V/u-verdicts-r1-reports.md"; touch -t 202001010000 "$V/u-verdicts-r1-reports.md"
+printf 'VERDICT: GO\n' > "$V/u-verdicts-rx-reports.md"; touch -t 202001010000 "$V/u-verdicts-rx-reports.md"
 env -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" \
   COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$T/out/run" >"$T/out.log" 2>&1
 built() { jq -c --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $u) | .builder.built]' "$T/out/run/project.json" 2>&1; }
@@ -31,6 +38,15 @@ check "every issue the Per issue table marks built counts as built" \
   '[[12639,12640,12641,12642,12643,12644,12645,12646,12647,12648,12649,12650,12651,12652,12653,12654,12655,12656]]' "$(built help-email-batch-2026-10-16)"
 check "a table under the title counts too, and a partly built issue does not, though a heading names it" \
   '[[12556,12617,11775]]' "$(built api-batch-2026-10-16)"
+check "a Builder carries the verdict of every round file by its own round, and the newest report's beside it" \
+  '[{"1":"VERDICT: NO-GO","2":"VERDICT: GO"},"VERDICT: GO",2]' \
+  "$(jq -c 'first(.[]) | .units.inFlight[]? | select(.unit == "u-verdicts") | [.builder.verdicts, .builder.verdict, .builder.verdictRound]' "$T/out/run/project.json" 2>&1)"
+# The stage list names each pass by its round, from the Builder's own log.
+printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","use":"t1"}' '{"event":"tool-end","ts":"2026-10-10T12:00:01Z","use":"t1"}' \
+  '{"event":"codex-start","ts":"2026-10-10T12:30:00Z","pass":"adversarial","round":1}' '{"event":"codex-end","ts":"2026-10-10T12:40:00Z","pass":"adversarial","round":1,"rc":0}' \
+  '{"event":"codex-start","ts":"2026-10-10T12:50:00Z","pass":"review","round":2}' > "$T/log.jsonl"
+check "each review stage carries its pass's round; building and fixing carry none" '[["building",null],["review",1],["fixing",null],["review",2]]' \
+  "$(jq -s --argjson now 0 -f "$SOURCE/scripts/dashboard_builders.jq" "$T/log.jsonl" | jq -c '[.stageHistory[] | [.stage, .round]]')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

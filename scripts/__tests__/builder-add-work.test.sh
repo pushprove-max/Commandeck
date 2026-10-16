@@ -3,7 +3,8 @@
 # old session's whole context was replayed on every call of the new work. What this pins: nothing is sent before
 # main has written the work down, or with no live Builder pane; the hand-off stands alone (brief, evidence, main's
 # rulings inlined, the acknowledgement the next pass needs); the Builder is told to stop before the pane is
-# cleared; a note that fails to send hands nothing over.
+# cleared; a note that fails to send hands nothing over. The pane is the one the launch's seat record names: no
+# session start may have recorded it since, and add-work found no Builder after any launch.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -13,12 +14,12 @@ git init -q -b main "$T/proj" && git -C "$T/proj" -c user.name=t -c user.email=t
 U=u1 W=$T/ws/u1 SC=$T/scratch; mkdir -p "$W/.claude/briefs" "$SC/handles" "$T/bin" "$T/home" "$T/proj/.claude/briefs"
 PROJ=$T/home/.claude/projects/$(printf '%s' "$W" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PROJ"
 printf 'handle=term_aw\ntask=task_aw\nsession=old-sid\n' > "$SC/seat-$U-builder.txt"
-# Logs every call; the pane list holds term_aw in the worktree; typing the pointer starts the new session's log.
+# Logs every call; the pane list holds term_aw in the worktree (none with AW_DOWN=1); typing the pointer starts the new session's log.
 cat > "$T/bin/orca-ide" <<'SH'
 #!/usr/bin/env bash
 echo "$*" >> "$AW_CALLS"
 case "$*" in
-  "terminal list --json") printf '{"result":[{"handle":"term_aw","worktreePath":"%s"}]}\n' "$AW_WT" ;;
+  "terminal list --json") [ "${AW_DOWN:-}" = 1 ] && echo '{"result":[]}' || printf '{"result":[{"handle":"term_aw","worktreePath":"%s"}]}\n' "$AW_WT" ;;
   *"orchestration send"*) exit "${AW_SEND_RC:-0}" ;;
   *"Your task spec is the file"*) printf '%s\n' "$*" > "$AW_PROJ/new-sid.jsonl" ;;
 esac
@@ -32,9 +33,8 @@ calls() { cat "$T/calls" 2>/dev/null | wc -l | tr -d ' '; }
 
 check "with no work written to main's rulings file, nothing is sent" "1 1 0" "$(add) $(grep -c 'write the added work to' "$T/err") $(calls)"
 printf '## 5. ADDED-PROBE: also build the export\n' > "$T/proj/.claude/briefs/$U-main-rulings.md"
-check "with no live Builder pane, nothing is sent" "3 0" "$(add) $(grep -c 'orchestration send' "$T/calls" 2>/dev/null || echo 0)"
-echo term_aw > "$SC/handles/unit-$U"
-check "with a live pane the work is handed over" 0 "$(add)"
+check "with no live Builder pane, nothing is sent" "3 0" "$(add AW_DOWN=1) $(cat "$T/calls" 2>/dev/null | grep -c 'orchestration send')"
+check "after a launch, with only its seat record naming the live pane, the work is handed over" "0 0" "$(add) $(ls "$SC/handles" | wc -l | tr -d ' ')"
 HAND=$(ls "$W/.claude/briefs/$U-added-"*.md 2>/dev/null | head -1)
 check "the hand-off stands alone: brief, evidence, main's rulings inlined, the acknowledgement" "1 1 1 1" \
   "$(grep -c "$W/.claude/briefs/$U.md\$" "$HAND") $(grep -c "$W/.claude/briefs/$U-evidence.md\$" "$HAND") $(grep -c 'ADDED-PROBE' "$HAND") $(grep -c -- "--ack-rulings $U" "$HAND")"
@@ -45,5 +45,8 @@ check "and main's seat record names the new session" "session=new-sid" "$(grep '
 rm -f "$T/calls" "$W/.claude/briefs/$U-added-"*.md
 check "a note that fails to send hands nothing over" "1 0 0" \
   "$(add AW_SEND_RC=1) $(ls "$W/.claude/briefs/$U-added-"*.md 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'terminal send' "$T/calls")"
+# A Builder relaunched after a session start recorded its old pane: the dead record must not hide the new one.
+printf 'term_old\n' > "$SC/handles/unit-$U"
+check "a dead handle from an earlier session does not hide the pane the launch names" 0 "$(add)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

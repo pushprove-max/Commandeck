@@ -447,15 +447,19 @@ pp_pane_of() {
 # pp_seat_pane <seat key> <worktree> -- the live pane of main (key main) or of a
 # Builder (key unit-<unit>): the handle its last session start recorded
 # (inbox-drain.sh), when Orca still lists it live in that worktree. Nothing when
-# the seat is down. A Builder with no record yet has not started: other panes in
-# its worktree (a design co-author) are never taken for it. Only main, alone in
-# its checkout, falls back to pp_pane_of, for a session that began before the record.
+# the seat is down. A Builder whose recorded pane is gone, or that no session start
+# recorded, has the pane its launch names in its seat record (seat.sh); other
+# panes in its worktree (a design co-author) are never taken for it. Only main,
+# alone in its checkout, falls back to pp_pane_of, for a session that began before
+# the record.
 pp_seat_pane() {
-  local h; h=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
-  [ -n "$h" ] || { [ "$1" != main ] || pp_pane_of "$2"; return 0; }
-  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg h "$h" \
-    "$PP_PNORM"'($wt | pnorm) as $wt | first((.result | if type == "array" then . else (.terminals // []) end)[]?
-      | select(.handle == $h and (.worktreePath | pnorm) == $wt and .connected != false and .orphaned != true) | .handle) // empty' 2>/dev/null
+  local hs; hs=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
+  [ "$1" = main ] || hs="$hs $(sed -n 's/^handle=//p' "$PP_SCRATCH/seat-${1#unit-}-builder.txt" 2>/dev/null | tail -1)"
+  [ -n "${hs// /}" ] || { [ "$1" != main ] || pp_pane_of "$2"; return 0; }
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg hs "$hs" \
+    "$PP_PNORM"'($wt | pnorm) as $wt | [(.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select((.worktreePath | pnorm) == $wt and .connected != false and .orphaned != true) | .handle] as $live
+      | first($hs | splits(" +") | select(. != "" and IN($live[]))) // empty' 2>/dev/null
 }
 # pp_worktree_new <name> -- a new Orca worktree of this project at
 # $PP_WORKSPACES/<name>, on local main and not Orca's origin/main default. The

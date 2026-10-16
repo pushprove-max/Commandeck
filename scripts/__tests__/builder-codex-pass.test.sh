@@ -166,6 +166,18 @@ check "and neither checkout's tracked files changed" "" \
 # hand-off file that stands alone): the old session carried the whole build's context into every fix call. Main's
 # seat record follows the new session's log, so main-watch reads the new log and not the cleared one.
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 10 >/dev/null)
+# A launch refused for a missing evidence line cost a request and a retry. --check is
+# the launch's own evidence check (the same function): it names the missing line and exits non-zero, or passes, and
+# in both cases stages nothing, commits nothing, never reaches Codex and leaves no pass lock.
+printf 'it()\n' > "$W/x.guard.test.ts"; : > "$TMP/probe"; HEAD7=$(git -C "$W" rev-parse HEAD)
+chk() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" 7 review >"$TMP/out" 2>"$TMP/err"); echo $?; }
+untouched() { [ "$(git -C "$W" rev-parse HEAD)" = "$HEAD7" ] && [ -z "$(git -C "$W" diff --cached --name-only)" ] && [ ! -e "$B/$U-r7-reports.md" ] \
+  && [ ! -s "$TMP/probe" ] && [ ! -e "$L" ] && echo untouched; }
+check "--check on an evidence file without the line: it names the line, exits 2, and nothing was staged, committed, locked or sent to Codex" "2 1 untouched" \
+  "$(chk) $(grep -c 'Mutation-verified: <what you broke' "$TMP/err") $(untouched)"
+echo 'Mutation-verified: emptied the guard test; it went red' >> "$B/$U-evidence.md"
+check "--check on a complete evidence file passes, and still stages, commits, locks and runs nothing" "0 1 untouched" \
+  "$(chk) $(grep -c '^check ok: ' "$TMP/out") $(untouched)"
 SC=$TMP/scratch FB=$TMP/fb; mkdir -p "$SC" "$FB" "$W/x/__tests__"; echo t > "$W/x/__tests__/y.test.sh"
 printf '## 1. RULING-PROBE: keep the probe\n' > "$REPO/.claude/briefs/$U-main-rulings.md"
 (cd "$W" && COMMANDECK_MAIN=$REPO bash "$PASS_SH" --ack-rulings "$U" >/dev/null 2>&1)
@@ -198,6 +210,12 @@ check "a NO-GO pass from the Builder's pane ends 0 and tells the old session to 
 H7=$B/$U-fix-r7.md
 check "the hand-off stands alone: brief, evidence, the findings, main's rulings inlined, the task and the touched tests" "1 1 1 1 1 1" \
   "$(grep -c "$B/$U.md\$" "$H7") $(grep -c "$B/$U-evidence.md\$" "$H7") $(grep -c 'FINDING-PROBE' "$H7") $(grep -c 'RULING-PROBE' "$H7") $(grep -c 'Orca task: task_frs' "$H7") $(grep -cF 'x/__tests__/y.test.sh' "$H7")"
+# Each fix-round session read the whole brief at start, about 37K cache-write tokens a
+# time. The findings say what to fix; the brief stays reachable by path for the finding that needs it.
+check "the hand-off does not order the brief or the evidence file read whole at start; both stay reachable by path" "0 0 1 1" \
+  "$(grep -ci 'read the brief whole' "$H7") $(grep -ci 'read the evidence file whole' "$H7") $(grep -c "Open it only when a finding needs it: $B/$U.md\$" "$H7") $(grep -c "update it before the next pass: $B/$U-evidence.md\$" "$H7")"
+check "the launch after a passing --check is not refused: the guard test is committed with its note" "1 1" \
+  "$(git -C "$W" log -1 --format=%B | grep -c '^Mutation-verified: ') $(git -C "$W" ls-files x.guard.test.ts | wc -l | tr -d ' ')"
 helper_done 7
 check "the pane is waited idle, cleared, then handed the file" "terminal wait,--text /clear,terminal wait,Your task spec is the file" \
   "$(grep -oE 'terminal wait|--text /clear|Your task spec is the file' "$TMP/frs-calls" | uniq | paste -sd, -)"

@@ -31,6 +31,14 @@ printf '%s\n' "${SAMPLES[@]}" | tee "$TMP/tree/CHANGELOG.md" > "$TMP/tree/ci/lea
 echo clean > "$TMP/tree/README.md"
 bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
 check "the changelog and the word list are exempt" 0 "$?"
+# A png's compressed bytes spell an issue number by chance; the scanner cannot judge pixels. Its text still can't hide in a .md.
+rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/docs/images"
+printf '\x89PNG\r\n\x1a\n\x00#''123\x00\n' > "$TMP/tree/docs/images/a.png"
+bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
+check "a png whose bytes hold an issue number is skipped" 0 "$?"
+printf 'see #''123\n' > "$TMP/tree/docs/a.md"
+bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
+check "the same number in a .md beside it still fails" 1 "$?"
 
 leak() { bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1; echo $?; }
 fresh() { rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/.claude/briefs" "$TMP/tree/.claude-plugin" "$TMP/tree/scripts/__tests__" "$TMP/tree/sub/.claude-plugin"

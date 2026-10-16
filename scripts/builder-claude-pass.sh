@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# builder-claude-pass.sh <unit> <N> adversarial|review|final -- the review pass of the
+# builder-claude-pass.sh [--check] <unit> <N> adversarial|review|final -- the review pass of the
 #     Claude-only profile: the same three passes, commit step, round file and
 #     checks as builder-codex-pass.sh, run through a headless read-only session
 #     on roles.claude-reviewer instead of Codex.

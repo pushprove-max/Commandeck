@@ -311,20 +311,28 @@
     const place = (el, from, to) => { el.style.left = `${x(from).toFixed(1)}%`; el.style.width = `${Math.max(0, x(to) - x(from)).toFixed(1)}%`; return el; };
     const lane = (cls, ...kids) => { const d = h('div', `lane${cls ? ` ${cls}` : ''}`); d.append(...kids); return d; };
     const nums = (...cells) => { const d = h('span', 'num'); d.append(...cells.map((c) => h('span', null, c))); return d; };
-    const trace = h('div', 'trace');
+    // trace is the Stage block, always in view; act is the activity, folded under the card's Details.
+    const trace = h('div', 'trace'), act = h('div', 'trace');
+    // A finished pass names the verdict of its own round file; a running one has none yet.
+    const verdicts = (isBuilder(u) && u.builder.verdicts) || {};
     // Each stage the Builder went through, with its time and its cost from the same collect (matched by start).
     const segs = (isBuilder(u) && Array.isArray(u.builder.stageHistory) ? u.builder.stageHistory : [])
       .filter((g) => g && Number.isFinite(parseTime(g.from)))
       .map((g, i) => {
         const c = cost && Array.isArray(cost.stages) && cost.stages[i] && cost.stages[i].from === g.from ? cost.stages[i] : null;
         const a = parseTime(g.from), b = g.to ? parseTime(g.to) : now;
-        return { g, a, b, time: `${took((b - a) / 1000)}${g.to ? '' : ' so far'}`, usd: c ? costOf(c) : 'cost not measured' };
+        const pass = g.stage === 'review' && num(g.round) !== null;
+        const v = pass && g.to ? verdicts[g.round] : null;
+        const name = !pass ? STAGE_LABEL[g.stage] || g.stage
+          : `Codex pass ${g.round}${!g.to ? ' running' : v ? ` · ${String(v).replace(/^VERDICT:\s*/, '')}` : ''}`;
+        return { g, a, b, name, judged: Boolean(v), time: `${took((b - a) / 1000)}${g.to ? '' : ' so far'}`, usd: c ? costOf(c) : 'cost not measured' };
       });
     const stageBand = segs.length ? segs.map((sg) => place(h('i', STAGE_TONE[sg.g.stage] || '', STAGE_LABEL[sg.g.stage] || sg.g.stage), sg.a, sg.b))
       : Number.isFinite(since) && STAGE_TONE[u.stage] ? [place(h('i', STAGE_TONE[u.stage], STAGE_LABEL[u.stage]), since, now)] : [];
     trace.append(h('span', 'lab', 'Stage'), lane('stages', ...stageBand, h('span', 'now')), nums('Tokens in', 'Out', 'Took'));
     trace.lastChild.classList.add('headnums');
-    if (segs.length && segs.every((sg) => x(sg.b) - x(sg.a) >= STAGE_MIN_PCT)) {
+    // A named verdict only shows in the list, so a finished pass with one takes the list too.
+    if (segs.length && segs.every((sg) => !sg.judged && x(sg.b) - x(sg.a) >= STAGE_MIN_PCT)) {
       // Every segment holds its figures: a time row and a cost row, each figure under its own stage.
       for (const [label, k] of [['Time', 'time'], ['Cost', 'usd']]) trace.append(h('span', 'lab', label), lane('figs', ...segs.map((sg) => place(h('i', 'fig', sg[k]), sg.a, sg.b))), h('span'));
     } else if (segs.length) {
@@ -334,7 +342,7 @@
       const list = h('ol', 'stagelist');
       segs.forEach((sg, i) => {
         const row = h('li');
-        row.append(h('i', `sw ${STAGE_TONE[sg.g.stage] || ''}`), h('span', null, STAGE_LABEL[sg.g.stage] || sg.g.stage), h('span', null, sg.time), h('span', null, sg.usd));
+        row.append(h('i', `sw ${STAGE_TONE[sg.g.stage] || ''}`), h('span', null, sg.name), h('span', null, sg.time), h('span', null, sg.usd));
         list.append(row);
         const band = stageBand[i];
         if (x(sg.b) - x(sg.a) >= STAGE_MIN_PCT) band.textContent = `${band.textContent} ${sg.time} · ${sg.usd}`;
@@ -353,7 +361,7 @@
       tick.style.left = `${x(signAt).toFixed(1)}%`;
       sign.append(place(h('i', 'gap'), signAt, now), tick);
     }
-    trace.append(h('span', 'lab', 'Last sign'), sign, h('span'));
+    act.append(h('span', 'lab', 'Last sign'), sign, h('span'));
     // One row per helper run on the clock: a subagent's tokens, or a Codex pass's exit code.
     for (const s of steps) {
       const t0 = parseTime(s.start), t1 = parseTime(s.kind === 'codex' ? s.end : s.stop);
@@ -363,17 +371,20 @@
       lab.append(h('small', null, s.kind === 'codex' ? `${s.pass || 'pass'}${num(s.round) === null ? '' : `, round ${s.round}`}` : modelName(s.model || s.modelAsked || 'model not recorded')));
       const spent = live ? 'running' : took((t1 - t0) / 1000);
       const tk = s.tokens && num(s.tokens.input) !== null && num(s.tokens.output) !== null ? s.tokens : null;
-      trace.append(lab, lane(null, place(h('i', `h${s.kind === 'codex' ? ' codex' : ''}${live ? ' live' : ''}`), t0, live ? now : t1)),
+      act.append(lab, lane(null, place(h('i', `h${s.kind === 'codex' ? ' codex' : ''}${live ? ' live' : ''}`), t0, live ? now : t1)),
         s.kind === 'codex' ? nums('', live ? '' : `rc ${s.rc ?? 'not recorded'}`, spent)
           : nums(tk ? tk.input.toLocaleString('en-US') : 'not recorded', tk ? tk.output.toLocaleString('en-US') : '', spent));
     }
     const axis = h('div', 'axis');
     for (let i = 0; i <= 4; i += 1) axis.append(h('span', null, i === 4 ? `now ${hm(new Date(now))}` : hm(new Date(start + (i * width) / 4))));
-    trace.append(h('span'), axis, h('span'));
+    act.append(h('span'), axis, h('span'));
     li.append(trace);
     const branch = h('p', 'branch', 'Branch ');
     branch.append(h('code', null, u.branch || 'not measured'), `, ${u.agents === null || u.agents === undefined ? 'agents not measured' : u.agents === '' ? 'no agents' : `agents ${u.agents}`}`);
     li.append(branch);
+    const more = h('details', 'unit-more');
+    more.append(h('summary', null, 'Details'), act);
+    li.append(more);
     return li;
   }
 

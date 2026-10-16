@@ -315,6 +315,17 @@ for c in 'CI=1 npm run test:zeta > /tmp/z.log' 'set -o pipefail; CI=1 LOG=$SCRAT
   ran "$(json "$c")"
   check "assignments before the suite leave its status its own: recorded: $c" 2 "$(run_hook "$(json "$c")")"
 done
+# Only the first suite's head was checked once. The reviewer's case: the tests exit 0, typecheck exits 1, `!` makes
+# Bash exit 0, the completion hook fires, and the retry must still run. Every later suite's head is checked the same.
+for c in 'npm run test:psi && ! npm run typecheck' 'npm run test:psi && ! npm run typecheck && echo ok' \
+  'npm run test:psi && time ! npm run typecheck'; do
+  ran "$(json "$c")"
+  check "a later suite with a word before it that may change its status: not recorded: $c" 0 "$(run_hook "$(json "$c")")"
+done
+for c in 'npm run test:psi && CI=1 npm run typecheck' 'npm run test:psi && CI=1 npm run typecheck && echo ok'; do
+  ran "$(json "$c")"
+  check "a later suite after plain assignments: recorded: $c" 2 "$(run_hook "$(json "$c")")"
+done
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -15,33 +15,41 @@
 # again: single lookups spread over a fix round with no edit between
 # them are separate questions, not one large search. The streak file holds the
 # count and the time of the last counted search. GAP is a starting value too.
+# Reads sent together in one turn are ONE lookup: allowed, and counted once. The searches
+# of a turn are the tool_use blocks sharing one message id in the transcript that this guard
+# counts as searches and lets through, each distinct one once; other calls beside one search make no batch.
+# A whole-repo search is refused whatever the turn carries.
 # Self-test: bash hooks/__tests__/builder-search-guard.test.sh
 LIMIT=3
 GAP=600
+SIB=${COMMANDECK_SEARCH_SIBLING_MS:-1500}
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 {
-  IFS=$'\001' read -r AID SID TOOL PTH EVT
+  IFS=$'\001' read -r AID SID TOOL PTH EVT TUID TXP
   CMD=$(cat)
-} < <(jq -r '([.agent_id // "", .session_id // "", .tool_name // "", (.tool_input.path // .tool_input.relative_path // ""), .hook_event_name // ""] | join("\u0001")),
+} < <(jq -r '([.agent_id // "", .session_id // "", .tool_name // "", (.tool_input.path // .tool_input.relative_path // ""), .hook_event_name // "", .tool_use_id // "", .transcript_path // ""] | join("\u0001")),
   (.tool_input.command // "")' <<<"$INPUT" 2>/dev/null)
 [ -z "$AID" ] || exit 0
 STREAK=/tmp/claude-builder-search-streak-${SID:-none}
 ROOT=${CLAUDE_PROJECT_DIR:-}
 ROOT=${ROOT%/}
-WHOLE=0
 
-case "$TOOL" in
-  Edit|Write|MultiEdit|Agent|Task) : > "$STREAK"; exit 0 ;;
+case "$TOOL" in Edit|Write|MultiEdit|Agent|Task) : > "$STREAK"; exit 0 ;; esac
+# search <tool> <path> <command> -- 0 for a search, with WHOLE=1 for a whole-repo one; 1 for any other call.
+search() {
+  local P M E S FOUND SEG W k V i C SKIP A OP CMD=$3
+  WHOLE=0
+  case "$1" in
   Grep|Glob|mcp__serena__search_for_pattern)
-    P=${PTH%/}
+    P=${2%/}
     case "$P" in ''|.) WHOLE=1 ;; *) [ -n "$ROOT" ] && [ "$P" = "$ROOT" ] && WHOLE=1 ;; esac ;;
   mcp__codebase-memory__search_code|mcp__codebase-memory__search_graph) ;;
   Bash)
     P=${CMD//[\'\"\\]/}
-    case "$P" in *rg*|*grep*|*find*) ;; *) exit 0 ;; esac
+    case "$P" in *rg*|*grep*|*find*) ;; *) return 1 ;; esac
     # shellcheck source=lib/strip-quoted.sh
-    . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || exit 0
+    . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || return 1
     M=$'\x01'
     # strip_quoted drops an empty quoted argument; keep its place, or the flag
     # after `-e ""` is read as the pattern.
@@ -94,21 +102,53 @@ case "$TOOL" in
           case "$OP" in ''|.|'$CLAUDE_PROJECT_DIR'|'${CLAUDE_PROJECT_DIR}'|'$PWD') WHOLE=1 ;; *) [ -n "$ROOT" ] && [ "$OP" = "$ROOT" ] && WHOLE=1 ;; esac ;;
       esac
     done <<<"$S"
-    [ "$FOUND" = 1 ] || exit 0 ;;
-  *) exit 0 ;;
-esac
+    [ "$FOUND" = 1 ] || return 1 ;;
+  *) return 1 ;;
+  esac
+  return 0
+}
+search "$TOOL" "$PTH" "$CMD" || exit 0
 
-N=0 AT=''
-{ read -r N AT < "$STREAK"; } 2>/dev/null
+# Prints "<searches in this call's turn> <message id>"; 0 when the call is not on disk yet (the transcript lags the hook).
+# Only distinct searches that are let through count: a lone search sent with any other call, a whole-repo search
+# (always refused) or the same search again is no batch. Records end in NUL, so a command keeps its newlines and
+# its heredoc data stays data.
+turn_calls() {
+  local n=0 id='' t p c W0=$WHOLE
+  [ -n "$TUID" ] && [ -r "$TXP" ] || { echo "0 "; return; }
+  {
+    read -r -d '' id
+    while IFS=$'\001' read -r -d '' t p c; do ! search "$t" "$p" "$c" || [ "$WHOLE" = 1 ] || n=$((n + 1)); done
+  } < <(tail -n 400 "$TXP" | grep -F '"type":"assistant"' | jq -js --arg u "$TUID" '
+    (map(select(any((.message.content // [])[]; .type == "tool_use" and .id == $u))) | last) as $m
+    | if $m == null or $m.message.id == null then empty
+      else $m.message.id as $id | $id + "\u0000", ([map(select(.message.id == $id))[] | (.message.content // [])[] | select(.type == "tool_use")]
+        | unique_by([.name, .input])[] | [.name, (.input.path // .input.relative_path // ""), (.input.command // "")] | join("\u0001") + "\u0000") end' 2>/dev/null)
+  WHOLE=$W0
+  [ -n "$id" ] || n=0
+  echo "$n $id"
+}
+N=0 AT='' MID=''
+{ read -r N AT MID < "$STREAK"; } 2>/dev/null
 case "$N" in ''|*[!0-9]*) N=0 ;; esac
 printf -v NOW '%(%s)T' -1
 case "$AT" in ''|*[!0-9]*) ;; *) [ $((NOW - AT)) -le "$GAP" ] || N=0 ;; esac
-case "$EVT" in PostToolUse*) printf '%s %s\n' $((N+1)) "$NOW" > "$STREAK"; exit 0 ;; esac
+case "$EVT" in PostToolUse*)
+  # Every counted call keeps its message id: a sibling that reaches the transcript late is then not counted again.
+  read -r _ CMID < <(turn_calls)
+  [ -z "$CMID" ] || [ "$CMID" != "$MID" ] || exit 0
+  printf '%s %s %s\n' $((N+1)) "$NOW" "$CMID" > "$STREAK"; exit 0 ;;
+esac
 if [ "$WHOLE" = 1 ]; then
   REASON=whole-repo
   MSG='A whole-repo search is a large search. Hand it to an Explore subagent (Agent, subagent_type Explore), or name a directory.'
 else
   [ "$N" -ge "$LIMIT" ] || exit 0
+  # The first call of a batch can be checked before its siblings are on disk: wait one sibling window, then count again.
+  if [ -n "$TUID" ] && [ -r "$TXP" ]; then
+    sleep "$((SIB / 1000)).$(printf '%03d' $((SIB % 1000)))"
+    read -r CALLS _ < <(turn_calls); [ "${CALLS:-0}" -lt 2 ] || exit 0
+  fi
   REASON=streak
   # The refusal names the forms that run now: each refusal costs a request, and a retry that guesses costs another.
   MSG="This is now a large search ($((LIMIT+1))+ lookups in a row). Allowed now, and not counted: the Read tool, or a plain \`grep -n <pattern> <file>...\` with no -r, for files you already know; mcp__serena__find_symbol or find_referencing_symbols for a symbol; an Explore subagent (Agent, subagent_type Explore) for anything wider. An Edit, Write or Agent call, or $((GAP / 60)) minutes with no search, starts the count again."

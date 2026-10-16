@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.0-111111?style=flat-square" alt="Version 0.8.0">
+  <img src="https://img.shields.io/badge/version-0.8.1-111111?style=flat-square" alt="Version 0.8.1">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -16,6 +16,17 @@ of work gets a Builder, a second session in its own git worktree. A reviewer
 on another model reads what the Builder committed, and the merge script takes
 a branch only when it can find that reviewer's verdict for the commit being
 merged: a `VERDICT: GO`, or a closing pass that left nothing above P2.
+
+## What it looks like
+
+The dashboard: every Builder by stage, what waits on you, pull requests and issues, and the week's
+Claude and Codex limits and cost. (Sample project, invented figures.)
+
+![Commandeck dashboard](docs/images/dashboard.png)
+
+Orca with the Chief of Staff pinned, main orchestrating and one worktree per Builder:
+
+![Orca with Commandeck](docs/images/orca.png)
 
 ## What you need
 
@@ -98,6 +109,28 @@ your project. Script names in the text are relative to it. Setup
 never commits. When it wrote files that
 every worktree needs, its output ends with the `git add` and `git commit`
 line to run.
+
+### Updating
+
+A plugin update takes two steps; the first alone leaves Codex and the background jobs on the
+old version.
+
+1. Update the plugin: `claude plugin update commandeck`.
+2. In each project that is set up, in a Claude Code session, run `/commandeck:update`
+   (or `bash <plugin folder>/scripts/update.sh`). Claude Code puts the new version in a new
+   folder; Codex's hooks, the permission rule and the two background jobs still name the old
+   one until this runs. It re-points them, runs setup again with your earlier answers (which
+   also updates every add-on to its latest), prints the changelog and runs the doctor. If the
+   doctor fails, every file is put back as it was and its `FAIL` lines say why.
+3. Start new Claude and Codex sessions. A session already open keeps the hooks it started with.
+
+- codebase-memory updates only while no Claude or Codex session is open. If one is open it
+  stays on the old version and setup lists it under "Needs you"; close the sessions and run
+  `/commandeck:update` again.
+- A config version the new release does not know is refused and nothing changes. There is no
+  migration: uninstall with the old version, then set up again.
+- Going back a version: install the earlier version with `claude plugin install`, then run
+  `update.sh` from that version's folder.
 
 ### What setup asks
 

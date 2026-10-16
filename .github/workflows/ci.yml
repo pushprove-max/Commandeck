@@ -61,4 +61,4 @@ jobs:
       - name: Bash 3.2 tests
         run: |
           /opt/homebrew/bin/bash hooks/__tests__/run-hook.test.sh
-          /opt/homebrew/bin/bash scripts/__tests__/setup-requirements.test.sh
+          /opt/homebrew/bin/bash scripts/__tests__/requirements.test.sh

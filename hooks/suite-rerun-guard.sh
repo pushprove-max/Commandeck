@@ -277,7 +277,8 @@ own_status() {
   local i op prev=';' seen=0 pf=0
   for ((i = 0; i < ${#KEPT[@]} - 1; i++)); do
     op=${KEPT[$i]##*$'\x1f'}
-    [ "$seen" = 1 ] || { suite "$i" && { head_ok "$i" || return 1; } && seen=1; }
+    # Every suite's head, not only the first's: `npm run test:unit && ! npm run typecheck` exits 0 on a failure.
+    if suite "$i"; then head_ok "$i" || return 1; seen=1; fi
     if [ "$seen" = 0 ]; then
       if pf_on "$i"; then
         case $prev/$op in ';/;'|';/&&'|';/||'|'&/;'|'&/&&'|'&/||') pf=1 ;; esac
@@ -287,8 +288,8 @@ own_status() {
     fi
     case $op in '&&') ;; '|'|'|&') [ "$pf" = 1 ] || return 1 ;; *) return 1 ;; esac
   done
-  # The suite is the last segment: nothing follows it, but its own head still counts.
-  [ "$seen" = 1 ] || head_ok "$i"
+  # The last segment: nothing follows it, but a suite there still has its head checked.
+  if suite "$i"; then head_ok "$i"; else [ "$seen" = 1 ]; fi
 }
 
 # --- PostToolUse: the run finished, so it counts ------------------------------

@@ -2,7 +2,8 @@
 # build when any file in the tree matches one. Lines starting "# " and blank
 # lines are not patterns.
 #
-# Exempt paths: CHANGELOG.md and this file. Nothing else: a build's papers
+# Exempt paths: CHANGELOG.md, this file and every .png (approved images of
+# invented data, whose compressed bytes match by chance). Nothing else: a build's papers
 # under .claude/briefs/ are untracked and ignored, and a tracked file there is
 # searched like any other.
 #

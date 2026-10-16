@@ -395,3 +395,46 @@ test("a finished build keeps the cost it had at its merge; one with none kept sa
   assert.match(text(b), /Cost by stage not recorded/);
   assert.equal(b.querySelector('table.costs'), null);
 });
+
+// The helper rows took most of a card. The card keeps its Stage band and the stages'
+// time and cost in view, and a closed Details holds the activity: the last sign, each helper run and the clock.
+test('a unit card keeps Stage and its figures in view and folds the activity rows behind a closed Details', () => {
+  const w = fresh(Fixed);
+  const hist = [stage('building', 90, 60), stage('review', 60, 30), stage('fixing', 30, null)];
+  const u = costed(hist, [tally(1.5), tally(0.25), tally(0.4)], tally(2.15, { sec: 5400 }));
+  u.builder.steps = [{ kind: 'codex', pass: 'adversarial', round: 1, start: iso(ago(60)), end: iso(ago(30)), rc: 0 },
+    { kind: 'subagent', type: 'Explore', model: 'claude-haiku-5-5', tokens: { input: 1, output: 1 }, start: iso(ago(80)), stop: iso(ago(75)) }];
+  show(w, { units: { inFlight: [u] } });
+  const card = w.document.querySelector('#units li.unit');
+  const shown = card.querySelector(':scope > .trace');
+  assert.ok(shown.querySelector('.lane.stages'), 'the Stage band stays in view');
+  assert.equal(shown.querySelectorAll('.lane.figs').length, 2, 'with its time and cost');
+  assert.doesNotMatch(text(shown), /Last sign|Explore|Codex adversarial/, 'no activity row outside Details');
+  const more = card.querySelector(':scope > details.unit-more');
+  assert.ok(more && !more.open, 'Details is closed');
+  assert.equal(text(more.querySelector('summary')), 'Details');
+  assert.deepEqual([...more.querySelectorAll('.trace .lab')].map(text), ['Last sign', 'Codex adversarial, round 1', 'Explore Haiku 5.5']);
+  assert.ok(more.querySelector('.trace .axis'), 'the clock goes with the rows it times');
+});
+
+// Every finished Codex pass names its own verdict in the stage list, read from its own
+// round file (builder.verdicts, by round); a pass still running says so, and one with no round file names none.
+const judged = (hist, verdicts) => { const u = costed(hist, hist.map(() => tally(0.5)), tally(3, { sec: 6000 })); u.builder.verdicts = verdicts; return u; };
+test('every finished Codex pass in the stage list reads its own round\'s verdict; a running one reads running', () => {
+  const w = fresh(Fixed);
+  const hist = [stage('building', 100, 12), { ...stage('review', 12, 10), round: 1 }, stage('fixing', 10, 8), { ...stage('review', 8, 6), round: 2 },
+    stage('fixing', 6, 5), { ...stage('review', 5, 4), round: 3 }, stage('fixing', 4, 2), { ...stage('review', 2, null), round: 4 }];
+  show(w, { units: { inFlight: [judged(hist, { 1: 'VERDICT: NO-GO', 2: 'VERDICT: GO', 4: 'VERDICT: GO' })] } });
+  const names = [...w.document.querySelectorAll('#units li.unit .trace > .stagelist li:not(.total)')].map((l) => text(l.children[1]));
+  assert.deepEqual(names, ['Building', 'Codex pass 1 · NO-GO', 'Fixing', 'Codex pass 2 · GO', 'Fixing', 'Codex pass 3', 'Fixing', 'Codex pass 4 running'],
+    'pass 3 has no round file, and pass 4 is still running: an older file of its number is not its verdict');
+});
+
+test('a finished pass shows its verdict when every stage is wide: the verdict takes the stage list', () => {
+  const w = fresh(Fixed);
+  const hist = [stage('building', 100, 60), { ...stage('review', 60, 30), round: 1 }, stage('fixing', 30, null)];
+  show(w, { units: { inFlight: [judged(hist, { 1: 'VERDICT: NO-GO' })] } });
+  const list = w.document.querySelector('#units li.unit .trace > .stagelist');
+  assert.ok(list, 'a named verdict shows only in the list');
+  assert.match(text(list), /Codex pass 1 · NO-GO/);
+});

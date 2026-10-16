@@ -35,6 +35,8 @@
 # builder-codex-pass.sh --preflight -- print `<model>\t<companion>` or fail;
 #     builder-launch.sh runs it so a Builder never starts without a working pass.
 # builder-codex-pass.sh --ack-rulings <unit> -- say main's rulings file was read.
+# builder-codex-pass.sh --check <unit> <N> <kind> -- run a launch's own checks up to the Codex sign-in check,
+#     the evidence-file ones included, in a copy of the index: it stages, commits and launches nothing.
 #
 # Each Codex pass is a persisted `task` thread of the Codex plugin companion: its
 # review threads are ephemeral and leave no session record to check. The pass
@@ -728,8 +730,9 @@ fi
 if [ "${1:-}" = --preflight ]; then printf '%s\t%s\n' "$MODEL" "$COMPANION"; exit 0; fi
 
 # --ack-rulings <unit> runs no pass: the round and kind below are only stand-ins for it.
+CHECK=0; [ "${1:-}" != --check ] || { CHECK=1; shift; }
 ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
-UNIT=${1:?usage: builder-$BY-pass.sh <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
+UNIT=${1:?usage: builder-$BY-pass.sh [--check] <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
@@ -777,7 +780,7 @@ $(cat "$STOP")"
 # shortcut: a lock whose holder is gone is taken over without a second lock around the takeover; the merge's check is what refuses a closing pass another pass overlapped.
 LOCK=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-pass.lock || die "$WT is not a git worktree"
 # The lock is in the git folder, which pp_rm_rf refuses; it holds one pid file, and rmdir cannot remove more.
-unlock() { rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true; }
+unlock() { rm -f "$LOCK/pid" "$LOCK/index"; rmdir "$LOCK" 2>/dev/null || true; }
 if ! mkdir "$LOCK" 2>/dev/null; then
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
   [[ $HOLDER =~ ^[0-9]+$ ]] && kill -0 "$HOLDER" 2>/dev/null \
@@ -804,6 +807,32 @@ SCOPE=$(cat ${RULINGS[@]+"${RULINGS[@]}"} "$MAIN_OF_WT/.claude/briefs/$UNIT-buil
 if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCOPE_REC")" ]; }; then
   KIND=final
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
+fi
+# Stages what the pass will commit and refuses on the evidence-file checks; sets NOTES for the commit message.
+# --check runs it in a copy of the index, so the Builder learns of a refusal before a launch costs a retry.
+stage_and_check() {
+  # Staged whole, then the briefs taken back out: an exclude pathspec naming
+  # .claude/briefs makes git add fail in a repo that ignores .claude/.
+  git -C "$WT" add -A
+  git -C "$WT" reset -q -- .claude/briefs
+  # A shared template (_*.md) is tracked batch work; -u never adds the unit's own untracked brief, evidence or round files.
+  # Only when one is tracked: git fails a pathspec that matches no tracked file.
+  TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
+  [ -z "$TEMPLATES" ] || git -C "$WT" add -u -- '.claude/briefs/_*'
+  # commit-msg demands a mutation note when a guard-class test is added; the pass
+  # carries the evidence file's notes, and refuses here rather than at the hook.
+  NOTES=$(grep -E '^Mutation-verified: ' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+  GUARDS=$(git -C "$WT" diff --cached --name-only --diff-filter=A | guard_class_tests)
+  [ -n "$GUARDS" ] && [ -z "$NOTES" ] && die "this pass adds guard-class tests ($(paste -sd' ' - <<<"$GUARDS")) and .claude/briefs/$UNIT-evidence.md has no line of the form
+  Mutation-verified: <what you broke and how the test went red>
+Add one per guard test, then rerun the pass."
+  return 0
+}
+if [ "$CHECK" = 1 ]; then
+  cp "$(git -C "$WT" rev-parse --absolute-git-dir)/index" "$LOCK/index" || die "cannot copy the index of $WT"
+  GIT_INDEX_FILE=$LOCK/index stage_and_check
+  echo "check ok: a launch of $UNIT $N $KIND passes the evidence-file checks. Not run: the Codex sign-in check. Nothing was staged or committed."
+  exit 0
 fi
 # A revoked sign-in made the pass end with no output while `codex login status`
 # still said signed in, so a one-word request is the check. It runs outside the
@@ -832,21 +861,7 @@ Run codex login, then run the pass again. No commit, no reviewer, no round file.
   rm -f "$PROBE_ERR"
 fi
 
-# Staged whole, then the briefs taken back out: an exclude pathspec naming
-# .claude/briefs makes git add fail in a repo that ignores .claude/.
-git -C "$WT" add -A
-git -C "$WT" reset -q -- .claude/briefs
-# A shared template (_*.md) is tracked batch work; -u never adds the unit's own untracked brief, evidence or round files.
-# Only when one is tracked: git fails a pathspec that matches no tracked file.
-TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
-[ -z "$TEMPLATES" ] || git -C "$WT" add -u -- '.claude/briefs/_*'
-# commit-msg demands a mutation note when a guard-class test is added; the pass
-# carries the evidence file's notes, and refuses here rather than at the hook.
-NOTES=$(grep -E '^Mutation-verified: ' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
-GUARDS=$(git -C "$WT" diff --cached --name-only --diff-filter=A | guard_class_tests)
-[ -n "$GUARDS" ] && [ -z "$NOTES" ] && die "this pass adds guard-class tests ($(paste -sd' ' - <<<"$GUARDS")) and .claude/briefs/$UNIT-evidence.md has no line of the form
-  Mutation-verified: <what you broke and how the test went red>
-Add one per guard test, then rerun the pass."
+stage_and_check
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
 git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N${NOTES:+$'\n\n'$NOTES}"
@@ -1083,8 +1098,8 @@ TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
   printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
   printf 'You are the Builder of %s, in a fresh session of the same pane: the session that ran pass %s was cleared, so this file and the files it names are all you have.\n\n' "$UNIT" "$N"
   printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$ORCA_TERMINAL_HANDLE" "${TASK:-not in $SEAT; ask main}" "$ORCA_TERMINAL_HANDLE"
-  printf -- '- Read the brief whole, it still binds you: %s\n' "$WT/.claude/briefs/$UNIT.md"
-  printf -- '- Read the evidence file whole, it says what is built, verified and left: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
+  printf -- '- The brief still binds you, but do not read it at start: the findings say what to fix. Open it only when a finding needs it: %s\n' "$WT/.claude/briefs/$UNIT.md"
+  printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n\n' "$N" "$((N + 1))"
   printf '## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
   printf '\n## Main'"'"'s rulings\n\n'

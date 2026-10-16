@@ -4,7 +4,8 @@
 # what setup wrote outside it still names the old one: Codex's hook entries and
 # their trust, the permission rule for the scripts, the two jobs. This prints
 # the version and its changelog, runs setup again with the answers already in
-# the project's config, and runs the doctor. If the doctor fails, every file is
+# the project's config, shows what setup says needs the owner (a failed add-on
+# install among it), and runs the doctor. If the doctor fails, every file is
 # put back as it was before the update and this exits 1.
 # A config whose version this plugin does not know is refused: there is no
 # migration code.
@@ -58,6 +59,8 @@ back() {
   echo "update: FAILED ($1). Every file is back as it was before the update; the two jobs were restarted by the failed run and may need: bash $(jq -r '.root // "<old plugin folder>"' "$IL_PROJECT")/scripts/setup.sh" >&2
   exit 1
 }
-bash "$HERE/setup.sh" >/dev/null || back "setup did not finish"
+OUT=$(bash "$HERE/setup.sh") || back "setup did not finish"
+# Setup lists a failed add-on install or update under Needs you: dropping it would hide the failure.
+awk '/^Needs you/ { on = 1 } on && /^$/ { exit } on' <<<"$OUT"
 bash "$HERE/doctor.sh" || back "the doctor found a break, above"
 echo "update: done"

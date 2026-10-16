@@ -12,7 +12,8 @@ merges with `merge-unit-local.sh {unit}`.
 
 - `/ponytail full`: the smallest complete change.
 - In your first turn, open this brief and every file it names, together; after that, send
-  every look whose inputs you already know in one turn.
+  every look whose inputs you already know in one turn. A fix-round session starts from
+  its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
@@ -22,6 +23,9 @@ merges with `merge-unit-local.sh {unit}`.
   whatever comes back is sent again on every later turn of the build.
 - Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
   line per batch item in the evidence file: the build review reads that shape.
+- Builders never write new end-to-end tests: no test installs or uninstalls
+  the plugin, or runs setup.sh or uninstall.sh whole. Check the one function
+  or rule a change touches, on a hand-written config.
 - Tests first: red, then green. A red test that shows a hang sets its own
   short timeout (a few seconds), so it fails fast instead of running to the
   command's time limit. To show a test catches a break without editing your
@@ -103,6 +107,11 @@ merge refuses a round file the script did not write, or one older than the tip.
    that narrowed pass: fix it and run the closing pass again. If you fix none
    of them, commit nothing after the closing pass: the merge takes that tip
    too, and prints each P2 and P3 as open.
+
+Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
+it runs the launch's own checks on what the pass would commit (the
+`Mutation-verified:` line a new guard test needs), names what is missing and
+stages, commits and sends nothing. A launch refused for a missing line costs a pass and a retry.
 {loop-rules}
 When a pass reports a bug, look for the same kind of bug nearby and fix
 the whole class before the next pass. Each fix gets one evidence line

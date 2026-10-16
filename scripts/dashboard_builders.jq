@@ -86,10 +86,11 @@ map(select(type == "object" and (.event | type) == "string")) as $r
     # each pass a review, the time after a pass to the next one a fix. The open stage has no end (to: null).
     stageHistory: (([$r[].ts | ep | select(. != null)] | min) as $t0
       | if $t0 == null then [] else
-        ([$cx[] | {a: (.c.ts | ep), b: (.e.ts // null | if . == null then null else ep end)} | select(.a != null)] | sort_by(.a)) as $p
+        ([$cx[] | {a: (.c.ts | ep), b: (.e.ts // null | if . == null then null else ep end), r: (.c.round // null)} | select(.a != null)] | sort_by(.a)) as $p
         | [{stage: "building", from: $t0, to: ($p[0].a // null)}]
           + [range(0; $p | length) as $i | $p[$i] as $x | ($p[$i + 1].a // null) as $nx
-             | {stage: "review", from: $x.a, to: ([$x.b, $nx] | map(numbers) | min)},
+             # round: the pass's own, so the stage list names it and its round file's verdict.
+             | {stage: "review", round: $x.r, from: $x.a, to: ([$x.b, $nx] | map(numbers) | min)},
                (if $x.b != null and ($nx == null or $x.b < $nx) then {stage: "fixing", from: $x.b, to: $nx} else empty end)]
         | map(.from |= todate | .to |= (if . == null then null else todate end))
       end),

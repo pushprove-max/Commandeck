@@ -284,6 +284,13 @@ units() {
         vr=${f##*/}; vr=${vr#"${u##*/}-r"}; vr=${vr%-reports.md}
         [[ $vr =~ ^[0-9]+$ ]] && vr=$((10#$vr)) || vr=null
         bj=$(jq -c --arg v "$v" --argjson vr "$vr" '.verdict = $v | .verdictRound = $vr' <<<"$bj")
+        # Every round file's own verdict by its round, so each finished pass shows its own.
+        vs='{}'
+        while IFS= read -r r; do
+          n=${r##*/}; n=${n#"${u##*/}-r"}; n=${n%-reports.md}
+          [[ $n =~ ^[0-9]+$ ]] && vs=$(jq -c --arg n "$((10#$n))" --arg v "$(grep -v '^[[:space:]]*$' "$r" | tail -1 | cut -c1-200)" '.[$n] = $v' <<<"$vs")
+        done < <(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$')
+        bj=$(jq -c --argjson vs "$vs" '.verdicts = $vs' <<<"$bj")
       fi
       # An unreadable log stays wholly not measured; any other Builder also carries its issues and findings.
       # reviewedTree: is the worktree still the tree its newest pass read. The build review reads the same script.

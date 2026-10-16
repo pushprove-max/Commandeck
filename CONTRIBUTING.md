@@ -27,6 +27,7 @@ approach.
 - Branch from `main` and keep each pull request to one change.
 - Run the three checks above; CI runs them on every pull request.
 - A change to a plugin file raises the version and adds a `CHANGELOG.md` entry, as described above.
-- Add a test that fails without your change.
+- Add a test that fails without your change. Keep it to the function or rule your change touches, on a hand-written
+  config. No test installs or uninstalls the plugin, or runs `setup.sh` or `uninstall.sh` whole.
 - Pull requests are squash-merged. A maintainer reviews each one, and CI for a first-time contributor runs after
   a maintainer approves it.

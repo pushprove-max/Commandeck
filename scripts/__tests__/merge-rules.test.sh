@@ -31,5 +31,23 @@ check "keep both for a reworded rule loads it, though keep mine was saved for it
 check "keep both for a rule made from two loads it, though keep mine was saved for both" 1 \
   "$(MS --drop 18cd2c62 --drop 8fc96d58 --keep 607f18a2 | grep -c 'Main plans with the owner')"
 
+# A duplicate is the same text once case and spacing are set aside, nothing more (main's ruling): a path, a code
+# span, a flag or a sign changes what a rule says, so a near-match keeps the plugin's rule.
+A=$(awk '/^THE CLEAR LINE/{p=1} /^## Details/{exit} p' "$REAL/templates/main-session.md" | sed 's|~/.claude/checkpoints/|./.claude/checkpoints/|g')
+check "an owner's rule naming ./.claude/checkpoints/ leaves in the plugin's ~/.claude/checkpoints/ rule" 0 \
+  "$(MS --against <(printf '%s\n' "$A") --report | grep -c '^  already in')"
+n=0
+while IFS='|' read -r mine theirs want; do
+  n=$((n + 1))
+  check "a plugin rule against a near-match ($n) is kept once, or left out when only case and spacing differ" "$want" \
+    "$(python3 "$REAL/scripts/merge-rules.py" <(printf -- '- %s\n' "$mine") --against <(printf -- '- %s\n' "$theirs") | grep -cxF -- "- $mine")"
+done <<'RULES'
+Save a checkpoint in ~/.claude/checkpoints/ first.|Save a checkpoint in ./.claude/checkpoints/ first.|1
+Run `make test` before you push.|Run make test before you push.|1
+Call setup.sh --plan first.|Call setup.sh plan first.|1
+Keep the limit at -1.|Keep the limit at 1.|1
+Run  MAKE before you push.|run make before   you push.|0
+RULES
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

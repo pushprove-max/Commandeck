@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.1 -- 2026-10-16
+
+- The tests no longer install or uninstall the plugin or run setup.sh or uninstall.sh whole: small checks of
+  the functions they call take their place, and the Builder brief and CONTRIBUTING.md say not to write new ones (#127).
+- The dashboard's merged-since-push list was already a pane of its own, Next push (#128).
+- A unit card keeps its Stage band in view and folds the activity rows into a closed Details (#129).
+- The stage list names each Codex pass with its round's verdict, GO or NO-GO, or running (#130).
+- The search guard counts reads sent together in one turn as one lookup; a whole-repo search is still refused (#131).
+- A fix-round session starts from its hand-off and opens the brief and evidence file only when a finding needs them (#132).
+- `builder-codex-pass.sh --check` runs a launch's own checks and stages, commits and sends nothing (#133).
+- The suite re-run guard checks the head of every suite in a chain: `npm test && ! npm run typecheck` is no
+  longer recorded as a pass (#134).
+- builder-add-work.sh, answer-worker.sh and to-main.sh find a Builder's pane from its launch record (#137).
+- The README has an Updating section: the two steps of a plugin update, and going back a version.
+- update.sh shows setup's Needs you list, a failed add-on install or update among it, where it used to hide it.
+- The README shows the dashboard and Orca, in a What it looks like section.
+
 ## 0.8.0 -- 2026-10-16
 
 - No script can remove a main checkout any more. `dashboard.sh --project` run by hand
