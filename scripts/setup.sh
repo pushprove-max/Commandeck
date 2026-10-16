@@ -374,10 +374,10 @@ fi
 [ -n "$PLAN" ] || bash "$HERE/main-watch.sh" --install >/dev/null
 il_global "$GCLAUDE" claude-md "$IL_ROOT/templates/global-claude.md" --global-claude
 il_global "$GRULES" rules "$IL_ROOT/templates/global-rules.md" --global-rules
-D=$(jq -r 'to_entries[] | select(.value == "keep-mine") | .key' <<<"$DROPS")
+D=$(jq -r 'to_entries[] | select(.value == "keep-mine" or .value == "keep-both") | (if .value == "keep-mine" then "--drop" else "--keep" end), .key' <<<"$DROPS")
 for f in "${OWN[@]}"; do
   c=$OWNS; [ "$f" = AGENT_STARTUP.md ] || c=$OWNM
-  # shellcheck disable=SC2086 # the ids are 8 hex digits each
+  # shellcheck disable=SC2086 # --drop/--keep and ids of 8 hex digits each
   il_own "$IL_PROJECT" "$PP_MAIN/$f" "$IL_ROOT/templates/${f#.claude/}" "$c" $D
 done
 if [ "$PONYTAIL" = false ]; then

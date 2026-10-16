@@ -222,6 +222,8 @@ M1=$(one1 <(MS) 1)
 # Another rule sessions load, by its id and its first line (merge-rules.py --units), for the drop below.
 U=$(python3 "$PLUGIN/scripts/merge-rules.py" <(MS) --units | awk -F'\t' -v m="$M1" 'length($2) < 100 && $2 ~ /^- / && $2 != m && $2 !~ /scripts\/|hooks\/|templates\/|200K/' | head -1)
 ID=${U%%$'\t'*} M2=${U#*$'\t'}
+# A rule 0.7.2 reworded (8aa8b56d, made from 0.7.1's c99218c7: merge-rules.py MADE_FROM), by its first line.
+M3=$(python3 "$PLUGIN/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "8aa8b56d" { print $2 }')
 G1=$(one1 "$PLUGIN/templates/global-rules.md" 1)
 P2=$T/proj2; project "$P2"; M2F=$(mf "$P2"); Q=$P2/.git/commandeck-setup-questions
 printf '# Our startup\n\n- Run make before you push.\n%s\n' "$S1" > "$P2/AGENT_STARTUP.md"
@@ -285,6 +287,10 @@ check "a dropped rule is saved and no longer loaded" "0:1:0" "$?:$(jq --arg i "$
 # Keep both is saved too, so a rerun need not ask it again, and the rule loads beside the owner's.
 run "$P2" setup.sh "${ANSWERS[@]}" --rules-keep "$ID" >"$T/out" 2>&1
 check "a rule answered keep both is saved and loaded again" "0:keep-both:1" "$?:$(jq -r --arg i "$ID" '.mergeDecisions[$i]' "$P2/.claude/commandeck.json"):$(STARTUP | grep -cxF -- "$M2")"
+# Keep mine saved for a 0.7.1 rule, then keep both for its reworded rule: the newer, explicit answer wins.
+jq '.mergeDecisions.c99218c7 = "keep-mine"' "$C" > "$T/c" && cp "$T/c" "$C"
+run "$P2" setup.sh "${ANSWERS[@]}" --rules-keep 8aa8b56d >"$T/out" 2>&1
+check "keep both for a reworded rule loads it, though keep mine was saved for the rule it was made from" "0:1" "$?:$(STARTUP | grep -cxF -- "$M3")"
 # Default takes out only what setup wrote: a value the owner changed since is theirs and stays.
 jq '.promptCacheTtl = "5m"' "$P2/.claude/settings.json" > "$T/s" && cp "$T/s" "$P2/.claude/settings.json"
 run "$P2" setup.sh "${ANSWERS[@]}" --cache-ttl default >"$T/out" 2>&1
@@ -355,6 +361,9 @@ CTX=$(cd "$P3" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN PATH="$BIN:$PATH"
 check "main still loads a plugin rule that only a path-scoped rule states, and not one an always-on rule states" '0:1:0' \
   "$R1:$(grep -cxF -- "$S1" <<<"$CTX"):$(grep -cxF -- "$S2" <<<"$CTX")"
 check "a main-session merge adds a rule the owner has only under Details" 1 "$(awk '/^## Details \(not injected\)/ {exit} 1' "$P3/.claude/main-session.md" | grep -cxF -- "$M1")"
+run "$P3" setup.sh "${ANSWERS[@]}" --rules merge --own-main-session merge --rules-drop c99218c7 --rules-keep 8aa8b56d >"$T/out" 2>&1
+check "a main-session merge adds a reworded rule answered keep both, though keep mine was saved for the rule it was made from" "0:1" \
+  "$?:$(awk '/^## Details \(not injected\)/ {exit} 1' "$P3/.claude/main-session.md" | grep -cxF -- "$M3")"
 git -C "$P3" worktree add -q "$T/wt/b3"
 jq -n --arg a "$T/wt/b3/.claude/rules/agents.md" '{claudeMdExcludes: [$a]}' > "$T/wt/b3/.claude/settings.local.json"
 check "a Builder, which never loads agents.md, still gets the plugin rule it states" 1 \

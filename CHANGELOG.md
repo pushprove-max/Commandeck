@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2 -- 2026-10-16
+
+- Main's startup text is 497 bytes shorter (main-session.md, 10,198 to 9,701
+  bytes for the main seat), and states every rule it stated before. A rule you
+  keep your own wording for (`--rules-drop`) stays out after its rewording,
+  until you answer keep both (`--rules-keep`) for the reworded rule.
+- Main's prompt banner is about 0.4 s faster (1.26 s to 0.83 s, 5-run means):
+  its three local checks run beside the Orca calls. It prints the same text.
+- COMMANDECK_WORKSPACES given ending in `/` or `/.` no longer hides this
+  project's worktrees from any script (0.7.0 fixed the prompt banner only).
+
 ## 0.7.1 -- 2026-10-16
 
 - A decision reopened or re-asked in the second it was last asked now waits

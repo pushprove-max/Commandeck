@@ -44,7 +44,8 @@ inject() {
 
 # rules_cut <file> -- stdin less the plugin's rules the owner already has (setup's "rules": "merge": exact
 # matches in the project's CLAUDE.md and .claude/rules/) and those the owner keeps their own wording for
-# (mergeDecisions), by merge-rules.py. For a plugin template, and for the rules setup merged into the owner's
+# (mergeDecisions: keep-mine drops a rule, keep-both keeps it, the rule's own answer over one saved for the
+# rule it was made from), by merge-rules.py. For a plugin template, and for the rules setup merged into the owner's
 # own file (its marked block, committed, so cut here for the seat that loads it); anything else, or a failed
 # cut, as it came. Only a file this seat loads counts: merge-rules.py takes this seat's settings' excludes
 # (claudeMdExcludes: a Builder's agents.md) and counts a path-scoped rules file for nothing.
@@ -57,7 +58,7 @@ rules_cut() {
     while IFS= read -r d; do [ -z "$d" ] || a+=(--exclude "$d"); done < <(for f in "$REPO_ROOT/.claude/settings.local.json" "$REPO_ROOT/.claude/settings.json" "$HOME/.claude/settings.json"; do jq -r '.claudeMdExcludes[]? | strings' "$f" 2>/dev/null; done)
     for f in "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT"/.claude/rules/*.md; do [ ! -f "$f" ] || a+=(--against "$f"); done
   fi
-  [ -z "$tpl" ] && [ ${#a[@]} = 0 ] || while IFS= read -r d; do [ -z "$d" ] || a+=(--drop "$d"); done < <(jq -r '.mergeDecisions // {} | to_entries[] | select(.value == "keep-mine") | .key' "$CONFIG" 2>/dev/null)
+  [ -z "$tpl" ] && [ ${#a[@]} = 0 ] || while IFS= read -r d; do a+=("$d"); done < <(jq -r '.mergeDecisions // {} | to_entries[] | select(.value == "keep-mine" or .value == "keep-both") | (if .value == "keep-mine" then "--drop" else "--keep" end), .key' "$CONFIG" 2>/dev/null)
   [ ${#a[@]} -gt 0 ] && python3 "$PLUGIN/scripts/merge-rules.py" - "${a[@]}" <<<"$t" 2>/dev/null || printf '%s\n' "$t"
 }
 

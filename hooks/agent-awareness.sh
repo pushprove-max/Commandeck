@@ -49,13 +49,20 @@ if [ -n "$range" ]; then
   fi
 fi
 
+# The local checks below are a bash start each (~0.6 s in a row, 2026-10-16
+# profile) and need nothing from each other or Orca, so they run beside the RPCs.
+OT=$(mktemp -d)
+HERE=${BASH_SOURCE[0]%/*}
+{ bash "$HERE/../scripts/main-watch.sh" --status >"$OT/mw"; echo $? >"$OT/mw.rc"; } &
+bash "$HERE/../scripts/decision.sh" list >"$OT/led" 2>/dev/null &
+bash "$HERE/../scripts/codex-helpers.sh" orphans >"$OT/orphans" 2>/dev/null &
+
 # 2) Live Orca worktrees (anything but the main checkout) with their agents.
 # Bounded: Orca calls are RPCs; a stalled runtime must not stall every prompt.
 if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   # The three RPCs are independent, so they run together. A call that hits its
   # cap leaves a .late marker: an empty list from a stalled runtime must read
   # as "not checked", never as "nothing is running".
-  OT=$(mktemp -d)
   { timeout 20 orca-ide worktree ps --json >"$OT/wts" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/wts.late"; } &
   { timeout 20 orca-ide terminal list --json >"$OT/live" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/live.late"; } &
   { timeout 20 orca-ide orchestration task-list --brief --json >"$OT/tasks" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/tasks.late"; } &
@@ -66,10 +73,9 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     out+="Orca state NOT CHECKED (no answer in 20s):$late -- the lists below may be missing live work\n\n"; ALWAYS=1
   fi
   # Orca lists every repo's worktrees; only this project's are main's to verify.
-  # A worktrees folder named with trailing slashes still names the same folder.
+  # project-main.sh drops a trailing / or /. from PP_WORKSPACES, the one shared fix for every such compare.
   wts=$(jq -r --arg ws "$PP_WORKSPACES" '
-    ($ws | sub("/+$"; "")) as $ws
-    | .result.worktrees[]? | select(.isMainWorktree != true)
+    .result.worktrees[]? | select(.isMainWorktree != true)
     | select(.path | startswith($ws + "/"))
     | select(.isArchived != true)
     | "  \(.displayName) [\(.branch | sub("^refs/heads/";""))] status=\(.workspaceStatus) terminals=\(.liveTerminalCount // 0)"
@@ -114,7 +120,6 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     | (($active | map("  \(.id) \(.status): \(.spec // .task_title // "" | .[0:100])")
         + (if $stale > 0 then ["  + \($stale) open task(s) with no live pane -- close with task-update --status completed|failed"] else [] end))
        | join("\n"))' <"$OT/tasks" 2>/dev/null)
-  rm -rf "$OT"
   if [ -n "$tasks" ]; then
     out+="Open Orca tasks:\n$tasks\n\n"
   fi
@@ -145,12 +150,13 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
 fi
 # main-watch.sh is the one thing that wakes main: down means nothing
 # will, so this prints on every prompt until it runs again.
-if ! mw=$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/main-watch.sh" --status); then
-  out+="$mw\n\n"; ALWAYS=1
+wait
+if [ "$(<"$OT/mw.rc")" != 0 ]; then
+  out+="$(<"$OT/mw")\n\n"; ALWAYS=1
 fi
 # The owner's open asks print every turn: an answer given in chat closes nothing on
 # the dashboard's Needs Owner card until main records it.
-led=$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/decision.sh" list 2>/dev/null)
+led=$(<"$OT/led")
 open=$(jq -r 'map(select(.answeredAt == null and .waitsOn == null) | .id) | join(", ")' <<<"$led" 2>/dev/null)
 if [ -n "$open" ]; then
   out+="Open decisions for the owner: $open\n  when they answer: bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh answer <id> '<answer>'\n\n"; ALWAYS=1
@@ -241,7 +247,7 @@ fi
 # A Codex plugin helper (app-server-broker.mjs + its codex app-server child) is
 # not a worker: one runs per worktree. Only a pair whose worktree is gone needs
 # action, and the action is a kill by pid.
-orphans=$(bash "${BASH_SOURCE[0]%/*}/../scripts/codex-helpers.sh" orphans 2>/dev/null)
+orphans=$(<"$OT/orphans"); rm -rf "$OT"
 if [ -n "$orphans" ]; then
   out+="$(echo $orphans | wc -w) orphaned Codex helper process(es) whose worktree is gone -- kill $orphans\n"
 fi

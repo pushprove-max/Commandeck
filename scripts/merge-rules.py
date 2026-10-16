@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """merge-rules.py <template, or - for stdin> [--against <file>]... [--exclude <glob>]... [--drop <id>]...
-                [--block] [--report | --units | --sources]
+                [--keep <id>]... [--block] [--report | --units | --sources]
 
 The plugin's rules file <template>, less every rule the owner already has. A
 rule is one unit of Markdown: a top-level bullet with its indented lines, a
@@ -9,9 +9,10 @@ when their text is equal once case and spacing are set aside: code decides,
 exactly, and nothing fuzzy is guessed (a path, a code span or a flag that
 differs makes a different rule, so both are kept). A rule the owner chose to keep
 their own wording for is named by its id (--drop), the first 8 hex digits of the
-sha1 of that normalised text. Text inside a commandeck marked block in an
---against file is the plugin's own, so it never counts as the owner's. An
---against rules file whose frontmatter names `paths:` loads only for those
+sha1 of that normalised text; one they chose to load anyway is named by --keep,
+which beats a --drop of an id it was made from. Text inside a commandeck
+marked block in an --against file is the plugin's own, so it never counts
+as the owner's. An --against rules file whose frontmatter names `paths:` loads only for those
 paths, so it counts for nothing, and so does one whose frontmatter this does
 not read for sure (an indented key, a list, anything odd); of a
 main-session.md only the part above "## Details (not injected)" loads, so
@@ -105,6 +106,21 @@ def rid(lines):
     return hashlib.sha1(norm(lines).encode()).hexdigest()[:8]
 
 
+# A reworded rule gets a new id, and an owner's saved --drop names the old one. Each new id here is left
+# out when every id it was made from is (a duplicate rule beats a lost one), unless the owner kept it by its
+# own id: that answer is newer. Add a line per reworded rule.
+MADE_FROM = {
+    # 0.7.2 main-session.md
+    "607f18a2": ("18cd2c62", "8fc96d58"), "06c5d1a6": ("58d81ff4", "8fc96d58"), "1cf7c669": ("1f85d44e",),
+    "2fac1916": ("57eadb12",), "f949bcf5": ("32d46d9b",), "8aa8b56d": ("c99218c7",), "0c39c843": ("f0729b8f",),
+    "8ecde936": ("00709c21",), "0a0832e3": ("f0558144",),
+}
+
+
+def dropped(i, drop, keep):
+    return i not in keep and (i in drop or (i in MADE_FROM and all(dropped(o, drop, keep) for o in MADE_FROM[i])))
+
+
 def parse(text):
     """[(kind, lines)]: kind is h (heading), u (a rule) or b (a blank line)."""
     out, cur, fence = [], None, False
@@ -145,12 +161,12 @@ def parse(text):
 def main(argv):
     if not argv or (argv[0].startswith("-") and argv[0] != "-"):
         sys.exit(__doc__)
-    template, against, exclude, drop, mode, block = argv[0], [], [], set(), "text", False
+    template, against, exclude, drop, keep, mode, block = argv[0], [], [], set(), set(), "text", False
     i = 1
     while i < len(argv):
         a = argv[i]
-        if a in ("--against", "--exclude", "--drop") and i + 1 < len(argv):
-            {"--against": against.append, "--exclude": exclude.append, "--drop": drop.add}[a](argv[i + 1])
+        if a in ("--against", "--exclude", "--drop", "--keep") and i + 1 < len(argv):
+            {"--against": against.append, "--exclude": exclude.append, "--drop": drop.add, "--keep": keep.add}[a](argv[i + 1])
             i += 2
         elif a in ("--report", "--units", "--sources"):
             mode = a[2:]
@@ -204,7 +220,7 @@ def main(argv):
         if kind == "u" and norm(lines) in theirs:
             gone.add(j)
             same.append((theirs[norm(lines)], lines))
-        elif kind == "u" and rid(lines) in drop:
+        elif kind == "u" and dropped(rid(lines), drop, keep):
             gone.add(j)
             mine.append(lines)
     if mode == "report":

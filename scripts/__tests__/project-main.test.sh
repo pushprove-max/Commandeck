@@ -26,6 +26,15 @@ check "a stand-in project is not paired with a real project's worktrees folder o
   "$(resolve HOME=/nonexistent-home COMMANDECK_MAIN="$T/samename/one" | cut -d' ' -f1)"
 check "a stand-in project with its worktrees folder under the temp folder is followed" "$T/samename/one $T/home/orca/workspaces/one" \
   "$(resolve HOME="$T/home" COMMANDECK_MAIN="$T/samename/one")"
+# Consumers compare "$PP_WORKSPACES/..." as text with the paths Orca and the transcripts
+# report: a trailing / or /. left in it made that "//" or "/./" and matched nothing. Nothing
+# else is respelled (a link or .. too), or Orca's spelling of the same folder stops matching.
+# COMMANDECK_MAIN is kept as given: the install manifest and the scratch folder are keyed by it.
+spell() { ( cd "$T/one" && env -u CLAUDE_PROJECT_DIR COMMANDECK_MAIN="$1" COMMANDECK_WORKSPACES="$2" bash -c '. "$0" && pp_main_resolve && printf "%s %s" "$PP_MAIN" "$PP_WORKSPACES"' "$REAL/scripts/project-main.sh" ); }
+ln -s "$T" "$T/link"
+check "trailing slashes on the worktrees folder are dropped, COMMANDECK_MAIN's are kept" "$T/one/ $T/ws" "$(spell "$T/one/" "$T/ws//")"
+check "a trailing /. on the worktrees folder is dropped, COMMANDECK_MAIN's is kept" "$T/one/. $T/ws" "$(spell "$T/one/." "$T/ws/./")"
+check "a link's spelling of both is kept" "$T/link/one $T/link/ws" "$(spell "$T/link/one" "$T/link/ws")"
 
 # #99: builder-launch.sh branches only from a main fast-forwarded from origin (pp_sync_main);
 # a release marked published on origin and not fetched was rebuilt as a draft.

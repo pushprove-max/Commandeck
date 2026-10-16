@@ -374,17 +374,17 @@ il_rules_against() {
     jq -r '.claudeMdExcludes[]? | strings | "--exclude", .' "$f" 2>/dev/null || true; done
   for f in "$PP_MAIN/CLAUDE.md" "$PP_MAIN"/.claude/rules/*.md; do [ ! -f "$f" ] || printf -- '--against\n%s\n' "$f"; done
 }
-# il_own <manifest> <owner's file> <plugin template> <replace|merge|skip|''> [drop id...] -- the owner's
+# il_own <manifest> <owner's file> <plugin template> <replace|merge|skip|''> [--drop|--keep <id>]... -- the owner's
 # own AGENT_STARTUP.md or .claude/main-session.md, which the session hook loads instead of the plugin's.
 # replace changes no file: the answer, saved in the config (ownFiles), has the hook load the plugin's
 # version; merge adds, in a marked block, the plugin's rules it lacks (merge-rules.py: exact matches
-# against it; the drop ids are rules the owner keeps their own wording for); skip, or no answer, leaves it
+# against it; --drop and --keep are the owner's answers by rule id); skip, or no answer, leaves it
 # as it is. A merge into main-session.md goes ahead of the owner's "## Details (not injected)" heading, which
 # ends what the hook loads, and only the part above it counts as the owner's. The block is committed and each
 # seat's settings may exclude other project rules, so the session hook, not setup, leaves out of it what the
 # project's CLAUDE.md and .claude/rules/ state for the seat it starts (the plan says so).
 il_own() {
-  local m=$1 f=$2 t=$3 c=$4 a=() d body rest n
+  local m=$1 f=$2 t=$3 c=$4 a=() body rest n
   shift 4
   [ -f "$f" ] || return 0
   # A merge block an earlier run added comes out on any other answer.
@@ -395,7 +395,7 @@ il_own() {
       # main-session.md's first line is its persona and its Details stay on disk: neither is a rule to add.
       if [ "${f##*/}" = main-session.md ]; then body=$(tail -n +2 "$t" | awk '/^## Details \(not injected\)/ {exit} 1')
       else body=$(cat "$t"); fi
-      for d; do a+=(--drop "$d"); done
+      a=("$@")
       [ -z "${IL_PLAN:-}" ] || python3 "$IL_ROOT/scripts/merge-rules.py" - --against "$f" ${a[@]+"${a[@]}"} --report <<<"$body" | sed "s|^|plan: $f: |"
       # The block keeps the plugin's own scripts/... paths: the file is committed, and the session hook
       # writes this machine's plugin folder into the block as it loads it.

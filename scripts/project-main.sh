@@ -81,6 +81,10 @@ pp_main_resolve() {
     fi
   fi
   m=${COMMANDECK_MAIN:-} w=${COMMANDECK_WORKSPACES:-}
+  # Consumers compare "$PP_WORKSPACES/..." as text with Orca's and the transcripts' paths, so a trailing / or /.
+  # goes; no other respelling (a link, a ..), or Orca's spelling stops matching. COMMANDECK_MAIN stays as given:
+  # the install manifest and the scratch folder are keyed by its spelling.
+  while :; do case $w in */) w=${w%/} ;; */.) w=${w%/.} ;; *) break ;; esac; done
   if [ -n "$own" ]; then
     [ -z "$w" ] || [ "$(pp_real "$w")" = "$ownws" ] || pp_fixture "$w" "$own" || w=
     [ -z "$m" ] || pp_fixture "$m" "$own" || m=
