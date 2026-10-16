@@ -63,6 +63,16 @@ check "a nested substitution's search after cd .. blocks" 2 \
   "$(run_hook "$(json 'cd hooks; X=$(cd ..; echo "$(rg foo .)")')")"
 check "a nested substitution's search after cd into a folder passes" 0 \
   "$(run_hook "$(json 'X=$(cd hooks; echo "$(rg foo .)")')")"
+# Every path is judged by `realpath -m`. A Mac's own realpath (first on a bare
+# /usr/bin:/bin PATH) has no -m: the search is refused by that cause, never
+# called an unbounded path the agent cannot fix by naming another one.
+mkdir -p "$READ_TMP/bin"
+printf '#!/bin/sh\necho "realpath: illegal option -- m" >&2\nexit 1\n' >"$READ_TMP/bin/realpath"; chmod +x "$READ_TMP/bin/realpath"
+for C in 'rg foo src' 'rg foo ..' 'rg foo $HOME'; do
+  OUT=$(cd "$MAIN_TMP" && json "$C" | PATH="$READ_TMP/bin:$PATH" "$HOOK" 2>&1 >/dev/null; echo "rc=$?")
+  check "with no working realpath -m, '$C' is refused and names realpath" "rc=2 1" \
+    "${OUT##*$'\n'} $(case "$OUT" in *'realpath -m'*) echo 1 ;; *) echo 0 ;; esac)"
+done
 # A here-document fed to a shell through process substitution is run, not written.
 check "a here-document piped to bash through >( ) is judged as commands" 2 \
   "$(run_hook "$(json $'cat > >(bash) <<\'EOF\'\nrg -n foo\nEOF')")"

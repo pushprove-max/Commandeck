@@ -273,7 +273,8 @@ search_bounded() {
     /*) P=$OP ;;
     *) [ -n "$SEARCH_BASE" ] || return 1; P=$SEARCH_BASE/$OP ;;
   esac
-  P=$(realpath -m -- "$P" 2>/dev/null) || return 1
+  # GNU realpath never fails under -m, so a failure is a realpath that cannot judge any path.
+  P=$(realpath -m -- "$P" 2>/dev/null) || { echo "BLOCKED: realpath -m failed (a realpath without -m, such as the Mac's own, is first on this hook's PATH), so no search path can be judged. Put GNU realpath first: brew install coreutils, or run /commandeck:setup." >&2; exit 2; }
   root_like "$P" && return 1
   case "$P" in *[*?[]*)
     while IFS= read -r M; do root_like "$(realpath -m -- "$M")" && return 1; done < <(compgen -G "$P")

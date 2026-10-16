@@ -39,5 +39,6 @@ The page numbers its lessons L1, L2, ... in the order you write them. Refer to a
    python3 <plugin>/skills/worktreereview/scripts/render.py <scratch>/result.json <scratch>/notes.json <out.html>
    ```
 3. Check each figure in your lessons against the rendered tables, fix `notes.json` and render again
-   if one is wrong.
+   if one is wrong. The page computes the "Where it could shrink" items, so the first render may
+   list some under "Not reviewed yet": add a `shrink_review` entry for each and render again.
 4. Your last line is the page's path, and nothing after it.

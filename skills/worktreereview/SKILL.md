@@ -72,6 +72,8 @@ It reads logs only, so it works after main has removed the worktree:
    python3 ${CLAUDE_PLUGIN_ROOT}/skills/worktreereview/scripts/render.py <result.json> <notes.json> <out.html>
    ```
    Every figure you quote in a lesson must match the page's tables. Recompute, do not recall.
+   The page computes the "Where it could shrink" items, so the first render may list some under
+   "Not reviewed yet": add a `shrink_review` entry for each and render again.
 
 7. **File it** where your role files reports for the owner and add the index line.
 

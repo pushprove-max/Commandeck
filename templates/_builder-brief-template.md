@@ -11,6 +11,8 @@ merges with `merge-unit-local.sh {unit}`.
 ## How to work
 
 - `/ponytail full`: the smallest complete change.
+- In your first turn, open this brief and every file it names, together; after that, send
+  every look whose inputs you already know in one turn.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one

@@ -200,6 +200,10 @@ check('the skill asks for the marks, drafts the uncovered items, and asks the st
       ['`shrink_review`' in skill, 'each "Where it could shrink" item the page marks uncovered, becomes a draft issue' in skill,
        'is there a library, a shared helper or a cached step that would significantly speed up builds like this one?' in skill])
 check('a page with no written lessons carries no review list', False, 'Each item against the open issues' in page_with({}))
+# The items exist only once the page is rendered, so a writer that marks before rendering leaves them all unreviewed.
+handoff = ' '.join(open(f'{HERE}/../writer-handoff.md').read().split())
+check('the skill and the writer mark each item the first render leaves unreviewed, then render again', [True] * 2,
+      ['"Not reviewed yet": add a `shrink_review` entry for each and render again' in t for t in (skill, handoff)])
 
 # --- A cut takes its seconds off every part of a duration, not only the whole: else the page shows
 # a helper working after its time was cut, or a Codex pass whose commands outlast it. ---

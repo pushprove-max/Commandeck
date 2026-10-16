@@ -35,14 +35,17 @@ over=0
 # agent-awareness.sh prints a state once and remembers it: each seat gets an
 # empty memory of its own, never the owner's, so every seat is measured whole.
 measure() { # role
-  local dir=$T/unit builder= cmd name bytes rc total=0
+  local dir=$T/unit builder= cmd name bytes rc total=0 proj=$ROOT
   case $1 in main) dir=$T/main ;; chief-of-staff) dir=$T/Chief-of-Staff ;; builder) builder=1 ;; esac
+  # A per-prompt hook judges the seat by its own folder (agent-awareness.sh exits in a linked
+  # worktree); a startup hook reads the project's files, which only the real checkout holds.
+  [ "$EVENT" = SessionStart ] || [ "$1" = main ] || proj=$dir
   while IFS= read -r cmd; do
     name=${cmd##*/hooks/}; name=${name%%\"*}
     # A hook that fails has no size: 0 bytes from it would pass the line it was never held to.
     rc=0
     (cd "$dir" && jq -cn --arg e "$EVENT" --arg d "$dir" '{hook_event_name: $e, source: "startup", prompt: "status?", session_id: "startup-size", cwd: $d}' \
-      | CLAUDE_PROJECT_DIR=$ROOT COMMANDECK_BUILDER=$builder COMMANDECK_HOOK_FIRE_LOG=/dev/null COMMANDECK_RULING_LOG=$T/rulings.jsonl COMMANDECK_AWARENESS_DIR=$T/awareness-$1 COMMANDECK_SCRATCH=$T/scratch-$1 COMMANDECK_MEASURE=1 \
+      | CLAUDE_PROJECT_DIR=$proj COMMANDECK_BUILDER=$builder COMMANDECK_HOOK_FIRE_LOG=/dev/null COMMANDECK_RULING_LOG=$T/rulings.jsonl COMMANDECK_AWARENESS_DIR=$T/awareness-$1 COMMANDECK_SCRATCH=$T/scratch-$1 COMMANDECK_MEASURE=1 \
         bash -c "$cmd" >"$T/out" 2>/dev/null) || rc=$?
     [ "$rc" = 0 ] || { echo "startup-size: $name failed as $1 (exit $rc), so its size is not known" >&2; over=1; }
     bytes=$(wc -c <"$T/out" | tr -d ' ')

@@ -65,8 +65,12 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   if [ -n "$late" ]; then
     out+="Orca state NOT CHECKED (no answer in 20s):$late -- the lists below may be missing live work\n\n"; ALWAYS=1
   fi
-  wts=$(jq -r '
-    .result.worktrees[]? | select(.isMainWorktree != true)
+  # Orca lists every repo's worktrees; only this project's are main's to verify.
+  # A worktrees folder named with trailing slashes still names the same folder.
+  wts=$(jq -r --arg ws "$PP_WORKSPACES" '
+    ($ws | sub("/+$"; "")) as $ws
+    | .result.worktrees[]? | select(.isMainWorktree != true)
+    | select(.path | startswith($ws + "/"))
     | select(.isArchived != true)
     | "  \(.displayName) [\(.branch | sub("^refs/heads/";""))] status=\(.workspaceStatus) terminals=\(.liveTerminalCount // 0)"
       + ((.agents // []) | map(" orca-says=\(.agentType):\(.state)") | join(""))' <"$OT/wts" 2>/dev/null)

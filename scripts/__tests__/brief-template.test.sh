@@ -13,6 +13,7 @@ PASS=0 FAIL=0
 check() { if grep -qF -- "$2" <<<"$BODY"; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (no \"$2\")"; fi }
 # One line per paragraph, so a rule wrapped across lines is still one string.
 BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$T" | sed -E 's/ +/ /g')
+check "the first turn opens the brief and its files together, and later looks are batched" "In your first turn, open this brief and every file it names, together; after that, send every look whose inputs you already know in one turn."
 check "a red hang test sets its own short timeout" "A red test that shows a hang sets its own short timeout"
 check "each evidence heading is written the moment its item turns green (#90)" "The moment an item's test turns green, add its section to the evidence file: \`## #<issue> <title>\`, then the guarding test name and file on the next line."
 check "a changed setting keeps reading the deployed format" "keeps reading the format already deployed from its first commit, and has a test that the release accepts the deployed format"
