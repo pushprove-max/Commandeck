@@ -382,7 +382,7 @@ il_rules_against() {
 # as it is. A merge into main-session.md goes ahead of the owner's "## Details (not injected)" heading, which
 # ends what the hook loads, and only the part above it counts as the owner's. The block is committed and each
 # seat's settings may exclude other project rules, so the session hook, not setup, leaves out of it what the
-# project's CLAUDE.md and .claude/rules/ state for the seat it starts (the plan shows main's count).
+# project's CLAUDE.md and .claude/rules/ state for the seat it starts (the plan says so).
 il_own() {
   local m=$1 f=$2 t=$3 c=$4 a=() d body rest n
   shift 4
@@ -400,10 +400,7 @@ il_own() {
       # The block keeps the plugin's own scripts/... paths: the file is committed, and the session hook
       # writes this machine's plugin folder into the block as it loads it.
       body=$(python3 "$IL_ROOT/scripts/merge-rules.py" - --against "$f" ${a[@]+"${a[@]}"} <<<"$body") || return 1
-      if [ -n "${IL_PLAN:-}" ]; then
-        while IFS= read -r d; do a+=("$d"); done < <(il_rules_against)
-        python3 "$IL_ROOT/scripts/merge-rules.py" - ${a[@]+"${a[@]}"} --report <<<"$body" | sed "s|^|plan: $f: when main starts, of the block: |"
-      fi
+      [ -z "${IL_PLAN:-}" ] || echo "plan: $f: main's sessions also drop any plugin rule your rule files already state."
       rest=$(il_cat "$f" | awk -v b="<!-- commandeck:merge:begin -->" -v e="<!-- commandeck:merge:end -->" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }')
       n=$(grep -n -m1 '^## Details (not injected)' <<<"$rest" | cut -d: -f1) || n=
       if [ -n "$n" ]; then

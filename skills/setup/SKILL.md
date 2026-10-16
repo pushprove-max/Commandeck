@@ -144,8 +144,8 @@ Ask them in this order, up to four questions per call.
     - On: the ponytail skill (/ponytail), smallest-change coding rules; costs nothing until asked for. `--ponytail`
     - Off: not installed; a copy an earlier setup installed is removed. `--no-ponytail`
     Then, how long Claude keeps a conversation's prompt cache:
-    Ask "Prompt cache": 1h and 5m (recommended) | Leave default
-    - 1h and 5m: main and Claude panes 1 hour, subagents 5 minutes, in `.claude/settings.json`; on real transcripts 5 minutes cost main about 19% more, and 1 hour cost subagents about 8% more. `--cache-ttl recommended`
+    Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default
+    - 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`
     - Leave default: writes nothing; Claude Code picks (and a value an earlier setup wrote is taken out). `--cache-ttl default`
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": serena (recommended) | codebase-memory | agent-browser | None

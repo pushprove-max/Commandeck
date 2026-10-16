@@ -129,8 +129,11 @@ if [ "$QUESTIONS" = begin ]; then
   done
   # What main loads; each seat leaves out what its own rules state when it starts (the session hook).
   A=(); while IFS= read -r d; do A+=("$d"); done < <(il_rules_against)
-  R=$(python3 "$IL_ROOT/scripts/merge-rules.py" /dev/null ${A[@]+"${A[@]}"} --sources | sed "s|^$PP_MAIN/||" | paste -sd' ' -)
-  [ -z "$R" ] || echo "  your project rules: $R (with --rules merge, of the plugin's startup rules: $(python3 "$IL_ROOT/scripts/merge-rules.py" "$IL_ROOT/templates/AGENT_STARTUP.md" "${A[@]}" --report | head -1); of its main-session rules: $(python3 "$IL_ROOT/scripts/merge-rules.py" "$IL_ROOT/templates/main-session.md" "${A[@]}" --report | head -1))"
+  R=$(python3 "$IL_ROOT/scripts/merge-rules.py" /dev/null ${A[@]+"${A[@]}"} --sources | sed "s|^$PP_MAIN/||" | paste -sd, - | sed 's/,/, /g')
+  if [ -n "$R" ]; then
+    N=$(for t in AGENT_STARTUP.md main-session.md; do python3 "$IL_ROOT/scripts/merge-rules.py" "$IL_ROOT/templates/$t" "${A[@]}" --report; done | grep -c '^  already in ') || true
+    echo "  your project rules: $R. Merging leaves out the $N plugin rule$([ "$N" = 1 ] || echo s) you already have."
+  fi
   [ ! -s "$IL_GLOBAL" ] || echo "  your global rules: $IL_GLOBAL (install writes nothing into it: offer merge, block or skip)"
   [ -z "${SERENA_AUTO:-}" ] || echo "  a serena server is configured: setup turns serena on unless told --no-serena"
   if req_check setup claude-openai >/dev/null 2>&1; then echo "  Codex reviewer: ready"

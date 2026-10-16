@@ -101,6 +101,8 @@ check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in p
 # A first-time owner sees which answer to take: one option of every question is marked, and a
 # question is titled in words, never by a rule's hash.
 check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS"; grep '(recommended).*(recommended)' <<<"$ASKS")"
+# The recommended cache answer must not read as the one that costs more.
+check "the prompt-cache question says the recommended mix cost least" '1:1' "$(grep -cxF '    Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default' "$SETUP"):$(grep -cF -- '- 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`' "$SETUP")"
 check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a-f]{8})"' <<<"$ASKS")"
 
 echo "$PASS passed, $FAIL failed"

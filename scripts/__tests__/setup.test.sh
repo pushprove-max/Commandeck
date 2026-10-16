@@ -235,7 +235,7 @@ ASK=(--own-startup merge --own-main-session replace --rules merge --global-rules
 
 run "$P2" setup.sh --questions begin >"$T/out" 2>&1
 check "--questions begin names the owner's own files and rules, and suspends the decoy" '0:1:1:1:1' \
-  "$?:$(grep -c '^  your own AGENT_STARTUP.md: it loads instead' "$T/out"):$(grep -c '^  your own .claude/main-session.md' "$T/out"):$(grep -c '^  your project rules: .claude/rules/house.md' "$T/out"):$([ -s "$Q" ] && echo 1)"
+  "$?:$(grep -c '^  your own AGENT_STARTUP.md: it loads instead' "$T/out"):$(grep -c '^  your own .claude/main-session.md' "$T/out"):$(grep -cx '  your project rules: .claude/rules/house.md\. Merging leaves out the 1 plugin rule you already have\.' "$T/out"):$([ -s "$Q" ] && echo 1)"
 # What it prints is read to the owner: plain words, and the context window when a model setting names it.
 check "--questions begin says nothing of a decoy" 0 "$(grep -ci decoy "$T/out")"
 ANTHROPIC_MODEL='opus[1m]' run "$P2" setup.sh --questions begin >"$T/out" 2>&1
@@ -397,6 +397,11 @@ for fm in $'"trigger": "always_on"\n"paths": [docs/**]' '  paths: [docs/**]' $'d
 done
 printf -- '---\npaths: [docs/**]\n\n%s\n' "$S1" > "$P4/.claude/rules/docs.md"
 check "a rules file whose frontmatter never closes stands in for no plugin rule" 1 "$(CTX4 "$P4" | grep -cxF -- "$S1")"
+# Rules that share no plugin rule: a count of 0 must not stop setup (grep -c finds nothing).
+printf '# Ours\n\n- Run make before you push.\n' > "$P4/.claude/rules/docs.md"
+run "$P4" setup.sh --questions begin >"$T/out" 2>&1
+check "--questions begin counts no plugin rule your rules lack" '0:1' "$?:$(grep -cx '  your project rules: .claude/rules/docs.md\. Merging leaves out the 0 plugin rules you already have\.' "$T/out")"
+run "$P4" setup.sh --questions end >/dev/null 2>&1
 rm "$P4/.claude/rules/docs.md"; printf '# House\n\n%s\n\n%s\n' "$S1" "$M1" > "$P4/.claude/rules/house.md"
 # An exclude is a glob as Claude Code reads it: ** spans no folder too, so it takes a direct child.
 n=0
@@ -414,7 +419,8 @@ printf '# Ours\n\n- Run make before you push.\n' > "$P4/AGENT_STARTUP.md"
 printf 'Our persona.\n\n## Details (not injected)\n\nLong notes.\n' > "$P4/.claude/main-session.md"
 git -C "$P4" add AGENT_STARTUP.md .claude/main-session.md .claude/rules && git -C "$P4" -c user.name=t -c user.email=t@t commit -qm own
 run "$P4" setup.sh "${ANSWERS[@]}" --rules merge --own-startup merge --own-main-session merge --plan >"$T/out" 2>&1
-check "the plan says what main leaves out of each merged block when it starts" '0:2' "$?:$(grep -c 'when main starts, of the block: .*, 1 already in your files' "$T/out")"
+# One plain line per merged block, not a third count in a row.
+check "the plan says main's sessions leave out of each merged block what the rule files state" '0:2:0' "$?:$(grep -c ": main's sessions also drop any plugin rule your rule files already state\.$" "$T/out"):$(grep -c 'when main starts' "$T/out")"
 run "$P4" setup.sh "${ANSWERS[@]}" --rules merge --own-startup merge --own-main-session merge >"$T/out" 2>&1; R1=$?
 git -C "$P4" add AGENT_STARTUP.md .claude/main-session.md && git -C "$P4" -c user.name=t -c user.email=t@t commit -qm merged
 check "main, which loads the house rules, gets neither plugin rule they state twice" '0:0:0' "$R1:$(CTX4 "$P4" | grep -cxF -- "$S1"):$(CTX4 "$P4" | grep -cxF -- "$M1")"
