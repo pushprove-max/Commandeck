@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.1 -- 2026-10-16
+
+- `scripts/platform-audit/run-audit.sh` runs its verifiers under bash 5.2 (ubuntu CI) too: bash 5.2 could not re-read
+  `verify.sh`'s per-area function, so no verifier ran and every audit failed.
+
 ## 0.11.0 -- 2026-10-16
 
 - Breaking: `builder-launch.sh` refuses a batch brief with no `## Prior art` section, a brief written before 0.11.0

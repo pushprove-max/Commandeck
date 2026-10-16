@@ -9,10 +9,8 @@ HEADER=$(grep -m1 '^| ID |' "$HERE/PROMPT.template.md")
 # run-audit.sh takes a nonempty output as a finished audit, so a failed auditor leaves none: not a partial file,
 # not one from an earlier run in the same folder, nor one without the template's sections. Any failed area fails
 # this script.
-one() {
-  IFS=$'\t' read -r id desc paths standards <<<"$1"
-  rm -f "$A/out/$id.md"
-  python3 - "$HERE/PROMPT.template.md" "$id" "$desc" "$paths" "$standards" "$COMMIT" "$A/src" > "$A/out/$id.prompt.md" <<'PY'
+# Fills the prompt template, outside one() as verify.sh's check is: no here-document in an exported function.
+read -r -d '' FILL <<'PY' || true
 import sys
 tpl, i, d, p, s, c, src = sys.argv[1:]
 t = open(tpl).read()
@@ -20,6 +18,10 @@ for k, v in {'SLICE': i, 'DESC': d, 'PATHS': p, 'STANDARDS': s, 'COMMIT': c, 'SR
     t = t.replace('{{%s}}' % k, v)
 print(t)
 PY
+one() {
+  IFS=$'\t' read -r id desc paths standards <<<"$1"
+  rm -f "$A/out/$id.md"
+  python3 -c "$FILL" "$HERE/PROMPT.template.md" "$id" "$desc" "$paths" "$standards" "$COMMIT" "$A/src" > "$A/out/$id.prompt.md"
   rc=$?
   if [ "$rc" = 0 ]; then
     local -a auditor; mapfile -t auditor <<<"$AUDITOR_ARGV"
@@ -44,7 +46,7 @@ PY
   echo "$id exit=$rc $(wc -c < "$A/out/$id.md" 2>/dev/null || echo 0) bytes $(date +%H:%M)"
   return "$rc"
 }
-export -f one; export A HERE COMMIT AUDITOR_ARGV HEADER
+export -f one; export A HERE COMMIT AUDITOR_ARGV HEADER FILL
 # NUL-separated, no -I: xargs reads no quotes in a row and caps no row's length.
 grep -v '^\s*$' "$A/slices.tsv" | tr '\n' '\0' | xargs -0 -n 1 -P 5 bash -c 'one "$1"' _
 echo ALL-DONE

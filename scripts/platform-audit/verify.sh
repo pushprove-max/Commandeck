@@ -8,18 +8,9 @@ A=${A:?run-audit.sh sets A} HERE=${HERE:?run-audit.sh sets HERE} VERIFIER_ARGV=$
 COMMIT=$(cat "$A/commit.txt")
 # As in run.sh: a failed verifier leaves no output, nor one without the counts line or a row for each finding,
 # and an area whose audit failed gets no verifier.
-one() {
-  id=$1
-  d="$A/vrun/$id"; mkdir -p "$d"
-  rm -f "$A/verify/$id.md"
-  [ -s "$A/out/$id.md" ] || { echo "$id skipped: no audit output"; return 1; }
-  sed -e "s#{{SLICE}}#$id#g" -e "s#{{COMMIT}}#$COMMIT#g" -e "s#{{A}}#$A#g" "$HERE/VERIFY.template.md" > "$d/PROMPT.md"
-  local -a verifier; mapfile -t verifier <<<"$VERIFIER_ARGV"
-  (cd "$d" && env "${verifier[@]}" "Read $d/PROMPT.md and do exactly what it says." \
-    --setting-sources "" --disable-slash-commands --strict-mcp-config --no-session-persistence \
-    --tools Read,Grep,Glob --allowedTools Read,Grep,Glob --add-dir "$A" --output-format json > "$A/vlogs/$id.json" 2>&1)
-  rc=$?
-  [ "$rc" != 0 ] || python3 - "$A/out/$id.md" "$A/vlogs/$id.json" "$A/verify/$id.md" <<'PY' || rc=1
+# The verdict check, outside one(): bash 5.2 cannot re-read an exported function whose here-document is followed by
+# `||`, so xargs children would get no one().
+read -r -d '' CHECK <<'PY' || true
 import json, re, sys
 audit, log, out = sys.argv[1:]
 v = json.load(open(log)).get('result') or ''
@@ -48,10 +39,22 @@ if bad or not got or tuple(map(int, got.groups())) != (n['CONFIRMED'], n['PARTLY
              f'confirmed={n["CONFIRMED"]} partly={n["PARTLY"]} refuted={n["REFUTED"]} duplicates={n["dup"]}')
 open(out, 'w').write(v)
 PY
+one() {
+  id=$1
+  d="$A/vrun/$id"; mkdir -p "$d"
+  rm -f "$A/verify/$id.md"
+  [ -s "$A/out/$id.md" ] || { echo "$id skipped: no audit output"; return 1; }
+  sed -e "s#{{SLICE}}#$id#g" -e "s#{{COMMIT}}#$COMMIT#g" -e "s#{{A}}#$A#g" "$HERE/VERIFY.template.md" > "$d/PROMPT.md"
+  local -a verifier; mapfile -t verifier <<<"$VERIFIER_ARGV"
+  (cd "$d" && env "${verifier[@]}" "Read $d/PROMPT.md and do exactly what it says." \
+    --setting-sources "" --disable-slash-commands --strict-mcp-config --no-session-persistence \
+    --tools Read,Grep,Glob --allowedTools Read,Grep,Glob --add-dir "$A" --output-format json > "$A/vlogs/$id.json" 2>&1)
+  rc=$?
+  [ "$rc" != 0 ] || python3 -c "$CHECK" "$A/out/$id.md" "$A/vlogs/$id.json" "$A/verify/$id.md" || rc=1
   [ "$rc" = 0 ] || rm -f "$A/verify/$id.md"
   echo "$id exit=$rc $( [ -s "$A/verify/$id.md" ] && wc -c < "$A/verify/$id.md" || echo MISSING) $(date +%H:%M)"
   return "$rc"
 }
-export -f one; export A HERE COMMIT VERIFIER_ARGV
+export -f one; export A HERE COMMIT VERIFIER_ARGV CHECK
 cut -f1 "$A/slices.tsv" | grep -v '^\s*$' | tr '\n' '\0' | xargs -0 -n 1 -P 4 bash -c 'one "$1"' _
 echo ALL-DONE

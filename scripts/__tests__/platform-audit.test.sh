@@ -237,6 +237,9 @@ check "a routing file with no audit-auditor role fails before any agent runs" "2
 for s in run verify; do
   A=/dev/null HERE=$D AUDITOR_ARGV=codex VERIFIER_ARGV=claude bash "$D/$s.sh" > /dev/null 2>&1
   check "$s.sh with a scratch folder it cannot read fails" 1 "$([ $? -ne 0 ] && echo 1 || echo 0)"
+  # xargs children get `one` through `export -f`; bash 5.2 (ubuntu CI) cannot re-read an exported function whose
+  # here-document is followed by `||`, so every child failed there with `one: command not found`.
+  check "$s.sh's exported function holds no here-document" 0 "$(awk '/^one\(\) \{/{f=1} f && /(^|[^<])<<[^<]/{n++} f && /^}/{f=0} END{print n+0}' "$D/$s.sh")"
 done
 
 echo "$PASS passed, $FAIL failed"
