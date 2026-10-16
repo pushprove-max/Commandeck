@@ -50,6 +50,16 @@ merge its rules with yours instead of replacing them.
 - Removed: the hook that refused main a read inside a worker's worktree.
   Restored: the hint that a plugin script answers `--help`, when main reads
   one.
+- The prompt banner lists only this project's Orca worktrees, also when the
+  worktrees folder is named with a trailing slash.
+- The whole-disk search guard refuses, and names realpath, when `realpath -m`
+  does not work, instead of blaming the path.
+- `startup-size.sh` measures each seat in its own folder, so only main's row
+  shows the prompt banner.
+- The Builder brief template asks for the brief and every file it names in the
+  first turn.
+- The worktreereview step marks each item the first render leaves unreviewed,
+  then renders again.
 
 ## 0.6.0 -- 2026-10-15
 
