@@ -275,6 +275,11 @@
       top.append('Total time ', strong(Number.isFinite(t0b) ? span((now - t0b) / 1000) : 'not measured'),
         ' · Cost so far ', strong(cost ? splitOf(cost.total) : cost === null ? 'not measured' : NOT_REC), h('small', null, " · main's own tokens not counted"));
       li.append(top);
+      // Live context against the clear line past which the Builder hands off to a fresh session (a setup answer).
+      const ctx = num(u.builder.context), line = num(Number(u.builder.clearLine)), k = (n) => `${Math.round(n / 1000)}K`;
+      li.append(h('p', `uctx${ctx !== null && line !== null && ctx > line ? ' hot' : ''}`, ctx === null ? 'Context not measured'
+        : u.builder.clearLine === 'off' ? `Context ${k(ctx)}, clear line off` : line === null ? `Context ${k(ctx)}`
+          : ctx > line ? `Context ${k(ctx)}, past the ${k(line)} clear line` : `Context ${k(ctx)} of the ${k(line)} clear line`));
     }
     // A Builder is drawn from its own event log: one badge per signal the state word does not already say.
     const badges = h('p', 'badges');
@@ -1297,7 +1302,10 @@
           aLim === null ? 'no weekly limit set' : `of ${wholeDollars(aLim)}`, 'limit'),
         measure('Week pace', aUnsure ? 'incomplete' : aUnder === null ? null : `${wholeDollars(Math.abs(aUnder))} ${aUnder < 0 ? 'over' : 'under'}`, aUnsure ? 'warn' : aUnder === null ? 'nm' : aUnder < 0 ? 'crit' : 'ok',
           'against the weekly limit', 'limit'),
-      ] : [lim('Claude 7-day', d.limit), lim('Codex 7-day', d.limit && d.limit.codex)]),
+      ] : []),
+      // A 7-day tile only where that provider has a subscription window; a failed or unknown read still shows it.
+      ...(d.limit && d.limit.billing === 'api' ? [] : [lim('Claude 7-day', d.limit)]),
+      ...(d.limit && ['api', 'none'].includes(d.limit.codexBilling) ? [] : [lim('Codex 7-day', d.limit && d.limit.codex)]),
       measure('Cost today', dSpent === null ? null : `${day.complete === false ? 'at least ' : ''}${money(dSpent)}`, dSpent === null ? 'nm' : day.complete === false ? 'warn' : '',
         dSpent === null ? dUnText : [`${dShare('Claude', day.claudeUsd)} + ${dShare('Codex', day.codexUsd)}, list price`, dEst ? `${money(dEst)} estimated` : null,
           dTier ? `${money(dTier)} priced by tier, not exact version` : null,

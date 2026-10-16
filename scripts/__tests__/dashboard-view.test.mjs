@@ -186,7 +186,8 @@ test('the timeline reaches back to a run older than the build start; no start ke
 // #97: a machine on an API base URL (a proxy) has no usage windows: no 5-hour or 7-day figure, one note saying so.
 test('API billing leaves out the usage-window tiles and says why; a subscription keeps them', () => {
   const w = fresh();
-  show(w, { limit: { billing: 'api', api: { spentUsd: 12, complete: true } } });
+  // Codex's tile follows Codex's own sign-in (the next test): none here.
+  show(w, { limit: { billing: 'api', codexBilling: 'none', api: { spentUsd: 12, complete: true } } });
   const doc = w.document;
   assert.ok(!/7-day/.test(text(doc.getElementById('summary'))), 'no 7-day tile in the top strip');
   // The chart legend's 5-hour key is .sub-only, which the card's api class hides.
@@ -197,6 +198,28 @@ test('API billing leaves out the usage-window tiles and says why; a subscription
   show(v, { limit: { billing: 'subscription', usedPct: 40, fiveHour: { usedPct: 10 } } });
   assert.match(text(v.document.getElementById('summary')), /Claude 7-day/);
   assert.match(text(v.document.getElementById('limit-facts')), /5-hour/);
+});
+
+// A 7-day tile is for a provider used through a subscription, the only case with a 7-day window: elsewhere it
+// was a dead "not measured" box. Claude's follows its billing, Codex's its sign-in; a failed read on a
+// subscription, or a sign-in that could not be read, still shows the tile as not measured, never hides it.
+test('each 7-day tile shows only on a subscription; a failed read there still shows it, not measured', () => {
+  const strip = (limit) => { const w = fresh(); show(w, { limit }); return w.document.getElementById('summary'); };
+  const tile = (el, name) => [...el.querySelectorAll('.measure')].find((m) => text(m).startsWith(name)) || null;
+  let s = strip({ billing: 'api', codexBilling: 'api', api: { spentUsd: 12, complete: true } });
+  assert.equal(tile(s, 'Claude 7-day'), null, 'API-billed Claude: no Claude tile');
+  assert.equal(tile(s, 'Codex 7-day'), null, 'Codex on an API key: no Codex tile');
+  s = strip({ billing: 'api', codexBilling: 'none' });
+  assert.equal(tile(s, 'Claude 7-day'), null, 'API billing with no API figures yet: still no Claude tile');
+  assert.equal(tile(s, 'Codex 7-day'), null, 'no Codex sign-in: no Codex tile');
+  s = strip({ billing: 'subscription', usedPct: 40, codexBilling: 'subscription', codex: { usedPct: 20 } });
+  assert.match(text(tile(s, 'Claude 7-day')), /40%/, 'subscription with a reading: unchanged');
+  assert.match(text(tile(s, 'Codex 7-day')), /20%/);
+  s = strip({ billing: 'subscription', usedPct: null, codexBilling: 'subscription', codex: { usedPct: null } });
+  assert.ok(tile(s, 'Claude 7-day').classList.contains('nm'), 'a failed Claude read on a subscription: shown, not measured');
+  assert.ok(tile(s, 'Codex 7-day').classList.contains('nm'), 'a failed Codex read on a subscription: shown, not measured');
+  s = strip({ billing: 'api', codexBilling: null, api: { spentUsd: 12, complete: true } });
+  assert.ok(tile(s, 'Codex 7-day').classList.contains('nm'), 'a Codex sign-in that could not be read: shown, not measured');
 });
 
 const pr = (n, over) => ({ number: n, title: `PR ${n}`, url: `${REPO}/pull/${n}`, draft: false, branch: `work/b${n}`, review: 'APPROVED', mergeable: 'MERGEABLE', mergeState: 'CLEAN',
@@ -420,6 +443,15 @@ test('a unit card keeps Stage and its figures in view and folds the activity row
 // Every finished Codex pass names its own verdict in the stage list, read from its own
 // round file (builder.verdicts, by round); a pass still running says so, and one with no round file names none.
 const judged = (hist, verdicts) => { const u = costed(hist, hist.map(() => tally(0.5)), tally(3, { sec: 6000 })); u.builder.verdicts = verdicts; return u; };
+test("a Builder's card shows its live context against its clear line; past it, off and not measured each say so", () => {
+  const ctx = (over) => { const w = fresh(); show(w, { units: { inFlight: [builder({ builder: { ...builder().builder, ...over } })] } });
+    const el = w.document.querySelector('#units li.unit .uctx'); return [text(el), el.classList.contains('hot')]; };
+  assert.deepEqual(ctx({ context: 150000, clearLine: '180000' }), ['Context 150K of the 180K clear line', false]);
+  assert.deepEqual(ctx({ context: 191000, clearLine: '180000' }), ['Context 191K, past the 180K clear line', true]);
+  assert.deepEqual(ctx({ context: 150000, clearLine: 'off' }), ['Context 150K, clear line off', false]);
+  assert.deepEqual(ctx({}), ['Context not measured', false]);
+});
+
 test('every finished Codex pass in the stage list reads its own round\'s verdict; a running one reads running', () => {
   const w = fresh(Fixed);
   const hist = [stage('building', 100, 12), { ...stage('review', 12, 10), round: 1 }, stage('fixing', 10, 8), { ...stage('review', 8, 6), round: 2 },

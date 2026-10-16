@@ -154,5 +154,29 @@ printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens"
       COMMANDECK_RESTART_HELPER="$BOX/stub-helper.sh" bash "$HOOK" > "$BOX/carry.out" 2>/dev/null)
 check "no checkpoint: the stop is blocked" block "$(jq -r .decision "$BOX/carry.out" 2>/dev/null)"
 
+# THE BUILDER CLEAR LINE: a Builder pane (a linked worktree with COMMANDECK_BUILDER=1) past setup's
+# builder.clearLine (default 180K; off turns it off) is told at each prompt to hand off to a fresh session:
+# past it a bundled build re-reads a large cached context every turn, and compaction loses detail.
+git -C "$BOX/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
+git -C "$BOX/repo" worktree add -q "$BOX/ws/unit-a" 2>/dev/null
+mkdir -p "$BOX/repo/.claude"
+# builder_line <context tokens> [VAR=value...] -- what the prompt hook says in the Builder's pane.
+builder_line() { printf '{"message":{"usage":{"cache_read_input_tokens":%s,"input_tokens":0}}}\n' "$1" > "$BOX/bt.jsonl"
+  (cd "$BOX/ws/unit-a" && printf '{"session_id":"bs","transcript_path":"%s","prompt":"go on"}' "$BOX/bt.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" ORCA_TERMINAL_HANDLE=builder-pane COMMANDECK_BUILDER=1 "${@:2}" bash "$ROOT/hooks/context-line.sh" 2>&1); }
+OUT=$(builder_line 190000)
+check "a Builder past the default 180K line is told to hand off" 1 "$(grep -c "^CONTEXT 190K is over this Builder's 180K clear line" <<<"$OUT")"
+check "with the handoff file and the command that starts the fresh session in this pane" 1 \
+  "$(grep -c "unit-a-handoff\.md.*builder-fresh-round\.sh builder-pane .*/ws/unit-a/\.claude/briefs/unit-a-handoff\.md" <<<"$OUT")"
+check "under the line it says nothing" "" "$(builder_line 170000)"
+check "a worker pane that is not a Builder is still exempt" "" "$(builder_line 190000 COMMANDECK_BUILDER=)"
+echo '{"builder": {"clearLine": "off"}}' > "$BOX/repo/.claude/commandeck.json"
+check "the line set off: no line at any size" "" "$(builder_line 400000)"
+echo '{"builder": {"clearLine": "150000"}}' > "$BOX/repo/.claude/commandeck.json"
+check "a line set at setup is the one read" 1 "$(builder_line 170000 | grep -c "^CONTEXT 170K is over this Builder's 150K clear line")"
+echo '{"builder": {"clearLine": "lots"}}' > "$BOX/repo/.claude/commandeck.json"
+check "a saved line that is not a token count says so, naming the key" 1 "$(builder_line 190000 | grep -c 'builder.clearLine')"
+rm "$BOX/repo/.claude/commandeck.json"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

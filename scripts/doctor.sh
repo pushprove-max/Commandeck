@@ -47,6 +47,10 @@ elif [ "$(jq -r '.version // empty' "$IL_CONFIG" 2>/dev/null)" != "$IL_VERSION" 
 else
   PROFILE=$(jq -r .profile "$IL_CONFIG")
   ok "config: version $IL_VERSION, $PROFILE profile, strict hooks $(jq -r '.strictHooks // false' "$IL_CONFIG")"
+  # The Builder answers as their readers take them: the launch, the prompt hook, the launch's sizing check.
+  if V=$(pp_route_json builder 2>&1); then ok "builder: $(jq -r '"\(.model) at effort \(.effort)"' <<<"$V") (setup.sh --builder-model, --builder-effort)"; else bad "builder: $(tail -1 <<<"$V")"; fi
+  if V=$(. "$IL_ROOT/hooks/lib/project.sh" && pp_builder_clear_line "$PP_MAIN" 2>&1); then ok "builder clear line: $V (tokens of context, or off; setup.sh --builder-clear-line)"; else bad "builder clear line: $V"; fi
+  if V=$(pp_issue_sizing 2>&1); then ok "issue sizing: $V (tokens to read, or off; setup.sh --issue-sizing)"; else bad "issue sizing: $V"; fi
   # The merge check runs on a copy that links main's node_modules (merge-unit-local.sh).
   ! jq -r '.testCommand // empty' "$IL_CONFIG" | grep -qE '(^|[^[:alnum:]_-])(npm (ci|install)|pnpm install|yarn install)([^[:alnum:]_-]|$)' \
     || warn "check command: it installs packages, and the merge check shares the main checkout's node_modules, so each merge rewrites main's packages; install in the project's setup, not in the check"

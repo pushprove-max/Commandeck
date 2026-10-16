@@ -59,7 +59,7 @@ check "and nothing on the machine changed" "$BEFORE" "$(snap)"
 WANT=$(printed)
 # A value is never a flag: an option missing its value does not turn --install-missing into the owner's yes.
 BAD=
-for o in --addons --cache-ttl --own-startup --own-main-session --rules --rules-drop --rules-keep --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags; do
+for o in --builder-effort --builder-clear-line --issue-sizing --addons --cache-ttl --own-startup --own-main-session --rules --rules-drop --rules-keep --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags; do
   go setup.sh --profile claude "$o" --install-missing >"$T/out" 2>&1
   [ ! -e "$T/pm" ] || { BAD+=" $o"; rm "$T/pm"; }
 done

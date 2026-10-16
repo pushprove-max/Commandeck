@@ -53,7 +53,7 @@ fi
 # board.sh records the project's run here; --run overrides it. With neither, the run
 # this pane is bound to is asked for, because the printed-id record below is
 # keyed by run and a read with no run has no record.
-[ -n "$RUN" ] || RUN=$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)
+[ -n "$RUN" ] || RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)
 [ -n "$RUN" ] || RUN=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty' 2>/dev/null)
 # BIND EVERY TIME. The pointer file names a run; the RUN names a coordinator
 # TERMINAL, and that is what a check reads. Main's pane changes -- a restart, a

@@ -8,12 +8,25 @@
 # 200K (lowered from 350K 2026-10-10, main re-sent ~217K per turn); it
 # must stay below the 500K auto-compact window in settings.local.json, or
 # compaction fires first. Worker panes (linked worktrees, the Chief-of-Staff
-# pane included) are exempt.
+# pane included) are exempt, but for a Builder: past its own line (setup's
+# Builder clear line, default 180K) it writes a handoff and builder-fresh-round.sh
+# goes on in a fresh session of the same pane.
 input=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
-if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then exit 0; fi
+if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then
+  [ "${COMMANDECK_BUILDER:-}" = 1 ] || exit 0
+  . "${BASH_SOURCE[0]%/*}/lib/project.sh" && . "${BASH_SOURCE[0]%/*}/lib/context-size.sh" || exit 0
+  LINE=$(pp_builder_clear_line 2>&1) || { echo "$LINE"; exit 0; }
+  [ "$LINE" != off ] && ctx=$(context_size "$transcript") && [ "$ctx" -gt "$LINE" ] 2>/dev/null || exit 0
+  HOOK_FIRE_ADVISE=1
+  TOP=$(git rev-parse --show-toplevel); UNIT=${TOP##*/}; HAND=$TOP/.claude/briefs/$UNIT-handoff.md
+  # The seat record takes the new session's id, so main-watch follows the new log; no record, no argument.
+  REC=$(pp_run_file 2>/dev/null) && [ -f "${REC%/*}/seat-$UNIT-builder.txt" ] && REC=" $(printf '%q' "${REC%/*}/seat-$UNIT-builder.txt")" || REC=
+  echo "CONTEXT $((ctx / 1000))K is over this Builder's $((LINE / 1000))K clear line: finish this step, then write $HAND for a fresh session of this pane: first the line 'Read .claude/briefs/$UNIT.md, then go on from here.', then decisions, unresolved findings, current commit, test evidence and what is left. Then start this in the background (run_in_background) and end the turn: bash $(printf '%q' "$(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)")/builder-fresh-round.sh ${ORCA_TERMINAL_HANDLE:-<the handle of this pane>} $(printf '%q' "$HAND")$REC"
+  exit 0
+fi
 # A /handoff whose restart did not finish keeps its marker (context-clear-restart.sh spends it only once a
 # new main holds the resume prompt), and this pane is still main: the owner gets the reason in one line.
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty')

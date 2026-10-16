@@ -23,6 +23,8 @@
 # changed lines, drops even that.
 # Nothing checks the word against the finished diff; the first pass counts the
 # real lines. Every launch prints which rule chose, on stderr.
+# An independent issue the batch's Size lines estimate over setup's issue sizing line (40K tokens by default) is
+# named on stderr before anything is created, the split proposed; main splits it or launches as is.
 # --model puts this one Builder on another model routing.json names (an alias,
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
@@ -109,6 +111,18 @@ LOOP=
 [ "$SMALL" != off ] || T=${T//$'or one when the build\n   is under {small-build} changed lines and main did not launch it with `--risky` (the\n   pass prints which)'/'never one: this project turned the small build off'}
 T=${T//'{small-build}'/"$SMALL"}
 T=${T//$'{loop-rules}\n'/"$LOOP"}
+# Issue sizing (setup's issueSizing: tokens, or off; default 40000): an independent issue the batch's "Size:" line
+# estimates over the line is cheaper as its own unit, so main hears of it before the launch and decides.
+SIZING=$(pp_issue_sizing) || exit 2
+[ "$SIZING" = off ] || awk -v max="$SIZING" '
+  /^#+ / { l = length($1); if (on && l <= lv) on = 0; if (!on && $0 ~ /^#+ The issues/) { on = 1; lv = l }; next }
+  !on { next }
+  /^[0-9]+\. / { n = $1; sub(/\.$/, "", n); i = $2; sub(/:$/, "", i); name[n] = i ~ /^#[0-9]+$/ ? " (" i ")" : ""; order[++k] = n; next }
+  /^[[:space:]]*Size:/ && k { size[order[k]] = $0 }
+  END { for (j = 1; j <= k; j++) { n = order[j]; s = size[n]
+    if (s == "") print "sizing: item " n name[n] " has no Size line (its files, shared or independent, ~<n>K tokens to read); add one so the batch can be sized"
+    else if (s ~ /independent/ && match(s, /~[0-9]+K/) && substr(s, RSTART + 1, RLENGTH - 2) * 1000 > max)
+      print "sizing: item " n name[n] " is independent and ~" substr(s, RSTART + 1, RLENGTH - 2) "K tokens to read, over this project'"'"'s " max / 1000 "K line: propose it as its own unit, or the small Builder (--small --model sonnet), and launch on the split main accepts or overrides" } }' "$BATCH" >&2
 # Its headings go two levels down, so a batch with a level-1 title of its own stays inside "## The batch": the
 # dashboard reads the issues from that section, and its reader takes any "# " line as a heading.
 T=${T//'{batch}'/"$(sed -E 's/^(#+ )/##\1/' "$BATCH")"}

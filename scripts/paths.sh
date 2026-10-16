@@ -62,6 +62,13 @@ PP_SCRATCH=${COMMANDECK_SCRATCH:-$HOME/.commandeck/scratch/$PP_MAIN_SLUG}
 # writer. Never Orca's ~/.config/orca/current-run: every project on the machine
 # shares that file. hooks/lib/project.sh pp_run_file spells the same path.
 PP_RUN_FILE=$PP_SCRATCH/current-run
+# pp_owed_clear <time> -- removes $PP_SCRATCH/cos-owed, the owner's message main owes the relay a reply to, when it was
+# marked before <time>. to-main.sh writes the mark under cos-owed.lock, and this holds that lock from its read to its
+# removal: a newer mark written between the two was removed with the old one. cos-watch-inbox.sh takes it too.
+pp_owed_clear() {
+  local at
+  { flock -w 10 9 && IFS=$'\t' read -r at _ < "$PP_SCRATCH/cos-owed" && [ "$at" -lt "$1" ] && rm -f "$PP_SCRATCH/cos-owed"; } 9>>"$PP_SCRATCH/cos-owed.lock" 2>/dev/null
+}
 export PP_MAIN PP_WORKSPACES PP_MAIN_SLUG PP_WORKSPACES_SLUG PP_SCRATCH
 PP_SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The same path as one shell word, for a command that is printed to be run.
@@ -282,12 +289,13 @@ def seat_at($root; $spec):
     elif $p.i != null then fail("\($p.r) has no candidates")
     else $role end
   | . + {role: $p.r}
-  # A project may choose the model of its Builder (set-up stores it,
-  # pp_route_json hands it in). The one place it applies, and only to this role.
+  # A project may choose the model and effort of its Builder (set-up stores them,
+  # pp_route_json hands them in). The one place they apply, and only to this role.
   # An advisor an older set-up stored is not read: every Builder runs with none (the owner, 2026-10-14).
   | if $p.r != "builder" then . else
-      . + ($ARGS.named.builder // {} | {model} | with_entries(select(.value != null)
-        | if .value | IN($root | aliases[]) then . else fail("this project has builder.\(.key) is not one of \($root | aliases | join(", ")); set-up sets it") end))
+      . + ($ARGS.named.builder // {} | {model, effort} | with_entries(select(.value != null)
+        | (if .key == "model" then $root | aliases else ["low", "medium", "high", "max"] end) as $ok
+        | if .value | IN($ok[]) then . else fail("this project has builder.\(.key) \(.value), which is not one of \($ok | join(", ")); set-up sets it") end))
     end
   # Codex fast mode changes what a run costs: it is the answer set-up saved
   # (pp_codex_fast hands it in) and never the routing file itself. No quote mark here: this is inside one.
@@ -516,8 +524,25 @@ pp_review_loop() {
   [[ $v =~ $3 ]] || { echo "$PP_MAIN/.claude/commandeck.json has reviewLoop.$1 = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
   echo "$v"
 }
-# The tier is the Codex home's own setting: a pass runs on what its config says.
-pp_codex_fast_home() { grep -qE '^[[:space:]]*service_tier[[:space:]]*=[[:space:]]*"fast"' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; }
+# pp_issue_sizing -- setup's issue sizing line (issueSizing: tokens, or off), default 40000. A saved value it does
+# not take fails, naming the key, as pp_review_loop does.
+pp_issue_sizing() {
+  local v; v=$(jq -r '.issueSizing // 40000' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) || v=40000
+  [[ $v =~ ^(off|[1-9][0-9]*)$ ]] || { echo "$PP_MAIN/.claude/commandeck.json has issueSizing = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
+  echo "$v"
+}
+# The tier is the Codex home's own setting: a pass runs on what its config says. Read with tomllib, as
+# pp_codex_proxy is: the default profile's service_tier over the top-level one, the key in any TOML spelling.
+pp_codex_fast_home() {
+  python3 -c 'import tomllib' 2>/dev/null \
+    || { echo "Codex fast mode needs Python 3.11 or newer (tomllib) to read Codex's config.toml" >&2; return 1; }
+  python3 -c '
+import sys, tomllib
+try: c = tomllib.load(open(sys.argv[1], "rb"))
+except (OSError, ValueError): sys.exit(1)
+p = (c.get("profiles") or {}).get(c.get("profile"))
+sys.exit((p if isinstance(p, dict) and "service_tier" in p else c).get("service_tier") != "fast")' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null
+}
 pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has no advisor] -- the resolved seat, as JSON
   local cfg m=${3:-} b; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }

@@ -535,6 +535,49 @@ def api_base_url():
     return isinstance(env, dict) and bool(env.get("ANTHROPIC_BASE_URL"))
 
 
+def codex_billing(sessions_dir):
+    """How Codex is signed in, from auth.json in its home (the sessions folder's parent): "subscription" for a
+    ChatGPT login, "api" for an API key, "none" with no file, None when it cannot be read or no sessions folder
+    is given. Only the kind is read, never a token. Only "api" and "none" hide the Codex 7-day tile: an unknown
+    never does. Codex keeps a sign-in out of auth.json when config.toml names any cli_auth_credentials_store but
+    "file" (keyring, auto, ephemeral; in any profile): no auth.json is then unknown, not "none". With keyring or
+    ephemeral Codex reads no auth.json at all, so one left from before is unknown too. build() also reads "none"
+    with a live 7-day reading as unknown."""
+    if not sessions_dir:
+        return None
+    home = os.path.dirname(os.path.abspath(sessions_dir))
+    try:
+        import tomllib  # Python 3.11+, a stated requirement; without it the sign-in is unknown, not "none"
+        with open(os.path.join(home, "config.toml"), "rb") as f:
+            cfg = tomllib.load(f)
+    except FileNotFoundError:
+        cfg = {}
+    except (ImportError, OSError, ValueError):
+        return None
+    profiles = cfg.get("profiles")
+    tables = [cfg] + [p for p in (profiles.values() if isinstance(profiles, dict) else ()) if isinstance(p, dict)]
+    key = "cli_auth_credentials_store"
+    # A value that is not a string (a number, a list) is unknown, like any store but "file" or "auto".
+    stores = {t[key] if isinstance(t[key], str) else None for t in tables if key in t}
+    if stores - {"file", "auto"}:
+        return None
+    try:
+        with open(os.path.join(home, "auth.json")) as f:
+            a = json.load(f)
+    except FileNotFoundError:
+        return "none" if stores <= {"file"} else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(a, dict):
+        return None
+    mode = a.get("auth_mode")
+    if mode in ("chatgpt", "apikey"):
+        return "subscription" if mode == "chatgpt" else "api"
+    if isinstance(a.get("tokens"), dict):
+        return "subscription"
+    return "api" if a.get("OPENAI_API_KEY") else "none"
+
+
 def billing(cache_dir):
     """("subscription" | "api", weekly limit in dollars or None), from billing.json beside the cache folder.
 
@@ -766,6 +809,8 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     # The subscription keys above are the same in both modes; API mode adds its own block beside them.
     mode, limit = billing(cache_dir)
     out["billing"] = mode
+    cb = codex_billing(sessions)
+    out["codexBilling"] = None if cb == "none" and out["codex"]["usedPct"] is not None else cb
     out["api"] = None
     if mode == "api":
         monday = epoch(api_week(None, None, now)["windowStart"])

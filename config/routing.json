@@ -21,7 +21,7 @@
     "builder": {
       "agent": "claude",
       "model": "opus",
-      "effort": "high",
+      "effort": "medium",
       "unboxed": true,
       "edits": true,
       "note": "One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore subagents (haiku) and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh."

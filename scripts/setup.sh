@@ -4,7 +4,8 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-model <alias>] [--codex-fast|--no-codex-fast]
+#          [--builder-model <alias>] [--builder-effort low|medium|high|max] [--builder-clear-line <tokens>|off]
+#          [--issue-sizing <tokens>|off] [--codex-fast|--no-codex-fast]
 #          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
@@ -46,7 +47,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -91,7 +92,7 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -102,7 +103,7 @@ fi
 OWN=(AGENT_STARTUP.md .claude/main-session.md)
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
-BMODEL=$(old .builder.model) FAST=$(old .codexFast)
+BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
@@ -170,6 +171,10 @@ while [ $# -gt 0 ]; do
     --hosts) HOSTS=$2; shift 2 ;;
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     --builder-model) BMODEL=$2; shift 2 ;;
+    # The Builder's effort and clear line, and the issue sizing line: '' takes the default back (nothing saved).
+    --builder-effort) case $2 in low|medium|high|max|'') BEFFORT=$2 ;; *) die "--builder-effort takes low, medium, high or max, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --builder-clear-line) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--builder-clear-line takes a number of tokens, or off, not '$2'. Nothing was changed"; BCLEAR=$2; shift 2 ;;
+    --issue-sizing) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--issue-sizing takes a number of tokens, or off, not '$2'. Nothing was changed"; SIZING=$2; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
     # The global CLAUDE.md template and the rules: this run's answer, never saved; no answer leaves the file alone.
@@ -322,13 +327,14 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".*; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
   --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
-  + (if $bm == "" then {} else {builder: {model: $bm}} end)
+  + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != "")) | if . == {} then {} else {builder: .} end)
+  + (if $sz == "" then {} else {issueSizing: $sz} end)
   + (if $cm == {} then {} else {codexModels: $cm} end)
   + (if $rl == {} then {} else {reviewLoop: $rl} end)
   + (if $own == {} then {} else {ownFiles: $own} end)

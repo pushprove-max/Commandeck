@@ -26,6 +26,13 @@ check "a main-only finding goes under the deferred heading every later pass read
 check "a test result carries the machine's load and time beside it" "\`bash -c '. {scripts}/host-services.sh && hs_stamp'\` prints it with the time"
 check "a fix-round session starts from its hand-off and opens the brief only when a finding needs it" "A fix-round session starts from its hand-off alone, and opens this brief and the evidence file only when a finding needs them."
 check "every launch is checked first with the pass script's --check, which commits nothing" "Before every launch run \`bash {scripts}/{pass-script} --check {unit} <N> <kind>\`"
+# A closing run of a file already green on the same tree was the third run the
+# validation guard refuses: one Builder bypassed it, another could skip it unsaid.
+check "the closing run covers only touched files whose inputs changed since their last green run" "ONE run of every test file this build touched whose inputs changed since its last green run starts in the background beside the closing pass"
+check "a touched file already green on the current tree is cited, not run again" "a touched file already green on the current tree is cited instead (its log path and totals), never run again"
+check "the evidence lists each touched test file as run or cited" "The evidence file lists each touched test file as run or cited: \`Closing run: <file>: run, <n> passed, <n> failed\` or \`Closing run: <file>: cited <log path>, <n> passed, <n> failed\`."
+# The leak check searches an image's text chunks only: its pixels are a human check.
+check "a new or changed image needs the owner's review line in the evidence" "A new or changed image needs the owner's review: the evidence file carries \`image reviewed by the owner: <file>\` for each"
 check "no Builder writes a new end-to-end test" "Builders never write new end-to-end tests: no test installs or uninstalls the plugin, or runs setup.sh or uninstall.sh whole."
 # main's rulings file: the pass reads stated limits from one heading only, so the template must carry it.
 BODY=$(cat "${T%/*}/main-rulings.md")

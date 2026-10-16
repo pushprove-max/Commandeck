@@ -47,6 +47,8 @@ dec() { env HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" bash "$REAL/scripts/dec
 watch() { env HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-decisions.sh" 2>/dev/null | jq -r .id; echo "rc=${PIPESTATUS[0]}"; }
 check "the watcher fires an open decision" "deploy-window-$DAY rc=0" "$(watch | grep -v ship-now | paste -sd' ' -)"
 check "a restart does not fire it again" "rc=1" "$(watch | paste -sd' ' -)"
+# The Chief of Staff's Stop hook counts this project's watcher by the pid it records.
+check "the watcher records its pid for this project" 1 "$(grep -cxE '[0-9]+' "$(HOME=$TMP/home bash -c '. "$1"; pp_cos_key "$2"; printf %s "$COS_KEY"' _ "$REAL/hooks/lib/project.sh" "$TMP/main").cos-watch-decisions.pid" 2>/dev/null)"
 dec answer "deploy-window-$DAY" 'Noon' >/dev/null; dec reopen "deploy-window-$DAY" >/dev/null
 check "a reopened decision fires again" "deploy-window-$DAY rc=0" "$(watch | paste -sd' ' -)"
 # A fast machine (CI's Linux runner) asks, answers and reopens in one second: the
@@ -105,6 +107,26 @@ dec add patch-box-2026-10-01 "$PQ" none main >/dev/null
 dec add patch-box-2026-10-01 "$PQ" none main --reask "the vendor shipped a fix" >/dev/null
 check "an earlier day's re-asked picker goes out under today's header" 0 "$(ask "Patch box" "$PQ")"
 check "and moves to today's id" "re-asked as patch-box-$DAY|open" "$(answer_of patch-box-2026-10-01)|$(answer_of "patch-box-$DAY")"
+
+# Main answered the owner's message (relayed by the Chief of Staff, marked owed
+# by to-main.sh) on its own screen, and the owner never saw it. A turn that ends
+# while the message is owed is held once and told the one command that reaches
+# the relay; the next stop passes, and the relay's watcher flags it if still owed.
+stop() { jq -cn --arg cwd "$TMP/main" '{cwd: $cwd, last_assistant_message: "Yes, u1 merged at 09:55.", stop_hook_active: false}' \
+  | env -u CLAUDE_PROJECT_DIR -u COMMANDECK_REVIEWER HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" COMMANDECK_SCRATCH="$TMP/scratch" \
+      COMMANDECK_HOOK_FIRE_LOG="$TMP/fire.jsonl" bash "$REAL/hooks/ask-stop-records-decision.sh" 2>"$TMP/err"; echo $?; }
+mkdir -p "$TMP/scratch"
+check "a plain closing message with nothing owed passes" 0 "$(stop)"
+printf '1000\tis u1 merged?\n' > "$TMP/scratch/cos-owed"
+check "a turn ending while the owner's relayed message is owed is held" 2 "$(stop)"
+check "the hold names the message and the command that reaches the relay" 1:1 "$(grep -c '"is u1 merged?"' "$TMP/err"):$(grep -c 'cos-tell\.sh --note' "$TMP/err")"
+check "once: the next stop passes" 0 "$(stop)"
+# The hold reads the mark and records "held" on it under the lock to-main.sh writes it under: a newer mark written
+# between the two took the "held" meant for the older one, and its own turn end was never held.
+mkdir -p "$TMP/gbin"; printf '#!/bin/sh\ncase "$*" in *cos-owed) flock -n %q true && echo unlocked >> %q ;; esac\nexec %q "$@"\n' \
+  "$TMP/scratch/cos-owed.lock" "$TMP/grep.log" "$(command -v grep)" > "$TMP/gbin/grep"; chmod +x "$TMP/gbin/grep"; : > "$TMP/grep.log"
+printf '1000\tis u2 merged?\n' > "$TMP/scratch/cos-owed"
+check "the hold reads and marks the message under the writer's lock" "2:0" "$(PATH="$TMP/gbin:$PATH" stop):$(grep -c unlocked "$TMP/grep.log")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

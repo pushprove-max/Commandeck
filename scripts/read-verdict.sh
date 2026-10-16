@@ -667,6 +667,12 @@ if [ -n "$WTP" ] && { [ "$AGENT" = claude ] || [ -z "$AGENT" ]; } && [ "$LOG_FOU
       LOG_FOUND=1; SOURCE="claude-log $f"; TEXT=$(claude_report "$f"); VERDICT_LINE=$(find_verdict "$TEXT")
       break
     done
+  elif [ "$WTP" -ef "$PP_MAIN" ] && compgen -G "$PROJ/*.jsonl" >/dev/null; then
+    # Main is not a seat: no seat record or launch time names its session, and
+    # it is the one pane in main's checkout, so its session is the log written last.
+    f=$(ls -t "$PROJ"/*.jsonl | head -1)
+    echo "read-verdict: $HANDLE is main's pane, which has no seat record: reading the newest session log in main's checkout, $f" >&2
+    LOG_FOUND=1; SOURCE="claude-log $f"; TEXT=$(claude_report "$f"); VERDICT_LINE=$(find_verdict "$TEXT")
   elif compgen -G "$PROJ/*.jsonl" >/dev/null; then
     echo "read-verdict: cannot tie $HANDLE to one Claude session log in $PROJ: no Claude process in the pane, no session= in a seat record, and no launch time (argument 8). Not guessing." >&2
     exit 7

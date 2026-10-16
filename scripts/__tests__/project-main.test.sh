@@ -116,5 +116,19 @@ pths() { ( cd "$V" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES HOME="$
 check "a main checkout given as <tmp>/victim/./ is the one the dashboard registry names, and the one Orca's pane is in" "yes h-main" \
   "$(pths "$V/./" 'pp_registered && echo yes') $(pths "$V/./" 'pp_pane_of "$PP_MAIN"')"
 check "another checkout is neither" "no" "$(pths "$V/nest/proj" 'pp_registered && echo yes || echo no; pp_pane_of "$PP_MAIN"')"
+
+# Claude Code gives a Bash command no CLAUDE_PROJECT_DIR, so main closing a
+# task (orca-wait.sh --close) from a folder outside the project was told "no
+# project here ... is a git checkout". With nothing else naming the project, the
+# Orca pane's own worktree does; a worktree pane's still resolves to its main.
+mkdir -p "$T/elsewhere" "$T/obin"
+printf '#!/usr/bin/env bash\necho "$*" >> %q; echo %s\n' "$T/orca.log" "'{\"ok\":true}'" > "$T/obin/orca-ide"; chmod +x "$T/obin/orca-ide"
+away() { ( cd "$T/elsewhere" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_WORKSPACES PATH="$T/obin:$PATH" COMMANDECK_SCRATCH="$T/scratch" "$@" ); }
+check "main closes a task from outside the checkout, its pane's worktree naming the project" "closed task_1:1" \
+  "$(away ORCA_WORKTREE_ID="id-1::$T/one" bash "$REAL/scripts/orca-wait.sh" --close task_1 2>&1):$(grep -c 'task-update --id task_1 --status completed' "$T/orca.log" 2>/dev/null)"
+check "a worktree pane's resolves to its main checkout" "$T/one" \
+  "$(away ORCA_WORKTREE_ID="id-2::$U" bash -c '. "$0" && pp_main_resolve && printf "%s" "$PP_MAIN"' "$REAL/scripts/project-main.sh")"
+check "with no pane either, it still says there is no project" 1 \
+  "$(away ORCA_WORKTREE_ID= bash "$REAL/scripts/orca-wait.sh" --close task_2 2>&1 | grep -c 'no project here')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -134,6 +134,20 @@ check "and the next start shows it" 1 "$(drain h8 | grep -c '^- \[status\] stuck
 git -C "$T/p" worktree add -q "$T/ws/term_api" 2>/dev/null; main_is ''
 OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/answer-worker.sh" term_api "use the second option" 2>&1)
 check "a unit whose name starts with term_ gets its answer queued" 1 "$(grep -c 'the Builder of term_api is not running; the answer is queued' <<<"$OUT")"
+# The owner's message the relay passes to main is owed a reply to the relay:
+# marked until main sends one (cos-tell.sh --note) or the relay's watcher flags
+# main's ended turn. A script's message from main's own checkout owes nothing.
+git -C "$T/p" worktree add -q "$T/ws/Chief-of-Staff" 2>/dev/null; main_is term_11; start term_11 >/dev/null
+# The mark is written under the lock the scripts that clear it hold from their read to their removal (cos-tell.test.sh
+# races them): one written outside it lands between the two and is removed. The mark's clock is read inside the lock.
+printf '#!/bin/sh\n[ "$1" != +%%s ] || ! flock -n %q true || echo unlocked >> %q\nexec %q "$@"\n' "$T/scratch/cos-owed.lock" "$T/date.log" "$(command -v date)" > "$T/bin/date"
+chmod +x "$T/bin/date"; : > "$T/date.log"
+(cd "$T/ws/Chief-of-Staff" && "${E[@]}" bash "$REAL/scripts/to-main.sh" question "is u1 merged?" "the owner asks" >/dev/null 2>&1)
+rm "$T/bin/date"
+check "a message the relay sends main is marked owed, with its subject, under the clearing scripts' lock" "is u1 merged?:0" \
+  "$(cut -f2 "$T/scratch/cos-owed" 2>/dev/null):$(grep -c unlocked "$T/date.log")"
+rm -f "$T/scratch/cos-owed"; send eleven >/dev/null 2>&1
+check "a message sent from main's checkout is not" no "$([ -e "$T/scratch/cos-owed" ] && echo yes || echo no)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

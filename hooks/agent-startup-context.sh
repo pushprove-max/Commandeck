@@ -82,7 +82,7 @@ if [ "$MAIN" = 1 ] && RELAY=$(jq -re '.chiefOfStaff.name // empty' "$CONFIG" 2>/
 fi
 # The Chief-of-Staff worktree is the owner's relay pane; it stays a worker seat otherwise.
 [ "$LINKED" = 1 ] && [ "${TOP##*/}" = Chief-of-Staff ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] && COS=1
-COS_STATE=$HOME/.commandeck/chief-of-staff/$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_project && printf '%s' "$PP_PROJECT").md
+COS_STATE=$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_cos_key && printf '%s' "$COS_KEY").md
 if [ "$COS" = 1 ]; then
   PERSONA=$(jq -r '.chiefOfStaff.persona // empty' "$CONFIG" 2>/dev/null)
   RELAY=$(jq -r '.chiefOfStaff.name // empty' "$CONFIG" 2>/dev/null)
@@ -109,8 +109,8 @@ elif [ "$COS" = 1 ]; then
   # It is deaf between turns unless a watcher is running: each one exits when
   # it has something, which wakes the pane.
   cat <<EOF
-# Wake-ups: run each in the background (run_in_background) and start it again when it exits.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-inbox.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: main's messages for you or the owner. A turn may not end without it running.
+# Wake-ups: run each in the background (run_in_background) and start it again when it exits. A turn may not end without all four running.
+- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-inbox.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: main's messages for you or the owner.
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/decision.sh answer <id> '<answer>'\` and append its printed \`seen\` value to ${COS_STATE%.md}.decisions-seen
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-alerts.sh\` and \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-limit.sh\`: dashboard alerts and the 7-day limit. Tell the owner, then append the alert id to ${COS_STATE%.md}.alerts-seen
 # To main: \`bash $(printf '%q' "$PLUGIN")/scripts/to-main.sh question '<subject>' '<the owner's answer verbatim>'\`. It finds main's live pane itself; "message queued" means main is down and sees it first when it starts.

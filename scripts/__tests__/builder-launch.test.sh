@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # builder-launch.test.sh -- what a Builder is launched with, read from a hand-written commandeck.json (no setup
-# run). What this pins: the default Builder is Opus at effort high with no advisor, and every Builder launch,
+# run). What this pins: the default Builder is Opus at effort medium with no advisor, and runs at the effort setup
+# recorded, the small tooling Builder too; every Builder launch,
 # a risky one included, has the advisor switched off and a brief that says so, whatever advisor an older set-up
 # stored (owner's order 2026-10-14; #85: a launch that leaves out --advisor gets Claude Code's default one); a seat
 # that names an advisor keeps it; a batch's own headings stay inside the brief's sections the dashboard reads;
-# and the review-loop answers reach the brief and the build review's flags as saved.
+# the review-loop answers reach the brief and the build review's flags as saved; and an independent issue the brief
+# sizes over setup's line is flagged to main before launch, while a shared one stays in the batch.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -22,10 +24,22 @@ launch() { in_proj bash "$REAL/scripts/builder-launch.sh" --dry-run "$@" >"$T/br
 printf '## The issues\n1. #1: toy\n' > "$T/batch.md"
 
 # --- the seat a Builder and the other roles launch as ---
-check "the default Builder is Opus at effort high with no advisor" '["opus","high",null]' \
-  "$(in_proj bash -c '. "$0" && pp_route_json builder | jq -c "[.model, .effort, .advisor]"' "$REAL/scripts/paths.sh")"
+route() { in_proj bash -c '. "$0" && pp_route_json builder "" "$1" | jq -c "[.model, .effort, .advisor]"' "$REAL/scripts/paths.sh" "${1:-}"; }
+check "the default Builder is Opus at effort medium with no advisor" '["opus","medium",null]' "$(route)"
 OFF=CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
 cmd_of() { in_proj env "${@:2}" bash -c '. "$0" && pp_route_json "$1" | jq -r ".cmd // (.argv | join(\" \"))"' "$REAL/scripts/paths.sh" "$1"; }
+# The Builder's effort is a setup answer (builder.effort): each one reaches the command the Builder opens with.
+for e in low medium high max; do
+  cfg "{builder: {effort: \"$e\"}}"
+  check "a recorded effort $e: the Builder launches with --effort $e" 1 "$(cmd_of builder | grep -c -- "--effort $e\( \|$\)")"
+done
+check "the small tooling Builder (--model sonnet) runs at the same recorded effort" '["sonnet","max",null]' "$(route sonnet)"
+# The deployed format: a config from before the question, with the model alone, keeps its model at the default effort.
+cfg '{builder: {model: "sonnet"}}'
+check "a config with no recorded effort reads as before, at the default medium" '["sonnet","medium",null]' "$(route)"
+cfg '{builder: {effort: "extreme"}}'
+check "an effort that is not a level stops the launch, naming the key" 1 "$(route 2>&1 | grep -c 'builder.effort')"
+cfg '{}'
 check "a Builder and the headless reviewer launch with the advisor switched off" "1 1" "$(cmd_of builder | grep -c "$OFF") $(cmd_of claude-reviewer | grep -c "$OFF")"
 jq '.roles["design-coauthor"].advisor = "opus"' "$REAL/config/routing.json" > "$T/routing.json"
 check "a seat that names an advisor keeps it, switched on" "1 0" \
@@ -59,6 +73,19 @@ check "the build review flags at the saved thresholds" '[45.5, 0.4, 25.0]' \
 cfg '{reviewLoop: {smallBuild: "off"}}'
 launch toy-unit "$T/batch.md"
 check "small build off: the brief says the first pass is never one reviewer" '1:0' "$(grep -c 'three reviewers at once, never one: this project turned the small build off' "$T/brief"):$(grep -c 'under off' "$T/brief")"
+
+# --- issue sizing: each item's Size line, against setup's line (issueSizing, default 40000 tokens) ---
+printf '## The issues\n1. #1: toy\n   Size: scripts/a.sh; shared with 2; ~60K tokens\n2. #2: toy two\n   Size: scripts/a.sh, scripts/b.sh; shared with 1; ~30K tokens\n3. #3: export\n   Size: scripts/export.sh; independent; ~45K tokens\n4. #4: small\n   Size: scripts/c.sh; independent; ~10K tokens\n5. #5: no size\n' > "$T/sized.md"
+launch toy-unit "$T/sized.md"
+check "an independent issue over the 40K default is flagged to main, with the split proposed" 1 "$(grep -c '^sizing: item 3 (#3) is independent and ~45K tokens to read, over this project.s 40K line: propose it as its own unit' "$T/err")"
+check "a shared issue over the line stays in the batch; an independent small one too" 0 "$(grep -cE '^sizing: item (1|2|4) ' "$T/err")"
+check "an item with no Size line is named, so the brief lists every one" 1 "$(grep -c '^sizing: item 5 (#5) has no Size line' "$T/err")"
+cfg '{issueSizing: "off"}'; launch toy-unit "$T/sized.md"
+check "sizing off keeps today's grouping: nothing flagged" 0 "$(grep -c '^sizing:' "$T/err")"
+cfg '{issueSizing: "50000"}'; launch toy-unit "$T/sized.md"
+check "a line set at setup is the one read: 45K is under 50K" 0 "$(grep -c '^sizing: item 3' "$T/err")"
+cfg '{issueSizing: "lots"}'; launch toy-unit "$T/sized.md"
+check "a saved line that is not a number stops the launch, naming the key" "2:1" "$?:$(grep -c 'issueSizing' "$T/err")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

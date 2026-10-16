@@ -18,6 +18,19 @@ GITDIR=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/n
 COMMON=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 [ "$GITDIR" = "$COMMON" ] || exit 0
 
+# The owner's message the Chief of Staff passed to main (to-main.sh marks it
+# owed) is answered through the relay: an answer left on this screen never
+# reaches the owner. A turn that ends with it owed is held once per message;
+# cos-tell.sh --note clears the mark, and the relay's watcher flags it otherwise.
+# Read and marked held under the lock to-main.sh writes it under: a newer mark between the two took this one's "held".
+OWED=$( . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_run_file 2>/dev/null) && OWED=${OWED%/*}/cos-owed
+if [ -f "$OWED" ] && { flock -w 10 9 && ! grep -qx held "$OWED" && IFS=$'\t' read -r _ SUBJ < "$OWED" && echo held >> "$OWED"; } 9>>"$OWED.lock" 2>/dev/null; then
+  printf '%s\n' "HELD: the owner's message \"$SUBJ\", passed on by the Chief of Staff, has no reply sent back to the relay, so an answer left on this screen does not reach the owner." \
+    "Send your reply, then end the turn again: bash ${BASH_SOURCE[0]%/*}/../scripts/cos-tell.sh --note '<subject>' '<your reply>'" \
+    "If the answer comes later, end the turn again: the relay's watcher tells the owner this turn ended without one." >&2
+  exit 2
+fi
+
 T=$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null)
 # This turn = every row after the last typed prompt: a Claude user row that is
 # not only tool results, or a Codex user_message event (codex-dispatch.sh hands

@@ -202,7 +202,7 @@ launch)
   # reach an inbox main is waiting on and the wait times out silently (one
   # lost hour on a walkthrough, 2026-09-14). Bind it to the same run the
   # collect branch sends on.
-  LAUNCH_RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)}
+  LAUNCH_RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
   # Orca's injected preamble asks every dispatched worker for periodic
   # heartbeats, and its worker contract spells the command out. orca-wait.sh
   # drops them unread, so each one buys nothing and costs the seat a turn: 65
@@ -351,7 +351,7 @@ collect)
   # follows main to whatever pane it lives in.
   # A DRIVER'S SEAT SENDS NOTHING (COMMANDECK_DRIVER=1): the driver's own wake is
   # the one message for this event, and this send was its duplicate.
-  SEND_RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)}
+  SEND_RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
   if [ -n "$SEND_RUN" ] && [ -n "$V" ] && [ "${COMMANDECK_DRIVER:-0}" != 1 ]; then
     orca-ide orchestration send --run "$SEND_RUN" --to "run:$SEND_RUN" --type question \
       --subject "seat $ROLE $UNIT: ${V#VERDICT: }" --body "$V" --json >/dev/null \

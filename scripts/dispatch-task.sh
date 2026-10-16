@@ -53,7 +53,7 @@ IFS=$'\t' read -r WTID WTPATH AGENT < <(orca-ide terminal list --json 2>/dev/nul
 # Type the pointer once and wait up to 60 s for the Codex turn it starts.
 type_pointer() {
   local run spec f mark
-  run=${COMMANDECK_RUN:-$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)}
+  run=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
   spec=$(orca-ide orchestration task-list ${run:+--run "$run"} --json 2>/dev/null \
     | jq -r --arg t "$TK" 'first(.result.tasks[]? | select(.id == $t) | .spec) // empty' 2>/dev/null)
   [ -n "$spec" ] || fail "$1; its spec could not be read back from Orca to type instead"

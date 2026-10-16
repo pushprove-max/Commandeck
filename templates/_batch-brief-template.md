@@ -1,7 +1,9 @@
 ## The issues
 
 1. #<n>: <title>
+   Size: <the files it touches>; shared with <item numbers>, or independent; ~<n>K tokens to read
 2. <an item with no issue: its title>
+   Size: ...
 
 ## The batch (done criteria)
 

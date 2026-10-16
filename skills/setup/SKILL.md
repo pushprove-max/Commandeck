@@ -108,7 +108,7 @@ Ask them in this order, up to four questions per call.
    "Global rules" are the plugin's working, review, agent and test rules; "Global CLAUDE" its general instructions (working rules, code exploration, root-cause discipline). Your own text is never changed, and a copy of the file is made first.
 6. Which model builds?
    Ask "Builder model": Opus (recommended) | Sonnet
-   - Opus: best quality, at effort high with no advisor. `--builder-model ''`
+   - Opus: best quality, with no advisor. `--builder-model ''`
    - Sonnet: uses less of your plan. `--builder-model sonnet`
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
@@ -118,6 +118,13 @@ Ask them in this order, up to four questions per call.
    "(recommended)". When it found no model setting, add to the question: "Not
    sure? /model shows your model: one marked 1M, or an id that ends in [1m], is
    Larger."
+   Then, one call:
+   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
+   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. `--builder-effort ''`, or `low`, `high`; Maximum: `max`
+   Ask "Builder clear line": 180K (recommended) | 150K | 250K | Off
+   - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000`; Off: `--builder-clear-line off`
+   Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off
+   - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`

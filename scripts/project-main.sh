@@ -76,18 +76,22 @@ pp_checkout() { # <dir>: sets c (git common dir), g (git dir) and t (top folder)
   case $c in */.git) ;; *) return 1 ;; esac
 }
 pp_main_resolve() {
-  local c g t first="" own="" ownws="" m w r
+  local c g t first="" own="" ownws="" m w r sp=${CLAUDE_PROJECT_DIR-}
   # Where the shell stands is the one thing here git answers for by itself, so a
   # linked worktree there decides; the session's project is a variable beside it.
   if pp_checkout "$PWD"; then
     first=${c%/.git}
     [ "$c" = "$g" ] || { own=$c; ownws=$(pp_real "$t/.."); }
   fi
-  if pp_checkout "${CLAUDE_PROJECT_DIR-}"; then
+  # Claude Code gives a Bash command no CLAUDE_PROJECT_DIR: from outside every
+  # checkout, with no COMMANDECK_MAIN either, the Orca pane's own worktree (its
+  # id is "<id>::<path>") names the session's project.
+  [ -n "$sp$first${COMMANDECK_MAIN-}" ] || case ${ORCA_WORKTREE_ID-} in *::/*) sp=${ORCA_WORKTREE_ID#*::} ;; esac
+  if pp_checkout "$sp"; then
     if [ -z "$own" ]; then
       first=${c%/.git}
       [ "$c" = "$g" ] || { own=$c; ownws=$(pp_real "$t/.."); }
-    elif pp_fixture "$CLAUDE_PROJECT_DIR" "$own"; then
+    elif pp_fixture "$sp" "$own"; then
       first=${c%/.git}
     fi
   fi

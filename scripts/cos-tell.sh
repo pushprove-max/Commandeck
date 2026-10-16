@@ -13,9 +13,13 @@ if [ "${1:-}" = --note ]; then
   [ $# = 3 ] || { echo "usage: cos-tell.sh --note <subject> <body>" >&2; exit 2; }
   RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "cos-tell: NOT sent: no run recorded in $PP_RUN_FILE, so the relay has no durable mailbox" >&2; exit 1; }
+  SENT=$(date +%s)
   OUT=$(orca-ide orchestration send --run "$RUN" --to "run:$RUN" --type status --subject "$2" --body "$3" --json 2>&1)
   jq -e '.ok == true and ([.. | strings | select(test("^msg_"))] | length > 0) and (tostring | test("not durable") | not)' <<<"$OUT" >/dev/null 2>&1 \
     || { echo "cos-tell: NOT sent: Orca did not confirm a stored message to run:$RUN: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+  # The owner's message to main has its reply (to-main.sh), when main sent this: a worker's note is not one,
+  # and neither is this note to a message marked while it was being sent.
+  [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef "$PP_MAIN" ] && pp_owed_clear "$SENT"
   echo "cos-tell: note stored in run:$RUN for the Chief of Staff"; exit 0
 fi
 HANDLE=$(pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")

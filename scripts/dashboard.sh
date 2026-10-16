@@ -34,6 +34,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/host-services.sh"
 . "$HERE/codex-helpers.sh" || exit 1
 . "$HERE/../hooks/lib/project.sh"; pp_project "$PP_MAIN"
+. "$HERE/../hooks/lib/context-size.sh"
 NAME=dashboard
 UNIT=commandeck-$NAME.service  # the Linux unit; another project's dashboard.service is not ours
 OUT=${COMMANDECK_DASHBOARD_DIR:-$HOME/.commandeck/dashboard}
@@ -300,6 +301,9 @@ units() {
       if [ "$(jq -c '.steps' <<<"$bj")" != null ] && f=$(pp_session_log "$wt") && [ -n "$f" ]; then
         cu=$(bash "$HERE/seat-event.sh" --usage claude "$f" $((NOW - 86400)) 2>/dev/null) && jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$cu" || cu='{"tokens":null}'
         [ "$cu" = null ] || bj=$(jq -c --argjson c "$cu" '. + {cache24h: $c.tokens}' <<<"$bj")
+        # Its live context, against the clear line past which it hands off (the hook context-line.sh).
+        bj=$(jq -c --arg c "$(context_size "$f")" --arg l "$(pp_builder_clear_line "$PP_MAIN" 2>/dev/null)" \
+          '. + {context: ($c | tonumber? // null), clearLine: (if $l == "" then null else $l end)}' <<<"$bj")
       fi
     fi
     jq -cn --arg u "$u" --argjson branch "$branch" --argjson dirty "$dirty" --argjson diff "$diff" --argjson ag "$ag" \

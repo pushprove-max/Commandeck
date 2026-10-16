@@ -39,6 +39,29 @@ check "a png whose bytes hold an issue number is skipped" 0 "$?"
 printf 'see #''123\n' > "$TMP/tree/docs/a.md"
 bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
 check "the same number in a .md beside it still fails" 1 "$?"
+# A png's pixels are a human check, but its text chunks are text: names, paths
+# or tool output can ride in them unseen. Each kind is searched with the word
+# list; the same word in the pixel data alone passes.
+# png <chunk type> <text> -- a 1x1 png carrying <text> in one chunk of that type (iTXtz: compressed iTXt).
+png() { python3 -I -c '
+import struct, sys, zlib
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+kind, word = sys.argv[1], sys.argv[2].encode()
+body = {"tEXt": b"Comment\0" + word, "zTXt": b"Comment\0\0" + zlib.compress(word), "iTXt": b"Comment\0\0\0en\0\0" + word,
+        "iTXtz": b"Comment\0\1\0en\0\0" + zlib.compress(word), "IDAT": word}[kind]
+sys.stdout.buffer.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0))
+                        + chunk(kind[:4].encode(), body) + chunk(b"IEND", b""))' "$@"; }
+for k in tEXt zTXt iTXt iTXtz; do
+  rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/docs/images"; png "$k" "see #""1234" > "$TMP/tree/docs/images/a.png"
+  out=$(bash "$REAL/ci/leak-test.sh" "$TMP/tree" 2>&1)
+  check "a png whose $k chunk holds an issue number fails, naming the image" 1:1 "$?:$(grep -c '^docs/images/a.png:1:' <<<"$out")"
+done
+rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/docs/images"; png IDAT "see #""1234 ${SAMPLES[0]}" > "$TMP/tree/docs/images/a.png"
+bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
+check "the same words in its pixel data alone pass" 0 "$?"
+printf 'not a png\n' > "$TMP/tree/docs/images/b.png"
+bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1
+check "a .png that is not one cannot be searched, and says so" 2 "$?"
 
 leak() { bash "$REAL/ci/leak-test.sh" "$TMP/tree" >/dev/null 2>&1; echo $?; }
 fresh() { rm -rf "$TMP/tree"; mkdir -p "$TMP/tree/.claude/briefs" "$TMP/tree/.claude-plugin" "$TMP/tree/scripts/__tests__" "$TMP/tree/sub/.claude-plugin"

@@ -960,7 +960,7 @@ tick() {
   # Before the run lookup: a leak is reaped whether or not main can be told.
   reap_brokers
   heads_up_capture
-  RUN=$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null)
+  RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
   NOW=${COMMANDECK_NOW:-$(date +%s)}
   DIAG= DIAG_KEYS= REBOUND= RELAY=0

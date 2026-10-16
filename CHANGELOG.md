@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0 -- 2026-10-16
+
+- Main's Stop hook holds a turn once when the owner's message the Chief of Staff passed on has no reply sent back,
+  and the relay's watcher flags every main turn that ended with nothing sent to it, with main's last words (#138).
+- The limit card shows each 7-day tile only where that provider has a subscription window; a failed read still shows it (#139).
+- The Chief of Staff's inbox watcher wakes on any message main's pane sends to the run, whatever its subject (#140).
+- The Chief of Staff's Stop hook requires all four watchers, each checked by its own pid file for this project (#141).
+- `read-verdict.sh` reads main's pane from the newest session log in main's checkout (#142).
+- A script run from outside the project finds it from Orca's worktree id when Claude Code gives no project folder (#143).
+- The Stop hook's block names each watcher's start command by the stable plugin link, which survives an update (#144).
+- The closing run cites a touched test file already green on the current tree instead of running it again (#145).
+- Setup asks the Builder's effort (medium by default), and every Builder launch runs at it (#146).
+- Setup asks the Builder clear line (180K by default, or off): past it the Builder is told to hand off to a fresh
+  session of its pane, and the dashboard's unit card shows its context against the line (#147).
+- Setup asks the issue sizing line (40K by default, or off): the batch brief sizes each issue, and the Builder launch
+  flags an independent issue over the line to main, the split proposed (#148).
+- The leak check searches a PNG's text chunks (tEXt, zTXt, iTXt) with the word list; a new or changed image is for the owner to review (#149).
+- Codex fast mode reads Codex's config.toml as TOML: a quoted `"service_tier"` key or a `'fast'` literal now counts,
+  the default profile's tier wins over the top-level one, and a tier set only in an unused profile no longer does.
+
 ## 0.8.1 -- 2026-10-16
 
 - The tests no longer install or uninstall the plugin or run setup.sh or uninstall.sh whole: small checks of

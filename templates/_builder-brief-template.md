@@ -57,13 +57,21 @@ merges with `merge-unit-local.sh {unit}`.
   background; never wait for green before a pass.
   A fix round re-runs only the test files that round touched, and only the
   touched cases where the runner can select them.
-  ONE whole run of every test file this build touched starts in the background
-  beside the closing pass, and never before an earlier pass. A file that times
+  ONE run of every test file this build touched whose inputs changed since its
+  last green run starts in the background beside the closing pass, and never
+  before an earlier pass; a touched file already green on the current tree is
+  cited instead (its log path and totals), never run again. A file that times
   out in that run is rerun alone at once, never in another whole run; a
   second timeout is one question to main.
   A first pass that ends GO with nothing committed after it needs no closing
   pass: that GO merges, and the runs beside it were the closing run. A test file with a case selector says so in its header.
-- The closing run is the test files this build touched, and no others.
+- The closing run is the test files this build touched, and no others. The
+  evidence file lists each touched test file as run or cited:
+  `Closing run: <file>: run, <n> passed, <n> failed` or
+  `Closing run: <file>: cited <log path>, <n> passed, <n> failed`.
+- A new or changed image needs the owner's review: the evidence file carries
+  `image reviewed by the owner: <file>` for each, which you ask main for. The
+  leak check searches only an image's text chunks; its pixels are a human check.
 - A command expected to run over 60 seconds, a test or not, starts in the background
   (Bash `run_in_background`); work on while it runs. Read every background result before the closing pass:
   a red one costs that pass.

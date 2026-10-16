@@ -5,6 +5,7 @@
 # the owner would chase work that was done. What this pins, on copies of two real evidence files (taken
 # 2026-10-16; issue numbers carry a leading 1 so the leak check passes): a row whose status starts "built" counts,
 # under "## Per issue" or under the title; a "partly built" row does not, even with a heading of its own.
+# A Builder also carries its live context, from its session log, beside the clear line setup recorded for it.
 set -uo pipefail
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -30,6 +31,9 @@ echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$WS/u-verdicts/.claude/settings.loc
 printf 'Round 2 review.\nVERDICT: GO\n\n' > "$V/u-verdicts-r2-reports.md"
 printf 'Round 1 review.\n- [P1] one -- f:1 -- why\nVERDICT: NO-GO\n' > "$V/u-verdicts-r1-reports.md"; touch -t 202001010000 "$V/u-verdicts-r1-reports.md"
 printf 'VERDICT: GO\n' > "$V/u-verdicts-rx-reports.md"; touch -t 202001010000 "$V/u-verdicts-rx-reports.md"
+mkdir -p "$MAIN/.claude" "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")"
+echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
+echo '{"type":"assistant","message":{"usage":{"cache_read_input_tokens":150000,"input_tokens":12}}}' > "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")/s.jsonl"
 env -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" \
   COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$T/out/run" >"$T/out.log" 2>&1
 built() { jq -c --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $u) | .builder.built]' "$T/out/run/project.json" 2>&1; }
@@ -41,6 +45,9 @@ check "a table under the title counts too, and a partly built issue does not, th
 check "a Builder carries the verdict of every round file by its own round, and the newest report's beside it" \
   '[{"1":"VERDICT: NO-GO","2":"VERDICT: GO"},"VERDICT: GO",2]' \
   "$(jq -c 'first(.[]) | .units.inFlight[]? | select(.unit == "u-verdicts") | [.builder.verdicts, .builder.verdict, .builder.verdictRound]' "$T/out/run/project.json" 2>&1)"
+check "a Builder's live context from its session log, beside the clear line setup recorded" '[150012,"160000"]' \
+  "$(jq -c 'first(.[]) | .units.inFlight[]? | select(.unit == "u-verdicts") | [.builder.context, .builder.clearLine]' "$T/out/run/project.json" 2>&1)"
+check "one with no session log has no context to show" '[null]' "$(jq -c 'first(.[]) | [.units.inFlight[]? | select(.unit == "api-batch-2026-10-16") | .builder.context]' "$T/out/run/project.json" 2>&1)"
 # The stage list names each pass by its round, from the Builder's own log.
 printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","use":"t1"}' '{"event":"tool-end","ts":"2026-10-10T12:00:01Z","use":"t1"}' \
   '{"event":"codex-start","ts":"2026-10-10T12:30:00Z","pass":"adversarial","round":1}' '{"event":"codex-end","ts":"2026-10-10T12:40:00Z","pass":"adversarial","round":1,"rc":0}' \
