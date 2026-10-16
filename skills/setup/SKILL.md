@@ -229,5 +229,5 @@ report and changes no file; it runs as a workflow, which setup switched on in
 Then ask (setup has ended, so the decoy is back and goes first):
 
    Ask "Demo build": Yes (recommended) | Skip
-   - Yes: one small brief (`${CLAUDE_PLUGIN_ROOT}/templates/_builder-brief-template.md`) launched with `builder-launch.sh`, to see a Builder, a review pass and a local merge end to end.
+   - Yes: one small brief (`${CLAUDE_PLUGIN_ROOT}/templates/_builder-brief-template.md`) launched with `builder-launch.sh`, to see a Builder, a review pass and a local merge end to end. It takes about 25 minutes (a small build measured 24) and runs one Builder session plus one review pass.
    - Skip: go straight to the first real request.
