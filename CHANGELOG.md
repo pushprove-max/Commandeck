@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.0 -- 2026-10-16
+
+- Breaking: `builder-launch.sh` refuses a batch brief with no `## Prior art` section, a brief written before 0.11.0
+  too. Add the heading to the brief and under it name the governing standard, the library or service the project's
+  `.claude/paved-road.md` approves, and why the batch builds instead if it does; then launch again.
+- A paved-road registry, `templates/paved-road.md` (empty), is copied to a project's `.claude/paved-road.md`: for each
+  area, the standards that govern it and the library or managed service it builds on.
+- The batch brief template has a required Prior art section, and `builder-launch.sh` refuses a batch without one;
+  the Builder brief says that section binds.
+- Every review pass, Codex or Claude, asks whether the change hand-builds what the registry or a published standard
+  covers, and has such a finding cite the registry row.
+- `scripts/platform-audit/run-audit.sh [--dry-run]` audits each area of the registry whose files changed since the
+  last recorded audit: one read-only auditor (routing role `audit-auditor`) per area, then one verifier
+  (`audit-verifier`, read tools only) that tries to disprove each finding, merged into one report. A change to the
+  registry or the areas file audits every area again. An agent that fails, or whose output lacks the template's
+  sections or a verdict for each finding, fails the audit and records nothing; `--dry-run` lists the areas and
+  launches nothing.
+
 ## 0.10.0 -- 2026-10-16
 
 - Each build in Builds in progress folds to one line on its own toggle (name, seat, stage, issues built, cost so far,

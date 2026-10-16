@@ -52,6 +52,23 @@
       "unboxed": true,
       "edits": true,
       "note": "The design check of a batch marked risky: builder-launch.sh --risky opens this pane before the Builder, and it writes the design note the Builder reads first. It writes that note and no code."
+    },
+    "audit-auditor": {
+      "agent": "codex",
+      "headless": true,
+      "model": "astra",
+      "effort": "xhigh",
+      "sandbox": "read-only",
+      "edits": false,
+      "note": "scripts/platform-audit/run.sh: one read-only auditor per area of the project's paved-road registry."
+    },
+    "audit-verifier": {
+      "agent": "claude",
+      "headless": true,
+      "model": "opus",
+      "effort": null,
+      "edits": false,
+      "note": "scripts/platform-audit/verify.sh: one verifier per area, tries to disprove each auditor finding with read tools only; verify.sh saves its final message as the verdict. Effort omitted."
     }
   },
   "review": {},

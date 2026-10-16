@@ -21,7 +21,9 @@ cfg() { jq -n "{version: 1, profile: \"claude\"} + ($1)" > "$CFG"; }
 cfg '{}'
 in_proj() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING PATH="$T/bin:$PATH" "$@"); }
 launch() { in_proj bash "$REAL/scripts/builder-launch.sh" --dry-run "$@" >"$T/brief" 2>"$T/err"; }
-printf '## The issues\n1. #1: toy\n' > "$T/batch.md"
+# A launch refuses a batch with no Prior art section, so every fixture carries one.
+P='\n## Prior art\nInternal tooling; no outside library.\n'
+printf "## The issues\n1. #1: toy\n$P" > "$T/batch.md"
 
 # --- the seat a Builder and the other roles launch as ---
 route() { in_proj bash -c '. "$0" && pp_route_json builder "" "$1" | jq -c "[.model, .effort, .advisor]"' "$REAL/scripts/paths.sh" "${1:-}"; }
@@ -58,10 +60,18 @@ for a in opus none; do
 done
 cfg '{}'
 # The dashboard's issue list is read from the rendered brief: a batch's sub-headings stay inside "The issues".
-printf '# Export batch\n## The issues\n### #3 Export times out\nSee #9 for the old report.\n### #4 Retry the upload\n' > "$T/batch2.md"
+printf "# Export batch\n## The issues\n### #3 Export times out\nSee #9 for the old report.\n### #4 Retry the upload\n$P" > "$T/batch2.md"
 launch toy-unit "$T/batch2.md"
 check "a batch's issue sub-headings stay inside The issues; its own title stays inside The batch" '[3,9,4]:1' \
   "$(bash "$REAL/scripts/brief-issues.sh" "$T/brief" | jq -c .):$(grep -c '^### Export batch$' "$T/brief")"
+# A batch that never asked whether a standard, library or service already does the job is how hand-built
+# versions of solved problems get in; one with no Prior art heading is refused, dry run included.
+printf '## The issues\n1. #1: build an OTP input\nNo prior art here, just a mention.\n' > "$T/noprior.md"
+launch toy-unit "$T/noprior.md"
+check "a batch with no Prior art section is refused, naming the section and the registry" "2 1 1" \
+  "$? $(grep -c 'Prior art' "$T/err") $(grep -c '.claude/paved-road.md' "$T/err")"
+launch toy-unit "$T/batch.md"
+check "a batch with its Prior art section is taken" 0 "$?"
 
 # --- the review loop, as setup saves it: strings, as typed ---
 cfg '{reviewLoop: {maxRounds: "6", closingPass: "no", smallBuild: "150", maxReviewMinutes: "45.50", maxTestPercent: "40", maxUsd: "25"}}'
@@ -75,7 +85,7 @@ launch toy-unit "$T/batch.md"
 check "small build off: the brief says the first pass is never one reviewer" '1:0' "$(grep -c 'three reviewers at once, never one: this project turned the small build off' "$T/brief"):$(grep -c 'under off' "$T/brief")"
 
 # --- issue sizing: each item's Size line, against setup's line (issueSizing, default 40000 tokens) ---
-printf '## The issues\n1. #1: toy\n   Size: scripts/a.sh; shared with 2; ~60K tokens\n2. #2: toy two\n   Size: scripts/a.sh, scripts/b.sh; shared with 1; ~30K tokens\n3. #3: export\n   Size: scripts/export.sh; independent; ~45K tokens\n4. #4: small\n   Size: scripts/c.sh; independent; ~10K tokens\n5. #5: no size\n' > "$T/sized.md"
+printf '## The issues\n1. #1: toy\n   Size: scripts/a.sh; shared with 2; ~60K tokens\n2. #2: toy two\n   Size: scripts/a.sh, scripts/b.sh; shared with 1; ~30K tokens\n3. #3: export\n   Size: scripts/export.sh; independent; ~45K tokens\n4. #4: small\n   Size: scripts/c.sh; independent; ~10K tokens\n5. #5: no size\n'"$P" > "$T/sized.md"
 launch toy-unit "$T/sized.md"
 check "an independent issue over the 40K default is flagged to main, with the split proposed" 1 "$(grep -c '^sizing: item 3 (#3) is independent and ~45K tokens to read, over this project.s 40K line: propose it as its own unit' "$T/err")"
 check "a shared issue over the line stays in the batch; an independent small one too" 0 "$(grep -cE '^sizing: item (1|2|4) ' "$T/err")"

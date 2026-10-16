@@ -111,6 +111,8 @@ MANY='List every finding you can defend, worst first. After each one, look for t
 # A build that added a required setting read only the new format; every deployed environment ran the old one.
 SETTINGS='A change that adds or changes a required setting (a config key, an environment variable, a file format) with no test that the release still accepts the format already deployed is P1.'
 FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS"
+# Asked in every pass and by every reviewer, after its focus.
+LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
 # The Claude reviewer's template: the same slots and the same two lines this
 # script replaces, so one function fills both.
 CLAUDE_TEMPLATE="You are reviewing a code change. Target: {{TARGET_LABEL}}.
@@ -163,7 +165,7 @@ DIFF_HARD=${COMMANDECK_PASS_DIFF_HARD:-900000}
 # The prompt is checked against this script's own text only: the merge
 # reads no plugin file, so a plugin update after a pass does not undo the pass.
 session_proof() {
-  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$LABEL" "$GUIDANCE" "$MANY" <<'PY'
+  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
 import glob, json, os, re, subprocess, sys, time
 by, tid, wt, sha, wait, home, head_full, head_fix, head_final, block, updated, *fixed = sys.argv[1:]
 name, where = ("Claude session", "projects") if by == "claude" else ("Codex thread", "sessions")
@@ -692,11 +694,11 @@ plugin_prompt() {
   t=${t%%"$OPEN"*}$OPEN$'\n'$FORMAT$'\n'$CLOSE${t#*"$CLOSE"}
   [[ $t == *"$ONE"* ]] || die "$TEMPLATE no longer says \"$ONE\"; the every-finding line has nothing to replace"
   t=${t//"$ONE"/"$MANY"}
-  t=${t//'{{TARGET_LABEL}}'/"$LABEL"}; t=${t//'{{USER_FOCUS}}'/"$1"}
+  t=${t//'{{TARGET_LABEL}}'/"$LABEL"}; t=${t//'{{USER_FOCUS}}'/"$1 $LENS"}
   t=${t//'{{REVIEW_COLLECTION_GUIDANCE}}'/"$GUIDANCE"}
   [[ ${t//"$SLOT"/} =~ \{\{[A-Z_]+\}\} ]] && die "$TEMPLATE has a placeholder this script does not fill: ${BASH_REMATCH[0]}"
   # session_proof looks for each of these: a template that drops one would fail every pass after Codex ran.
-  for own in "$LABEL" "$1" "$GUIDANCE" "$SLOT"; do
+  for own in "$LABEL" "$1" "$LENS" "$GUIDANCE" "$SLOT"; do
     [[ $t == *"$own"* ]] || die "$TEMPLATE has no place for this script's text: $own"
   done
   printf '%s' "$t"

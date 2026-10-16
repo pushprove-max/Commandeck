@@ -53,7 +53,7 @@ ROLE_LANES='{
   "luna-reviewer": "review", "refuter": "review", "certifier": "review", "judge-fable": "review",
   "judge-luna": "review", "judge-luna-high": "review", "judge-sol-high": "review", "judge-sol-xhigh": "review",
   "fixer": "fixing", "design-fixer": "fixing",
-  "e2e-driver": null, "companion": null, "automation-claude": null,
+  "e2e-driver": null, "audit-auditor": null, "audit-verifier": null, "companion": null, "automation-claude": null,
   "main-session": null, "release-captain": null}'
 # The flow's order: with two lanes working at once, the later one is the unit's.
 LANE_ORDER='["planning","building","review","fixing"]'

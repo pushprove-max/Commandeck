@@ -97,6 +97,17 @@ printf 'Reviewed: %s\nCodex thread: thr-none\n\nVERDICT: GO\n' "$(git -C "$TMP/w
 check "a hand-written round file naming no real session is refused" 1 "$(merge hand)"
 printf 'VERDICT: GO\n' > "$TMP/ws/hand/.claude/briefs/hand-r2-reports.md"
 check "a hand-written round file with no session id is refused" 1 "$(merge hand)"
+# A pass sent before the paved-road question joined the prompt (0.11.0) did not ask it: its prompt and session,
+# the same in all else, prove no pass of this script.
+mk oldlens; go oldlens
+python3 - "$CODEX_HOME" <<'PY'
+import glob, sys
+lens = " Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
+for f in glob.glob(f"{sys.argv[1]}/builder-pass-prompts/thr-oldlens-1-*") + glob.glob(f"{sys.argv[1]}/sessions/*/*/*/*thr-oldlens-1-*.jsonl"):
+    t = open(f).read(); assert lens in t, f; open(f, "w").write(t.replace(lens, ""))
+PY
+check "a pass whose prompt has no paved-road question is refused as not the script's" "1 1" \
+  "$(merge oldlens) $(grep -c "was not started with the pass script's prompt" "$TMP/out")"
 
 # Step 5 has Orca remove the unit's folder; a folder that is a checkout of its own, not a linked worktree, is
 # refused before anything else is done.

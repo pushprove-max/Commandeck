@@ -149,6 +149,10 @@ check "with the scope record deleted, a review pass reads the whole branch" 1 "$
 # every reviewer is told a new required setting with no deployed-format test blocks the merge.
 check "the first and later passes' prompts carry the deployed-format rule" "1 1" \
   "$(grep -c 'format already deployed' "$B/$U-r1-prompt-1.md") $(grep -c 'format already deployed' "$B/$U-r4-prompt-1.md")"
+# Every pass asks whether the change hand-builds what the project's paved-road registry or a standard covers,
+# and has such a finding cite the registry row.
+check "the first and later passes' prompts ask the paved-road question, citing the registry row" "1 1 1 1" \
+  "$(grep -c 'hand-build something .claude/paved-road.md or a published standard already covers' "$B/$U-r1-prompt-1.md") $(grep -c 'cites the registry row' "$B/$U-r1-prompt-1.md") $(grep -c 'hand-build something .claude/paved-road.md' "$B/$U-r4-prompt-1.md") $(grep -c 'cites the registry row' "$B/$U-r4-prompt-1.md")"
 
 # the owner's extra rounds for one unit, with no edit to the tracked settings file.
 printf 'echo six\n' > "$W/a.sh"

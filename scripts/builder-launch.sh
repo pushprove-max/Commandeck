@@ -59,6 +59,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
+# Every batch says which standard governs it, what library or service already does it, and why we build if we do.
+grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
 WT=$PP_WORKSPACES/$UNIT
 # Two Builders never share a worktree: a reused one carries another batch's diff and event log.
 # A risky launch's own worktree, made by its first call, is the one exception.

@@ -11,6 +11,9 @@ merges with `merge-unit-local.sh {unit}`.
 ## How to work
 
 - `/ponytail full`: the smallest complete change.
+- The batch's Prior art section binds: build on the standard and the library
+  or service it names, as the project's `.claude/paved-road.md` lists them for
+  the area. A deviation states its reason in the evidence file.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
