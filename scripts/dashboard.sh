@@ -161,7 +161,7 @@ seat_actual() {
   [ -n "$f" ] && tail -n 40 "$f" 2>/dev/null | jq -cR 'fromjson? | objects | select(.type == "assistant" and .isSidechain != true and (.message.model | type) == "string")
     | {model: .message.model, effort: (.effort | strings // null), advisor: (.advisorModel | strings // null), at: (.timestamp // null)}' 2>/dev/null | tail -1 | grep . || echo null
 }
-# builder_progress <worktree> <unit> -- a Builder's {issues, built, findings}, each null when its file is
+# builder_progress <worktree> <unit> -- a Builder's {issues, built, findings, raised}, each null when its file is
 # missing. Built is false for an evidence file that is there and cannot be read, and an empty list
 # only for one read with no built item in it. Issues are the work items brief-issues.sh reads from the brief
 # and main's rulings file for the unit: an issue is its number, an item with no issue number its own text.
@@ -195,7 +195,10 @@ builder_progress() {
     done; sed -n 's/^+//p' <<<"$tb"; } | grep -vxFf <(sed -n 's/^-//p' <<<"$tb") | bash "$HERE/brief-issues.sh" --list)
   f=$(ls -t "$d/$u"-r*-reports.md 2>/dev/null | head -1)
   [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
-  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" '{issues: $is, built: $bu, findings: $fi}'
+  # Raised: the effort main raised the Builder to and why, from the line builder-launch.sh writes in its brief.
+  t=$(grep -m1 -E '^effort override: builder [a-z]+ -> [a-z]+: ' "$d/$u.md" 2>/dev/null || true)
+  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" --arg ra "$t" \
+    '{issues: $is, built: $bu, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null)}'
 }
 # One projection for the board: every worktree of this project. Orca lists the
 # whole machine's worktrees, so every lookup is by path, never by name: two

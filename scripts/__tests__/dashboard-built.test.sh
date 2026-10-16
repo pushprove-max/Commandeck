@@ -31,6 +31,8 @@ echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$WS/u-verdicts/.claude/settings.loc
 printf 'Round 2 review.\nVERDICT: GO\n\n' > "$V/u-verdicts-r2-reports.md"
 printf 'Round 1 review.\n- [P1] one -- f:1 -- why\nVERDICT: NO-GO\n' > "$V/u-verdicts-r1-reports.md"; touch -t 202001010000 "$V/u-verdicts-r1-reports.md"
 printf 'VERDICT: GO\n' > "$V/u-verdicts-rx-reports.md"; touch -t 202001010000 "$V/u-verdicts-rx-reports.md"
+# A Builder main raised: its brief carries the override line builder-launch.sh writes, so its card can say so.
+printf '# u-verdicts -- Builder batch\n\neffort override: builder medium -> high: touches billing\n\n## The batch\n' > "$V/u-verdicts.md"
 mkdir -p "$MAIN/.claude" "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")"
 echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
 echo '{"type":"assistant","message":{"usage":{"cache_read_input_tokens":150000,"input_tokens":12}}}' > "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")/s.jsonl"
@@ -48,6 +50,8 @@ check "a Builder carries the verdict of every round file by its own round, and t
 check "a Builder's live context from its session log, beside the clear line setup recorded" '[150012,"160000"]' \
   "$(jq -c 'first(.[]) | .units.inFlight[]? | select(.unit == "u-verdicts") | [.builder.context, .builder.clearLine]' "$T/out/run/project.json" 2>&1)"
 check "one with no session log has no context to show" '[null]' "$(jq -c 'first(.[]) | [.units.inFlight[]? | select(.unit == "api-batch-2026-10-16") | .builder.context]' "$T/out/run/project.json" 2>&1)"
+check "a raised Builder carries the effort main raised it to and why; one launched at the default carries none" '[{"effort":"high","reason":"touches billing"},null]' \
+  "$(jq -c 'first(.[]) | [.units.inFlight[]? | select(.unit == "u-verdicts" or .unit == "api-batch-2026-10-16")] | sort_by(.unit) | reverse | map(.builder.raised)' "$T/out/run/project.json" 2>&1)"
 # The stage list names each pass by its round, from the Builder's own log.
 printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","use":"t1"}' '{"event":"tool-end","ts":"2026-10-10T12:00:01Z","use":"t1"}' \
   '{"event":"codex-start","ts":"2026-10-10T12:30:00Z","pass":"adversarial","round":1}' '{"event":"codex-end","ts":"2026-10-10T12:40:00Z","pass":"adversarial","round":1,"rc":0}' \

@@ -42,7 +42,10 @@ function boot(store = {}, project = 'demo', clock = Date) {
   w.DASH_LAYOUT = onDisk();
   w.fetch = (url, opt) => { w.puts += 1; return fetch(`http://127.0.0.1:${port}/${url}`, opt); };
   const none = () => 0;
-  vm.runInNewContext(appSrc, { window: w, document: w.document, setInterval: none, clearInterval: none, setTimeout, clearTimeout, Date: clock, console });
+  // w.refresh() runs the page's timers once, as the next refresh would: it asks for data.js again.
+  const timers = [];
+  w.refresh = () => timers.forEach((f) => f());
+  vm.runInNewContext(appSrc, { window: w, document: w.document, setInterval: (f) => timers.push(f), clearInterval: none, setTimeout, clearTimeout, Date: clock, console });
   return w;
 }
 // Saves and their answers are real requests: wait until a page has sent nothing new for a while.
@@ -469,4 +472,57 @@ test('a finished pass shows its verdict when every stage is wide: the verdict ta
   const list = w.document.querySelector('#units li.unit .trace > .stagelist');
   assert.ok(list, 'a named verdict shows only in the list');
   assert.match(text(list), /Codex pass 1 · NO-GO/);
+});
+
+// Builds in progress ran a screen tall with two or three builds, and a finished build took a running one's space.
+// Each build folds to one line on its own toggle, a finished one folds by itself, and the owner's choice is kept
+// with the panel layout, so neither a refresh nor a reload undoes it.
+test('each build folds to one line on its own toggle; a finished one folds itself; the choice outlives a refresh and a reload', async () => {
+  const w = fresh(Fixed);
+  const fin = (unit, sha) => ({ unit, sha, at: iso(ago(5)), how: 'merged', open: { P1: 0, P2: 0, P3: 0 }, cost: { stages: [], total: tally(5.25, { sec: 7200 }) } });
+  const raised = builder({ unit: 'batch-h', builder: { ...builder().builder, built: [12], raised: { effort: 'high', reason: 'touches billing' } }, seat: { model: 'claude-opus-5-5', effort: 'high' } });
+  const running = { units: { inFlight: [builder(), raised], finishedBuilds: [fin('done-a', 'aaaaaaaa1')] } };
+  show(w, running);
+  const builds = () => Object.fromEntries([...w.document.querySelectorAll('#builds .build')].map((b) => [b.dataset.unit, b]));
+  const shut = () => Object.fromEntries(Object.entries(builds()).map(([u, b]) => [u, b.classList.contains('shut')]));
+  assert.deepEqual(shut(), { 'batch-g': false, 'batch-h': false, 'done-a': true }, 'running builds open; a finished one folded by itself');
+  const line = (u) => text(builds()[u].querySelector('.line'));
+  assert.equal(line('batch-h'), 'batch-h · Opus 5.5, high effort, raised by main · Building · 1 of 2 built · cost not recorded · last sign 9 s ago',
+    'the one line: name, seat, stage, issues built, cost so far, last sign');
+  assert.equal(line('done-a'), 'done-a · seat not recorded · merged · issues not recorded · cost $5.25 · merged 5 min ago');
+  const css = fs.readFileSync(path.join(ROOT, 'dashboard', 'app.css'), 'utf8');
+  assert.match(css, /\.build\.shut > :not\(\.uline\):not\(\.line\) \{[^}]*display: none/, 'folded, a build shows its header row and its one line only');
+  assert.match(css, /\.build:not\(\.shut\) > \.line \{[^}]*display: none/, 'open, the one line is not repeated');
+  const toggle = (u) => builds()[u].querySelector('.uline button[data-fold]');
+  assert.equal(toggle('batch-g').getAttribute('aria-expanded'), 'true');
+  toggle('batch-g').click();
+  assert.deepEqual(shut(), { 'batch-g': true, 'batch-h': false, 'done-a': true }, 'the toggle folds its own build and no other');
+  assert.equal(toggle('batch-g').getAttribute('aria-expanded'), 'false');
+  toggle('done-a').click();
+  assert.ok(builds()['done-a'].querySelector('button[data-close]'), 'Close stays on a finished build');
+  // A refresh: batch-h has finished since, and batch-g is still running.
+  w.refresh();
+  show(w, { units: { inFlight: [builder()], finishedBuilds: [fin('done-a', 'aaaaaaaa1'), fin('batch-h', 'hhhhhhhh2')] } });
+  assert.deepEqual(shut(), { 'batch-g': true, 'batch-h': true, 'done-a': false },
+    'a build that finished while the page was open folds itself; the owner\'s fold and unfold stand');
+  await settled(w);
+  assert.deepEqual(onDisk().projects.demo.builds, { 'batch-g': true, aaaaaaaa1: false }, 'the choice is saved with the panel layout');
+  const again = boot(storeOf(w), 'demo', Fixed);
+  show(again, { units: { inFlight: [builder()], finishedBuilds: [fin('done-a', 'aaaaaaaa1'), fin('batch-h', 'hhhhhhhh2')] } });
+  assert.deepEqual(Object.fromEntries([...again.document.querySelectorAll('#builds .build')].map((b) => [b.dataset.unit, b.classList.contains('shut')])),
+    { 'batch-g': true, 'batch-h': true, 'done-a': false }, 'a reload keeps every choice');
+  // Close on a finished build is unchanged: it clears the build.
+  again.document.querySelector('#builds .build[data-unit="done-a"] button[data-close]').click();
+  assert.equal(again.document.querySelector('#builds .build[data-unit="done-a"]'), null);
+});
+
+test("a raised Builder's unit card says main raised its effort, with the reason on hover", () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [builder({ seat: { model: 'claude-opus-5-5', effort: 'high' }, builder: { ...builder().builder, raised: { effort: 'high', reason: 'touches billing' } } })] } });
+  const seat = w.document.querySelector('#units li.unit .seat');
+  assert.equal(text(seat), 'Builder, Opus 5.5, high effort, raised by main');
+  assert.equal(seat.title, 'effort raised by main: touches billing');
+  const chip = w.document.querySelector('#builds .mdl.e');
+  assert.equal(text(chip), 'effort high, raised by main');
+  assert.equal(chip.title, 'effort raised by main: touches billing');
 });

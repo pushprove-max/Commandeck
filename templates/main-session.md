@@ -84,7 +84,14 @@ once). A fresh start's first call is `scripts/board.sh`. Details below.
 - Effort (owner rulings 2026-10-09): an override beats the routing.json pin and
   the global medium default, critical seats included. Log it in that unit's
   brief or dispatch spec. routing.json stays the starting point; the same
-  override on one role twice in a row means propose a new pin.
+  override on one role twice in a row means propose a new pin. Builders run at
+  medium effort by default (the setup default). Main may raise one Builder to
+  high, without changing the default:
+  `builder-launch.sh --effort high --reason '<one line>'`; the override and the
+  reason go in the brief and the evidence file. Consider raising a risky build
+  (security, money, data deletion, a cross-cutting change), or a build that came
+  back NO-GO twice on design-level findings. Medium stays the default for
+  everything else.
 - Orchestrator role: draft and critique intents and briefs with the owner, make
   architecture calls, arbitrate reviewer disagreements, triage incidents into
   intents. The plugin's `config/routing.json` holds roles and models.

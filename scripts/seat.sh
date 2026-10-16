@@ -25,7 +25,7 @@
 set -euo pipefail
 usage() { cat <<'EOF'
 usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 reruns a spec that already finished)
-       seat.sh launch builder <unit> <spec-file> [--model <alias>] [--no-advisor]   (one launch only; builder-launch.sh passes them)
+       seat.sh launch builder <unit> <spec-file> [--model <alias>] [--effort medium|high] [--no-advisor]   (one launch only; builder-launch.sh passes them)
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
        seat.sh effort  <role> <unit> <handle> <level>
@@ -103,23 +103,25 @@ effort)
 launch)
   SPEC=${1:?spec file}
   [ -s "$SPEC" ] || { echo "empty spec: $SPEC" >&2; exit 2; }
-  # One Builder launch may name its model or drop its advisor (builder-launch.sh);
-  # no other seat takes either. The model is checked here too: this launch is also run by hand.
-  LMODEL='' LADVISOR='' LOPTS=("${@:2}")
+  # One Builder launch may name its model, raise its effort or drop its advisor (builder-launch.sh);
+  # no other seat takes any. The model and effort are checked here too: this launch is also run by hand.
+  LMODEL='' LEFFORT='' LADVISOR='' LOPTS=("${@:2}")
   if [ "${#LOPTS[@]}" -gt 0 ]; then
     [ "$ROLE" = builder ] || { echo "seat.sh: only the builder seat takes a launch option (${LOPTS[*]}); nothing was done" >&2; exit 2; }
     i=0
     while [ "$i" -lt "${#LOPTS[@]}" ]; do
       case ${LOPTS[i]} in
         --model) i=$((i+1)); LMODEL=${LOPTS[i]:-}; [ -n "$LMODEL" ] || { usage >&2; exit 2; } ;;
+        --effort) i=$((i+1)); LEFFORT=${LOPTS[i]:-} ;;
         --no-advisor) LADVISOR=none ;;
         *) usage >&2; exit 2 ;;
       esac
       i=$((i+1))
     done
     [ -z "$LMODEL" ] || pp_builder_model_ok "$LMODEL" || exit 2
+    [ -z "$LEFFORT" ] || pp_builder_effort_ok "$LEFFORT" "$(pp_route_json builder "" "$LMODEL" | jq -r '.effort // "none"')" || exit 2
   fi
-  pp_route "$ROLE" "" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
+  pp_route "$ROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
   [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
   # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
   CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
@@ -176,6 +178,8 @@ launch)
   # first line seconds before `terminal create` returns -- a record stamped
   # afterwards rejected the round's own log and sent every Claude seat down the
   # partial rendered-screen path (three drivers stalled on 2026-09-13).
+  # A Builder opened here by hand waits out a risky launch's second call (builder-launch.sh), which rewrites its records.
+  [ "$ROLE" != builder ] || pp_builder_lock "$UNIT" || exit 1
   LAUNCH_EPOCH=$(date +%s)
   . "$PP_SCRIPTS/codex-helpers.sh"
   REUSED=0

@@ -50,6 +50,17 @@ check "once the project's Builder model changed, the live pane is refused, and t
 # The reader prints an unfinished pane's last lines under "NO VERDICT YET"; reading a verdict there closed the seat.
 run collect builder seat-builder >"$T/out" 2>&1
 check "a fenced verdict in an unfinished pane's last lines is no verdict" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
+# A Builder main raised (builder-launch.sh --effort) opens at that effort; a level other than medium or high is refused here too.
+rm -f "$T/pane-up"
+COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" --effort high >"$T/out" 2>&1
+check "a raised Builder's pane opens with --effort high" '0:1' "$?:$(grep -cE -- '^cmd=.* --effort high( |$)' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt)"
+run launch builder seat-builder "$T/spec.md" --effort max >"$T/out" 2>&1
+check "--effort max is refused before any pane opens" '2:1' "$?:$(grep -c 'REFUSED: --effort takes medium or high' "$T/out")"
+# A seat launched by hand is held to the launcher's floor: medium under a project default of high would lower it.
+jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+run launch builder seat-builder "$T/spec.md" --effort medium >"$T/out" 2>&1
+check "--effort medium under a Builder default of high is refused before any pane opens" '2:1' \
+  "$?:$(grep -c "REFUSED: --effort medium is below this project's Builder default high" "$T/out")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

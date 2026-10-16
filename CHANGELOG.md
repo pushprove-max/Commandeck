@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 -- 2026-10-16
+
+- Each build in Builds in progress folds to one line on its own toggle (name, seat, stage, issues built, cost so far,
+  last sign); a finished build folds by itself, and the owner's choice is kept with the panel layout (#150).
+- `builder-launch.sh --effort high --reason '<one line>'` raises one Builder above the setup default (medium or high
+  only); the brief and the evidence file record the override, the launch prints the effort it uses, and the
+  dashboard marks the build raised by main (#151). `seat.sh launch builder` holds a launch by hand to the same
+  floor. A risky launch's second call opens the Builder at the effort the first recorded, or rewrites the brief and
+  logs the change in the evidence before it opens at a new one;
+  it refuses while that Builder already runs, and a retry after a failed write finishes every record still owed.
+
 ## 0.9.0 -- 2026-10-16
 
 - Main's Stop hook holds a turn once when the owner's message the Chief of Staff passed on has no reply sent back,

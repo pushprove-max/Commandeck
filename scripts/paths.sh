@@ -561,6 +561,14 @@ pp_builder_model_ok() { # <alias> -- says why not
   jq -e --arg a "$1" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null 2>&1 \
     || { echo "REFUSED: --model ${1:-(none)} is not one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)" 2>/dev/null)" >&2; return 2; }
 }
+# The effort one Builder launch may run: medium or high, never under the project's Builder default. Asked the
+# same two places as the model, so a seat launched by hand cannot lower it either.
+pp_builder_effort_ok() { # <level> <the Builder's default effort, or none> -- says why not
+  [[ $1 == medium || $1 == high ]] || { echo "REFUSED: --effort takes medium or high ('$1' given): main may raise a Builder, never lower it" >&2; return 2; }
+  # A default that is no level (none) indexes to null, which every level is at or above.
+  jq -ne --arg e "$1" --arg d "$2" "$PP_ROUTE_JQ"' efforts | index($e) >= index($d)' >/dev/null \
+    || { echo "REFUSED: --effort $1 is below this project's Builder default $2; a launch may only raise it" >&2; return 2; }
+}
 pp_route() { # same arguments; sets RT_AGENT RT_MODEL RT_EFFORT RT_READONLY RT_BANNER RT_FAMILY RT_CMD
   local json f
   json=$(pp_route_json "$@") || return 2
@@ -585,6 +593,15 @@ pp_unit_briefs() {
     [[ $b =~ ^(\.md|-evidence\.md|-design(-spec)?\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
   done
   return 0
+}
+# pp_builder_lock <unit> -- one Builder launch of a unit at a time, held until this process exits: builder-launch.sh
+# rewrites a risky unit's records before seat.sh opens the pane, so a seat.sh run by hand takes the same lock.
+# Taken once per process: builder-launch.sh execs seat.sh with it held, and a second flock on a new open would wait on itself.
+pp_builder_lock() {
+  [ "${PP_BUILDER_LOCKED:-}" != "$1" ] || return 0
+  mkdir -p "$PP_SCRATCH" && exec {PP_BUILDER_LOCK_FD}>>"$PP_SCRATCH/$1-builder-launch.lock" && flock -w 600 "$PP_BUILDER_LOCK_FD" \
+    || { echo "cannot lock $PP_SCRATCH/$1-builder-launch.lock; the Builder was not launched" >&2; return 1; }
+  export PP_BUILDER_LOCKED=$1
 }
 # pp_unit_name <unit> -- pp_unit_briefs tells a unit's papers by name alone, so
 # no unit may be named like one: `u-evidence` would lose its brief to `u`.

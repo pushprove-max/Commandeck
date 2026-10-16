@@ -219,13 +219,17 @@
     const c = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(String(m));
     return c ? `${c[1][0].toUpperCase()}${c[1].slice(1)} ${c[2]}.${c[3]}` : String(m);
   }
+  // A Builder main raised above the setup default (builder-launch.sh --effort), from its brief's override line.
+  const raisedBy = (u) => (u.builder && u.builder.raised && typeof u.builder.raised.reason === 'string' ? ', raised by main' : '');
   // What the seat is running, from its own session (the collector's `seat`), never the routing table.
   function seatTags(u, label) {
     const row = h('div', 'mdls');
     const s = u.seat;
     if (s && typeof s === 'object' && typeof s.model === 'string') {
       if (label) row.append(h('span', 'mdl', label));
-      row.append(h('span', 'mdl m', modelName(s.model)), h('span', 'mdl e', `effort ${s.effort || 'not recorded'}`));
+      const e = h('span', 'mdl e', `effort ${s.effort || 'not recorded'}${raisedBy(u)}`);
+      if (raisedBy(u)) e.title = `effort raised by main: ${u.builder.raised.reason}`;
+      row.append(h('span', 'mdl m', modelName(s.model)), e);
       if (s.advisor) row.append(h('span', 'mdl v', `advisor ${modelName(s.advisor)}`));
     } else row.append(h('span', 'mdl off', u.agents === '' ? 'no seat running' : 'model and effort not recorded'));
     return row;
@@ -238,7 +242,7 @@
   function seatText(u, label) {
     const s = u.seat;
     if (!s || typeof s !== 'object' || typeof s.model !== 'string') return [label, u.agents === '' ? 'no seat running' : 'model and effort not recorded'].filter(Boolean).join(', ');
-    return [label, modelName(s.model), `${s.effort || 'effort not recorded'}${s.effort ? ' effort' : ''}`, s.advisor ? `advisor ${modelName(s.advisor)}` : null].filter(Boolean).join(', ');
+    return [label, modelName(s.model), `${s.effort || 'effort not recorded'}${s.effort ? ' effort' : ''}${raisedBy(u)}`, s.advisor ? `advisor ${modelName(s.advisor)}` : null].filter(Boolean).join(', ');
   }
 
   const isBuilder = (u) => Boolean(u) && Boolean(u.builder) && typeof u.builder === 'object';
@@ -264,9 +268,11 @@
     const li = h('li', `unit${quiet ? ' quiet' : ''}`);
     li.dataset.unit = u.unit;
     const head = h('div', 'unit-head');
+    const seatSpan = h('span', 'seat', seatText(u, seatLabel(u)));
+    if (raisedBy(u)) seatSpan.title = `effort raised by main: ${u.builder.raised.reason}`;
     head.append(h('p', 'unit-name', u.unit),
       h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
-      h('span', 'seat', seatText(u, seatLabel(u))));
+      seatSpan);
     li.append(head);
     const cost = isBuilder(u) ? u.builder.cost : undefined;
     if (isBuilder(u)) {
@@ -500,13 +506,29 @@
     return d;
   }
   // One build's block, running or finished: the same parts in the same order, so the two cannot drift.
-  function block(unit, small, tags, stepRows, done, caption, more) {
+  // Folded, it shows its header row and `line` only. A running build is kept by its unit name, a finished one by its
+  // merge commit, so a build that finishes folds by itself whatever was chosen while it ran; the owner's own fold
+  // or unfold of either stands (buildFolds, kept with the panel layout).
+  function block(unit, small, tags, stepRows, done, caption, more, fold, line, finished) {
     const el = h('div', 'build');
     el.dataset.unit = unit;
+    el.dataset.fold = fold;
     const m = h('div', 'more');
     m.append(...more);
-    el.append(uline(unit, small), tags, steps(stepRows), mbar([[done, 'g']], 'h14'), caption, m);
+    el.append(uline(unit, small), h('p', 'line', line.join(' · ')), tags, steps(stepRows), mbar([[done, 'g']], 'h14'), caption, m);
+    const kept = buildFolds();
+    const b = h('button');
+    b.type = 'button';
+    b.dataset.fold = fold;
+    setFold(el, b, Object.prototype.hasOwnProperty.call(kept, fold) ? kept[fold] : finished);
+    el.firstChild.append(b);
     return el;
+  }
+  function setFold(el, b, shut) {
+    el.classList.toggle('shut', shut);
+    b.textContent = shut ? 'Expand' : 'Collapse';
+    b.setAttribute('aria-expanded', String(!shut));
+    b.setAttribute('aria-label', `${shut ? 'Expand' : 'Collapse'} ${el.dataset.unit}`);
   }
   function buildBlock(u, now, g) {
     const x = u.builder;
@@ -573,12 +595,16 @@
       legend(key, [['g', 'recorded as built'], ['n', built === null ? noBuilt : 'not yet recorded']]);
       more.push(tags, key);
     }
+    const line = [u.unit, seatText(u), STAGE_LABEL[u.stage] || `stage ${NOT_REC}`,
+      issues === null ? `issues ${NOT_REC}` : x.built === false ? noBuilt : `${issues.filter((i) => built && built.includes(i)).length} of ${issues.length} built`,
+      x.cost ? `cost ${costOf(x.cost.total)} so far` : x.cost === null ? 'cost not measured' : `cost ${NOT_REC}`,
+      num(u.ageSec) === null ? `last sign ${NOT_REC}` : `last sign ${ago(u.ageSec)} ago`];
     // diffStat is the tracked change not yet committed, which for a Builder is the change since its last pass.
     return block(u.unit, typeof u.diffStat === 'string' && u.diffStat ? `not committed, new files not counted: ${u.diffStat}` : '', seatTags(u, 'Builder'),
       names.map((s, i) => [s, [i < at ? 'done' : i === at ? 'now' : '', tone[i]].filter(Boolean).join(' '), (s === 'Closing pass' ? note : undefined) ?? (waits && i === at ? 'waiting on main' : undefined)]),
       done !== null && issues.length ? (100 * done) / issues.length : 0,
       issues === null ? cap(`issue list ${NOT_REC}`, '') : issues.length === 0 ? cap('The brief lists no issue numbers', '') : done === null ? cap(`${issues.length} issues in the brief`, noBuilt)
-        : cap([strong(`${done} of ${issues.length}`), ' issues recorded as built'], `${issues.length - done} left`), more);
+        : cap([strong(`${done} of ${issues.length}`), ' issues recorded as built'], `${issues.length - done} left`), more, u.unit, line, false);
   }
   // A finished build, from the line its merge recorded, drawn as a running one is. The record holds merges only and
   // no seat, so every step is behind it and the tags name how it ended. It stays until the owner clears it.
@@ -602,7 +628,9 @@
     const el = block(f.unit, `${how} ${Number.isFinite(t) ? `${ago((now - t) / 1000)} ago` : 'at a time not recorded'}`, tags,
       // Findings open at the merge leave the Merge step amber; a build that ended any other way has a red one.
       BUILD_STEPS.map((s) => (s !== 'Merge' ? [s, merged ? 'done' : ''] : !merged ? [s, 'crit', 'not merged']
-        : open && open.length ? [s, 'done warn', `${open.join(' · ')} open at merge`] : [s, 'done'])), merged ? 100 : 0, cap(ended, open === null ? `open findings ${NOT_REC}` : left), [dl, costTable(f.cost, NOT_REC)]);
+        : open && open.length ? [s, 'done warn', `${open.join(' · ')} open at merge`] : [s, 'done'])), merged ? 100 : 0, cap(ended, open === null ? `open findings ${NOT_REC}` : left), [dl, costTable(f.cost, NOT_REC)],
+      f.sha, [f.unit, `seat ${NOT_REC}`, how, `issues ${NOT_REC}`, f.cost && f.cost.total ? `cost ${costOf(f.cost.total)}` : `cost ${NOT_REC}`,
+        `${how} ${Number.isFinite(t) ? `${ago((now - t) / 1000)} ago` : 'at a time not recorded'}`], true);
     el.classList.add('finished');
     const close = h('button', null, 'Close');
     close.type = 'button';
@@ -616,6 +644,8 @@
   let listedBuilds = null;
   // A clear only this browser holds, held back from a save made before the first list was read.
   let owed = false;
+  // The builds a fold may keep choices for; null while either list is unread.
+  let foldScope = null;
   function renderBuilds(units, now, g) {
     const { builders, used } = workingBuilders(units);
     note('builds', builders ? '' : 'Builders not measured');
@@ -629,6 +659,8 @@
     // The finished list has its own source: it is drawn whether or not the running builds could be read.
     blocks.push(...(fin ? fin.map((f) => finishedBlock(f, now)) : [h('p', 'nm', 'Finished builds not measured')]));
     put(byId('builds-list'), blocks);
+    // Only with both lists read are the drawn builds every build: a fold saved then drops the builds gone since.
+    foldScope = builders && fin ? blocks.map((b) => b.dataset && b.dataset.fold).filter(Boolean) : null;
     flag('builds', Boolean(builders) && builders.some((u) => u.stage === 'waiting-main' || (Array.isArray(u.builder.signals) && u.builder.signals.length)));
   }
 
@@ -1483,6 +1515,7 @@
   const HIDDEN_KEY = `commandeck-dashboard-hidden${NS}`;
   const COLLAPSED_KEY = `commandeck-dashboard-collapsed${NS}`;
   const CLOSED_KEY = `commandeck-dashboard-closed${NS}`;
+  const BUILDS_KEY = `commandeck-dashboard-builds${NS}`;
   const HEIGHTS =['auto', 'half', 'tall'];
   const grid = q('main.grid');
   const isCard = (el) => Boolean(el) && el.parentElement === grid && el.classList.contains('card');
@@ -1526,7 +1559,7 @@
   // Each value is still read through restore()'s own checks, so the host's file is trusted no more than this browser's.
   // shortcut: a page already open does not pick up another page's change until it is reloaded, and its own next change
   // is then refused and reloads it (sendLayout); merge per key if two PCs are ever used at once.
-  const LAYOUT = { order: ORDER_KEY, sizes: SIZES_KEY, heights: HEIGHTS_KEY, hidden: HIDDEN_KEY, closed: CLOSED_KEY, collapsed: COLLAPSED_KEY };
+  const LAYOUT = { order: ORDER_KEY, sizes: SIZES_KEY, heights: HEIGHTS_KEY, hidden: HIDDEN_KEY, closed: CLOSED_KEY, collapsed: COLLAPSED_KEY, builds: BUILDS_KEY };
   const UNSAVED_KEY = `commandeck-dashboard-unsaved${NS}`;
   const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
   const file = window.DASH_LAYOUT;
@@ -1600,6 +1633,8 @@
   const keep = (key, value) => { mem.set(key, value); store((s) => s.setItem(key, JSON.stringify(value))); sendLayout(); };
   const saveOrder = () => keep(ORDER_KEY, cards().map((c) => c.id));
   const closedBuilds = () => { const v = saved(CLOSED_KEY); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; };
+  // Each build the owner folded (true) or unfolded (false), by the key block() gives it; a value not true or false is no choice.
+  const buildFolds = () => { const v = plain(saved(BUILDS_KEY)); return Object.fromEntries(Object.entries(v).filter(([, x]) => typeof x === 'boolean')); };
   // Cleared builds are only ever added to: where this browser's copy won above, the host's cleared builds join it.
   if (mine && Array.isArray(held.closed)) {
     const v = [...new Set(held.closed.filter((x) => typeof x === 'string').concat(closedBuilds()))];
@@ -1726,7 +1761,17 @@
   grid.addEventListener('dragend', () => { if (dragged) dragged.classList.remove('dragging'); dragged = null; });
   // Clearing a finished build is the owner's own tidy-up, not layout: Reset layout leaves it cleared. The host keeps
   // the list (dashboard_serve.py); this page only adds to its copy.
+  // The host takes a layout id only (dashboard_serve.py ID): a build whose unit name is longer still folds, unkept.
+  const LAYOUT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
   byId('builds-list').addEventListener('click', (e) => {
+    const f = e.target.closest('button[data-fold]');
+    if (f) {
+      const el = f.closest('.build'), shut = !el.classList.contains('shut');
+      setFold(el, f, shut);
+      const kept = Object.entries(buildFolds()).filter(([k]) => !foldScope || foldScope.includes(k));
+      if (LAYOUT_ID.test(f.dataset.fold)) keep(BUILDS_KEY, Object.fromEntries([...kept.filter(([k]) => k !== f.dataset.fold), [f.dataset.fold, shut]]));
+      return;
+    }
     const b = e.target.closest('button[data-close]');
     if (!b) return;
     keep(CLOSED_KEY, [...new Set(closedBuilds().concat(b.dataset.close))]);

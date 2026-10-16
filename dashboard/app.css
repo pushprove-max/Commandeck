@@ -94,7 +94,7 @@ h3 b, h3 .count { color: var(--ink); font-weight: 700; }
 
 /* Panel controls: width 1 to 4, height, hide; Earlier and Later show on hover or focus, always on touch. */
 .sz, .move, .tools { display: flex; gap: 3px; flex: none; }
-.sz button, .move button, .tools > button, .build.finished .uline button { background: var(--chip); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; font: 11px var(--mono); min-width: 22px; height: 20px; cursor: pointer; padding: 0 4px; }
+.sz button, .move button, .tools > button, .build .uline button { background: var(--chip); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; font: 11px var(--mono); min-width: 22px; height: 20px; cursor: pointer; padding: 0 4px; }
 .sz button.on { background: var(--accent-bg); color: var(--accent-ink); border-color: #2f5a94; }
 .move { opacity: 0; }
 .card:hover .move, .card:focus-within .move { opacity: 1; }
@@ -154,6 +154,9 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 
 /* Builds in progress. */
 .build + .build { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 6px; }
+.build.shut > :not(.uline):not(.line) { display: none; }
+.build:not(.shut) > .line { display: none; }
+.build > .line { font: 12px var(--mono); color: var(--muted); margin: 0 0 4px; overflow-wrap: anywhere; }
 .iss { display: flex; flex-wrap: wrap; gap: 5px; }
 .iss > * { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
 .iss a:hover { color: var(--accent-ink); }

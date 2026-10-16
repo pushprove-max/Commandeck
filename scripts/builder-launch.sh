@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] <unit> <batch-brief>
+# builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
 # -- open one Builder:
 # a NEW worktree on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
 # --builder), the one-page brief rendered from
@@ -12,7 +12,11 @@
 # --risky: the batch is one main marks risky. A roles.design-coauthor pane opens
 # first in the same worktree and writes <wt>/.claude/briefs/<unit>-design.md,
 # which the brief tells the Builder to read before it builds. That call opens
-# no Builder; the same command run again, once the note exists, opens it.
+# no Builder; the same command run again, once the note exists, opens it. With no --effort that second call keeps the
+# effort the first recorded; with one it rewrites the brief's override and adds an "effort changed at Builder launch"
+# line to the evidence before the pane opens, refused while that Builder already runs; two second calls of one unit, or one and a
+# Builder opened by hand with seat.sh, run one at a time, and each record is replaced whole. Any other change to the brief
+# between the calls is refused.
 # A tooling build expected under 200 changed lines may be launched --small on the
 # smaller model with --model sonnet; a risky one stays on the configured model,
 # and its batch brief says to write the failing test first.
@@ -29,19 +33,25 @@
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
 # routing-override line, written by the call that opens the Builder.
+# --effort raises this one Builder above the setup default (medium unless set-up chose another): medium or high
+# only, with a reason. The brief and the evidence file get one line, "effort override: builder <default> -> <used>:
+# <reason>", which the dashboard reads to mark the build raised. Every launch prints the effort it uses, on stderr.
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] <unit> <batch-brief>"
-RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON=''
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>"
+RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY=''
 while :; do
   case ${1:-} in
     --risky) RISKY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --small) SMALL=1; shift ;;
     --model) PICK=1 BMODEL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
-    --reason) PICK=1 REASON=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    --effort) RAISE=1 EFFORT=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    --reason) REASON=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     *) break ;;
   esac
 done
+# A reason with no --effort is the model pick's, checked as it always was.
+[ -z "$REASON" ] || [ "$RAISE" = 1 ] || PICK=1
 UNIT=${1:?$USAGE}
 BATCH=${2:?$USAGE}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -59,13 +69,37 @@ if [ "$PICK" = 1 ]; then
   # A log line is read as key=value words, so the reason holds no = and is one line.
   [[ -n $REASON && $REASON != *[=$'\n']* ]] || { echo "REFUSED: --model needs --reason '<one line, no = sign>'; the pick is logged with it" >&2; exit 2; }
 fi
+if [ "$RAISE" = 1 ]; then
+  [[ -n $REASON && $REASON != *$'\n'* ]] || { echo "REFUSED: --effort needs --reason '<one line>'; the brief records why the build was raised" >&2; exit 2; }
+fi
+SEAT=$(pp_route_json builder "" "$BMODEL") || exit 2
+DEFAULT=$(jq -r '.effort // "none"' <<<"$SEAT")
+OVERRIDE=
+if [ "$RAISE" = 1 ]; then
+  pp_builder_effort_ok "$EFFORT" "$DEFAULT" || exit 2
+  OVERRIDE="effort override: builder $DEFAULT -> $EFFORT: $REASON" WHY=$REASON
+fi
+# The second call of a risky launch: the first made the worktree, wrote the brief and evidence and opened the design pane.
+RESUME=0 REC=
+if [ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
+  RESUME=1
+  # One second call of a unit at a time, from reading its records to the pane's launch: a concurrent one saw no
+  # Builder and rewrote the records of the one opening. exec keeps the fd, so seat.sh holds the lock until it exits.
+  pp_builder_lock "$UNIT" || exit 1
+  REC=$(awk '/^## The batch/ { exit } /^effort override: / { print; exit }' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null || true)
+  # With no --effort it opens at what the first call recorded, never the setup default (main's ruling 1).
+  if [ "$RAISE" = 0 ] && [ -n "$REC" ]; then
+    EFFORT=${REC#* -> } WHY=${REC#effort override: builder * -> *: }; RAISE=1 EFFORT=${EFFORT%%:*} OVERRIDE=$REC
+  fi
+fi
 ADVISOR=0 RULE='none (the default Builder has no advisor)'
-if [ -n "$(pp_route_json builder "" "$BMODEL" | jq -r '.advisor // empty')" ]; then
+if [ -n "$(jq -r '.advisor // empty' <<<"$SEAT")" ]; then
   if [ "$SMALL" = 1 ]; then RULE='none (the advisor routing.json names; marked small)'
   else ADVISOR=1 RULE='kept (routing.json names it)'; fi
 fi
 OPTS=()
 [ "$PICK" = 0 ] || OPTS+=(--model "$BMODEL")
+[ "$RAISE" = 0 ] || OPTS+=(--effort "$EFFORT")
 [ "$ADVISOR" = 1 ] || OPTS+=(--no-advisor)
 # The Builder opens here, after its worktree and brief exist: the one place the pick is logged.
 open_builder() {
@@ -101,6 +135,8 @@ T=${T//'{reviewer}'/"${BY^}"}
 T=${T//'{pass-script}'/"builder-$BY-pass.sh"}
 T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
+# Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
+[ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
 SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
@@ -127,6 +163,7 @@ SIZING=$(pp_issue_sizing) || exit 2
 # dashboard reads the issues from that section, and its reader takes any "# " line as a heading.
 T=${T//'{batch}'/"$(sed -E 's/^(#+ )/##\1/' "$BATCH")"}
 echo "advisor: $RULE" >&2
+if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else echo "effort: $DEFAULT (the setup default)" >&2; fi
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
   || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
@@ -135,8 +172,34 @@ if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; exit 0; fi
 # The second call of a risky launch: the first made the worktree and opened the
 # design pane. The Builder opens only once the note is written; nothing waits.
 NOTE=$WT/.claude/briefs/$UNIT-design.md
-if [ "$RISKY" = 1 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
+if [ "$RESUME" = 1 ]; then
+  # Only the effort may change between the two calls (main's ruling 1); the advisor, batch and review loop the
+  # first call's brief states are what this Builder opens with, so any other difference is refused.
+  ON=$(cat "$WT/.claude/briefs/$UNIT.md" 2>/dev/null || true) NOW=$T
+  [ -z "$REC" ] || ON=${ON/$'\n'"$REC"$'\n'/}
+  [ -z "$OVERRIDE" ] || NOW=${NOW/$'\n'"$OVERRIDE"$'\n'/}
+  [ "$ON" = "$NOW" ] || { echo "REFUSED: this call renders another brief than the first call of this risky launch wrote, other than its effort. Run it again with the first call's --small, on the same batch file; the Builder was not launched." >&2; exit 2; }
   [ -s "$NOTE" ] || { echo "no design note at $NOTE yet; the Builder was not launched. Run this again once the design pane has written it." >&2; exit 1; }
+  # A changed effort is rewritten into both briefs and logged in the evidence before the pane opens, so the records
+  # match what runs. Each record is checked on its own: a retry after a failed write finishes what is still owed.
+  EV=$WT/.claude/briefs/$UNIT-evidence.md MB=$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md
+  # "<effort>|<reason>" the evidence last recorded: the first call's override line, then each change after it.
+  GOT=$({ cat "$EV" 2>/dev/null || true; } | awk -v d="$DEFAULT" '
+    /^effort override: builder [a-z]+ -> [a-z]+: / { e = $6; sub(/:$/, "", e); r = $0; sub(/^effort override: builder [a-z]+ -> [a-z]+: /, "", r) }
+    /^effort changed at Builder launch: [a-z]+ -> [a-z]+, reason: / { e = $8; sub(/,$/, "", e); r = $0; sub(/^effort changed at Builder launch: [a-z]+ -> [a-z]+, reason: /, "", r) }
+    END { print (e == "" ? d : e) "|" r }')
+  LINE=; [ "$RAISE" = 0 ] || [ "$GOT" = "$EFFORT|$WHY" ] || LINE="effort changed at Builder launch: ${GOT%%|*} -> $EFFORT, reason: $WHY"
+  if [ "$(cat "$WT/.claude/briefs/$UNIT.md")" != "$T" ] || [ "$(cat "$MB" 2>/dev/null || true)" != "$T" ] || [ -n "$LINE" ]; then
+    # A running Builder keeps the effort it opened with, so its records are not rewritten under it.
+    . "$HERE/codex-helpers.sh"
+    LIVE=$(live_pane_with_title "path:$WT" "$(pane_title builder "$UNIT")") || LIVE="(its pane list could not be read)"
+    [ -z "$LIVE" ] || { echo "REFUSED: a Builder for $UNIT is already running $LIVE; its brief and evidence were left as they are. Close it, then launch again." >&2; exit 2; }
+    # Each record is replaced whole, never cut short in place: a half-written brief would refuse the retry.
+    put() { printf '%s\n' "$2" > "$(dirname "$1")/.$(basename "$1").tmp" && mv -f "$(dirname "$1")/.$(basename "$1").tmp" "$1"; }
+    OLD=$(cat "$EV" 2>/dev/null || true)
+    { put "$WT/.claude/briefs/$UNIT.md" "$T" && put "$MB" "$T" && { [ -z "$LINE" ] || put "$EV" "${OLD:+$OLD$'\n'}$LINE"; }; } \
+      || { echo "could not record the changed effort for $UNIT; the Builder was not launched. Run the same command again to finish." >&2; exit 1; }
+  fi
   open_builder
 fi
 
@@ -145,6 +208,7 @@ pp_worktree_new "$UNIT" || exit 1
 bash "$HERE/worktree-setup.sh" "$WT" --builder
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
+[ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"
 # Main's own copy: the pass script reads the stated limits from it, never from the Builder's.
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
   || { echo "could not keep main's copy of the brief for $UNIT" >&2; exit 1; }

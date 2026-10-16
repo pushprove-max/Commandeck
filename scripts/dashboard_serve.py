@@ -65,6 +65,8 @@ CHECKS = {
     'sizes': lambda v: id_map(v, lambda n: type(n) is int and 1 <= n <= 4),
     # A preset, or the whole number of pixels a panel was dragged to (app.js PX_MIN, PX_MAX).
     'heights': lambda v: id_map(v, lambda h: (type(h) is str and h in HEIGHTS) or (type(h) is int and 60 <= h <= 4000)),
+    # Each build the owner folded (true) or unfolded (false): a running one by its unit name, a finished one by its commit.
+    'builds': lambda v: id_map(v, lambda b: type(b) is bool),
 }
 
 

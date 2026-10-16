@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.9.0-111111?style=flat-square" alt="Version 0.9.0">
+  <img src="https://img.shields.io/badge/version-0.10.0-111111?style=flat-square" alt="Version 0.10.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -268,7 +268,9 @@ stands, the output lists what was not filed, and the exit code is 4.
 
 A launch with `--risky` opens a design pane first. It writes a design note
 that the Builder reads before it builds; running the same command again opens
-the Builder. Every Builder runs with no advisor, a `--risky` one included. A
+the Builder at the effort the first call recorded. Given `--effort` and `--reason`,
+that second call rewrites the brief's override and logs the change in the evidence
+file before the Builder opens; it refuses while that Builder already runs. Every Builder runs with no advisor, a `--risky` one included. A
 launch with `--small` says the batch is expected under 200 changed lines; it
 also drops an advisor written into `config/routing.json`'s `roles.builder` by
 hand. `--model <alias> --reason '<one line>'` puts one launch on
