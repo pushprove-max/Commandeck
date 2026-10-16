@@ -45,6 +45,12 @@ fold() {
 
 append() { printf '%s\n' "$1" >> "$L" || die "could not append to $L"; printf '%s\n' "$1"; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# fresh <askedAt> -- now, for a new snapshot of an id last asked at <askedAt>
+# (empty for a new id). askedAt is how the watcher's seen mark and answer
+# --asked-at tell snapshots apart, and stamps are whole seconds, so a tie waits
+# for the next second; a stamp ahead of the clock would hide the ask from a
+# prompt that answers it now.
+fresh() { local t; t=$(now); [ "$t" != "$1" ] || { sleep 1; t=$(now); }; printf '%s\n' "$t"; }
 
 # Same question: equal once case, punctuation and spacing are dropped, or a
 # reworded one whose content words (stop words out, plural/-ing/-ed endings
@@ -170,7 +176,8 @@ case "${1:-}" in
     if [ -n "$waits" ]; then
       ! jq -e --arg id "$2" 'any(.[]; .id == $id)' <<<"$cur" >/dev/null || die "decision $2 already exists"
     elif [ -z "$reask" ]; then gate "$cur" "$2" "$3" "$5"; fi
-    append "$(jq -cn --arg id "$2" --arg q "$3" --arg d "$4" --arg s "$5${reask:+; re-ask: $reask}" --arg at "$(now)" --arg w "$waits" \
+    append "$(jq -cn --arg id "$2" --arg q "$3" --arg d "$4" --arg s "$5${reask:+; re-ask: $reask}" \
+      --arg at "$(fresh "$(jq -r --arg id "$2" '.[] | select(.id == $id) | .askedAt' <<<"$cur")")" --arg w "$waits" \
       '{id: $id, askedAt: $at, question: $q, proposedDefault: $d, source: $s, answeredAt: null, answer: null}
        + (if $w == "" then {} else {waitsOn: $w} end)')" ;;
   check)
@@ -189,8 +196,8 @@ case "${1:-}" in
     gate "$cur" "$id" "$q" ;;
   answer)
     # --asked-at: answer only the snapshot the caller read. A hook that read
-    # its open rows before a reopen must not close the reopened ask.
-    # ponytail: whole-second stamps; a reopen in the ask's own second passes.
+    # its open rows before a reopen must not close the reopened ask (reopen
+    # always moves askedAt on).
     # --correct: replace a wrongly recorded answer; the old one goes to .history.
     asked="" correct=""
     if [ $# -eq 5 ] && [ "$4" = --asked-at ]; then asked=$5
@@ -222,7 +229,7 @@ case "${1:-}" in
     prev=$(jq -c --arg id "$2" '.[] | select(.id == $id)' <<<"$cur")
     [ -n "$prev" ] || die "unknown decision $2"
     ! jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is still open"
-    append "$(jq -c --arg at "$(now)" '.askedAt = $at | .answeredAt = null | .answer = null
+    append "$(jq -c --arg at "$(fresh "$(jq -r .askedAt <<<"$prev")")" '.askedAt = $at | .answeredAt = null | .answer = null
       | .source |= (index("; re-ask: ") as $i | if $i then .[:$i] else . end)' <<<"$prev")" ;;
   list)
     [ $# -eq 1 ] || usage

@@ -49,6 +49,32 @@ check "the watcher fires an open decision" "deploy-window-$DAY rc=0" "$(watch | 
 check "a restart does not fire it again" "rc=1" "$(watch | paste -sd' ' -)"
 dec answer "deploy-window-$DAY" 'Noon' >/dev/null; dec reopen "deploy-window-$DAY" >/dev/null
 check "a reopened decision fires again" "deploy-window-$DAY rc=0" "$(watch | paste -sd' ' -)"
+# A fast machine (CI's Linux runner) asks, answers and reopens in one second: the
+# reopen still needs a new askedAt, or the watcher's id@askedAt mark hides it and
+# an answer that read the old snapshot closes the reopened ask. That askedAt must
+# not be ahead of the clock either: the prompt hook answers only asks stamped no
+# later than the prompt. The clock is frozen (epoch in $TMP/clock) and moves only
+# when something sleeps; the hook's `date -u -d @<epoch>` reaches the real date.
+mkdir "$TMP/bin"; date -u -d 2026-10-01T09:00:00Z +%s > "$TMP/clock"
+printf '#!/bin/sh\ncase "$*" in "-u +"*) exec %q -u -d "@$(cat %q)" "$2" ;; +%%s) exec cat %q ;; esac\nexec %q "$@"\n' \
+  "$(command -v date)" "$TMP/clock" "$TMP/clock" "$(command -v date)" > "$TMP/bin/date"
+printf '#!/bin/sh\necho $(( $(cat %q) + 1 )) > %q\n' "$TMP/clock" "$TMP/clock" > "$TMP/bin/sleep"
+chmod +x "$TMP/bin/date" "$TMP/bin/sleep"
+fdec() { PATH="$TMP/bin:$PATH" dec "$@"; }
+fprompt() { jq -cn --arg p "$1" --arg cwd "$TMP/main" '{hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: $cwd, prompt: $p}' \
+  | env -u CLAUDE_PROJECT_DIR -u COMMANDECK_REVIEWER PATH="$TMP/bin:$PATH" HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" \
+      COMMANDECK_RULING_LOG="$TMP/rulings.jsonl" COMMANDECK_HOOK_FIRE_LOG="$TMP/fire.jsonl" bash "$REAL/hooks/ruling-log.sh" >/dev/null 2>&1; }
+fdec add same-second 'Rotate the keys?' none main >/dev/null
+check "the watcher fires a decision on a frozen clock" "same-second rc=0" "$(watch | paste -sd' ' -)"
+fdec answer same-second Yes >/dev/null; fdec reopen same-second >/dev/null
+check "a reopen in the ask's own second fires again" "same-second rc=0" "$(watch | paste -sd' ' -)"
+check "and an answer that read the old snapshot refuses" 1 \
+  "$(fdec answer same-second No --asked-at 2026-10-01T09:00:00Z >/dev/null 2>&1; echo $?)"
+fprompt "same-second: yes"
+check "the owner's reply right after the reopen closes it" "answered in chat" \
+  "$(dec list | jq -r '.[] | select(.id == "same-second") | .answer // "open" | .[:16]')"
+fdec add same-second 'Rotate the keys?' none main --reask 'the old keys leaked' >/dev/null
+check "a re-ask in the answer's own second fires again" "same-second rc=0" "$(watch | paste -sd' ' -)"
 # A Builder's question waits on main: the relay pane the watcher wakes would put it to the owner.
 dec add u1-msg_q1 'Which fixture?' none 'u1 asks' --waits-on main >/dev/null
 check "a Builder's question waiting on main never wakes the relay" "rc=1" "$(watch | paste -sd' ' -)"

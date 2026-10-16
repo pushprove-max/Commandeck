@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 -- 2026-10-16
+
+- A decision reopened or re-asked in the second it was last asked now waits
+  for the next second and takes that as its new ask time. The Chief of Staff's
+  watcher puts it to the owner again, and an answer read before the reopen
+  cannot close it (the 0.7.0 Linux CI failure).
+
 ## 0.7.0 -- 2026-10-16
 
 Setup asks better questions, shows every change before it makes one, and can
