@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.13.1 -- 2026-10-17
+
+- Fresh-round hand-off waits while the Builder's pane is busy, ends when the pane is gone or Orca fails five times in
+  a row, and runs one at a time per pane. (#157)
+- The watcher no longer posts "stopped without reporting" while a Builder waits on a review pass it started, for up
+  to an hour. (#158)
+- A fresh-round failure notice reaches main as a question, with the command that re-runs the hand-off. (#159)
+- orca-wait shows every message that cites a ruling id or comes from the relay's pane, and keeps every message it
+  hides in main-watch/messages/hidden.jsonl, which its summary line names. A batch too large for a command line
+  drains instead of replaying forever. (#160)
+- Project lookup from outside a checkout falls back to Orca's entry for the pane, and its failure names where it
+  looked. (#161)
+- plan-worktree-close.sh finds the plan author's pane when Orca lists its worktree only in worktreeId or ptyId. (#162)
+- read-verdict.sh: on a screen that may end inside a fence, a GO is not read as the verdict; other verdicts are. (#163)
+- merge-unit-local.sh writes the Builder's ledger row with its seat tag, so it names the Builder's own session. (#164)
+- The Chief-of-Staff poller always shows a message sent to its own handle, FYI or not. (#166)
+- main-watch posts no heads-up while a project's own watcher holds a live claim in <scratch>/heads-up-owner, and says
+  so once; a note the owner cannot have seen is posted once the claim ends. (#167)
+- merge-unit-local.test.sh is back with one fast case: the Builder's ledger row.
+
 ## 0.13.0 -- 2026-10-17
 
 - The merge check (`testCommand`) is now `bash scripts/run-shell-tests.sh --changed`: it runs only the shell tests the
