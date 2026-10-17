@@ -14,6 +14,14 @@
   change touches, and each touched script's or hook's same-name test. The whole suite stays
   `bash scripts/run-shell-tests.sh`, and CI still runs it on every push.
 - Removed the three slowest shell tests: builder-launch.test.sh, suite-rerun-guard.test.sh and merge-unit-local.test.sh.
+- Setup names the paved-road template to start from when `.claude/paved-road.md` is missing (#155).
+- The dashboard shows a unit's planning as its Planning stage: on the plan card, first on the Builder's card and in
+  its cost total, seat by seat, including relaunches and seats in their own Codex home (#156).
+- `seat.sh collect` with no `--marker` closes on the marker the last wait proved from a finished turn; a wait that
+  timed out, or a reply that only quotes the marker (a fenced one on screen too), saves none.
+- `seat.sh` finds a seat's sessions in the Codex home its role is routed to (`codexHome`).
+- The dashboard stops on a Mac with BSD stat, naming GNU stat, before it writes anything.
+- main-session template: a planner's size target is soft.
 
 ## 0.11.2 -- 2026-10-16
 
