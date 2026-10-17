@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.2 -- 2026-10-16
+
+- `scripts/platform-audit/verify.sh` refuses a verdict with two rows for one finding: the later row silently
+  replaced the earlier one, so a confirmed P1 could count as refuted and the audit still recorded HEAD.
+- `hooks/suite-rerun-guard.sh` starts Python once per call, not three times, and forks less: about 40% faster per
+  call, and its self-test drops from about 77 s to about 50 s, well under the shell-test runner's 120 s limit. Its
+  Python no longer imports a `shlex.py` or `re.py` from the project folder.
+- `builder-launch.sh` refuses a raise whose brief or evidence cannot be read, keeping the evidence history, and
+  refuses a directory where a record belongs instead of writing inside it (#152, #153).
+- `dashboard.sh` keeps an unreadable `unit-cost.json` as it is instead of overwriting it with only the latest units'
+  costs; a corrupt one is still reset (#154). `--unregister` refuses an unreadable registry instead of emptying it.
+
 ## 0.11.1 -- 2026-10-16
 
 - `scripts/platform-audit/run-audit.sh` runs its verifiers under bash 5.2 (ubuntu CI) too: bash 5.2 could not re-read

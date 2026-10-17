@@ -338,8 +338,12 @@ units() {
       | python3 "$HERE/dashboard_limit.py" units "$NOW" "$CACHE" "$HOME/.claude/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
       && jq -e 'objects' >/dev/null 2>&1 <<<"$costs"; then
     ok unit-cost
-    had=$(jq -ce 'objects' "$kept" 2>/dev/null) || had='{}'
-    jq -cn --argjson o "$had" --argjson c "$costs" '$o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"
+    # A kept file there but unreadable (or a directory) is left as it is: read as empty, the write would lose every
+    # earlier unit's cost. One that reads but is not an object is corrupt, and starts again empty.
+    if [ ! -e "$kept" ]; then had='{}'
+    elif had=$(cat "$kept" 2>/dev/null); then had=$(jq -ce 'objects' <<<"$had" 2>/dev/null) || had='{}'
+    else had=; fi
+    [ -z "$had" ] || { jq -cn --argjson o "$had" --argjson c "$costs" '$o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"; }
   else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
   jq -c --argjson k "$known" --argjson fin "$(finished_builds)" --argjson c "$costs" --argjson kept "$(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}')" \
     '{inFlight: (if $k then map(del(.rec) | if .builder then .builder.cost = ($c[.unit]? // null) else . end) else null end),
@@ -845,6 +849,8 @@ register() {
 unregister() {
   local p=$1
   [ ! -d "$1" ] || { p=$(cd "$1" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && p=${p%/.git} || p=$1; }
+  # Read as empty, an unreadable registry (or a directory) would be rewritten without every project in it.
+  [ ! -e "$REG" ] || { [ -f "$REG" ] && [ -r "$REG" ]; } || { echo "dashboard: cannot read $REG; nothing unregistered" >&2; return 1; }
   registered | grep -vxF -- "$p" > "$REG.new.$$"; mv -f "$REG.new.$$" "$REG" && echo "dashboard: unregistered $p"
 }
 

@@ -36,8 +36,9 @@ printf '# u-verdicts -- Builder batch\n\neffort override: builder medium -> high
 mkdir -p "$MAIN/.claude" "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")"
 echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
 echo '{"type":"assistant","message":{"usage":{"cache_read_input_tokens":150000,"input_tokens":12}}}' > "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$WS/u-verdicts")/s.jsonl"
-env -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" \
-  COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$T/out/run" >"$T/out.log" 2>&1
+dash() { env -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$T/out/run" >"$T/out.log" 2>&1; }
+dash
 built() { jq -c --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $u) | .builder.built]' "$T/out/run/project.json" 2>&1; }
 
 check "every issue the Per issue table marks built counts as built" \
@@ -58,6 +59,23 @@ printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","
   '{"event":"codex-start","ts":"2026-10-10T12:50:00Z","pass":"review","round":2}' > "$T/log.jsonl"
 check "each review stage carries its pass's round; building and fixing carry none" '[["building",null],["review",1],["fixing",null],["review",2]]' \
   "$(jq -s --argjson now 0 -f "$SOURCE/scripts/dashboard_builders.jq" "$T/log.jsonl" | jq -c '[.stageHistory[] | [.stage, .round]]')"
+
+# The costs kept for finished builds are written back whole on every run. A kept file that could not be read
+# was taken as empty and overwritten, losing every earlier unit's cost; one that reads but is not an object is reset.
+K=$T/out/cache/demo/unit-cost.json
+printf '{"old-unit":{"usd":1}}\n' > "$K"; chmod 000 "$K"; dash; chmod 644 "$K"
+check "an unreadable kept cost file is left as it was" '{"old-unit":{"usd":1}}' "$(jq -c . "$K" 2>&1)"
+echo 'not json{' > "$K"; dash
+check "a corrupt kept cost file is reset to an object" '{}' "$(jq -c . "$K" 2>&1)"
+rm "$K"; mkdir "$K"; dash
+check "a directory where the kept cost file belongs gets nothing put inside it" 0 "$(ls -A "$K" | wc -l | tr -d ' ')"
+# The same fault in --unregister: an unreadable registry was rewritten as empty, dropping every registered project.
+unreg() { COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" bash "$SOURCE/scripts/dashboard.sh" --unregister "$1" >/dev/null 2>&1; }
+R=$T/out/projects; printf '/a\n/b\n' > "$R"; chmod 000 "$R"; unreg /a
+check "--unregister with an unreadable registry fails and leaves it as it was" "1 /a /b" "$? $(chmod 644 "$R"; paste -sd' ' "$R")"
+unreg /a; check "--unregister drops only that project" "0 /b" "$? $(paste -sd' ' "$R")"
+rm "$R"; mkdir "$R"; unreg /b
+check "--unregister with a directory where the registry belongs fails, putting nothing inside it" "1 0" "$? $(ls -A "$R" | wc -l | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

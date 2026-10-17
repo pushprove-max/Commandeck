@@ -131,7 +131,7 @@ turn_calls() {
 N=0 AT='' MID=''
 { read -r N AT MID < "$STREAK"; } 2>/dev/null
 case "$N" in ''|*[!0-9]*) N=0 ;; esac
-printf -v NOW '%(%s)T' -1
+NOW=$(date +%s)
 case "$AT" in ''|*[!0-9]*) ;; *) [ $((NOW - AT)) -le "$GAP" ] || N=0 ;; esac
 case "$EVT" in PostToolUse*)
   # Every counted call keeps its message id: a sibling that reaches the transcript late is then not counted again.

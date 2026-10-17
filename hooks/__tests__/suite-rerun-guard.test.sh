@@ -327,5 +327,25 @@ for c in 'npm run test:psi && CI=1 npm run typecheck' 'npm run test:psi && CI=1 
   check "a later suite after plain assignments: recorded: $c" 2 "$(run_hook "$(json "$c")")"
 done
 
+# The hook runs on every suite call, and each Python start costs tens of milliseconds: three per call made this file
+# take 77 s and pass the shell-test runner's 120 s limit on a loaded Mac. One call lexes both forms of the segments.
+mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$TMP/py-calls" "$(command -v python3)" > "$TMP/bin/python3"
+chmod +x "$TMP/bin/python3"
+for c in 'set -o pipefail; npm run test:kappa 2>&1 | tail -3' 'cd infra && npm run test:kappa'; do
+  : > "$TMP/py-calls"; PATH="$TMP/bin:$PATH" run_hook "$(json "$c")" >/dev/null
+  PATH="$TMP/bin:$PATH" complete "$(json "$c")"
+  check "one Python start per hook call, PreToolUse and completion: $c" 2 "$(wc -l < "$TMP/py-calls" | tr -d ' ')"
+done
+# python3 -c puts the working directory first on its import path, so a project's own shlex.py ran inside the hook.
+mkdir -p "$TMP/planted"; printf 'open(%s, "w").write("ran")\n' "'$TMP/planted/ran'" > "$TMP/planted/shlex.py"
+(cd "$TMP/planted" && run_hook "$(json 'npm run test:lambda')" >/dev/null)
+check "a shlex.py in the working directory is not imported" no "$([ -e "$TMP/planted/ran" ] && echo yes || echo no)"
+
+# The clock is date(1): printf's %()T needs Bash 4.2, and the launcher takes any Bash 4. Under 4.0/4.1 the record
+# got no time, so a finished run aged from 1970 and never blocked its rerun.
+printf '#!/bin/sh\necho 1234567890\n' > "$TMP/bin/date"; chmod +x "$TMP/bin/date"
+COMMANDECK_SUITE_RUNS_DIR="$TMP/clock" PATH="$TMP/bin:$PATH" run_hook "$(json 'npm run test:mu')" >/dev/null
+check "the run's record carries the time date(1) gives" 1234567890 "$(cut -d' ' -f1 "$TMP"/clock/* 2>/dev/null)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

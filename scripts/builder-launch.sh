@@ -85,10 +85,13 @@ fi
 RESUME=0 REC=
 if [ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
   RESUME=1
+  # A record there but unreadable (or a directory) stops the launch: read as empty, its rewrite would lose its history.
+  rd() { [ ! -e "$1" ] || cat "$1" || { echo "could not read $1; the Builder was not launched and no record was changed." >&2; return 1; }; }
   # One second call of a unit at a time, from reading its records to the pane's launch: a concurrent one saw no
   # Builder and rewrote the records of the one opening. exec keeps the fd, so seat.sh holds the lock until it exits.
   pp_builder_lock "$UNIT" || exit 1
-  REC=$(awk '/^## The batch/ { exit } /^effort override: / { print; exit }' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null || true)
+  WB=$(rd "$WT/.claude/briefs/$UNIT.md") || exit 1
+  REC=$(awk '/^## The batch/ { exit } /^effort override: / { print; exit }' <<<"$WB")
   # With no --effort it opens at what the first call recorded, never the setup default (main's ruling 1).
   if [ "$RAISE" = 0 ] && [ -n "$REC" ]; then
     EFFORT=${REC#* -> } WHY=${REC#effort override: builder * -> *: }; RAISE=1 EFFORT=${EFFORT%%:*} OVERRIDE=$REC
@@ -177,7 +180,7 @@ NOTE=$WT/.claude/briefs/$UNIT-design.md
 if [ "$RESUME" = 1 ]; then
   # Only the effort may change between the two calls (main's ruling 1); the advisor, batch and review loop the
   # first call's brief states are what this Builder opens with, so any other difference is refused.
-  ON=$(cat "$WT/.claude/briefs/$UNIT.md" 2>/dev/null || true) NOW=$T
+  ON=$WB NOW=$T
   [ -z "$REC" ] || ON=${ON/$'\n'"$REC"$'\n'/}
   [ -z "$OVERRIDE" ] || NOW=${NOW/$'\n'"$OVERRIDE"$'\n'/}
   [ "$ON" = "$NOW" ] || { echo "REFUSED: this call renders another brief than the first call of this risky launch wrote, other than its effort. Run it again with the first call's --small, on the same batch file; the Builder was not launched." >&2; exit 2; }
@@ -185,21 +188,22 @@ if [ "$RESUME" = 1 ]; then
   # A changed effort is rewritten into both briefs and logged in the evidence before the pane opens, so the records
   # match what runs. Each record is checked on its own: a retry after a failed write finishes what is still owed.
   EV=$WT/.claude/briefs/$UNIT-evidence.md MB=$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md
+  EVT=$(rd "$EV") && MBT=$(rd "$MB") || exit 1
   # "<effort>|<reason>" the evidence last recorded: the first call's override line, then each change after it.
-  GOT=$({ cat "$EV" 2>/dev/null || true; } | awk -v d="$DEFAULT" '
+  GOT=$(printf '%s\n' "$EVT" | awk -v d="$DEFAULT" '
     /^effort override: builder [a-z]+ -> [a-z]+: / { e = $6; sub(/:$/, "", e); r = $0; sub(/^effort override: builder [a-z]+ -> [a-z]+: /, "", r) }
     /^effort changed at Builder launch: [a-z]+ -> [a-z]+, reason: / { e = $8; sub(/,$/, "", e); r = $0; sub(/^effort changed at Builder launch: [a-z]+ -> [a-z]+, reason: /, "", r) }
     END { print (e == "" ? d : e) "|" r }')
   LINE=; [ "$RAISE" = 0 ] || [ "$GOT" = "$EFFORT|$WHY" ] || LINE="effort changed at Builder launch: ${GOT%%|*} -> $EFFORT, reason: $WHY"
-  if [ "$(cat "$WT/.claude/briefs/$UNIT.md")" != "$T" ] || [ "$(cat "$MB" 2>/dev/null || true)" != "$T" ] || [ -n "$LINE" ]; then
+  if [ "$WB" != "$T" ] || [ "$MBT" != "$T" ] || [ -n "$LINE" ]; then
     # A running Builder keeps the effort it opened with, so its records are not rewritten under it.
     . "$HERE/codex-helpers.sh"
     LIVE=$(live_pane_with_title "path:$WT" "$(pane_title builder "$UNIT")") || LIVE="(its pane list could not be read)"
     [ -z "$LIVE" ] || { echo "REFUSED: a Builder for $UNIT is already running $LIVE; its brief and evidence were left as they are. Close it, then launch again." >&2; exit 2; }
-    # Each record is replaced whole, never cut short in place: a half-written brief would refuse the retry.
-    put() { printf '%s\n' "$2" > "$(dirname "$1")/.$(basename "$1").tmp" && mv -f "$(dirname "$1")/.$(basename "$1").tmp" "$1"; }
-    OLD=$(cat "$EV" 2>/dev/null || true)
-    { put "$WT/.claude/briefs/$UNIT.md" "$T" && put "$MB" "$T" && { [ -z "$LINE" ] || put "$EV" "${OLD:+$OLD$'\n'}$LINE"; }; } \
+    # Each record is replaced whole, never cut short in place: a half-written brief would refuse the retry. mv would
+    # put it inside a directory at that path and succeed, so one is refused.
+    put() { [ ! -d "$1" ] && printf '%s\n' "$2" > "$(dirname "$1")/.$(basename "$1").tmp" && mv -f "$(dirname "$1")/.$(basename "$1").tmp" "$1"; }
+    { put "$WT/.claude/briefs/$UNIT.md" "$T" && put "$MB" "$T" && { [ -z "$LINE" ] || put "$EV" "${EVT:+$EVT$'\n'}$LINE"; }; } \
       || { echo "could not record the changed effort for $UNIT; the Builder was not launched. Run the same command again to finish." >&2; exit 1; }
   fi
   open_builder

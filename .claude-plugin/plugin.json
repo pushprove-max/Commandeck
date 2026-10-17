@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",

@@ -48,19 +48,19 @@ CWD=$(cd "$CWD" && pwd -P)
 # with its target. A line whose quote is still open is split together with the
 # lines that close it: split alone, a quoted string spanning lines lost its
 # quotes and its prose ran as a command.
-# With a second argument, every word is kept, re-quoted, whitespace folded: the
+# It then prints the same segments again with every word kept, re-quoted, whitespace folded: the
 # run key needs them, since `-t "one case"` picks the tests and is not the two
 # words `-t one case`. Each segment then ends with \x1f and the operator after it, and
 # with \x1e before that when it had a redirection (one that fails skips the command).
 # A quoted or escaped ; & | < > is a word, never an operator: shlex hands both back
 # alike, so such characters are swapped out before it splits and back after.
+# -I: the working directory is the project's, and -c would import its own shlex.py or re.py.
 chain_segments() {
-  KEEP_QUOTED=${2:-} CMD=$1 python3 -c '
+  CMD=$1 python3 -I -S -c '
 import os, re, shlex
-keep = os.environ["KEEP_QUOTED"]
 HIDE = str.maketrans(";&|<>", "\ue000\ue001\ue002\ue003\ue004")
 SHOW = {v: k for k, v in HIDE.items()}
-def emit(toks):
+def emit(toks, keep):
     seg, skip, redir = [], False, ""
     for t in toks:
         if skip:
@@ -105,6 +105,7 @@ lines = [re.sub(r"(\\*)#", midword_hash, l) for l in os.environ["CMD"].replace("
 # missed a form every round. Any `<<` outside a comment (a `#` that starts a
 # word with no quote before it) means one line at a time, body included: a
 # suite named in a body blocks, one after it is never hidden.
+groups = []
 COMMENT = re.compile(r"^([^\x27\x22#]*?)(?:^|(?<=[ \t]))#.*")
 if any("<<" in COMMENT.sub(r"\1", l) for l in lines):
     for line in lines:
@@ -112,8 +113,8 @@ if any("<<" in COMMENT.sub(r"\1", l) for l in lines):
             toks = lex(line)
         except ValueError:
             toks = re.findall(r"[^ \t]+", line)
-        emit(toks)
-    raise SystemExit
+        groups.append(toks)
+    lines = []  # every line is read: the joining loop below has none left
 i = 0
 while i < len(lines):
     for j in range(i, len(lines)):
@@ -125,8 +126,12 @@ while i < len(lines):
     else:
         # A quote that never closes costs only its own line.
         j, toks = i, re.findall(r"[^ \t]+", lines[i])
-    emit(toks)
+    groups.append(toks)
     i = j + 1
+# One line per segment in both forms, so the caller splits the output in half.
+for keep in ("", "1"):
+    for toks in groups:
+        emit(toks, keep)
 '
 }
 
@@ -146,25 +151,29 @@ SUITE_RE='(^|[[:blank:];&|(`])(npm[[:blank:]]+(run[[:blank:]]+)?(test|typecheck)
 
 # shortcut: knows npm, tsc and vitest runs only; add the project's testCommand
 # here when a project with another runner turns the strict tier on.
-printf '%s' "$CMD" | grep -qE "$SUITE_RE" || exit 0
+grep -qE "$SUITE_RE" <<< "$CMD" || exit 0
 
 # The directory the suite runs in: the rerun state below is keyed on it, not on
 # the payload's cwd.
-D=$CWD CWD0=$CWD
-RUN_CWD=""
-while IFS= read -r SEG; do
-  D=$(seg_cd "$D" "$SEG")
-  [ -z "$RUN_CWD" ] && printf '%s' "$SEG" | grep -qE "$SUITE_RE" && RUN_CWD=$D
-done <<< "$(chain_segments "$CMD")"
-CWD=${RUN_CWD:-$D}
 # Match the words that run, not quoted prose: a message body naming `npm test`
 # is not a suite run.
-SEGS=$(chain_segments "$CMD")
+# One Python call for both forms (this hook runs on every suite call): the plain half, then the kept half.
+mapfile -t ALL < <(chain_segments "$CMD")
+PLAIN=("${ALL[@]:0:${#ALL[@]}/2}") KEPT=("${ALL[@]:${#ALL[@]}/2}")
+printf -v SEGS '%s\n' "${PLAIN[@]}"
+D=$CWD CWD0=$CWD
+RUN_CWD=""
+# A segment is one line, so [[ =~ ]] matches it as grep would, with no fork: this hook runs on every suite call.
+while IFS= read -r SEG; do
+  case $SEG in cd*|'(cd'*) D=$(seg_cd "$D" "$SEG") ;; esac
+  [ -z "$RUN_CWD" ] && [[ $SEG =~ $SUITE_RE ]] && RUN_CWD=$D
+done <<< "$SEGS"
+CWD=${RUN_CWD:-$D}
 
-printf '%s' "$SEGS" | grep -qE "$SUITE_RE" || exit 0
+grep -qE "$SUITE_RE" <<< "$SEGS" || exit 0
 
 # --- same run, same tree, within 30 minutes -----------------------------------
-printf '%s' "$SEGS" | grep -qE '(^|[[:space:];&|(])RERUN=1([[:space:]]|$)' && exit 0
+grep -qE '(^|[[:space:];&|(])RERUN=1([[:space:]]|$)' <<< "$SEGS" && exit 0
 
 # The key is the suite's own words, every argument kept, only when the suite
 # opens the command, or follows one leading `cd <folder> &&` (or `;`) into a
@@ -176,10 +185,8 @@ printf '%s' "$SEGS" | grep -qE '(^|[[:space:];&|(])RERUN=1([[:space:]]|$)' && ex
 # a second suite) is keyed on the whole command: whether a suite ran there
 # hangs on control flow (`false && npm test`, `cd . || npm test`), and a
 # missed block costs a rerun while a wrong one costs a run that never happened.
-mapfile -t PLAIN <<< "$SEGS"
-mapfile -t KEPT < <(chain_segments "$CMD" keep)
 seg() { local s=${KEPT[$1]%$'\x1f'*}; printf '%s' "${s%$'\x1e'}"; }
-suite() { seg "$1" | grep -qE "$SUITE_RE"; }
+suite() { local s=${KEPT[$1]%$'\x1f'*}; [[ ${s%$'\x1e'} =~ $SUITE_RE ]]; }
 S=0
 read -r -a W <<< "${PLAIN[0]:-}"
 T=${W[1]:-}; case $T in /*) ;; ?*) T=$CWD0/$T ;; esac
@@ -195,7 +202,7 @@ KEY=$CMD
 # Counted twice, quotes read as spaces and then with quotes and backslashes taken out as the shell does (
 # `bash -c "npm run \"typecheck\""`); either count over one is a second suite.
 suites() { grep -oE "$SUITE_RE" | wc -l; }
-if suite "$S" && [ "$(printf '%s' "$CMD" | tr "\"'" '  ' | suites)" -le 1 ] && [ "$(printf '%s' "$CMD" | tr -d "\"'\\\\" | suites)" -le 1 ]; then
+if suite "$S" && [ "$(tr "\"'" '  ' <<< "$CMD" | suites)" -le 1 ] && [ "$(tr -d "\"'\\\\" <<< "$CMD" | suites)" -le 1 ]; then
   KEY=$(seg "$S")
   for ((i = S + 1; i < ${#KEPT[@]}; i++)); do suite "$i" && { KEY=$CMD; break; }; done
 fi
@@ -214,12 +221,12 @@ TREE=$( {
     printf '%s\0' "$file"
     git -C "$CWD" hash-object -- "$file" 2>/dev/null || printf 'missing\n'
   done < <(git -C "$CWD" ls-files --others --exclude-standard -z -- "$PAPERS" 2>/dev/null)
-} | sha1sum | cut -c1-40)
+} | sha1sum) TREE=${TREE:0:40}
 [ -n "$TREE" ] || exit 0
 
 DIR="${COMMANDECK_SUITE_RUNS_DIR:-$HOME/.commandeck/suite-runs}"
 mkdir -p "$DIR" 2>/dev/null || exit 0
-STATE="$DIR/$(printf '%s|%s' "$CWD" "$KEY" | sha1sum | cut -c1-40)"
+STATE=$(printf '%s|%s' "$CWD" "$KEY" | sha1sum) STATE=$DIR/${STATE:0:40}
 NOW=$(date +%s)
 
 # own_status -- 0 when the command's exit status is the suite's own. The completion hook hears exit 0
@@ -238,7 +245,8 @@ set_ok() {
   local w o= W
   PF=
   [[ ${KEPT[$1]} == *$'\x1e\x1f'* ]] && return 1
-  read -r -a W <<< "$(seg "$1")"
+  local s=${KEPT[$1]%$'\x1f'*}
+  read -r -a W <<< "${s%$'\x1e'}"
   [ "${W[0]:-}" = set ] || return 1
   for w in "${W[@]:1}"; do
     if [ -n "$o" ]; then
@@ -253,7 +261,8 @@ set_ok() {
 pf_on() { set_ok "$1" && [ "$PF" = on ]; }
 pf_off() {
   local W
-  seg "$1" | tr -d _ | grep -qi pipefail && return 0
+  local s=${KEPT[$1]%$'\x1f'*}; s=${s%$'\x1e'}; s=${s//_/}
+  [[ ${s,,} == *pipefail* ]] && return 0
   read -r -a W <<< "${PLAIN[$1]:-}"
   case ${W[0]:-} in
     set) ! set_ok "$1" ;;

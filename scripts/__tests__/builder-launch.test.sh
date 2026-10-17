@@ -179,6 +179,19 @@ first; (ulimit -f 1; second --effort high --reason billing)
 r1=$?:$(grep -c '^terminal create' "$T/orca.log"); second --effort high --reason billing
 check "a raise cut short mid-write: no pane; the retry opens at high with every record saying so once" \
   'failed:0:0:--effort high:1:1:1' "$([ "${r1%%:*}" != 0 ] && echo failed || echo 'exit 0'):${r1#*:}:$?:$(opened):$(grep -c '^effort override: builder medium -> high: billing$' "$RB/risky-unit.md"):$(grep -c '^effort override: builder medium -> high: billing$' "$PROJ/.claude/briefs/risky-unit-builder-brief.md"):$(grep -c '^effort changed at Builder launch: medium -> high, reason: billing$' "$RB/risky-unit-evidence.md")"
+# Sol r5: a record that could not be read was taken as empty, so the raise rewrote the evidence with only its new
+# line (its history gone), and a directory where main's brief belongs took the new brief inside it and launched.
+first --effort high --reason 'touches billing'; chmod 000 "$RB/risky-unit-evidence.md"; second --effort high --reason billing
+r1=$?:$(grep -c '^terminal create' "$T/orca.log"); chmod 644 "$RB/risky-unit-evidence.md"
+check "an unreadable evidence file: refused with no pane, and its history is kept" '1:0:1:0' \
+  "$r1:$(grep -c '^effort override: builder medium -> high: touches billing$' "$RB/risky-unit-evidence.md"):$(grep -c '^effort changed' "$RB/risky-unit-evidence.md")"
+second --effort high --reason billing
+check "the retry once it reads: opens at high, the evidence keeps the first line and logs the change" '0:--effort high:1:1' \
+  "$?:$(opened):$(grep -c '^effort override: builder medium -> high: touches billing$' "$RB/risky-unit-evidence.md"):$(grep -c '^effort changed at Builder launch: high -> high, reason: billing$' "$RB/risky-unit-evidence.md")"
+first; MB=$PROJ/.claude/briefs/risky-unit-builder-brief.md; rm "$MB"; mkdir "$MB"; second --effort high --reason billing
+check "a directory where main's brief belongs: refused with no pane, nothing put inside it" '1:0:0' \
+  "$?:$(grep -c '^terminal create' "$T/orca.log"):$(ls -A "$MB" | wc -l | tr -d ' ')"
+rmdir "$MB"
 # Sol r3: two second calls at once, one at the default and one raising, both saw no Builder; the default one opened
 # medium while the raising one rewrote the records to high, and only then did seat.sh refuse. The pane is slow to
 # open here, so the raise's check falls inside the other's launch: one call at a time, the raise sees it and refuses.

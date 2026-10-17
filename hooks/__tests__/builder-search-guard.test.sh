@@ -82,5 +82,11 @@ ev PostToolUse gs-j "$(inb "$GREP" j1)"; tx msg-j j2; ev PostToolUse gs-j "$(inb
 check "a batch whose siblings reach the transcript late still counts once" 1 "$(cut -d' ' -f1 /tmp/claude-builder-search-streak-gs-j)"
 unset COMMANDECK_SEARCH_SIBLING_MS
 
+# The clock is date(1): printf's %()T needs Bash 4.2, and the launcher takes any Bash 4. Under 4.0/4.1 the
+# streak got no time, so no gap ever reset it.
+mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho 1234567890\n' > "$TMP/bin/date"; chmod +x "$TMP/bin/date"
+rm -f /tmp/claude-builder-search-streak-gs-clk; PATH="$TMP/bin:$PATH" sg gs-clk "$GREP" >/dev/null
+check "the streak carries the time date(1) gives" 1234567890 "$(cut -d' ' -f2 /tmp/claude-builder-search-streak-gs-clk)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

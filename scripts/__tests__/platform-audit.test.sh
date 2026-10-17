@@ -223,6 +223,9 @@ check "a row with no duplicate answer is no verdict" "1 none" \
 check "a counts line that miscounts the verdicts is no verdict" "1 none" "$(verdict "$GOOD" 'confirmed=2 partly=0 refuted=0 duplicates=1')"
 check "a counts line that miscounts the duplicates is no verdict" "1 none" "$(verdict "$GOOD" 'confirmed=1 partly=0 refuted=1 duplicates=0')"
 check "a verdict with no counts line is no verdict" "1 none" "$(verdict "$GOOD" '')"
+# A second row for one finding would silently replace the first, so a confirmed finding could leave the counts.
+check "two verdict rows for one finding are no verdict, even with counts matching the last" "1 none" \
+  "$(verdict "$GOOD"$'\n| 01-01 | P1 | REFUTED | P3 | new | src/a.ts:3 guarded |' 'confirmed=0 partly=0 refuted=2 duplicates=1')"
 # An indented finding row is still a finding the verifier must answer.
 printf '## Findings\n  | 01-01 | P1 |\n## Coverage\nall\n' > "$V/out/01-auth.md"
 check "an indented finding row with no verdict row is no verdict" "1 none" "$(verdict '' 'confirmed=0 partly=0 refuted=0 duplicates=0')"

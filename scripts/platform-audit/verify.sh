@@ -22,6 +22,8 @@ rows = {}
 for line in v.splitlines():
     c = [x.strip().strip('*`').strip() for x in line.strip().strip('|').split('|')]
     if c[0] in want:
+        if c[0] in rows:
+            sys.exit(f'the verdict judges {c[0]} twice, so one row would silently replace the other')
         rows[c[0]] = c
 n = {'CONFIRMED': 0, 'PARTLY': 0, 'REFUTED': 0, 'dup': 0}
 bad = []
