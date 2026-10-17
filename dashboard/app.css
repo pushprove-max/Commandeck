@@ -379,6 +379,7 @@ body.look-only .card:not([data-look]) { display: none; }
 .trace .stagelist { grid-column: 1 / -1; display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; color: #b8bec8; }
 .stagelist li { display: grid; grid-template-columns: 10px minmax(max-content, 1fr) 90px 120px; gap: 6px; align-items: center; white-space: nowrap; }
 .stagelist li > span:nth-child(n+3) { text-align: right; }
+.stagelist.seats li { grid-template-columns: 10px minmax(max-content, 1fr) repeat(5, max-content); }
 .stagelist li.total { color: var(--ink); font-weight: 600; border-top: 1px solid var(--line); }
 .stagelist li.hi { color: var(--ink); background: var(--line-soft); }
 .stagelist .sw { width: 10px; height: 10px; border-radius: 2px; }

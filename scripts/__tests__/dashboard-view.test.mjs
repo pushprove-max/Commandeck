@@ -409,6 +409,40 @@ test('a stage too narrow for its figures moves every stage to a list under the b
   assert.ok(!lines[2].classList.contains('hi'));
 });
 
+// a unit's planning is its Planning stage, seat by seat; what no seat claims is one row, so the rows sum to the stage.
+const seats = [
+  { role: 'plan-author', model: 'claude-opus-5-5', effort: 'high', from: iso(ago(120)), to: iso(ago(100)), ...tally(0.3, { sec: 1200, calls: 3 }) },
+  { role: 'plan-judge-sol', model: 'gpt-6.1-sol', effort: 'high', from: iso(ago(110)), to: null, ...tally(0, { sec: 600, calls: 1, input: 1000, output: 10 }) },
+  { role: null, model: null, effort: null, from: null, to: null, ...tally(0.1, { sec: 0, calls: 1 }) }];
+const seatRows = (card) => [...card.querySelectorAll('.stagelist.seats li')].map((l) => [...l.children].slice(1).map(text));
+const SEAT_ROWS = [['plan-author', 'claude-opus-5-5 high', '3 calls', '200,000 in / 3,000 out', '$0.30', '20:00'],
+  ['plan-judge-sol', 'gpt-6.1-sol high', '1 calls', '1,000 in / 10 out', '$0.00', '10:00 so far'],
+  ['Not tied to a seat', '', '1 calls', '200,000 in / 3,000 out', '$0.10', '']];
+test("a unit's planning card is its Planning stage: its time and cost, its cost by stage and one row per seat", () => {
+  const w = fresh(Fixed);
+  const cost = { stages: [{ ...stage('planning', 120, null), ...tally(0.4, { calls: 5 }) }], total: tally(0.4, { sec: 7200, calls: 5 }), seats };
+  show(w, { units: { inFlight: [{ unit: 'pw-plan', stage: 'planning', stageSince: iso(ago(120)), ageSec: 60, agents: 'claude:idle', builder: null,
+    plan: { worktree: '/ws/pw-plan', from: iso(ago(120)), seats: [], cost } }] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.equal(text(card.querySelector('.unit-head .state')), 'Planning');
+  assert.equal(text(card.querySelector('.ucost')), "Total time 2h 00m · Cost so far $0.40 (Claude not measured, Codex not measured) · main's own tokens not counted");
+  assert.deepEqual([...card.querySelectorAll('table.costs tr')].map((r) => [...r.children].map(text)).map((r) => [r[0], r[2], r[5]]),
+    [['Stage', 'Model calls', 'Cost'], ['Planning', '5', '$0.40'], ['Unit total', '5', '$0.40']], 'its cost by stage, the planning stage alone');
+  assert.deepEqual(seatRows(card), SEAT_ROWS, 'one row per seat, and what no seat claims in one row');
+});
+
+test("a Builder's card draws its planning first, and lists the planning's seats", () => {
+  const w = fresh(Fixed);
+  const hist = [stage('planning', 120, 90), stage('building', 90, 30), stage('review', 30, null)];
+  const u = costed(hist, [tally(0.4, { calls: 5 }), tally(1), tally(0.5)], tally(1.9, { sec: 7200 }));
+  u.builder.cost.seats = seats;
+  show(w, { units: { inFlight: [u] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.deepEqual([...card.querySelectorAll('.lane.stages i')].map((b) => [b.textContent.split(' ')[0], b.style.left]),
+    [['Planning', '0%'], ['Building', '25%'], ['In', '75%']], 'the planning segment first, from the build clock start');
+  assert.deepEqual(seatRows(card), SEAT_ROWS);
+});
+
 test("a finished build keeps the cost it had at its merge; one with none kept says so, never $0", () => {
   const w = fresh(Fixed);
   const fin = (unit, sha, cost) => ({ unit, sha, at: iso(ago(5)), how: 'merged', open: { P1: 0, P2: 0, P3: 0 }, cost });

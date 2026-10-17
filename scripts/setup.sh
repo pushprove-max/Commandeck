@@ -441,6 +441,7 @@ for f in "${OWN[@]}"; do
     *) NOTES+=("$f: yours loads instead of the plugin's whole version (to change that: $flag replace or merge)") ;;
   esac
 done
+[ -e "$PP_MAIN/.claude/paved-road.md" ] || NOTES+=("paved road: no .claude/paved-road.md; start it from $IL_ROOT/templates/paved-road.md, which also says what .claude/paved-road-areas.tsv holds")
 [ "$RULES" != merge ] || NOTES+=("rules: sessions leave out the plugin's rules your CLAUDE.md and .claude/rules/ already state word for word$(n=$(jq '[.[] | select(. == "keep-mine")] | length' <<<"$DROPS"); [ "$n" = 0 ] || echo ", and the $n you keep your own wording for")")
 
 if [ -n "$PLAN" ]; then

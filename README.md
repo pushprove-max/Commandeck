@@ -162,7 +162,8 @@ setup asks, the picker guard's stray-keypress option is off.
 Then setup prints the plan, every file it would create or change with a
 diff, and asks Apply, Change an answer, or Cancel. Its summary ends in three
 parts: what it did, what needs you (a command it could not run, files to
-commit), and what is optional, with how to change any answer later: run
+commit), and what is optional (a project with no `.claude/paved-road.md`
+is pointed to the template that starts it), with how to change any answer later: run
 `/commandeck:setup` again, or `setup.sh` with only that flag. It also creates
 the project's Orca run, or prints the one command for it. Your own status
 line is set with `--status-line` (uninstall puts the earlier one back).
@@ -470,7 +471,8 @@ The dashboard is one local page for all your projects, with a bar to switch
 between them. A background job collects its data every 60 seconds with no
 model call, and the page reloads every 15. Each project's view shows alerts,
 builds in progress, decisions waiting on you, `main` against its remote,
-every worktree by stage, the 7-day limit, tokens per role over 7 days, recent
+every worktree by stage, a unit's planning as its Planning stage, seat by seat,
+counted in its build's cost, the 7-day limit, tokens per role over 7 days, recent
 hook blocks and the Chief of Staff's inbox. Three panels show GitHub work:
 open pull requests with their checks, open issues by milestone with the
 Builder holding each, and the commits the next push of `main` would send.

@@ -29,7 +29,9 @@
   effort?" for each seat, offering only the models setup allows
   (`planModels`, which `plan-tier.sh` prints), default Opus high
   (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`).
-  One judge round and one revision, never a judging loop. A seat whose
+  A size target in a planner's spec is soft: the planner exceeds it when the
+  content needs it and says why in the plan, never trimming needed content to
+  fit. One judge round and one revision, never a judging loop. A seat whose
   default model is not allowed runs on an allowed one, and a Codex judge with
   no Codex allowed runs as `plan-judge-claude`; its launch says which, and
   you tell the owner. Never refuse an answer for a missing tool. Launch each

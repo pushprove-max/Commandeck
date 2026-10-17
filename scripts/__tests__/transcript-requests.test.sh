@@ -6,7 +6,8 @@
 # row beside the new one (#52). Claude Code 2.1.300 writes api-request,
 # api-request-blob and api-request-shape rows, a third or more of a long log's
 # bytes: no reader may count or price them, nor spend time parsing them, so one
-# still half-written breaks no read (#71).
+# still half-written breaks no read (#71). Each request keeps the transcript it came from, so a planning seat's spend
+# is told from its session's file; a cache from before is read again.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -38,6 +39,27 @@ jq -cn --arg p "$L" --argjson off "$(wc -c < "$L")" \
   '{version: 5, offsets: {($p): $off}, requests: {r1: [1791633600, "claude-haiku-5-5", 100000, 0, 0, 0, 0]}, cwd: {r1: "/proj"}}' > "$T/upgrade/cache.json"
 row r1 m1 >> "$L"
 check "a version-5 cache holding r1, then a line with r1 and m1: one request" "1 0.01" "$(requests "$T/upgrade")"
+
+# --- each request keeps the transcript it came from, so a planning seat's spend is told from its session's file ---
+# A cache from before (Claude's version 6, Codex's version 3) holds no file for a request: it is read again.
+L=$(fresh files); row r1 m1 > "$L"
+jq -cn --arg p "$L" --argjson off "$(wc -c < "$L")" \
+  '{version: 6, offsets: {($p): $off}, requests: {r1: [1791633600, "claude-haiku-5-5", 100000, 0, 0, 0, 0]}, cwd: {r1: "/proj"}, alias: {r1: "r1", m1: "r1"}}' > "$T/files/cache.json"
+check "a version-6 cache is read again, and each row carries its folder and its transcript" "1 /proj $L" \
+  "$(cd "$ROOT/scripts" && python3 -c '
+import sys, dashboard_limit as d
+rows = d.requests(sys.argv[1] + "/projects", sys.argv[1] + "/cache.json", 0, d.epoch("2026-10-10T13:00:00Z"), True)
+print(len(rows), *[x for t in rows for x in t[1:]])' "$T/files" 2>&1)"
+X=$T/cx/sessions/2026/10/10/rollout-a.jsonl; mkdir -p "${X%/*}"
+printf '%s\n' '{"type":"session_meta","timestamp":"2026-10-10T12:00:00Z","payload":{"cwd":"/ws/pu-plan"}}' \
+  '{"type":"token_usage_record","timestamp":"2026-10-10T12:00:05Z","payload":{"response_id":"x1","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}' > "$X"
+jq -cn --arg p "$X" --argjson off "$(wc -c < "$X")" \
+  '{version: 3, files: {($p): [$off, null, null, "/ws/pu-plan"]}, requests: {x1: [1791633605, "unknown Codex model", 10, null, 0, 0, 1]}, cwd: {x1: "/ws/pu-plan"}}' > "$T/cx/cache.json"
+check "a version-3 Codex cache is read again, and each row carries its folder and its rollout" "1 /ws/pu-plan $X" \
+  "$(cd "$ROOT/scripts" && python3 -c '
+import sys, dashboard_limit as d
+rows = d.codex_requests(sys.argv[1] + "/sessions", sys.argv[1] + "/cache.json", 0, d.epoch("2026-10-10T13:00:00Z"), None, True)
+print(len(rows), *[x for t in rows for x in t[1:]])' "$T/cx" 2>&1)"
 
 # --- #71: a 2.1.300 log, its assistant rows among the new api-request rows ---
 # The new rows' shapes are those a 2.1.300 session writes, with short contents.
@@ -159,5 +181,18 @@ b = d.by_agent([row("claude-haiku-5-5"), row("claude-haiku-5-5")], [row("claude-
 u = d.by_agent([row("claude-haiku-5-5")], [row("claude-mystery-9-9")])
 print(b["claude"], b["codex"], u["claude"], u["codex"])' 2>&1); }
 check "a mixed build's parts add up to its total; an unpriced Codex call leaves the Codex part unpriced" "1.0 2.0 0.5 None" "$(split)"
+
+# Two judges launched in one second share a planning worktree: each seat's ledger row names the log its own launch's
+# tag was handed in, never the first log after the launch, or one log is charged to both seats.
+SE=$T/home-se; SWT=$T/se-plan; SX=$SE/.codex/sessions/2026/10/17; mkdir -p "$SX" "$SWT"; git init -q "$T/se-main"
+L0=$(( $(date +%s) - 60 ))
+jrow() { printf '%s\n' "{\"type\":\"session_meta\",\"timestamp\":\"$(date -u -d "@$2" +%Y-%m-%dT%H:%M:%SZ)\",\"payload\":{\"cwd\":\"$SWT\"}}" \
+  "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Judge it. Seat tag $1.\"}]}}"; }
+jrow seat-sol-1 $((L0 + 1)) > "$SX/rollout-sol.jsonl"; jrow seat-astra-1 $((L0 + 2)) > "$SX/rollout-astra.jsonl"
+for s in sol astra; do
+  HOME=$SE COMMANDECK_MAIN=$T/se-main COMMANDECK_SEAT_EVENTS=$T/se.jsonl SEAT_EVENT_WORKTREE=$SWT SEAT_EVENT_AGENT=codex SEAT_EVENT_SPEC=seat-$s-1 \
+    bash "$ROOT/scripts/seat-event.sh" pu "plan-judge-$s" "task_$s" "$L0" >/dev/null 2>&1
+done
+check "each judge's ledger row names its own log" "rollout-sol.jsonl rollout-astra.jsonl" "$(jq -r '.session // "null" | split("/") | last' "$T/se.jsonl" 2>&1 | paste -sd' ' -)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

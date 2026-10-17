@@ -3,7 +3,9 @@
 # owner to edit a shell start file. What this pins: one check names everything missing at once, in two groups (what
 # a package manager can install, with the one command; what only the owner can do, with its step); nothing is
 # installed without --install-missing, and with it the printed command runs once and setup carries on in the same
-# run; and a script the Mac's Bash 3.2 started carries on under Homebrew's, once, with its arguments and input.
+# run; a script the Mac's Bash 3.2 started carries on under Homebrew's, once, with its arguments and input; setup
+# names the paved-road template only when the project has no .claude/paved-road.md; and on a Mac whose stat is BSD
+# the preflight stops the dashboard, naming GNU stat, before it writes anything.
 # Every setup.sh run here stops at the requirements check or at its own argument check, before it writes
 # anything: no run of setup.sh goes further.
 # No package is installed: brew, apt-get and sudo are stand-ins that record their arguments, on a PATH that holds
@@ -115,6 +117,24 @@ else
   check "a tool Homebrew put in a new folder is found by the check that follows the install" "2 brew install flock" "$? $(cat "$T/pm" 2>/dev/null)"
   rm -f "$PLUGIN/scripts/probe.sh"
 fi
+
+# --- the paved-road note: setup's one rule, run alone on a hand-written project (no setup run) ---
+note() { (NOTES=(); PP_MAIN=$PROJ IL_ROOT=$PLUGIN; eval "$(grep -F 'paved-road.md' "$SOURCE/scripts/setup.sh")"; printf '%s\n' ${NOTES[@]+"${NOTES[@]}"}); }
+check "with no .claude/paved-road.md setup names the template to start it from" 1 "$(note | grep -c "start it from $PLUGIN/templates/paved-road.md")"
+check "and the template it names is shipped" 1 "$([ -f "$SOURCE/templates/paved-road.md" ] && echo 1)"
+mkdir -p "$PROJ/.claude"; echo '# Paved road' > "$PROJ/.claude/paved-road.md"
+check "with the file there it says nothing" '' "$(note)"
+rm -rf "$PROJ/.claude"
+
+# --- a Mac whose stat is BSD: the preflight stops the dashboard before it writes anything ---
+# uname and stat are stand-ins; the Homebrew prefix is an empty folder, so no gnubin is added.
+MAC=$T/mac; mkdir -p "$MAC"
+printf '#!/bin/sh\necho Darwin\n' > "$MAC/uname"; printf '#!/bin/sh\necho "stat: illegal option -- -" >&2; exit 1\n' > "$MAC/stat"; chmod +x "$MAC"/*
+OS=Darwin BREW=$T/nobrew BIN="$MAC:$BIN" go dashboard.sh >"$T/out" 2>&1
+check "a Mac with a BSD stat stops the dashboard" 1 $?
+check "with the preflight's message" 1 "$(grep -c 'Mac preflight failed' "$T/out")"
+check "naming GNU stat" 1 "$(grep -c 'GNU stat' "$T/out")"
+check "before any dashboard file is written" 0 "$(find "$HOME/.commandeck" -name project.json 2>/dev/null | grep -c .)"
 
 [ "$FAIL" = 0 ] || { echo "--- last output"; tail -15 "$T/out"; }
 echo "$PASS passed, $FAIL failed"

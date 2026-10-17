@@ -274,13 +274,17 @@
       h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
       seatSpan);
     li.append(head);
-    const cost = isBuilder(u) ? u.builder.cost : undefined;
-    if (isBuilder(u)) {
-      const t0b = parseTime(u.builder.startedAt);
+    // A unit's planning worktree shows its time from the first plan seat's launch, its cost and its cost by stage.
+    const cost = isBuilder(u) ? u.builder.cost : u.plan ? u.plan.cost : undefined;
+    if (isBuilder(u) || u.plan) {
+      const t0b = parseTime(isBuilder(u) ? u.builder.startedAt : u.plan.from);
       const top = h('p', 'ucost');
       top.append('Total time ', strong(Number.isFinite(t0b) ? span((now - t0b) / 1000) : 'not measured'),
         ' · Cost so far ', strong(cost ? splitOf(cost.total) : cost === null ? 'not measured' : NOT_REC), h('small', null, " · main's own tokens not counted"));
       li.append(top);
+      if (!isBuilder(u)) li.append(costTable(cost, cost === null ? 'not measured' : NOT_REC));
+    }
+    if (isBuilder(u)) {
       // Live context against the clear line past which the Builder hands off to a fresh session (a setup answer).
       const ctx = num(u.builder.context), line = num(Number(u.builder.clearLine)), k = (n) => `${Math.round(n / 1000)}K`;
       li.append(h('p', `uctx${ctx !== null && line !== null && ctx > line ? ' hot' : ''}`, ctx === null ? 'Context not measured'
@@ -365,6 +369,8 @@
       list.append(total);
       trace.append(list);
     }
+    const seatList = seatsOf(cost);
+    if (seatList) trace.append(seatList);
     const signAt = num(u.ageSec) === null ? null : now - u.ageSec * 1000;
     const sign = lane('pulse');
     if (signAt !== null) {
@@ -488,6 +494,20 @@
     const f = x.findings && typeof x.findings === 'object' ? ['P0', 'P1', 'P2', 'P3'].filter((k) => num(x.findings[k])).map((k) => `${k} ${x.findings[k]}`) : null;
     const found = f === null ? `findings ${NOT_REC}` : `${f.length ? f.join(' · ') : 'no findings'}${num(x.verdictRound) !== null && x.verdictRound !== pass ? ` in pass ${x.verdictRound}` : ''}`;
     return `pass ${pass} · ${found} · ${num(x.reviewSec) === null ? `minutes ${NOT_REC}` : `${Math.round(x.reviewSec / 60)} min in review`}`;
+  }
+  // The planning stage seat by seat: role, model and effort, calls, tokens, cost and time ("so far" until its
+  // collect). What no seat claims is one row, so the rows sum to the stage.
+  function seatsOf(cost) {
+    if (!cost || !Array.isArray(cost.seats) || !cost.seats.length) return null;
+    const list = h('ol', 'stagelist seats');
+    for (const s of cost.seats) {
+      const row = h('li');
+      row.append(h('i', `sw ${STAGE_TONE.planning || ''}`), h('span', null, s.role || 'Not tied to a seat'), h('span', null, [s.model, s.effort].filter(Boolean).join(' ')),
+        h('span', null, `${s.calls} calls`), h('span', null, `${s.input.toLocaleString('en-US')} in / ${s.output.toLocaleString('en-US')} out`),
+        h('span', null, costOf(s)), h('span', null, s.role ? `${took(s.sec)}${s.to ? '' : ' so far'}` : ''));
+      list.append(row);
+    }
+    return list;
   }
   // The cost-by-stage table under a build's Details (#94): each stage, then the unit's total. `missing` says why
   // there is none: a running build's collect could not read it, a finished one's was never kept.

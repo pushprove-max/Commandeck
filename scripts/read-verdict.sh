@@ -192,10 +192,12 @@ file_holders() { # path -- pids holding it open; fails when no tool could answer
 # drivers inherit it, and the seats still write to ~/.codex, so narrowing found
 # no session and every plan-author wait hung (2026-10-04). The cwd, model and
 # launch filters pick the seat's log. One path per line: Orca's path has a space.
+# COMMANDECK_SEAT_CODEX_HOME is the home a seat's role is routed to (codexHome; seat.sh sets it from the record).
 codex_session_dirs() {
-  printf '%s\n' "$HOME/.codex-review/sessions" "$HOME/.codex/sessions"
-  local h=${CODEX_HOME:-}; h=${h%/}
-  case $h in ''|"$HOME/.codex"|"$HOME/.codex-review") ;; *) printf '%s\n' "$h/sessions" ;; esac
+  local h
+  for h in "$HOME/.codex-review" "$HOME/.codex" "${CODEX_HOME:-}" "${COMMANDECK_SEAT_CODEX_HOME:-}"; do
+    h=${h%/}; [ -z "$h" ] || printf '%s\n' "$h/sessions"
+  done | awk '!seen[$0]++'
 }
 
 log_created() { # file -- epoch of the first timestamped record, else mtime

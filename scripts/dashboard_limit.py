@@ -24,6 +24,7 @@ usage would cost on the pay-as-you-go API. The reading carries no
 history, so each new sample is appended to <cache-dir>/limit-history.jsonl and
 the chart draws from that file.
 """
+import hashlib
 import json
 import os
 import platform
@@ -33,6 +34,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
@@ -337,8 +339,8 @@ def requests(projects, cache_path, since, now, folders=False):
 
     A week of transcripts runs to gigabytes, so each file is read once from the
     byte offset the last call stopped at; the cache keeps every request's row,
-    and the working folder its session ran in. With `folders`, each row comes
-    paired with that folder.
+    the working folder its session ran in and the transcript it came from. With
+    `folders`, each row comes as (row, folder, transcript).
     None when a transcript is there and cannot be read: the rows would be short.
     """
     if not os.path.isdir(projects):
@@ -346,13 +348,13 @@ def requests(projects, cache_path, since, now, folders=False):
     try:
         with open(cache_path) as f:
             cache = json.load(f)
-        offsets, seen, where, alias = cache["offsets"], cache["requests"], cache["cwd"], cache["alias"]
-        # Version 6 keeps every id a request is known by (#52): an older cache keyed it on one id and is read again.
-        if cache.get("version") != 6 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict) \
-                or not isinstance(alias, dict):
-            raise ValueError("cache from before a request kept all its ids")
+        offsets, seen, where, alias, file = cache["offsets"], cache["requests"], cache["cwd"], cache["alias"], cache["file"]
+        # Version 6 keeps every id a request is known by (#52), version 7 its transcript: an older cache is read again.
+        if cache.get("version") != 7 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict) \
+                or not isinstance(alias, dict) or not isinstance(file, dict):
+            raise ValueError("cache from before a request kept its transcript")
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        offsets, seen, where, alias = {}, {}, {}, {}
+        offsets, seen, where, alias, file = {}, {}, {}, {}, {}
     live, unread, unlisted = {}, False, []
     # A folder that cannot be listed hides its transcripts: the same short count.
     for root, _, files in os.walk(projects, onerror=unlisted.append):
@@ -405,20 +407,22 @@ def requests(projects, cache_path, since, now, folders=False):
                     for old in keys[1:]:
                         seen.pop(old, None)
                         where.pop(old, None)
+                        file.pop(old, None)
                         alias.update({i: keys[0] for i, k in alias.items() if k == old})
                     alias.update(dict.fromkeys(ids, keys[0]))
                     seen[keys[0]] = row  # a streamed request's last line carries its final usage
                     where[keys[0]] = r.get("cwd")
+                    file[keys[0]] = path
             live[path] = off
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 6, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
-                   "alias": {i: k for i, k in alias.items() if k in seen}}, f)
+        json.dump({"version": 7, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
+                   "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen}}, f)
     os.replace(tmp, cache_path)
     if unread or any(not isinstance(e, FileNotFoundError) for e in unlisted):
         return None
-    return [(v, where.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
+    return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
 
 
 CODEX_TAIL = 262144  # a session file is read 256 KB at a time from its end: token_count events are frequent
@@ -622,8 +626,8 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     cache-written tokens, so the row's input is what is left. The model is the file's last `turn_context`
     or `thread_settings_applied`; the speed tier is logged only by the latter ("priority" is the vendor's
     fast mode). Both are kept per file beside the byte offset, so a later call that starts past them still
-    knows them, as is the working folder the file's `session_meta` names, which `folders` pairs each row with
-    as in requests(). The walk and the cache are requests()'s, with that state added.
+    knows them, as is the working folder the file's `session_meta` names, which `folders` pairs each row with,
+    and the file itself, as in requests(). The walk and the cache are requests()'s, with that state added.
 
     A file or folder that cannot be opened is appended to `missed`: what it spent is unknown, so the caller
     must not call the week complete. One that has gone since it was listed spent nothing unseen.
@@ -635,12 +639,13 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     try:
         with open(cache_path) as f:
             cache = json.load(f)
-        files, seen, where = cache["files"], cache["requests"], cache["cwd"]
-        # Version 3 keeps each response's working folder; an older cache is read again.
-        if cache.get("version") != 3 or not isinstance(files, dict) or not isinstance(seen, dict) or not isinstance(where, dict):
+        files, seen, where, file = cache["files"], cache["requests"], cache["cwd"], cache["file"]
+        # Version 3 keeps each response's working folder, version 4 its file; an older cache is read again.
+        if cache.get("version") != 4 or not isinstance(files, dict) or not isinstance(seen, dict) or not isinstance(where, dict) \
+                or not isinstance(file, dict):
             raise ValueError("not this reader's cache")
     except (OSError, ValueError, KeyError, TypeError):
-        files, seen, where = {}, {}, {}
+        files, seen, where, file = {}, {}, {}, {}
     live = {}
     for root, _, names in os.walk(sessions_dir, onerror=lost):
         for name in names:
@@ -685,6 +690,7 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
                     elif r.get("type") == "token_usage_record" and codex_row(r, model, tier):
                         seen[p["response_id"]] = codex_row(r, model, tier)
                         where[p["response_id"]] = cwd
+                        file[p["response_id"]] = path
                     elif r.get("type") == "token_usage_record":
                         # Never dropped: a usage line this reader cannot use is spend of unknown size, kept as a
                         # request with no counts so the week reads it as unpriced. Keyed by where it sits in the file.
@@ -692,13 +698,14 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
                         seen[f"unreadable:{path}:{off}"] = [min(int(st.st_mtime), now) if at is None else at,
                                                             "unreadable Codex record", None, None, 0, None, None]
                         where[f"unreadable:{path}:{off}"] = cwd
+                        file[f"unreadable:{path}:{off}"] = path
             live[path] = [off, model, tier, cwd]
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 3, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}}, f)
+        json.dump({"version": 4, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen}}, f)
     os.replace(tmp, cache_path)
-    return [(v, where.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
+    return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
 
 
 def api_week(limit, rows, now, codex_rows=None, codex_partial=False, since=None):
@@ -830,12 +837,12 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     # The week needs the usage reading for its start; the day does not. With that reading refused the
     # panel keeps the day's cost and leaves every week figure unmeasured.
     if out["cost"] is None and day is not None:
-        out["cost"] = {**cost([r for r, _ in day], 0, midnight, now), "week": None, "unpricedRequests": None}
+        out["cost"] = {**cost([r for r, _, _ in day], 0, midnight, now), "week": None, "unpricedRequests": None}
     codex_day = codex_requests(sessions, os.path.join(cache_dir, "codex-requests.json"), midnight, now, lost, True)
     # A session is one project's: where one checkout sits inside another, the innermost root that holds it wins.
     roots = sorted(((r, name) for name, rs in (day_projects or {}).items() for r in rs if isinstance(r, str)), key=lambda t: -len(t[0].rstrip("/")))
     owner = lambda folder: next((name for r, name in roots if under(folder, [r])), None)
-    own = lambda rows, name: None if rows is None else [r for r, folder in rows if owner(folder) == name]
+    own = lambda rows, name: None if rows is None else [r for r, folder, _ in rows if owner(folder) == name]
     out["today"] = {}
     for name in day_projects or {}:
         t = api_week(None, own(day, name), now, own(codex_day, name), bool(lost), midnight)
@@ -865,43 +872,96 @@ def by_agent(claude, codex):
     return out
 
 
+def seat_costs(seats, rows, folder, now):
+    """A planning stage's requests by the seat that made them; `rows` are (row, folder, file, agent).
+
+    A seat holds a request when its file is the seat's session: a Claude id is `<folder>/<id>.jsonl`, whose helpers
+    and sub-agents write under `<folder>/<id>/`; a path (the seat ledger's, a Codex log) is that file. A seat's time
+    runs from its launch to its collect, else to its last request so far. A request two seats claim (their lookups
+    found one log) is neither's. What no seat holds is one entry with no role, so the seats always sum to the stage.
+    """
+    claims = []
+    for s in seats or []:
+        f = s.get("session") if isinstance(s.get("session"), str) and s.get("session") else None
+        if f and not os.path.isabs(f):
+            f = os.path.join(folder, f + ".jsonl")
+        claims.append([i for i, t in enumerate(rows) if f and isinstance(t[2], str) and (t[2] == f or (f.endswith(".jsonl") and t[2].startswith(f[:-6] + "/")))])
+    count = Counter(i for k in claims for i in k)
+    out, held = [], {i for i, n in count.items() if n == 1}
+    for s, k in zip(seats or [], claims):
+        k = [i for i in k if i in held]
+        a, b = epoch(s.get("from")), epoch(s.get("completedAt")) or max((rows[i][0][0] for i in k), default=now)
+        out.append({"role": s.get("role"), "model": s.get("model"), "effort": s.get("effort"), "from": s.get("from"), "to": s.get("completedAt"),
+                    **tally([rows[i][0] for i in k], round(max(0, b - a)) if a else 0)})
+    rest = [t[0] for i, t in enumerate(rows) if i not in held]
+    if rest:
+        out.append({"role": None, "model": None, "effort": None, "from": None, "to": None, **tally(rest, 0)})
+    return out
+
+
 def unit_costs(units, now, cache_dir, projects, sessions):
     """Each Builder's cost by stage, from the requests its own worktree's sessions made (#94).
 
-    `units` is [{unit, worktree, stages: [{stage, from, to}]}] (dashboard_builders.jq's stageHistory). A
+    `units` is [{unit, worktree, stages: [{stage, from, to}], plan}] (dashboard_builders.jq's stageHistory). A
     request belongs to the unit when its session ran in the worktree: the Builder, its helpers and Workflow
     sub-agents (their transcripts sit under the worktree's own projects folder) and its review passes,
     Claude's or Codex's. Main works in the main checkout, so its own requests are never counted. A request
     goes to the stage it was made in; one before the first stage (the session's opening) to the first.
+    A `plan` ({worktree, from, seats}: dashboard.sh plan_seats) adds its planning worktree's requests as a first
+    stage, "planning", into the total, and split by seat (seat_costs) as `seats`. A planning worktree's own
+    card is a unit whose worktree is its plan's, with no other stage.
     None for a unit whose requests cannot all be read: a short total would read as the whole.
     """
-    starts = {u["unit"]: epoch(u["stages"][0]["from"]) for u in units if u.get("stages")}
+    start = lambda u: epoch(u["plan"]["from"]) if u.get("plan") else epoch(u["stages"][0]["from"]) if u.get("stages") else None
+    starts = {u["unit"]: start(u) for u in units}
     since = min((t for t in starts.values() if t is not None), default=None)
     if since is None:
         return {}
     missed = []
     # No sessions folder is an install without Codex: no Codex review ran, so it adds nothing rather than unknown.
     cx = codex_requests(sessions, os.path.join(cache_dir, "unit-codex.json"), since - 600, now, missed, True) if sessions and os.path.isdir(sessions) else []
+    # A collected Codex seat may have run in another Codex home (routing's per-role codexHome): that home's whole
+    # sessions tree is read too, as its earlier launches log in other date folders (<home>/sessions/YYYY/MM/DD).
+    # Each home's cache is keyed by a hash of its path: a punctuation-folded key gave two homes one cache.
+    home = lambda f: (re.match(r"(.*/sessions)/\d{4}/\d{2}/\d{2}/[^/]+$", f) or re.match(r"(.*)/[^/]+$", f)).group(1)
+    other = {home(s["session"]) for u in units for s in ((u.get("plan") or {}).get("seats") or [])
+             if isinstance(s.get("session"), str) and os.path.isabs(s["session"]) and not under(s["session"], [sessions or "", projects])}
+    for d in sorted(other):
+        if cx is not None and os.path.isdir(d):
+            key = hashlib.sha256(d.encode()).hexdigest()[:16]
+            more = codex_requests(d, os.path.join(cache_dir, f"unit-codex-{key}.json"), since - 600, now, missed, True)
+            cx = None if more is None else cx + more
+    # Claude Code's folder for a session run in a worktree: every byte that is not a letter or digit becomes "-".
+    folder = lambda wt: os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
     out = {}
     for u in units:
-        t0, wt = starts.get(u["unit"]), u["worktree"]
+        t0, wt, plan = starts.get(u["unit"]), u["worktree"], u.get("plan")
         if t0 is None:
             continue
-        # Claude Code's folder for a session run in the worktree: every byte that is not a letter or digit becomes "-".
-        folder = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
-        claude = requests(folder, os.path.join(cache_dir, f"unit-requests-{u['unit']}.json"), t0 - 600, now, True) if os.path.isdir(folder) else []
-        if claude is None or cx is None or missed:
+        pwt = plan["worktree"] if plan else None
+        got = {w: requests(folder(w), os.path.join(cache_dir, f"unit-requests-{os.path.basename(w)}.json"), t0 - 600, now, True)
+               if os.path.isdir(folder(w)) else [] for w in {wt, pwt} - {None}}
+        if None in got.values() or cx is None or missed:
             out[u["unit"]] = None
             continue
-        rows = sorted([r for r, f in claude + cx if under(f, [wt])], key=lambda r: r[0])
+        mine = lambda w: sorted([(r, f, p, a) for a, src in (("claude", got[w]), ("codex", cx)) for r, f, p in src
+                                 if under(f, [w]) and r[0] <= now], key=lambda t: t[0][0])
+        build, planned = mine(wt) if wt != pwt else [], mine(pwt) if plan else []
+        rows = [t[0] for t in build]
         bounds = [(epoch(s["from"]), epoch(s["to"]) if s.get("to") else now) for s in u["stages"]]
         stages = []
         for i, (s, (a, b)) in enumerate(zip(u["stages"], bounds)):
-            mine = [r for r in rows if (i == 0 or r[0] >= a) and (r[0] < b or (i == len(bounds) - 1 and r[0] <= now))]
-            stages.append({"stage": s["stage"], "from": s["from"], "to": s.get("to"), **tally(mine, round(max(0, b - a)))})
+            mine_ = [r for r in rows if (i == 0 or r[0] >= a) and (r[0] < b or (i == len(bounds) - 1 and r[0] <= now))]
+            stages.append({"stage": s["stage"], "from": s["from"], "to": s.get("to"), **tally(mine_, round(max(0, b - a)))})
+        seats = {}
+        if plan:
+            to = u["stages"][0]["from"] if u["stages"] else None
+            stages.insert(0, {"stage": "planning", "from": plan["from"], "to": to, **tally([t[0] for t in planned], round(max(0, (epoch(to) or now) - t0)))})
+            seats = {"seats": seat_costs(plan.get("seats"), planned, folder(pwt), now)}
         # The last stage is always the open one (stageHistory), so the build has run from its start to now.
-        mine = lambda src: [r for r, f in src if under(f, [wt]) and r[0] <= now]
-        out[u["unit"]] = {"stages": stages, "total": {**tally([r for r in rows if r[0] <= now], round(max(0, now - t0))), "byAgent": by_agent(mine(claude), mine(cx))}}
+        both = build + planned
+        part = lambda a: [t[0] for t in both if t[3] == a]
+        out[u["unit"]] = {"stages": stages, "total": {**tally([t[0] for t in both], round(max(0, now - t0))), "byAgent": by_agent(part("claude"), part("codex"))}, **seats}
     return out
 
 

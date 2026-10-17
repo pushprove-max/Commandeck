@@ -153,6 +153,31 @@ seat_role() {
     | max_by(.[0] | tonumber) // empty | .[1] as $r | ($lanes[$r] // empty) + "\t" + $r'
 }
 
+# plan_seats <unit> [before-iso] -- the unit's planning, read from its plan seats' records (seat.sh launch; never
+# deleted), so it outlives <unit>-plan: {worktree, from (the first launch, a relaunched seat's first= too), seats: [{role, task, from, model, effort,
+# session, completedAt}]}, or null. Model and effort are the record's command's (--model, --effort, Codex's
+# model_reasoning_effort); session its Claude id, else the seat ledger row's log (a collected Codex judge), which
+# also gives completedAt. With `before`, only seats first launched before it: a Builder's own planning, a planner
+# relaunched after the Builder started included (Sol r4).
+# shortcut: keyed by unit name, so a unit planned twice before its Builder counts both; key by build if it matters.
+plan_seats() {
+  local f
+  for f in "$PP_SCRATCH/seat-$1-"*.txt; do
+    [ ! -f "$f" ] || awk '{ i = index($0, "="); if (i) v[substr($0, 1, i - 1)] = substr($0, i + 1) }
+      END { print v["launched"] "\t" v["role"] "\t" v["task"] "\t" v["unit"] "\t" v["worktree"] "\t" v["session"] "\t" v["cmd"] "\t" v["first"] }' "$f"
+  done | jq -Rn --arg u "$1" --arg b "${2:-}" --arg ws "$PP_WORKSPACES" \
+    --slurpfile ev <(jq -cR 'fromjson? | objects | select(.taskId | type == "string")' "$METRICS/seat-events.jsonl" 2>/dev/null) '
+    ($ev | map({key: .taskId, value: .}) | from_entries) as $e
+    | [inputs | split("\t") | select(length == 8 and .[3] == $u and .[4] == "\($u)-plan" and (.[0] | test("^[0-9]+$")))
+       | ([.[0], .[7]] | map(tonumber? // empty) | min) as $f
+       | select($b == "" or $f < ($b | fromdateiso8601)) | ($e[.[2]] // {}) as $r
+       | {role: .[1], task: .[2], from: (.[0] | tonumber | todate), first: $f,
+          model: ((.[6] | capture("--model[ =](?<m>[^ ;[]+)") | .m) // $r.model // null),
+          effort: ((.[6] | capture("--effort[ =](?<l>[a-z]+)|model_reasoning_effort=\"?(?<c>[a-z]+)") | .l // .c) // null),
+          session: (if .[5] != "" then .[5] else $r.session // null end), completedAt: ($r.completedAt // null)}]
+    | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\($u)-plan", from: (map(.first) | min | todate), seats: map(del(.first))} end'
+}
+
 # seat_actual <worktree> -- what the seat really runs: the model, effort and advisor on the last
 # main-thread reply of the worktree's newest Claude session record. No record, or none in its tail, is null.
 # shortcut: reads the newest record's last 40 rows and Claude records only, so a Codex seat reads null.
@@ -205,7 +230,7 @@ builder_progress() {
 # whole machine's worktrees, so every lookup is by path, never by name: two
 # projects may each have a unit of one name.
 units() {
-  local ps='' u wt ag st branch dirty diff age seat s run open='' role sr rd bj bl rows b v vr f
+  local ps='' u wt ag st branch dirty diff age seat s run open='' role sr rd bj bl rows b v vr f po pj
   if ps=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) && jq -e . >/dev/null 2>&1 <<<"$ps"; then ok orca
   else ps=''; nm orca "orca-ide worktree ps failed"; fi
   # Per worktree, the lane of each working pane's role: its recorded launch
@@ -230,6 +255,14 @@ units() {
   for wt in "$PP_WORKSPACES"/*/; do
     wt=${wt%/}; [ -e "$wt/.git" ] || continue
     u=${wt##*/}
+    # A plan seat's worktree (marked <unit>-plan, seat.sh) is the unit's Planning stage. With the unit's own
+    # worktree there, that one card carries the planning: one unit, one card.
+    po=
+    if [[ $u == *-plan ]]; then
+      po=$(cat "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)/commandeck-plan-of" 2>/dev/null) || po=
+      [ "$po" = "${u%-plan}" ] || po=
+      [ -z "$po" ] || [ ! -e "$PP_WORKSPACES/$po/.git" ] || continue
+    fi
     # The relay pane's worktree is a seat, not a unit. Exact name only; app.js SEATS names the same stage.
     case $u in Chief-of-Staff) seat=chief-of-staff ;; *) seat= ;; esac
     ag=null
@@ -241,8 +274,9 @@ units() {
     s=$(git -C "$wt" diff-index HEAD --shortstat 2>/dev/null) && diff=$(jq -Rc 'sub("^ +"; "")' <<<"$s")
     # Orca lists panes and none is working: the pane finished, so the unit
     # waits on main, aged from what the pane left. Unknown stays null.
-    st=null age=null
-    if [ "$ag" != null ] && [ "$ag" != '""' ] && [[ $ag != *:working* ]]; then
+    st=null age=null pj=null
+    if [ -n "$po" ]; then st='"planning"'; age=$(seat_age "$wt" "$ps"); pj=$(plan_seats "$po")
+    elif [ "$ag" != null ] && [ "$ag" != '""' ] && [[ $ag != *:working* ]]; then
       st='"waiting-main"'; age=$(seat_age "$wt" "$ps")
     fi
     # A live seat record's role sets the stage through ROLE_LANES; a seat role leaves it as read.
@@ -309,10 +343,12 @@ units() {
         bj=$(jq -c --arg c "$(context_size "$f")" --arg l "$(pp_builder_clear_line "$PP_MAIN" 2>/dev/null)" \
           '. + {context: ($c | tonumber? // null), clearLine: (if $l == "" then null else $l end)}' <<<"$bj")
       fi
+      # Its planning, launched before its first stage, though the planning worktree is gone.
+      pj=$(plan_seats "$u" "$(jq -r '.stageHistory[0].from // empty' <<<"$b" 2>/dev/null)")
     fi
     jq -cn --arg u "$u" --argjson branch "$branch" --argjson dirty "$dirty" --argjson diff "$diff" --argjson ag "$ag" \
-      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" \
-      '{unit: $u, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj}' \
+      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" --argjson pj "${pj:-null}" \
+      '{unit: $u, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj, plan: $pj}' \
       | jq -c --argjson seat "$(seat_actual "$wt")" '. + {seat: $seat}'
   done > "$RUN/in-flight.jsonl"
   if [ -e "$RUN/builder-bad" ]; then nm builder-logs "a Builder event log could not be read"; else ok builder-logs; fi
@@ -330,12 +366,12 @@ units() {
   if ws_listable; then
     jq -c 'map({(.unit): .rec}) | add // {}' "$RUN/in-flight.json" > "$RUN/unit-stages" && mv -f "$RUN/unit-stages" "$stages"
   else known=false; fi
-  # Each Builder's cost by stage (#94), from its worktree's own sessions. The last figures read for each unit are
-  # kept, so a finished build shows them as they stood at its merge.
+  # Each Builder's cost by stage (#94), from its worktree's own sessions, its planning first. The last figures
+  # read for each unit are kept, so a finished build shows them as they stood at its merge.
   # shortcut: kept by unit name, so a later build under the same name replaces an earlier one's; key by build if that matters.
   local costs kept=$CACHE/unit-cost.json had
-  if costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select(.builder.stageHistory | type == "array" and length > 0)
-        | {unit, worktree: "\($ws)/\(.unit)", stages: .builder.stageHistory}]' "$RUN/in-flight.json" \
+  if costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select((.builder.stageHistory | type == "array" and length > 0) or .plan != null)
+        | {unit, worktree: "\($ws)/\(.unit)", stages: (.builder.stageHistory | arrays // []), plan}]' "$RUN/in-flight.json" \
       | python3 "$HERE/dashboard_limit.py" units "$NOW" "$CACHE" "$HOME/.claude/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
       && jq -e 'objects' >/dev/null 2>&1 <<<"$costs"; then
     ok unit-cost
@@ -347,7 +383,13 @@ units() {
     [ -z "$had" ] || { jq -cn --argjson o "$had" --argjson c "$costs" '$o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"; }
   else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
   jq -c --argjson k "$known" --argjson fin "$(finished_builds)" --argjson c "$costs" --argjson kept "$(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}')" \
-    '{inFlight: (if $k then map(del(.rec) | if .builder then .builder.cost = ($c[.unit]? // null) else . end) else null end),
+    '{inFlight: (if $k then map(del(.rec) | ($c[.unit]? // null) as $x
+        # A planning stage in the cost is drawn first on the Builder clock, which then starts with it.
+        | if .builder then .builder.cost = $x
+            | if $x.stages[0].stage? == "planning" and (.builder.stageHistory | type == "array")
+              then .builder.stageHistory = [$x.stages[0] | {stage, from, to}] + .builder.stageHistory | .builder.startedAt = $x.stages[0].from
+              else . end
+          elif .plan then .plan.cost = $x else . end) else null end),
       finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end)}' "$RUN/in-flight.json"
 }
 

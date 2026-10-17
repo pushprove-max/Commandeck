@@ -2,7 +2,8 @@
 # seat.test.sh -- seat.sh launches and reads the panes main works through, on a hand-written commandeck.json (no
 # setup run). What this pins: a headless role is never opened as a pane; a read-only seat is refused a spec
 # that asks it to write a file, but not prose that ends on the verb; a live Builder pane is reused only while the
-# project's Builder settings are the ones it opened with; and a pane quoting a verdict in a fence is still working.
+# project's Builder settings are the ones it opened with; a pane quoting a verdict in a fence is still working; and
+# collect with no --marker closes on the last wait's marker, after a silent seat's relaunch too.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -21,10 +22,12 @@ SWT=$HOME/orca/workspaces/proj/seat-builder; mkdir -p "$HOME/orca/workspaces/pro
 cat > "$BIN/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  "terminal create"*) touch "$T/pane-up"; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
+  "terminal create"*) touch "$T/pane-up"; [ ! -e "$T/on-create" ] || { cp "$T/on-create" "$T/screen"; touch "$T/grow"; }; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
   "terminal list"*) [ -e "$T/pane-up" ] && t='[{"handle":"h1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT"}]' || t='[]'
     echo "{\"ok\":true,\"result\":{\"terminals\":\$t}}" ;;
-  "terminal read"*) jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
+  "terminal read"*) [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
+    jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
+  "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
   "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
   *) echo '{"ok":true,"result":{}}' ;;
@@ -61,6 +64,91 @@ jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
 run launch builder seat-builder "$T/spec.md" --effort medium >"$T/out" 2>&1
 check "--effort medium under a Builder default of high is refused before any pane opens" '2:1' \
   "$?:$(grep -c "REFUSED: --effort medium is below this project's Builder default high" "$T/out")"
+
+# A plan seat's driver waits on one marker after another and then collects with no --marker: the STOP hints print
+# collect that way, and without the wait's marker a finished plan read as no verdict and kept its pane open.
+# The pane ends each turn idle on the marker it was asked for (the screen file); a launch shows on-create's screen,
+# which grows on every read after, so a slow machine cannot read the relaunched pane as silent too.
+# A wait that never sees its marker ends at its own --timeout-s, not the test's.
+srun() { (export COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 COMMANDECK_LOOP_POLL_SECONDS=0 COMMANDECK_DRIVER=1; run "$@"); }
+printf 'Plan the unit.\nEnd on a line of its own.\n' > "$T/plan-spec.md"
+# The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
+PWT=$HOME/orca/workspaces/proj/pu-plan; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?
+for m in PLAN-DONE REVISED PLAN-DONE; do echo "$m" > "$T/screen"; srun wait plan-author pu --marker "$m" --timeout-s 10 >"$T/out" 2>&1 || echo "wait $m: $(tail -2 "$T/out")"; done
+srun collect plan-author pu >"$T/out" 2>&1
+check "collect with no --marker closes on the marker the last wait saw" '0:1' "$?:$(grep -c 'closed seat=plan-author unit=pu PLAN-DONE' "$T/out")"
+# A silent read-only seat is relaunched from its record, which the relaunch writes again: the marker must survive it.
+printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
+srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches" 0 $?
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt)
+printf 'Reading the plan.\nesc to interrupt\n' > "$T/screen"; echo PLAN-DONE > "$T/on-create"
+COMMANDECK_SEAT_SILENT_SECONDS=1 srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 20 >"$T/out" 2>&1
+check "a silent judge is relaunched once and its wait then sees the marker" '0:1' "$?:$(grep -c 'relaunching once' "$T/out")"
+check "the relaunched record keeps relaunched=1 and the wait's marker" '1:1' "$(grep -cx 'relaunched=1' "$JREC"):$(grep -cx 'marker=PLAN-DONE' "$JREC")"
+srun collect plan-judge-claude pu >"$T/out" 2>&1
+check "and collect with no --marker closes it" '0:1' "$?:$(grep -c 'closed seat=plan-judge-claude unit=pu PLAN-DONE' "$T/out")"
+rm -f "$T/on-create" "$T/grow"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a plain launch writes a record with no marker of an earlier wait" '0:0' "$?:$(grep -c '^marker=' "$JREC")"
+check "and keeps the seat's first launch, so a relaunch does not move its planning's start" 1 \
+  "$(awk -F= '$1 == "first" { f = $2 } $1 == "launched" { l = $2 } END { print (f != "" && f < l) }' "$JREC")"
+# A wait that gives up has proven nothing: an unfinished pane quoting the marker in a fence must not be collected on it.
+printf 'Still judging.\n```\nPLAN-DONE\n```\nesc to interrupt\n' > "$T/screen"
+srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 0 >"$T/out" 2>&1
+check "a wait that times out fails and saves no marker" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
+srun collect plan-judge-claude pu >"$T/out" 2>&1
+check "so collect with no --marker keeps the unfinished pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
+# Sol r4: with no session log to read, the idle screen decides, and a marker it shows inside a fence is a quoted
+# sample, never the pane's own: three idle polls of it saved the marker and flagless collect closed the seat.
+printf 'Still judging.\n```\nPLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
+srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+check "an idle screen quoting the marker in a fence, with no session log, is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
+srun collect plan-judge-claude pu --marker PLAN-DONE >"$T/out" 2>&1
+check "and collect, even given the marker, keeps the pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
+# A screen is a viewport: one that opens inside the fence, its opening line scrolled away, still quotes the marker.
+printf 'PLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
+srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+check "a screen opening inside a fence that quotes the marker is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
+# Sol r5: a real bare opening fence still streaming is the same text as a cropped closing one; ambiguity never releases.
+printf 'Still judging.\n```\nPLAN-DONE\n' > "$T/screen"
+srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+check "a screen ending inside a bare fence that quotes the marker is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
+srun collect plan-judge-claude pu --marker PLAN-DONE >"$T/out" 2>&1
+check "and collect, even given the marker, keeps the pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
+# The session log outranks the screen (Sol r2): a finished turn whose reply ends on a question, not the marker, is no
+# marker, though the idle screen still shows the reply's fenced sample of it.
+printf 'Plan it again.\nEnd on a line of its own.\n' > "$T/plan-spec2.md"
+rm -f "$T/pane-up"; srun launch plan-author pu "$T/plan-spec2.md" >"$T/out" 2>&1; check "the planner launches again" 0 $?
+# Without the record, the judge's below would be written into the working folder.
+AREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt) || { echo "FAIL no planner record"; exit 1; }; NOWZ=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+PS=$HOME/.claude/projects/$(printf '%s' "$PWT" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PS"
+jq -cn --arg t "$NOWZ" --arg tag "$(sed -n 's/^tag=//p' "$AREC")" '
+  {type: "user", timestamp: $t, message: {role: "user", content: "Your task spec. Seat tag \($tag)."}},
+  {type: "assistant", timestamp: $t, message: {content: [{type: "tool_use", id: "u1", name: "Read", input: {}}]}},
+  {type: "assistant", timestamp: $t, message: {content: [{type: "text", text: "It ends on:\n```\nPLAN-DONE\n```\nPlease clarify the scope."}]}},
+  {type: "system", subtype: "turn_duration", timestamp: $t}' > "$PS/s-ask.jsonl"
+printf 'It ends on:\n```\nPLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
+srun wait plan-author pu --marker PLAN-DONE --timeout-s 5 >"$T/out" 2>&1
+check "an idle reply that quotes the marker and ends on a question is not released" '1:0' "$?:$(grep -c '^marker=' "$AREC")"
+srun collect plan-author pu >"$T/out" 2>&1
+check "so collect with no --marker leaves the planner open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
+# A role routed to its own Codex home (routing's codexHome) writes its sessions there, which no default home holds:
+# collect finds its log from the record's command, so its ledger row names it. (The Orca stand-in's pane is a
+# Claude one elsewhere, so the verdict is the screen's marker; the ledger's lookup is the seat's own, by its role.)
+echo PLAN-DONE > "$T/screen"; L=$(($(date +%s) - 5))
+JH=$T/judge-home; mkdir -p "$JH/sessions/2026/10/17"; JL=$JH/sessions/2026/10/17/rollout-sol.jsonl
+printf 'handle=h1\ntask=task_1\nrole=plan-judge-sol\nunit=pu\nworktree=pu-plan\nlaunched=%s\nfirst=%s\ntag=seat-sol-1\ncmd=export COMMANDECK_SEAT=plan-judge-sol; CODEX_HOME=%s codex --model gpt-6.1-sol\n' \
+  "$L" "$L" "$JH" > "$(dirname "$AREC")/seat-pu-plan-judge-sol.txt"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$PWT" '
+  {type: "session_meta", timestamp: $t, payload: {cwd: $w}},
+  {type: "response_item", timestamp: $t, payload: {type: "message", role: "user", content: [{type: "input_text", text: "Judge it. Seat tag seat-sol-1."}]}},
+  {type: "event_msg", timestamp: $t, payload: {type: "task_started"}},
+  {type: "event_msg", timestamp: $t, payload: {type: "task_complete", last_agent_message: "No findings.\nVERDICT: GO"}}' > "$JL"
+# A project that allows the judge its Codex model, so the seat stays a Codex one.
+jq --arg m "$(jq -r '.roles["plan-judge-sol"].model' "$REAL/config/routing.json")" '.planModels = [$m]' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+touch "$T/pane-up"; COMMANDECK_SEAT_EVENTS=$T/events.jsonl srun collect plan-judge-sol pu --marker PLAN-DONE >"$T/out" 2>&1
+check "a judge in its own Codex home is collected, and its ledger row names its log" "0:$JL" "$?:$(jq -r '.session' "$T/events.jsonl" 2>&1 | tail -1)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

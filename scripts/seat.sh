@@ -11,12 +11,14 @@
 #     the --on-go or --on-nogo command (from the repo root, via eval) that the
 #     verdict selects, so a GO launches the next seat or loop in the same call.
 #     --marker: a seat that ends on a marker line (plan-author's PLAN-DONE) and
-#     prints no VERDICT is collected with the marker standing in for the verdict.
+#     prints no VERDICT is collected with the marker standing in for the verdict;
+#     without it, collect falls back to the marker of the last wait.
 # seat.sh wait <role> <unit> --marker <text> [--timeout-s <n>] -- block until the
 #     pane shows the marker more times than the injected spec did AND is idle
 #     (the spec echoes the marker the moment it lands, so count alone is not
 #     enough; same rule as unit-loop.sh wait_worker). For a driver, never main:
-#     main waits on the Orca inbox.
+#     main waits on the Orca inbox. A wait that sees the marker end a finished
+#     turn keeps it in the record for collect.
 #
 # Roles: any `roles.<name>.cmd` in config/routing.json. Main still writes the spec
 # (the judgment); this script is the plumbing that cost six to ten main turns
@@ -34,7 +36,7 @@ Open one routing.json seat in the unit's worktree, collect its verdict, or wait 
 effort sends /effort <level> to the pane only while it is an idle Claude pane, and
 never below routing's effort-stages.reviewer-floor to a read-only role.
   --report <path>   collect: write the findings here when the pane could not
-  --marker <text>   collect: a marker line that stands in for VERDICT; wait: the line to wait for
+  --marker <text>   collect: a marker line that stands in for VERDICT (collect falls back to the marker of the last wait); wait: the line to wait for
   --on-go <cmd>     collect: run this from the repo root on VERDICT: GO
   --on-nogo <cmd>   collect: run this from the repo root on VERDICT: NO-GO
   --timeout-s <n>   wait: give up after n seconds (default 5400)
@@ -81,6 +83,13 @@ fi
 # read-verdict.sh ties a Codex pane's session log by worktree and launch epoch,
 # so two seats in one worktree would transcribe each other's review without it.
 LAUNCHED=$(grep '^launched=' "$REC" 2>/dev/null | cut -d= -f2 || true)
+# A role routed to its own Codex home (routing's codexHome) logs there, in no home the session readers search by
+# default: every read below (read-verdict.sh, seat-event.sh) looks there too, by the command the record launched.
+seat_codex_home() {
+  local h; h=$(sed -nE 's/^cmd=(.*[ ;])?CODEX_HOME=([^ ;]+).*/\2/p' "$REC" 2>/dev/null | tail -1 || true)
+  export COMMANDECK_SEAT_CODEX_HOME=${h/#\~/$HOME}
+}
+seat_codex_home
 [ -d "$WT" ] || [[ $CMDNAME == launch && $ROLE == plan-* && -z $SEAT_REPO ]] || { echo "no worktree at $WT" >&2; exit 2; }
 # The role whose routing the seat runs on. A plan seat put on another (pp_plan_seat: a Codex judge with no Codex
 # runs as plan-judge-claude) keeps its own name, pane and record, so the Panel's two judges stay two.
@@ -99,6 +108,25 @@ worker_state_kv() {
   timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --agent "${AGENT:-}" --marker "${MARKER:-}" "$@" 2>/dev/null || true
 }
 kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
+# A marker inside a fence is a quoted sample, never the pane's own (Sol r4): every fenced line, its delimiters too,
+# reads as blank, by the fence rule paths.sh gives every report reader.
+# A screen is a viewport: when the plain reading ends inside a fence and the first delimiter is bare, as a closing
+# line is, the screen may have opened inside one. That text is also a bare opening fence still streaming, so it
+# fails closed (Sol r5): a line counts only when the reading as opening inside a fence also puts it outside one.
+# Ceiling: a cropped screen whose fences then pair up reads plain, as in read-verdict.sh.
+unfenced() {
+  awk "$PP_AWK_FENCE"'
+    { raw[NR] = $0; out[NR] = (fence($0) || flen) ? "" : $0 }
+    END {
+      if (flen) for (i = 1; i <= NR; i++) if (raw[i] ~ /^[[:space:]]*(```+|~~~+)/) {
+        if (raw[i] !~ /^[[:space:]]*(```+|~~~+)[[:space:]]*$/) break
+        flen = 0; for (k = i + 1; k <= NR; k++) if (fence(raw[k]) || flen) out[k] = ""
+        for (k = 1; k <= i; k++) out[k] = ""
+        break
+      }
+      for (i = 1; i <= NR; i++) print out[i]
+    }'
+}
 
 case "$CMDNAME" in
 effort)
@@ -305,7 +333,11 @@ launch)
       [ -z "$REQ" ] || { send_pointer --retry-request "$REQ" | submitted && PROVEN=1; }
     fi
   fi
-  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
+  # The record is rewritten, but keeps the seat's first launch in this worktree: a relaunched planner's
+  # planning still starts there (dashboard.sh plan_seats).
+  FIRST=; [ "$(sed -n 's/^worktree=//p' "$REC" 2>/dev/null | tail -1)" != "$WTN" ] || FIRST=$(sed -n 's/^first=//p; s/^launched=//p' "$REC" | sort -n | head -1)
+  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
+  seat_codex_home
   # The silent-pane relaunch below starts this seat again from its record.
   [ "${#LOPTS[@]}" -eq 0 ] || echo "opts=${LOPTS[*]}" >> "$REC"
   # A seat the origin placed here is the origin's to hear: main-watch on this
@@ -364,6 +396,7 @@ collect)
     esac
   done
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
+  [ -n "$DONE_MARKER" ] || DONE_MARKER=$(sed -n 's/^marker=//p' "$REC" | tail -1)
   # An absolute --report (the usage example's form) is used as given; only a relative one lives in the worktree.
   case $REPORT in ''|/*) ;; *) REPORT=$WT/$REPORT ;; esac
   H=$(grep '^handle=' "$REC" | cut -d= -f2); T=$(grep '^task=' "$REC" | cut -d= -f2)
@@ -372,7 +405,7 @@ collect)
   # slice; a bare VERDICT line inside the slice can be a fenced sample. With no
   # banner there is no verdict: the "NO VERDICT YET" tail it prints instead can hold one.
   V=$(printf '%s\n' "$OUT" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
-  if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//' <<<"$OUT")"; then V=$DONE_MARKER; fi
+  if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(unfenced <<<"$OUT" | sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//')"; then V=$DONE_MARKER; fi
   # A read-only seat cannot have written the report itself, so a file already
   # sitting at that path is a PREVIOUS round's and the pane is the only source
   # of truth: overwrite it. Skipping the write served h1c's triage the voided
@@ -410,7 +443,7 @@ collect)
   # seat-event.sh sums this pane's own session log; a missing or unreadable log
   # writes tokens:null with the reason and never blocks the row. A read VERDICT is done.
   # The row goes to the main checkout's ledger (seat-event.sh's own default), which the dashboard reads, wherever collect is run from.
-  SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done \
+  SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$REC" | tail -1) \
     "$(dirname "$0")/seat-event.sh" "$UNIT" "$ROLE" "$T" "$LAUNCHED" || echo "seat: no seat event recorded for $ROLE $UNIT" >&2
   pp_task_close "$T" completed "{\"verdict\":\"${V#VERDICT: }\"}" || true
   orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true
@@ -432,6 +465,9 @@ wait)
   done
   [ -n "$MARKER" ] || { echo "wait: --marker is required" >&2; exit 2; }
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
+  # collect with no --marker closes on the marker of the latest wait that saw it end a finished turn (the exit trap):
+  # a wait that gave up proved nothing, and the pane may still quote the marker unfinished.
+  sed -i '/^marker=/d' "$REC"
   H=$(grep '^handle=' "$REC" | cut -d= -f2); SPEC=$(grep '^spec=' "$REC" | cut -d= -f2-)
   T=$(grep '^task=' "$REC" | cut -d= -f2); PROMPT=$(grep '^prompt=' "$REC" | cut -d= -f2- || true)
   TAG=$(grep '^tag=' "$REC" | cut -d= -f2- || true)
@@ -439,7 +475,8 @@ wait)
   # and the turn-complete hooks from waking main for the same turn. It names the
   # line the wait actually saw: the marker, or the verdict that released it.
   WAITF=$SCRATCH/waiting-$H; pp_wait_mark > "$WAITF"; SEEN_MARK=$MARKER
-  trap 'if [ $? = 0 ]; then printf "%s\nseen %s %s\n" "$$" "$(date +%s)" "$SEEN_MARK" > "$WAITF"; else rm -f "$WAITF"; fi' EXIT
+  trap 'if [ $? = 0 ]; then printf "%s\nseen %s %s\n" "$$" "$(date +%s)" "$SEEN_MARK" > "$WAITF"
+    [ "$SEEN_MARK" != "$MARKER" ] || echo "marker=$MARKER" >> "$REC"; else rm -f "$WAITF"; fi' EXIT
   # The pointer usually holds no marker; grep's exit 1 must not end the wait under pipefail.
   AGENT=$(seat_agent)
   # The rendered screen is the only pane text: Orca 1.4.220 keeps no accumulated
@@ -456,7 +493,7 @@ wait)
   # not repeat, or read the session log where the agent keeps one.
   marker_count() {
     local strip='s/^[[:space:]*`•]+//; s/[[:space:]*`"]+$//'
-    sed -E "$strip" | awk -v m="$MARKER" '
+    unfenced | sed -E "$strip" | awk -v m="$MARKER" '
       !screen { if ($0 == m) { above[p] = 1; if (p != "") inprompt++ } else if ($0 != "") p = $0; next }
       $0 == m { own = 1
         # A wrapped prompt line shows only its tail above the marker.
@@ -526,7 +563,7 @@ wait)
         H=$(grep '^handle=' "$REC" | cut -d= -f2); T=$(grep '^task=' "$REC" | cut -d= -f2)
         rm -f "$WAITF"; WAITF=$SCRATCH/waiting-$H; pp_wait_mark > "$WAITF"
         LAUNCHED=$(grep '^launched=' "$REC" | cut -d= -f2); PROMPT=$(grep '^prompt=' "$REC" | cut -d= -f2- || true)
-        TAG=$(grep '^tag=' "$REC" | cut -d= -f2- || true)
+        TAG=$(grep '^tag=' "$REC" | cut -d= -f2- || true); seat_codex_home
         busy_seen=0 idle_hits=0 last_sig="" last_change=$(date +%s)
         continue
       fi
@@ -555,7 +592,9 @@ wait)
     if [ "$(kv state)" = running ] || [ -n "$(kv outstanding)" ]; then sleep "$POLL"; continue; fi
     if grep -qE 'esc to interrupt|· Working|extra thought|faster model' <<<"$screen"; then busy_seen=1; idle_hits=0
     else
-      count=$(printf '%s\n' "$screen" | marker_count); SEEN_MARK=$MARKER
+      # A completed turn in the session log that did not end on the marker is no marker: its screen can still
+      # show a quoted one (Sol r2). The screen counts only when the log cannot say.
+      count=0; [ "$(kv state)" = complete ] || count=$(printf '%s\n' "$screen" | marker_count); SEEN_MARK=$MARKER
       # A marker scrolled off the screen is still in the session log, read the way collect reads it.
       # Any VERDICT line counts, not just GO/NO-GO: a seat may end on another
       # word, and a GO/NO-GO-only match left the drivers of

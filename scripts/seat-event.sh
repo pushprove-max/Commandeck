@@ -10,7 +10,8 @@
 # SEAT_EVENT_WORKTREE (and SEAT_EVENT_AGENT) name where the seat ran: its session
 # log is found there and summed into tokens. Without one, or with no usage in
 # the log, tokens is null and tokensReason (SEAT_EVENT_REASON or a default) says
-# why. SEAT_EVENT_STOP is why the seat stopped: done, killed, wedged or budget.
+# why. session is that log's path (null without one): the dashboard ties a planning
+# seat's spend to it after the pane is gone. SEAT_EVENT_STOP is why the seat stopped: done, killed, wedged or budget.
 set -uo pipefail
 HERE=$(dirname "${BASH_SOURCE[0]}")
 # provider log [since-epoch] -- {model, tokens:{input, cachedInput, output}} or
@@ -58,14 +59,15 @@ case $LAUNCHED in ''|*[!0-9]*) echo "seat-event: invalid launch epoch '$LAUNCHED
 LAUNCHED_AT=$(date -u -d "@$LAUNCHED" '+%Y-%m-%dT%H:%M:%SZ') || { echo "seat-event: invalid launch epoch $LAUNCHED" >&2; exit 1; }
 COMPLETED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 FILE=${COMMANDECK_SEAT_EVENTS:-$PP_MAIN/.claude/metrics/seat-events.jsonl}
-USAGE=null; REASON=${SEAT_EVENT_REASON:-no token usage measured for this seat}
+USAGE=null; REASON=${SEAT_EVENT_REASON:-no token usage measured for this seat}; SESSION=
 if [ -n "${SEAT_EVENT_WORKTREE:-}" ]; then
   # Bounded, so a blocked log read cannot hold the step this row measures.
   # A fresh pane's session is newer than the launch; a warm pane's (a fix sent to
-  # the builder) is older, and only its task id binds it.
+  # the builder) is older, and only its task id binds it. SEAT_EVENT_SPEC (the
+  # record's tag) picks a seat's own session from a sibling's launched with it.
   state() { timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$SEAT_EVENT_WORKTREE" --agent "${SEAT_EVENT_AGENT:-}" "$@" 2>/dev/null || true; }
   kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
-  ST=$(state --launched "$LAUNCHED")
+  ST=$(state --launched "$LAUNCHED" ${SEAT_EVENT_SPEC:+--spec "$SEAT_EVENT_SPEC"})
   [ -n "$(kv session)" ] || [ -z "$TASK" ] || ST=$(state --task "$TASK")
   SESSION=$(kv session); REASON="no session log: $(kv reason)"
   if [ -n "$SESSION" ] && [ -f "$SESSION" ]; then
@@ -79,9 +81,10 @@ mkdir -p "$(dirname "$FILE")"
 jq -cn --arg unit "$UNIT" --arg role "$ROLE" --arg taskId "$TASK" \
   --arg launchedAt "$LAUNCHED_AT" --arg completedAt "$COMPLETED_AT" \
   --arg model "$MODEL" --arg round "$ROUND" --arg stop "${SEAT_EVENT_STOP:-unknown}" \
-  --argjson usage "$USAGE" --arg reason "$REASON" \
+  --argjson usage "$USAGE" --arg reason "$REASON" --arg session "$SESSION" \
   '{event:"worker_done",unit:$unit,role:$role,taskId:$taskId,launchedAt:$launchedAt,completedAt:$completedAt,
-    model:($usage.model // (if $model == "" then null else $model end)),tokens:($usage.tokens // null),stopReason:$stop}
+    model:($usage.model // (if $model == "" then null else $model end)),tokens:($usage.tokens // null),stopReason:$stop,
+    session:(if $session == "" then null else $session end)}
    + (if $round == "" then {} else {round:($round | tonumber? // .)} end)
    + (if $usage.tokens == null then {tokensReason:$reason} else {} end)' \
   >> "$FILE"
