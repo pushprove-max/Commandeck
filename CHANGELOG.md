@@ -10,6 +10,10 @@
   the worktree, with one REFUSED line, when it holds a file that is not identical on local main or a pane does not
   close. A rejected plan's worktree closes by hand with `bash scripts/plan-worktree-close.sh <unit>` (`--dry-run`
   removes nothing). An unreadable, empty or error pane list counts as "panes not closed", never as "no panes".
+- The merge check (`testCommand`) is now `bash scripts/run-shell-tests.sh --changed`: it runs only the shell tests the
+  change touches, and each touched script's or hook's same-name test. The whole suite stays
+  `bash scripts/run-shell-tests.sh`, and CI still runs it on every push.
+- Removed the three slowest shell tests: builder-launch.test.sh, suite-rerun-guard.test.sh and merge-unit-local.test.sh.
 
 ## 0.11.2 -- 2026-10-16
 
