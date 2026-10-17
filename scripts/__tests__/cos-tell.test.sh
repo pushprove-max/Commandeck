@@ -54,9 +54,9 @@ rm -f "$T/live-only"
 # the watcher passed only `status` from main, marked it read, and the owner never
 # heard. Any type from main to its run or to this pane wakes the relay; main's
 # messages to a worker, its scripts' notes and worker traffic do not.
-# row <from> <to> <type> <subject> [<sent at>] -- one message stored in run_1.
-row() { jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg f "$1" --arg to "$2" --arg t "$3" --arg s "$4" --arg at "${5:-2026-10-15T10:00:00Z}" \
-  '{sequence: $n, run_id: "run_1", from_handle: $f, to_handle: $to, subject: $s, body: "b", type: $t, created_at: $at}' >> "$T/store.jsonl"; }
+# row <from> <to> <type> <subject> [<sent at>] [<run id>] -- one message stored, in run_1 unless named.
+row() { jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg f "$1" --arg to "$2" --arg t "$3" --arg s "$4" --arg at "${5:-2026-10-15T10:00:00Z}" --arg r "${6-run_1}" \
+  '{sequence: $n, run_id: $r, from_handle: $f, to_handle: $to, subject: $s, body: "b", type: $t, created_at: $at}' >> "$T/store.jsonl"; }
 watch >/dev/null
 row term_main run:run_1 question "0.9.0 is ready. OK to release?"
 check "a question from main with a plain subject wakes the relay" 1 "$(watch | grep -c 'OK to release?')"
@@ -69,6 +69,16 @@ row term_main run:run_1 question "main-watch: 2 items need you"
 row term_w1 run:run_1 question "should I split the file?"
 row term_w1 run:run_1 worker_done "u1 done"
 check "main's messages to a worker, its scripts' notes and worker traffic do not" "rc=1" "$(watch >/dev/null; echo "rc=$?")"
+# Issue 166: main's answer-worker.sh reply to this pane, sent with no run id while the pane was busy, was dropped
+# by the run rule and by its "answer from main" subject. A message to this pane's own handle always wakes it.
+row term_main term_cos status "answer from main" 2026-10-15T10:00:00Z ""
+check "main's answer to this pane's own handle, with no run id, wakes it" 1 "$(watch | grep -c 'answer from main')"
+row term_main term_cos status "FYI owner answer"
+check "an FYI to this pane's own handle wakes it too, and is printed" 1 "$(watch | grep -c 'FYI owner answer')"
+row term_main run:run_1 status "heads-up: x"; row term_main run:run_1 status "main-watch: y"; row term_w1 run:run_1 worker_done "u2 done"
+check "the run's heads-up, main-watch and worker_done traffic still does not" "rc=1" "$(watch >/dev/null; echo "rc=$?")"
+row term_main run:run_1 status "FYI to the run"
+check "an FYI to the run is still held" "rc=1" "$(watch >/dev/null; echo "rc=$?")"
 
 # The relay passed the owner's message to main (to-main.sh marks it owed), and
 # main answered on its own screen: nothing reached the relay and the owner

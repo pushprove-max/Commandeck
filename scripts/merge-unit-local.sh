@@ -5,7 +5,7 @@
 # last round file must be the pass script's, GO, for the tip being merged. The
 # project's check command (.claude/commandeck.json testCommand) then runs once
 # on a copy of the squashed tree; a red check undoes the squash.
-# Self-test: bash scripts/__tests__/merge-unit-local.test.sh
+# Self-test (the Builder's ledger row only; CI's full suite has no merge-path test): bash scripts/__tests__/merge-unit-local.test.sh
 set -euo pipefail
 # Two Builders finishing minutes apart would rebase and squash onto the same
 # index of the ONE main checkout. Serialise them: the second caller waits, then
@@ -376,7 +376,7 @@ if [ "$DRY_RUN" = 0 ]; then
   # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.
   SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
   [ ! -f "$SEAT" ] || SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(pp_route builder 2>/dev/null && printf '%s' "$RT_AGENT" || true) SEAT_EVENT_STOP=done \
-    bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
+    SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$SEAT" | tail -1) bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
     || echo "no token ledger row written for $UNIT's Builder (ignored)" >&2
   while IFS= read -r f; do
     [ -n "$f" ] || continue

@@ -21,7 +21,8 @@ printf 'node_modules/\n.env\n.claude/briefs/\n' > "$P/.gitignore"
 echo plan > "$P/.claude/plans/toy.md"; echo a > "$P/a.txt"; echo old > "$P/f"; touch "$P/node_modules/x"
 G add -A && G commit -q -m base; BASE=$(G rev-parse HEAD)
 # The orca-ide stand-in: one pane in the worktree while $T/pane exists; $T/close-fail, close-noop, list-fail and
-# close-hook make the close exit 1, leave the pane listed, fail the list, or run a command as the pane closes.
+# close-hook make the close exit 1, leave the pane listed, fail the list, or run a command as the pane closes;
+# ids-only lists the pane with its worktree only in worktreeId and ptyId.
 cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$T/orca.log"
@@ -31,6 +32,7 @@ case "\$*" in
     [ ! -e "$T/list-empty" ] || exit 0
     [ ! -e "$T/list-blank" ] || { echo; exit 0; }
     [ ! -e "$T/list-null" ] || { echo null; exit 0; }
+    [ ! -e "$T/pane" ] || [ ! -e "$T/ids-only" ] || { echo '{"result":{"terminals":[{"handle":"h1","worktreeId":"id::$WT","ptyId":"id::$WT@@ab12"}]}}'; exit 0; }
     [ -e "$T/pane" ] && echo '{"result":{"terminals":[{"handle":"h1","worktreePath":"$WT"}]}}' || echo '{"result":{"terminals":[]}}' ;;
   "terminal close"*) [ ! -e "$T/close-fail" ] || exit 1
     [ ! -e "$T/close-hook" ] || bash "$T/close-hook"
@@ -43,7 +45,7 @@ run() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR COMMANDECK_WORK
 # fresh [ref] -- a marked planning worktree of unit u on <ref> (default main), set up by the real worktree-setup.sh,
 # one pane open, as seat.sh and builder-launch.sh leave it.
 fresh() {
-  rm -rf "$T/pane" "$T/close-fail" "$T/close-noop" "$T/list-fail" "$T/list-bad" "$T/list-empty" "$T/list-blank" "$T/list-null" "$T/close-hook"
+  rm -rf "$T/pane" "$T/close-fail" "$T/close-noop" "$T/list-fail" "$T/list-bad" "$T/list-empty" "$T/list-blank" "$T/list-null" "$T/close-hook" "$T/ids-only"
   git -C "$P" worktree remove --force "$WT" 2>/dev/null; rm -rf "$WT"; git -C "$P" worktree prune
   git -C "$P" worktree add -q --detach "$WT" "${1:-main}" && echo u > "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"
   run bash "$REAL/scripts/worktree-setup.sh" "$WT" >/dev/null 2>&1; touch "$T/pane"; : > "$T/orca.log"
@@ -139,6 +141,12 @@ check "another unit's mark: left, exit 0, nothing closed" "0:1:0:0" \
 fresh; close --dry-run
 check "--dry-run on a clean worktree: says what it would close, closes nothing" "0:would close 1 panes and remove $WT:0:0" \
   "$RC:$(cat "$T/out"):$(calls 'terminal close'):$(calls 'worktree remove')"
+# Issue 162: the plan author's pane listed with no worktreePath was missed and left orphaned.
+fresh; touch "$T/ids-only"; close --dry-run
+check "--dry-run counts a pane listed with only worktreeId and ptyId" "0:would close 1 panes and remove $WT" "$RC:$(cat "$T/out")"
+close
+check "and the real run closes it and removes the worktree" "0:1:no" "$RC:$(grep -c '^terminal close --terminal h1' "$T/orca.log"):$([ -d "$WT" ] && echo yes || echo no)"
+fresh
 echo x > "$WT/stray"; close --dry-run
 check "--dry-run on a dirty worktree: refused like the real run" "1:1" "$RC:$(grep -c '^REFUSED: .* holds stray (untracked)' "$T/err")"
 rm -rf "$WT"; git -C "$P" worktree prune; close

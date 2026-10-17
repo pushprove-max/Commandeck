@@ -180,8 +180,8 @@ handle_units() {  # {"term_x":"wt1168-retry-runtime", ...} -- every pane that si
   local m
   m=$(orca-ide terminal list --json 2>/dev/null | jq -c --arg ws "$WS" "$PP_PNORM"'
     ($ws | pnorm + "/") as $ws
-    | [ (.result | if type == "array" then . else (.terminals // []) end)[]? | select(((.worktreePath // "") | pnorm | startswith($ws)))
-      | { key: .handle, value: ((.worktreePath | pnorm | ltrimstr($ws)) | split("/")[0]) } ]
+    | [ (.result | if type == "array" then . else (.terminals // []) end)[]? | select(((wtp // "") | pnorm | startswith($ws)))
+      | { key: .handle, value: ((wtp | pnorm | ltrimstr($ws)) | split("/")[0]) } ]
     | from_entries' 2>/dev/null)
   [ -n "$m" ] || m='{}'
   printf '%s\n' "$m"
@@ -239,8 +239,11 @@ driver_units() {  # units whose driver is alive, as a JSON array
 #     main's handle too, but never as `status`, so only main's hand-sent notes
 #     match. Orca's refusal of such a send carries its own payload and is kept.
 #     With no pane handle in the environment nothing is dropped on a guess.
+# None of these rules hides an owner answer: a message citing a ruling id, or from the relay's pane (the one in
+# $PP_WORKSPACES/Chief-of-Staff, as to-main.sh finds it), always passes. What they hide goes to hidden.jsonl.
 # Everything else passes, including every driver wake and every escalation: an
 # escalation is a seat asking for a decision the driver cannot make.
+RID_RE='r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}'
 KEEP='
   def echo_unit: (.subject // "") | ((capture("\\((?<u>[^)]+)\\)") // {u:""}) | .u);
   def seat_unit: (.subject // "") | ((capture("^seat [a-z-]+ (?<u>[^:]+):") // {u:""}) | .u);
@@ -257,9 +260,10 @@ KEEP='
                or (sender_unit == "u") or (echo_unit == "u")
                or ((.subject // "") | test("^(seat [a-z-]+ (on )?|drive )?u([: ]|$)|(^| )unit=u( |$)"));
   def relay: (.subject // "") | startswith("heads-up:");
+  def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or (sender_unit == "Chief-of-Staff");
   def own: ($me != "") and (.type == "status") and ((.from_handle // "") == $me)
            and (((.payload // "") | tostring | contains("_orcaLifecycleRejection")) | not);
-  .result.messages[]? | select(.type != "heartbeat") | select(relay or ((noisy | not) and (harness | not) and (own | not)))'
+  .result.messages[]? | select(.type != "heartbeat") | select(relay or owner or ((noisy | not) and (harness | not) and (own | not)))'
 # A heads-up relay (main-watch.sh) is printed whole, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
 RENDER='if ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
@@ -334,7 +338,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     fi
   fi
   # A ruling id in a message is a claim until the log agrees: a void row is machine text or a decoy pick, never the owner's word.
-  for rid in $(jq -r '[.subject // "", .body // ""] | join("\n")' <<<"$m" | grep -oE 'r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}' | sort -u); do
+  for rid in $(jq -r '[.subject // "", .body // ""] | join("\n")' <<<"$m" | grep -oE "$RID_RE" | sort -u); do
     # Any void value, and a pick made in under two seconds that the owner has not
     # confirmed (ruling-log.sh marks both). An id with one bad row is bad, whichever row is first.
     row=$(jq -rRn --arg id "$rid" '[inputs | fromjson? | select(.id == $id)] | select(length > 0)
@@ -503,7 +507,12 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
       dunits=$(driver_units); hunits=$(handle_units)
     fi
     # One array feeds every output path and the counter.
-    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --arg me "${ORCA_TERMINAL_HANDLE:-}" "[$KEEP]" 2>/dev/null) || kept='[]'
+    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --arg me "${ORCA_TERMINAL_HANDLE:-}" --arg rid "$RID_RE" "[$KEEP]" 2>/dev/null) || kept='[]'
+    # What the rules hid is kept, before the ack as the bodies below are: a hidden owner answer can still be found.
+    # Both go in on stdin: as an argument a big batch overflows ARG_MAX (E2BIG) and the drain never acks.
+    # shortcut: one append-only file, rotate it per run if it grows past a few MB.
+    mkdir -p "$MSGDIR" && { printf '%s\n' "$out"; printf '%s' "${kept:-[]}"; } | jq -cs '[.[0].result.messages[]? | select(.type != "heartbeat")] - .[1] | .[]' >> "$MSGDIR/hidden.jsonl" \
+      || { echo "orca-wait: could not save hidden messages to $MSGDIR/hidden.jsonl; not acknowledged"; return 1; }
     all=$(printf '%s' "$out" | jq '[.result.messages[]?] | length' 2>/dev/null) || all=0
     OVER=$((${OVER:-0} + ${all:-0} - $(printf '%s' "${kept:-[]}" | jq length)))
     if [ "${kept:-[]}" != '[]' ]; then
@@ -537,7 +546,7 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
 drain || exit 3
 # Orca's banner counts every queued message, the ones the filter passes over too:
 # without this line "5 messages" beside 2 printed reads as 3 lost.
-[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, your own status notes coming back from the run, a live driver's seat reports); Orca's banner counts them."
+[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, your own status notes coming back from the run, a live driver's seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
 [ "$TOTAL" -gt 0 ] && { state_block; exit 0; }
 echo "orca-wait: nothing was queued."
 exit 1

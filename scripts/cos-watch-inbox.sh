@@ -19,6 +19,7 @@
 # seat.sh's "seat <role> <unit>: <verdict>" and answer-worker.sh's "answer from main".
 # Only messages in this project's run count: the inbox is the whole machine's,
 # and with no run recorded nothing is relayed.
+# A message to this pane's own handle always counts, and always wakes it.
 # A message whose subject starts "FYI" does not wake the pane: each wake
 # replays the pane's whole context. It is held and printed, then cleared,
 # with the next message that does wake the pane.
@@ -127,12 +128,14 @@ if limit < 3840 and len(ms) >= limit and min(m.get("sequence") or 0 for m in ms)
     sys.exit(3)
 want = r"^cos\b|chief.of.staff|\bowner\b" + ("|" + re.escape(name) if name else "")
 # The Orca inbox holds every project on the machine: this pane relays its own run only.
+# A message to this pane (to_handle == me) is for the relay, whatever its run, type or subject (answer-worker.sh from main).
 mine = [m for m in ms if (m.get("sequence") or 0) > last and m.get("from_handle") != me
-        and run and m.get("run_id") == run
-        and m.get("type") != "worker_done"  # worker reports go to main
-        and (re.search(want, m.get("subject") or "", re.I)
-             or (coord and m.get("from_handle") == coord and (m.get("to_handle") or "") in ("", "run:" + run, me)))
-        and not re.match(r"(main-watch|heads-up|main:|answer from main|seat \S+ \S+: )", m.get("subject") or "", re.I)]
+        and (m.get("to_handle") == me
+             or (run and m.get("run_id") == run
+                 and m.get("type") != "worker_done"  # worker reports go to main
+                 and (re.search(want, m.get("subject") or "", re.I)
+                      or (coord and m.get("from_handle") == coord and (m.get("to_handle") or "") in ("", "run:" + run, me)))
+                 and not re.match(r"(main-watch|heads-up|main:|answer from main|seat \S+ \S+: )", m.get("subject") or "", re.I)))]
 def at(m):
     try:
         return int(datetime.datetime.fromisoformat((m.get("created_at") or "").replace("Z", "+00:00")).timestamp())
@@ -156,7 +159,7 @@ if sent:  # main sent the relay something: its turn is not a silent stop, and a 
                 os.remove(owedf)
 line = lambda m: " ".join(str(x) for x in (m.get("created_at"), (m.get("from_handle") or "")[:14], m.get("subject"), "|", m.get("body"), "\n"))
 mine.sort(key=lambda m: m["sequence"])
-fyi = [m for m in mine if re.match(r"\s*fyi\b", m.get("subject") or "", re.I)]
+fyi = [m for m in mine if m.get("to_handle") != me and re.match(r"\s*fyi\b", m.get("subject") or "", re.I)]
 wake = [m for m in mine if m not in fyi]
 held = held + "".join(line(m) + "\n" for m in fyi)
 out = owed + "".join(line(m) + "\n" for m in wake) + ("HELD FYI NOTES (did not wake you):\n" + held + "\n" if held and (wake or owed) else "")

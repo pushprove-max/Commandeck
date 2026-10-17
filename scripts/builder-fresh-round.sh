@@ -5,20 +5,26 @@
 # seat record, the new session's id is appended as its last session= line, which main-watch.sh reads, so main
 # watches the new log and not the cleared one.
 # builder-codex-pass.sh runs it after a NO-GO pass, and builder-add-work.sh when main adds work, each as a plain
-# background child. A pane that does not settle in 15 minutes gets nothing typed: the reason goes to stderr
-# and to main (to-main.sh: a log alone was never read), the exit is 1, and the round stays in the old session.
-# Self-test: bash scripts/__tests__/builder-codex-pass.test.sh
+# background child. It waits while the pane is busy, until the pane is gone or Orca fails 5 tries in a row; one
+# hand-off to a pane at a time.
+# A hand-off that does not start gets nothing typed: the reason and a re-run line go to stderr and to main
+# (to-main.sh: a log alone was never read), the exit is 1, and the round stays in the old session.
+# Self-test: bash scripts/__tests__/builder-fresh-round.test.sh
 set -uo pipefail
 H=${1:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}
 HAND=${2:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}
 REC=${3:-}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
-LIMIT=900 SETTLE=${COMMANDECK_FRESH_ROUND_SETTLE_SECONDS:-20}
-idle() { orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms "$1" --json >/dev/null 2>&1; }
+SETTLE=${COMMANDECK_FRESH_ROUND_SETTLE_SECONDS:-20}
+# idle <ms> -- the pane is idle within <ms>. Orca's answer is kept in W: a busy pane is a wait that timed out.
+idle() { W=$(orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms "$1" --json 2>&1); }
 # tell <reason> -- the reason on stderr, and to main: a hand-off that never started is news only main can act on.
 # Main first, so the log's last line is written once nothing more runs.
+# A question, not an escalation: Orca refuses an escalation from a pane with no dispatch of its own.
 tell() {
-  bash "$(dirname "${BASH_SOURCE[0]}")/to-main.sh" escalation "fresh round not started: ${HAND##*/}" "builder-fresh-round: $1" >/dev/null 2>&1 \
+  local d; d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  bash "$d/to-main.sh" question "fresh round not started: ${HAND##*/}" "builder-fresh-round: $1
+re-run: bash $(printf %q "$d/builder-fresh-round.sh") $(printf %q "$H") $(printf %q "$HAND")${REC:+ $(printf %q "$REC")}" >/dev/null 2>&1 \
     || [ $? = 3 ] || echo "builder-fresh-round: telling main failed too" >&2   # 3: queued for main's next session
   echo "builder-fresh-round: $1" >&2
   exit 1
@@ -26,14 +32,39 @@ tell() {
 fail() { tell "$1; the round of $HAND stays in the old session."; }
 # send <text> -- type <text> and Enter into the pane; Orca's answer is kept for the reason when it fails.
 send() { SENT=$(orca-ide terminal send --terminal "$H" --text "$1" --enter --json 2>&1) || { SENT=$(printf '%s' "$SENT" | tr -s '\n' ' ' | cut -c1-300); return 1; }; }
-END=$((SECONDS + LIMIT))
+# listed -- 0: Orca's list holds $H live; 1: it answers without it (gone); 2: no list (it failed, or is not JSON).
+listed() {
+  orca-ide terminal list --json 2>/dev/null | jq -e --arg h "$H" '(.result | if type == "array" then . else .terminals end)
+    | if type == "array" then any(.[]; .handle == $h and .orphaned != true) else error("no list") end' >/dev/null 2>&1
+  local r=$?; [ "$r" -le 1 ] || r=2; return "$r"
+}
+# A second hand-off to the same pane waits here until the first exits: two would interleave their typing.
+mkdir -p "$PP_SCRATCH" && exec 9>>"$PP_SCRATCH/fresh-round-$H.lock" && flock 9 || fail "cannot lock $PP_SCRATCH/fresh-round-$H.lock; nothing typed"
 # Idle twice, SETTLE apart: a background-task notice can wake the old session just after it ends its turn, and
-# /clear typed into a busy turn is lost.
+# /clear typed into a busy turn is lost. A busy pane (the wait timed out) or one blocked on its user (Orca exits 1
+# with wait.satisfied false) is waited on 5 minutes a try, for as long as it is listed. Any other failed wait,
+# the first or the second, or a list that does not answer, is Orca failing: 5 in a row and main is told, since
+# retried for good it would hold the lock and stall every later hand-off unseen. The sleep after every try
+# keeps an Orca that answers at once from spinning the loop.
+DOWN=0 MS=300000
 while :; do
-  left=$((END - SECONDS))
-  { [ "$left" -gt 0 ] && idle "$((left * 1000))"; } || fail "pane $H was not idle within ${LIMIT}s; nothing typed"
+  if idle "$MS"; then
+    [ "$MS" = 1000 ] && break
+    MS=1000
+  else
+    MS=300000
+    if jq -e '.error.code == "timeout" or .result.wait.satisfied == false' >/dev/null 2>&1 <<<"$W"; then
+      DOWN=0
+    else
+      listed; case $? in
+        1) fail "pane $H is gone; nothing typed" ;;
+        0) why="wait: $(printf '%s' "$W" | tr -s '\n' ' ' | cut -c1-200)" ;;
+        *) why="wait and list gave no answer" ;;
+      esac
+      DOWN=$((DOWN + 1)); [ "$DOWN" -lt 5 ] || fail "Orca failed 5 times in a row ($why); nothing typed"
+    fi
+  fi
   sleep "$SETTLE"
-  idle 1000 && break
 done
 STAMP=$(mktemp) || fail "cannot make a temp file; nothing typed"
 trap 'rm -f "$STAMP"' EXIT

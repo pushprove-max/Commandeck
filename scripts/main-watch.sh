@@ -21,7 +21,8 @@
 #   reap_brokers), a user process count past 2,000 is an item, and finished or
 #   orphaned panes are closed (close-done-panes.sh --close).
 # Heads-up: every Claude session's "you should know" offer, full text, posted
-#   to main's inbox and never typed into a pane (heads_up_capture).
+#   to main's inbox and never typed into a pane (heads_up_capture), unless a
+#   live claim in $PP_SCRATCH/heads-up-owner names another watcher (hu_claimed).
 # Handled = main closed the item's Orca task (completed or failed). An item with
 # no task gets one on its first post. An open item re-posts every 5 minutes,
 # except a heads-up note, which is settled once delivered. A seat a
@@ -181,13 +182,15 @@ builder_card() {
   jq -cR --argjson la "$2" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$1/.claude/builder-events.jsonl" 2>/dev/null \
     | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$1")" -f "$HERE/dashboard_builders.jq" 2>/dev/null
 }
-# helper_out <unit> <launched> -- a helper the Builder started has not finished, and logged a row within
-# STALL_S: a Builder that ended its turn to wait on it is waiting, not stopped (#41). A helper silent
-# longer than that died with no stop row, so the Builder's stop is real and is posted.
+# helper_out <unit> <launched> -- a helper or a review pass the Builder started has not finished: a helper
+# that logged a row within STALL_S, or a pass started within HOLD_S. A Builder that ended its turn to wait on
+# it is waiting, not stopped (#41). A pass logs only its start and end rows, so its start is the clock; a helper
+# silent past STALL_S, or a pass killed with no end row, died, so the Builder's stop is real and is posted.
 helper_out() {
   [ -f "$WS/$1/.claude/builder-events.jsonl" ] || return 1
-  builder_card "$1" "$2" | jq -e --argjson now "$NOW" --argjson s "$STALL_S" \
-    'any(.waiting[] | select(.kind == "subagent") | $now - (.seenAt | sub("\\.[0-9]+"; "") | fromdateiso8601); . >= 0 and . < $s)' >/dev/null 2>&1
+  builder_card "$1" "$2" | jq -e --argjson now "$NOW" --argjson s "$STALL_S" --argjson hold "$HOLD_S" \
+    'any(.waiting[]; (.kind == "subagent" and ($now - (.seenAt | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $s))
+      or (.kind == "codex" and ($now - (.since | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $hold)))' >/dev/null 2>&1
 }
 
 # builder_watch -- each working Builder seat's event log through
@@ -696,8 +699,8 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
           && ! timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$w" --agent claude --launched "${5:-0}" --spec "${7:-}" \
             --marker "${u^^}-DONE" 2>/dev/null | grep -qx 'marker=1'; then
           [ -s "$ST/held-$key" ] || echo "$NOW" > "$ST/held-$key"
-          # A helper started after the hold began means the Builder worked, maybe between two ticks: a new clock.
-          [ "$(builder_card "$u" "${5:-0}" | jq -r --argjson now "$NOW" '[.waiting[] | select(.kind == "subagent")
+          # A helper or pass started after the hold began means the Builder worked, maybe between two ticks: a new clock.
+          [ "$(builder_card "$u" "${5:-0}" | jq -r --argjson now "$NOW" '[.waiting[] | select(.kind == "subagent" or .kind == "codex")
             | .since | sub("\\.[0-9]+"; "") | fromdateiso8601 | select(. <= $now)] | max // 0' 2>/dev/null || echo 0)" \
             -le "$(cat "$ST/held-$key")" ] || echo "$NOW" > "$ST/held-$key"
           [ $((NOW - $(cat "$ST/held-$key"))) -ge "$HOLD_S" ] || return 0
@@ -892,6 +895,26 @@ hu_done() {
   { jq -r --arg k "$1" '.pairs | to_entries[] | select(.value == $k) | .key' <<<"$2"; echo "$1"; } >> "$HU_DONE"
 }
 
+HU_CLAIM_S=300   # a heads-up claim older than five ticks is no claim
+# hu_claimed -- a project's own watcher posts the heads-up notes for this checkout: $PP_SCRATCH/heads-up-owner
+# (pid=, main=, at=, written whole each cycle it posts) names a live pid, this checkout as text, and an at= from
+# 0 to HU_CLAIM_S old. Anything else is no claim, and this watcher posts. Sets HU_PID and HU_AT.
+# shortcut: pid plus a 300 s at= window; add the process start time to the claim if a reuse is seen.
+hu_claimed() {
+  local c main
+  c=$(cat "$PP_SCRATCH/heads-up-owner" 2>/dev/null) || return 1
+  HU_PID=$(sed -n 's/^pid=//p' <<<"$c" | tail -1) main=$(sed -n 's/^main=//p' <<<"$c" | tail -1) HU_AT=$(sed -n 's/^at=//p' <<<"$c" | tail -1)
+  [[ $HU_PID =~ ^[0-9]+$ && $HU_AT =~ ^[0-9]+$ ]] && kill -0 "$HU_PID" 2>/dev/null \
+    && [ "$(pp_norm "$main")" = "$(pp_norm "$PP_MAIN")" ] && [ $((NOW - HU_AT)) -ge 0 ] && [ $((NOW - HU_AT)) -le "$HU_CLAIM_S" ]
+}
+
+# hu_seen <session id> <shownAt> -- 0 when a store file shows that offer now. A store that cannot be read, or a
+# file that does not parse, shows nothing: an unsure note waits and may be posted twice, never lost.
+hu_seen() {
+  cat "$HU_STORE"/cc-plugin-you-should-know_builtin-*.json 2>/dev/null | jq -en --arg id "$1" --argjson at "$2" \
+    'any(inputs | .sessions? | arrays | .[]; type == "object" and .id == $id and .view.kind? == "offer" and .view.shownAt == $at)' >/dev/null 2>&1
+}
+
 # hu_shown <session id> <shownAt> -- 0 while the store still shows that offer,
 # or cannot be read; 1 once every store file answers and none shows it.
 hu_shown() {
@@ -914,6 +937,23 @@ hu_shown() {
 # retried from the saved text until Orca accepts it, then never sent again.
 heads_up_post() {
   local led k id cwd subj body t p
+  # The claim owner posts these notes. A note it must have seen (every member shown before its last cycle, at=,
+  # and still shown) is put on the handled list unsent. Any other waits, unposted, and is posted once the claim
+  # ends: backlog gone from the store, or an offer newer than the owner's last cycle, is never lost with the owner.
+  if hu_claimed; then
+    [ "$(cat "$ST/hu-yield" 2>/dev/null)" = "$HU_PID" ] || { echo "$HU_PID" > "$ST/hu-yield"
+      echo "main-watch: heads-up notes are not posted: pid $HU_PID claims them for $PP_MAIN ($PP_SCRATCH/heads-up-owner)" >&2; }
+    led=$(cat "$HU_LEDGER" 2>/dev/null) || return 0
+    for k in $(jq -r '.groups | keys[]' <<<"$led" 2>/dev/null); do
+      grep -qxF -- "$k" "$HU_DONE" 2>/dev/null && continue
+      for p in $(jq -r --arg k "$k" '.pairs | to_entries[] | select(.value == $k) | .key' <<<"$led"); do
+        [ "${p##*@}" -le $((HU_AT * 1000)) ] && hu_seen "${p%@*}" "${p##*@}" || continue 2
+      done
+      { jq -r --arg k "$k" '.pairs | to_entries[] | select(.value == $k) | .key' <<<"$led"; echo "$k"; } >> "$HU_DONE"
+    done
+    return 0
+  fi
+  rm -f "$ST/hu-yield"
   led=$(cat "$HU_LEDGER" 2>/dev/null) || return 0
   for k in $(jq -r '.groups | keys[]' <<<"$led" 2>/dev/null); do
     grep -qxF -- "$k" "$HU_DONE" 2>/dev/null && continue

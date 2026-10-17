@@ -122,13 +122,17 @@ check "another checkout is neither" "no" "$(pths "$V/nest/proj" 'pp_registered &
 # project here ... is a git checkout". With nothing else naming the project, the
 # Orca pane's own worktree does; a worktree pane's still resolves to its main.
 mkdir -p "$T/elsewhere" "$T/obin"
-printf '#!/usr/bin/env bash\necho "$*" >> %q; echo %s\n' "$T/orca.log" "'{\"ok\":true}'" > "$T/obin/orca-ide"; chmod +x "$T/obin/orca-ide"
-away() { ( cd "$T/elsewhere" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_WORKSPACES PATH="$T/obin:$PATH" COMMANDECK_SCRATCH="$T/scratch" "$@" ); }
+# The list holds term_m with only its worktreeId: issue 161's shape, an entry with no worktreePath.
+printf '#!/usr/bin/env bash\necho "$*" >> %q\ncase "$*" in *"terminal list"*) jq -nc --arg w "id::%s" %s ;; *) echo %s ;; esac\n' \
+  "$T/orca.log" "$T/one" "'{ok: true, result: {terminals: [{handle: \"term_m\", worktreeId: \$w}]}}'" "'{\"ok\":true}'" > "$T/obin/orca-ide"; chmod +x "$T/obin/orca-ide"
+away() { ( cd "$T/elsewhere" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_WORKSPACES -u ORCA_TERMINAL_HANDLE PATH="$T/obin:$PATH" COMMANDECK_SCRATCH="$T/scratch" "$@" ); }
 check "main closes a task from outside the checkout, its pane's worktree naming the project" "closed task_1:1" \
   "$(away ORCA_WORKTREE_ID="id-1::$T/one" bash "$REAL/scripts/orca-wait.sh" --close task_1 2>&1):$(grep -c 'task-update --id task_1 --status completed' "$T/orca.log" 2>/dev/null)"
 check "a worktree pane's resolves to its main checkout" "$T/one" \
   "$(away ORCA_WORKTREE_ID="id-2::$U" bash -c '. "$0" && pp_main_resolve && printf "%s" "$PP_MAIN"' "$REAL/scripts/project-main.sh")"
-check "with no pane either, it still says there is no project" 1 \
-  "$(away ORCA_WORKTREE_ID= bash "$REAL/scripts/orca-wait.sh" --close task_2 2>&1 | grep -c 'no project here')"
+check "with no worktree id, Orca's list entry for this pane's handle names the project (issue 161)" "closed task_3:1" \
+  "$(away ORCA_WORKTREE_ID= ORCA_TERMINAL_HANDLE=term_m bash "$REAL/scripts/orca-wait.sh" --close task_3 2>&1):$(grep -c 'task-update --id task_3 --status completed' "$T/orca.log" 2>/dev/null)"
+check "with no pane either, it still says there is no project, and names where it looked" 1 \
+  "$(away ORCA_WORKTREE_ID= bash "$REAL/scripts/orca-wait.sh" --close task_2 2>&1 | grep -c "no project here: .*tried: $T/elsewhere)")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -439,9 +439,11 @@ KNOWN_VERDICTS='GO NO-GO DONE REVISED'
 # fence, the screen is read once more as starting inside one. That second
 # reading counts only when the first delimiter it meets is bare, as a closing
 # line is, and it ends outside a fence; otherwise the plain reading stands.
-# CEILING: a screen whose last lines are a bare opening fence and a fixture
-# verdict still streaming is the same text as a cropped one, and reads as that
-# verdict until the fence closes. Reviewer tests open with a language and path.
+# AMBIGUOUS: a screen whose last lines are a bare opening fence and a fixture
+# verdict still streaming is the same text as a cropped one. So when the second
+# reading replaces a plain one that ended inside a fence, a GO there is dropped
+# and any other verdict kept (main's ruling): a false NO-GO costs one more round,
+# a false GO skips one.
 verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict outside a fence
   printf '%s\n' "$1" | VERDICT_RE=$VERDICT_RE awk -v cropped="${2:-}" "$PP_AWK_FENCE"'
     { line[NR] = $0 }
@@ -459,9 +461,18 @@ verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict o
       ended_inside = (inside || flen)
       return out
     }
+    function drop_go(s,   n, a, i, w, r) {  # the lines of s whose word, as verdict_word strips it, is not GO
+      n = split(s, a, "\n"); r = ""
+      for (i = 1; i <= n; i++) {
+        if (a[i] == "") continue
+        w = a[i]; sub(/^[0-9]+:[[:space:]]*\*?\*?VERDICT:[[:space:]]*/, "", w); sub(/[[:space:]].*$/, "", w); sub(/"$/, "", w); sub(/\*+$/, "", w)
+        if (w != "GO") r = r a[i] "\n"
+      }
+      return r
+    }
     END {
-      out = scan(0)
-      if (cropped && (out == "" || ended_inside)) { again = scan(1); if (!ended_inside) out = again }
+      out = scan(0); plain_inside = ended_inside
+      if (cropped && (out == "" || plain_inside)) { again = scan(1); if (!ended_inside) out = plain_inside ? drop_go(again) : again }
       printf "%s", out
     }'
 }

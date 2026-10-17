@@ -204,7 +204,8 @@ add-csv-export-r1-reports.md: VERDICT: GO (adversarial pass on 3f9c2a1, …)
 ```
 
 A watcher service, `main-watch.sh`, installed by setup, posts a message to
-the orchestrator when the Builder's pane stops. The orchestrator then runs
+the orchestrator when the Builder's pane stops (not while it waits on a helper
+or a review pass it started, for up to an hour). The orchestrator then runs
 the merge from the main checkout:
 
 ```bash
@@ -219,6 +220,14 @@ STEP 4 merge: git merge --squash add-csv-export; npm test; git commit -m …
 STEP 5 cleanup: orca-ide terminal close --worktree … --all; orca-ide worktree remove --worktree … --force
 DONE unit=add-csv-export merged=local sha=8d41e07; …; nothing was pushed
 ```
+
+A project that runs its own watcher and posts Claude Code's heads-up notes itself writes
+`<scratch>/heads-up-owner` (`pid=`, `main=` the full checkout path, `at=` epoch, no later than that cycle's
+read of the offer store) each cycle it posts.
+While that claim is live (pid alive, same checkout, under 300 s old), `main-watch.sh` posts no heads-up. It
+counts a note as the owner's only when the offer was shown before `at=` and is still shown; any other note waits
+and is posted once the claim ends.
+A watcher that stands down writes no claim.
 
 Those are some of the lines the scripts print, with example values filled
 in. Between
@@ -378,7 +387,7 @@ it found and exits, which wakes the pane:
 
 | Watcher | Wakes the pane when |
 |---|---|
-| `cos-watch-inbox.sh` | the orchestrator sends it a message (checked every 20 s). A subject starting `FYI` is held and shown with the next message that does wake it |
+| `cos-watch-inbox.sh` | the orchestrator sends it a message, or anyone sends to its own handle (checked every 20 s). A subject starting `FYI` is held and shown with the next message that does wake it, unless it was sent to its own handle |
 | `cos-watch-decisions.sh` | a decision in the ledger is open and you have not been asked yet (every 20 s) |
 | `cos-watch-alerts.sh` | the dashboard raises an alert for this project or the machine (every 60 s) |
 | `cos-watch-limit.sh [<percent>]` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |

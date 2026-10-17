@@ -53,7 +53,7 @@ if [ "$REQ_UNAME" = Darwin ] && ! req_check all; then
 fi
 
 . "$(dirname "${BASH_SOURCE[0]}")/project-main.sh"
-pp_main_resolve || { echo "paths.sh: no project here: neither ${CLAUDE_PROJECT_DIR:-(no CLAUDE_PROJECT_DIR)} nor $PWD is a git checkout; run it in the project, or set COMMANDECK_MAIN" >&2
+pp_main_resolve || { echo "paths.sh: no project here: no git checkout found (tried: $PP_TRIED); run it in the project, or set COMMANDECK_MAIN" >&2
   return 1; }
 PP_MAIN_SLUG=$(pp_slug "$PP_MAIN")
 PP_WORKSPACES_SLUG=$(pp_slug "$PP_WORKSPACES")

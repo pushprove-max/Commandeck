@@ -189,12 +189,14 @@ printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n
 PROJ=$HOME/.claude/projects/$(printf '%s' "$W" | tr -c 'A-Za-z0-9' '-')
 # The cleared session's own log names the hand-off too (it read the pass's output); it is not the new one.
 mkdir -p "$PROJ"; echo "$B/$U-fix-r7.md" > "$PROJ/old-sid.jsonl"; touch -t 209901010000 "$PROJ/old-sid.jsonl"
-# Logs every call; a wait answers FRS_IDLE (1 is Orca's timeout); typing the pointer starts the new session's log.
+# Logs every call; a wait answers FRS_IDLE (1 with no answer is a failed wait); the list holds term_frs unless FRS_GONE;
+# typing the pointer starts the new session's log.
 cat > "$FB/orca-ide" <<'SH'
 #!/usr/bin/env bash
 echo "$*" >> "$FRS_CALLS"
 case "$*" in
   *"terminal wait"*) exit "${FRS_IDLE:-0}" ;;
+  *"terminal list"*) [ -n "${FRS_GONE:-}" ] && echo '{"result":{"terminals":[]}}' || echo '{"result":{"terminals":[{"handle":"term_frs"}]}}' ;;
   *"--text /clear"*) [ -z "${FRS_SEND_FAILS:-}" ] || { echo "orca: PROBE-REFUSAL" >&2; exit 1; } ;;
   *"Your task spec is the file"*) printf '%s\n' "$*" > "$FRS_PROJ/new-sid.jsonl"; touch -t 209901010000 "$FRS_PROJ/new-sid.jsonl" ;;
 esac
@@ -226,10 +228,10 @@ check "the pane is waited idle, cleared, then handed the file" "terminal wait,--
 check "the pointer names the hand-off file" 1 "$(grep -cF "Your task spec is the file $H7." "$TMP/frs-calls")"
 check "main's seat record now names the new session, not the cleared one" "session=new-sid" "$(grep '^session=' "$SC/seat-$U-builder.txt" | tail -1)"
 rm -f "$TMP/frs-calls"; printf 'echo eight\n' > "$W/a.sh"
-check "a pane that never goes idle: the pass still ends 0" 0 "$(fpass "$W" 8 review "$NOGO" FRS_IDLE=1)"
+check "a pane that is gone before it goes idle: the pass still ends 0" 0 "$(fpass "$W" 8 review "$NOGO" FRS_IDLE=1 FRS_GONE=1)"
 helper_done 8
 check "and the helper types nothing and says why" "0 1" \
-  "$(grep -c 'terminal send' "$TMP/frs-calls") $(grep -c 'was not idle within 900s; nothing typed' "$SC/$U-fix-r8.log")"
+  "$(grep -c 'terminal send' "$TMP/frs-calls") $(grep -c 'pane term_frs is gone; nothing typed' "$SC/$U-fix-r8.log")"
 rm -f "$TMP/frs-calls"; printf 'echo nine\n' > "$W/a.sh"
 check "a GO pass hands nothing over" "0 0 0" \
   "$(fpass "$W" 9 review 'VERDICT: GO') $(ls "$B/$U-fix-r9.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | wc -l | tr -d ' ')"

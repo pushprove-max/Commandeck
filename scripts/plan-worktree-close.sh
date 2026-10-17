@@ -78,7 +78,7 @@ refuse() {
 panes() {
   local out; out=$(timeout 10 orca-ide terminal list --json 2>/dev/null) \
     && jq -e . <<<"$out" >/dev/null && jq -r --arg wt "$WT" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . elif (.terminals | type) == "array" then .terminals else error("not a terminal list") end)[]
-      | select((.worktreePath | pnorm) == $wt) | .handle' <<<"$out"
+      | select((wtp | pnorm) == $wt) | .handle' <<<"$out"
 }
 
 refuse ""

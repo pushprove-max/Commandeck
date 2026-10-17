@@ -13,7 +13,8 @@ set -euo pipefail
 SOURCE=$(git rev-parse --show-toplevel)
 # Physical path: main-watch finds main's pane by comparing Orca's worktreePath with it.
 T=$(cd "$(mktemp -d)" && pwd -P)
-trap 'rm -rf "$T"' EXIT
+LIVE= ARGV=
+trap 'kill $LIVE $ARGV 2>/dev/null; rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*" >&2; [ ! -s "$T/sends" ] || { echo "sends were:" >&2; cat "$T/sends" >&2; }; exit 1; }
 
 REPO=$T/repo S=$T/scratch F=$T/fake
@@ -119,5 +120,54 @@ mkdir -p "$T/ws/pu-plan"; printf 'handle=term_pu\ntask=task_pu\nrole=plan-author
 echo "task_pu running" >> "$F/tasks"; state term_pu working; tick 40100
 echo PLAN-DONE > "$F/verdict-term_pu"; state term_pu "done"; tick 40160; tick 40220
 grep -q 'seat plan-author on pu finished' "$T/sends" || fail "a planner that finished in its planning worktree was not posted"
+
+# Issue 158: a Builder that ends its turn on a review pass it started is waiting, not stopped. A pass logs only
+# its start and end rows, so it is held from its start for HOLD_S (1 h), and a finished pass holds nothing.
+crow() { jq -nc --argjson t "$1" --arg e "$2" '{ts: ($t | todate), event: $e, pass: "review", round: 2}'; }
+for u in wt-c1 wt-c2; do bseat $u term_$u task_$u 48000; state term_$u working; crow 49400 codex-start > "$T/ws/$u/.claude/builder-events.jsonl"; done
+crow 49500 codex-end >> "$T/ws/wt-c2/.claude/builder-events.jsonl"
+tick 49900; for u in wt-c1 wt-c2; do state term_$u "done"; done; tick 50000
+[ "$(posts 'wt-c1 builder stopped without reporting')" = 0 ] || fail "a Builder waiting on a review pass started 10 minutes ago was posted as stopped"
+[ "$(posts 'wt-c2 builder stopped without reporting')" = 1 ] || fail "a Builder whose pass had ended was not posted as stopped at once"
+tick $((49400 + 3660))
+[ "$(posts 'wt-c1 builder stopped without reporting')" = 1 ] || fail "a Builder held on a pass started 61 minutes ago was not posted"
+
+# Issue 167: a project that runs its own watcher posts the same heads-up notes from the same store. A live claim
+# from it for this checkout stands this watcher down, and says so once; anything short of one is no claim.
+mkdir -p "$T/home/.claude/plugins/store" "$T/home/.claude/projects/p"
+offer() { # <name> <shownAt s>: the store shows one offer, from a session that ran in this checkout
+  jq -nc --arg id "sess-$1" --argjson at "$2" --arg l "LINE-$1" '{sessions: [{id: $id, view: {kind: "offer", shownAt: ($at * 1000), line: $l, explanation: "why"}}]}' \
+    > "$T/home/.claude/plugins/store/cc-plugin-you-should-know_builtin-t.json"
+  jq -nc --arg c "$REPO" '{cwd: $c}' > "$T/home/.claude/projects/p/sess-$1.jsonl"; }
+claim() { printf 'pid=%s\nmain=%s\nat=%s\n' "$1" "$2" "$3" > "$S/heads-up-owner"; }
+yields() { grep -c 'heads-up notes are not posted' "$T/stderr" || true; }
+sleep 30 & LIVE=$!
+N=60000; offer a $N; claim "$LIVE" "$REPO" $N; tick $N; tick $((N + 60))
+[ "$(posts LINE-a)" = 0 ] || fail "a heads-up note was posted while a live claim for this checkout names another watcher"
+[ "$(yields)" = 1 ] || fail "the stand-down was not said exactly once ($(yields) times)"
+rm -f "$S/heads-up-owner"; N=$((N + 120)); offer b $N; tick $N
+[ "$(posts LINE-b)" = 1 ] || fail "with no claim (the project's watcher stood down) the note was not posted"
+[ "$(posts LINE-a)" = 0 ] || fail "a note captured under the claim was posted when it ended"
+sleep 0 & DEAD=$!; wait $DEAD
+for c in "stale:$LIVE:$REPO:-301" "dead:$DEAD:$REPO:0" "nested:$LIVE:$REPO/nested:0" "other:$LIVE:$T/other:0"; do
+  IFS=: read -r name pid main age <<<"$c"
+  N=$((N + 60)); offer "$name" $N; claim "$pid" "$main" $((N + age)); tick $N
+  [ "$(posts "LINE-$name")" = 1 ] || fail "a $name claim stood the watcher down"
+done
+rm -f "$S/heads-up-owner"
+bash -c 'sleep 30' "$REPO/ops/main-watch.sh" & ARGV=$!
+N=$((N + 60)); offer argv $N; tick $N
+[ "$(posts LINE-argv)" = 1 ] || fail "a process that only names a watcher script in its arguments stood the watcher down"
+[ "$(yields)" = 1 ] || fail "a claim that ended did not reset the stand-down line, or said it again: $(yields)"
+# A claim stands down only for notes its owner must have seen: shown before its last cycle (at=) and still shown.
+# "old" is newer than the owner's at= on the first tick and gone from the store by the second; it waits, and
+# posts once the claim ends. "seen" is shown before at= and still shown: the owner posted it.
+kill "$LIVE" 2>/dev/null; sleep 60 & LIVE=$!
+N=$((N + 60)); offer old $N; claim "$LIVE" "$REPO" $((N - 1)); tick $N
+offer seen $((N + 30)); N=$((N + 60)); claim "$LIVE" "$REPO" $N; tick $N
+[ "$(posts LINE-old)$(posts LINE-seen)" = 00 ] || fail "a heads-up note was posted while a live claim for this checkout names another watcher"
+rm -f "$S/heads-up-owner"; N=$((N + 60)); tick $N
+[ "$(posts LINE-old)" = 1 ] || fail "a note the claim owner never saw (shown after its last cycle, then gone) was lost"
+[ "$(posts LINE-seen)" = 0 ] || fail "a note the claim owner saw was posted when the claim ended"
 
 echo "PASS main-watch-helper-hold.test.sh"

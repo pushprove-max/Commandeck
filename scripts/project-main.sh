@@ -52,7 +52,9 @@ pp_norm() {
   [ "$p" = / ] || p=${p%/}
   printf '%s' "$p"
 }
-PP_PNORM='def pnorm: if type == "string" then (. + "/") | gsub("/+"; "/") | gsub("/(\\./)+"; "/") | if . == "/" then . else rtrimstr("/") end else . end;'
+# wtp: an Orca list entry's worktree, whatever field holds it: worktreePath, or the path in worktreeId
+# ("<id>::<path>") or in ptyId ("<id>::<path>@@<hash>").
+PP_PNORM='def pnorm: if type == "string" then (. + "/") | gsub("/+"; "/") | gsub("/(\\./)+"; "/") | if . == "/" then . else rtrimstr("/") end else . end; def wtp: .worktreePath // ((.worktreeId // "") | capture("::(?<p>/.*)$").p) // ((.ptyId // "") | capture("::(?<p>/.*)@@").p);'
 # pp_git <args...>: git with none of its routing variables (GIT_DIR, GIT_WORK_TREE
 # and the rest git lists, and the ceiling that stops its search): a Builder sets
 # them in its own shell, and they would make its worktree read as a main checkout.
@@ -87,6 +89,11 @@ pp_main_resolve() {
   # checkout, with no COMMANDECK_MAIN either, the Orca pane's own worktree (its
   # id is "<id>::<path>") names the session's project.
   [ -n "$sp$first${COMMANDECK_MAIN-}" ] || case ${ORCA_WORKTREE_ID-} in *::/*) sp=${ORCA_WORKTREE_ID#*::} ;; esac
+  # Then Orca's own list entry for this pane, by its handle.
+  [ -n "$sp$first${COMMANDECK_MAIN-}" ] || [ -z "${ORCA_TERMINAL_HANDLE-}" ] \
+    || sp=$(timeout 5 orca-ide terminal list --json 2>/dev/null | jq -r --arg h "$ORCA_TERMINAL_HANDLE" \
+      "$PP_PNORM"'first((.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h) | wtp) // empty' 2>/dev/null)
+  PP_TRIED="$PWD${sp:+ $sp}"
   if pp_checkout "$sp"; then
     if [ -z "$own" ]; then
       first=${c%/.git}
