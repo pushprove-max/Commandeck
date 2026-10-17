@@ -110,7 +110,7 @@ if [ "$RESUME" = 1 ]; then
   # A record there but unreadable (or a directory) stops the launch: read as empty, its rewrite would lose its history.
   rd() { [ ! -e "$1" ] || cat "$1" || { echo "could not read $1; the Builder was not launched and no record was changed." >&2; return 1; }; }
   # One second call of a unit at a time, from reading its records to the pane's launch: a concurrent one saw no
-  # Builder and rewrote the records of the one opening. exec keeps the fd, so seat.sh holds the lock until it exits.
+  # Builder and rewrote the records of the one opening. the lock is held until this script exits.
   pp_builder_lock "$UNIT" || exit 1
   WB=$(rd "$WT/.claude/briefs/$UNIT.md") || exit 1
   REC=$(awk '/^## The batch/ { exit } /^effort override: / { print; exit }' <<<"$WB")
@@ -138,7 +138,10 @@ open_builder() {
     printf '%s unit=%s note=routing-override %s\n' "$(date +%F)" "$UNIT" "$SKIPPED" >> "${COMMANDECK_ROUTING_LOG:-$PP_MAIN/.claude/routing-log}" \
       || { echo "could not write the routing log; the Builder was not launched" >&2; exit 1; }
   fi
-  exec bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"}
+  bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} || exit $?
+  # The plan is on main and the Builder runs: its planning worktree closes. A refusal is printed and never fails the launch.
+  bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
+  exit 0
 }
 
 BY=$(pp_pass)
@@ -200,7 +203,7 @@ if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
   || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
-if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; exit 0; fi
+if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" --dry-run >&2 || true; exit 0; fi
 
 # The second call of a risky launch: the first made the worktree and opened the
 # design pane. The Builder opens only once the note is written; nothing waits.

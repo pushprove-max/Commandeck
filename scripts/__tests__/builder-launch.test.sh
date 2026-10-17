@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# timeout: 240 (about 110s alone, over the 120s default once the suite shares the machine)
 # builder-launch.test.sh -- what a Builder is launched with, read from a hand-written commandeck.json (no setup
 # run). What this pins: the default Builder is Opus at effort medium with no advisor, and runs at the effort setup
 # recorded, the small tooling Builder too; every Builder launch,
@@ -352,6 +353,16 @@ first; MB=$PROJ/.claude/briefs/risky-unit-builder-brief.md; rm "$MB"; mkdir "$MB
 check "a directory where main's brief belongs: refused with no pane, nothing put inside it" '1:0:0' \
   "$?:$(grep -c '^terminal create' "$T/orca.log"):$(ls -A "$MB" | wc -l | tr -d ' ')"
 rmdir "$MB"
+# Owner's order 2026-10-17: the Builder's launch closes the unit's planning worktree, and a refusal never fails the launch.
+PW=$(dirname "$RWT")/risky-unit-plan
+mkplan() { git -C "$PROJ" worktree add -q --detach "$PW" main && echo risky-unit > "$(git -C "$PW" rev-parse --absolute-git-dir)/commandeck-plan-of"; }
+first; mkplan; echo x > "$PW/stray.md"; second
+check "a planning worktree holding a file main lacks: the launch exits 0 with the Builder's pane open, REFUSED is printed, the worktree stays" '0:1:1:1:0' \
+  "$?:$(grep -c '^terminal create' "$T/orca.log"):$(grep -c '^REFUSED: .* holds stray.md (untracked)' "$T/err"):$([ -d "$PW" ] && echo 1 || echo 0):$(grep -c '^worktree remove' "$T/orca.log")"
+rm "$PW/stray.md"; first; second
+check "a clean planning worktree: removed after the Builder's pane opened, not before" '1:closed' \
+  "$(grep -c '^worktree remove' "$T/orca.log"):$(awk '/^terminal create/ { c = 1 } /^worktree remove/ { print c ? "closed" : "early" }' "$T/orca.log")"
+git -C "$PROJ" worktree remove --force "$PW"
 # Sol r3: two second calls at once, one at the default and one raising, both saw no Builder; the default one opened
 # medium while the raising one rewrote the records to high, and only then did seat.sh refuse. The pane is slow to
 # open here, so the raise's check falls inside the other's launch: one call at a time, the raise sees it and refuses.

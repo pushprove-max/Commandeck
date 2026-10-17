@@ -41,7 +41,8 @@
   unless the judge found a real gap, which goes to the owner. Without it,
   every answer ends at the plan file: STOP until the owner's own go after
   reading the plan. Commit the plan from `<unit>-plan` on main and name it in the batch's `## Plan`
-  section, or the launch is refused. A plan is never a build order: a plan
+  section, or the launch is refused. The Builder's launch closes `<unit>-plan` and its panes; on a rejected
+  plan run `bash scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build order: a plan
   that exists, is approved or is committed starts no build. A `--risky`
   design pane runs after the plan.
 - **Announce every worker at dispatch time**: agent, model, worktree, task.

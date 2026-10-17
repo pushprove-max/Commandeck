@@ -175,7 +175,7 @@ brief with you (the items and how each will be judged done), asks whether
 to write a plan first (no plan, one planner, a plan and a judge, or a panel
 of two plans, two judges and one merge), and once you say go launches a Builder (a batch that
 names no committed plan is refused unless launched with
-`--skip-plan --reason '<one line>'`):
+`--skip-plan --reason '<one line>'`; the Builder's launch closes the plan's worktree once everything in it is on main):
 
 ```bash
 bash "$PLUGIN/scripts/builder-launch.sh" add-csv-export .claude/briefs/add-csv-export-batch.md

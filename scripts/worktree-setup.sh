@@ -19,6 +19,8 @@
 set -euo pipefail
 WT=${1:?usage: worktree-setup.sh <worktree-path> [--builder]}
 BUILDER=0; [ "${2:-}" = --builder ] && BUILDER=1
+# --print-settings: writes nothing in <wt>, prints the settings file a fresh run would leave (plan-worktree-close.sh compares it).
+PRINT=0; [ "${2:-}" = --print-settings ] && PRINT=1
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
 MAIN=$PP_MAIN
 # The plugin's hooks, by full path: an installed plugin is not in the project,
@@ -28,16 +30,19 @@ HOOKS=$(cd "$PP_SCRIPTS/../hooks" && pwd)
 [ "$(cd "$WT" && git rev-parse --git-dir)" != "$(cd "$WT" && git rev-parse --git-common-dir)" ] \
   || { echo "refusing: $WT is the main checkout" >&2; exit 1; }
 
-mkdir -p "$WT/.claude"
-F="$WT/.claude/settings.local.json"
-[ -f "$F" ] || echo '{}' > "$F"
+if [ "$PRINT" = 1 ]; then F=$(mktemp); echo '{}' > "$F"; exec 3>&1 >&2
+else
+  mkdir -p "$WT/.claude"
+  F="$WT/.claude/settings.local.json"
+  [ -f "$F" ] || echo '{}' > "$F"
+fi
 # The session's own files never ride a unit commit and never read as untracked
 # code at the merge, whatever the project's gitignore says: the repo's shared
 # exclude file names them.
 EXCLUDE=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir)/info/exclude
-mkdir -p "${EXCLUDE%/*}"
+[ "$PRINT" = 1 ] || mkdir -p "${EXCLUDE%/*}"
 for p in .claude/settings.local.json .claude/builder-events.jsonl; do
-  grep -qxF "$p" "$EXCLUDE" 2>/dev/null || echo "$p" >> "$EXCLUDE"
+  [ "$PRINT" = 1 ] || grep -qxF "$p" "$EXCLUDE" 2>/dev/null || echo "$p" >> "$EXCLUDE"
 done
 # A Builder stays a Builder: seat.sh launch reruns this script without the flag.
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$F")" = 1 ] && BUILDER=1
@@ -68,7 +73,7 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   exit 0
 fi
 
-pp_link_node_modules "$MAIN" "$WT"
+[ "$PRINT" = 1 ] || pp_link_node_modules "$MAIN" "$WT"
 
 WINDOW=${COMMANDECK_WORKER_COMPACT_WINDOW:-450000}
 [ "$BUILDER" = 1 ] && WINDOW=300000
@@ -164,3 +169,4 @@ if [ "$BUILDER" = 1 ]; then
   mv "$tmp" "$F"
   echo "$WT: Builder profile: COMMANDECK_BUILDER=1, 1h prompt cache, Agent allowed, node allowed, $(echo "$BX" | jq length) orchestration rules excluded, event-log hooks on"
 fi
+[ "$PRINT" = 0 ] || { cat "$F" >&3; rm -f "$F"; }

@@ -50,7 +50,7 @@ link or settings); `.gitignore` `node_modules/`, main a `node_modules/` dir; an 
 ## Kept
 seat.sh's mark, lock and reuse rule; STEP 5; `plan_ok`; the risky first call (no Builder yet, so no close).
 ## Not doing
-No close at merge as a backstop (not ordered). No hook on judge verdicts. No PushProve change (its own unit).
+No close at merge as a backstop (not ordered). No hook on judge verdicts. No host-project change (its own unit).
 ## Risks
 - Fails safe (refused, left in place): a stray ignored file (`__pycache__/`); settings setup now writes differently
   (plugin update, `COMMANDECK_WORKER_COMPACT_WINDOW`). A branch Orca keeps holds only what is on main.
