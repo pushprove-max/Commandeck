@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-shell-tests.sh [--own-lane] [--list | <file>...] -- run every shell
+# run-shell-tests.sh [--own-lane] [--list | --changed [<base>] | <file>...] -- run every shell
 # self-test under hooks/__tests__ and scripts/__tests__ (or only the named files), one per line in
 # sorted order, and exit non-zero if any failed. Each file's result is also
 # printed the moment it finishes, as a `-- ` line ahead of the sorted report.
@@ -22,6 +22,11 @@
 # the same first five lines. The ordinary run skips it and `--own-lane` runs
 # only those, which is how the chain gives them a lane of their own. The
 # coverage guard reads the same marker, so the two never both run one test.
+#
+# `--changed [<base>]` runs only the tests `git diff --name-only <base>` (default
+# HEAD) touches: a test it adds or edits, and the same-name test of a script or
+# hook it adds or edits (scripts/seat.sh -> scripts/__tests__/seat.test.sh). It is
+# the merge check: the whole suite took 12 minutes a merge (ruling 2026-10-17).
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"
@@ -44,7 +49,23 @@ TMPDIR=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
 ONLY_OWN_LANE=0
 [ "${1:-}" = --own-lane ] && { ONLY_OWN_LANE=1; shift; }
 
-if [ $# -gt 0 ] && [ "$1" != --list ]; then
+if [ "${1:-}" = --changed ]; then
+  BASE=${2:-HEAD}
+  # An unknown base would select nothing and pass: fail instead.
+  git rev-parse -q --verify "$BASE^{commit}" >/dev/null || { echo "run-shell-tests: --changed: no commit $BASE" >&2; exit 2; }
+  # A deleted file selects nothing (--diff-filter=d). A failed git would also select nothing and pass: fail instead.
+  CHANGED=$(git diff --name-only --diff-filter=d "$BASE" --) || { echo "run-shell-tests: --changed: git diff $BASE failed" >&2; exit 2; }
+  # A shared helper's callers' tests are not run (main's ruling 2026-10-17): CI's full suite on every push covers them.
+  mapfile -t TESTS < <(printf '%s\n' "$CHANGED" | while IFS= read -r f; do
+    case $f in
+      (hooks/__tests__/*/*|scripts/__tests__/*/*) ;;
+      (hooks/__tests__/*.test.sh|scripts/__tests__/*.test.sh) echo "$f" ;;
+      (hooks/*/*|scripts/*/*) ;;
+      (hooks/*|scripts/*) t=${f%%/*}/__tests__/$(basename "${f%.*}").test.sh; [ ! -f "$t" ] || echo "$t" ;;
+    esac
+  done | sort -u)
+  [ "${#TESTS[@]}" -gt 0 ] || { echo "run-shell-tests: no shell test was touched since $BASE"; exit 0; }
+elif [ $# -gt 0 ] && [ "$1" != --list ]; then
   # Named files are relative to where the caller stood, not to $ROOT.
   mapfile -t TESTS < <(for f in "$@"; do case $f in (/*) echo "$f" ;; (*) echo "$CALLER_PWD/$f" ;; esac; done | sort)
 else

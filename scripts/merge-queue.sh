@@ -4,7 +4,7 @@
 # failed) or not. Exit 4: every unit merged, and one or more could not file an
 # issue for a finding left open.
 # Logs: <scratch>/merge-<unit>.log (paths.sh PP_SCRATCH)
-# Self-test: bash scripts/__tests__/merge-unit-local.test.sh
+# Self-test: none; merge-unit-local.test.sh was cut for its run time (2026-10-17).
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ $# -gt 0 ] || { echo "usage: merge-queue.sh <unit> ..." >&2; exit 2; }

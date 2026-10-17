@@ -586,9 +586,15 @@ From a clone of this repository:
 
 ```bash
 bash scripts/run-shell-tests.sh    # every shell self-test
+bash scripts/run-shell-tests.sh --changed main  # only the tests your change touches
 bash ci/leak-test.sh               # no name from the source project in the tree
 bash scripts/proof-run.sh          # the numbers above
 ```
+
+This repository's merge check (`testCommand` in `.claude/commandeck.json`) is
+`bash scripts/run-shell-tests.sh --changed`: it runs only the shell tests the
+change touches, each test it adds or edits and the same-name test of each
+script or hook it adds or edits. The whole suite stays `bash scripts/run-shell-tests.sh`.
 
 ## Support
 

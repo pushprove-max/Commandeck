@@ -19,6 +19,9 @@ Every change to the plugin raises the version in `.claude-plugin/plugin.json` an
 
 They need `bash`, `git`, `ripgrep`, `jq` and `perl`.
 
+The local merge check runs only the shell tests a change touches: `bash scripts/run-shell-tests.sh --changed main`
+from your branch. CI and anyone who wants the whole suite run `bash scripts/run-shell-tests.sh`.
+
 ## Pull requests
 
 Pull requests are welcome. For anything larger than a small fix, open an issue first so we can agree on the
