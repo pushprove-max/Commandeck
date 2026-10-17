@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.0 -- 2026-10-17
+
+- Plan before build: `plan-tier.sh <batch-brief>` answers "Write a plan first?" with No plan, Plan + judge or Panel,
+  from the triggers in `config/plan-triggers.tsv` (or the project's own `.claude/plan-triggers.tsv`), going one tier
+  up when unsure. Plan seats (`plan-author`, the judges) run in a planning worktree `<unit>-plan` cut from main, with
+  one judge round and one revision. A plan is never a build order.
+- `builder-launch.sh` closes the unit's `<unit>-plan` worktree and its panes once the Builder's pane is open. It keeps
+  the worktree, with one REFUSED line, when it holds a file that is not identical on local main or a pane does not
+  close. A rejected plan's worktree closes by hand with `bash scripts/plan-worktree-close.sh <unit>` (`--dry-run`
+  removes nothing). An unreadable, empty or error pane list counts as "panes not closed", never as "no panes".
+
 ## 0.11.2 -- 2026-10-16
 
 - `scripts/platform-audit/verify.sh` refuses a verdict with two rows for one finding: the later row silently
