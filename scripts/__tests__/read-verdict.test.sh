@@ -16,6 +16,8 @@ cat > "$T/bin/orca-ide" <<EOF
 case "\$*" in
   *"terminal read"*"--screen"*) jq -n --rawfile s "$T/screen" '{result: {terminal: {tail: \$s}}}' ;;
   *"terminal read"*) echo '{"result":{"terminal":{"tail":""}}}' ;;
+  *"terminal list"*) [ -e "$T/listed" ] && echo '{"ok":true,"result":{"terminals":[{"handle":"term_r","worktreePath":"$T/p"}]}}' \
+    || echo '{"ok":true,"result":{"terminals":[]}}' ;;
   *) echo '{"ok":true,"result":{"terminals":[]}}' ;;
 esac
 EOF
@@ -30,5 +32,12 @@ check "prose, a bare fence, then VERDICT: GO: no verdict" none "$(verdict 'Revie
 check "the same shape with NO-GO: NO-GO" "VERDICT: NO-GO" "$(verdict 'code\n```\nVERDICT: NO-GO\n')"
 check "a fenced sample that closes, then the reply's own GO: GO" "VERDICT: GO" \
   "$(verdict 'Sample:\n```bash\nVERDICT: NO-GO\n```\nAll fixed.\nVERDICT: GO\n')"
+# seat.sh binds a Codex seat's log into its record as a path (session=/.../rollout.jsonl). For a pane Orca names no
+# agent for, that path is no Claude session id: the seat's Claude log is still found by its launch time.
+touch "$T/listed"; mkdir -p "$T/sc" "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')"
+printf 'handle=term_r\ntask=task_r\nrole=plan-author\nlaunched=%s\nsession=%s\n' $(($(date +%s) - 60)) "$T/codex/rollout.jsonl" > "$T/sc/seat-r.txt"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type: "assistant", timestamp: $t, message: {content: [{type: "text", text: "Done.\nVERDICT: NO-GO"}]}},
+  {type: "system", subtype: "turn_duration", timestamp: $t}' > "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl"
+check "a record's bound Codex log path is not read as a Claude session id" "VERDICT: NO-GO" "$(verdict 'Working.\n')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

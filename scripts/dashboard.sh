@@ -156,7 +156,7 @@ seat_role() {
 # plan_seats <unit> [before-iso] -- the unit's planning, read from its plan seats' records (seat.sh launch; never
 # deleted), so it outlives <unit>-plan: {worktree, from (the first launch, a relaunched seat's first= too), seats: [{role, task, from, model, effort,
 # session, completedAt}]}, or null. Model and effort are the record's command's (--model, --effort, Codex's
-# model_reasoning_effort); session its Claude id, else the seat ledger row's log (a collected Codex judge), which
+# model_reasoning_effort); session its Claude id or its bound log path (seat.sh bind_session), else the seat ledger row's log (a collected Codex judge), which
 # also gives completedAt. With `before`, only seats first launched before it: a Builder's own planning, a planner
 # relaunched after the Builder started included (Sol r4).
 # shortcut: keyed by unit name, so a unit planned twice before its Builder counts both; key by build if it matters.
@@ -927,7 +927,7 @@ install() {
   export COMMANDECK_DASHBOARD_PORT=$PORT COMMANDECK_DASHBOARD_BIND=$BIND COMMANDECK_MAIN=$PP_MAIN
   mkdir -p "$OUT" || return 1
   for f in "${VIEW[@]}"; do view_put "$f" || { echo "dashboard: could not copy $src/$f into $OUT" >&2; return 1; }; done
-  local -a keep=(PATH HOME COMMANDECK_MAIN COMMANDECK_DASHBOARD_PORT COMMANDECK_DASHBOARD_BIND COMMANDECK_DASHBOARD_HOSTS COMMANDECK_DASHBOARD_NAME COMMANDECK_DASHBOARD_DIR CODEX_HOME)
+  local -a keep=(PATH HOME COMMANDECK_MAIN COMMANDECK_DASHBOARD_PORT COMMANDECK_DASHBOARD_BIND COMMANDECK_DASHBOARD_HOSTS COMMANDECK_DASHBOARD_NAME COMMANDECK_DASHBOARD_DIR CODEX_HOME COMMANDECK_CODEX_REVIEW_HOME)
   if [ "$(hs_os)" = Darwin ]; then
     local plist=$HOME/Library/LaunchAgents/$HS_PREFIX$NAME.plist
     mkdir -p "${plist%/*}" || return 1

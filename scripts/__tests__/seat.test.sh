@@ -29,6 +29,9 @@ case "\$*" in
     jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
   "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
+  "orchestration worker-start"*) [ -e "$T/no-dispatch" ] && { echo '{"ok":false,"error":{"message":"refused for the test"}}'; exit; }; echo '{"ok":true,"result":{}}' ;;
+  "terminal send"*) [ -e "$T/no-dispatch" ] || { echo '{"ok":true,"result":{}}'; exit; }
+    while [ \$# -gt 0 ]; do [ "\$1" != --text ] || printf '%s\n' "\$2" >> "$T/sent"; shift; done; echo '{"ok":true,"result":{"stages":["turn_started"]}}' ;;
   "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
   *) echo '{"ok":true,"result":{}}' ;;
 esac
@@ -131,6 +134,10 @@ jq -cn --arg t "$NOWZ" --arg tag "$(sed -n 's/^tag=//p' "$AREC")" '
 printf 'It ends on:\n```\nPLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
 srun wait plan-author pu --marker PLAN-DONE --timeout-s 5 >"$T/out" 2>&1
 check "an idle reply that quotes the marker and ends on a question is not released" '1:0' "$?:$(grep -c '^marker=' "$AREC")"
+check "a Claude seat with no session at launch binds its log's session id, not its path" 'session=s-ask' "$(grep '^session=' "$AREC" 2>&1)"
+# Every stand-in pane is h1, and the reader takes the first record naming it: the judge's collect below must not
+# read the planner's session.
+sed -i '/^session=/d' "$AREC"
 srun collect plan-author pu >"$T/out" 2>&1
 check "so collect with no --marker leaves the planner open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
 # A role routed to its own Codex home (routing's codexHome) writes its sessions there, which no default home holds:
@@ -147,8 +154,25 @@ jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$PWT" '
   {type: "event_msg", timestamp: $t, payload: {type: "task_complete", last_agent_message: "No findings.\nVERDICT: GO"}}' > "$JL"
 # A project that allows the judge its Codex model, so the seat stays a Codex one.
 jq --arg m "$(jq -r '.roles["plan-judge-sol"].model' "$REAL/config/routing.json")" '.planModels = [$m]' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+# A Codex seat's log is not found at launch (no Claude process to ask), so the wait binds it into the record: a
+# running judge's spend is then its own, not "Not tied to a seat". A sibling's newer log in the same home and
+# worktree, under another seat's tag, is not the one bound.
+JREC2=$(dirname "$AREC")/seat-pu-plan-judge-sol.txt; echo "spec=$T/judge-spec.md" >> "$JREC2"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$PWT" '
+  {type: "session_meta", timestamp: $t, payload: {cwd: $w}},
+  {type: "response_item", timestamp: $t, payload: {type: "message", role: "user", content: [{type: "input_text", text: "Judge it. Seat tag seat-astra-2."}]}},
+  {type: "event_msg", timestamp: $t, payload: {type: "task_started"}}' > "$JH/sessions/2026/10/17/rollout-astra.jsonl"
+touch "$T/pane-up"; srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 5 >"$T/out" 2>&1
+check "a Codex seat's wait binds its own log into the record, not a sibling's" "session=$JL" "$(grep '^session=' "$JREC2" 2>&1)"
 touch "$T/pane-up"; COMMANDECK_SEAT_EVENTS=$T/events.jsonl srun collect plan-judge-sol pu --marker PLAN-DONE >"$T/out" 2>&1
 check "a judge in its own Codex home is collected, and its ledger row names its log" "0:$JL" "$?:$(jq -r '.session' "$T/events.jsonl" 2>&1 | tail -1)"
+
+# A seat Orca would not dispatch gets its pointer typed, and no preamble then names its task: the typed text
+# carries the task id, so the seat's session can be tied to its task (read-verdict.sh --task).
+rm -f "$T/pane-up" "$T/sent"; touch "$T/no-dispatch"; jq 'del(.planModels)' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a typed pointer ends with its task id" 'Task id task_1.' "$(grep -m1 'Your task spec' "$T/sent" 2>&1 | grep -o 'Task id task_1\.$')"
+rm -f "$T/no-dispatch"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

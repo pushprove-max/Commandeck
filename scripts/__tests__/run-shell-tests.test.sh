@@ -46,5 +46,14 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.renames GIT_CONFIG_VALUE_0=invalid ran
 check "a failed diff fails, running nothing" "2 " "$RC $GOT"
 git -C "$R" checkout -q -- .
 
+# A test module (.test.mjs) runs through its shell wrapper of the same name: an edit to the module alone ran nothing.
+printf '#!/usr/bin/env bash\necho view >> "$RAN"\n' > "$R/scripts/__tests__/view.test.sh"; echo '// view' > "$R/scripts/__tests__/view.test.mjs"
+echo '// lone' > "$R/hooks/__tests__/lone.test.mjs"
+git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm modules
+echo '// edited' >> "$R/scripts/__tests__/view.test.mjs"; echo '// edited' >> "$R/hooks/__tests__/lone.test.mjs"
+ran
+check "an edited test module runs its wrapper; one with no wrapper selects nothing" "view" "$GOT"
+git -C "$R" checkout -q -- .
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

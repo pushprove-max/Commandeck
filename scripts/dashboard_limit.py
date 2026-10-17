@@ -9,7 +9,8 @@
   dashboard_limit.py build <status> <usage-file> <now-epoch> <cache-dir> <projects-dir> [<codex-sessions-dir> [<day-projects-json>]]
       The panel's JSON. <status> is dashboard.sh's record for the usage file.
       With the Codex sessions folder it adds `codex`: Codex's own 7-day
-      reading, never summed with Claude's. <day-projects-json> is an object,
+      reading, never summed with Claude's. Codex spend also reads the review
+      home's sessions (COMMANDECK_CODEX_REVIEW_HOME, default ~/.codex-review). <day-projects-json> is an object,
       project name to its folders: `today` then holds, per project, the day's
       cost of the sessions run in those folders. Every other figure is the
       account's.
@@ -334,6 +335,17 @@ def under(folder, roots):
     return isinstance(folder, str) and any(folder == r or folder.startswith(r + "/") for r in roots)
 
 
+def gone(path):
+    """Whether a folder is not there. One whose parent cannot be searched is there: what it holds is unknown."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return not os.path.isdir(path)
+
+
 def requests(projects, cache_path, since, now, folders=False):
     """Each distinct API request's row from Claude Code's transcripts (subagents included) since `since`.
 
@@ -619,6 +631,20 @@ def codex_row(r, model, tier):
             None if inp is None else max(0, inp - (read or 0) - (write or 0)), write, 0, read, n(u, "output_tokens")]
 
 
+# The review Codex home every session reader searches: its spend counts beside the main home's.
+REVIEW_HOME = os.environ.get("COMMANDECK_CODEX_REVIEW_HOME") or os.path.expanduser("~/.codex-review")
+
+
+def codex_all(sessions, cache_dir, stem, since, now, missed, folders=False):
+    """codex_requests() on `sessions` and on the review home's sessions folder, joined; None when neither is there."""
+    review = os.path.join(REVIEW_HOME, "sessions")
+    got = [codex_requests(sessions, os.path.join(cache_dir, f"{stem}.json"), since, now, missed, folders)]
+    if not sessions or os.path.realpath(sessions) != os.path.realpath(review):
+        got.append(codex_requests(review, os.path.join(cache_dir, f"{stem}-review.json"), since, now, missed, folders))
+    got = [g for g in got if g is not None]
+    return sum(got, []) if got else None
+
+
 def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=False):
     """Each Codex response's row, in request_row's shape, from the session files since `since`.
 
@@ -634,7 +660,7 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     """
     missed = [] if missed is None else missed
     lost = lambda e: None if isinstance(e, FileNotFoundError) else missed.append(e.filename)
-    if not sessions_dir or not os.path.isdir(sessions_dir):
+    if not sessions_dir or gone(sessions_dir):
         return None
     try:
         with open(cache_path) as f:
@@ -822,7 +848,7 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     if mode == "api":
         monday = epoch(api_week(None, None, now)["windowStart"])
         missed = []
-        codex_rows = codex_requests(sessions, os.path.join(cache_dir, "codex-requests.json"), monday, now, missed)
+        codex_rows = codex_all(sessions, cache_dir, "codex-requests", monday, now, missed)
         api_rows = requests(projects, os.path.join(cache_dir, "limit-requests.json"), min(monday, now - 86400), now)
         out["api"] = api_week(limit, api_rows, now, codex_rows, bool(missed))
         # With no subscription reading nothing above loaded the requests, and cache writes still cost dollars here.
@@ -838,7 +864,7 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     # panel keeps the day's cost and leaves every week figure unmeasured.
     if out["cost"] is None and day is not None:
         out["cost"] = {**cost([r for r, _, _ in day], 0, midnight, now), "week": None, "unpricedRequests": None}
-    codex_day = codex_requests(sessions, os.path.join(cache_dir, "codex-requests.json"), midnight, now, lost, True)
+    codex_day = codex_all(sessions, cache_dir, "codex-requests", midnight, now, lost, True)
     # A session is one project's: where one checkout sits inside another, the innermost root that holds it wins.
     roots = sorted(((r, name) for name, rs in (day_projects or {}).items() for r in rs if isinstance(r, str)), key=lambda t: -len(t[0].rstrip("/")))
     owner = lambda folder: next((name for r, name in roots if under(folder, [r])), None)
@@ -881,11 +907,14 @@ def seat_costs(seats, rows, folder, now):
     found one log) is neither's. What no seat holds is one entry with no role, so the seats always sum to the stage.
     """
     claims = []
+    # Compared real, as unit_costs reads homes: a seat's path spelled through a symlink or a "." names the same log.
+    real = {p: os.path.realpath(p) for p in {t[2] for t in rows if isinstance(t[2], str)}}
     for s in seats or []:
         f = s.get("session") if isinstance(s.get("session"), str) and s.get("session") else None
         if f and not os.path.isabs(f):
             f = os.path.join(folder, f + ".jsonl")
-        claims.append([i for i, t in enumerate(rows) if f and isinstance(t[2], str) and (t[2] == f or (f.endswith(".jsonl") and t[2].startswith(f[:-6] + "/")))])
+        f = f and os.path.realpath(f)
+        claims.append([i for i, t in enumerate(rows) if f and t[2] in real and (real[t[2]] == f or (f.endswith(".jsonl") and real[t[2]].startswith(f[:-6] + "/")))])
     count = Counter(i for k in claims for i in k)
     out, held = [], {i for i, n in count.items() if n == 1}
     for s, k in zip(seats or [], claims):
@@ -919,15 +948,17 @@ def unit_costs(units, now, cache_dir, projects, sessions):
         return {}
     missed = []
     # No sessions folder is an install without Codex: no Codex review ran, so it adds nothing rather than unknown.
-    cx = codex_requests(sessions, os.path.join(cache_dir, "unit-codex.json"), since - 600, now, missed, True) if sessions and os.path.isdir(sessions) else []
+    cx = codex_all(sessions, cache_dir, "unit-codex", since - 600, now, missed, True) or []
     # A collected Codex seat may have run in another Codex home (routing's per-role codexHome): that home's whole
     # sessions tree is read too, as its earlier launches log in other date folders (<home>/sessions/YYYY/MM/DD).
     # Each home's cache is keyed by a hash of its path: a punctuation-folded key gave two homes one cache.
+    # Paths are compared real: a log spelled through a symlink or a "." is still in the home already read.
     home = lambda f: (re.match(r"(.*/sessions)/\d{4}/\d{2}/\d{2}/[^/]+$", f) or re.match(r"(.*)/[^/]+$", f)).group(1)
-    other = {home(s["session"]) for u in units for s in ((u.get("plan") or {}).get("seats") or [])
-             if isinstance(s.get("session"), str) and os.path.isabs(s["session"]) and not under(s["session"], [sessions or "", projects])}
+    read = [os.path.realpath(r) for r in (sessions, projects, os.path.join(REVIEW_HOME, "sessions")) if r]
+    other = {home(os.path.realpath(s["session"])) for u in units for s in ((u.get("plan") or {}).get("seats") or [])
+             if isinstance(s.get("session"), str) and os.path.isabs(s["session"]) and not under(os.path.realpath(s["session"]), read)}
     for d in sorted(other):
-        if cx is not None and os.path.isdir(d):
+        if cx is not None and not gone(d):
             key = hashlib.sha256(d.encode()).hexdigest()[:16]
             more = codex_requests(d, os.path.join(cache_dir, f"unit-codex-{key}.json"), since - 600, now, missed, True)
             cx = None if more is None else cx + more
@@ -940,7 +971,7 @@ def unit_costs(units, now, cache_dir, projects, sessions):
             continue
         pwt = plan["worktree"] if plan else None
         got = {w: requests(folder(w), os.path.join(cache_dir, f"unit-requests-{os.path.basename(w)}.json"), t0 - 600, now, True)
-               if os.path.isdir(folder(w)) else [] for w in {wt, pwt} - {None}}
+               if not gone(folder(w)) else [] for w in {wt, pwt} - {None}}
         if None in got.values() or cx is None or missed:
             out[u["unit"]] = None
             continue

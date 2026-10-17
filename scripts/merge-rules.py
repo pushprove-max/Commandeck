@@ -116,6 +116,8 @@ MADE_FROM = {
     "8ecde936": ("00709c21",), "0a0832e3": ("f0558144",),
     # 0.10.0 main-session.md
     "38ccaed2": ("6743a4ac",),
+    # 0.13.2 main-session.md
+    "d3ad81e3": ("871dfc54",),
 }
 
 

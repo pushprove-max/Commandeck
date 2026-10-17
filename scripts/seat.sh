@@ -108,6 +108,13 @@ worker_state_kv() {
   timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --agent "${AGENT:-}" --marker "${MARKER:-}" "$@" 2>/dev/null || true
 }
 kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
+# A record with no session= (a Codex seat, or a Claude pid lookup that failed) takes the log the reader found, so
+# the seat's spend is its own (dashboard_limit.py seat_costs), not "Not tied to a seat". A Claude log binds as
+# its session id, the form every reader of session= builds <projects>/<id>.jsonl from.
+bind_session() {
+  local s; s=$(kv session); [ "$(kv provider)" != claude ] || { s=${s##*/}; s=${s%.jsonl}; }
+  grep -q '^session=' "$REC" 2>/dev/null || [ -z "$s" ] || echo "session=$s" >> "$REC"
+}
 # A marker inside a fence is a quoted sample, never the pane's own (Sol r4): every fenced line, its delimiters too,
 # reads as blank, by the fence rule paths.sh gives every report reader.
 # A screen is a viewport: when the plain reading ends inside a fence and the first delimiter is bare, as a closing
@@ -321,6 +328,8 @@ launch)
     # collect (not a worker_done) is what closes that seat. Say it loudly.
     echo "NO-WAKE: task $T was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
     DIRECT=1
+    # No Orca preamble names the task in a typed pane: the id ties its session to the task (read-verdict.sh --task).
+    SPEC_TEXT+=" Task id $T."
     # dispatch-task.sh's busy refusal lands here too; typing would bypass it.
     rc=0; pane_is_busy "$H" || rc=$?
     [ "$rc" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read; the pointer was not typed" >&2; exit 1; }
@@ -574,7 +583,7 @@ wait)
     # The spec picks this seat's session from a sibling's in the same worktree.
     # The launch proof above does not ask for it: a turn that has started has
     # not always written its prompt yet.
-    ST=$(worker_state_kv --launched "${LAUNCHED:-0}" --spec "${TAG:-$SPEC}")
+    ST=$(worker_state_kv --launched "${LAUNCHED:-0}" --spec "${TAG:-$SPEC}"); bind_session
     if [ "$(kv state)" = complete ] && [ -z "$(kv outstanding)" ] && [ "$(kv marker)" = 1 ]; then
       SEEN_MARK=$MARKER; echo "marker $MARKER up on $H (session log)"; exit 0
     fi

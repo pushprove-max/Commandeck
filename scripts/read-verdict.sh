@@ -648,7 +648,8 @@ if [ -n "$WTP" ] && { [ "$AGENT" = claude ] || [ -z "$AGENT" ]; } && [ "$LOG_FOU
   # TIE THE HANDLE TO ITS OWN SESSION: the pane's live Claude process
   # first, then the seat record. Newest-log-in-the-worktree handed a sibling
   # pane's verdict to main on 2026-09-23.
-  SID=$(pane_sessions "$HANDLE"); [ -n "$SID" ] || SID=$SEAT_SESSION
+  # A session= that is a path is a Codex log seat.sh bound, never a Claude id.
+  SID=$(pane_sessions "$HANDLE"); [ -n "$SID" ] || case $SEAT_SESSION in /*) ;; *) SID=$SEAT_SESSION ;; esac
   if [ "$(printf '%s' "$SID" | grep -c .)" -gt 1 ]; then
     echo "read-verdict: cannot tie $HANDLE to one Claude session log: its pane runs sessions $(echo $SID)." >&2
     exit 7

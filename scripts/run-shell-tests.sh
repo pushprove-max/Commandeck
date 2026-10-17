@@ -60,6 +60,8 @@ if [ "${1:-}" = --changed ]; then
     case $f in
       (hooks/__tests__/*/*|scripts/__tests__/*/*) ;;
       (hooks/__tests__/*.test.sh|scripts/__tests__/*.test.sh) echo "$f" ;;
+      # A test module runs through its same-name shell wrapper (dashboard-view.test.sh).
+      (hooks/__tests__/*.test.mjs|scripts/__tests__/*.test.mjs) t=${f%.mjs}.sh; [ ! -f "$t" ] || echo "$t" ;;
       (hooks/*/*|scripts/*/*) ;;
       (hooks/*|scripts/*) t=${f%%/*}/__tests__/$(basename "${f%.*}").test.sh; [ ! -f "$t" ] || echo "$t" ;;
     esac

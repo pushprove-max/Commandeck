@@ -221,7 +221,8 @@
   }
   // A Builder main raised above the setup default (builder-launch.sh --effort), from its brief's override line.
   const raisedBy = (u) => (u.builder && u.builder.raised && typeof u.builder.raised.reason === 'string' ? ', raised by main' : '');
-  // What the seat is running, from its own session (the collector's `seat`), never the routing table.
+  // What the seat is running, from its own session (the collector's `seat`), never the routing table. A planning
+  // card's head draws the plan's seats instead; `u.seat` stays the Builder's own.
   function seatTags(u, label) {
     const row = h('div', 'mdls');
     const s = u.seat;
@@ -250,8 +251,8 @@
   // The unit card, "Run trace" (the owner's pick, #73): a head with the state in words, up to four big facts, then the
   // build from its start on one clock ending now. The stage is a band, the last sign a tick with the silence after it
   // hatched, and each helper run a bar with its numbers in a right-hand column. The diff and the seat show once.
-  // A Builder's stages come from its event log (stageHistory), each with its time and cost (#94); any other unit
-  // shows only the stage it is in now.
+  // A Builder's stages come from its event log (stageHistory), each with its time and cost (#94); a planning card's
+  // one stage is its Planning, from its cost; any other unit shows only the stage it is in now.
   const TRACE_SEC = 2400;
   const took = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
   // A tally's list-price dollars (#94). A request with no price leaves the sum a floor: it says so and names the models.
@@ -268,7 +269,10 @@
     const li = h('li', `unit${quiet ? ' quiet' : ''}`);
     li.dataset.unit = u.unit;
     const head = h('div', 'unit-head');
-    const seatSpan = h('span', 'seat', seatText(u, seatLabel(u)));
+    // A planning card names every plan seat (`u.seat` is only the newest); done once its collect set completedAt.
+    const planSeats = !isBuilder(u) && u.plan && Array.isArray(u.plan.seats) ? u.plan.seats.filter(Boolean) : [];
+    const seatSpan = h('span', 'seat', planSeats.length ? planSeats.map((s) => [s.role, s.model ? modelName(s.model) : 'model not recorded',
+      s.effort ? `${s.effort} effort` : 'effort not recorded', s.completedAt ? 'done' : 'running'].join(', ')).join(' · ') : seatText(u, seatLabel(u)));
     if (raisedBy(u)) seatSpan.title = `effort raised by main: ${u.builder.raised.reason}`;
     head.append(h('p', 'unit-name', u.unit),
       h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
@@ -318,7 +322,7 @@
     // The clock runs from the build's start (its first logged event, else the stage's) to now, back to the
     // earliest helper run if one began before; a unit with no start keeps the last 40 minutes (#95).
     const steps = isBuilder(u) && Array.isArray(u.builder.steps) ? u.builder.steps.filter(Boolean) : [];
-    const begun = parseTime(isBuilder(u) ? u.builder.startedAt : null);
+    const begun = parseTime(isBuilder(u) ? u.builder.startedAt : u.plan ? u.plan.from : null);
     const start = Math.min(Number.isFinite(begun) ? begun : Number.isFinite(since) ? since : now - TRACE_SEC * 1000,
       ...steps.map((s) => parseTime(s.start)).filter(Number.isFinite));
     const width = Math.max(1000, now - start);
@@ -331,7 +335,7 @@
     // A finished pass names the verdict of its own round file; a running one has none yet.
     const verdicts = (isBuilder(u) && u.builder.verdicts) || {};
     // Each stage the Builder went through, with its time and its cost from the same collect (matched by start).
-    const segs = (isBuilder(u) && Array.isArray(u.builder.stageHistory) ? u.builder.stageHistory : [])
+    const segs = (isBuilder(u) ? (Array.isArray(u.builder.stageHistory) ? u.builder.stageHistory : []) : cost && Array.isArray(cost.stages) ? cost.stages : [])
       .filter((g) => g && Number.isFinite(parseTime(g.from)))
       .map((g, i) => {
         const c = cost && Array.isArray(cost.stages) && cost.stages[i] && cost.stages[i].from === g.from ? cost.stages[i] : null;
@@ -495,14 +499,14 @@
     const found = f === null ? `findings ${NOT_REC}` : `${f.length ? f.join(' · ') : 'no findings'}${num(x.verdictRound) !== null && x.verdictRound !== pass ? ` in pass ${x.verdictRound}` : ''}`;
     return `pass ${pass} · ${found} · ${num(x.reviewSec) === null ? `minutes ${NOT_REC}` : `${Math.round(x.reviewSec / 60)} min in review`}`;
   }
-  // The planning stage seat by seat: role, model and effort, calls, tokens, cost and time ("so far" until its
-  // collect). What no seat claims is one row, so the rows sum to the stage.
+  // The planning stage seat by seat: role (", running" until its collect), model and effort, calls, tokens, cost
+  // and time ("so far" until its collect). What no seat claims is one row, so the rows sum to the stage.
   function seatsOf(cost) {
     if (!cost || !Array.isArray(cost.seats) || !cost.seats.length) return null;
     const list = h('ol', 'stagelist seats');
     for (const s of cost.seats) {
       const row = h('li');
-      row.append(h('i', `sw ${STAGE_TONE.planning || ''}`), h('span', null, s.role || 'Not tied to a seat'), h('span', null, [s.model, s.effort].filter(Boolean).join(' ')),
+      row.append(h('i', `sw ${STAGE_TONE.planning || ''}`), h('span', null, s.role ? `${s.role}${s.to ? '' : ', running'}` : 'Not tied to a seat'),h('span', null, [s.model, s.effort].filter(Boolean).join(' ')),
         h('span', null, `${s.calls} calls`), h('span', null, `${s.input.toLocaleString('en-US')} in / ${s.output.toLocaleString('en-US')} out`),
         h('span', null, costOf(s)), h('span', null, s.role ? `${took(s.sec)}${s.to ? '' : ' so far'}` : ''));
       list.append(row);

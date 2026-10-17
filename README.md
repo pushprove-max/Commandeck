@@ -224,9 +224,11 @@ DONE unit=add-csv-export merged=local sha=8d41e07; …; nothing was pushed
 A project that runs its own watcher and posts Claude Code's heads-up notes itself writes
 `<scratch>/heads-up-owner` (`pid=`, `main=` the full checkout path, `at=` epoch, no later than that cycle's
 read of the offer store) each cycle it posts.
-While that claim is live (pid alive, same checkout, under 300 s old), `main-watch.sh` posts no heads-up. It
-counts a note as the owner's only when the offer was shown before `at=` and is still shown; any other note waits
-and is posted once the claim ends.
+While that claim is live (pid alive, same checkout, under 300 s old), `main-watch.sh` posts nothing: no
+finished, stopped, stalled or heads-up item, so write the claim only on a cycle that posts all of them. It
+counts a note as the owner's only when the offer was shown before `at=` and is still shown, and any other item
+as the owner's once `at=` is past the tick that first saw it; the rest wait and are posted once the claim ends.
+An item the owner posted is not handled: once the claim ends, it is reminded every 5 minutes until main closes its task.
 A watcher that stands down writes no claim.
 
 Those are some of the lines the scripts print, with example values filled
@@ -488,6 +490,9 @@ Builder holding each, and the commits the next push of `main` would send.
 They read `gh` (read-only, every 5 minutes) and git. Without `gh`, or signed
 out, each says so and the rest of the page still works. An issue number links
 to the issue on GitHub.
+A planning card lists every plan seat with its model, effort and state;
+`COMMANDECK_CODEX_REVIEW_HOME` (default `~/.codex-review`) names the review
+Codex home whose spend counts.
 
 It serves plain HTTP on `127.0.0.1`, on the first free port from 8791, and
 setup prints the address. It has no login. On the loopback bind it answers

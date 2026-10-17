@@ -21,8 +21,10 @@
 #   reap_brokers), a user process count past 2,000 is an item, and finished or
 #   orphaned panes are closed (close-done-panes.sh --close).
 # Heads-up: every Claude session's "you should know" offer, full text, posted
-#   to main's inbox and never typed into a pane (heads_up_capture), unless a
-#   live claim in $PP_SCRATCH/heads-up-owner names another watcher (hu_claimed).
+#   to main's inbox and never typed into a pane (heads_up_capture).
+# A live claim in $PP_SCRATCH/heads-up-owner names a project's own watcher
+#   (hu_claimed): this one then posts nothing, finished, stopped, stalled or
+#   heads-up; the typed nudge and the typed wake still go.
 # Handled = main closed the item's Orca task (completed or failed). An item with
 # no task gets one on its first post. An open item re-posts every 5 minutes,
 # except a heads-up note, which is settled once delivered. A seat a
@@ -147,8 +149,19 @@ mkdir -p "$ST" || exit 1
 # post <key> <task or empty> <subject> <body> [once] -- the whole handled/re-post
 # rule. `once`: an item already delivered is settled, never re-posted.
 post() {
-  local f=$ST/item-$1 task=$2 last status
+  local f=$ST/item-$1 task=$2 last status y
   [ -e "$f" ] && grep -qx handled "$f" && return 0
+  # Under a live claim the project's watcher posts every item. One it has run a whole cycle past (at= after this
+  # watcher's first sighting) it posted; any other waits here, and is posted once the claim ends. A post is not
+  # main handling it: it is recorded as posted at the owner's last cycle, its task kept, so once the claim ends
+  # the item is reminded on the usual cadence until main closes its task.
+  if [ "${CLAIMED:-0}" = 1 ]; then
+    y=$(cat "$ST/yield-$1" 2>/dev/null) || { echo "$NOW" > "$ST/yield-$1"; return 0; }
+    [ -e "$f" ] && task=$(sed -n 's/^task=//p' "$f")
+    [ "$HU_AT" -le "$y" ] || printf 'posted=%s\ntask=%s\n' "$HU_AT" "$task" > "$f"
+    return 0
+  fi
+  rm -f "$ST/yield-$1"
   [ -e "$f" ] && task=$(sed -n 's/^task=//p' "$f")
   last=$(sed -n 's/^posted=//p' "$f" 2>/dev/null)
   if [ -z "$task" ] || [ "$task" = none ]; then
@@ -896,7 +909,7 @@ hu_done() {
 }
 
 HU_CLAIM_S=300   # a heads-up claim older than five ticks is no claim
-# hu_claimed -- a project's own watcher posts the heads-up notes for this checkout: $PP_SCRATCH/heads-up-owner
+# hu_claimed -- a project's own watcher posts every item for this checkout: $PP_SCRATCH/heads-up-owner
 # (pid=, main=, at=, written whole each cycle it posts) names a live pid, this checkout as text, and an at= from
 # 0 to HU_CLAIM_S old. Anything else is no claim, and this watcher posts. Sets HU_PID and HU_AT.
 # shortcut: pid plus a 300 s at= window; add the process start time to the claim if a reuse is seen.
@@ -940,9 +953,7 @@ heads_up_post() {
   # The claim owner posts these notes. A note it must have seen (every member shown before its last cycle, at=,
   # and still shown) is put on the handled list unsent. Any other waits, unposted, and is posted once the claim
   # ends: backlog gone from the store, or an offer newer than the owner's last cycle, is never lost with the owner.
-  if hu_claimed; then
-    [ "$(cat "$ST/hu-yield" 2>/dev/null)" = "$HU_PID" ] || { echo "$HU_PID" > "$ST/hu-yield"
-      echo "main-watch: heads-up notes are not posted: pid $HU_PID claims them for $PP_MAIN ($PP_SCRATCH/heads-up-owner)" >&2; }
+  if [ "$CLAIMED" = 1 ]; then
     led=$(cat "$HU_LEDGER" 2>/dev/null) || return 0
     for k in $(jq -r '.groups | keys[]' <<<"$led" 2>/dev/null); do
       grep -qxF -- "$k" "$HU_DONE" 2>/dev/null && continue
@@ -953,7 +964,6 @@ heads_up_post() {
     done
     return 0
   fi
-  rm -f "$ST/hu-yield"
   led=$(cat "$HU_LEDGER" 2>/dev/null) || return 0
   for k in $(jq -r '.groups | keys[]' <<<"$led" 2>/dev/null); do
     grep -qxF -- "$k" "$HU_DONE" 2>/dev/null && continue
@@ -1005,6 +1015,14 @@ tick() {
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
   NOW=${COMMANDECK_NOW:-$(date +%s)}
   DIAG= DIAG_KEYS= REBOUND= RELAY=0
+  # Read once a tick: every post and the heads-up relay stand down under it (hu_claimed).
+  CLAIMED=0
+  if hu_claimed; then
+    CLAIMED=1
+    [ "$(cat "$ST/hu-yield" 2>/dev/null)" = "$HU_PID" ] || { echo "$HU_PID" > "$ST/hu-yield"
+      echo "main-watch: nothing is posted (finished, stopped, stalled, heads-up): pid $HU_PID claims this checkout's items for $PP_MAIN ($PP_SCRATCH/heads-up-owner)" >&2; }
+  else rm -f "$ST/hu-yield"
+  fi
   # A failed task list cannot tell handled from open; skip rather than guess.
   # A fenced one would silence every item, so main hears it (rebind was tried).
   if ! orca_op '.result.tasks' orca-ide orchestration task-list --run "$RUN" --json; then

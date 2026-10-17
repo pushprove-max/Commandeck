@@ -416,7 +416,7 @@ const seats = [
   { role: null, model: null, effort: null, from: null, to: null, ...tally(0.1, { sec: 0, calls: 1 }) }];
 const seatRows = (card) => [...card.querySelectorAll('.stagelist.seats li')].map((l) => [...l.children].slice(1).map(text));
 const SEAT_ROWS = [['plan-author', 'claude-opus-5-5 high', '3 calls', '200,000 in / 3,000 out', '$0.30', '20:00'],
-  ['plan-judge-sol', 'gpt-6.1-sol high', '1 calls', '1,000 in / 10 out', '$0.00', '10:00 so far'],
+  ['plan-judge-sol, running', 'gpt-6.1-sol high', '1 calls', '1,000 in / 10 out', '$0.00', '10:00 so far'],
   ['Not tied to a seat', '', '1 calls', '200,000 in / 3,000 out', '$0.10', '']];
 test("a unit's planning card is its Planning stage: its time and cost, its cost by stage and one row per seat", () => {
   const w = fresh(Fixed);
@@ -429,6 +429,22 @@ test("a unit's planning card is its Planning stage: its time and cost, its cost 
   assert.deepEqual([...card.querySelectorAll('table.costs tr')].map((r) => [...r.children].map(text)).map((r) => [r[0], r[2], r[5]]),
     [['Stage', 'Model calls', 'Cost'], ['Planning', '5', '$0.40'], ['Unit total', '5', '$0.40']], 'its cost by stage, the planning stage alone');
   assert.deepEqual(seatRows(card), SEAT_ROWS, 'one row per seat, and what no seat claims in one row');
+});
+
+// Two plan seats at once: the collector's `seat` is only the newest, so a card drawn from it hides the other (issue 168).
+test('a planning card names every plan seat with its model, effort and state, and its Planning figures while they run', () => {
+  const w = fresh(Fixed);
+  const cost = { stages: [{ ...stage('planning', 120, null), ...tally(0.4, { calls: 5 }) }], total: tally(0.4, { sec: 7200, calls: 5 }), seats };
+  const planSeats = [
+    { role: 'plan-author', task: 't1', from: iso(ago(120)), model: 'claude-opus-5-5', effort: 'high', session: 's1', completedAt: iso(ago(100)) },
+    { role: 'plan-judge-sol', task: 't2', from: iso(ago(110)), model: 'gpt-6.1-sol', effort: null, session: null, completedAt: null }];
+  show(w, { units: { inFlight: [{ unit: 'pw-plan', stage: 'planning', stageSince: iso(ago(5)), ageSec: 60, agents: 'codex:working', builder: null,
+    seat: { model: 'gpt-6.1-sol', effort: 'high' }, plan: { worktree: '/ws/pw-plan', from: iso(ago(120)), seats: planSeats, cost } }] } });
+  const card = w.document.querySelector('#units li.unit');
+  assert.equal(text(card.querySelector('.unit-head .seat')),
+    'plan-author, Opus 5.5, high effort, done · plan-judge-sol, gpt-6.1-sol, effort not recorded, running', 'every seat, not only the newest');
+  assert.deepEqual([...card.querySelectorAll('.lane.figs')].map((l) => [...l.querySelectorAll('i')].map(text)), [['120:00 so far'], ['$0.40']],
+    'the Planning stage carries its time and cost from the first launch');
 });
 
 test("a Builder's card draws its planning first, and lists the planning's seats", () => {

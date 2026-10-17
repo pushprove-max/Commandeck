@@ -9,11 +9,11 @@
 # A unit's planning is its Planning stage, seat by seat, rebuilt from records that outlive its planning worktree.
 set -uo pipefail
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
-T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
+T=$(cd "$(mktemp -d)" && pwd -P); trap 'chmod 755 "$T/locked" 2>/dev/null; rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 
-export HOME=$T/home
+export HOME=$T/home COMMANDECK_CODEX_REVIEW_HOME=$T/review-home
 MAIN=$T/demo BIN=$T/bin WS=$T/ws
 mkdir -p "$HOME" "$BIN"
 git init -q -b main "$MAIN" && git -C "$MAIN" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
@@ -156,6 +156,33 @@ r = [d.unit_costs([x], now, cache, t + "/none", None)[x["unit"]]["total"]["calls
 print(json.dumps(r).replace(" ", ""))' "$T" "$WS/pv-plan" "$P0" "$NOW" "$1" 2>&1); }
 mkdir -p "$T/homes-cache"
 check "two Codex homes named alike are each read once, on every collect; a home's earlier date folder is read too" '[2,2,2,2]' "$(homes "$T/homes-cache")"
+# The review Codex home (COMMANDECK_CODEX_REVIEW_HOME, default ~/.codex-review) is where every review pass logs:
+# its spend was never read, so a unit's cost left out every review request. A seat bound to a log there is read
+# with that home already, never a second time. A Codex home that cannot be searched (its parent locked) read as
+# not installed, so the unit called its cost complete; its spend is unknown, so the cost is none at all.
+RX=$T/review-home/sessions/2026/10/17; mkdir -p "$RX"; xrow x-rev $((P0 + 90)) > "$RX/rev.jsonl"
+LX=$T/locked/home/sessions/2026/10/17; mkdir -p "$LX"; xrow x-lock $((P0 + 90)) > "$LX/lock.jsonl"
+seatcost() { rm -rf "$T/seat-cache"; mkdir -p "$T/seat-cache"; (cd "$SOURCE/scripts" && python3 -c '
+import json, sys, dashboard_limit as d
+wt, p0, now, cache, s = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5]
+seats = [{"role": "r", "from": d.iso(p0), "session": s}] if s else []
+c = d.unit_costs([{"unit": "u", "worktree": wt + "-build", "stages": [], "plan": {"worktree": wt, "from": d.iso(p0), "seats": seats}}], now, cache, "/none", None)["u"]
+print(json.dumps(c and [c["total"]["calls"]] + [x["calls"] for x in c["seats"] if x["role"]]).replace(" ", ""))' "$WS/pv-plan" "$P0" "$NOW" "$T/seat-cache" "${1:-}" 2>&1); }
+check "a review home's request counts in the unit's total" '[1]' "$(seatcost)"
+check "a seat bound to a review-home log holds it, and it counts once" '[1,1]' "$(seatcost "$RX/rev.jsonl")"
+# Homes are compared as real paths: a seat log spelled through a symlink or a "." still names the review home.
+ln -s "$T/review-home" "$T/review-alias"
+check "a seat bound to a review-home log through a symlink counts it once" '[1,1]' "$(seatcost "$T/review-alias/sessions/2026/10/17/rev.jsonl")"
+check "a seat bound to a review-home log through a dot path counts it once" '[1,1]' "$(seatcost "$T/./review-home/sessions/2026/10/17/rev.jsonl")"
+check "a review home named through a symlink, its seat logged at the real path, counts it once" '[1,1]' "$(COMMANDECK_CODEX_REVIEW_HOME=$T/review-alias seatcost "$RX/rev.jsonl")"
+chmod 000 "$T/locked"
+check "a seat whose Codex home cannot be searched leaves the unit's cost unknown" 'null' "$(seatcost "$LX/lock.jsonl")"
+check "and its sessions folder reads as missed, not absent" 'true' "$(cd "$SOURCE/scripts" && python3 -c '
+import sys, dashboard_limit as d
+m = []
+d.codex_requests(sys.argv[1], sys.argv[2], 0, 2**40, m)
+print(bool(m) and "true")' "$T/locked/home/sessions" "$T/seat-cache/x.json" 2>&1)"
+chmod 755 "$T/locked"
 # Live planning worktrees, marked as seat.sh marks them, each with an idle pane: a finished plan waits on main and
 # still reads Planning; with the Builder there too, the unit is one card. An unmarked <name>-plan is no plan.
 for w in pv-plan pw-plan foo-plan; do git -C "$MAIN" worktree add -q "$WS/$w"; done

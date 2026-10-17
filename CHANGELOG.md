@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.2 -- 2026-10-17
+
+- A planning card names every plan seat with its model, effort and running or done state, not only the newest, and
+  its Planning stage shows its time and cost while the seats run. A seat's row says "running" until its collect. A
+  Codex seat binds its own log into its record, so its spend is its own. No driver badge exists to remove. (#168)
+- Codex spend also reads the review home's sessions (`COMMANDECK_CODEX_REVIEW_HOME`, default `~/.codex-review`),
+  counted once. A Codex or Claude folder that cannot be searched marks the week and the unit incomplete instead of
+  reading as not installed. A typed seat pointer carries its task id. (#168)
+- main-watch posts nothing while a project's own watcher holds a live claim: finished, stopped and stalled items
+  stand down too, not only heads-up notes. An item the owner cannot have seen is posted once the claim ends;
+  one it posted is reminded again once the claim ends, until main closes its task. (#167)
+- Main tells each planner to name a fitting mattpocock-skills skill in the plan when that plugin is installed; an
+  owner who kept their own planning rule keeps it.
+- The merge check runs a changed `.test.mjs` through its `.test.sh` wrapper.
+
 ## 0.13.1 -- 2026-10-17
 
 - Fresh-round hand-off waits while the Builder's pane is busy, ends when the pane is gone or Orca fails five times in

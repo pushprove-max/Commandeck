@@ -38,7 +38,11 @@
   seat under its own role name and the build's unit name: every plan seat
   works in the planning worktree `<unit>-plan`, which its first launch cuts
   from main, so the Builder's own worktree is still new. Planners
-  write the plan file (`.claude/plans/<file>.md`) and nothing else. When the
+  write the plan file (`.claude/plans/<file>.md`) and nothing else. Each
+  planner's spec carries, word for word: "If the mattpocock-skills plugin is
+  installed and one of its skills fits this unit (for example TDD for new
+  logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what
+  the plan names." When the
   owner already gave the build word, launch once the judge round is done,
   unless the judge found a real gap, which goes to the owner. Without it,
   every answer ends at the plan file: STOP until the owner's own go after

@@ -32,6 +32,14 @@ check "keep both for a reworded rule loads it, though keep mine was saved for it
 check "keep both for a rule made from two loads it, though keep mine was saved for both" 1 \
   "$(MS --drop 18cd2c62 --drop 8fc96d58 --keep 607f18a2 | grep -c 'Main plans with the owner')"
 
+# Main writes each planner's spec from the planning rule, so that rule is where a planner hears to name a fitting
+# mattpocock-skills skill (the owner's, 2026-10-17); it stays one rule. An owner who kept their own wording of the
+# planning rule before (871dfc54) does not get the reworded one too.
+check "the planning rule names the skills line, inside the same rule" "1:29" \
+  "$(MS | awk '/^- \*\*/ { p = /Plan before every build/ } p' | grep -c 'If the mattpocock-skills plugin'):$(MS --units | wc -l | tr -d ' ')"
+check "an owner who kept their own planning rule does not get the reworded one" 0 \
+  "$(MS --drop 871dfc54 | grep -c 'If the mattpocock-skills plugin')"
+
 # A duplicate is the same text once case and spacing are set aside, nothing more (main's ruling): a path, a code
 # span, a flag or a sign changes what a rule says, so a near-match keeps the plugin's rule.
 A=$(awk '/^THE CLEAR LINE/{p=1} /^## Details/{exit} p' "$REAL/templates/main-session.md" | sed 's|~/.claude/checkpoints/|./.claude/checkpoints/|g')
