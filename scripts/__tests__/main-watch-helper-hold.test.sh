@@ -114,4 +114,10 @@ tick $((M + 480))
 [ "$(typed)" = 1 ] || fail "an unanswered main was woken again inside 2 minutes"
 rm -f "$F/inbox"
 
+# Sol r3: a planner runs in <unit>-plan before its unit has a worktree, and a seat was watched only in <unit>.
+mkdir -p "$T/ws/pu-plan"; printf 'handle=term_pu\ntask=task_pu\nrole=plan-author\nunit=pu\nlaunched=40000\nworktree=pu-plan\n' > "$S/seat-pu-plan-author.txt"
+echo "task_pu running" >> "$F/tasks"; state term_pu working; tick 40100
+echo PLAN-DONE > "$F/verdict-term_pu"; state term_pu "done"; tick 40160; tick 40220
+grep -q 'seat plan-author on pu finished' "$T/sends" || fail "a planner that finished in its planning worktree was not posted"
+
 echo "PASS main-watch-helper-hold.test.sh"

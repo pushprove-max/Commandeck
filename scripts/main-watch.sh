@@ -629,11 +629,12 @@ proc_warn() {
     "Top command families: $PROC_TOP. At the per-user cap (kern.maxprocperuid) nothing new can start. Find the leak: ps -A -o command= | sort | uniq -c | sort -rn | head"
 }
 
-seat() { # handle task unit role launched [session id] [seat tag]
-  local h=$1 task=$2 u=$3 key="seat-$1-$2" state kind since at ep item
+seat() { # handle task unit role launched [session id] [seat tag] [worktree name]
+  # A planner runs in <unit>-plan before its unit has a worktree: the record names where the seat runs.
+  local h=$1 task=$2 u=$3 w=$WS/${8:-$3} key="seat-$1-$2" state kind since at ep item
   # The closing line compared below is this seat's own read, never the last seat's.
   RV_OUT=
-  [ -n "$h" ] && [ -n "$u" ] && [ "$u" != u ] && [ -d "$WS/$u" ] || return 0
+  [ -n "$h" ] && [ -n "$u" ] && [ "$u" != u ] && [ -d "$w" ] || return 0
   state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
   case $state in ""|none) ;; *) : > "$ST/seen-$key" ;; esac
   [ -e "$ST/state-$key" ] && [ "$(sed -n 2p "$ST/state-$key")" = "$state" ] || printf '%s\n%s\n' "$NOW" "$state" > "$ST/state-$key"
@@ -652,7 +653,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
   kind=$(cat "$ST/kind-$key" 2>/dev/null)
   # A Codex pane on the Mac reads `none` at work and at rest, so there its log
   # growing past the settled finish is the only sign of the follow-up.
-  if [ -n "$kind" ] && { [ "$state" = working ] || { { [ "$state" = "done" ] || [ "$state" = none ]; } && pane_grew "$h" "$key" f "$WS/$u" "$task" "$5" "${6:-}"; }; }; then
+  if [ -n "$kind" ] && { [ "$state" = working ] || { { [ "$state" = "done" ] || [ "$state" = none ]; } && pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}"; }; }; then
     rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key" "$ST/held-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
   fi
   # A settled finish is not read again; the wait check below still needs the
@@ -664,7 +665,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
     working)
       # A hold ends when the Builder works again, settled or not: its next helper wait starts a fresh clock.
       : > "$ST/working-$key"; rm -f "$ST/held-$key"
-      at=$(grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}")
+      at=$(grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}")
       [ $((NOW - at)) -ge "$STALL_S" ] || return 0
       post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
         "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h"
@@ -675,7 +676,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         # and again only when the pane or its log grew past that read: a seat
         # that works and finishes between two ticks never reads `working`.
         if [ ! -e "$ST/working-$key" ] && [ -e "$ST/booted-$key" ]; then
-          pane_grew "$h" "$key" b "$WS/$u" "$task" "$5" "${6:-}" || return 0
+          pane_grew "$h" "$key" b "$w" "$task" "$5" "${6:-}" || return 0
           rm -f "$ST/booted-$key" "$ST/bp-$key" "$ST/bl-$key"
         fi
         # The cutoff is the seat's launch, also for a follow-up: read-verdict.sh
@@ -684,7 +685,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         if has_result "$h" "${5:-0}"; then kind=finished
         elif [ "$RV_OK" = 0 ] && rv_unanswered "$key"; then return 0
         elif [ -e "$ST/working-$key" ]; then kind=silent
-        else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}"; }; return 0; fi
+        else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$w" "$task" "$5" "${6:-}"; }; return 0; fi
         # A Builder with no DONE line and a helper out is waiting on it: read again next tick. DONE is its own
         # unit's marker as the brief prints it, never another pane's it quotes (DESIGN-DONE). A VERDICT line
         # is no finish here: read-verdict.sh ends its output at one, and a Builder quotes its passes' verdicts,
@@ -692,7 +693,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         # marker), bound as seat.sh binds it: the seat tag typed into every prompt, direct ones included.
         # The log is the Builder's own to write, so the hold is bounded by this service's clock: HOLD_S at most.
         if [ "$4" = builder ] && ! grep -qxF -- "${u^^}-DONE" <<<"$RV_OUT" && helper_out "$u" "${5:-0}" \
-          && ! timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$WS/$u" --agent claude --launched "${5:-0}" --spec "${7:-}" \
+          && ! timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$w" --agent claude --launched "${5:-0}" --spec "${7:-}" \
             --marker "${u^^}-DONE" 2>/dev/null | grep -qx 'marker=1'; then
           [ -s "$ST/held-$key" ] || echo "$NOW" > "$ST/held-$key"
           # A helper started after the hold began means the Builder worked, maybe between two ticks: a new clock.
@@ -707,7 +708,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
       fi
       # The finish's fingerprint, once per finish.
-      mark_pane f "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" ;;
+      mark_pane f "$key" "$h" "$w" "$task" "$5" "${6:-}" ;;
     ""|none)
       # Gone: only a pane this service saw alive, and only when Orca answered.
       [ "$LISTED" = 1 ] || return 0
@@ -720,7 +721,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         at=$(cat "$ST/look-$key" 2>/dev/null)
         [ -z "$at" ] || [ $((NOW - ${5:-0})) -lt "$STALL_S" ] || [ $((NOW - at)) -ge "$STALL_S" ] || return 0
         echo "$NOW" > "$ST/look-$key"; rm -f "$ST/log-$key"
-        grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" >/dev/null
+        grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}" >/dev/null
         [ -n "$(sed -n 4p "$ST/grow-$key" 2>/dev/null)" ] || return 0
         : > "$ST/seen-$key"
       fi
@@ -731,7 +732,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
       if [ -z "$kind" ]; then
         if has_result "$h" "${5:-0}"; then kind=finished
         else
-          at=$(grew_at "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}")
+          at=$(grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}")
           [ -z "$(sed -n 4p "$ST/grow-$key" 2>/dev/null)" ] || [ $((NOW - at)) -ge "$STALL_S" ] || return 0
           # A read that failed says nothing about how the seat ended, and a
           # settled seat is not read again: it is tried each tick, and only a
@@ -747,7 +748,7 @@ seat() { # handle task unit role launched [session id] [seat tag]
         echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
       fi
       # A listed pane's finish is fingerprinted too, so its follow-up is seen.
-      [ "$state" != none ] || mark_pane f "$key" "$h" "$WS/$u" "$task" "$5" "${6:-}" ;;
+      [ "$state" != none ] || mark_pane f "$key" "$h" "$w" "$task" "$5" "${6:-}" ;;
     *)
       [ $((NOW - since)) -ge "$WAITING_S" ] || return 0
       post "wait-$key-$since" "" "main-watch: $u $4 stalled in Orca state $state; inspect" \
@@ -998,12 +999,12 @@ tick() {
   # record was most of a tick. Each key's first line counts, the last
   # for session=. The separator is not whitespace, so an empty field keeps its
   # place; not a pipe: a subshell would drop the items this tick batches.
-  while IFS=$'\x1f' read -r h t u role launched sid tag; do
-    seat "$h" "$t" "$u" "$role" "$launched" "$sid" "$tag"
+  while IFS=$'\x1f' read -r h t u role launched sid tag wt; do
+    seat "$h" "$t" "$u" "$role" "$launched" "$sid" "$tag" "$wt"
   done < <(awk -F= -v OFS=$'\x1f' '
-    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"], v["tag"] }
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"], v["tag"], v["worktree"] }
     FNR == 1 { if (NR > 1) out(); split("", v) }
-    /^(handle|task|unit|role|launched|origin|tag)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
+    /^(handle|task|unit|role|launched|origin|tag|worktree)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   flush

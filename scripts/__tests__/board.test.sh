@@ -22,5 +22,10 @@ touch -t 202601010000 "$B/u1-r10-reports.md"
 check "a unit whose newest pass ended NO-GO shows it, with its findings" "      pass r10 review: VERDICT: NO-GO (P1 1, P2 2)" "$(board)"
 round 11 final 'Clean.' GO
 check "the next pass's GO replaces it" "      pass r11 final: VERDICT: GO" "$(board)"
+# Sol r3: a planner runs in <unit>-plan before its unit has a worktree, and the seats list hid it.
+mkdir -p "$T/scratch" "$T/ws/u2-plan"; printf 'handle=h7\ntask=task_7\nrole=plan-author\nunit=u2\nworktree=u2-plan\n' > "$T/scratch/seat-u2-plan-author.txt"
+check "a planner in its planning worktree is listed under its unit" "  u2 plan-author h7 task_7" \
+  "$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" u2 2>&1 | grep '^  u2 plan-author')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -12,6 +12,38 @@
   change goes in ONE reply as one batch of calls, recording the same.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with
   one foreground `bash scripts/orca-wait.sh`. An ordinary prompt carries no inbox check.
+- **Plan before every build (owner order 2026-10-17)**: before
+  `builder-launch.sh`, ask the owner "Write a plan first?" with five answers.
+  Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan,
+  Plan + judge or Panel from the trigger file (the project's
+  `.claude/plan-triggers.tsv`, else the plugin's `config/plan-triggers.tsv`),
+  one tier up when unsure, and prints the tier, the trigger that picked it
+  and the seats; tell the owner all three. No plan: launch with
+  `--skip-plan --reason '<one line>'`. One planner: a `plan-author` seat
+  writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol`
+  reads it, and the planner revises it once with the judge's findings.
+  Panel: `plan-author` and `plan-author-second` write a plan each in
+  parallel, `plan-judge-astra` and `plan-judge-sol` read both, and
+  `plan-author` merges them into one plan; always ask which model writes the
+  second plan (default Fable when allowed). Then ask "Which model and
+  effort?" for each seat, offering only the models setup allows
+  (`planModels`, which `plan-tier.sh` prints), default Opus high
+  (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`).
+  One judge round and one revision, never a judging loop. A seat whose
+  default model is not allowed runs on an allowed one, and a Codex judge with
+  no Codex allowed runs as `plan-judge-claude`; its launch says which, and
+  you tell the owner. Never refuse an answer for a missing tool. Launch each
+  seat under its own role name and the build's unit name: every plan seat
+  works in the planning worktree `<unit>-plan`, which its first launch cuts
+  from main, so the Builder's own worktree is still new. Planners
+  write the plan file (`.claude/plans/<file>.md`) and nothing else. When the
+  owner already gave the build word, launch once the judge round is done,
+  unless the judge found a real gap, which goes to the owner. Without it,
+  every answer ends at the plan file: STOP until the owner's own go after
+  reading the plan. Commit the plan from `<unit>-plan` on main and name it in the batch's `## Plan`
+  section, or the launch is refused. A plan is never a build order: a plan
+  that exists, is approved or is committed starts no build. A `--risky`
+  design pane runs after the plan.
 - **Announce every worker at dispatch time**: agent, model, worktree, task.
 - **Every question for the owner goes to the relay pane** (the worktree ending in
   `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);

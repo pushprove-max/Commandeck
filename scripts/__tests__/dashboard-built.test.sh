@@ -77,5 +77,14 @@ unreg /a; check "--unregister drops only that project" "0 /b" "$? $(paste -sd' '
 rm "$R"; mkdir "$R"; unreg /b
 check "--unregister with a directory where the registry belongs fails, putting nothing inside it" "1 0" "$? $(ls -A "$R" | wc -l | tr -d ' ')"
 
+# Sol r3: a planner runs in <unit>-plan, its record's unit is <unit>, and its card read no seat for that worktree.
+SCR=$(cd "$MAIN" && env -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$MAIN" bash -c '. "$0" && echo "$PP_SCRATCH"' "$SOURCE/scripts/paths.sh"); mkdir -p "$SCR" "$WS/pu-plan" && touch "$WS/pu-plan/.git"; echo run_1 > "$SCR/current-run"
+printf 'handle=h7\ntask=task_7\nrole=plan-author\nunit=pu\nworktree=pu-plan\nlaunched=%s\n' "$(date +%s)" > "$SCR/seat-pu-plan-author.txt"
+printf '#!/usr/bin/env bash\ncase "$*" in "orchestration task-list"*) echo %s ;; *) exit 1 ;; esac\n' \
+  "'{\"result\":{\"tasks\":[{\"id\":\"task_7\",\"status\":\"running\"}]}}'" > "$BIN/orca-ide"
+dash
+check "a planner's card in its planning worktree shows its seat" '["planning","plan-author"]' \
+  "$(jq -c 'first(.[]) | .units.inFlight[]? | select(.unit == "pu-plan") | [.stage, .seatRole]' "$T/out/run/project.json" 2>&1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

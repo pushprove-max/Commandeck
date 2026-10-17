@@ -41,11 +41,9 @@ cut -f1 <<<"$ROWS" | sed 's/^/area: /'
 [ "$DRY" = 0 ] || exit 0
 
 # Each agent's command is its routing.json role's, resolved once here: run.sh and verify.sh run it in xargs children.
-argv_of() { # <role> -- its argv, one word a line; a Codex family becomes the model id the account lists
-  local m
-  m=$(jq -er --arg r "$1" '.roles[$r] | select(.headless) | .model' "$(pp_routing)") || return 2
-  [ "$(jq -r --arg r "$1" '.roles[$r].agent' "$(pp_routing)")" != codex ] || m=$(pp_codex_model "$m" "$1") || return 2
-  pp_route_json "$1" "" "$m" | jq -er '.argv[]'
+argv_of() { # <role> -- its argv, one word a line; a Codex family becomes the model id the account lists (pp_route_json)
+  jq -e --arg r "$1" '.roles[$r] | select(.headless)' "$(pp_routing)" >/dev/null || return 2
+  pp_route_json "$1" | jq -er '.argv[]'
 }
 AUDITOR_ARGV=$(argv_of audit-auditor) || die "$(pp_routing) has no usable headless audit-auditor role; nothing audited"
 VERIFIER_ARGV=$(argv_of audit-verifier) || die "$(pp_routing) has no usable headless audit-verifier role; nothing audited"

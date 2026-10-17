@@ -299,7 +299,9 @@ def seat_at($root; $spec):
     end
   # Codex fast mode changes what a run costs: it is the answer set-up saved
   # (pp_codex_fast hands it in) and never the routing file itself. No quote mark here: this is inside one.
-  | if ($p.r | startswith("codex-reviewer")) then .fast = ($ARGS.named.codexFast == true) else . end;
+  | if ($p.r | startswith("codex-reviewer")) then .fast = ($ARGS.named.codexFast == true) else . end
+  # The same for a plan seat: the per-seat answer of the owner at set-up (planFast, pp_route_json hands it in).
+  | if ($p.r | startswith("plan-")) and any($ARGS.named.planFast // [] | .[]; . == $p.r) then .fast = true else . end;
 def validate:
   . as $root
   | ([check_templates] | length) as $_
@@ -544,15 +546,18 @@ p = (c.get("profiles") or {}).get(c.get("profile"))
 sys.exit((p if isinstance(p, dict) and "service_tier" in p else c).get("service_tier") != "fast")' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null
 }
 pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has no advisor] -- the resolved seat, as JSON
-  local cfg m=${3:-} b; cfg=$(pp_routing)
+  local cfg m=${3:-} b pf d; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
   b=$(jq -c '.builder // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$b" ] || b='{}'
-  if [ -z "$m" ]; then
-    # Every Codex role's model goes through the resolver: the project's saved id beats a family and an id alike.
-    m=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty' "$cfg" 2>/dev/null || true)
-    [ -z "$m" ] || m=$(pp_codex_model "$m" "${1%%.*}") || return 2
+  pf=$(jq -c '.planFast // []' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$pf" ] || pf='[]'
+  # Every Codex role's model goes through the resolver, one handed in (a plan seat's pick) too. The project's saved
+  # id is for the role's own model: it beats that family and an id alike, never another family picked for the seat.
+  d=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty' "$cfg" 2>/dev/null || true)
+  if [ -n "$d" ]; then
+    if [ -z "$m" ] || [ "$m" = "$d" ]; then m=$(pp_codex_model "$d" "${1%%.*}") || return 2
+    else m=$(pp_codex_model "$m") || return 2; fi
   fi
-  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
+  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" --argjson planFast "$pf" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
 }
 # The model one Builder launch may run: an alias routing.json already names, the
 # check set-up makes for --builder-model. builder-launch.sh asks before it
@@ -560,6 +565,35 @@ pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has
 pp_builder_model_ok() { # <alias> -- says why not
   jq -e --arg a "$1" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null 2>&1 \
     || { echo "REFUSED: --model ${1:-(none)} is not one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)" 2>/dev/null)" >&2; return 2; }
+}
+# The model a plan seat may be launched on: one routing.json already names for a seat of the same agent, so a Codex
+# judge is never handed a Claude model.
+pp_seat_model_ok() { # <role> <alias> -- says why not
+  local ok; ok=$(jq -r --arg r "$1" '.roles[$r].agent as $a | [.roles[] | (.candidates // [.])[] | select(.agent == $a) | .model, .advisor | strings] | unique | join(", ")' "$(pp_routing)") || return 2
+  [[ -n $2 && ", $ok, " == *", $2, "* ]] || { echo "REFUSED: --model $2 is not one of $ok" >&2; return 2; }
+}
+# pp_plan_models -- the models a plan seat may run on, space-separated: setup's planModels (owner's ruling
+# 2026-10-17), or with none saved every model routing.json gives a seat, Codex's only on the Claude+OpenAI profile.
+pp_plan_models() {
+  local saved; saved=$(jq -r '.planModels // empty | join(" ")' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) || saved=
+  [ -z "$saved" ] || { echo "$saved"; return 0; }
+  jq -r --arg p "$(pp_pass)" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "codex") | .model] | unique | join(" ")' "$(pp_routing)"
+}
+# pp_plan_seat <role> -- "<role> <model>": the plan seat on its own model when setup allows it, else on the first
+# allowed model of its agent, else, for a Codex judge with no Codex model allowed, plan-judge-claude. Says on stderr
+# which model or seat it used instead.
+pp_plan_seat() {
+  local r=$1 ok a m alt; ok=" $(pp_plan_models) "
+  a=$(jq -r --arg r "$r" '.roles[$r].agent // empty' "$(pp_routing)") m=$(jq -r --arg r "$r" '.roles[$r].model // empty' "$(pp_routing)")
+  [ -n "$a" ] || { echo "routing: no role $r" >&2; return 2; }
+  if [[ $ok != *" $m "* ]]; then
+    alt=$(jq -r --arg a "$a" --arg ok "$ok" '[.roles[] | (.candidates // [.])[] | select(.agent == $a) | .model] as $mine
+      | first($ok | split(" ")[] | select(. != "" and IN($mine[]))) // empty' "$(pp_routing)")
+    if [ -n "$alt" ]; then echo "$r: $m is not one of the models this project allows (setup's planModels:$ok); used $alt instead" >&2; m=$alt
+    elif [ "$a" = codex ]; then echo "$r: no Codex model is allowed in this project; used plan-judge-claude instead" >&2; pp_plan_seat plan-judge-claude; return
+    else echo "REFUSED: no model this project allows can run $r (setup's planModels:$ok)" >&2; return 2; fi
+  fi
+  echo "$r $m"
 }
 # The effort one Builder launch may run: medium or high, never under the project's Builder default. Asked the
 # same two places as the model, so a seat launched by hand cannot lower it either.

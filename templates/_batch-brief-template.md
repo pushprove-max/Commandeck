@@ -15,3 +15,10 @@ means. Then the tests to write first, and how the batch will be reviewed.
 Required: builder-launch.sh refuses a batch without it. Which standard
 governs this change, which library or managed service already does it (the
 project's `.claude/paved-road.md`, by area), and why we build instead if we do.
+
+## Plan
+
+Required: builder-launch.sh refuses a batch without it. The plan the owner
+read before saying go, by its path: `.claude/plans/<file>.md`, committed on
+main. With no plan, main launches with
+`--skip-plan --reason '<one line>'` instead.

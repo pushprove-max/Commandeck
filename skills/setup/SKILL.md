@@ -125,6 +125,10 @@ Ask them in this order, up to four questions per call.
    - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000`; Off: `--builder-clear-line off`
    Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off
    - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
+   Ask "Plan models": All (recommended) | Without Fable | Without Codex | Without both
+   - The models the plan seats (the planners and judges before a build) may run on; every planning answer offers only these, and a seat whose default is left out says which model it used instead. All: `--plan-models ''`; Without Fable: `--plan-models opus,sonnet,sol,astra`; Without Codex: `--plan-models opus,sonnet,fable`; Without both: `--plan-models opus,sonnet`. On the Claude-only profile ask All | Without Fable, and Without Fable is `--plan-models opus,sonnet`.
+   Ask "Plan seats on the fast tier", one multi-select question (`multiSelect: true`): Planners | Codex judges | Claude judge
+   - Each plan seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Nothing chosen is the default, every seat on the standard tier: `--plan-fast ''`. Planners: `plan-author,plan-author-second`; Codex judges: `plan-judge-sol,plan-judge-astra`; Claude judge: `plan-judge-claude`; the chosen ones joined by commas, as `--plan-fast plan-author,plan-judge-claude`. Offer Codex judges only on the Claude+OpenAI profile and when the check said "Codex fast mode: available".
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`

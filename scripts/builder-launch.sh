@@ -36,22 +36,28 @@
 # --effort raises this one Builder above the setup default (medium unless set-up chose another): medium or high
 # only, with a reason. The brief and the evidence file get one line, "effort override: builder <default> -> <used>:
 # <reason>", which the dashboard reads to mark the build raised. Every launch prints the effort it uses, on stderr.
+# A plan is written before every build (owner's order 2026-10-17): every launch, a dry run included, is refused unless
+# the batch has a "## Plan" section naming a .claude/plans/<file>.md, a nonempty file committed on local main (checked
+# again once main is fast-forwarded from origin). --skip-plan, with a reason, launches without one: the skip is printed
+# on stderr, written into the brief and the evidence file as "plan skipped: <reason>", and logged as a routing-override
+# line. A risky launch's second call is not checked again, so one begun before this rule still opens its Builder.
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>"
-RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY=''
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
+RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0
 while :; do
   case ${1:-} in
     --risky) RISKY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --small) SMALL=1; shift ;;
+    --skip-plan) SKIP=1; shift ;;
     --model) PICK=1 BMODEL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --effort) RAISE=1 EFFORT=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --reason) REASON=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     *) break ;;
   esac
 done
-# A reason with no --effort is the model pick's, checked as it always was.
-[ -z "$REASON" ] || [ "$RAISE" = 1 ] || PICK=1
+# A reason with no --effort or --skip-plan is the model pick's, checked as it always was.
+[ -z "$REASON" ] || [ "$RAISE" = 1 ] || [ "$SKIP" = 1 ] || PICK=1
 UNIT=${1:?$USAGE}
 BATCH=${2:?$USAGE}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -62,9 +68,27 @@ pp_unit_name "$UNIT" || exit 2
 # Every batch says which standard governs it, what library or service already does it, and why we build if we do.
 grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
 WT=$PP_WORKSPACES/$UNIT
+# The second call of a risky launch: the first made the worktree, wrote the brief and evidence and opened the design pane.
+RESUME=0
+[ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ] && RESUME=1
+# The plan is read where the worktree is cut from, local main (pp_worktree_new): a nonempty regular file there.
+PLAN=$(awk '/^#+[[:space:]]/ { on = $0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/ } on' "$BATCH" | grep -oE '\.claude/plans/[A-Za-z0-9._-]+\.md' | head -1) || PLAN=
+plan_ok() {
+  [ -n "$SKIPPED" ] || [ "$RESUME" = 1 ] || [[ $PLAN && $(git -C "$PP_MAIN" ls-tree -l refs/heads/main -- "$PLAN" 2>/dev/null) =~ ^100(644|755)\ blob\ [0-9a-f]+\ +[1-9][0-9]*$'\t'"$PLAN"$ ]] \
+    || { echo "REFUSED: $BATCH names no plan committed on main in $PP_MAIN (a '## Plan' section naming .claude/plans/<file>.md${PLAN:+; $PLAN is not a nonempty file in the last commit of main}): write and commit the plan the owner reads before the build, or launch with --skip-plan --reason '<one line>'" >&2; exit 2; }
+}
+SKIPPED=
+if [ "$SKIP" = 1 ]; then
+  # Logged as a routing-override line, read as key=value words: one line, no = sign.
+  [[ -n $REASON && $REASON != *[=$'\n']* ]] || { echo "REFUSED: --skip-plan needs --reason '<one line, no = sign>'; the brief, the evidence and the routing log record why the build has no plan" >&2; exit 2; }
+  SKIPPED="plan skipped: $REASON"
+fi
+# A risky launch's second call is not asked again: its first call checked the plan, or ran before the rule, and the
+# brief it wrote, which the Builder opens with, must match this call's (checked below).
+plan_ok
 # Two Builders never share a worktree: a reused one carries another batch's diff and event log.
 # A risky launch's own worktree, made by its first call, is the one exception.
-if [ -e "$WT" ] && ! { [ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; }; then echo "REFUSED: $WT already exists; a Builder starts in a new worktree" >&2; exit 2; fi
+if [ -e "$WT" ] && [ "$RESUME" = 0 ]; then echo "REFUSED: $WT already exists; a Builder starts in a new worktree" >&2; exit 2; fi
 
 if [ "$PICK" = 1 ]; then
   pp_builder_model_ok "$BMODEL" || exit 2
@@ -81,10 +105,8 @@ if [ "$RAISE" = 1 ]; then
   pp_builder_effort_ok "$EFFORT" "$DEFAULT" || exit 2
   OVERRIDE="effort override: builder $DEFAULT -> $EFFORT: $REASON" WHY=$REASON
 fi
-# The second call of a risky launch: the first made the worktree, wrote the brief and evidence and opened the design pane.
-RESUME=0 REC=
-if [ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ]; then
-  RESUME=1
+REC=
+if [ "$RESUME" = 1 ]; then
   # A record there but unreadable (or a directory) stops the launch: read as empty, its rewrite would lose its history.
   rd() { [ ! -e "$1" ] || cat "$1" || { echo "could not read $1; the Builder was not launched and no record was changed." >&2; return 1; }; }
   # One second call of a unit at a time, from reading its records to the pane's launch: a concurrent one saw no
@@ -110,6 +132,10 @@ OPTS=()
 open_builder() {
   if [ "$PICK" = 1 ]; then
     printf '%s unit=%s note=routing-override builder %s: %s\n' "$(date +%F)" "$UNIT" "$BMODEL" "$REASON" >> "${COMMANDECK_ROUTING_LOG:-$PP_MAIN/.claude/routing-log}" \
+      || { echo "could not write the routing log; the Builder was not launched" >&2; exit 1; }
+  fi
+  if [ -n "$SKIPPED" ]; then
+    printf '%s unit=%s note=routing-override %s\n' "$(date +%F)" "$UNIT" "$SKIPPED" >> "${COMMANDECK_ROUTING_LOG:-$PP_MAIN/.claude/routing-log}" \
       || { echo "could not write the routing log; the Builder was not launched" >&2; exit 1; }
   fi
   exec bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"}
@@ -142,6 +168,7 @@ T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
 # Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
+[ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
 SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
@@ -169,6 +196,7 @@ SIZING=$(pp_issue_sizing) || exit 2
 T=${T//'{batch}'/"$(sed -E 's/^(#+ )/##\1/' "$BATCH")"}
 echo "advisor: $RULE" >&2
 if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else echo "effort: $DEFAULT (the setup default)" >&2; fi
+[ -z "$SKIPPED" ] || echo "$SKIPPED" >&2
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
   || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
@@ -183,7 +211,7 @@ if [ "$RESUME" = 1 ]; then
   ON=$WB NOW=$T
   [ -z "$REC" ] || ON=${ON/$'\n'"$REC"$'\n'/}
   [ -z "$OVERRIDE" ] || NOW=${NOW/$'\n'"$OVERRIDE"$'\n'/}
-  [ "$ON" = "$NOW" ] || { echo "REFUSED: this call renders another brief than the first call of this risky launch wrote, other than its effort. Run it again with the first call's --small, on the same batch file; the Builder was not launched." >&2; exit 2; }
+  [ "$ON" = "$NOW" ] || { echo "REFUSED: this call renders another brief than the first call of this risky launch wrote, other than its effort. Run it again with the first call's --small and --skip-plan, on the same batch file; the Builder was not launched." >&2; exit 2; }
   [ -s "$NOTE" ] || { echo "no design note at $NOTE yet; the Builder was not launched. Run this again once the design pane has written it." >&2; exit 1; }
   # A changed effort is rewritten into both briefs and logged in the evidence before the pane opens, so the records
   # match what runs. Each record is checked on its own: a retry after a failed write finishes what is still owed.
@@ -210,11 +238,14 @@ if [ "$RESUME" = 1 ]; then
 fi
 
 pp_sync_main "$PP_MAIN" || exit 1
+# Fast-forwarding main from origin may have removed the plan the worktree is about to be cut without.
+plan_ok
 pp_worktree_new "$UNIT" || exit 1
 bash "$HERE/worktree-setup.sh" "$WT" --builder
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"
+[ -z "$SKIPPED" ] || printf '%s\n' "$SKIPPED" >> "$WT/.claude/briefs/$UNIT-evidence.md"
 # Main's own copy: the pass script reads the stated limits from it, never from the Builder's.
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
   || { echo "could not keep main's copy of the brief for $UNIT" >&2; exit 1; }

@@ -171,8 +171,11 @@ line is set with `--status-line` (uninstall puts the earlier one back).
 
 After setup, the Claude session in the project's main checkout is the
 orchestrator. You tell it what you want in plain words. It writes a batch
-brief with you (the items and how each will be judged done) and launches a
-Builder:
+brief with you (the items and how each will be judged done), asks whether
+to write a plan first (no plan, one planner, a plan and a judge, or a panel
+of two plans, two judges and one merge), and once you say go launches a Builder (a batch that
+names no committed plan is refused unless launched with
+`--skip-plan --reason '<one line>'`):
 
 ```bash
 bash "$PLUGIN/scripts/builder-launch.sh" add-csv-export .claude/briefs/add-csv-export-batch.md

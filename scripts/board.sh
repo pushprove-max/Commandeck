@@ -152,13 +152,15 @@ echo "== seats (live worktrees only)"
 # Seat records are never deleted, so the whole history of every merged unit is
 # on disk. Only a unit whose worktree still exists can still be waited on.
 #
-# One grep names every record's unit, and only a live unit's record is opened:
-# a process or three per record (1,044 records on 2026-10-11) took 16 s.
+# One awk names every record's unit and worktree (a planner's is <unit>-plan, before its unit has one), and only a
+# live worktree's record is opened: a process or three per record (1,044 records on 2026-10-11) took 16 s.
 SEATS=()
-while IFS= read -r line; do
-  u=${line#*:unit=}
-  [ -n "$u" ] && [ -d "$WS/$u" ] && SEATS+=("${line%%:unit=*}")
-done < <(grep -H -m1 '^unit=' "$SCRATCH"/seat-*.txt 2>/dev/null)
+while IFS=$'\x1f' read -r f u w; do
+  [ -n "$u" ] && [ -d "$WS/${w:-$u}" ] && SEATS+=("$f")
+done < <(awk -v OFS=$'\x1f' 'function out() { if (f != "") print f, v["unit"], v["worktree"] }
+  FNR == 1 { out(); f = FILENAME; split("", v) }
+  /^(unit|worktree)=/ { k = substr($0, 1, index($0, "=") - 1); if (!(k in v)) v[k] = substr($0, length(k) + 2) }
+  END { out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
 for r in ${SEATS[@]+"${SEATS[@]}"}; do
   u=$(grep '^unit=' "$r" | cut -d= -f2)
   [ -z "$ONLY" ] || [ "$u" = "$ONLY" ] || continue

@@ -26,6 +26,7 @@ set -euo pipefail
 usage() { cat <<'EOF'
 usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 reruns a spec that already finished)
        seat.sh launch builder <unit> <spec-file> [--model <alias>] [--effort medium|high] [--no-advisor]   (one launch only; builder-launch.sh passes them)
+       seat.sh launch plan-<seat> <unit> <spec-file> [--model <alias>] [--effort <level>]   (the plan seat's model and effort the owner picked; it runs in <unit>-plan, made on its first launch)
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
        seat.sh effort  <role> <unit> <handle> <level>
@@ -53,24 +54,45 @@ SEAT_REPO=${COMMANDECK_SEAT_REPO:-}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 WS=$PP_WORKSPACES
 [ -z "$SEAT_REPO" ] || [ -n "$PP_WORKSPACES_GIVEN" ] || WS=$HOME/orca/workspaces/$SEAT_REPO
-WT=$WS/$UNIT
 SCRATCH=$PP_SCRATCH
 # Another repo's unit can carry this repo's unit name; its record must not be
 # this one's. "@" keeps the two names apart because no unit name may hold it:
 # with "." this repo's unit "ops.foo" and repo "ops" unit "foo" shared a record.
 case $UNIT in *@*) echo "a unit name cannot hold @: $UNIT" >&2; exit 2 ;; esac
 REC=$SCRATCH/seat-${SEAT_REPO:+$SEAT_REPO@}$UNIT-$ROLE.txt
+# A plan seat runs before its Builder, whose launch makes the unit's worktree and refuses one already made: it works
+# in its own planning worktree, <unit>-plan, which its first launch cuts from local main (below). A launched seat is
+# read in the worktree its record names (worktree=); a record naming none is from before, when every seat ran in <unit>.
+if [ "$CMDNAME" = launch ]; then WTN=$UNIT; [[ $ROLE != plan-* ]] || WTN=$UNIT-plan
+else WTN=$(grep '^worktree=' "$REC" 2>/dev/null | tail -1 | cut -d= -f2- || true); WTN=${WTN:-$UNIT}; fi
+WT=$WS/$WTN
+# <unit>-plan is also a name a Builder unit can take: a plan seat reuses one only when its own first launch made it.
+PLAN_OF=commandeck-plan-of
+# The Panel's planners launch in parallel: the check here and the make and mark below are one step under this lock,
+# or the second saw <unit>-plan made and not yet marked, and refused it (Sol r4). Released once the worktree is marked.
+if [[ $CMDNAME == launch && $ROLE == plan-* ]]; then
+  mkdir -p "$SCRATCH" && exec {PLAN_LOCK_FD}>>"$SCRATCH/${SEAT_REPO:+$SEAT_REPO@}$UNIT-plan-worktree.lock" && flock -w 600 "$PLAN_LOCK_FD" \
+    || { echo "cannot lock $SCRATCH/$UNIT-plan-worktree.lock; nothing was opened" >&2; exit 1; }
+  if [ -d "$WT" ] && [ "$(cat "$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)/$PLAN_OF" 2>/dev/null)" != "$UNIT" ]; then
+    echo "REFUSED: $WT is not $UNIT's planning worktree (no plan seat of $UNIT made it; a Builder unit of that name may own it). Nothing was opened." >&2
+    exit 2
+  fi
+fi
 # read-verdict.sh ties a Codex pane's session log by worktree and launch epoch,
 # so two seats in one worktree would transcribe each other's review without it.
 LAUNCHED=$(grep '^launched=' "$REC" 2>/dev/null | cut -d= -f2 || true)
-[ -d "$WT" ] || { echo "no worktree at $WT" >&2; exit 2; }
+[ -d "$WT" ] || [[ $CMDNAME == launch && $ROLE == plan-* && -z $SEAT_REPO ]] || { echo "no worktree at $WT" >&2; exit 2; }
+# The role whose routing the seat runs on. A plan seat put on another (pp_plan_seat: a Codex judge with no Codex
+# runs as plan-judge-claude) keeps its own name, pane and record, so the Panel's two judges stay two.
+RROLE=$ROLE
+if [[ $ROLE == plan-* ]] && S=$(pp_plan_seat "$ROLE" 2>/dev/null); then RROLE=${S% *}; fi
 # The seat's agent CLI, so the session reader looks in one provider's logs.
 seat_agent() {
-  pp_route "$ROLE" 2>/dev/null && printf '%s\n' "$RT_AGENT" || true
+  pp_route "$RROLE" 2>/dev/null && printf '%s\n' "$RT_AGENT" || true
 }
 # The role's pane cannot write files: a codex read-only sandbox or a Claude seat without Write.
 seat_readonly() {
-  pp_route "$ROLE" && [ "$RT_READONLY" = 1 ]
+  pp_route "$RROLE" && [ "$RT_READONLY" = 1 ]
 }
 # Bounded, so a blocked log read cannot freeze a wait or a launch.
 worker_state_kv() {
@@ -103,11 +125,12 @@ effort)
 launch)
   SPEC=${1:?spec file}
   [ -s "$SPEC" ] || { echo "empty spec: $SPEC" >&2; exit 2; }
-  # One Builder launch may name its model, raise its effort or drop its advisor (builder-launch.sh);
-  # no other seat takes any. The model and effort are checked here too: this launch is also run by hand.
+  # One Builder launch may name its model, raise its effort or drop its advisor (builder-launch.sh); a plan seat
+  # takes the model and effort the owner picked for it. No other seat takes any. The model and effort are checked
+  # here too: this launch is also run by hand.
   LMODEL='' LEFFORT='' LADVISOR='' LOPTS=("${@:2}")
   if [ "${#LOPTS[@]}" -gt 0 ]; then
-    [ "$ROLE" = builder ] || { echo "seat.sh: only the builder seat takes a launch option (${LOPTS[*]}); nothing was done" >&2; exit 2; }
+    [[ $ROLE == builder || $ROLE == plan-* ]] || { echo "seat.sh: only the builder and plan seats take a launch option (${LOPTS[*]}); nothing was done" >&2; exit 2; }
     i=0
     while [ "$i" -lt "${#LOPTS[@]}" ]; do
       case ${LOPTS[i]} in
@@ -118,11 +141,26 @@ launch)
       esac
       i=$((i+1))
     done
-    [ -z "$LMODEL" ] || pp_builder_model_ok "$LMODEL" || exit 2
-    [ -z "$LEFFORT" ] || pp_builder_effort_ok "$LEFFORT" "$(pp_route_json builder "" "$LMODEL" | jq -r '.effort // "none"')" || exit 2
+    if [ "$ROLE" = builder ]; then
+      [ -z "$LMODEL" ] || pp_builder_model_ok "$LMODEL" || exit 2
+      [ -z "$LEFFORT" ] || pp_builder_effort_ok "$LEFFORT" "$(pp_route_json builder "" "$LMODEL" | jq -r '.effort // "none"')" || exit 2
+    else
+      # A plan seat's effort is any level, checked with its role below; its model, one the agent it runs on already runs.
+      [ -z "$LMODEL" ] || pp_seat_model_ok "$RROLE" "$LMODEL" || exit 2
+    fi
   fi
-  pp_route "$ROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
-  [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
+  # A plan seat runs only on a model setup allows (planModels): a pick outside them is refused, and a default
+  # outside them is swapped for an allowed one, which is said.
+  if [[ $ROLE == plan-* ]]; then
+    if [ -n "$LMODEL" ]; then
+      [[ " $(pp_plan_models) " == *" $LMODEL "* ]] || { echo "REFUSED: --model $LMODEL is not one of the models this project allows a plan seat ($(pp_plan_models)); setup sets them (--plan-models)" >&2; exit 2; }
+    else
+      S=$(pp_plan_seat "$ROLE") || exit 2
+      RROLE=${S% *} LMODEL=${S#* }
+    fi
+  fi
+  pp_route "$RROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$RROLE in routing.json" >&2; exit 2; }
+  [ -n "$RT_CMD" ] || { echo "roles.$RROLE in routing.json is not a pane seat" >&2; exit 2; }
   # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
   CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
   # A finished spec does not run twice: the same plan-reviser job ran
@@ -167,6 +205,12 @@ launch)
       exit 2
     }
   fi
+  # A plan seat's first launch cuts its planning worktree from local main, as builder-launch.sh cuts a Builder's.
+  # Its git dir is marked as this unit's, the mark the reuse check above reads.
+  if [ ! -d "$WT" ]; then
+    pp_worktree_new "$WTN" && echo "$UNIT" > "$(git -C "$WT" rev-parse --absolute-git-dir)/$PLAN_OF" || exit 1
+  fi
+  [ -z "${PLAN_LOCK_FD:-}" ] || exec {PLAN_LOCK_FD}>&-
   ORCA_TERMINAL_HANDLE=$(bash "$PP_SCRIPTS/run-bound.sh") || exit 2; export ORCA_TERMINAL_HANDLE
   # Same reason as dispatch-unit.sh: a seat in a worktree with no node_modules
   # symlink gets a silently toothless eslint, ts-suggestions and parser-backed
@@ -261,7 +305,7 @@ launch)
       [ -z "$REQ" ] || { send_pointer --retry-request "$REQ" | submitted && PROVEN=1; }
     fi
   fi
-  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nlaunched=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$LAUNCH_EPOCH" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
+  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
   # The silent-pane relaunch below starts this seat again from its record.
   [ "${#LOPTS[@]}" -eq 0 ] || echo "opts=${LOPTS[*]}" >> "$REC"
   # A seat the origin placed here is the origin's to hear: main-watch on this

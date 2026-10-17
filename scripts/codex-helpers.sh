@@ -47,6 +47,7 @@ ROLE_LANES='{
   "plan-author": "planning", "brief-reviewer": "planning", "design-coauthor": "planning",
   "plan-author-arch": "planning", "brief-reviewer-arch": "planning",
   "plan-author-hard": "planning", "brief-reviewer-hard": "planning",
+  "plan-author-second": "planning", "plan-judge-sol": "planning", "plan-judge-astra": "planning", "plan-judge-claude": "planning",
   "investigator": "planning", "debugger": "planning", "debugger-pipeline": "planning",
   "implementer": "building", "implementer-light": "building", "race-implementer": "building", "escalation": "building", "builder": "building",
   "reviewer": "review", "claude-reviewer": "review", "codex-reviewer": "review", "codex-reviewer-risky": "review",

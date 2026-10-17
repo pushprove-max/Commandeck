@@ -139,13 +139,14 @@ open_tasks() {
 # of the newest live seat for exactly this unit: a seat record (seat.sh launch)
 # whose Orca task is still open. A record launched before Orca created the
 # worktree belongs to an older unit of the same name. Prints nothing when no
-# record is live or the newest one's role has no stage.
+# record is live or the newest one's role has no stage. A record is matched by the worktree it names (a planner of
+# <unit> runs in <unit>-plan, and its seat-<unit>-plan-<seat>.txt is in this glob), else by its unit.
 seat_role() {
   local f created=''
   [ -z "$4" ] || created=$(jq -r --arg p "$2" '[.result.worktrees[]? | select(.path == $p) | .createdAt | numbers][0] // empty | . / 1000 | floor' <<<"$4")
   for f in "$PP_SCRATCH/seat-$1-"*.txt; do
     [ ! -f "$f" ] || awk '{ i = index($0, "="); if (i) v[substr($0, 1, i - 1)] = substr($0, i + 1) }
-      END { print v["launched"] "\t" v["role"] "\t" v["task"] "\t" v["unit"] }' "$f"
+      END { print v["launched"] "\t" v["role"] "\t" v["task"] "\t" (v["worktree"] != "" ? v["worktree"] : v["unit"]) }' "$f"
   done | jq -Rrn --arg u "$1" --argjson open "$3" --arg c "$created" --argjson lanes "$ROLE_LANES" '
     [inputs | split("\t") | select(.[3] == $u and (.[0] | test("^[0-9]+$")) and .[1] != ""
       and (.[2] as $t | any($open[]; . == $t)) and ($c == "" or (.[0] | tonumber) >= ($c | tonumber)))]

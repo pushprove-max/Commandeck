@@ -5,8 +5,8 @@
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
 #          [--builder-model <alias>] [--builder-effort low|medium|high|max] [--builder-clear-line <tokens>|off]
-#          [--issue-sizing <tokens>|off] [--codex-fast|--no-codex-fast]
-#          [--codex-model <Codex role>=<model id>|<Codex role>= ...]
+#          [--issue-sizing <tokens>|off] [--codex-fast|--no-codex-fast] [--plan-models <model>[,<model>...]|'']
+#          [--codex-model <Codex role>=<model id>|<Codex role>= ...] [--plan-fast <plan seat>[,<plan seat>...]|'']
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
@@ -47,7 +47,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -104,6 +104,7 @@ OWN=(AGENT_STARTUP.md .claude/main-session.md)
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
+PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
@@ -174,6 +175,10 @@ while [ $# -gt 0 ]; do
     # The Builder's effort and clear line, and the issue sizing line: '' takes the default back (nothing saved).
     --builder-effort) case $2 in low|medium|high|max|'') BEFFORT=$2 ;; *) die "--builder-effort takes low, medium, high or max, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --builder-clear-line) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--builder-clear-line takes a number of tokens, or off, not '$2'. Nothing was changed"; BCLEAR=$2; shift 2 ;;
+    # The models a plan seat may run on, comma-separated; '' takes the default back (every model routing names).
+    --plan-models) PMODELS=$2; shift 2 ;;
+    # The plan seats that run on the fast tier, comma-separated; '' is none, the default.
+    --plan-fast) PFAST=$2; shift 2 ;;
     --issue-sizing) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--issue-sizing takes a number of tokens, or off, not '$2'. Nothing was changed"; SIZING=$2; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
@@ -244,6 +249,21 @@ for r in $(jq -r 'keys[]' <<<"$CMODELS"); do
   m=$(jq -r --arg r "$r" '.[$r]' <<<"$CMODELS")
   [[ $m =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] && ! [[ $m =~ ^[a-z]+$ ]] \
     || die "--codex-model $r=$m: name a model id, such as gpt-6.1-sol, not a family or other text. Nothing was changed"
+done
+# Leaving fable out opts out of Fable, leaving every Codex model out opts out of Codex. A Claude model stays: it
+# writes the plan. A Codex one only on the Claude+OpenAI profile, which has Codex.
+for m in ${PMODELS//,/ }; do
+  jq -e --arg m "$m" --arg p "$PROFILE" 'any(.roles[] | (.candidates // [.])[]; .model == $m and (.agent == "claude" or $p == "claude-openai"))' "$(pp_routing)" >/dev/null \
+    || die "--plan-models takes models routing.json gives a seat ($(jq -r --arg p "$PROFILE" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "claude-openai") | .model] | unique | join(", ")' "$(pp_routing)")), not '$m'. Nothing was changed"
+done
+[ -z "$PMODELS" ] || jq -e --arg l "$PMODELS" 'any(.roles[] | (.candidates // [.])[]; .agent == "claude" and IN(.model; ($l | split(",")[])))' "$(pp_routing)" >/dev/null \
+  || die "--plan-models keeps at least one Claude model, the one that writes the plan. Nothing was changed"
+# A fast plan seat is a plan role routing.json names; a Codex one needs the Codex home's fast tier, as the review pass does.
+for r in ${PFAST//,/ }; do
+  a=$(jq -r --arg r "$r" 'if ($r | startswith("plan-")) then .roles[$r].agent // empty else empty end' "$(pp_routing)")
+  [ -n "$a" ] || die "--plan-fast takes plan seats, $(jq -r '[.roles | keys[] | select(startswith("plan-"))] | join(", ")' "$(pp_routing)"), not '$r'. Nothing was changed"
+  [ "$a" != codex ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
+    || die "$r was set to fast, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line. Add that line and run setup again, or leave $r out of --plan-fast. Nothing was changed"
 done
 
 # --- preflight: refuse here, before anything changes ---
@@ -327,7 +347,7 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".*; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
   --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
@@ -335,6 +355,8 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $test == "" then {} else {testCommand: $test} end)
   + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != "")) | if . == {} then {} else {builder: .} end)
   + (if $sz == "" then {} else {issueSizing: $sz} end)
+  + (if $pm == "" then {} else {planModels: ($pm | split(",") | map(select(. != "")))} end)
+  + (if $pf == "" then {} else {planFast: ($pf | split(",") | map(select(. != "")))} end)
   + (if $cm == {} then {} else {codexModels: $cm} end)
   + (if $rl == {} then {} else {reviewLoop: $rl} end)
   + (if $own == {} then {} else {ownFiles: $own} end)

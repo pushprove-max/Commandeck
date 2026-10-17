@@ -18,6 +18,52 @@
       "edits": true,
       "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges."
     },
+    "plan-author": {
+      "agent": "claude",
+      "model": "opus",
+      "effort": "high",
+      "unboxed": true,
+      "edits": true,
+      "note": "The plan main asks for before every build: it writes the plan file and nothing else. Main stops once the plan exists; the build starts only on the owner's own go after reading it. The owner may pick another model and effort when asked; this is the default."
+    },
+    "plan-author-second": {
+      "agent": "claude",
+      "model": "fable",
+      "effort": "high",
+      "unboxed": true,
+      "edits": true,
+      "note": "The Panel answer's second planner: writes its own plan beside plan-author's, in parallel, for the merge. Where Fable is not available main runs this seat on another Claude model (seat.sh launch --model) and says so."
+    },
+    "plan-judge-sol": {
+      "agent": "codex",
+      "model": "sol",
+      "effort": "high",
+      "reviewer": true,
+      "sandbox": "read-only",
+      "unboxed": true,
+      "edits": false,
+      "note": "Judge of the Plan + judge and Panel answers: reads the plan or plans and prints its findings; the planner revises once with them. One round, no judging loop. A project set up with no Codex (profile claude) uses plan-judge-claude instead."
+    },
+    "plan-judge-astra": {
+      "agent": "codex",
+      "model": "astra",
+      "effort": "high",
+      "reviewer": true,
+      "sandbox": "read-only",
+      "unboxed": true,
+      "edits": false,
+      "note": "The Panel answer's second judge, beside plan-judge-sol: reads both plans and prints its findings for the merge. With no Codex, plan-judge-claude takes its place."
+    },
+    "plan-judge-claude": {
+      "agent": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "reviewer": true,
+      "tools": ["Write", "Edit", "NotebookEdit"],
+      "unboxed": true,
+      "edits": false,
+      "note": "The plan judge of a project set up with no Codex (profile claude): a read-only Claude pane in place of plan-judge-sol and plan-judge-astra, which main says when it runs it."
+    },
     "builder": {
       "agent": "claude",
       "model": "opus",
