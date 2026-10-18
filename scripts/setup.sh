@@ -578,7 +578,7 @@ for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "$n"; done
 # The config setup wrote is the project's, and so is a merge into the owner's startup files: a unit's
 # worktree has them only once git holds them. Setup never commits.
 # After the relay's worktree is set up: its pane's TTL as Claude Code will read it, and the main checkout's local file.
-while IFS= read -r L; do [ "${L%% *}" != warn ] || NEED+=("${L#warn }"); done < <(il_cache_ttl_report)
+while IFS= read -r L; do [ "${L%% *}" != warn ] || NEED+=("${L#warn }"); done < <(il_cache_ttl_report; il_shadow_report)
 OWED=()
 for f in "$IL_CONFIG" "$PSET" "$IL_AGENTS" "${OWN[@]/#/$PP_MAIN/}"; do
   f=${f#"$PP_MAIN"/}

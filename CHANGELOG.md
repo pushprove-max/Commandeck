@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.0 -- 2026-10-18
+
+- Worker and Builder panes start with less context: `worktree-setup.sh` turns off the Stripe plugin and the
+  `computer-use`, `built-in-browser` and `chrome-browser` skills of `anthropic-skills`, turns auto memory off, and, where
+  the ponytail plugin is on and setup's answer is yes, swaps its full text for a summary of about 1 KB
+  (`templates/ponytail/SUMMARY.md`). Main, the relay pane and a `--keep all` seat keep everything.
+- New `--keep <billing|all>[,...]` on `worktree-setup.sh` and `builder-launch.sh`: `billing` keeps the Stripe plugin,
+  `all` changes nothing above. The list is stored in the worktree's `env`, so a rerun without the flag keeps it, and
+  a rerun that passes the flag replaces it. A rerun removes every leaf the script owns before it writes the current
+  set; a `skillOverrides` entry you set yourself stays. The script now refuses an argument it does not know.
+- The briefs say auto memory is off in a worker pane: a Builder asks main for a fact the brief lacks, and main copies
+  every memory fact a unit depends on into its brief.
+- The doctor, and setup under Needs you, warn for every key `worktree-setup.sh` writes that the main checkout's
+  `.claude/settings.local.json` also sets with a different value (#192). It replaces the check for a prompt-cache
+  TTL there, with the same message for that key. `worktree-setup.sh --print-settings` now prints the relay pane's file too.
+
 ## 0.15.0 -- 2026-10-18
 
 - Setup and update ask the prompt cache per role: 5 minutes for main and every worker pane (Builders included,

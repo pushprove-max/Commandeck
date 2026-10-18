@@ -139,7 +139,8 @@ cache() { COMMANDECK_WORKSPACES=$T/ws lib il_cache_ttl_report; }
 OUT=$(cache)
 check "the relay's own 1h beats the user's 5m: one ok line and no warn" '1:0' "$(grep -c '^ok prompt cache' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.local.json"
-OUT=$(cache)
+shadow() { lib il_shadow_report; }
+OUT=$({ cache; shadow; })
 check "a TTL in the main checkout's local file warns, naming the file, and the relay then runs 5m" '1:1' \
   "$(grep -c "^warn prompt cache: $PROJ/.claude/settings.local.json sets CLAUDE_CODE_PROMPT_CACHE_TTL=5m" <<<"$OUT"):$(grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose' <<<"$OUT")"
 echo '{}' > "$PROJ/.claude/settings.local.json"; echo '{}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
@@ -167,6 +168,37 @@ rm -f "$PROJ/.claude/settings.json"
 echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
 check "with both answers Leave as is the doctor has nothing to check" '1:0' "$(cache | grep -c '^ok prompt cache: setup sets none'):$(cache | grep -c '^warn')"
 rm -f "$HOME/.claude/settings.json" "$PROJ/.claude/settings.local.json"
+
+# --- a key in the main checkout's local file shadows the per-worktree one (Claude Code applies it over the worktree's own) ---
+echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"autoMemoryEnabled":true}' > "$PROJ/.claude/settings.local.json"
+OUT=$(shadow)
+check "autoMemoryEnabled true in main's local file warns, naming the key and the file" "1:0" \
+  "$(grep -c "^warn settings: $PROJ/.claude/settings.local.json sets autoMemoryEnabled=true" <<<"$OUT"):$(grep -c '^ok' <<<"$OUT")"
+echo '{"autoMemoryEnabled":false,"someOwnerKey":"x"}' > "$PROJ/.claude/settings.local.json"
+OUT=$(shadow)
+check "the same value, and a key setup never writes, do not warn" "1:0" "$(grep -c '^ok settings' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
+echo '{"skillOverrides":{"anthropic-skills:chrome-browser":"on"},"enabledPlugins":{"stripe@claude-plugins-official":true}}' > "$PROJ/.claude/settings.local.json"
+check "a nested leaf is named by its path, one warning for each" "1:1" \
+  "$(shadow | grep -c 'sets skillOverrides.anthropic-skills:chrome-browser=on'):$(shadow | grep -c 'sets enabledPlugins.stripe@claude-plugins-official=true')"
+check "no worktree is left behind by the check" 1 "$(git -C "$PROJ" worktree list | wc -l | tr -d ' ')"
+# A probe that cannot run is no clean bill: the owner's key may still shadow what it would have shown.
+echo '{"autoMemoryEnabled":true}' > "$PROJ/.claude/settings.local.json"
+RG=$(command -v git); mkdir -p "$T/nogit" "$T/emptygit"
+printf '#!/usr/bin/env bash\n[[ "$*" == *"worktree add"* ]] && exit 1\nexec %s "$@"\n' "$RG" > "$T/nogit/git"
+printf '#!/usr/bin/env bash\n[[ "$*" == *"worktree add"* ]] && exit 0\nexec %s "$@"\n' "$RG" > "$T/emptygit/git"
+chmod +x "$T/nogit/git" "$T/emptygit/git"
+OUT=$(PATH="$T/nogit:$PATH" shadow)
+check "a probe worktree that cannot be made is a warning, never an ok" '0:1' "$(grep -c '^ok settings' <<<"$OUT"):$(grep -c '^warn settings' <<<"$OUT")"
+OUT=$(PATH="$T/emptygit:$PATH" shadow)
+check "a probe whose profile cannot be generated is a warning, never an ok" '0:1' "$(grep -c '^ok settings' <<<"$OUT"):$(grep -c '^warn settings' <<<"$OUT")"
+# The doctor removes its own probes and prunes nothing else: another worktree whose directory is away keeps its metadata.
+git -C "$PROJ" worktree add -q "$T/away" && mv "$T/away" "$T/away.gone"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=gc.worktreePruneExpire GIT_CONFIG_VALUE_0=now shadow >/dev/null
+check "an offline worktree's metadata survives the check" 1 "$(git -C "$PROJ" worktree list | grep -c "$T/away")"
+mv "$T/away.gone" "$T/away" && git -C "$PROJ" worktree remove --force "$T/away"
+rm -f "$PROJ/.claude/settings.local.json"
+check "no local file: nothing shadowed" 1 "$(shadow | grep -c '^ok settings')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

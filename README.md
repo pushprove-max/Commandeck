@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.15.0-111111?style=flat-square" alt="Version 0.15.0">
+  <img src="https://img.shields.io/badge/version-0.16.0-111111?style=flat-square" alt="Version 0.16.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -370,6 +370,23 @@ budget) are marked `# codex: skip` and do not run there.
 
 Several of these know only npm and TypeScript. In another stack they stay
 silent.
+
+## What each pane starts with
+
+A worker pane (a Builder, a planner, a reviewer) starts with less context than main. `scripts/worktree-setup.sh`
+writes the difference into the worktree's `.claude/settings.local.json`:
+
+| Seat | Stripe plugin and the three browser skills | Auto memory | Ponytail |
+|---|---|---|---|
+| Main, the Chief of Staff, a `--keep all` seat | kept | kept | the plugin |
+| Builder, planner, plan judge, other worker panes | off, except what `--keep` lists | off | a summary of about 1 KB |
+
+`--keep billing` brings the Stripe plugin back for a billing unit (`builder-launch.sh --keep billing`, or
+`worktree-setup.sh <worktree> --keep billing`); `--keep all` changes none of this. The list is stored in the
+worktree, so a rerun without the flag keeps it. With auto memory off, the brief carries every fact the unit
+depends on. The ponytail summary replaces the plugin's full text only where you have the plugin on and chose
+ponytail in setup. The doctor warns when a key in the main checkout's `.claude/settings.local.json` would shadow
+one of these per-worktree settings, because Claude Code applies that file over a worktree's own.
 
 ## Chief of Staff
 

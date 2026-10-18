@@ -16,11 +16,25 @@
 #    against an 18% baseline. The file is globally gitignored,
 #    so it never rides a unit commit, and main's own settings.local.json is
 #    untouched because main is not a worktree.
+#
+# A worker or Builder pane also starts lean (the owner, 2026-10-18): Stripe and the three browser skills off,
+# auto memory off (the brief carries what the unit needs), and a ~1 KB ponytail summary in place of the plugin's
+# full print. --keep <list> (billing: keep Stripe; all: change none of this) is stored in env, so a rerun without
+# the flag keeps it. A rerun deletes every leaf this script owns before it writes the current set; no other leaf is
+# touched, so an owner's own skillOverrides entry stays.
 set -euo pipefail
-WT=${1:?usage: worktree-setup.sh <worktree-path> [--builder]}
-BUILDER=0; [ "${2:-}" = --builder ] && BUILDER=1
+USAGE="usage: worktree-setup.sh <worktree-path> [--builder] [--keep <billing|all>[,...]] [--print-settings]"
+WT=${1:?$USAGE}; shift
+BUILDER=0 PRINT=0 KEEP= KEEPSET=0
 # --print-settings: writes nothing in <wt>, prints the settings file a fresh run would leave (plan-worktree-close.sh compares it).
-PRINT=0; [ "${2:-}" = --print-settings ] && PRINT=1
+while [ $# -gt 0 ]; do
+  case $1 in
+    --builder) BUILDER=1; shift ;;
+    --print-settings) PRINT=1; shift ;;
+    --keep) [ $# -ge 2 ] || { echo "$USAGE" >&2; exit 2; }; KEEP=$2 KEEPSET=1; shift 2 ;;
+    *) echo "$USAGE" >&2; exit 2 ;;
+  esac
+done
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
 MAIN=$PP_MAIN
 # The plugin's hooks, by full path: an installed plugin is not in the project,
@@ -46,7 +60,16 @@ for p in .claude/settings.local.json .claude/builder-events.jsonl; do
 done
 # A Builder stays a Builder: seat.sh launch reruns this script without the flag.
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$F")" = 1 ] && BUILDER=1
+# The keep a run stored; a print reads it from the worktree's real file, as its own temp file is empty.
+[ "$KEEPSET" = 1 ] || KEEP=$(jq -r '.env.COMMANDECK_SKILL_KEEP // empty' "$([ "$PRINT" = 1 ] && echo "$WT/.claude/settings.local.json" || echo "$F")" 2>/dev/null || true)
 tmp=$(mktemp)
+# Every leaf the lean-pane settings own: a rerun removes them all before it writes the current set. The Stripe and
+# ponytail plugin keys are owned on a worker only: the relay branch writes its own Stripe off and takes ponytail out.
+SUMMARY=$(cd "$PP_SCRIPTS/../templates/ponytail" && pwd)/SUMMARY.md
+DISOWN='def disown: del(.autoMemoryEnabled, .env.COMMANDECK_SKILL_KEEP, .skillOverrides["anthropic-skills:computer-use"], .skillOverrides["anthropic-skills:built-in-browser"], .skillOverrides["anthropic-skills:chrome-browser"])
+    | def sum: (.command // "") | test("/templates/ponytail/SUMMARY[.]md\"$");
+      if .hooks.SessionStart then .hooks.SessionStart |= map(if any(.hooks[]?; sum) then (.hooks |= map(select(sum | not))) | select(.hooks != []) else . end) else . end
+    | if (.hooks.SessionStart // [1]) == [] then del(.hooks.SessionStart) else . end;'
 PLUGINS_OFF='{"customer-support@synced":false,"design@synced":false,"operations@synced":false,"product-management@synced":false,"productivity@synced":false,"cowork-plugin-management@synced":false}'
 
 # The setting is the worktree's own project's, read from its primary checkout.
@@ -64,16 +87,18 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   # startup text names (owner ruling 2026-10-12); no other script.
   COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
   # Ponytail runs in every seat, the relay pane too (owner, 2026-10-16): the off an earlier run wrote goes, and the
-  # pane follows the owner's own setting. The typescript-lsp plugin is gone, and so is the key for it.
+  # pane follows the owner's own setting; worker panes run it through a summary instead of the plugin. The typescript-lsp plugin is gone, and so is the key for it.
   # The setup answer for the relay's prompt cache: 1h is written into env by path, so its other env entries stay.
-  jq --arg rttl "$(jq -r '.chiefOfStaff.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" '
-    (if $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h" else . end)
+  jq --arg rttl "$(jq -r '.chiefOfStaff.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" "$DISOWN"'
+    disown
+    | (if $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h" else . end)
     | .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
     | .disableClaudeAiConnectors = true
     | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
     | .permissions.allow = ((.permissions.allow // []) + $callow | unique)' "$F" > "$tmp"
   mv "$tmp" "$F"
   echo "$WT: Chief-of-Staff relay pane: $(echo "$COS_MCP_DENY" | jq length) MCP servers denied, code + business plugins and claude.ai connectors off, 8 orca command patterns and 5 of the plugin's scripts allowed; no worker settings"
+  [ "$PRINT" = 0 ] || { cat "$F" >&3; rm -f "$F"; }
   exit 0
 fi
 
@@ -139,6 +164,26 @@ mv "$tmp" "$F"
 # pane in the worktree finishes a turn, the twin of the Codex `notify` hook, so
 # main's blocking wait wakes at once instead of at its timeout.
 echo "$WT: node_modules linked where main has them, compact window $WINDOW, memoir off, $(echo "$DENY" | jq length) unused tools denied, auto mode with $(echo "$ALLOW" | jq length) allowed command patterns, Stop notify hook, orchestration.md excluded, business plugins + claude.ai connectors + chrome/CloudWatch off"
+
+# 10. Lean pane (owner, 2026-10-18; probed with `claude -p` that each override hides its name): Stripe and the three
+#     browser skills off unless --keep says otherwise, auto memory off (a file key, so it holds on every relaunch
+#     path), and the ponytail plugin swapped for its summary where the owner has the plugin on and setup said yes.
+PONY=0
+[ "$(jq -r '.ponytail // false' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" = true ] \
+  && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1 && PONY=1
+jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" "$DISOWN"'
+  def keeps($w): ($keep | split(",") | index($w)) != null;
+  disown | del(.enabledPlugins["stripe@claude-plugins-official"], .enabledPlugins["ponytail@ponytail"])
+  | if keeps("all") then .env.COMMANDECK_SKILL_KEEP = $keep
+    else
+      .autoMemoryEnabled = false
+      | (if $keep != "" then .env.COMMANDECK_SKILL_KEEP = $keep else . end)
+      | (if keeps("billing") then . else .enabledPlugins["stripe@claude-plugins-official"] = false end)
+      | .skillOverrides = ((.skillOverrides // {}) + {"anthropic-skills:computer-use": "off", "anthropic-skills:built-in-browser": "off", "anthropic-skills:chrome-browser": "off"})
+      | (if $pony == 1 then .enabledPlugins["ponytail@ponytail"] = false | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $sum}]}]) else . end)
+    end' "$F" > "$tmp"
+mv "$tmp" "$F"
+echo "$WT: lean pane: $(if [ "$KEEP" = all ]; then echo "kept whole (--keep all)"; else echo "browser skills off, auto memory off, Stripe $(case ",$KEEP," in *,billing,*) echo kept;; *) echo off;; esac), ponytail $([ "$PONY" = 1 ] && echo summary || echo untouched)"; fi)"
 
 # 9. --builder: a Builder runs its own Explore subagents (Agent allowed)
 #    and the Codex companion (node), carries no orchestration rules, and logs

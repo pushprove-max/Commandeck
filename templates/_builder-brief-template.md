@@ -11,6 +11,8 @@ merges with `merge-unit-local.sh {unit}`.
 ## How to work
 
 - `/ponytail full`: the smallest complete change.
+- Auto memory is off in this pane. If the work hinges on a ruling or fact the brief does not state, ask main with
+  the orchestration ask command before guessing.
 - The batch's Prior art section binds: build on the standard and the library
   or service it names, as the project's `.claude/paved-road.md` lists them for
   the area. A deviation states its reason in the evidence file.

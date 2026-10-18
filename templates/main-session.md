@@ -36,6 +36,11 @@ once). A fresh start's first call is `scripts/board.sh`.
 
 ## Details (not injected)
 
+- Worker panes run without auto memory. Copy into the brief every memory fact the unit depends on: the ruling with
+  its id, configured values, known traps. A brief never cites a memory by file name alone. A worker and a Builder
+  also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
+  `builder-launch.sh --keep billing`) brings Stripe back for a billing unit, `--keep all` changes none of it.
+
 - Plan before every build (owner order 2026-10-17): before
   `builder-launch.sh`, ask the owner "Write a plan first?" with five answers.
   Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan,

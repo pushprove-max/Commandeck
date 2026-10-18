@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
+# builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all>] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
 # -- open one Builder:
 # a NEW worktree on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
 # --builder), the one-page brief rendered from
@@ -29,6 +29,8 @@
 # real lines. Every launch prints which rule chose, on stderr.
 # An independent issue the batch's Size lines estimate over setup's issue sizing line (40K tokens by default) is
 # named on stderr before anything is created, the split proposed; main splits it or launches as is.
+# --keep <billing|all> keeps what a Builder pane drops by default (Stripe; all: the whole cut) and is stored in the
+# worktree for reruns; see worktree-setup.sh.
 # --model puts this one Builder on another model routing.json names (an alias,
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
@@ -42,7 +44,8 @@
 # on stderr, written into the brief and the evidence file as "plan skipped: <reason>", and logged as a routing-override
 # line. A risky launch's second call is not checked again, so one begun before this rule still opens its Builder.
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all>] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
+KEEP=
 RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0
 while :; do
   case ${1:-} in
@@ -50,6 +53,7 @@ while :; do
     --dry-run) DRY=1; shift ;;
     --small) SMALL=1; shift ;;
     --skip-plan) SKIP=1; shift ;;
+    --keep) KEEP=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --model) PICK=1 BMODEL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --effort) RAISE=1 EFFORT=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --reason) REASON=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
@@ -237,6 +241,8 @@ if [ "$RESUME" = 1 ]; then
     { put "$WT/.claude/briefs/$UNIT.md" "$T" && put "$MB" "$T" && { [ -z "$LINE" ] || put "$EV" "${EVT:+$EVT$'\n'}$LINE"; }; } \
       || { echo "could not record the changed effort for $UNIT; the Builder was not launched. Run the same command again to finish." >&2; exit 1; }
   fi
+  # An explicit --keep reaches the settings before the pane opens, as on a first call; seat.sh reruns setup without it.
+  [ -z "$KEEP" ] || bash "$HERE/worktree-setup.sh" "$WT" --builder --keep "$KEEP" || exit 1
   open_builder
 fi
 
@@ -244,7 +250,7 @@ pp_sync_main "$PP_MAIN" || exit 1
 # Fast-forwarding main from origin may have removed the plan the worktree is about to be cut without.
 plan_ok
 pp_worktree_new "$UNIT" || exit 1
-bash "$HERE/worktree-setup.sh" "$WT" --builder
+bash "$HERE/worktree-setup.sh" "$WT" --builder ${KEEP:+--keep "$KEEP"}
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"

@@ -147,6 +147,8 @@ check "every add-on has a command and a cost: none is a placeholder" 0 \
 check "no add-on command names a version" 0 "$(grep -v '^#' "$REAL/config/addons.tsv" | cut -f2 | grep -cE '@[0-9]|==|--version[ =]?[0-9]')"
 check "the ponytail skill says never to write its name in a comment" '1:0' \
   "$(grep -c 'Never write "ponytail" in a comment' "$REAL/templates/ponytail/SKILL.md"):$(grep -c '`ponytail:` comment' "$REAL/templates/ponytail/SKILL.md")"
+# A worker pane prints this in place of the plugin's whole ponytail text: a startup print is paid for in every pane.
+check "the ponytail summary a worker pane prints is at most 1,200 bytes" ok "$([ "$(wc -c < "$REAL/templates/ponytail/SUMMARY.md")" -le 1200 ] && echo ok || echo long)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

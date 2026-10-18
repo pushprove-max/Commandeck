@@ -251,6 +251,36 @@ il_auto_mode_report() {
   done
   [ "$n" != 0 ] || echo "ok auto mode: no list of yours replaces the built-in rules, and no project file carries autoMode"
 }
+# il_shadow_report -- the doctor's lines on the main checkout's .claude/settings.local.json, each "ok <why>" or "warn
+# <what is wrong and the fix>". Claude Code applies that file over a worktree's own for the same key, so a key there
+# beats the per-worktree one worktree-setup.sh wrote. For every scalar leaf the script writes for a Builder (a worker's
+# leaves are a subset) and for the relay, the file's different value is a warning. Array entries merge across files, so
+# they are not compared. The profiles come from throwaway worktrees; the owner's file is reported, never edited.
+il_shadow_report() {
+  local ml=$PP_MAIN/.claude/settings.local.json t k mv wv n=0 w bad=0
+  [ -f "$ml" ] || { echo "ok settings: no .claude/settings.local.json in the main checkout, so nothing shadows a worktree's own"; return 0; }
+  t=$(mktemp -d)
+  for w in Builder-probe Chief-of-Staff; do
+    git -C "$PP_MAIN" worktree add -q --detach --no-checkout "$t/$w" 2>/dev/null || { bad=1; continue; }
+    (cd "$t/$w" && bash "$PP_SCRIPTS/worktree-setup.sh" "$t/$w" --builder --print-settings 2>/dev/null) > "$t/$w.json" || { bad=1; : > "$t/$w.json"; }
+    git -C "$PP_MAIN" worktree remove --force "$t/$w" 2>/dev/null
+  done
+  while IFS=$'\t' read -r k mv wv; do
+    n=$((n+1))
+    if [ "$k" = env.CLAUDE_CODE_PROMPT_CACHE_TTL ]; then
+      echo "warn prompt cache: $ml sets CLAUDE_CODE_PROMPT_CACHE_TTL=$mv, and Claude Code applies that file over every worktree's own settings, so the relay and worker panes run $mv; move the key to $HOME/.claude/settings.json"
+    else
+      echo "warn settings: $ml sets $k=$mv, and Claude Code applies that file over every worktree's own settings, so a worker pane runs $mv where setup writes $wv; remove the key from that file"
+    fi
+  done < <(for w in Builder-probe Chief-of-Staff; do [ ! -s "$t/$w.json" ] || jq -r --slurpfile m "$ml" '
+      . as $p | [paths(scalars | true) | select(all(.[]; type == "string"))][] as $k
+      | ((try ($m[0] | getpath($k)) catch null)) as $mv
+      | select($mv != null and ($mv | type) != "object" and $mv != ($p | getpath($k)))
+      | [($k | join(".")), ($mv | tostring), ($p | getpath($k) | tostring)] | @tsv' "$t/$w.json"; done | sort -u -t$'\t' -k1,1)
+  pp_rm_rf "$t"
+  [ "$bad" = 0 ] || echo "warn settings: the check could not build a worker or relay pane's settings in a throwaway worktree, so it cannot tell whether $ml shadows them; run the doctor again from a clean main checkout"
+  [ "$n" != 0 ] || [ "$bad" != 0 ] || echo "ok settings: $ml sets no key that a worker or relay pane's own settings write differently"
+}
 # il_cache_ttl_report -- the doctor's lines on the prompt-cache answers, each "ok <why>" or "warn <what is wrong and the
 # fix>". Claude Code applies the main checkout's .claude/settings.local.json over a worktree's own, so a TTL there beats
 # the per-worktree answers setup wrote; the relay's own value is the last of: user file, the relay's project and local
@@ -258,8 +288,9 @@ il_auto_mode_report() {
 il_cache_ttl_report() {
   local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n=0 f fs=() s w x
   jq -e '.cacheTtl == "5m" or .chiefOfStaff.cacheTtl == "1h"' "$IL_CONFIG" >/dev/null 2>&1 || { echo "ok prompt cache: setup sets none"; return 0; }
+  # A TTL in that file is reported by il_shadow_report; here it only keeps the "no file overrides" line from being said.
   v=$(jq -r --arg k $k '.env[$k] // empty' "$ml" 2>/dev/null)
-  [ -z "$v" ] || { n=1; echo "warn prompt cache: $ml sets $k=$v, and Claude Code applies that file over every worktree's own settings, so the relay and worker panes run $v; move the key to $HOME/.claude/settings.json"; }
+  [ -z "$v" ] || n=1
   if [ -z "$v" ] && jq -e '.cacheTtl == "5m"' "$IL_CONFIG" >/dev/null 2>&1; then
     # an env key beats the promptCacheTtl keys, so main's answer is the last env key of the user and project files;
     # with none, it is the last promptCacheTtl key of the user, project and local files (the order Claude Code reads them)
