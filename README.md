@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.16.0-111111?style=flat-square" alt="Version 0.16.0">
+  <img src="https://img.shields.io/badge/version-0.17.0-111111?style=flat-square" alt="Version 0.17.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -387,6 +387,14 @@ worktree, so a rerun without the flag keeps it. With auto memory off, the brief 
 depends on. The ponytail summary replaces the plugin's full text only where you have the plugin on and chose
 ponytail in setup. The doctor warns when a key in the main checkout's `.claude/settings.local.json` would shadow
 one of these per-worktree settings, because Claude Code applies that file over a worktree's own.
+
+Your own lists go on top. Setup asks for the skills and plugins worker and Builder panes turn off, and for keep
+words: `workerSkillsOff` (skill names, written as `skillOverrides` `"off"`), `workerPluginsOff` (`plugin@marketplace`
+keys, written as `enabledPlugins` `false`) and `keeps` (a word and the skills and plugins it brings back) in
+`.claude/commandeck.json`. `--keep <word>` brings a word's set back for one unit, a plugin cut by default (the business
+plugins, memoir, ponytail) included; a rerun after a list shrinks takes the dropped names back out. A name you set
+yourself in a worktree's `settings.local.json` keeps your value. The plugin ships no names: with no answer, nothing beyond the table above is cut. Plugin
+skills cannot be turned off one at a time. Only a whole plugin can be.
 
 ## Chief of Staff
 

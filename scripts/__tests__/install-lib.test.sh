@@ -137,5 +137,29 @@ check "a config with no answer is asked" 0:1 "$(replay '{"version":1}')"
 check "a stored 5m is written again on every replay, and not asked" 1:0 "$(replay '{"cacheTtl":"5m"}')"
 check "a stored leave writes nothing and is not asked" 0:0 "$(replay '{"cacheTtl":"leave"}')"
 
+# --- the owner's worker cuts: setup ships no name, and update (setup with no answers) keeps the owner's lists ---
+# setup.sh's own read lines and its config write run on a hand-written config, il_write printing what it would write;
+# each later arg is a flag and its answer, through il_cuts as setup's case arms pass them. No setup run.
+cuts() {
+  if [ "$1" = none ]; then rm -f "$T/cuts.json"; else echo "$1" > "$T/cuts.json"; fi; shift
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; shift; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={}
+    eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^CUTS=" <<<"$S")"
+    while [ $# -gt 0 ]; do CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2; done
+    eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"' "$T/cuts.json" "$@"
+}
+OWNER='{"version":1,"profile":"claude","workerSkillsOff":["own:a"],"workerPluginsOff":["p@m"],"keeps":{"tools":{"skills":["own:a"],"plugins":[]}}}'
+for c in none '{"version":1,"profile":"claude"}'; do
+  out=$(cuts "$c")
+  check "no owner input ($c): the config has no worker list and no keep, and names no skill" '[null,null,null]:[]' \
+    "$(jq -c '[.workerSkillsOff, .workerPluginsOff, .keeps]' <<<"$out"):$(jq -c '[.. | strings | select(test("^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$"))]' <<<"$out")"
+done
+check "an owner's lists and keep survive update (setup with no answers)" "$(jq -c '[.workerSkillsOff, .workerPluginsOff, .keeps]' <<<"$OWNER")" \
+  "$(cuts "$OWNER" | jq -c '[.workerSkillsOff, .workerPluginsOff, .keeps]')"
+check "the flags set a list, add a keep word (an @ name is a plugin) and clear another" '[["x:y","z"],null,{"web":{"skills":["s:t"],"plugins":["q@m"]}}]' \
+  "$(cuts "$OWNER" --worker-skills-off z,x:y --worker-plugins-off '' --keep-word tools= --keep-word web=q@m,s:t | jq -c '[.workerSkillsOff, .workerPluginsOff, .keeps]')"
+for bad in '--worker-plugins-off nomarket' '--worker-skills-off a@b' '--keep-word all=x' '--keep-word x' '--worker-skills-off a,,b'; do
+  check "setup refuses $bad and writes nothing" refused "$(cuts "$OWNER" $bad 2>/dev/null || echo refused)"
+done
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

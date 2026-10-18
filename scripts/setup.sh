@@ -11,6 +11,7 @@
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
+#          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
 #   or: setup.sh --questions begin|end
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
@@ -51,7 +52,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -96,7 +97,7 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -114,6 +115,8 @@ DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADD
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
+# The owner's worker cuts (worktree-setup.sh writes them): carried over as saved, and each answer below changes one.
+CUTS=$(jq -c '{workerSkillsOff, workerPluginsOff, keeps} | with_entries(select(.value != null))' "$IL_CONFIG" 2>/dev/null || true); [ -n "$CUTS" ] || CUTS='{}'
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
 # default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.
@@ -208,6 +211,7 @@ while [ $# -gt 0 ]; do
     --relay-cache-ttl) case $2 in 1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
+    --worker-skills-off|--worker-plugins-off|--keep-word) CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2 ;;
     # A role with no id clears the saved one. Checked below, once the routing file is known.
     --codex-model) [[ $2 == *=* ]] || usage; CMODELS=$(jq -c --arg r "${2%%=*}" --arg m "${2#*=}" 'if $m == "" then del(.[$r]) else .[$r] = $m end' <<<"$CMODELS"); shift 2 ;;
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
@@ -357,7 +361,7 @@ AUTO_DO=${AUTO:-leave}; [ "$AUTO" != remove ] || AUTO=leave
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".*; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
   --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
@@ -376,6 +380,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + {ponytail: ($pony != "false")}
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
+  + $cuts
   + {chiefOfStaff: ({name: $name, persona: $persona, cacheTtl: $rcache} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
 elif [ "$(readlink "$IL_LINK" 2>/dev/null)" != "$IL_ROOT" ]; then echo "plan: would point $IL_LINK at $IL_ROOT"; fi

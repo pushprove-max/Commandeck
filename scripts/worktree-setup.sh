@@ -21,9 +21,12 @@
 # auto memory off (the brief carries what the unit needs), and a ~1 KB ponytail summary in place of the plugin's
 # full print. --keep <list> (billing: keep Stripe; all: change none of this) is stored in env, so a rerun without
 # the flag keeps it. A rerun deletes every leaf this script owns before it writes the current set; no other leaf is
-# touched, so an owner's own skillOverrides entry stays.
+# touched, so an owner's own skillOverrides entry stays. On top, the owner's own lists in commandeck.json (setup's
+# answers; the plugin ships no name): workerSkillsOff and workerPluginsOff are cut too, and a --keep word named in
+# keeps brings its skills and plugins back, the ones cut by default included. The leaves a run cuts for the lists are
+# stored in env, so a list that shrinks loses them; a name the owner already set in the file is theirs, never cut or stored.
 set -euo pipefail
-USAGE="usage: worktree-setup.sh <worktree-path> [--builder] [--keep <billing|all>[,...]] [--print-settings]"
+USAGE="usage: worktree-setup.sh <worktree-path> [--builder] [--keep <billing|all|a keep word>[,...]] [--print-settings]"
 WT=${1:?$USAGE}; shift
 BUILDER=0 PRINT=0 KEEP= KEEPSET=0
 # --print-settings: writes nothing in <wt>, prints the settings file a fresh run would leave (plan-worktree-close.sh compares it).
@@ -63,10 +66,14 @@ done
 # The keep a run stored; a print reads it from the worktree's real file, as its own temp file is empty.
 [ "$KEEPSET" = 1 ] || KEEP=$(jq -r '.env.COMMANDECK_SKILL_KEEP // empty' "$([ "$PRINT" = 1 ] && echo "$WT/.claude/settings.local.json" || echo "$F")" 2>/dev/null || true)
 tmp=$(mktemp)
-# Every leaf the lean-pane settings own: a rerun removes them all before it writes the current set. The Stripe and
-# ponytail plugin keys are owned on a worker only: the relay branch writes its own Stripe off and takes ponytail out.
+# Every leaf the lean-pane settings own: a rerun removes them all before it writes the current set. A move-1 leaf (a
+# browser skill, Stripe) is the run's only while COMMANDECK_DEFAULT_CUTS names it and it holds the run's value. The
+# ponytail off (the run's only beside the summary hook) is owned on a worker only: the relay branch takes ponytail out.
 SUMMARY=$(cd "$PP_SCRIPTS/../templates/ponytail" && pwd)/SUMMARY.md
-DISOWN='def disown: del(.autoMemoryEnabled, .env.COMMANDECK_SKILL_KEEP, .skillOverrides["anthropic-skills:computer-use"], .skillOverrides["anthropic-skills:built-in-browser"], .skillOverrides["anthropic-skills:chrome-browser"])
+DISOWN='def disown: (.env.COMMANDECK_OWNER_CUTS // "" | split(",")) as $o | (.env.COMMANDECK_DEFAULT_CUTS // "" | split(",")) as $r
+    | del((.skillOverrides[$o[] | select(contains("@") | not)] | select(. == "off")), (.enabledPlugins[$o[] | select(contains("@"))] | select(. == false)))
+    | del((.skillOverrides[$r[] | select(contains("@") | not)] | select(. == "off")), (.enabledPlugins[$r[] | select(. == "stripe@claude-plugins-official")] | select(. == false)))
+    | del(.autoMemoryEnabled, .env.COMMANDECK_SKILL_KEEP, .env.COMMANDECK_OWNER_CUTS, .env.COMMANDECK_DEFAULT_CUTS, .env.COMMANDECK_OWNER_ON)
     | def sum: (.command // "") | test("/templates/ponytail/SUMMARY[.]md\"$");
       if .hooks.SessionStart then .hooks.SessionStart |= map(if any(.hooks[]?; sum) then (.hooks |= map(select(sum | not))) | select(.hooks != []) else . end) else . end
     | if (.hooks.SessionStart // [1]) == [] then del(.hooks.SessionStart) else . end;'
@@ -145,6 +152,14 @@ EXCLUDE="$(cd "$WT" && pwd)/.claude/rules/orchestration.md"
 #    jq 'del(.disableClaudeAiConnectors) | .deniedMcpServers |= map(select(.serverName != "claude-in-chrome"))'
 #    and relaunch the pane; a rerun of this script turns them off again.
 #    PLUGINS_OFF is set above, shared with the Chief-of-Staff branch.
+#    The business plugin and memoir leaves the owner set in this file, read before this step writes over them, so a
+#    keep word (step 10) gives each back. A false is the run's only while COMMANDECK_DEFAULT_CUTS names it (ruling
+#    2026-10-18: a file with no such key has no false of the run's); an owner's on this step wrote over is named in
+#    COMMANDECK_OWNER_ON, so it is still the owner's on the next run.
+FIXED=$(jq -c 'keys + ["memoir@memoir"]' <<<"$PLUGINS_OFF")
+OWNFIX=$(jq -c --argjson fixed "$FIXED" '(.env.COMMANDECK_DEFAULT_CUTS // "" | split(",")) as $r | (.env.COMMANDECK_OWNER_ON // "" | split(",")) as $on
+  | .enabledPlugins // {} | with_entries(select(.key | IN($fixed[])) | if .value == false and (.key | IN($on[])) then .value = true else . end
+    | select(.value != false or (.key | IN($r[]) | not)))' "$F")
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
 jq --arg ttl "$(jq -r '.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
@@ -168,22 +183,46 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 # 10. Lean pane (owner, 2026-10-18; probed with `claude -p` that each override hides its name): Stripe and the three
 #     browser skills off unless --keep says otherwise, auto memory off (a file key, so it holds on every relaunch
 #     path), and the ponytail plugin swapped for its summary where the owner has the plugin on and setup said yes.
+#     A browser skill or Stripe leaf the owner set in this file is left as it is, kept or not; the ones the run writes
+#     are named in COMMANDECK_DEFAULT_CUTS, so a keep word takes out only those.
+#     The owner's lists add to the cuts; a plugin another step writes (the business plugins, memoir) is never stored
+#     as the owner's, so a list that drops it does not take that step's leaf out, and a keep word that names it (or
+#     ponytail) deletes the run's own leaf and gives back the one the owner set in this file (OWNFIX, step 8), so the
+#     owner's own setting holds. A listed name the owner set in this file is left
+#     as it is; a stored leaf the owner changed by hand is no longer this run's to delete. Ponytail too: its off is
+#     this run's only beside the summary hook, so an owner's own leaf is neither deleted, claimed nor swapped.
+CUTS=$(jq -c '{s: [.workerSkillsOff[]? | strings], p: [.workerPluginsOff[]? | strings], k: (.keeps | if type == "object" then . else {} end)}' "$PROJECT/.claude/commandeck.json" 2>/dev/null) || CUTS='{"s":[],"p":[],"k":{}}'
 PONY=0
 [ "$(jq -r '.ponytail // false' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" = true ] \
   && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1 && PONY=1
-jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" "$DISOWN"'
+jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
   def keeps($w): ($keep | split(",") | index($w)) != null;
-  disown | del(.enabledPlugins["stripe@claude-plugins-official"], .enabledPlugins["ponytail@ponytail"])
+  ["anthropic-skills:computer-use", "anthropic-skills:built-in-browser", "anthropic-skills:chrome-browser"] as $m1
+  | "stripe@claude-plugins-official" as $stripe
+  | [$keep | split(",")[] as $w | $cuts.k[$w] | objects] as $kw
+  | [$kw[] | .skills[]? | strings] as $ks
+  | ([$kw[] | .plugins[]? | strings] + (if keeps("billing") then [$stripe] else [] end)) as $kp
+  | any(.hooks.SessionStart[]?.hooks[]?; (.command // "") | test("/templates/ponytail/SUMMARY[.]md\"$")) as $sumhook
+  | disown
+  | if $sumhook and .enabledPlugins["ponytail@ponytail"] == false then del(.enabledPlugins["ponytail@ponytail"]) else . end
+  | reduce ($kp[] | select(IN($fixed[]))) as $n (.; if $ownfix | has($n) then .enabledPlugins[$n] = $ownfix[$n] else del(.enabledPlugins[$n]) end)
+  | (.skillOverrides // {}) as $so | (.enabledPlugins // {}) as $ep
+  | if keeps("all") then [] else $m1 - $ks + [$stripe] - $kp | map(select(. as $n | $so + $ep | has($n) | not)) end as $w1
+  | .env.COMMANDECK_DEFAULT_CUTS = ($fixed - $kp - ($ownfix | keys) + $w1 | join(","))
+  | ([$ownfix | to_entries[] | select(.value == true).key] - $kp) as $on | (if $on != [] then .env.COMMANDECK_OWNER_ON = ($on | join(",")) else . end)
+  | ($cuts.s - $m1 - $ks | unique | map(select(. as $n | $so | has($n) | not))) as $os
+  | ($cuts.p - $fixed - [$stripe] - $kp | unique | map(select(. as $n | $ep | has($n) | not))) as $op
   | if keeps("all") then .env.COMMANDECK_SKILL_KEEP = $keep
     else
       .autoMemoryEnabled = false
       | (if $keep != "" then .env.COMMANDECK_SKILL_KEEP = $keep else . end)
-      | (if keeps("billing") then . else .enabledPlugins["stripe@claude-plugins-official"] = false end)
-      | .skillOverrides = ((.skillOverrides // {}) + {"anthropic-skills:computer-use": "off", "anthropic-skills:built-in-browser": "off", "anthropic-skills:chrome-browser": "off"})
-      | (if $pony == 1 then .enabledPlugins["ponytail@ponytail"] = false | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $sum}]}]) else . end)
+      | .enabledPlugins = ((.enabledPlugins // {}) + ($w1 - $m1 + $op | map({(.): false}) | add // {}))
+      | .skillOverrides = ((.skillOverrides // {}) + ($w1 - [$stripe] + $os | map({(.): "off"}) | add // {}))
+      | (if $os + $op != [] then .env.COMMANDECK_OWNER_CUTS = ($os + $op | join(",")) else . end)
+      | (if $pony == 1 and ($kp | index("ponytail@ponytail") | not) and ($ep | has("ponytail@ponytail") | not) then .enabledPlugins["ponytail@ponytail"] = false | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $sum}]}]) else . end)
     end' "$F" > "$tmp"
 mv "$tmp" "$F"
-echo "$WT: lean pane: $(if [ "$KEEP" = all ]; then echo "kept whole (--keep all)"; else echo "browser skills off, auto memory off, Stripe $(case ",$KEEP," in *,billing,*) echo kept;; *) echo off;; esac), ponytail $([ "$PONY" = 1 ] && echo summary || echo untouched)"; fi)"
+echo "$WT: lean pane: $(if [ "$KEEP" = all ]; then echo "kept whole (--keep all)"; else echo "browser skills off, auto memory off, Stripe $(jq -e '.enabledPlugins["stripe@claude-plugins-official"] == false' "$F" >/dev/null && echo off || echo kept), ponytail $(jq -e '[.hooks.SessionStart[]?.hooks[]?.command | select(test("/templates/ponytail/SUMMARY[.]md\"$"))] != []' "$F" >/dev/null && echo summary || echo untouched), $(jq -r '.env.COMMANDECK_OWNER_CUTS // "" | split(",") | length' "$F") of your listed skills and plugins off"; fi)"
 
 # 9. --builder: a Builder runs its own Explore subagents (Agent allowed)
 #    and the Codex companion (node), carries no orchestration rules, and logs

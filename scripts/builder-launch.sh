@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all>] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
+# builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
 # -- open one Builder:
 # a NEW worktree on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
 # --builder), the one-page brief rendered from
@@ -29,8 +29,8 @@
 # real lines. Every launch prints which rule chose, on stderr.
 # An independent issue the batch's Size lines estimate over setup's issue sizing line (40K tokens by default) is
 # named on stderr before anything is created, the split proposed; main splits it or launches as is.
-# --keep <billing|all> keeps what a Builder pane drops by default (Stripe; all: the whole cut) and is stored in the
-# worktree for reruns; see worktree-setup.sh.
+# --keep <billing|all|a keep word> keeps what a Builder pane drops by default (Stripe; all: the whole cut; a word in
+# commandeck.json's keeps: its skills and plugins) and is stored in the worktree for reruns; see worktree-setup.sh.
 # --model puts this one Builder on another model routing.json names (an alias,
 # as set-up's --builder-model takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
@@ -44,7 +44,7 @@
 # on stderr, written into the brief and the evidence file as "plan skipped: <reason>", and logged as a routing-override
 # line. A risky launch's second call is not checked again, so one begun before this rule still opens its Builder.
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all>] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
 KEEP=
 RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0
 while :; do

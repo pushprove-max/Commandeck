@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.0 -- 2026-10-18
+
+- Worker and Builder panes take your own cuts on top of 0.16.0's: setup asks once for the skills
+  (`--worker-skills-off`) and plugins (`--worker-plugins-off`) they turn off and for keep words (`--keep-word
+  <word>=<names>`), saved in `.claude/commandeck.json` as `workerSkillsOff`, `workerPluginsOff` and `keeps`; update keeps
+  them. `worktree-setup.sh` writes them as `skillOverrides` `"off"` and `enabledPlugins` `false`, and `--keep <word>`
+  (or `builder-launch.sh --keep <word>`) brings a word's set back, a plugin the panes cut by default (the business
+  plugins, memoir, ponytail) included. The leaves are stored in the worktree's `env`, so a rerun after a list shrinks
+  removes the dropped ones; a name you set yourself in the worktree's `settings.local.json` keeps your value. This holds for the browser skills and Stripe too. In a worktree set up before 0.17.0, a default cut, Stripe under `--keep billing` included, stays off under a keep word; set up a
+  fresh worktree to bring it back. The plugin ships no names: with no answer, nothing new is cut.
+  The README says plugin skills cannot be turned off one at a time, only a whole plugin.
+
 ## 0.16.0 -- 2026-10-18
 
 - Worker and Builder panes start with less context: `worktree-setup.sh` turns off the Stripe plugin and the

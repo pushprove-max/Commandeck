@@ -172,6 +172,13 @@ Ask them in this order, up to four questions per call.
     - Leave as is: Changes nothing in ~/.claude/settings.json; a refusal of a plugin script stays possible. `--auto-mode leave`
     - Take them out: offered only when `bash -c 'jq -e "[.entries[].autoMode // empty] | length > 0" ~/.commandeck/install/_machine.json >/dev/null 2>&1 && echo recorded; true'` prints "recorded". Removes the two lines setup added, for every project on this machine; your own entries stay. `--auto-mode remove`
     A list of yours without `"$defaults"` is left as it is (it replaces Claude Code's built-in list) and setup says how to keep that list.
+    Then, what worker and Builder panes turn off on top of the plugin's own cuts (the plugin ships no names):
+    Ask "Worker cuts": None (recommended) | <saved lists, if any>
+    - None: worker panes drop only the Stripe plugin and the three browser skills. `--worker-skills-off '' --worker-plugins-off ''`
+    - Your own, typed as the picker's own text answer: skill names (`<plugin>:<skill>` for a plugin's) and `plugin@marketplace` keys, separated by commas. Names with an @ go in `--worker-plugins-off <a>,<b>`, the rest in `--worker-skills-off <a>,<b>`. A plugin's own skills cannot be turned off one at a time: only the whole plugin.
+    Ask "Keep words": None (recommended) | <saved words, if any>
+    - None: no word of yours; `--keep billing` and `--keep all` still work. A saved word left out is sent as `--keep-word <word>=`.
+    - Your own, typed as `<word>=<name>[,<name>...]`: `builder-launch.sh --keep <word>` brings those skills and plugins back for one unit. `--keep-word <word>=<names>`, once per word.
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": All (recommended) | serena | agent-browser | None
     - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open; the ponytail plugin only when you have it and ponytail is on. Sends no `--addons`.

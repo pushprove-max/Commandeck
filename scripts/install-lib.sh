@@ -200,6 +200,25 @@ il_cache_ttl() {
       && il_set "$m" --arg p "$f" --argjson s "$s" '.entries[$p].cacheTtl = ((.entries[$p].cacheTtl // {}) + $s)'
   fi
 }
+# il_cuts <cuts json> <flag> <answer> -- setup's worker cuts (workerSkillsOff, workerPluginsOff, keeps) with one answer
+# applied, printed. --worker-skills-off takes skill names and --worker-plugins-off plugin@marketplace keys, each a comma
+# list ('' clears it); --keep-word takes <word>=<names>, a name with an @ a plugin, and <word>= drops the word. Every
+# name is the owner's: the plugin ships none. An answer it cannot take is refused, and nothing is printed.
+il_cuts() {
+  local s='[A-Za-z0-9_.:-]+' p='[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+' v=$3 w= k re what
+  case $2 in
+    --worker-skills-off) k=workerSkillsOff re=$s what="skill names" ;;
+    --worker-plugins-off) k=workerPluginsOff re=$p what="plugin@marketplace keys" ;;
+    *) k=keeps re="$p|$s" what="<word>=<skill or plugin@marketplace>[,...], a word other than all"
+       [[ $v =~ ^([A-Za-z0-9_-]+)=(.*)$ ]] && [ "${BASH_REMATCH[1]}" != all ] && w=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]} ;;
+  esac
+  [ "$k" != keeps ] || [ -n "$w" ] && [[ $v =~ ^(($re)(,($re))*)?$ ]] \
+    || { echo "setup: $2 takes $what, separated by commas, not '$3'. Nothing was changed" >&2; return 1; }
+  jq -c --arg k "$k" --arg w "$w" --arg v "$v" '($v | split(",") | unique) as $n
+    | if $k != "keeps" then (if $n == [] then del(.[$k]) else .[$k] = $n end)
+      elif $n == [] then del(.keeps[$w]) | if .keeps == {} then del(.keeps) else . end
+      else .keeps[$w] = {skills: ($n | map(select(contains("@") | not))), plugins: ($n | map(select(contains("@"))))} end' <<<"$1"
+}
 # il_auto_mode <manifest> <settings file> add|leave|remove -- two plain-English lines in Claude Code's
 # auto-mode classifier environment list (the classifier ignores autoMode in a project's settings, so the owner's
 # user file is its home): the plugin's repo and scripts, and the relay pane. The list keeps "$defaults" (the
