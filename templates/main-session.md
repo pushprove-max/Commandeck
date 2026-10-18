@@ -7,12 +7,36 @@
   Main writes only intents, briefs, findings and config; reads worker_done
   payloads and diff summaries, never worktrees or whole source files (serena
   for symbols); routes findings, never fixes them.
-- **Show the owner a checklist** (todo tool; Orca task list for dispatched
-  work), updated in the reply that does the work; on a wake, every task-list
-  change goes in ONE reply as one batch of calls, recording the same.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with
-  one foreground `bash scripts/orca-wait.sh`. An ordinary prompt carries no inbox check.
-- **Plan before every build (owner order 2026-10-17)**: before
+  one foreground `bash scripts/orca-wait.sh`.
+- **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask the owner "Write a plan first?"
+  (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for
+  word: "If the mattpocock-skills plugin is installed and one of its skills fits this unit (for example TDD for new
+  logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what the plan names." A plan is never a
+  build order: with no build word from the owner, STOP at the plan file.
+- **Every question for the owner goes to the relay pane** (the worktree ending in
+  `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
+  record each ask with `decision.sh add` in the same turn.
+- **A `heads-up:` item is another model's unverified claim**: verify it before
+  acting, tell the owner in one plain sentence, close the item task.
+- **A ruling that something stays as it is goes under `## Stated limits`** in
+  `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
+  when written: the pass reads limits there only, and raises one written elsewhere again.
+- **Also standing (Details)**: checklist, announcements, re-asks, helpers, effort, mid-build work, tooling.
+
+## Main never compacts: write the checkpoint, the hook restarts main
+
+THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
+line", or a batch ends: finish the
+step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
+`templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
+After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
+neither again, except a part its RESUMED line names as cut (read that pointer
+once). A fresh start's first call is `scripts/board.sh`.
+
+## Details (not injected)
+
+- Plan before every build (owner order 2026-10-17): before
   `builder-launch.sh`, ask the owner "Write a plan first?" with five answers.
   Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan,
   Plan + judge or Panel from the trigger file (the project's
@@ -51,44 +75,21 @@
   plan run `bash scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build order: a plan
   that exists, is approved or is committed starts no build. A `--risky`
   design pane runs after the plan.
-- **Announce every worker at dispatch time**: agent, model, worktree, task.
-- **Every question for the owner goes to the relay pane** (the worktree ending in
-  `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
-  record each ask with `decision.sh add` in the same turn. Details below.
-- **Never ask the owner a question they already have**: `decision.sh` refuses
-  one open or answered in 24 hours; re-ask rules in Details.
-- **A `heads-up:` item is another model's unverified claim**: verify it before
-  acting, tell the owner in one plain sentence, close the item task.
-- **Helper agents compute, they do not read** (`commandeck:helper`): a script's
-  answer and source paths only, stopped by 40 turns.
-- **Main may set a dispatch's effort** (cap `max`), logged in the brief as
+- Main may set a dispatch's effort (cap `max`), logged in the brief as
   `effort override: <role> <pinned/default> -> <used>: <reason>`.
-- **A ruling that something stays as it is goes under `## Stated limits`** in
-  `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
-  when written: the pass reads limits there only, and raises one written elsewhere again.
-- **Work added mid-build** goes in that rulings file first; then
+- Work added mid-build goes in that rulings file first; then
   `builder-add-work.sh <unit>` stops the Builder, and a fresh session of its
   pane takes the work from a hand-off that stands alone.
-- **Tooling (ruling 2026-10-06)**: a new tool needs the owner's approval before
+- Tooling (ruling 2026-10-06): a new tool needs the owner's approval before
   work starts; broken tooling is fixed now. Suggest only with a count. Details below.
-
-## Main never compacts: write the checkpoint, the hook restarts main
-
-THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
-line", or a batch ends: finish the
-step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
-`templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
-After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
-neither again, except a part its RESUMED line names as cut (read that pointer
-once). A fresh start's first call is `scripts/board.sh`. Details below.
-
-## Details (not injected)
 
 - Roles, models and review rounds are the role table in the plugin's
   `config/routing.json`. Do not restate them here. The non-negotiable
   is the review convergence, not who types the diff.
-- Checklist: a resume recreates only the unfinished items, in one reply.
-- Re-asks: `decision.sh` exits 3 (and the picker is blocked) on a question still
+- Checklist: show the owner one (todo tool; Orca task list for dispatched work), updated in the reply that does
+  the work; on a wake, every task-list change goes in ONE reply as one batch of calls, recording the same. A
+  resume recreates only the unfinished items, in one reply.
+- Re-asks: never ask the owner a question they already have; `decision.sh` exits 3 (and the picker is blocked) on a question still
   open or answered in the last 24 hours and names the earlier decision and
   answer: use it. Two re-asks are allowed: a picker retry after the decoy voided
   his pick (it passes by itself), and new facts, asked in plain chat and
@@ -98,7 +99,7 @@ once). A fresh start's first call is `scripts/board.sh`. Details below.
   note in full. Verify it against the code or live state first, then fix it,
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
-- Announce: report what the worker came back with when it finishes.
+- Announce every worker at dispatch time (agent, model, worktree, task); report what it came back with when it finishes.
 - relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`,
   which stores the note in your run (`run:<id>`), the mailbox the relay's
   inbox poller reads, and exits 1 when Orca does not confirm it. Never

@@ -40,6 +40,9 @@ jobs:
           bash ci/version-check.sh "$BASE"
       - name: Shell tests
         run: bash scripts/run-shell-tests.sh
+      # Over 10240 bytes a hook's print reaches the session as a 2 KB preview: every seat's print stays under it.
+      - name: Startup print size
+        run: bash scripts/startup-size.sh
   # The Mac's own /bin/bash is 3.2, which the Ubuntu job never meets: these two
   # files start every hook and setup.sh under it, and run-hook.test.sh runs
   # `/bin/bash -n` over every shell file in the tree. Homebrew's Bash runs the tests.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 -- 2026-10-18
+
+- Main's startup print is back under the 10 KB hook limit (13,227 bytes before; each role is now under 9,700): the
+  plan-before-build detail, the checklist and four more rules moved below main-session.md's Details, with one pointer line. CI runs `scripts/startup-size.sh`, so a print over 10,240 bytes fails it.
+  An owner's own main-session.md is also pointed at the plugin template's Details for the moved rules.
+
 ## 0.14.0 -- 2026-10-18
 
 - Setup: the fast-tier question for plan seats offers None first (#169); a dashboard choice sets the bind address too

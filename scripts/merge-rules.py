@@ -120,6 +120,11 @@ MADE_FROM = {
     "d3ad81e3": ("871dfc54",),
     # 0.14.0 main-session.md
     "f652f9a1": ("d3ad81e3",), "ea79fcf3": ("2fac1916",), "3ca43de1": ("0a0832e3",), "487d3e9e": ("04adb41d",),
+    # 0.14.1 startup trim: reworded, or several moved below Details into one pointer rule
+    "c3227972": ("f652f9a1",), "42145c44": ("06c5d1a6",), "5c61b810": ("34ec1023",), "d96617b8": ("3ca43de1",),
+    "1cf4ae22": ("1cf7c669", "6d119e42", "c89a261a", "ea79fcf3", "f949bcf5", "0c39c843", "8ecde936"),
+    "95273f82": ("f652f9a1",), "c16a1020": ("f949bcf5",), "5f729572": ("0c39c843",), "cd93267c": ("8ecde936",),
+    "a726a12f": ("8361fb71", "1cf7c669"), "6398c17f": ("8ade2fb3", "c89a261a"), "6a82c4ab": ("2848b779", "6d119e42"),
 }
 
 

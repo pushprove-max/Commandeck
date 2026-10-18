@@ -103,5 +103,10 @@ check "a Builder whose own settings exclude the house rules gets the merged star
 ex "$L4" "$P4/.claude/rules/house.md"
 check "main, once its settings exclude them, gets the merged main-session rule they state" 1 "$(ctx "$P4" | grep -cxF -- "$M1")"
 
+# The injected bullets of the plugin's main-session.md point at its Details; an owner's file has none of those rules,
+# so main is told where they are: the plugin's own template.
+check "main with its own main-session.md is pointed at the plugin template's Details for the moved rules" 1 \
+  "$(ctx "$P4" | grep -c "^\[Details.*$REAL/templates/main-session.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

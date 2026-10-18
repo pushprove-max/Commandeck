@@ -149,6 +149,8 @@ elif [ "$MAIN" = 1 ]; then
   # section stays on disk, under the 10 KB limit.
   tail -n +2 "$MAIN_ONLY" | awk '/^## Details \(not injected\)/ {exit} 1' | rules_cut "$MAIN_ONLY" | inject "$MAIN_ONLY"
   echo "[Details (not injected): Read $MAIN_ONLY from its '## Details (not injected)' heading when a bullet points there]"
+  # The rules the plugin moved below its Details are not in an owner's own file (a merge copies only the part above them).
+  [ "$MAIN_ONLY" = "$PLUGIN/templates/main-session.md" ] || echo "[Details (not injected): the plugin's own rules a bullet points to are in $PLUGIN/templates/main-session.md, from its '## Details (not injected)' heading]"
   if [ -f "$REPO_ROOT/todo/main-todo.md" ]; then
     # Main's todo list survives a restart because it is a file. A pointer: its
     # full text does not fit the limit.
