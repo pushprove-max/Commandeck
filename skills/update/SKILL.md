@@ -26,6 +26,8 @@ Only Rebase runs `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase`. It
 refuses and changes nothing when the relay worktree has uncommitted changes or
 the rebase conflicts: show its line. `relay: current` or `relay: none`: say nothing.
 
+If update shows a `Prompt cache:` or `Relay prompt cache:` line under Needs you, ask that question from `${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md` word for word, then run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh` with only that flag. Never run setup.sh without the answer.
+
 - It exits 1 with "back as it was" when the doctor fails: the files are
   restored; tell the owner the doctor's `FAIL` lines.
 - It refuses a config version it does not know and changes nothing. There is

@@ -129,5 +129,44 @@ check "a value in user settings counts when the environment has none, and the en
   "$(ts X=1 | grep -c '^warn tool search: tool search is off (ENABLE_TOOL_SEARCH=false)'):$(ts ENABLE_TOOL_SEARCH=true | grep -c '^ok tool search')"
 rm -f "$PROJ/.mcp.json" "$HOME/.claude/settings.json"
 
+# --- the relay's prompt cache: the value its pane really runs on, not only the bytes in its own file ---
+mkdir -p "$HOME/.claude" "$T/ws/Chief-of-Staff/.claude"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.json"
+echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
+echo '{"permissions":{"allow":[]}}' > "$PROJ/.claude/settings.local.json"
+cache() { COMMANDECK_WORKSPACES=$T/ws lib il_cache_ttl_report; }
+OUT=$(cache)
+check "the relay's own 1h beats the user's 5m: one ok line and no warn" '1:0' "$(grep -c '^ok prompt cache' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.local.json"
+OUT=$(cache)
+check "a TTL in the main checkout's local file warns, naming the file, and the relay then runs 5m" '1:1' \
+  "$(grep -c "^warn prompt cache: $PROJ/.claude/settings.local.json sets CLAUDE_CODE_PROMPT_CACHE_TTL=5m" <<<"$OUT"):$(grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose' <<<"$OUT")"
+echo '{}' > "$PROJ/.claude/settings.local.json"; echo '{}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
+check "a relay file without the key runs on the user's 5m, and the doctor says so" 1 "$(cache | grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose')"
+echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$HOME/.claude/settings.json"
+check "a user-level 1h beats the 5m setup wrote for main, and the doctor says so" '1:0' "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose'):$(cache | grep -c '^ok')"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$PROJ/.claude/settings.json"; echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.json"
+check "a project-level 1h beats the user's 5m for main" 1 "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose')"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.json"
+check "a 5m in the user and project files is ok" '1:0' "$(cache | grep -c '^ok prompt cache'):$(cache | grep -c '^warn')"
+# No env key anywhere: main runs on the promptCacheTtl settings, and the main checkout's local file is read after the
+# project's, where setup wrote its 5m, so a key there wins.
+echo '{}' > "$HOME/.claude/settings.json"; echo '{"promptCacheTtl":"5m","subagentPromptCacheTtl":"5m"}' > "$PROJ/.claude/settings.json"
+echo '{"promptCacheTtl":"1h"}' > "$PROJ/.claude/settings.local.json"
+OUT=$(cache)
+check "a promptCacheTtl in main's local file beats the project's 5m: the doctor names the file and the key" '1:0' \
+  "$(grep -c "^warn prompt cache: main runs 1h, not the 5m you chose: promptCacheTtl is 1h in $PROJ/.claude/settings.local.json" <<<"$OUT"):$(grep -c '^ok' <<<"$OUT")"
+echo '{"subagentPromptCacheTtl":"1h"}' > "$PROJ/.claude/settings.local.json"
+check "and so does a subagentPromptCacheTtl there" 1 "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose: subagentPromptCacheTtl is 1h in ')"
+echo '{"promptCacheTtl":"5m","subagentPromptCacheTtl":"5m"}' > "$PROJ/.claude/settings.local.json"
+check "a local 5m is ok" '1:0' "$(cache | grep -c '^ok prompt cache'):$(cache | grep -c '^warn')"
+echo '{}' > "$PROJ/.claude/settings.local.json"
+rm -f "$PROJ/.claude/settings.json"
+echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
+check "with both answers Leave as is the doctor has nothing to check" '1:0' "$(cache | grep -c '^ok prompt cache: setup sets none'):$(cache | grep -c '^warn')"
+rm -f "$HOME/.claude/settings.json" "$PROJ/.claude/settings.local.json"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

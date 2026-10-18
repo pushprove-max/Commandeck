@@ -10,7 +10,7 @@
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
-#          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl recommended|default] [--auto-mode add|leave|remove] [--plan]
+#          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
 #   or: setup.sh --questions begin|end
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
@@ -34,9 +34,10 @@
 # changes is copied beside it first (<file>.commandeck-bak-<date>). Every add-on
 # (or those --addons names) is installed or updated to its latest by its
 # config/addons.tsv command; the rest are printed. The ponytail skill is installed unless --no-ponytail.
-# --cache-ttl recommended writes the prompt-cache lifetimes (main 1 hour,
-# subagents 5 minutes) into the project's .claude/settings.json; default
-# leaves Claude Code's own, and takes out what an earlier run wrote. A
+# --cache-ttl 5m writes the prompt-cache lifetime of main and every worker pane (and subagents) as 5 minutes,
+# into the project's .claude/settings.json and each worktree's settings.local.json; leave writes nothing, and keeps
+# what an earlier run wrote. --relay-cache-ttl 1h does the same for the relay pane's worktree; leave writes
+# nothing. Until each is answered, setup writes nothing for it and says so. A
 # status line is set only when one is given, and the one before it is recorded
 # for uninstall.
 # --auto-mode add puts two lines into the auto-mode classifier's list in ~/.claude/settings.json (every project on
@@ -50,7 +51,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --auto-mode --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -108,7 +109,7 @@ PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfSta
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
 PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
-OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) AUTO=$(old .autoMode)
+OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
@@ -203,7 +204,8 @@ while [ $# -gt 0 ]; do
     --addons) ADDONS=${2//,/ } ADDONS_SET=1; [ "$2" != none ] || ADDONS=; shift 2 ;;
     --ponytail) PONYTAIL=true; shift ;;
     --no-ponytail) PONYTAIL=false; shift ;;
-    --cache-ttl) case $2 in recommended|default) CACHE=$2 ;; *) die "--cache-ttl takes recommended or default, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --cache-ttl) case $2 in 5m|leave) CACHE=$2 ;; *) die "--cache-ttl takes 5m or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --relay-cache-ttl) case $2 in 1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
     # A role with no id clears the saved one. Checked below, once the routing file is known.
@@ -357,7 +359,7 @@ EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg auto "$AUTO" '
+  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
@@ -374,7 +376,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + {ponytail: ($pony != "false")}
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
-  + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
+  + {chiefOfStaff: ({name: $name, persona: $persona, cacheTtl: $rcache} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
 elif [ "$(readlink "$IL_LINK" 2>/dev/null)" != "$IL_ROOT" ]; then echo "plan: would point $IL_LINK at $IL_ROOT"; fi
 # allow_out <manifest> <settings file> -- the plugin's rules out of a file setup put them in before.
@@ -388,7 +390,7 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || echo "permissions: moved from $WAS scope to $SCOPE scope ($SETTINGS)"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
-il_cache_ttl "$IL_PROJECT" "$PSET" "$([ "$CACHE" = recommended ] || echo off)"
+[ "$CACHE" != 5m ] || il_cache_ttl "$IL_PROJECT" "$PSET"
 il_auto_mode "$IL_MACHINE" "$HOME/.claude/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
@@ -444,6 +446,8 @@ fi
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
+case $CACHE in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
+[ -z "$NAME" ] || case $RCACHE in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac
 [ -z "$SERENA_AUTO" ] || NOTES+=("serena: on, because a serena server is configured on this machine (--no-serena turns it off)")
 for f in "${OWN[@]}"; do
   c=$OWNS flag=--own-startup; [ "$f" = AGENT_STARTUP.md ] || c=$OWNM flag=--own-main-session
@@ -573,6 +577,8 @@ echo "prompt cache: main $(jq -r '.promptCacheTtl // "default"' "$PSET" 2>/dev/n
 for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "$n"; done
 # The config setup wrote is the project's, and so is a merge into the owner's startup files: a unit's
 # worktree has them only once git holds them. Setup never commits.
+# After the relay's worktree is set up: its pane's TTL as Claude Code will read it, and the main checkout's local file.
+while IFS= read -r L; do [ "${L%% *}" != warn ] || NEED+=("${L#warn }"); done < <(il_cache_ttl_report)
 OWED=()
 for f in "$IL_CONFIG" "$PSET" "$IL_AGENTS" "${OWN[@]/#/$PP_MAIN/}"; do
   f=${f#"$PP_MAIN"/}

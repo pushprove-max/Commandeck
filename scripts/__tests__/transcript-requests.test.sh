@@ -113,11 +113,15 @@ L=$(plog review)
 check "a reviewer's verdict is read with its next request half-written" "VERDICT: GO" \
   "$(cd "$ROOT" && HOME=$T/home-rv COMMANDECK_SCRATCH=$T/scratch bash scripts/read-verdict.sh h-71 5 "$T/review" claude "" "" 0 1 2>&1 | grep -m1 '^VERDICT:')"
 L=$(plog builder)
-{ printf '{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_1h_input_tokens":10}}}}\n'; printf %s "$TORN"; } > "$L"
+{ printf '{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_5m_input_tokens":10}}}}\n'; printf %s "$TORN"; } > "$L"
 printf '{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_5m_input_tokens":10}}}}\n' > "${L%.jsonl}/subagents/agent-a.jsonl"
 check "the cache check reads a live Builder log, its next request half-written" \
-  "s.jsonl: main thread 1h=10 5m=0; 1 subagent transcript(s) 1h=0 5m=10" \
+  "s.jsonl: main thread 1h=0 5m=10; 1 subagent transcript(s) 1h=0 5m=10" \
   "$(cd "$ROOT" && HOME=$T/home-rv bash scripts/builder-cache-check.sh "$T/builder" 2>&1)"
+# The order of 2026-10-18 replaced the Builder's 1h pin: a main thread still writing 1h cache must fail the check.
+printf '{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_1h_input_tokens":10}}}}\n' > "$L"
+HOME=$T/home-rv bash "$ROOT/scripts/builder-cache-check.sh" "$T/builder" >/dev/null 2>&1
+check "the cache check fails a Builder whose main thread wrote 1h cache" 1 "$?"
 
 prompts() { python3 "$ROOT/scripts/checkpoint-context.py" messages "$1" 10000 2>&1 | tail -n +3; }
 check "a restart carries the 2.1.300 log's one prompt, and no blob as a prompt" \

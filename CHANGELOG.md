@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0 -- 2026-10-18
+
+- Setup and update ask the prompt cache per role: 5 minutes for main and every worker pane (Builders included,
+  replacing their 1-hour pin), 1 hour for the relay pane, each with a Leave as is that writes nothing. The flag
+  values change: `--cache-ttl 5m|leave`, and a new `--relay-cache-ttl 1h|leave`; the old `recommended|default`
+  is refused. An install that chose the old answer is asked again under Needs you, and setup's own earlier 1-hour
+  value moves to 5 minutes only on a 5m answer.
+- Rewriting the relay's `.claude/settings.local.json` keeps its other `env` entries.
+- The doctor, and setup under Needs you, warn when a TTL in the main checkout's `.claude/settings.local.json`
+  would override the per-worktree answers, when the relay pane would not run on the 1 hour chosen, and when an
+  `env` TTL in the user's or the project's settings, or a `promptCacheTtl` or `subagentPromptCacheTtl` in main's
+  local settings file read after the project's, keeps main on a value other than the 5 minutes chosen.
+
 ## 0.14.1 -- 2026-10-18
 
 - Main's startup print is back under the 10 KB hook limit (13,227 bytes before; each role is now under 9,700): the

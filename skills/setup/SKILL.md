@@ -159,9 +159,13 @@ Ask them in this order, up to four questions per call.
     - On: the ponytail skill (/ponytail), smallest-change coding rules; costs nothing until asked for. `--ponytail`
     - Off: not installed; a copy an earlier setup installed is removed. `--no-ponytail`
     Then, how long Claude keeps a conversation's prompt cache:
-    Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default
-    - 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`
-    - Leave default: writes nothing; Claude Code picks (and a value an earlier setup wrote is taken out). `--cache-ttl default`
+    Ask "Prompt cache": 5m for main and workers (recommended) | Leave as is
+    - 5m for main and workers: Main, Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too. On real sessions a 5-minute cache cost about 5% less for main and 6 to 17% less for worker panes: they seldom pause long enough for a 1-hour cache to pay. Saved in `.claude/settings.json` and each worktree's `.claude/settings.local.json`. `--cache-ttl 5m`
+    - Leave as is: writes nothing; what is set now stays, a 1-hour value an earlier setup wrote included (on a Claude subscription an unset cache is 1 hour). `--cache-ttl leave`
+    With a relay:
+    Ask "Relay prompt cache": 1h (recommended) | Leave as is
+    - 1h: The relay pane keeps its cache 1 hour. It waits on you between turns, and on real sessions a 5-minute cache cost it about 85% more than 1 hour. Saved in its worktree's `.claude/settings.local.json`; its other settings stay. The doctor warns if another file overrides it. `--relay-cache-ttl 1h`
+    - Leave as is: writes nothing in the relay's settings. `--relay-cache-ttl leave`
     Then, the auto-mode classifier (it checks each command in a pane run in auto mode):
     Ask "Auto mode": Add two entries (recommended) | Leave as is | Take them out
     - Add two entries: Your Claude panes run in auto mode. Two plain-English lines go into ~/.claude/settings.json, kept with Claude Code's built-in list, so its safety check knows the plugin's scripts and the relay pane. They apply in every project on this machine. `--auto-mode add`

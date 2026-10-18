@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.14.1-111111?style=flat-square" alt="Version 0.14.1">
+  <img src="https://img.shields.io/badge/version-0.15.0-111111?style=flat-square" alt="Version 0.15.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -154,7 +154,7 @@ setup asks, the picker guard's stray-keypress option is off.
 | Merge check | the command that must pass before a merge, or none |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Ponytail | on (the skill is installed) or off |
-| Prompt cache | recommended (`promptCacheTtl` 1 hour for main and Claude panes, `subagentPromptCacheTtl` 5 minutes, in `.claude/settings.json`; a value you set stays) or Claude Code's default (writes nothing) |
+| Prompt cache | 5m for main and worker panes (`promptCacheTtl` and `subagentPromptCacheTtl` in `.claude/settings.json`, `CLAUDE_CODE_PROMPT_CACHE_TTL` in each worktree's `settings.local.json`; a value you set stays), 1h for the relay pane (its worktree's `settings.local.json`, its other settings kept), each with Leave as is (writes nothing) |
 | Auto mode | add two lines to the auto-mode classifier's list in `~/.claude/settings.json` (kept with `"$defaults"`; they apply in every project on this machine), leave it as is (writes nothing), or take setup's lines out; a list of yours without `"$defaults"` is never touched |
 | Add-ons | any of serena, codebase-memory, agent-browser, or none (see [Add-ons](#add-ons)) |
 | Review loop | defaults, keep saved, or tune: the most review rounds (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200; off gives every first pass three reviewers), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
@@ -431,7 +431,7 @@ picker.
   and test evidence.
 - The cache check. `scripts/builder-cache-check.sh <worktree> [session-id]`
   reads a Builder's transcripts and fails unless its main thread wrote only
-  1-hour prompt cache and its subagents only 5-minute cache.
+  5-minute prompt cache, and its subagents only 5-minute cache.
 - The price of each build. The build review prices every request at list
   price from one table in `scripts/dashboard_limit.py` and flags a build over
   $30. These are list-price equivalents and a subscription plan bills

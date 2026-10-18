@@ -49,6 +49,8 @@ done
 tmp=$(mktemp)
 PLUGINS_OFF='{"customer-support@synced":false,"design@synced":false,"operations@synced":false,"product-management@synced":false,"productivity@synced":false,"cowork-plugin-management@synced":false}'
 
+# The setting is the worktree's own project's, read from its primary checkout.
+PROJECT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); PROJECT=${PROJECT%/.git}
 # The Chief-of-Staff relay pane never reads code, so it gets only the
 # slimming keys: code servers, code plugins and connectors off. None of the
 # worker mechanics below -- its Stop notify hook would wake main every relay turn.
@@ -63,8 +65,10 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
   # Ponytail runs in every seat, the relay pane too (owner, 2026-10-16): the off an earlier run wrote goes, and the
   # pane follows the owner's own setting. The typescript-lsp plugin is gone, and so is the key for it.
-  jq --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" '
-    .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
+  # The setup answer for the relay's prompt cache: 1h is written into env by path, so its other env entries stay.
+  jq --arg rttl "$(jq -r '.chiefOfStaff.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" '
+    (if $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h" else . end)
+    | .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
     | .disableClaudeAiConnectors = true
     | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
     | .permissions.allow = ((.permissions.allow // []) + $callow | unique)' "$F" > "$tmp"
@@ -78,8 +82,6 @@ fi
 WINDOW=${COMMANDECK_WORKER_COMPACT_WINDOW:-450000}
 [ "$BUILDER" = 1 ] && WINDOW=300000
 # Standard-context models hold 200K: a larger window would never compact.
-# The setting is the worktree's own project's, read from its primary checkout.
-PROJECT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); PROJECT=${PROJECT%/.git}
 [ "$(jq -r '.standardContext // false' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" = true ] && WINDOW=180000
 # 3. memoir off in worktrees (ruling 2026-09-03). Its SessionStart hook
 #    prints the store's 200-key listing (~8 KB) into every pane, its prompt
@@ -120,10 +122,11 @@ EXCLUDE="$(cd "$WT" && pwd)/.claude/rules/orchestration.md"
 #    PLUGINS_OFF is set above, shared with the Chief-of-Staff branch.
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
-jq --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+jq --arg ttl "$(jq -r '.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
+  | (if $ttl == "5m" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "5m" else . end)
   | .hooks = ((.hooks // {}) | map_values(map(select(((.hooks // []) | length) > 0 and all(.hooks[]; stale) | not))))
   | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false} + $poff | del(.["typescript-lsp@claude-plugins-official"]))
   | .disableClaudeAiConnectors = true
@@ -141,8 +144,8 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 #    and the Codex companion (node), carries no orchestration rules, and logs
 #    its events through hooks registered here only, so no other session pays
 #    for them. agent-startup-context.sh and agent-model-guard.sh read the env.
-#    Its main thread runs on the 1h prompt cache (owner, 2026-10-11) set here, not
-#    inherited from ~/.claude/settings.json; subagents keep the global 5m.
+#    Its prompt cache follows the setup answer like every worker's (owner, 2026-10-18,
+#    replacing the 1h pin of 2026-10-11): 5m above, nothing on Leave as is.
 #    Proof on a launched Builder: builder-cache-check.sh.
 if [ "$BUILDER" = 1 ]; then
   RULES="$(cd "$WT" && pwd)/.claude/rules"
@@ -151,7 +154,6 @@ if [ "$BUILDER" = 1 ]; then
     --arg gcmd "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/builder-search-guard.sh\"" --arg s "$PP_SCRIPTS_Q" '
     def reg($m): [{hooks: [{type: "command", command: $cmd}]} + (if $m then {matcher: $m} else {} end)];
     .env.COMMANDECK_BUILDER = "1"
-    | .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h"
     | .permissions.deny -= ["Agent"]
     | .permissions.allow = ((.permissions.allow | map(select(test("^Bash\\(bash .*/builder-(codex|claude)-pass[.]sh:") | not))) + ["Bash(node:*)", "Bash(bash \($s)/builder-codex-pass.sh:*)", "Bash(bash \($s)/builder-claude-pass.sh:*)"] | unique)
     | .claudeMdExcludes = (.claudeMdExcludes + $bx | unique)
@@ -167,6 +169,6 @@ if [ "$BUILDER" = 1 ]; then
     | .hooks.SubagentStart = ((.hooks.SubagentStart // []) + reg(null) | unique)
     | .hooks.SubagentStop = ((.hooks.SubagentStop // []) + reg(null) | unique)' "$F" > "$tmp"
   mv "$tmp" "$F"
-  echo "$WT: Builder profile: COMMANDECK_BUILDER=1, 1h prompt cache, Agent allowed, node allowed, $(echo "$BX" | jq length) orchestration rules excluded, event-log hooks on"
+  echo "$WT: Builder profile: COMMANDECK_BUILDER=1, Agent allowed, node allowed, $(echo "$BX" | jq length) orchestration rules excluded, event-log hooks on"
 fi
 [ "$PRINT" = 0 ] || { cat "$F" >&3; rm -f "$F"; }

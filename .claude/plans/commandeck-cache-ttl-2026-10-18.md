@@ -1,6 +1,6 @@
 # Plan: commandeck-cache-ttl-2026-10-18 -- setup/update default the main-conversation prompt-cache lifetime per role
 
-Order: owner, 2026-10-18 (ruling r-20261018-054513-1-fe0486). Main and worker panes 5m, relay pane 1h. Setup
+Order: owner, 2026-10-18 (owner ruling). Main and worker panes 5m, relay pane 1h. Setup
 and update ask each one with a "Leave as is" option and the cost stated plainly. Nothing is written without the
 answer. A rewrite of the relay's `.claude/settings.local.json` keeps its other `env` entries.
 

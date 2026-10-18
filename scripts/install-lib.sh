@@ -180,12 +180,12 @@ il_advisor_off() {
     doc=$(jq '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1"' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].advisorOff = true'
   fi
 }
-# il_cache_ttl <manifest> <settings file> [off] -- prompt-cache lifetimes: the main conversation 1 hour,
-# everything else 5 minutes (measured on real transcripts: 5 minutes cost main about 19% more than 1 hour,
-# and saved subagents about 8%). A key the owner set is left as it is; off takes out only a value setup
-# wrote and nobody changed since.
+# il_cache_ttl <manifest> <settings file> [off] -- prompt-cache lifetimes: 5 minutes for the main conversation and
+# subagents (measured 2026-10-18 on real transcripts: 5 minutes cost main about 5% less than 1 hour, because panes
+# seldom pause 5 to 60 minutes). A key the owner set is left as it is; a value setup itself wrote earlier (a 1 hour
+# of 0.14) is replaced; off takes out only a value setup wrote and nobody changed since.
 il_cache_ttl() {
-  local m=$1 f=$2 doc s
+  local m=$1 f=$2 doc s r
   doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     s=$(jq -c --arg p "$f" '.entries[$p].cacheTtl // {}' "$m" 2>/dev/null) || s='{}'
@@ -193,7 +193,8 @@ il_cache_ttl() {
     doc=$(jq --argjson s "$s" 'reduce ($s | to_entries[]) as $e (.; if .[$e.key] == $e.value then del(.[$e.key]) else . end)' <<<"$doc") \
       && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" 'del(.entries[$p].cacheTtl)'
   else
-    s=$(jq -c '{promptCacheTtl: "1h", subagentPromptCacheTtl: "5m"} | with_entries(select(.key as $k | $d | has($k) | not))' --argjson d "$doc" -n)
+    r=$(jq -c --arg p "$f" '.entries[$p].cacheTtl // {}' "$m" 2>/dev/null) || r='{}'
+    s=$(jq -c '{promptCacheTtl: "5m", subagentPromptCacheTtl: "5m"} | with_entries(select(.key as $k | ($d | has($k) | not) or $d[$k] == $r[$k]))' --argjson d "$doc" --argjson r "$r" -n)
     [ "$s" != '{}' ] || return 0
     doc=$(jq --argjson s "$s" '. + $s' <<<"$doc") && il_write "$f" <<<"$doc" \
       && il_set "$m" --arg p "$f" --argjson s "$s" '.entries[$p].cacheTtl = ((.entries[$p].cacheTtl // {}) + $s)'
@@ -249,6 +250,38 @@ il_auto_mode_report() {
     n=$((n+1)); echo "warn auto mode: $f has autoMode, which the classifier ignores there; move it to $HOME/.claude/settings.json ($where)"
   done
   [ "$n" != 0 ] || echo "ok auto mode: no list of yours replaces the built-in rules, and no project file carries autoMode"
+}
+# il_cache_ttl_report -- the doctor's lines on the prompt-cache answers, each "ok <why>" or "warn <what is wrong and the
+# fix>". Claude Code applies the main checkout's .claude/settings.local.json over a worktree's own, so a TTL there beats
+# the per-worktree answers setup wrote; the relay's own value is the last of: user file, the relay's project and local
+# files, the main checkout's local file (the order Claude Code reads them). The owner's key is reported, never edited.
+il_cache_ttl_report() {
+  local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n=0 f fs=() s w x
+  jq -e '.cacheTtl == "5m" or .chiefOfStaff.cacheTtl == "1h"' "$IL_CONFIG" >/dev/null 2>&1 || { echo "ok prompt cache: setup sets none"; return 0; }
+  v=$(jq -r --arg k $k '.env[$k] // empty' "$ml" 2>/dev/null)
+  [ -z "$v" ] || { n=1; echo "warn prompt cache: $ml sets $k=$v, and Claude Code applies that file over every worktree's own settings, so the relay and worker panes run $v; move the key to $HOME/.claude/settings.json"; }
+  if [ -z "$v" ] && jq -e '.cacheTtl == "5m"' "$IL_CONFIG" >/dev/null 2>&1; then
+    # an env key beats the promptCacheTtl keys, so main's answer is the last env key of the user and project files;
+    # with none, it is the last promptCacheTtl key of the user, project and local files (the order Claude Code reads them)
+    for f in "$HOME/.claude/settings.json" "$PP_MAIN/.claude/settings.json"; do [ ! -f "$f" ] || fs+=("$f"); done
+    v=$([ ${#fs[@]} = 0 ] || jq -rs --arg k $k 'map(.env[$k] // empty) | last // empty' "${fs[@]}" 2>/dev/null)
+    if [ -n "$v" ]; then
+      [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: an env $k=$v in $HOME/.claude/settings.json or $PP_MAIN/.claude/settings.json beats the promptCacheTtl setup wrote; remove that key"; }
+    else
+      [ ! -f "$ml" ] || fs+=("$ml")
+      for s in promptCacheTtl subagentPromptCacheTtl; do
+        w=; for f in ${fs[@]+"${fs[@]}"}; do x=$(jq -r --arg s $s '.[$s] // empty' "$f" 2>/dev/null); [ -z "$x" ] || { v=$x w=$f; }; done
+        [ -z "$w" ] || [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: $s is $v in $w, which is read after the one setup wrote; change it to 5m or remove it"; }
+      done
+    fi
+    fs=()
+  fi
+  if jq -e '.chiefOfStaff.cacheTtl == "1h"' "$IL_CONFIG" >/dev/null 2>&1 && [ -d "$rw" ]; then
+    for f in "$HOME/.claude/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
+    v=$(jq -rs --arg k $k 'map(.env[$k] // empty) | last // "unset"' "${fs[@]}" 2>/dev/null)
+    [ "$v" = 1h ] || { n=1; echo "warn prompt cache: the relay pane runs $v, not the 1h you chose; run setup again, or see the line above"; }
+  fi
+  [ "$n" != 0 ] || echo "ok prompt cache: no file overrides the answers setup wrote"
 }
 # il_tool_search_report -- the doctor's line on MCP tool search, "ok <why>" or "warn <what is wrong>". Whether it is on
 # follows Claude Code's docs ("Configure tool search"); each variable is read from the environment, else from `env`

@@ -106,5 +106,36 @@ check "an owner's list without \"\$defaults\" is left byte for byte, and setup s
 check "and nothing is recorded for it, so taking the lines out later removes nothing of the owner's" "$B" "$(sha256sum < "$MM")"
 rm -rf "$H/.commandeck" "$AS"
 
+# --- the prompt-cache lifetime: 5m, and setup's own earlier 1h moves while an owner's own value stays ---
+CM=$T/cm.json CS=$T/cs.json
+ttl() { lib 'il_cache_ttl "$1" "$2" '"${1:-}" "$CM" "$CS" 2>&1; }
+echo '{"entries":{}}' > "$CM"
+echo '{"promptCacheTtl":"1h","subagentPromptCacheTtl":"5m"}' > "$CS"
+jq --arg p "$CS" '.entries[$p].cacheTtl = {promptCacheTtl: "1h", subagentPromptCacheTtl: "5m"}' "$CM" > "$CM.n" && mv "$CM.n" "$CM"
+ttl >/dev/null
+check "an update moves the 1h an earlier setup wrote to 5m, in the file and in the record" '5m:5m:5m'   "$(jq -r .promptCacheTtl "$CS"):$(jq -r .subagentPromptCacheTtl "$CS"):$(jq -r --arg p "$CS" '.entries[$p].cacheTtl.promptCacheTtl' "$CM")"
+echo '{"promptCacheTtl":"1h"}' > "$CS"; echo '{"entries":{}}' > "$CM"
+ttl >/dev/null
+check "a 1h the owner set (no record) stays 1h, and the other key is added" '1h:5m' "$(jq -r .promptCacheTtl "$CS"):$(jq -r .subagentPromptCacheTtl "$CS")"
+ttl off >/dev/null
+check "taking setup's keys out leaves the owner's own 1h" '{"promptCacheTtl":"1h"}' "$(jq -c . "$CS")"
+
+# --- a config from before 0.15.0 holds the cache answer as "recommended" or "default": /commandeck:update replays it ---
+# A replay that read the old word as 5m would move an owner's 1h unasked, and one that said nothing would leave the
+# question unasked for good. setup.sh's own lines (the read, the gate on il_cache_ttl, the Needs-you line) run on a
+# hand-written config, as requirements.test.sh runs one of its lines; il_cache_ttl is a counter, no setup run.
+replay() {
+  echo "$1" > "$T/replay.json"
+  ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0
+    il_cache_ttl() { calls=$((calls + 1)); }
+    for l in '^old()' 'CACHE=$(old .cacheTtl)' '\[ "$CACHE" != 5m \] || il_cache_ttl' 'Prompt cache: not answered since 0.15.0'; do eval "$(grep -- "$l" "$REAL/scripts/setup.sh")"; done
+    echo "$calls:${#NEED[@]}" )
+}
+check "a stored \"recommended\" is not an answer: nothing is written, and the question is asked" 0:1 "$(replay '{"cacheTtl":"recommended"}')"
+check "a stored \"default\" is the same" 0:1 "$(replay '{"cacheTtl":"default"}')"
+check "a config with no answer is asked" 0:1 "$(replay '{"version":1}')"
+check "a stored 5m is written again on every replay, and not asked" 1:0 "$(replay '{"cacheTtl":"5m"}')"
+check "a stored leave writes nothing and is not asked" 0:0 "$(replay '{"cacheTtl":"leave"}')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

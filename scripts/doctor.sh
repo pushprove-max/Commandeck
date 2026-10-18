@@ -110,6 +110,7 @@ if [ -n "$PROFILE" ]; then
   [ "$PASS" != codex ] || ! python3 -c 'import tomllib' 2>/dev/null || ok "codex route: $(pp_codex_route)"
 fi
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_auto_mode_report)
+while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_cache_ttl_report)
 if [ "$PROFILE" = claude-openai ]; then
   N=$(il_codex_count "$IL_ROOT") ALL=$(il_codex_count)
   if [ "$N" = 5 ] && [ "$ALL" = 5 ]; then ok "codex hooks: five entries in $IL_CODEX/hooks.json run this plugin"
