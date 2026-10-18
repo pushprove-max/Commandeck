@@ -79,5 +79,55 @@ check "the yes recorded the wrapper as it was, in the manifest it was given, its
 grep -v '^notify = ' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
 check "no notify line at all warns so, with the line to add" 1 "$(report | grep -c "^warn codex notify: .* has no notify line.*notify = \[\"$LINK\"\]")"
 
+# --- the auto-mode lines: a list that replaced the built-in rules, and a project file the classifier ignores ---
+AM=$HOME/.claude/settings.json; mkdir -p "$HOME/.claude"
+am() { lib il_auto_mode_report; }
+rm -f "$AM" "$PROJ/.claude/settings.json" "$PROJ/.claude/settings.local.json"
+check "no autoMode anywhere: one ok line" '1:0' "$(am | grep -c '^ok auto mode:'):$(am | grep -c '^warn')"
+echo '{"autoMode":{"environment":["$defaults","mine"],"allow":["mine"]}}' > "$AM"
+OUT=$(am)
+check "a list without \"\$defaults\" warns for that list only, and says where to look" '1:1:0' \
+  "$(grep -c '^warn auto mode: the allow list in .* has no "\$defaults"' <<<"$OUT"):$(grep -c 'claude auto-mode critique' <<<"$OUT"):$(grep -c 'the environment list' <<<"$OUT")"
+echo '{"autoMode":{"environment":["$defaults"]}}' > "$AM"; echo '{"autoMode":{"allow":["x"]}}' > "$PROJ/.claude/settings.local.json"
+OUT=$(am)
+check "autoMode in a project file warns that the classifier ignores it, and where to move it" 1 "$(grep -c "^warn auto mode: .*settings.local.json has autoMode, which the classifier ignores there; move it to $AM" <<<"$OUT")"
+rm -f "$AM" "$PROJ/.claude/settings.local.json"
+
+# --- instruction size: past 200 lines a file loads in every session and is followed less well; MEMORY.md past 200 lines or 25 KB is cut off ---
+LR=$T/lint; mkdir -p "$LR/.claude/rules" "$T/mem"; git init -q -b main "$LR"
+lint() { python3 "$REAL/scripts/instruction-lint.py" --repo "$LR" --memory-dir "$T/mem" --global "$T/no-global.md" 2>&1; }
+n_lines() { for i in $(seq "$1"); do echo "line $i"; done; }
+n_lines 200 > "$LR/CLAUDE.md"
+check "a CLAUDE.md of 200 lines is not flagged" 0 "$(lint | grep -c over-200-lines)"
+n_lines 201 > "$LR/CLAUDE.md"
+check "a CLAUDE.md of 201 lines is flagged, with its length" "CLAUDE.md:201 over-200-lines 201 lines" "$(lint | grep over-200-lines)"
+n_lines 300 > "$LR/.claude/rules/a.md"; { printf -- '---\npaths:\n  - "src/**"\n---\n'; n_lines 300; } > "$LR/.claude/rules/b.md"
+check "a 300-line rules file is flagged unless it has paths:, which loads it only when a matching file is read" ".claude/rules/a.md:201 over-200-lines 300 lines" "$(lint | grep over-200-lines | grep rules)"
+n_lines 300 > "$LR/AGENT_STARTUP.md"
+check "AGENT_STARTUP.md is left to startup-size.sh" 0 "$(lint | grep -c AGENT_STARTUP)"
+n_lines 201 > "$T/global.md"
+check "the global CLAUDE.md counts too" 1 "$(python3 "$REAL/scripts/instruction-lint.py" --repo "$LR" --memory-dir "$T/mem" --global "$T/global.md" 2>&1 | grep -c "global.md:201 over-200-lines")"
+n_lines 200 > "$T/mem/MEMORY.md"
+check "a MEMORY.md of 200 lines is not flagged" 0 "$(lint | grep -c memory-over-limit)"
+n_lines 201 > "$T/mem/MEMORY.md"
+check "a MEMORY.md of 201 lines is flagged" 1 "$(lint | grep -c memory-over-limit)"
+head -c 26000 /dev/zero | tr '\0' 'x' | fold -w 2600 > "$T/mem/MEMORY.md"
+check "a 10-line MEMORY.md of 26 KB is flagged: what is past 25 KB is not loaded" 1 "$(lint | grep -c 'memory-over-limit 10 lines')"
+rm -rf "$LR" "$T/mem" "$T/global.md"
+
+# --- tool search: off loads every tool of every MCP server on every turn; the rule is the docs', row by row ---
+echo '{"mcpServers":{"a":{},"b":{}}}' > "$PROJ/.mcp.json"; rm -f "$HOME/.claude/settings.json" "$HOME/.claude.json"
+ts() { (unset ENABLE_TOOL_SEARCH CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ANTHROPIC_BASE_URL; export "$@"; lib il_tool_search_report); }
+check "nothing set: on, with the server count" 1 "$(ts X=1 | grep -c '^ok tool search: on, so 2 MCP servers')"
+check "ENABLE_TOOL_SEARCH=false warns, naming it and the count" 1 "$(ts ENABLE_TOOL_SEARCH=false | grep -c '^warn tool search: tool search is off (ENABLE_TOOL_SEARCH=false), so every tool of 2 MCP servers loads')"
+check "a proxy with the variable unset warns" 1 "$(ts ANTHROPIC_BASE_URL=https://proxy.example:8443/v1 | grep -c '^warn tool search: tool search is off (ANTHROPIC_BASE_URL is proxy.example,')"
+check "the same proxy with ENABLE_TOOL_SEARCH=true is ok" 1 "$(ts ANTHROPIC_BASE_URL=https://proxy.example ENABLE_TOOL_SEARCH=true | grep -c '^ok tool search')"
+check "ANTHROPIC_BASE_URL on api.anthropic.com is ok" 1 "$(ts ANTHROPIC_BASE_URL=https://api.anthropic.com | grep -c '^ok tool search')"
+check "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS beats ENABLE_TOOL_SEARCH=true" 1 "$(ts CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 ENABLE_TOOL_SEARCH=true | grep -c '^warn tool search: tool search is off (CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS is set)')"
+echo '{"env":{"ENABLE_TOOL_SEARCH":"false"}}' > "$HOME/.claude/settings.json"
+check "a value in user settings counts when the environment has none, and the environment wins over it" '1:1' \
+  "$(ts X=1 | grep -c '^warn tool search: tool search is off (ENABLE_TOOL_SEARCH=false)'):$(ts ENABLE_TOOL_SEARCH=true | grep -c '^ok tool search')"
+rm -f "$PROJ/.mcp.json" "$HOME/.claude/settings.json"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

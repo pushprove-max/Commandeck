@@ -2,11 +2,12 @@
 """One command for the computed build review page: collect, render, file, open in Orca.
 
 No model is involved. It runs only when the owner asks for a build review, never at a merge (the owner, 2026-10-14):
-  review.py <worktree path> [--out-dir DIR] [--open-in WORKTREE] [--no-open]
+  review.py <worktree path> [--out-dir DIR] [--open-in WORKTREE] [--no-open] [--main DIR]
             [collect.py options such as --max-review-min 30 --max-test-share 0.33 --max-usd 30]
 
 The page is written to DIR/<date>/<project>/<unit>-review.html (default DIR ~/.commandeck/reviews) and,
 with --open-in, opened as a browser tab in that worktree. Every step after collect is best effort.
+A worktree already removed is placed by --main, the project's main checkout; without it the review is refused.
 """
 import argparse
 import json
@@ -34,10 +35,15 @@ def main_checkout(worktree):
     return common[:-len('/.git')] if common.endswith('/.git') else common
 
 
-def places(worktree):
-    """(work folder, page path stem): a folder per project, so two projects' units never share a name."""
+def places(worktree, main=None):
+    """(work folder, page path stem): a folder per project, so two projects' units never share a name.
+
+    The project is the worktree's main checkout; once the worktree is removed only --main (the checkout) can name it."""
     wt = worktree.rstrip('/')
-    project, unit = os.path.basename(main_checkout(wt)) or 'project', os.path.basename(wt)
+    home = main_checkout(wt if os.path.isdir(wt) else main) if os.path.isdir(wt) or main else ''
+    if not home:
+        raise SystemExit(f'review.py: {wt} is not a worktree any more, so its project is unknown; pass --main <the project\'s main checkout>')
+    project, unit = os.path.basename(home), os.path.basename(wt)
     return f'/tmp/commandeck/worktreereview/{project}/{unit}', f'{project}/{unit}'
 
 
@@ -54,7 +60,7 @@ def rungs(wt, unit):
             return ''
     said = {int(n): (rung, why.strip().rstrip('`').strip())
             for n, rung, why in re.findall(r'^[-\s`]*Ponytail: item (\d+): rung (\d+); lazier option: (.+)$', text(f'{unit}-evidence.md'), re.M)}
-    items = re.findall(r'^\s*(\d+)\. \[rung \d+\] (#\d+)', text(f'{unit}.md'), re.M)
+    items = re.findall(r'^\s*(\d+)\. (?:\[rung \d+\] )?(#\d+)', text(f'{unit}.md'), re.M)
     return [{'item': int(n), 'issue': issue, 'rung': said.get(int(n), (None, None))[0], 'lazier': said.get(int(n), (None, None))[1]}
             for n, issue in items]
 
@@ -65,11 +71,12 @@ def main():
     ap.add_argument('--out-dir', default=os.path.expanduser('~/.commandeck/reviews'))
     ap.add_argument('--open-in')
     ap.add_argument('--no-open', action='store_true')
+    ap.add_argument('--main')
     a, passthrough = ap.parse_known_args()
     wt = a.worktree.rstrip('/')
     unit = os.path.basename(wt)
-    work, name = places(wt)
-    done = subprocess.run([sys.executable, f'{HERE}/collect.py', wt, '--out', work, *passthrough])
+    work, name = places(wt, a.main)
+    done = subprocess.run([sys.executable, f'{HERE}/collect.py', wt, '--out', work, *passthrough, *(['--main', a.main] if a.main else [])])
     if done.returncode:
         return done.returncode
     result = json.load(open(f'{work}/result.json'))

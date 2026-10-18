@@ -61,7 +61,18 @@ KIND=$(pane_kind_of "$TS" "$PS" "$H")
 [ -n "$KIND" ] || { echo "answer-worker: Orca does not say whether $H is a Claude or a Codex pane, so its session log cannot be picked; nothing was sent" >&2; exit 1; }
 
 # The pane's session log now, by worktree and kind, and whether its turn is over.
-log_state() { V=$("$HERE/read-verdict.sh" --state --worktree "$WT" --agent "$KIND" --current 2>/dev/null); LOG=$(sed -n 's/^session=//p' <<<"$V"); }
+# Two Claude planners share one worktree, so a planner pane (a seat record with its handle) is read through its launch
+# binding, the first session after its launch handed its tag; --current would pick the newer planner's log.
+# A Builder is not bound that way: a fresh round gives it a later session.
+log_state() {
+  local rec at tag
+  rec=$(grep -lx "handle=$H" "$PP_SCRATCH"/seat-*.txt 2>/dev/null | head -1)
+  at=$(sed -n 's/^launched=//p' "$rec" 2>/dev/null | tail -1); tag=$(sed -n 's/^tag=//p' "$rec" 2>/dev/null | tail -1)
+  if [ -n "$at" ] && [ -n "$tag" ] && ! grep -qx 'role=builder' "$rec"; then
+    V=$("$HERE/read-verdict.sh" --state --worktree "$WT" --agent "$KIND" --launched "$at" --spec "$tag" 2>/dev/null)
+  else V=$("$HERE/read-verdict.sh" --state --worktree "$WT" --agent "$KIND" --current 2>/dev/null); fi
+  LOG=$(sed -n 's/^session=//p' <<<"$V")
+}
 # idle: 0 when the pane's turn is over. Its log says so first: Orca can keep `working` for a pane whose
 # turn ended (a Builder past its done marker beside its reviewer), and an answer left in that inbox was never read.
 idle() {

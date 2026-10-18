@@ -12,6 +12,10 @@ Kinds:
   orphan-memory      a memory file named neither in MEMORY.md nor in a file MEMORY.md names
   dead-index         a MEMORY.md link to a missing file
   superseded-memory  a memory whose description says SUPERSEDED: its name still states the old rule
+  over-200-lines     CLAUDE.md, a rules file with no `paths:` frontmatter, or the global CLAUDE.md past 200
+                     lines: it loads in every session and is followed less well the longer it is
+                     (AGENT_STARTUP.md and main-session.md are left out: startup-size.sh holds them)
+  memory-over-limit  MEMORY.md past 200 lines or 25 KB: what is past that is not loaded
 
 Limit: a mechanical first pass. duplicate-subject matches only an identical bold
 lead or heading, so two rules that disagree under different wording or headings
@@ -28,6 +32,8 @@ HEADING = re.compile(r"^#{2,4}\s+(.+)")
 OPEN_CONFLICT = re.compile(r"\bOPEN conflict\b", re.IGNORECASE)
 INDEX_LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
 MD_NAME = re.compile(r"[\w.-]+\.md")
+PATHS_FRONTMATTER = re.compile(r"\A---\n(?:.*\n)*?paths:", re.MULTILINE)
+MAX_LINES, MAX_MEMORY_BYTES = 200, 25_600
 
 
 def git(repo, *args):
@@ -79,6 +85,14 @@ def lint(repo, memory_dir, global_file):
             others = ", ".join(p for p in places if p != here)
             rows.append(f"{here} duplicate-subject also at {others}")
 
+    # Loaded in every session; a rules file with `paths:` loads only when a matching file is read.
+    for path, shown in instruction:
+        if shown in ("AGENT_STARTUP.md", ".claude/main-session.md") or PATHS_FRONTMATTER.match(path.read_text()):
+            continue
+        count = len(path.read_text().splitlines())
+        if count > MAX_LINES:
+            rows.append(f"{shown}:{MAX_LINES + 1} over-200-lines {count} lines")
+
     for path, shown in instruction + [(p, str(p)) for p in memory]:
         for n, line in enumerate(path.read_text().splitlines(), 1):
             for model in sorted(set(MODEL_ID.findall(line))):
@@ -89,6 +103,8 @@ def lint(repo, memory_dir, global_file):
     index = memory_dir / "MEMORY.md"
     if index.is_file():
         text = index.read_text()
+        if len(text.splitlines()) > MAX_LINES or len(text.encode()) > MAX_MEMORY_BYTES:
+            rows.append(f"{index}:1 memory-over-limit {len(text.splitlines())} lines, {len(text.encode())} bytes")
         for n, line in enumerate(text.splitlines(), 1):
             for target in INDEX_LINK.findall(line):
                 if not (memory_dir / target).is_file():

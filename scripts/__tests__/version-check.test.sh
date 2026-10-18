@@ -44,6 +44,12 @@ check "so does a new plugin file git does not track yet" 1 "$(vc)"
 rm "$T/r/scripts/new.sh"
 check "with no such base to compare with the check fails, and does not pass by default" 2 "$(vc no-such-branch)"
 
+# An agent file is the plugin too: its frontmatter changes what every session that runs it loads.
+g checkout -q -b fourth main
+mkdir -p "$T/r/agents"; echo 'helper' > "$T/r/agents/helper.md"
+check "a new agent file with the version unchanged fails" 1 "$(vc)"
+rm -r "$T/r/agents"
+
 # Two branches can pick the same next number: once one merges, the other's number is main's already.
 g checkout -q -b third main
 echo 'echo three' > "$T/r/scripts/a.sh"; echo '{"name": "p", "version": "1.3.0"}' > "$T/r/.claude-plugin/plugin.json"; g add -A && g commit -q -m third

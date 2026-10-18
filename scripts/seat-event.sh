@@ -59,7 +59,7 @@ case $LAUNCHED in ''|*[!0-9]*) echo "seat-event: invalid launch epoch '$LAUNCHED
 LAUNCHED_AT=$(date -u -d "@$LAUNCHED" '+%Y-%m-%dT%H:%M:%SZ') || { echo "seat-event: invalid launch epoch $LAUNCHED" >&2; exit 1; }
 COMPLETED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 FILE=${COMMANDECK_SEAT_EVENTS:-$PP_MAIN/.claude/metrics/seat-events.jsonl}
-USAGE=null; REASON=${SEAT_EVENT_REASON:-no token usage measured for this seat}; SESSION=
+USAGE=null; REASON=${SEAT_EVENT_REASON:-no token usage measured for this seat}; SESSION= MISSING=
 if [ -n "${SEAT_EVENT_WORKTREE:-}" ]; then
   # Bounded, so a blocked log read cannot hold the step this row measures.
   # A fresh pane's session is newer than the launch; a warm pane's (a fix sent to
@@ -73,6 +73,15 @@ if [ -n "${SEAT_EVENT_WORKTREE:-}" ]; then
   if [ -n "$SESSION" ] && [ -f "$SESSION" ]; then
     USAGE=$(seat_usage "$(kv provider)" "$SESSION" "$LAUNCHED" 2>/dev/null) || USAGE=null
     REASON="no token usage in $SESSION"
+    # A Builder that went on in fresh sessions (builder-fresh-round.sh): the record's other sessions are in the same folder.
+    for id in ${SEAT_EVENT_SESSIONS:-}; do
+      f=${SESSION%/*}/$id.jsonl
+      [ "$f" != "$SESSION" ] || continue
+      if [ -f "$f" ] && U=$(seat_usage "$(kv provider)" "$f" "$LAUNCHED" 2>/dev/null) && [ -n "$U" ] && [ "$U" != null ]; then
+        USAGE=$(jq -cn --argjson a "$USAGE" --argjson b "$U" 'if $a == null then $b else $a | .tokens |= with_entries(.value += $b.tokens[.key]) end')
+      else MISSING+=" $id"; fi
+    done
+    [ -z "$MISSING" ] || REASON="no session log for$MISSING (their tokens are not counted)"
   fi
 fi
 # --argjson below would drop the row on anything but JSON.
@@ -80,11 +89,11 @@ printf '%s' "$USAGE" | jq -e 'type == "object" or . == null' >/dev/null 2>&1 || 
 mkdir -p "$(dirname "$FILE")"
 jq -cn --arg unit "$UNIT" --arg role "$ROLE" --arg taskId "$TASK" \
   --arg launchedAt "$LAUNCHED_AT" --arg completedAt "$COMPLETED_AT" \
-  --arg model "$MODEL" --arg round "$ROUND" --arg stop "${SEAT_EVENT_STOP:-unknown}" \
+  --arg model "$MODEL" --arg round "$ROUND" --arg stop "${SEAT_EVENT_STOP:-unknown}" --arg missing "$MISSING" \
   --argjson usage "$USAGE" --arg reason "$REASON" --arg session "$SESSION" \
   '{event:"worker_done",unit:$unit,role:$role,taskId:$taskId,launchedAt:$launchedAt,completedAt:$completedAt,
     model:($usage.model // (if $model == "" then null else $model end)),tokens:($usage.tokens // null),stopReason:$stop,
     session:(if $session == "" then null else $session end)}
    + (if $round == "" then {} else {round:($round | tonumber? // .)} end)
-   + (if $usage.tokens == null then {tokensReason:$reason} else {} end)' \
+   + (if $usage.tokens == null or $missing != "" then {tokensReason:$reason} else {} end)' \
   >> "$FILE"

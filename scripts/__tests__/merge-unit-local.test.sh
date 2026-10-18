@@ -89,5 +89,16 @@ go u
 check "a GO merge of u ends 0" 0 "$(merge u)"
 check "the Builder's ledger row names the Builder's own session, not its sibling's" "$PROJ/builder.jsonl" \
   "$(jq -r 'select(.unit == "u" and .role == "builder") | .session' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
+# A Builder that went on in a fresh session (builder-fresh-round.sh) has a record with one session= line per session;
+# its ledger row counts them all, or the tokens of every later phase vanish from the unit's cost.
+mk v; PV=$HOME/.claude/projects/$(printf '%s' "$COMMANDECK_WORKSPACES/v" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PV"
+printf 'handle=t_v\ntask=task_v\nunit=v\nrole=builder\nlaunched=%s\ntag=SEAT-TAG-V\nsession=first\nsession=second\n' "$LA" > "$COMMANDECK_SCRATCH/seat-v-builder.txt"
+use() { jq -nc --arg t "$(date -u -d "@$2" +%FT%TZ)" --argjson i "$3" '{type: "assistant", timestamp: $t, message: {id: "m\($i)", model: "claude-x", usage: {input_tokens: $i, output_tokens: 10}}}'; }
+{ jq -nc --arg t "$(date -u -d "@$((LA + 30))" +%FT%TZ)" '{type: "user", timestamp: $t, message: {content: "Seat tag SEAT-TAG-V: read the brief."}}'; use x $((LA + 31)) 100; } > "$PV/first.jsonl"
+use x $((LA + 40)) 200 > "$PV/second.jsonl"
+go v
+check "a GO merge of v ends 0" 0 "$(merge v)"
+check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
+  "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

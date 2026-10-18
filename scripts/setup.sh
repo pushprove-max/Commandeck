@@ -10,7 +10,7 @@
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
-#          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl recommended|default] [--plan]
+#          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl recommended|default] [--auto-mode add|leave|remove] [--plan]
 #   or: setup.sh --questions begin|end
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
 # skill asks the owner once and passes every answer here. A second run changes
@@ -39,6 +39,9 @@
 # leaves Claude Code's own, and takes out what an earlier run wrote. A
 # status line is set only when one is given, and the one before it is recorded
 # for uninstall.
+# --auto-mode add puts two lines into the auto-mode classifier's list in ~/.claude/settings.json (every project on
+# this machine); leave, and no answer, change nothing there; remove takes out the lines setup added (an update
+# replays add or leave, never a remove).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 # Ahead of paths.sh, which on a Mac refuses to load without the tools this
@@ -47,7 +50,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --auto-mode --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -105,9 +108,11 @@ PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfSta
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
 PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
-OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl)
+OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) AUTO=$(old .autoMode)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
+# merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
+GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
 # default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.
@@ -199,6 +204,7 @@ while [ $# -gt 0 ]; do
     --ponytail) PONYTAIL=true; shift ;;
     --no-ponytail) PONYTAIL=false; shift ;;
     --cache-ttl) case $2 in recommended|default) CACHE=$2 ;; *) die "--cache-ttl takes recommended or default, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
     # A role with no id clears the saved one. Checked below, once the routing file is known.
     --codex-model) [[ $2 == *=* ]] || usage; CMODELS=$(jq -c --arg r "${2%%=*}" --arg m "${2#*=}" 'if $m == "" then del(.[$r]) else .[$r] = $m end' <<<"$CMODELS"); shift 2 ;;
@@ -342,17 +348,20 @@ fi
 il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --arg d "${DASHBOARD:-0}" '. + {project: $p, scope: $s, root: $r, dashboard: ($d == "1")}'
 
 # --- the changes ---
+# A remove is done once: a saved remove replayed by an update would take out lines another project added.
+AUTO_DO=${AUTO:-leave}; [ "$AUTO" != remove ] || AUTO=leave
 # What setup really writes in the project: il_write notes each path whose content is new or different.
 # The exclude file is also written by worktree-setup.sh, by itself, so it is compared at the end.
 IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".*; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" '
+  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg auto "$AUTO" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
+  + (if $gen == null then {} else {generatedFiles: $gen} end)
   + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != "")) | if . == {} then {} else {builder: .} end)
   + (if $sz == "" then {} else {issueSizing: $sz} end)
   + (if $pm == "" then {} else {planModels: ($pm | split(",") | map(select(. != "")))} end)
@@ -364,6 +373,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $md == {} then {} else {mergeDecisions: $md} end)
   + {ponytail: ($pony != "false")}
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
+  + (if $auto == "" then {} else {autoMode: $auto} end)
   + {chiefOfStaff: ({name: $name, persona: $persona} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
 elif [ "$(readlink "$IL_LINK" 2>/dev/null)" != "$IL_ROOT" ]; then echo "plan: would point $IL_LINK at $IL_ROOT"; fi
@@ -379,6 +389,7 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
 il_cache_ttl "$IL_PROJECT" "$PSET" "$([ "$CACHE" = recommended ] || echo off)"
+il_auto_mode "$IL_MACHINE" "$HOME/.claude/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
 il_lines "$IL_PROJECT" "$IL_EXCLUDE" "${IL_STATE[@]}"
@@ -402,9 +413,10 @@ elif [ -n "$DASHBOARD" ]; then
   PORT=$(grep -oE 'COMMANDECK_DASHBOARD_PORT[^0-9]*[0-9]+' "$DASH_JOB" | grep -oE '[0-9]+$' | head -1)
   il_set "$IL_MACHINE" --arg b "${BIND:-127.0.0.1}" --arg p "$PORT" --arg h "$HOSTS" '.dashboard = {bind: $b, port: $p, hosts: $h}'
 else
-  # Declined after it was on: the project comes off the dashboard. The job is every project's and stays.
+  # Declined after it was on: the project comes off the dashboard. The job is every project's: it stays until the last one leaves.
   ! jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1 || ! pp_registered \
-    || { bash "$HERE/dashboard.sh" --unregister "$PP_MAIN" >/dev/null; il_set "$IL_PROJECT" 'del(.registered)'; }
+    || { bash "$HERE/dashboard.sh" --unregister "$PP_MAIN" >/dev/null; il_set "$IL_PROJECT" 'del(.registered)'
+         grep -q '[^[:space:]]' "$HOME/.commandeck/dashboard/projects" 2>/dev/null || bash "$HERE/dashboard.sh" --uninstall >/dev/null; }
 fi
 [ -n "$PLAN" ] || bash "$HERE/main-watch.sh" --install >/dev/null
 il_global "$GCLAUDE" claude-md "$IL_ROOT/templates/global-claude.md" --global-claude

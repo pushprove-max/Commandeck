@@ -22,6 +22,12 @@ jobs:
           echo "COMMANDECK_TEST_NODE_MODULES=$RUNNER_TEMP/dom/node_modules" >> "$GITHUB_ENV"
       - name: Leak test
         run: bash ci/leak-test.sh
+      # The manifests and every component file, checked by the CLI that loads them. Pinned: a new CLI version
+      # may add a rule, and a plugin change should not fail on that alone.
+      - name: Plugin validate
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.302
+          claude plugin validate .
       # The checkout brings one commit; the check compares with the main branch, so that is fetched
       # here. A push to main itself is compared with main as it was before the push.
       - name: Version check

@@ -74,5 +74,37 @@ OUT=$(lib "$UNDO" 2>&1)
 check "a file edited since setup is left with the owner's edit, and named" "1:1" \
   "$(jq '[.hooks.Stop[0].hooks[0].command] | index("/opt/mine.sh") + 1' "$C/hooks.json"):$(grep -c "^changed since setup, left as it is: $C/hooks.json$" <<<"$OUT")"
 
+# --- auto mode: two plain-English lines in the classifier's environment list of ~/.claude/settings.json ---
+# The list is the owner's: setup keeps "$defaults" (Claude Code's built-in rules) in it, adds its lines once, and
+# touches nothing when the owner's list has no "$defaults" (it replaced the built-in rules on purpose). Leave
+# changes nothing at all, in the settings file or the machine manifest: the manifest serves every project, so a
+# second project answering Leave must not take the first project's lines back.
+AS=$H/.claude/settings.json; MM=$H/.commandeck/install/_machine.json; mkdir -p "$H/.claude"
+auto() { lib 'il_auto_mode "$IL_MACHINE" "$HOME/.claude/settings.json" '"$1" 2>&1; }
+envs() { jq -c '.autoMode.environment | [.[0], length]' "$AS" 2>&1; }
+rm -rf "$H/.commandeck"; rm -f "$AS"
+auto add >/dev/null
+check "no autoMode yet: the list is written with \"\$defaults\" first and setup's two lines" '["$defaults",3]' "$(envs)"
+auto add >/dev/null
+check "a second run adds nothing" '["$defaults",3]' "$(envs)"
+check "the first line names the plugin's repo, the second the relay pane" '1:1' \
+  "$(jq -r '.autoMode.environment[1]' "$AS" | grep -c '^Trusted repo: https://'):$(jq -r '.autoMode.environment[2]' "$AS" | grep -c 'Chief-of-Staff')"
+B=$(sha256sum < "$AS"; sha256sum < "$MM")
+auto leave >/dev/null
+check "Leave after an earlier add changes neither the settings file nor the machine manifest" "$B" "$(sha256sum < "$AS"; sha256sum < "$MM")"
+auto remove >/dev/null
+check "taking them out, when setup made the list, leaves no autoMode and no record" 'null:null' "$(jq -c '.autoMode' "$AS"):$(jq -c '.entries[$f].autoMode' --arg f "$AS" "$MM")"
+echo '{"theme":"dark","autoMode":{"environment":["$defaults","mine"]}}' > "$AS"
+auto add >/dev/null; auto add >/dev/null
+check "an owner's list with \"\$defaults\" gets the lines once, their own entry kept in place" '["$defaults",4]:mine' "$(envs):$(jq -r '.autoMode.environment[1]' "$AS")"
+auto remove >/dev/null
+check "taking them out removes only setup's lines, the owner's entry and the rest of the file stay" '{"theme":"dark","autoMode":{"environment":["$defaults","mine"]}}' "$(jq -c . "$AS")"
+echo '{"autoMode":{"environment":["mine"]}}' > "$AS"; cp "$AS" "$T/as.before"; B=$(sha256sum < "$MM")
+OUT=$(auto add)
+check "an owner's list without \"\$defaults\" is left byte for byte, and setup says how to keep the built-in rules" '0:1' \
+  "$(cmp -s "$AS" "$T/as.before"; echo $?):$(grep -c '"$defaults"' <<<"$OUT")"
+check "and nothing is recorded for it, so taking the lines out later removes nothing of the owner's" "$B" "$(sha256sum < "$MM")"
+rm -rf "$H/.commandeck" "$AS"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

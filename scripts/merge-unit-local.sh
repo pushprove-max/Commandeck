@@ -376,7 +376,7 @@ if [ "$DRY_RUN" = 0 ]; then
   # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.
   SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
   [ ! -f "$SEAT" ] || SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(pp_route builder 2>/dev/null && printf '%s' "$RT_AGENT" || true) SEAT_EVENT_STOP=done \
-    SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$SEAT" | tail -1) bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
+    SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$SEAT" | tail -1) SEAT_EVENT_SESSIONS=$(sed -n 's/^session=//p' "$SEAT" | tr '\n' ' ') bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
     || echo "no token ledger row written for $UNIT's Builder (ignored)" >&2
   while IFS= read -r f; do
     [ -n "$f" ] || continue

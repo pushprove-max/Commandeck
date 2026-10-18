@@ -17,11 +17,11 @@ TRIG=$PP_MAIN/.claude/plan-triggers.tsv
 BAD=$(awk -F'\t' '!/^#/ && NF && (NF != 3 || $1 !~ /^(panel|none)$/) { print FNR; exit }' "$TRIG")
 [ -z "$BAD" ] || { echo "REFUSED: $TRIG line $BAD is not '<panel or none><tab><regex><tab><name>'" >&2; exit 2; }
 PICK=$(awk -F'\t' '
+  function pick(s,  i) { if (panel == "") for (i = 1; i <= n; i++) if (tier[i] == "panel" && s ~ re[i]) { panel = name[i]; break } }
   FNR == NR { if ($0 !~ /^#/ && NF) { n++; tier[n] = $1; re[n] = $2; name[n] = $3 }; next }
-  /^#+ / { h = index($0, " ") - 1; if (on && h <= lv) on = 0; if (!on && $0 ~ /^#+ The (issues|batch)/) { on = 1; lv = h }; next }
+  /^#+ / { h = index($0, " ") - 1; if (on && h <= lv) on = 0; if (!on && $0 ~ /^#+ The (issues|batch)/) { on = 1; lv = h } else if (on) pick(tolower($0)); next }
   !on { next }
-  { s = tolower($0) }
-  panel == "" { for (i = 1; i <= n; i++) if (tier[i] == "panel" && s ~ re[i]) { panel = name[i]; break } }
+  { s = tolower($0); pick(s) }
   /^[0-9]+\. / { items++; for (i = 1; i <= n; i++) if (tier[i] == "none" && s ~ re[i]) { quiet++; none = name[i]; break } }
   END {
     if (panel != "") print "Panel\t" panel

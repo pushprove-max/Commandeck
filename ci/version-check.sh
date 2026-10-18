@@ -12,7 +12,7 @@
 # Exit 0 nothing to say, 1 the version must change, 2 no base to compare with.
 # Self-test: bash scripts/__tests__/version-check.test.sh
 set -euo pipefail
-PLUGIN=(.claude-plugin/ config/ dashboard/ hooks/ scripts/ skills/ templates/)
+PLUGIN=(.claude-plugin/ agents/ config/ dashboard/ hooks/ scripts/ skills/ templates/)
 BASE=${1:-origin/main}
 cd "$(git rev-parse --show-toplevel)"
 FROM=$(git merge-base "$BASE" HEAD 2>/dev/null) || { echo "version-check: nothing named $BASE to compare with here; fetch the main branch first" >&2; exit 2; }

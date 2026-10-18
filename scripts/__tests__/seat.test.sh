@@ -174,5 +174,24 @@ COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T
 check "a typed pointer ends with its task id" 'Task id task_1.' "$(grep -m1 'Your task spec' "$T/sent" 2>&1 | grep -o 'Task id task_1\.$')"
 rm -f "$T/no-dispatch"
 
+# dispatch-task.sh types its own pointer to a Codex pane Orca will not bind. The seat's log is found by the tag in the
+# spec, and read-verdict.sh searches typed prompts only, so the typed pointer carries the spec's own tag sentence.
+B2=$T/bin2 WTP=$T/codex-wt; mkdir -p "$B2" "$WTP" "$HOME/.codex/sessions"
+cat > "$B2/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "terminal list"*) echo '{"result":{"terminals":[{"handle":"h1","agentIdentity":"codex","worktreeId":"w1","worktreePath":"$WTP"}]}}' ;;
+  "worktree ps"*) echo '{"result":{"worktrees":[]}}' ;;
+  "orchestration task-list"*) jq -n '{result: {tasks: [{id: "task_1", spec: "Read it. Seat tag seat-judge-7-8: it names this session, nothing to do with it."}]}}' ;;
+  "orchestration worker-start"*) echo '{"ok":false,"error":{"message":"refused for the test"}}' ;;
+  "terminal send"*) while [ \$# -gt 0 ]; do [ "\$1" != --text ] || printf '%s\n' "\$2" > "$T/typed"; shift; done
+    echo "{\"cwd\":\"$WTP\"} $T/scratch/dispatch-specs/task_1.md" > "$HOME/.codex/sessions/rollout-x.jsonl"; echo '{"ok":true}' ;;
+  *) echo '{"ok":true,"result":{}}' ;;
+esac
+EOF
+chmod +x "$B2/orca-ide"
+(cd "$PROJ" && COMMANDECK_SCRATCH=$T/scratch PATH="$B2:$PATH" bash "$REAL/scripts/dispatch-task.sh" task_1 terminal:h1 --keep-task </dev/null >"$T/out" 2>&1)
+check "a pointer dispatch-task.sh types to a Codex pane carries the spec's seat tag" 'Seat tag seat-judge-7-8' "$(grep -o 'Seat tag seat-judge-7-8' "$T/typed" 2>&1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

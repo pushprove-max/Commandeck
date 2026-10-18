@@ -127,8 +127,8 @@ Ask them in this order, up to four questions per call.
    - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
    Ask "Plan models": All (recommended) | Without Fable | Without Codex | Without both
    - The models the plan seats (the planners and judges before a build) may run on; every planning answer offers only these, and a seat whose default is left out says which model it used instead. All: `--plan-models ''`; Without Fable: `--plan-models opus,sonnet,sol,astra`; Without Codex: `--plan-models opus,sonnet,fable`; Without both: `--plan-models opus,sonnet`. On the Claude-only profile ask All | Without Fable, and Without Fable is `--plan-models opus,sonnet`.
-   Ask "Plan seats on the fast tier", one multi-select question (`multiSelect: true`): Planners | Codex judges | Claude judge
-   - Each plan seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Nothing chosen is the default, every seat on the standard tier: `--plan-fast ''`. Planners: `plan-author,plan-author-second`; Codex judges: `plan-judge-sol,plan-judge-astra`; Claude judge: `plan-judge-claude`; the chosen ones joined by commas, as `--plan-fast plan-author,plan-judge-claude`. Offer Codex judges only on the Claude+OpenAI profile and when the check said "Codex fast mode: available".
+   Ask "Plan seats on the fast tier", one multi-select question (`multiSelect: true`): None (recommended) | Planners | Codex judges | Claude judge
+   - Each plan seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. None is the default, every seat on the standard tier: `--plan-fast ''`. None picked with a seat means that seat alone. Planners: `plan-author,plan-author-second`; Codex judges: `plan-judge-sol,plan-judge-astra`; Claude judge: `plan-judge-claude`; the chosen ones joined by commas, as `--plan-fast plan-author,plan-judge-claude`. Offer Codex judges only on the Claude+OpenAI profile and when the check said "Codex fast mode: available".
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`
@@ -136,11 +136,15 @@ Ask them in this order, up to four questions per call.
    A typed name is sent as `--name <n>`. With a relay:
    Ask "Relay voice": Plain and brief (recommended) | <saved line, if any>
    - its one line on how it should sound. `--persona <text>`
+   When a relay already exists, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh`. If it prints `relay: <n> commits behind main`:
+   Ask "Relay": Rebase it (recommended) | Leave as is
+   - Rebase it: its worktree moves onto the project's local main, so its hooks and rules are current. Say how many commits behind, and that the relay pane may be running and sees the change. After Apply, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase`; it refuses and changes nothing when the worktree has uncommitted changes or the rebase conflicts: show its line.
+   - Leave as is: nothing is run. Never run `--rebase` without this answer.
 8. A dashboard?
    Ask "Dashboard": On, this machine only (recommended) | Off | <saved names, if any>
-   - On, this machine only: a local web page of builds and costs, served by a background job. `--dashboard --hosts ''`
+   - On, this machine only: a local web page of builds and costs, served by a background job, reachable from this machine only. `--dashboard --bind 127.0.0.1 --hosts ''`
    - Off: no job, no port. `--no-dashboard`
-   - On plus another name: the page also answers to a name such as a tailnet's, typed as the picker's own text answer (or the saved names). `--dashboard --hosts <name>[,<name>]`
+   - On plus another name: the page also answers to a name such as a tailnet's, typed as the picker's own text answer (or the saved names). This one listens on the network (`0.0.0.0`), so say so; a name not on the list still gets a 403. `--dashboard --bind 0.0.0.0 --hosts <name>[,<name>]`
 9. What must pass before a merge?
    Ask "Merge check": <detected command> (recommended) | None | <saved command, if any>
    - The one command that must pass before a merge, e.g. the project's test script. `--test-command '<cmd>'`
@@ -158,6 +162,12 @@ Ask them in this order, up to four questions per call.
     Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default
     - 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`
     - Leave default: writes nothing; Claude Code picks (and a value an earlier setup wrote is taken out). `--cache-ttl default`
+    Then, the auto-mode classifier (it checks each command in a pane run in auto mode):
+    Ask "Auto mode": Add two entries (recommended) | Leave as is | Take them out
+    - Add two entries: Your Claude panes run in auto mode. Two plain-English lines go into ~/.claude/settings.json, kept with Claude Code's built-in list, so its safety check knows the plugin's scripts and the relay pane. They apply in every project on this machine. `--auto-mode add`
+    - Leave as is: Changes nothing in ~/.claude/settings.json; a refusal of a plugin script stays possible. `--auto-mode leave`
+    - Take them out: offered only when `bash -c 'jq -e "[.entries[].autoMode // empty] | length > 0" ~/.commandeck/install/_machine.json >/dev/null 2>&1 && echo recorded; true'` prints "recorded". Removes the two lines setup added, for every project on this machine; your own entries stay. `--auto-mode remove`
+    A list of yours without `"$defaults"` is left as it is (it replaces Claude Code's built-in list) and setup says how to keep that list.
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": All (recommended) | serena | agent-browser | None
     - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open; the ponytail plugin only when you have it and ponytail is on. Sends no `--addons`.

@@ -1,6 +1,7 @@
 ---
 name: worktreereview
 description: Review one finished or running worktree build (a Builder or any agent that worked in an Orca worktree) and produce an HTML report of where the time and tokens went, stage by stage, with lessons. Use when the owner says "/worktreereview <unit>", "analyze the <unit> build", "break down that build", or asks what a Builder run cost.
+disable-model-invocation: true
 ---
 
 # Worktree review

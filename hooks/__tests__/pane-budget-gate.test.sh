@@ -26,6 +26,17 @@ runbash() { CLAUDE_PROJECT_DIR="$BOX/w" PANE_BUDGET_CONFIG="$1" "$HOOK" < "$BOX/
 rm -f "$BOX/w/.claude/briefs/w.md"
 OUT=$(runbash "$BOX/budget.json"); RC=$?; check "over-budget bash blocks" 2 "$RC"; check "bash block names handoff" 0 "$(printf '%s' "$OUT" | grep -q 'w-handoff.md' && echo 0 || echo 1)"
 check "under-budget bash passes" 0 "$(runbash "$BOX/budget-nocompact.json" >/dev/null; echo $?)"
+# A limit that is not a whole number admits nothing: a null context, a text compactions value and a missing file all block.
+printf '{"context":null}\n' > "$BOX/budget-null.json"; printf '{"context":99999999,"compactions":"x"}\n' > "$BOX/budget-text.json"
+check "a null context limit blocks" 2 "$(runbash "$BOX/budget-null.json" >/dev/null; echo $?)"
+check "a non-numeric compactions limit blocks" 2 "$(runbash "$BOX/budget-text.json" >/dev/null; echo $?)"
+check "a missing config blocks" 2 "$(runbash "$BOX/none.json" >/dev/null; echo $?)"
+# The turn count is a pass over the whole transcript on every Edit, Write and Bash: a within-budget call skips it
+# (the sort it ends in leaves a marker), an over-budget one still names turns= in its message.
+mkdir -p "$BOX/shim"; printf '#!/bin/sh\ntouch "%s/sorted"\nexec /usr/bin/sort "$@"\n' "$BOX" > "$BOX/shim/sort"; chmod +x "$BOX/shim/sort"
+rm -f "$BOX/sorted"; PATH="$BOX/shim:$PATH" runbash "$BOX/budget-nocompact.json" >/dev/null
+check "a within-budget call does not count the turns" 1 "$([ -e "$BOX/sorted" ]; echo $?)"
+check "an over-budget message still names the turns" 1 "$(PATH="$BOX/shim:$PATH" runbash "$BOX/budget.json" | grep -c 'turns=3 ')"
 printf '## decisions\n## unresolved findings\n## current commit\n## test evidence\n' > "$BOX/w/.claude/briefs/w-handoff.md"
 check "handoff permits bash" 0 "$(runbash "$BOX/budget.json" >/dev/null; echo $?)"
 rm "$BOX/w/.claude/briefs/w-handoff.md"

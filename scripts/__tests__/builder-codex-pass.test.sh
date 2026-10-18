@@ -246,5 +246,16 @@ rm -f "$TMP/frs-calls"
 check "a /clear Orca refuses: exit 1, Orca's answer in the log, and main is told" "1 1 1" \
   "$R $(grep -c 'typing /clear into term_frs failed (orca: PROBE-REFUSAL)' "$TMP/frs.out") $(cat "$TMP/frs-calls" "$SC/queue/main.jsonl" 2>/dev/null | grep -c "fresh round not started: ${H7##*/}")"
 
+# A diff past the reviewer's input limit is not pasted (Codex refuses an input over its limit, and the pass ended with no
+# review): the prompt holds the file list and how to read each file, and none of the diff body. Same range, same pass.
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 11 >/dev/null)
+printf 'echo eleven-BODY-PROBE\n' > "$W/a.sh"
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-11 COMMANDECK_PASS_DIFF_HARD=50 bash "$PASS_SH" "$U" 11 review >"$TMP/out" 2>"$TMP/err") \
+  || { echo "FAIL the over-limit pass r11 did not run: $(cat "$TMP/err")"; FAIL=$((FAIL+1)); }
+check "a diff over the input limit goes as a file list with the read instruction, and none of the diff body" "1 1 0" \
+  "$(input 11 | grep -c '^a.sh') $(input 11 | grep -cF ": git diff ") $(input 11 | grep -c 'BODY-PROBE')"
+# The Claude reviewer's git wrapper refuses -C before the subcommand (exit 2), and both reviewers run in the worktree.
+check "the read instruction has no git -C, which the reviewer's git wrapper refuses" 0 "$(input 11 | grep -cF 'git -C')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -30,9 +30,10 @@ def a($key; $sev; $text): {key: $key, severity: $sev, text: $text};
       | a("cache-role-\($role)"; "warn"; "\($role) cache hit rate over 24 h is \($r24 | r)%, \($r7 - $r24 | r) points under its 7-day \($r7 | r)%")),
     # Used ahead of the week's elapsed share runs out before the reset at this pace.
     # A machine set to API billing paces dollars instead (limit-api below): the two percent alerts stay quiet there.
+    # Each follows its own tool's billing: Claude's for Claude (billing), Codex's sign-in for Codex (codexBilling).
     ($d.limit // {} | select(.billing != "api" and .usedPct != null and .goalPct != null and .goalPct > 0 and .usedPct > .goalPct)
       | a("limit-claude"; "crit"; "Claude 7-day limit is on pace to run out before the reset: \(.usedPct | r)% used with \(.goalPct | r)% of the week gone")),
-    ($d.limit // {} | select(.billing != "api") | .codex // {} | select(.usedPct != null and .goalPct != null and .goalPct > 0 and .usedPct > .goalPct)
+    ($d.limit // {} | select(.codexBilling != "api") | .codex // {} | select(.usedPct != null and .goalPct != null and .goalPct > 0 and .usedPct > .goalPct)
       | a("limit-codex"; "crit"; "Codex 7-day limit is on pace to run out before the reset: \(.usedPct | r)% used with \(.goalPct | r)% of the week gone")),
     # A machine that pays by API: dollars spent ahead of the weekly limit's even pace. No limit, no alert.
     ($d.limit.api // {} | select(.limitUsd != null and .spentUsd != null and .goalUsd != null and .spentUsd > .goalUsd)
@@ -71,7 +72,7 @@ def a($key; $sev; $text): {key: $key, severity: $sev, text: $text};
    missing: [
      (if $se == null then "seat-events (cache hit rate)" elif $hit == null then "24 h cache hit rate (no measured seat)" else empty end),
      (if $d.limit.billing == "api" then empty elif $d.limit.usedPct == null or $d.limit.goalPct == null then "7-day limit" else empty end),
-     (if $d.limit.billing == "api" then empty elif $d.limit.codex.usedPct == null or $d.limit.codex.goalPct == null then "Codex 7-day limit" else empty end),
+     (if $d.limit.codexBilling == "api" then empty elif $d.limit.codex.usedPct == null or $d.limit.codex.goalPct == null then "Codex 7-day limit" else empty end),
      (if $d.limit.billing != "api" then empty elif $d.limit.api.spentUsd == null then "API spend"
       elif $d.limit.api.complete != true then "API spend (incomplete)" else empty end),
      (if $d.limit.cacheWritePct24h == null then "24 h cache write share" else empty end),

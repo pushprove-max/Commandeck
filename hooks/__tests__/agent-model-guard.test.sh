@@ -51,6 +51,9 @@ check "Explore naming sonnet is not rewritten"      "" "$(jq -cn --argjson i "$E
 # Unnamed general-purpose and debugger calls run as Sonnet 5.5; a named model still wins.
 DEBUGGER='{"subagent_type":"debugger","description":"find the cause","prompt":"trace it"}'
 check "unnamed debugger runs as Sonnet, reason names it" 1 "$(rewritten Agent "$DEBUGGER" sonnet)"
+# The plugin's own helper (agents/helper.md) is a fact-gatherer: unnamed it would run as Opus, the costliest seat.
+HELPER='{"subagent_type":"commandeck:helper","description":"count the callers","prompt":"count them"}'
+check "an unnamed commandeck:helper runs as Sonnet" 1 "$(rewritten Agent "$HELPER" sonnet)"
 check "the legacy Task tool name runs an unnamed general-purpose as Sonnet too" 1 "$(rewritten Task "$NOMODEL" sonnet)"
 check "general-purpose naming opus is not rewritten" "" "$(jq -cn --argjson i "$NOMODEL" '{tool_name:"Agent", tool_input:($i + {model:"opus"})}' | bash "$HOOK" 2>/dev/null)"
 check "debugger naming opus is not rewritten"       "" "$(jq -cn --argjson i "$DEBUGGER" '{tool_name:"Agent", tool_input:($i + {model:"opus"})}' | bash "$HOOK" 2>/dev/null)"

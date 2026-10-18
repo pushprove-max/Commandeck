@@ -32,6 +32,9 @@ check "prose, a bare fence, then VERDICT: GO: no verdict" none "$(verdict 'Revie
 check "the same shape with NO-GO: NO-GO" "VERDICT: NO-GO" "$(verdict 'code\n```\nVERDICT: NO-GO\n')"
 check "a fenced sample that closes, then the reply's own GO: GO" "VERDICT: GO" \
   "$(verdict 'Sample:\n```bash\nVERDICT: NO-GO\n```\nAll fixed.\nVERDICT: GO\n')"
+# Every reader of the printed line (seat.sh, the merge) matches one space after the colon; read-verdict accepts any.
+check "a verdict with two spaces after the colon is printed in one canonical form" "VERDICT: GO" "$(verdict 'Done.\nVERDICT:  GO\n')"
+check "a verdict with no space after the colon is printed in one canonical form" "VERDICT: GO" "$(verdict 'Done.\nVERDICT:GO\n')"
 # seat.sh binds a Codex seat's log into its record as a path (session=/.../rollout.jsonl). For a pane Orca names no
 # agent for, that path is no Claude session id: the seat's Claude log is still found by its launch time.
 touch "$T/listed"; mkdir -p "$T/sc" "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')"

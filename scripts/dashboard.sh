@@ -826,11 +826,16 @@ registered() { [ ! -s "$REG" ] || grep -v '^[[:space:]]*$' "$REG"; }
 # project whose collect fails stops the publication.
 github() { git -C "$1" config --get remote.origin.url 2>/dev/null | grep -qE '^(https://([^/@]+@)?|ssh://git@|git@)github\.com[:/]'; }
 projects() {
-  local p n i=1 gone='' bare='' note=''
-  COMMANDECK_MAIN="$PP_MAIN" DASH_NOW="$NOW" bash "$HERE/$NAME.sh" --project "$RUN/proj-1" >&2 && cat "$RUN/proj-1/project.json" > "$RUN/projects.jsonl" || return 1
+  local p n i=1 gone='' bare='' note='' home=1
+  # Off for the home project (a registry that exists and does not list it) means it is not collected; a job installed
+  # before any registration has no registry, and keeps collecting it.
+  # By name, as the loop below and register() match projects: a path can be spelled two ways.
+  [ ! -e "$REG" ] || registered | sed 's|.*/||; s/[^A-Za-z0-9_.-]/-/g' | grep -qxF -- "$PP_PROJECT" || home=
+  : > "$RUN/projects.jsonl"
+  [ -z "$home" ] || { COMMANDECK_MAIN="$PP_MAIN" DASH_NOW="$NOW" bash "$HERE/$NAME.sh" --project "$RUN/proj-1" >&2 && cat "$RUN/proj-1/project.json" > "$RUN/projects.jsonl" || return 1; }
   while IFS= read -r p; do
     # The home project is collected above; a name is one key, so a second checkout under home's name is home.
-    n=${p##*/}; [ "${n//[^A-Za-z0-9_.-]/-}" != "$PP_PROJECT" ] || continue
+    n=${p##*/}; [ -z "$home" ] || [ "${n//[^A-Za-z0-9_.-]/-}" != "$PP_PROJECT" ] || continue
     [ -e "$p/.git" ] || { gone+="${gone:+, }$p"; continue; }
     github "$p" || { bare+="${bare:+, }$p"; continue; }
     i=$((i + 1))

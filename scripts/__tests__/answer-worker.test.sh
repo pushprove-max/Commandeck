@@ -79,5 +79,31 @@ check "an idle pane whose log never shows the answer: NOT delivered" "1:1:0" "$R
 OUT=$(answer term_gone "hello"); RC=$?
 check "a pane that is gone: nothing sent, and said" "1:1" "$RC:$(grep -c 'no agent pane term_gone' <<<"$OUT")"
 
+# Two Claude planners share one <unit>-plan worktree. Planner A is mid-turn, planner B (newer log) is done: an answer
+# to A must be read against A's own log (the launch binding), or B's finished turn types it into A's busy pane.
+W2=$T/ws/u2-plan; P2=$T/home/.claude/projects/$(printf '%s' "$W2" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$W2" "$P2" "$T/scratch" "$T/bin2"
+for x in a b; do
+  printf 'handle=term_p%s\nrole=plan-author\nunit=u2\nlaunched=1760000000\ntag=SEAT-TAG-%s\n' "$x" "$x" > "$T/scratch/seat-u2-plan-$x.txt"
+  jq -nc --arg p "Seat tag SEAT-TAG-$x: plan it." '{type: "user", message: {role: "user", content: $p}, timestamp: "2025-10-09T08:00:0'$([ $x = a ] && echo 1 || echo 5)'Z"}' > "$P2/$x.jsonl"
+done
+echo '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Planned.\nPLAN-DONE"}]},"timestamp":"2025-10-09T08:01:00Z"}' >> "$P2/b.jsonl"
+echo '{"type":"system","subtype":"turn_duration","timestamp":"2025-10-09T08:01:01Z"}' >> "$P2/b.jsonl"
+cat > "$T/bin2/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "terminal list") jq -n '{result: {terminals: [{handle: "term_pa", tabId: "t2", leafId: "l1", worktreePath: "$W2"}, {handle: "term_pb", tabId: "t2", leafId: "l2", worktreePath: "$W2"}]}}' ;;
+  "worktree ps") jq -n '{result: {worktrees: [{path: "$W2", agents: [{paneKey: "t2:l1", agentType: "claude", state: "working"}, {paneKey: "t2:l2", agentType: "claude", state: "idle"}]}]}}' ;;
+  "terminal send") echo typed >> "$T/typed2"; echo '{"ok":true}' ;;
+  "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; esac; shift; done; printf '%s\n' "\$b" >> "$T/inbox2"; echo '{"ok":true}' ;;
+  *) echo '{"ok":true}' ;;
+esac
+EOF
+chmod +x "$T/bin2/orca-ide"
+: > "$T/typed2"; : > "$T/inbox2"; touch -d '2 hours ago' "$P2/a.jsonl" # B's log is the newer one, as --current reads it
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
+  ANSWER_WORKER_WAIT=2 PATH="$T/bin2:$PATH" bash "$REAL/scripts/answer-worker.sh" term_pa "take option two" 2>&1); RC=$?
+check "an answer to planner A reads A's log: A is mid-turn, so it goes to A's inbox, not typed in" "2:1:0" \
+  "$RC:$(wc -l < "$T/inbox2" | tr -d ' '):$(wc -l < "$T/typed2" | tr -d ' ')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -118,6 +118,8 @@ MADE_FROM = {
     "38ccaed2": ("6743a4ac",),
     # 0.13.2 main-session.md
     "d3ad81e3": ("871dfc54",),
+    # 0.14.0 main-session.md
+    "f652f9a1": ("d3ad81e3",), "ea79fcf3": ("2fac1916",), "3ca43de1": ("0a0832e3",), "487d3e9e": ("04adb41d",),
 }
 
 

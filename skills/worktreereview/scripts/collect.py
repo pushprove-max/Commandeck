@@ -48,6 +48,7 @@ REVIEW_WAIT = ('idle_elsewhere', 'idle_down')
 TOOL_DOWN = re.compile(r'REFUSED: (?:the \w+ \w+ pass failed|no Codex session appeared|the Codex broker|the Codex CLI is not signed in|no codex on PATH)')
 WAIT_ON_OWNER = 120  # an idle gap longer than this, waiting on the owner, is cut from the clock
 SHARE_FLOOR = 600  # seconds of tests and idle waits below which no share flags a build: two test runs are a third of a short one
+OUT_ROOT = '/tmp/commandeck/worktreereview'
 DECISIONS = None  # decisions.jsonl; None is the main checkout's own
 # What a call that went to the background answers at once: a Bash job's id, or a helper's. The harness
 # runs a helper in the background without the flag, so the answer is the only sign of it.
@@ -140,7 +141,7 @@ def refusal(blocked):
 def read_session(path):
     """One Claude session log -> its calls, tool calls, wake-ups, questions to main and failed pass launches."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
-         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'down': [], 'first': None, 'last': None}
+         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'down': [], 'first': None, 'last': None, 'final': ''}
     tasks, asked = {}, {}  # background task id -> its call; a job tool's call -> the job's call it asks about
     for e in rows_of(path):
         when = e.get('timestamp')
@@ -154,6 +155,7 @@ def read_session(path):
             s['usage'][m.get('id')] = (s['usage'].get(m.get('id'), (ts(when),))[0], m.get('usage') or {}, m.get('model'))
             for b in c if isinstance(c, list) else []:
                 if b.get('type') == 'text' and b.get('text', '').strip():
+                    s['final'] = b['text']
                     s['notes'].append((ts(when), b['text'].strip().replace('\n', ' ')[:220]))
                 elif b.get('type') == 'tool_use':
                     i = b.get('input') or {}
@@ -430,13 +432,17 @@ def loop_limits(home):
 
 
 def main_archive(worktree, unit, given=None):
-    """Where merge-unit-local.sh files the unit's brief files: <main checkout>/archive/briefs-<unit>.tar."""
+    """Where merge-unit-local.sh files the unit's brief files: ~/.commandeck/briefs/<project>/<unit>.tar,
+    <project> being the main checkout's folder name as hooks/lib/project.sh makes it (PP_PROJECT)."""
     home = main_checkout(worktree, given)
-    return os.path.join(home, 'archive', f'briefs-{unit}.tar') if home else None
+    if not home:
+        return None
+    project = re.sub(r'[^A-Za-z0-9_.-]', '-', os.path.basename(home)) or 'unknown'
+    return os.path.expanduser(f'~/.commandeck/briefs/{project}/{unit}.tar')
 
 
 def round_threads(worktree, unit, archive=None):
-    """{Codex thread id: (round number, pass kind)} from the head of each of the unit's round files.
+    """{Codex thread or Claude session id: (round number, pass kind)} from the head of each of the unit's round files.
 
     The worktree's own files, or, once the merge has archived them and the
     worktree is gone, the ones in the archive.
@@ -455,10 +461,10 @@ def round_threads(worktree, unit, archive=None):
         m = re.fullmatch(re.escape(unit) + r'-r(\d+)-reports\.md', name)
         if not m:
             continue  # another unit whose name starts with this one's
-        # builder-codex-pass.sh writes the threads and the kind before the first blank line.
+        # builder-codex-pass.sh writes the threads (or a Claude reviewer's sessions) and the kind before the first blank line.
         head = text.split('\n\n', 1)[0]
         kind = re.search(r'^Pass: (\S+)$', head, re.M)
-        for tid in re.findall(r'^Codex thread: ([A-Za-z0-9-]+)$', head, re.M):
+        for tid in re.findall(r'^(?:Codex thread|Claude session): ([A-Za-z0-9-]+)$', head, re.M):
             out[tid] = (int(m.group(1)), kind.group(1) if kind else 'review')
     return out
 
@@ -529,7 +535,7 @@ def number_passes(passes, rounds, launches):
     """
     for i, p in enumerate(passes, 1):
         if rounds:
-            named = [v for t, v in rounds.items() if any(f.endswith(f'-{t}.jsonl') for f in p['files'])]
+            named = [v for t, v in rounds.items() if t == p.get('sid') or any(f.endswith(f'-{t}.jsonl') for f in p['files'])]
             p['n'], p['kind'] = max(named) if named else (0, 'not a pass')
         else:
             near = [l for l in launches if -5 <= p['start'] - l[0] <= 180]
@@ -564,7 +570,9 @@ def main():
         if getattr(a, k) is None:
             setattr(a, k, v)
     unit = os.path.basename(wt)
-    out = a.out or f'/tmp/commandeck/worktreereview/{unit}'
+    home = main_checkout(wt, a.main)
+    # The folder review.py and the skill read: <project>/<unit>; a project nothing names (worktree gone, no --main) has none.
+    out = a.out or os.path.join(OUT_ROOT, *([os.path.basename(home)] if home else []), unit)
     os.makedirs(out, exist_ok=True)
     test_re = re.compile(a.test_regex, re.I)
     cuts = []
@@ -579,7 +587,7 @@ def main():
 
     proj =os.path.expanduser('~/.claude/projects/') + re.sub(r'[^A-Za-z0-9]', '-', wt)
     files = sorted(f for f in glob.glob(proj + '/*.jsonl') if not a.session or os.path.basename(f).startswith(a.session))
-    sessions = sorted((read_session(f) | {'id': os.path.basename(f)[:8], 'ledger': session_ledger(f)} for f in files), key=lambda s: s['first'])
+    sessions = sorted((read_session(f) | {'id': os.path.basename(f)[:8], 'name': os.path.basename(f)[:-6], 'ledger': session_ledger(f)} for f in files), key=lambda s: s['first'])
     passes = []
     if sessions:
         t0, t1 = sessions[0]['first'], max(s['last'] for s in sessions)
@@ -596,6 +604,16 @@ def main():
         t0, t1 = min(p['start'] for p in passes), max(p['end'] for p in passes)
     rounds = round_threads(wt, unit, main_archive(wt, unit, a.main))
     passes = fold_passes(passes, rounds)
+    # A Claude reviewer ran in the Builder's worktree: its log is already in `sessions`, which counts its tokens and cost
+    # once, so its pass carries none of its own.
+    for sess in sessions:
+        if sess['name'] in rounds:
+            verdict = re.findall(r'VERDICT:\s*(NO-GO|GO)', sess['final'])
+            passes.append({'file': sess['name'], 'files': [], 'sid': sess['name'], 'start': sess['first'], 'end': sess['last'], 'complete': True,
+                           'usage': {}, 'calls': 0, 'model': next((m for _, _, m in sess['usage'].values() if m), None), 'effort': None,
+                           'message': sess['final'], 'rows': [], 'threads': 1, 'verdict': verdict[-1] if verdict else 'none',
+                           'findings': len(re.findall(r'^\s*(?:[-*]\s*)?\[P[0-3]\]', sess['final'], re.M))})
+    passes.sort(key=lambda p: p['start'])
     for p in passes:
         # command_s and longest are worked out once the cut windows are known.
         p['spans'] = [x for f in p['files'] for x in codex_commands(f)]

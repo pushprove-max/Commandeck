@@ -95,8 +95,8 @@ map(select(type == "object" and (.event | type) == "string")) as $r
         | map(.from |= todate | .to |= (if . == null then null else todate end))
       end),
     startedAt: ([$r[].ts | select(ep != null)] | first // null),
-    reviewSec: (if $last == null then null else [$cs[] | . as $c | (.ts | ep) as $a
-        | (($ce | map(select(.pass == $c.pass and .round == $c.round)) | first | .ts // null | if . == null then $now else ep end)) as $b
+    reviewSec: (if $last == null then null else [$cx[] | (.c.ts | ep) as $a
+        | (if .e == null then $now else .e.ts | ep end) as $b
         | select($a != null and $b != null and $b >= $a) | $b - $a] | add // 0 end),
     waiting: ([($openCodex[] | {kind: "codex", what: .pass, round: .round, since: .ts}),
                # seenAt: the helper's newest row, so main-watch can tell a helper at work from one that died with no stop.

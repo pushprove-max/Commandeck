@@ -246,6 +246,50 @@ check('a refusal is sorted by its hook and its reason, a quoted interpreter path
     'validation_guard.py: this tree already has N passing run(s), the budget is N': 1}, r['blocked'])
 check('and the page counts them by hook', True, 'Guards refused 4 tool call(s): bash-guardrails.sh 3, validation_guard.py 1.' in rendered('why', r))
 
+# --- The merge script files the round archive under the project's name, not under the main checkout's archive/. ---
+import review
+proj2 = f'{TMP}/proj 2'
+subprocess.run(['git', 'init', '-q', proj2], check=True)
+check('an archive at the path merge-unit-local.sh writes is the one looked for', f'{TMP}/home/.commandeck/briefs/proj-2/gone.tar',
+      collect.main_archive(f'{TMP}/ws/gone', 'gone', proj2))
+
+# --- A Claude reviewer's pass: its round file is headed by its session, its log sits among the Builder's, and its
+# tokens are counted once, as the Builder worktree's own (never again as a Codex run). ---
+builder_rows = [user(0), say(10, 'building'), turn_end(12), user(500), say(510, 'fixed'), turn_end(512)]
+review_rows = [user(100), say(110, 'looking'), say(200, 'No findings.\nVERDICT: GO'), turn_end(201)]
+def with_reviewer(unit, header):
+    wt = f'{TMP}/ws/{unit}'
+    write(f'{TMP}/home/.claude/projects/{re.sub(r"[^A-Za-z0-9]", "-", wt)}/rv-1.jsonl', review_rows)
+    if header:
+        write(f'{wt}/.claude/briefs/{unit}-r1-reports.md', [header + '\n\nNo findings.\nVERDICT: GO\n'])
+    return collected(unit, builder_rows)
+plain, claude = with_reviewer('rv0', None), with_reviewer('rv1', 'Pass: adversarial\nClaude session: rv-1')
+check("a Claude reviewer's session is a numbered pass with its round and verdict", [(1, 'adversarial', 'GO')],
+      [(q['n'], q['kind'], q['verdict']) for q in claude['passes']])
+nonzero = lambda t: {k: {kk: v for kk, v in d.items() if v} for k, d in t.items()}
+check("and its tokens and cost are counted once, the same totals as with no round file", nonzero(plain['totals']), nonzero(claude['totals']))
+
+# --- A removed worktree is named by --main, else refused; a placed review is found where the skill reads it. ---
+check('a removed worktree with --main is filed under that project', ('/tmp/commandeck/worktreereview/proj 2/gone', 'proj 2/gone'),
+      review.places(f'{TMP}/ws/gone', proj2))
+try:
+    review.places(f'{TMP}/ws/gone')
+    refused = False
+except SystemExit:
+    refused = True
+check('and one with no --main is refused, not filed under "project"', True, refused)
+collect.OUT_ROOT = f'{TMP}/out-root'
+sys.argv = ['collect.py', f'{TMP}/ws/rv0', '--main', proj2]
+with contextlib.redirect_stdout(io.StringIO()):
+    collect.main()
+check('collect with no --out writes under <project>/<unit>, where the skill reads it', True, os.path.exists(f'{TMP}/out-root/proj 2/rv0/result.json'))
+
+# --- The batch brief lists items as `1. #12: title`; the older form carried a rung. ---
+write(f'{TMP}/ws/rg/.claude/briefs/rg.md', ['1. #12: Fix the hook\n2. [rung 3] #13 older\n'])
+write(f'{TMP}/ws/rg/.claude/briefs/rg-evidence.md', ['Ponytail: item 1: rung 5; lazier option: none\n'])
+check('a batch item in the brief template format gets its row and its rung', [(1, '#12', '5'), (2, '#13', None)],
+      [(r_['item'], r_['issue'], r_['rung']) for r_ in review.rungs(f'{TMP}/ws/rg', 'rg')])
+
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)
 PY

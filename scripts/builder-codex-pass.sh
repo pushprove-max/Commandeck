@@ -901,6 +901,11 @@ fi
 DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color -U100000 "$RANGE") || die "cannot diff $RANGE in $WT"
 [ "${#DIFF}" -le "$DIFF_MAX" ] || DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color "$RANGE") || die "cannot diff $RANGE in $WT"
 [ "${#DIFF}" -le "$DIFF_HARD" ] || DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color --irreversible-delete "$RANGE") || die "cannot diff $RANGE in $WT"
+# Still over the limit: the diff is not pasted, the reviewers read it file by file.
+if [ "${#DIFF}" -gt "$DIFF_HARD" ]; then
+  DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color --stat=200 "$RANGE"; git -C "$WT" diff --no-ext-diff --no-textconv --name-only "$RANGE") || die "cannot diff $RANGE in $WT"
+  NOTE+="${NOTE:+ }The diff is over the reviewer's input limit, so only its file list follows. Read it file by file, from the review worktree: git diff $RANGE -- <path>."
+fi
 # The limits main stated, from the brief and from its rulings: without them each
 # pass raised the same accepted limit again with a new wrapping case. Read from
 # main's checkout only (the launcher's copy of the brief, main's rulings file):

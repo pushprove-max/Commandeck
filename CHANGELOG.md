@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.0 -- 2026-10-18
+
+- Setup: the fast-tier question for plan seats offers None first (#169); a dashboard choice sets the bind address too
+  (#172); turning the dashboard off stops collecting the home project and removes the job when no project is left
+  (#173); `generatedFiles` survives setup and update (#174).
+- Setup and update offer to rebase an out-of-date relay worktree on main, with the commits it is behind; only a yes
+  runs `scripts/relay-sync.sh --rebase` (#170).
+- Auto mode: a setup question adds two plain-English lines to the classifier's list in `~/.claude/settings.json`,
+  kept with `"$defaults"`. Leave as is changes nothing; taking them out removes only setup's lines. The doctor warns
+  about a list without `"$defaults"` and about `autoMode` in a project file.
+- The doctor flags a CLAUDE.md, rules file or global CLAUDE.md over 200 lines, a MEMORY.md past 200 lines or 25 KB,
+  and tool search switched off; it points to `/skill-doctor`.
+- Codex limit alerts follow Codex's own billing mode (#171). The dashboard's review time keeps a retried pass (#187).
+- Auto plan tier reads panel triggers in sub-headings (#175). Planning offers each seat its own default model (#176).
+- The pane budget hook counts turns only when a pane is over budget (#177). A branch diff over the reviewer's input
+  limit goes as a file list to read file by file (#178).
+- The typed Codex pointer carries the seat tag (#179). A verdict is printed in one form (#180). The Builder's ledger
+  row sums every session it recorded (#181). An answer goes to the planner it names (#188).
+- worktreereview: finds the archive at the merge script's path (#182), counts a Claude reviewer's passes (#183),
+  refuses an unknown project (#184), writes under `<project>/<unit>` (#185), reads the batch template's item lines
+  (#186). Claude no longer starts the skill on its own.
+- Instruction files: the templates are held to 200 lines, and AGENT_STARTUP.md says what a compaction keeps (#189).
+  A lean `commandeck:helper` agent starts without CLAUDE.md and stops at 40 turns (#190).
+- CI runs `claude plugin validate .`, and this repo's merge check runs the version check first.
+
 ## 0.13.2 -- 2026-10-17
 
 - A planning card names every plan seat with its model, effort and running or done state, not only the newest, and

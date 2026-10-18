@@ -199,6 +199,74 @@ il_cache_ttl() {
       && il_set "$m" --arg p "$f" --argjson s "$s" '.entries[$p].cacheTtl = ((.entries[$p].cacheTtl // {}) + $s)'
   fi
 }
+# il_auto_mode <manifest> <settings file> add|leave|remove -- two plain-English lines in Claude Code's
+# auto-mode classifier environment list (the classifier ignores autoMode in a project's settings, so the owner's
+# user file is its home): the plugin's repo and scripts, and the relay pane. The list keeps "$defaults" (the
+# built-in rules). A list the owner wrote without it replaced those rules on purpose: left as it is, and said.
+# leave changes nothing, in the file or the manifest (the manifest serves every project on this machine);
+# remove takes out only the lines setup recorded, and the list too when setup made it.
+il_auto_mode() {
+  local m=$1 f=$2 doc new how rec
+  case $3 in
+    leave) return 0 ;;
+    add)
+      doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+      new=$(jq -cn --arg h "$(jq -r '.homepage // empty' "$IL_ROOT/.claude-plugin/plugin.json")" --arg l "$IL_LINK" '[
+        "Trusted repo: \($h) (the Commandeck workflow plugin). Its scripts and hooks under \($l) are this workflow'"'"'s own tools, run by every pane.",
+        "Key internal services: Orca panes on this machine. The relay pane (the worktree ending in /Chief-of-Staff) passes the owner'"'"'s answers to main word for word; main checks each against the owner'"'"'s ruling log before acting."]')
+      how=$(jq -r '(.autoMode.environment // null) as $e | if $e == null then "new" elif ($e | type) == "array" and any($e[]; . == "$defaults") then "append" else "refuse" end' <<<"$doc" 2>/dev/null) \
+        || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
+      if [ "$how" = refuse ]; then
+        echo "auto mode: the environment list in $f has no \"\$defaults\", so it replaces Claude Code's built-in list; left as it is. To keep the built-in rules and add this plugin's lines, add \"\$defaults\" to the list and run setup again"
+        return 0
+      fi
+      new=$(jq -c --argjson d "$doc" '$d.autoMode.environment as $e | . - ($e // [])' <<<"$new")
+      [ "$new" != '[]' ] || return 0
+      il_record "$m" merge "$f" || return 1
+      doc=$(jq --argjson n "$new" '.autoMode.environment = ((.autoMode.environment // ["$defaults"]) + $n)' <<<"$doc") && il_write "$f" <<<"$doc" \
+        && il_set "$m" --arg p "$f" --argjson n "$new" --arg how "$how" '.entries[$p].autoMode = {created: ((.entries[$p].autoMode.created // false) or $how == "new"), added: ((.entries[$p].autoMode.added // []) + $n)}' ;;
+    remove)
+      rec=$(jq -c --arg p "$f" '.entries[$p].autoMode // empty' "$m" 2>/dev/null); [ -n "$rec" ] || return 0
+      doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+      doc=$(jq --argjson r "$rec" 'if (.autoMode.environment | type) == "array" then
+          .autoMode.environment -= $r.added
+          | (if $r.created and .autoMode.environment == ["$defaults"] then del(.autoMode.environment) else . end)
+          | (if .autoMode == {} then del(.autoMode) else . end) else . end' <<<"$doc") \
+        && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" 'del(.entries[$p].autoMode)' ;;
+  esac
+}
+# il_auto_mode_report -- the doctor's lines on the auto-mode classifier's lists, each "ok <why>" or "warn <what is
+# wrong and the fix>". A list in ~/.claude/settings.json without "$defaults" replaced Claude Code's built-in one;
+# the classifier ignores autoMode in a project's settings files.
+il_auto_mode_report() {
+  local f=$HOME/.claude/settings.json k n=0 where="see what it uses: claude auto-mode config, claude auto-mode critique, and /permissions \"Recently denied\""
+  for k in environment allow soft_deny hard_deny; do
+    jq -e --arg k "$k" '.autoMode[$k] | type == "array" and all(.[]; . != "$defaults")' "$f" >/dev/null 2>&1 || continue
+    n=$((n+1)); echo "warn auto mode: the $k list in $f has no \"\$defaults\", so it replaces Claude Code's built-in $k rules; add \"\$defaults\" to keep them ($where)"
+  done
+  for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json"; do
+    jq -e 'has("autoMode")' "$f" >/dev/null 2>&1 || continue
+    n=$((n+1)); echo "warn auto mode: $f has autoMode, which the classifier ignores there; move it to $HOME/.claude/settings.json ($where)"
+  done
+  [ "$n" != 0 ] || echo "ok auto mode: no list of yours replaces the built-in rules, and no project file carries autoMode"
+}
+# il_tool_search_report -- the doctor's line on MCP tool search, "ok <why>" or "warn <what is wrong>". Whether it is on
+# follows Claude Code's docs ("Configure tool search"); each variable is read from the environment, else from `env`
+# in the project's local, project and user settings, in that order. The fallbacks by model and by cloud provider
+# are not judged: the doctor does not know the session's model.
+il_tool_search_report() {
+  local want betas url host n why
+  tsv() { local x=${!1:-}; [ -n "$x" ] || x=$(jq -r --arg k "$1" '.env[$k] // empty' "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json" 2>/dev/null | head -1); printf '%s' "$x"; }
+  want=$(tsv ENABLE_TOOL_SEARCH) betas=$(tsv CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) url=$(tsv ANTHROPIC_BASE_URL)
+  host=${url#*://}; host=${host%%[/:]*}
+  if [ -n "$betas" ]; then why="CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS is set"
+  elif [ "$want" = false ]; then why="ENABLE_TOOL_SEARCH=false"
+  elif [ -z "$want" ] && [ -n "$host" ] && [ "$host" != api.anthropic.com ]; then why="ANTHROPIC_BASE_URL is $host, not api.anthropic.com, and ENABLE_TOOL_SEARCH is unset; ENABLE_TOOL_SEARCH=true turns it on"
+  fi
+  n=$( { jq -r --arg p "$PP_MAIN" '(.mcpServers // {}, .projects[$p].mcpServers // {}) | keys[]' "$HOME/.claude.json"; jq -r '(.mcpServers // {}) | keys[]' "$PP_MAIN/.mcp.json"; } 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  if [ -n "${why:-}" ]; then echo "warn tool search: tool search is off ($why), so every tool of $n MCP servers loads on every turn"
+  else echo "ok tool search: on, so $n MCP servers add their tool names to a turn, not every tool"; fi
+}
 # il_test_audit <root> <file> -- the project's /test-audit: the plugin's script
 # with the two paths it cannot find out written in. A workflow script sees no
 # disk and no environment, and its agents type both paths into shell commands.

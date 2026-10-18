@@ -2,7 +2,7 @@
 name: update
 description: Finish a commandeck plugin update for this project. Use when the owner runs /commandeck:update or says "update commandeck", after `claude plugin update commandeck`.
 disable-model-invocation: true
-allowed-tools: Bash(bash *)
+allowed-tools: Bash(bash *), AskUserQuestion
 ---
 
 # /commandeck:update
@@ -15,6 +15,16 @@ runs. In each project that is set up:
 
 It prints the version and its changelog, re-points everything, and runs the
 doctor. Show the owner the changelog and any line that is not `ok`.
+
+Then run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh`. If it prints
+`relay: <n> commits behind main`, say so, that the relay pane may be running and
+sees the change, and ask:
+
+   Ask "Relay": Rebase it (recommended) | Leave as is
+
+Only Rebase runs `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase`. It
+refuses and changes nothing when the relay worktree has uncommitted changes or
+the rebase conflicts: show its line. `relay: current` or `relay: none`: say nothing.
 
 - It exits 1 with "back as it was" when the doctor fails: the files are
   restored; tell the owner the doctor's `FAIL` lines.

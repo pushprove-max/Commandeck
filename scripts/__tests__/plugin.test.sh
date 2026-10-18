@@ -35,6 +35,37 @@ check "the README shows no other version badge" 1 "$(grep -c 'badge/version-' "$
 check "and the CHANGELOG's newest entry is that version" "## $V -- " "$(grep -m1 -o '^## [^ ]* -- ' "$REAL/CHANGELOG.md")"
 check "it carries a description" yes "$(jq -r 'if (.description | type == "string" and length > 20) then "yes" else "no" end' "$M" 2>/dev/null)"
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
+# An instruction file over 200 lines loads in every session and is followed less well (Claude Code's memory guide).
+# startup-size.sh holds the bytes the hooks print; global-claude.md and global-rules.md never pass through a hook.
+for t in AGENT_STARTUP main-session global-claude global-rules; do
+  check "templates/$t.md is at most 200 lines: a longer file loads in every session and is followed less well" ok \
+    "$([ "$(wc -l < "$REAL/templates/$t.md")" -le 200 ] && echo ok || echo long)"
+done
+# A skill's SKILL.md over 500 lines, or description plus when_to_use over 1,536 characters, is cut or ignored; a skill
+# that spends money or changes the owner's setup must not be one Claude can start by itself.
+for d in "$REAL"/skills/*/; do
+  n=$(basename "$d")
+  check "skills/$n/SKILL.md is at most 500 lines" ok "$([ "$(wc -l < "$d/SKILL.md")" -le 500 ] && echo ok || echo long)"
+  check "skills/$n description plus when_to_use is at most 1,536 characters" ok \
+    "$([ "$(awk '/^---$/ {k++; next} k == 1 && /^(description|when_to_use): / {sub(/^[a-z_]+: /, ""); c += length($0)} END {print c + 0}' "$d/SKILL.md")" -le 1536 ] && echo ok || echo long)"
+done
+for n in setup update uninstall handoff worktreereview; do
+  check "skills/$n sets disable-model-invocation: a side-effect skill Claude could start by itself is the failure" 1 \
+    "$(grep -c '^disable-model-invocation: true$' "$REAL/skills/$n/SKILL.md")"
+done
+# The lean helper agent: omitClaudeMd and maxTurns do the work; hooks, mcpServers and permissionMode are ignored for a
+# plugin's agents, so each would be a setting that silently does nothing.
+H=$REAL/agents/helper.md
+check "agents/helper.md sets omitClaudeMd and maxTurns, and none of the keys a plugin agent ignores" "1 1 0" \
+  "$(grep -c '^omitClaudeMd: true$' "$H") $(grep -c '^maxTurns: [0-9]' "$H") $(grep -cE '^(hooks|mcpServers|permissionMode):' "$H")"
+# The fast-tier question's "None" answer is `--plan-fast ''` (skills/setup): the flag takes the empty value, and an empty value saves no planFast.
+check "setup.sh takes --plan-fast as a value flag and saves nothing for an empty one" "1 1" \
+  "$(grep -c '^TAKES=.* --plan-fast ' "$REAL/scripts/setup.sh") $(grep -c 'if $pf == "" then {} else {planFast' "$REAL/scripts/setup.sh")"
+# Every key merge-unit-local.sh reads from .claude/commandeck.json must survive setup's rebuild of that file
+# (update reruns setup): a key the writer's object does not build is dropped at the next update.
+for k in $(sed -n "s/.*jq -r '\.\([A-Za-z]*\).*commandeck\.json.*/\1/p" "$REAL/scripts/merge-unit-local.sh"); do
+  check "setup.sh's config writer names $k, which merge-unit-local.sh reads" 1 "$(grep -cE "[{,] *$k:" "$REAL/scripts/setup.sh" | sed 's/^[1-9][0-9]*$/1/')"
+done
 # Claude Code loads hooks/hooks.json without being told. A command that names
 # a script the repo lacks, or one that is not executable, fails at the first
 # event on someone else's machine, and a failed Stop hook is silent.
@@ -103,6 +134,8 @@ check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in p
 check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS"; grep '(recommended).*(recommended)' <<<"$ASKS")"
 # The recommended cache answer must not read as the one that costs more.
 check "the prompt-cache question says the recommended mix cost least" '1:1' "$(grep -cxF '    Ask "Prompt cache": 1h for main, 5m for subagents (recommended) | Leave default' "$SETUP"):$(grep -cF -- '- 1h for main, 5m for subagents: Main and Claude panes keep their cache 1 hour, subagents 5 minutes. On real sessions this mix cost least: a 5-minute cache cost main about 19% more, and a 1-hour cache cost subagents about 8% more. Saved in `.claude/settings.json`. `--cache-ttl recommended`' "$SETUP")"
+# Leave must read as a change of nothing: the machine's file serves every project, so a Leave that removed would take another project's lines.
+check "the auto-mode question: Leave changes nothing, and only Take them out removes" '1:1:1' "$(grep -cxF '    Ask "Auto mode": Add two entries (recommended) | Leave as is | Take them out' "$SETUP"):$(grep -cF -- '- Leave as is: Changes nothing in ~/.claude/settings.json; a refusal of a plugin script stays possible. `--auto-mode leave`' "$SETUP"):$(grep -c -- '--auto-mode remove' "$SETUP")"
 check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a-f]{8})"' <<<"$ASKS")"
 
 # The add-on list and the ponytail skill setup installs, as shipped, read without a setup run. The owner wants

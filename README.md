@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.2-111111?style=flat-square" alt="Version 0.13.2">
+  <img src="https://img.shields.io/badge/version-0.14.0-111111?style=flat-square" alt="Version 0.14.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -150,11 +150,12 @@ setup asks, the picker guard's stray-keypress option is off.
 | Builder clear line | 180K tokens of context (the default), another count, or off: past it the Builder writes a handoff and goes on in a fresh session of its pane, and its card on the dashboard shows its context against the line |
 | Issue sizing | 40K tokens (the default), another count, or off: an issue the batch brief sizes as sharing no files and needing more reading than this is proposed as its own unit when the Builder is launched; off keeps today's grouping |
 | Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
-| Dashboard | on for this machine only, off, or on plus another name it answers to (a tailnet's) |
+| Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network, and a name not on its list still gets a 403 |
 | Merge check | the command that must pass before a merge, or none |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Ponytail | on (the skill is installed) or off |
 | Prompt cache | recommended (`promptCacheTtl` 1 hour for main and Claude panes, `subagentPromptCacheTtl` 5 minutes, in `.claude/settings.json`; a value you set stays) or Claude Code's default (writes nothing) |
+| Auto mode | add two lines to the auto-mode classifier's list in `~/.claude/settings.json` (kept with `"$defaults"`; they apply in every project on this machine), leave it as is (writes nothing), or take setup's lines out; a list of yours without `"$defaults"` is never touched |
 | Add-ons | any of serena, codebase-memory, agent-browser, or none (see [Add-ons](#add-ons)) |
 | Review loop | defaults, keep saved, or tune: the most review rounds (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200; off gives every first pass three reviewers), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
 | Codex fast, Codex model | with the Codex reviewer only: fast mode, offered when your Codex config allows it, and a model id when setup found none |

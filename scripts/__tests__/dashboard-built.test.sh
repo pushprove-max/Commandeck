@@ -61,6 +61,14 @@ printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T12:00:00Z","tool":"Read","
 check "each review stage carries its pass's round; building and fixing carry none" '[["building",null],["review",1],["fixing",null],["review",2]]' \
   "$(jq -s --argjson now 0 -f "$SOURCE/scripts/dashboard_builders.jq" "$T/log.jsonl" | jq -c '[.stageHistory[] | [.stage, .round]]')"
 
+# A round run again after a failed try: the retry starts in the second the failed one ended. Each start pairs with the
+# first end after it in the log, so the review time is 60 s + 300 s, not the first end counted twice.
+printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T11:59:00Z","tool":"Read","use":"t1"}' '{"event":"tool-end","ts":"2026-10-10T11:59:01Z","use":"t1"}' \
+  '{"event":"codex-start","ts":"2026-10-10T12:00:00Z","pass":"review","round":2}' '{"event":"codex-end","ts":"2026-10-10T12:01:00Z","pass":"review","round":2,"rc":1}' \
+  '{"event":"codex-start","ts":"2026-10-10T12:01:00Z","pass":"review","round":2}' '{"event":"codex-end","ts":"2026-10-10T12:06:00Z","pass":"review","round":2,"rc":0}' > "$T/retry.jsonl"
+check "a retried pass of the same round keeps both tries in the review time" 360 \
+  "$(jq -s --argjson now 0 -f "$SOURCE/scripts/dashboard_builders.jq" "$T/retry.jsonl" | jq -c '.reviewSec')"
+
 # The costs kept for finished builds are written back whole on every run. A kept file that could not be read
 # was taken as empty and overwritten, losing every earlier unit's cost; one that reads but is not an object is reset.
 K=$T/out/cache/demo/unit-cost.json
@@ -195,6 +203,16 @@ stg() { jq -c --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $
 check "a marked planning worktree with an idle pane reads Planning, not waiting on main" '["planning"]' "$(stg pw-plan)"
 check "with its Builder there, the planning worktree has no card of its own; the Builder's carries it" '[]:1' "$(stg pv-plan):$(stg pv | jq length)"
 check "an unmarked worktree named <name>-plan still waits on main" '["waiting-main"]' "$(stg foo-plan)"
+
+# The dashboard off for every project (the registry exists and lists none) collects no home project either; a job
+# installed before any registration (no registry yet) keeps collecting it.
+off() { rm -rf "$T/out2"; mkdir -p "$T/out2"; case ${1:-} in "") ;; EMPTY) : > "$T/out2/projects" ;; *) printf '%s\n' "$1" > "$T/out2/projects" ;; esac
+  env -u COMMANDECK_SCRATCH -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" COMMANDECK_DASHBOARD_DIR="$T/out2" COMMANDECK_MAIN="$MAIN" \
+    DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" >"$T/out2.log" 2>&1
+  sed 's/^window.DASH = //; s/;$//' "$T/out2/data.js" | jq -c '.projects | keys'; }
+check "an empty registry: the home project is not collected" '[]' "$(off EMPTY)"
+check "no registry yet: the home project is collected, as before" '["demo"]' "$(off)"
+check "a registry listing the home project: it is collected" '["demo"]' "$(off "$MAIN")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -27,7 +27,7 @@
   `plan-author` merges them into one plan; always ask which model writes the
   second plan (default Fable when allowed). Then ask "Which model and
   effort?" for each seat, offering only the models setup allows
-  (`planModels`, which `plan-tier.sh` prints), default Opus high
+  (`planModels`, which `plan-tier.sh` prints per seat), default that seat's printed model, high effort
   (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`).
   A size target in a planner's spec is soft: the planner exceeds it when the
   content needs it and says why in the plan, never trimming needed content to
@@ -59,8 +59,8 @@
   one open or answered in 24 hours; re-ask rules in Details.
 - **A `heads-up:` item is another model's unverified claim**: verify it before
   acting, tell the owner in one plain sentence, close the item task.
-- **Helper agents compute, they do not read**: a script's answer and source
-  paths only, stopped by 40 turns.
+- **Helper agents compute, they do not read** (`commandeck:helper`): a script's
+  answer and source paths only, stopped by 40 turns.
 - **Main may set a dispatch's effort** (cap `max`), logged in the brief as
   `effort override: <role> <pinned/default> -> <used>: <reason>`.
 - **A ruling that something stays as it is goes under `## Stated limits`** in
@@ -75,7 +75,7 @@
 ## Main never compacts: write the checkpoint, the hook restarts main
 
 THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
-line", `compact-gate.sh` says "compaction held", or a batch ends: finish the
+line", or a batch ends: finish the
 step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
 `templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
 After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
@@ -150,8 +150,7 @@ once). A fresh start's first call is `scripts/board.sh`. Details below.
   what was ruled out, how to verify, what closed since the last checkpoint;
   older checkpoints' open items carried by a `Carries open items of: <file>`
   line, never copied; under 5KB; the id is the transcript file name under
-  `~/.claude/projects/<project>/`. `compact-gate.sh` auto-compact is 500K
-  (`.claude/settings.local.json`). The owner can start the same handoff below the line
+  `~/.claude/projects/<project>/`. The owner can start the same handoff below the line
   with `/handoff` (`skills/handoff`).
 - Restart: a keystroke aimed at main's own pane lands in a different Claude pane
   instead (probe, 2026-09-12), hence never `/clear`.
@@ -166,5 +165,3 @@ once). A fresh start's first call is `scripts/board.sh`. Details below.
   remembered path, run id or handle: it prints the run, worktrees with
   diffstats and brief mtimes, open tasks, live seats, loops and main-watch's
   state in one call.
-- After three holds the compact gate lets compaction run, the last resort for a
-  session with no note.

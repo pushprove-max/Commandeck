@@ -95,6 +95,10 @@ if [ -n "$PROFILE" ]; then
       || jq -e --arg s "$s" '.mcpServers[$s]' "$PP_MAIN/.mcp.json" >/dev/null 2>&1; then ok "add-on server $s: present"
     else ok "add-on server $s: not installed (optional; setup.sh --addons $s installs it)"; fi
   done
+  L=$(il_tool_search_report)
+  if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi
+  # A pointer only: turning skills off is the owner's call.
+  ok "skills: $(jq '[.enabledPlugins // {} | to_entries[] | select(.value == true)] | length' "$HOME/.claude/settings.json" 2>/dev/null || echo 0) plugins enabled; each model-invocable skill's description loads in every session; run /skill-doctor to see each one's cost and use"
   # The value the hooks read, the one setup reported.
   ok "serena hooks (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG" 2>/dev/null)"
   if MW=$(bash "$HERE/main-watch.sh" --status 2>&1); then ok "main-watch"
@@ -105,6 +109,7 @@ if [ -n "$PROFILE" ]; then
   # No tomllib is already the "FAIL tools" line: a second line, marked ok, would say it twice.
   [ "$PASS" != codex ] || ! python3 -c 'import tomllib' 2>/dev/null || ok "codex route: $(pp_codex_route)"
 fi
+while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_auto_mode_report)
 if [ "$PROFILE" = claude-openai ]; then
   N=$(il_codex_count "$IL_ROOT") ALL=$(il_codex_count)
   if [ "$N" = 5 ] && [ "$ALL" = 5 ]; then ok "codex hooks: five entries in $IL_CODEX/hooks.json run this plugin"

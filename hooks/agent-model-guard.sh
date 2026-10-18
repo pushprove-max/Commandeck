@@ -4,7 +4,7 @@
 #     Opus instead, through updatedInput, so it needs no retry turn;
 #     a fork alone keeps inheriting
 #   - an unnamed Explore call runs as Haiku (owner ruling 2026-10-08);
-#     an unnamed general-purpose or debugger call runs as Sonnet
+#     an unnamed general-purpose, debugger or commandeck:helper call runs as Sonnet
 #   - a named model runs as named, Sonnet and Haiku included, for any job
 #     (owner rulings 2026-10-07): this hook
 #     never refuses a call
@@ -19,7 +19,7 @@ jq -c --arg b "${COMMANDECK_BUILDER:-}" 'select(.tool_input.subagent_type != "fo
   | ($b == "1" and .tool_input.subagent_type == "Explore" and (.tool_input.model // "") != "haiku") as $builder
   | select($builder or (.tool_input.model // "") == "")
   | (if $builder then "haiku"
-     else {Explore: "haiku", "general-purpose": "sonnet", debugger: "sonnet"}[.tool_input.subagent_type // ""] // "opus" end) as $m
+     else {Explore: "haiku", "general-purpose": "sonnet", debugger: "sonnet", "commandeck:helper": "sonnet"}[.tool_input.subagent_type // ""] // "opus" end) as $m
   | {hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow",
        permissionDecisionReason: (if $builder then "Builder pane: every Explore runs as haiku (agent-model-guard.sh)"
                                   else "no model named: runs as \($m) (agent-model-guard.sh)" end),

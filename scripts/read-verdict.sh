@@ -824,7 +824,7 @@ START=$(( VERDICT_LINE - CONTEXT_LINES ))
 # banner so collect's `/^# /,$p` transcription never picks it up, and the raw
 # line still follows inside the slice, so a `tail -1` reader sees the original.
 printf '%s\n' "$TEXT" | sed -n "${VERDICT_LINE}p" \
-  | sed -E 's/^[[:space:]]*\*{0,2}//; s/[[:space:]]*\*{0,2}[[:space:]]*"?[[:space:]]*$//'
+  | sed -E 's/^[[:space:]]*\*{0,2}//; s/[[:space:]]*\*{0,2}[[:space:]]*"?[[:space:]]*$//; s/^VERDICT:[[:space:]]*/VERDICT: /'
 
 echo "=== $HANDLE : findings + verdict ==="
 printf '%s\n' "$TEXT" | sed -n "${START},${VERDICT_LINE}p"
