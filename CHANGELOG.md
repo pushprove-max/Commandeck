@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.0 -- 2026-10-19
+
+- 0.18.0 stays red on the Linux CI job until this release merges: `install-lib.test.sh` found no project from its fixture folders and passed only in an Orca pane; the helper now names its project. No change to the plugin's behaviour.
+- `INSTALL_LIB_TEST_CASE=<text>` re-runs only the `install-lib.test.sh` cases whose name holds `<text>`.
+- The batching advice (`batch-independent-looks.sh`) was off in the default hook tier; planner seats (`plan-*`) now hear it at the third single-look turn in a row.
+- `wait-test-run.sh` waits 270 s by default, not 540, so one wait never outlasts the 5-minute prompt cache; exit 3 says to wait again.
+
 ## 0.18.0 -- 2026-10-18
 
 - 0.17.0 could launch no seat under jq 1.7, the jq of CI's Ubuntu: one line of `worktree-setup.sh` used a form only

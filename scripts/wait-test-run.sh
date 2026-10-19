@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # wait-test-run.sh <runner-pid> <output-file> [max-seconds] -- wait on a
 # background test run. Ends when the runner exits or the limit (default
-# 540 s, under the Bash tool's 600 s) is reached, and checks the runner is
+# 270 s, under the 300 s the prompt cache lives, so a wait never outlasts it) is reached, and checks the runner is
 # alive whenever it stops: a Builder once started a second wait on the output
 # of a runner that had died with no result, and waited 25 minutes on it.
 #   0  the runner is gone and its output ends with a result; the tail is printed
@@ -14,7 +14,7 @@
 # Self-test: bash scripts/__tests__/wait-test-run.test.sh
 set -uo pipefail
 USAGE="usage: wait-test-run.sh <runner-pid> <output-file> [max-seconds]"
-PID=${1:-} OUT=${2:-} MAX=${3:-540}
+PID=${1:-} OUT=${2:-} MAX=${3:-270}
 [[ $PID =~ ^[0-9]+$ && -n $OUT && $MAX =~ ^[0-9]+$ ]] || { echo "$USAGE" >&2; exit 2; }
 END=$((SECONDS + MAX))
 while kill -0 "$PID" 2>/dev/null && [ "$SECONDS" -lt "$END" ]; do sleep 1; done

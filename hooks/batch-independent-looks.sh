@@ -34,8 +34,9 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
-# Strict tier: off unless the project turned it on (lib/project.sh).
-{ . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
+# Strict tier: off unless the project turned it on (lib/project.sh). A planner seat (seat.sh exports
+# COMMANDECK_SEAT=<role>) hears it either way: it is almost all reads, and it never ran under the default tier.
+case "${COMMANDECK_SEAT-}" in plan-*) ;; *) { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0 ;; esac
 
 # A FAILED call is still a turn -- the context was replayed either way -- so
 # unlike script-over-reads.sh this does not skip errors.

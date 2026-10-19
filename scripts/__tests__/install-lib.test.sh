@@ -3,12 +3,13 @@
 # uninstall.sh call (no whole run of either). What this pins: another tool's Codex hooks keep their places and
 # its trust entries stay as they were, since Codex keys trust by position; the manifest records what was at a path
 # with its hash and keeps the bytes; the restore puts those bytes back, and leaves a file edited since and names it;
-# a plan writes nothing, manifest included.
+# a plan writes nothing, manifest included. INSTALL_LIB_TEST_CASE=<text> runs only the cases whose name holds <text>.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
-check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
+# INSTALL_LIB_TEST_CASE=<text> re-checks only the cases whose name holds <text>; the fixtures still build, the others are not counted.
+check() { case $1 in *"${INSTALL_LIB_TEST_CASE-}"*) ;; *) return 0 ;; esac; if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 H=$T/home C=$T/home/.codex PROJ=$T/proj
 mkdir -p "$C" && git init -q -b main "$PROJ"
 # Another tool's Codex hooks and its trust entry, one of them disabled.
@@ -25,7 +26,7 @@ enabled = false
 EOF
 cp "$C/hooks.json" "$T/hooks.before"; cp "$C/config.toml" "$T/config.before"
 # lib <shell> [args] -- run it with paths.sh and install-lib.sh loaded and the args as "$1"..., in the project (or $CWD), on the hand-written HOME, under pipefail as setup.sh and uninstall.sh run.
-lib() { (cd "${CWD:-$PROJ}" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME HOME="$H" \
+lib() { (cd "${CWD:-$PROJ}" && env -u CLAUDE_PROJECT_DIR -u ORCA_WORKTREE_ID -u ORCA_TERMINAL_HANDLE -u COMMANDECK_SCRATCH -u CODEX_HOME COMMANDECK_MAIN="$PROJ" HOME="$H" \
   bash -c 'set -o pipefail; . "$0/paths.sh" && . "$0/install-lib.sh" && c=$1 && shift && eval "$c"' "$REAL/scripts" "$@"); }
 snap() { (cd "$T" && find home proj -path '*/.git' -prune -o -print | sort | while IFS= read -r f; do [ -f "$f" ] && sha256sum < "$f" | cut -c1-16; echo "$f"; done); }
 SETUP='il_record "$IL_MACHINE" merge "$IL_CODEX/hooks.json" "$IL_CODEX/config.toml" && il_record "$IL_PROJECT" own "$IL_CONFIG" \
@@ -343,4 +344,4 @@ setup_routing() { COMMANDECK_ROUTING=$1 lib 'S=$(cat "$0/setup.sh"); HERE=$0; di
 check "setup's routing block and review preflight pass on an owner's file with only an edited builder" 1 "$(setup_routing "$T/routing.orig" | grep -c '^preflight ok$')"
 
 echo "$PASS passed, $FAIL failed"
-[ "$FAIL" = 0 ]
+[ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }
