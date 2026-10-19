@@ -343,5 +343,42 @@ setup_routing() { COMMANDECK_ROUTING=$1 lib 'S=$(cat "$0/setup.sh"); HERE=$0; di
   eval "$(grep -F "COMMANDECK_PASS=\$PASS bash \"\$HERE/builder-codex-pass.sh\" --preflight" <<<"$S")" && echo "preflight ok"' 2>&1; }
 check "setup's routing block and review preflight pass on an owner's file with only an edited builder" 1 "$(setup_routing "$T/routing.orig" | grep -c '^preflight ok$')"
 
+# --- issue 207: a wrapper that already calls the stable link is no question, even before setup re-points the link ---
+H2=$T/h2; mkdir -p "$H2/.codex" "$H2/.commandeck" "$T/v1/hooks"; echo old > "$T/v1/hooks/codex-notify.sh"; ln -s "$T/v1" "$H2/.commandeck/plugin"
+printf 'notify = ["bash", "%s"]\n' "$T/wrap.sh" > "$H2/.codex/config.toml"
+printf '#!/bin/sh\n~/.commandeck/plugin/hooks/codex-notify.sh "$@"\n' > "$T/wrap.sh"
+OUT=$(H=$H2 IL_PLAN=1 lib 'il_notify_repoint "$IL_MACHINE"' 2>&1)
+check "notify: a wrapper calling the stable link by ~, the link still on an older folder, gets no ASK" 0 "$(grep -c 'ASK' <<<"$OUT")"
+printf '#!/bin/sh\n"%s/hooks/codex-notify.sh" "$@"\n' "$T/v1" > "$T/wrap.sh"
+OUT=$(H=$H2 IL_PLAN=1 lib 'il_notify_repoint "$IL_MACHINE"' 2>&1)
+check "notify: a wrapper calling an older versioned folder's hook gets the ASK, old and new lines different" 1 \
+  "$(grep -c "ASK: .*Old line: \"$T/v1/hooks/codex-notify.sh\" \"\$@\" New line: \"$H2/.commandeck/plugin/hooks/codex-notify.sh\" \"\$@\"" <<<"$OUT")"
+
+# --- issue 208: setup's two marked blocks are replaced where they stand; a run with nothing new writes nothing ---
+# globals [plan] [rules template] -- setup's two il_global merge calls, as setup.sh makes them, on H2's global file.
+globals() {
+  H=$H2 IL_PLAN=${1:-} IL_WROTE=${1:+$T/gw} R=${2:-} lib 'il_record "$IL_MACHINE" merge "$IL_GLOBAL" && il_global merge claude-md "$IL_ROOT/templates/global-claude.md" --global-claude \
+    && il_global merge rules "${R:-$IL_ROOT/templates/global-rules.md}" --global-rules' 2>&1; rm -f "$T/gw"
+}
+G=$H2/.claude/CLAUDE.md; mkdir -p "$H2/.claude"; printf 'my rules\n' > "$G"
+globals >/dev/null; printf '\nmy tail\n' >> "$G"; cp "$G" "$T/g.once"; rm -f "$G".commandeck-bak-*
+globals >/dev/null; globals >/dev/null
+check "blocks: two more runs with the same templates leave the global file byte-identical" "" "$(cmp "$T/g.once" "$G" 2>&1)"
+OUT=$(globals plan)
+check "blocks: a plan with nothing new would change nothing and copy nothing" 0 "$(grep -c 'would' <<<"$OUT")"
+{ cat "$REAL/templates/global-rules.md"; printf -- '- A rule only this test adds.\n'; } > "$T/rules2.md"
+OUT=$(globals plan "$T/rules2.md")
+check "blocks: a plan with one block's template changed would copy the file once and change it once" "1:1" \
+  "$(grep -c 'would copy' <<<"$OUT"):$(grep -c "would change $G" <<<"$OUT")"
+globals "" "$T/rules2.md" >/dev/null
+blk() { awk -v b="<!-- commandeck:$1:begin -->" '$0 == b { on = 1 } on { print } $0 == "<!-- commandeck:'"$1"':end -->" { on = 0 }' "$2"; }
+check "blocks: the changed block is replaced where it stands, the other untouched, the owner's text around them in place" "1:1:my rules:my tail" \
+  "$(blk rules "$G" | grep -c 'A rule only this test adds'):$([ "$(blk claude-md "$G")" = "$(blk claude-md "$T/g.once")" ] && echo 1):$(head -1 "$G"):$(tail -1 "$G")"
+check "blocks: the apply's backup holds the bytes from before it" "" "$(cmp "$T/g.once" "$G".commandeck-bak-* 2>&1)"
+{ cat "$REAL/templates/global-claude.md"; printf -- '- A line only this test adds.\n'; } > "$T/claude2.md"
+rm -f "$G".commandeck-bak-*; printf -- '- Another.\n' > "$T/rules3.md"
+OUT=$(H=$H2 IL_PLAN=1 IL_WROTE=$T/gw lib 'il_record "$IL_MACHINE" merge "$IL_GLOBAL" && il_global block claude-md "$1" x && il_global block rules "$2" y' "$T/claude2.md" "$T/rules3.md" 2>&1); rm -f "$T/gw"
+check "blocks: a plan that changes both blocks says it would copy the file once" 1 "$(grep -c 'would copy' <<<"$OUT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

@@ -223,4 +223,54 @@ tick $((D + 400))
 sed -i 's/^task_wt-x2 .*/task_wt-x2 completed/' "$F/tasks"; tick $((D + 800))
 [ "$(posts 'wt-x2 builder stopped')" = 1 ] || fail "an item main closed was re-posted"
 
+# Issue 203, WARM: a 5-minute Builder at its prompt waiting on a background job gets one "." line just before its own
+# cache lapses, up to a cost-bound budget. Orca reads such a pane working or done, so the gate is the session record's
+# end_turn marker, not the label. A ping never posts to main and never counts as an episode toward the third-episode post.
+rm -f "$S"/seat-*.txt; : > "$T/sends"; : > "$T/typed"
+W=90000
+bts() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+wfile() { printf '%s' "$T/home/.claude/projects/$(printf '%s' "$T/ws/$1" | sed 's/[^a-zA-Z0-9]/-/g')/s.jsonl"; }
+wlog() { # unit epoch stop [read write] -- one main-thread request and its reply in the unit's session record, its mtime following
+  local f; f=$(wfile "$1"); mkdir -p "${f%/*}"
+  printf '{"type":"user","isSidechain":false,"timestamp":"%s","message":{}}\n' "$(bts "$2")" >> "$f"
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"stop_reason":"%s","usage":{"input_tokens":2,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"cache_creation":{"ephemeral_5m_input_tokens":%s,"ephemeral_1h_input_tokens":0}}}}\n' \
+    "$(bts "$2")" "$3" "${4:-95000}" "${5:-5000}" "${5:-5000}" >> "$f"
+  touch -d "@$2" "$f"
+}
+wseat() { # unit handle state [read write last-stop] -- a Builder whose last reply, 230 s before W, left a background job running
+  bseat "$1" "$2" "t_$1" $((W - 4000)); state "$2" "$3"
+  printf '{"ts":"%s","event":"tool-start","use":"o1","tool":"Bash","kind":"shell","call":"o1"}\n{"ts":"%s","event":"tool-end","use":"o1","ok":true}\n' \
+    "$(bts $((W - 3000)))" "$(bts $((W - 2999)))" > "$T/ws/$1/.claude/builder-events.jsonl"
+  wlog "$1" $((W - 400)) tool_use "${4:-95000}" "${5:-5000}"
+  printf '{"type":"user","toolUseResult":{"stdout":"","backgroundTaskId":"bW"}}\n' >> "$(wfile "$1")"
+  wlog "$1" $((W - 230)) "${6:-end_turn}" "${4:-95000}" "${5:-5000}"
+}
+warms() { grep -c -- "--terminal $1 --text Signal WARM: keep-alive while you wait. Reply with one . and end your turn." "$T/typed" || true; }
+wseat wt-w1 term_w1 working
+wseat wt-w2 term_w2 done
+wseat wt-w3 term_w3 working 95000 5000 tool_use
+wseat wt-w5 term_w5 waiting
+wseat wt-w7 term_w7 working 500 498
+tick $W
+[ "$(warms term_w1)" = 1 ] || fail "warm: a Builder reading working, its log ending on end_turn with a job open, got $(warms term_w1) WARM lines, not one"
+[ "$(warms term_w2)" = 1 ] || fail "warm: the same Builder reading done did not get its first WARM"
+[ "$(warms term_w3)" = 0 ] || fail "warm: a Builder whose newest reply is a tool_use (blocked inside a call) was pinged"
+[ "$(warms term_w5)" = 0 ] || fail "warm: a pane reading waiting was pinged"
+[ "$(posts wt-w)" = 0 ] || fail "warm: a ping posted to main"
+tick $((W + 10))
+[ "$(warms term_w1)" = 1 ] || fail "warm: the next tick in the same window sent a second ping"
+wlog wt-w1 $((W + 30)) end_turn; wlog wt-w7 $((W + 30)) end_turn 500 498
+tick $((W + 260))
+[ "$(warms term_w1)" = 2 ] || fail "warm: after the Builder's own . reply the next window did not get a ping (got $(warms term_w1))"
+[ "$(warms term_w7)" = 2 ] || fail "warm: a 1000-token context should have pinged twice by now (got $(warms term_w7))"
+wlog wt-w7 $((W + 290)) end_turn 500 498; tick $((W + 520))
+[ "$(warms term_w7)" = 2 ] || fail "warm: a third ping went past the budget of 2 for one anchor"
+# After two WARMs the Builder's first QUIET is still its first episode: WARM keeps its own history.
+H1=$S/main-watch/builder-wt-w1-term_w1
+[ "$(grep -c . "$H1.warm")" = 2 ] && ! grep -q WARM "$H1" 2>/dev/null || fail "warm: the pings were not kept apart from the episode history"
+# The job ends (its notification row), so the idle Builder is QUIET.
+printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>bW</task-id>\\n</task-notification>"}\n' >> "$(wfile wt-w1)"
+touch -d "@$((W + 30))" "$(wfile wt-w1)"; tick $((W + 560))
+[ "$(grep -c '^QUIET ' "$H1")" = 1 ] && [ "$(posts 'wt-w1 is QUIET')" = 0 ] || fail "warm: after two WARMs the first QUIET was not episode 1, or was posted"
+
 echo "PASS main-watch-helper-hold.test.sh"

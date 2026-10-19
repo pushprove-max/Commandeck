@@ -11,12 +11,15 @@
 # that ENDS by sending an Orca message (a watcher that turns a file or
 # process event into a message the main session can block on).
 #
-# Worker panes are exempt from all but two rules: they run in linked git
-# worktrees and have no Orca run to block on when they wait for their own test
-# runs. In every pane a bare `orca(-ide) orchestration check` is blocked: it
-# returns a batch and never acknowledges it, so the batch replays on every
-# check and later messages queue behind it. A worker's sleep loop is let
-# through with a nudge toward run_in_background and wait-test-run.sh.
+# Worker panes run in linked git worktrees and have no Orca run to block on, so
+# main's rules about Orca waits do not apply to them. In every pane a bare
+# `orca(-ide) orchestration check` is blocked: it returns a batch and never
+# acknowledges it, so the batch replays on every check and later messages queue
+# behind it. A worker is held to one more thing (issue 214): a FOREGROUND call
+# may not wait past the prompt cache, since the next reply then rewrites it. Its
+# stated waits are summed against one budget, and a wait in a loop, which states
+# no end, is refused. A background call or a Monitor ends the turn and its exit
+# wakes the pane, so neither is held.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -64,26 +67,96 @@ esac
 # skips it; quote characters are dropped for that test, so `sl''eep` cannot
 # slip past.
 P=${CMD_CODE//[\'\"\\]/}
-case "$P" in *sleep*|*orca-wait*|*orchestration*) ;; *) [ "$TOOL" = "Monitor" ] && [ "$WORKER" = 0 ] || exit 0 ;; esac
+case "$P" in *sleep*|*orca-wait*|*orchestration*|*timeout-ms*|*wait-test-run*) ;; *) [ "$TOOL" = "Monitor" ] && [ "$WORKER" = 0 ] || exit 0 ;; esac
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 if type strip_quoted >/dev/null 2>&1; then
   BARE=$(strip_quoted "$CMD_CODE")
-  # The same text with each quoted span kept as the word it is, for loop_wait.
   Q=$'\x01'
-  # The word parser below is never handed what a quoted span holds, unless the
-  # span is plain word characters (a quoted script path): a quote or a backslash
-  # in it unbalanced the parser, which then read no loop at all. Any other
-  # span is the one word QUOTED.
-  WORDS=$(strip_quoted "$CMD_CODE" "$Q" | sed -E "s/${Q}([A-Za-z0-9_.\/:=@%+,-]+)([;&|()[:space:]]|\$)/\1\2/g; s/${Q}[^;&|()[:space:]]*/QUOTED/g")
+  MARKED=$(strip_quoted "$CMD_CODE" "$Q")
+  # The arguments bash passes, for every parser that reads words by position: a
+  # quoted token joins its neighbours (`"6""00"` is 600, `>"/dev/null"` is a
+  # redirection and its target), and quoted prose is the one word QUOTED. The
+  # mark stays in a quoted word, since bash reads a reserved word only unquoted
+  # (`"do""ne"` is a command, not the `done` that ends a loop); run() drops it.
+  JOINED=$(printf '%s' "$MARKED" | sed -E "s/${Q}([^A-Za-z0-9_.\/:=@%+,-]|\$)/QUOTED\1/g")
 else
   BARE=$(printf '%s' "$CMD_CODE" | sed -e "s:'[^']*'::g" -e 's:"[^"]*"::g' | sed -E 's/(^|[[:space:];&|(])#.*$/\1/')
-  WORDS=$CMD_CODE
+  JOINED=$CMD_CODE
 fi
 
-# Each command of BARE, its leading assignments and wrappers dropped.
+# The shell words every parser below shares, run by each with exec(). TOK splits
+# text into words, separators and redirections, a redirection attached or not
+# (a brace is a separator only as a word of its own, as bash reads `{` and `}`:
+# `${done}` is one word, never the `done` keyword)
+# (`sleep>/dev/null 400`, `2>&1`; a digit run before `>` is a file descriptor,
+# as bash reads it). run() is the command a simple command runs: redirections
+# and their targets dropped wherever they stand, then leading assignments and
+# reserved words (both unquoted; each word's quote mark \x01 is dropped after
+# them), then wrappers with their options (`env -u X`, `timeout -s TERM 600`).
+# num() reads a number the way GNU sleep and JavaScript's Number() do (4e2,
+# +400, 0x190, inf); None when it cannot.
+export NPL_WORDS='
+import math, re
+TOK = re.compile(r"\d*(?:&>>?|[<>]+&?)|[^\s;&|()<>]+|[;&|()\n]")
+REDIR = re.compile(r"\d*(?:&>>?|[<>]+&?)")
+SEPS = set(";&|(){}\n")
+# Each wrapper with the short options that take the next word.
+WRAP = {"command": "", "builtin": "", "exec": "a", "time": "fo", "nohup": "", "env": "CSuaPLU", "timeout": "ks",
+        "nice": "n", "setsid": "", "stdbuf": "eio", "bash": "Oo", "sh": "Oo"}
+LONG_ARG = {"--unset", "--chdir", "--split-string", "--argv0", "--signal", "--kill-after", "--adjustment", "--input",
+            "--output", "--error", "--format", "--rcfile", "--init-file"}
+RESERVED = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
+def run(words):
+    out, it = [], iter(words)
+    for w in it:
+        if REDIR.fullmatch(w):
+            next(it, None)
+        else:
+            out.append(w)
+    while out and (out[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", out[0])):
+        out = out[1:]
+    out = [w.replace("\x01", "") for w in out]
+    while out:
+        name = out[0].rsplit("/", 1)[-1]
+        if out[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", out[0]):
+            out = out[1:]
+            continue
+        if name not in WRAP:
+            break
+        out = out[1:]
+        while out and out[0].startswith("-"):
+            o = out.pop(0)
+            if o == "--":
+                break
+            if name == "command" and o[1:2] != "-" and set(o[1:]) & set("vV"):
+                return []  # a lookup (`command -v sleep`) runs nothing
+            short = next((k for k, c in enumerate(o[1:]) if c in WRAP[name]), None) if o[1:2] != "-" else None
+            if o in LONG_ARG or short == len(o) - 2:
+                out = out[1:]
+        if name == "timeout":
+            out = out[1:]  # the duration
+    return out
+def num(s):
+    try:
+        v = float(s)
+    except ValueError:
+        try:
+            v = float.fromhex(s) if re.match(r"[+-]?0[xX]", s) else None
+        except ValueError:
+            v = None
+    return None if v is None or v != v else max(v, 0)
+'
+# Each command of JOINED as run() reads it, one per line.
 segments() {
-  printf '%s\n' "$BARE" | sed -E 's/(&&|\|\||;|\||\$\()/\n/g' \
-    | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/^((nohup|exec|time|timeout[[:space:]]+[0-9smh]+)[[:space:]]+)*//'
+  printf '%s' "$JOINED" | python3 -c 'import os, sys; exec(os.environ["NPL_WORDS"])
+cmd = []
+for w in TOK.findall(sys.stdin.read()) + [";"]:
+    if w in SEPS:
+        if cmd:
+            print(" ".join(run(cmd)))
+        cmd = []
+    else:
+        cmd.append(w)'
 }
 if [ "$TOOL" = "Bash" ]; then
   while IFS= read -r seg; do
@@ -97,39 +170,87 @@ fi
 # A `sleep N` in command position inside a do...done body, however the loop is
 # split across lines. Depth, not a regex: a sleep after a finished loop, or a
 # `done` that is only an argument (`echo done`), must not read as a poll.
+# Also a chain: two sleeps with an operand, each followed by another command.
 sleep_loop() {
-  printf '%s' "$BARE" | python3 -c '
-import re, sys
-toks = re.findall(r"[^\s;&|(){}]+|[;&|(){}\n]", sys.stdin.read())
-depth, cmdpos, hit, skip = 0, True, 0, False
-for i, w in enumerate(toks):
-    if w in ";&|(){}\n":
-        cmdpos = True
-    elif not cmdpos:
-        continue
-    elif skip:
-        skip = False  # the duration after `timeout`
-    elif w in ("command", "builtin", "exec", "time", "nohup", "env") or re.match(r"[A-Za-z_]\w*=", w):
-        pass  # a wrapper or assignment: the next word is still the command
-    elif w == "timeout":
-        skip = True
+  printf '%s' "$JOINED" | python3 -c 'import os, sys; exec(os.environ["NPL_WORDS"])
+depth, cmd, hit, chain = 0, [], False, 0
+for w in TOK.findall(sys.stdin.read().rstrip()) + [""]:
+    if w in SEPS or not w:
+        words = run(cmd)
+        if len(words) > 1 and words[0].rsplit("/", 1)[-1] == "sleep":
+            hit, chain = hit or depth > 0, chain + bool(w)
+        cmd = []
+    elif cmd:
+        cmd.append(w)
     elif w == "do":
         depth += 1
     elif w == "done":
-        depth, cmdpos = max(depth - 1, 0), False
-    elif w in ("while", "until", "for", "if", "then", "else", "elif", "!"):
-        pass
-    else:
-        hit = hit or (w == "sleep" and depth > 0 and i + 1 < len(toks) and toks[i + 1][:1].isdigit())
-        cmdpos = False
-print(int(hit))'
+        depth = max(depth - 1, 0)
+    elif w not in ("while", "until", "if", "then", "else", "elif", "!", "time", "-p"):
+        cmd = [w]  # `for` too: its name word (`for done in`) is never a keyword
+print(int(hit or chain > 1))'
 }
 
 if [ "$WORKER" = 1 ]; then
-  # Advice, not a block: a Builder hand-wrote polls on its test log for up to 4,500 s of agent time in one build.
-  [ "$TOOL" = "Bash" ] && printf '%s' "$BARE" | grep -qE '(^|[;&|[:space:]])sleep[[:space:]]+[0-9]' && [ "$(sleep_loop)" = 1 ] \
-    && jq -cn --arg m 'A hand-written sleep loop waiting on output: start the run with run_in_background (you are notified when it exits); to block on it, wait only with wait-test-run.sh <runner-pid> <output-file> from the plugin scripts, which also checks the runner is still alive. Never poll.' \
-      '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$m}}'
+  [ "$TOOL" = "Bash" ] || exit 0
+  [ "$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')" = "true" ] && exit 0
+  # A Builder hand-wrote polls on its test log for up to 4,500 s of agent time in one build.
+  # The budget is wait-test-run.sh's default wait, 270 s, under the 5-minute cache; 540 s under the 1-hour one
+  # (setup writes CLAUDE_CODE_PROMPT_CACHE_TTL into each pane's settings). Summed per command, its word a path or not:
+  # every operand of sleep, an orca command's --timeout-ms, a wait-test-run.sh (its max, else 270). A wait inside a
+  # loop (its condition or body) repeats, so the one-pass sum bounds nothing: `loop`, refused.
+  LIMIT=270; [ "${CLAUDE_CODE_PROMPT_CACHE_TTL:-}" = 1h ] && LIMIT=540
+  WAITED=$(printf '%s' "$JOINED" | python3 -I -c 'import os, sys; exec(os.environ["NPL_WORDS"])
+UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+def secs(a):
+    # The whole operand first: 0x1d is hex, not 1 day.
+    v = num(a)
+    if v is None and a[-1:] in UNIT and len(a) > 1 and num(a[:-1]) is not None:
+        v = num(a[:-1]) * UNIT[a[-1]]
+    return None if v is None else math.ceil(min(v, 10**9))
+def wait(words):
+    if not words:
+        return 0
+    name, args = words[0].rsplit("/", 1)[-1], words[1:]
+    if name == "sleep":
+        n = [secs(a) for a in args]
+        return None if None in n else sum(n)
+    if name == "wait-test-run.sh":
+        return int(args[2]) if len(args) > 2 and args[2].isdigit() else 270
+    if name in ("orca", "orca-ide"):
+        vals = [v for k, a in enumerate(args) for v in
+                ([a.split("=", 1)[1]] if a.startswith("--timeout-ms=") else args[k + 1:k + 2] if a == "--timeout-ms" else [])]
+        n = [num(v) for v in vals]
+        return None if None in n else sum(math.ceil(min(v, 10**12) / 1000) for v in n)
+    return 0
+depth, cmd, total, looped, unread = 0, [], 0, False, False
+for w in TOK.findall(sys.stdin.read()) + [";"]:
+    if w in SEPS:
+        n = wait(run(cmd))
+        unread = unread or n is None
+        total, looped, cmd = total + (n or 0), looped or ((n is None or n > 0) and depth > 0), []
+    elif cmd:
+        cmd.append(w)
+    elif w in ("while", "until", "for", "select"):
+        depth += 1
+        cmd = [w] if w in ("for", "select") else []  # its name word (`for done in`) is never a keyword
+    elif w == "done":
+        depth = max(depth - 1, 0)
+    elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p"):
+        cmd = [w]
+print("loop" if looped else "unread" if unread else total)')
+  if [ "$WAITED" = loop ]; then
+    printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache. A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
+    exit 2
+  fi
+  if [ "$WAITED" = unread ]; then
+    printf 'BLOCKED: this hook cannot read a wait in this call (a sleep operand or --timeout-ms that is not a number, such as $T), so it cannot hold it to the %s s prompt-cache budget. State the wait as a number, or start the call with Bash run_in_background.\n' "$LIMIT" >&2
+    exit 2
+  fi
+  if [ "${WAITED:-0}" -gt "$LIMIT" ] 2>/dev/null; then
+    printf "BLOCKED: this call can wait up to %s s in all, past the prompt cache's life, so the next reply rewrites it.\nOne wait per call, at most %s s: an ask takes --timeout-ms 240000 and on a timeout reruns with --resume <message id>.\n" "$WAITED" "$LIMIT" >&2
+    exit 2
+  fi
   exit 0
 fi
 
@@ -168,46 +289,31 @@ fi
 
 # A loop around the wait is the Monitor loop by another name: each pass is a
 # wait main did not ask for, and it never returns to wake main. Parsed as
-# shell words (WORDS), so a quoted search pattern is one argument, never a
-# command, while a quoted script path in command position still is, and a
-# comment is gone. Loop depth counts do/done, so a wait after an inner loop's
+# shell words (JOINED), so a quoted search pattern is one argument, never a
+# command, while a quoted script path in command position still is, its quoted
+# parts joined as bash joins them, and a comment is gone. Loop depth counts do/done, so a wait after an inner loop's
 # `done` is still inside the outer one.
 loop_wait() {
-  CMD=$WORDS python3 - <<'PY'
-import os, re, shlex, sys
-try:
-    # An unquoted newline ends a command like `;` does. Heredoc bodies, comments
-    # and quotes are already gone (WORDS); shlex has no heredoc support of its own.
-    lex = shlex.shlex(os.environ["CMD"], posix=True, punctuation_chars=";&|()\n")
-    lex.whitespace = " \t\r"
-    # shlex commenting stays off: it swallows the newline that ends the command,
-    # so `while true # note` NEWLINE `do` hid the `do`.
-    lex.commenters = ""
-    lex.whitespace_split = True
-    toks = list(lex)
-except ValueError:
-    # Could not be split: no loop can be ruled out, so the caller blocks it
-    # when it names a wait.
-    sys.exit(3)
-SEP = re.compile(r"^[;&|()\n]+$")
+  CMD=$JOINED python3 - <<'PY'
+import os, sys
+# Heredoc bodies, comments and quotes are already gone (JOINED). TOK, not shlex:
+# shlex split `2>&1` at the `&`, so the `1` read as the command.
+exec(os.environ["NPL_WORDS"])
 depth, cmd = 0, []
 def is_wait(words):
-    while words and (re.match(r"^[A-Za-z_]\w*=", words[0]) or words[0] in ("bash", "sh", "exec", "nohup", "time")):
-        words = words[1:]
-    if words[:1] == ["timeout"]:
-        words = words[2:]
+    words = run(words)
     if not words:
         return False
     if words[0].endswith("orca-wait.sh"):
         return True
     return words[:3] == ["orca-ide", "orchestration", "check"] and "--wait" in words
-for t in toks + [";"]:
-    if SEP.match(t):
+for t in TOK.findall(os.environ["CMD"]) + [";"]:
+    if t in SEPS:
         if depth > 0 and is_wait(cmd):
             sys.exit(0)
         cmd = []
         continue
-    if not cmd and t in ("do", "then", "else", "{"):
+    if not cmd and t in ("do", "then", "else"):
         depth += t == "do"
         continue
     if not cmd and t == "done":
@@ -217,15 +323,11 @@ for t in toks + [";"]:
 sys.exit(1)
 PY
 }
-# Not seen: a wait whose command word is quoted with anything but plain word
-# characters (`"$DIR/orca-wait.sh"`).
+# Not seen: a wait whose quoted command word holds a space or an operator
+# (`"my dir/orca-wait.sh"`), which strip_quoted prints as prose.
 if [ "$TOOL" = "Bash" ] && printf '%s' "$CMD_CODE" | grep -qE 'orca-wait\.sh|orchestration[[:space:]]+check'; then
-  loop_wait; LW=$?
-  if [ "$LW" = 0 ]; then
+  if loop_wait; then
     printf 'BLOCKED: the Orca inbox wait inside a shell loop.\n%s\n' "$SINGLE_SHOT_FIX" >&2
-    exit 2
-  elif [ "$LW" != 1 ] && printf '%s' "$WORDS" | grep -qE 'orca-wait\.sh|orchestration[[:space:]]+check[[:space:]].*--wait'; then
-    printf 'BLOCKED: this command names the Orca inbox wait and could not be read as shell words, so a loop around the wait cannot be ruled out. Run the wait as its own command.\n%s\n' "$SINGLE_SHOT_FIX" >&2
     exit 2
   fi
 fi
@@ -250,14 +352,13 @@ if [ "$TOOL" = "Bash" ] && is_wait_command; then
   exit 0
 fi
 
-printf '%s' "$BARE" | grep -qE '(^|[;&|[:space:]])sleep[[:space:]]+[0-9]' || exit 0
+# JOINED, not BARE: a quoted or escaped command word (`"sleep"`, `\sleep`) runs.
+printf '%s' "$JOINED" | tr -d '\001' | grep -qE '(^|[;&|[:space:]/<>])sleep([[:space:]<>]|$)' || exit 0
 printf '%s' "$BARE" | grep -qE 'orca-ide[[:space:]]+orchestration[[:space:]]+check[[:space:]].*--wait' && exit 0
 printf '%s' "$BARE" | grep -qE 'orca-ide[[:space:]]+orchestration[[:space:]]+send[[:space:]]' && exit 0
 printf '%s' "$BARE" | grep -qE '(^|[[:space:]/])orca-wait\.sh([[:space:]]|$)' && exit 0
 
-LOOP=$(sleep_loop)
-CHAIN=$(printf '%s' "$BARE" | tr '\n' ' ' | grep -cE 'sleep[[:space:]]+[0-9]+[[:space:]]*(;|&&|\|\|).*sleep[[:space:]]+[0-9]+[[:space:]]*(;|&&|\|\|)')
-[ "$LOOP" = 0 ] && [ "$CHAIN" = 0 ] && exit 0
+[ "$(sleep_loop)" = 0 ] && exit 0
 
 cat >&2 <<'EOF'
 BLOCKED: sleep-loop polling in the main session. Wait on Orca instead:

@@ -56,7 +56,8 @@ block() {
 # (bash expands nothing in those; their bodies are dropped). strip_quoted reads
 # the spans (the reader git-safety.sh and no-poll-loops.sh use): a one-word
 # span stays the word it is, a span of several words becomes $QUOTED.
-# Commands that only carry text; none runs a quoted word given to it.
+# Commands that only carry text; none runs a quoted word given to it. The plugin's
+# own setup.sh, run by bash or sh, is one too (own_setup, below).
 SENDERS='gh|orca|orca-ide|git[[:space:]]+(commit|tag|notes|status|log|diff|show|add)|echo|printf|cat'
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || true
 ran() {
@@ -72,12 +73,22 @@ ran() {
     && ! grep -qE "<<-?[[:space:]]*[^[:space:]$M<-]" <<<"${CODE//<<</ }"; then
     CODE=$(sed -E "s/$M([^[:space:]$M])/\1/g; s/$M/ \$QUOTED /g" <<<"$CODE")
     while IFS= read -r SEG; do
-      [[ $SEG =~ ^[[:space:]]*$ || $SEG =~ ^[[:space:]]*($SENDERS)([[:space:]]|$) ]] || { whole "$1"; return; }
+      [[ $SEG =~ ^[[:space:]]*$ || $SEG =~ ^[[:space:]]*($SENDERS)([[:space:]]|$) ]] && continue
+      # The plugin's own setup.sh saves its quoted answers (a test command) and runs none of them (issue 206).
+      [[ $SEG =~ ^[[:space:]]*(bash|sh)[[:space:]]+([^[:space:]]+) ]] && own_setup "${BASH_REMATCH[2]}" && continue
+      whole "$1"; return
     done < <(sed -E 's/[0-9]*[<>]&[0-9-]*//g; s/&&|\|\||[;|&()]/\n/g' <<<"$CODE")
     printf '%s' "$CODE"
   else
     whole "$1"
   fi
+}
+# own_setup <path> -- the path, absolute or under ~, is this plugin's own setup.sh. A relative
+# path is not read: an earlier `cd` on the line could point it at another setup.sh.
+own_setup() {
+  local p=$1
+  [[ $p == '~/'* ]] && p=$HOME/${p:2}
+  [[ $p == /* ]] && [ -f "$p" ] && [ "$(realpath "$p" 2>/dev/null)" = "$(realpath "${BASH_SOURCE[0]%/*}/../scripts/setup.sh" 2>/dev/null)" ]
 }
 # The whole line as code: a quote mark is a word break, so `bash -c 'npm ci'`
 # reads as npm ci. A quoted folder with a space becomes $QUOTED, which blocks

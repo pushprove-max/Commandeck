@@ -53,7 +53,7 @@ check "the block never offers a send, which cannot return the answer" 0 "$R"
 : > "$COMMANDECK_SCRATCH/current-run"
 MSG=$(printf '%s' "$ASK" | CLAUDE_PROJECT_DIR=$WT bash "$HOOK" 2>&1 >/dev/null; echo "rc=$?")
 check "no run: still blocked" 2 "${MSG##*rc=}"
-case "$MSG" in *"orca-ide orchestration ask --from term_selftest --timeout-ms 600000"*) R=0 ;; *) R=1 ;; esac
+case "$MSG" in *"orca-ide orchestration ask --from term_selftest --timeout-ms 240000"*) R=0 ;; *) R=1 ;; esac
 check "no run: the ask is printed without --to" 0 "$R"
 case "$MSG" in *"--to"*|*"<run id>"*) R=1 ;; *) R=0 ;; esac
 check "no run: no placeholder run id" 0 "$R"
@@ -90,6 +90,8 @@ check "a worker with the decoy first is still blocked" 2 "$(q "$ASK_DECOY" | hoo
 MSG=$(q "Real choice" | CLAUDE_PROJECT_DIR=$WT bash "$HOOK" 2>&1 >/dev/null)
 case "$MSG" in *"orchestration ask"*) R=0 ;; *) R=1 ;; esac
 check "a worker's block is today's message, not the decoy refusal" 0 "$R"
+# Issue 214: the ask this guard hands a worker must pass no-poll-loops.sh, which holds a worker's wait to 270 s.
+check "the printed ask waits no more than 240 s" 1 "$(grep -oE -- '--timeout-ms [0-9]+' <<<"$MSG" | awk '$2 <= 240000 { n++ } END { print n + 0 }')"
 
 # Setup's questions are asked without the decoy (owner ruling Q5): setup.sh --questions begin
 # leaves a marker in git's folder, and the end of setup takes it away. A worker stays blocked.

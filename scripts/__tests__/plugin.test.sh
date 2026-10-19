@@ -58,6 +58,13 @@ done
 H=$REAL/agents/helper.md
 check "agents/helper.md sets omitClaudeMd and maxTurns, and none of the keys a plugin agent ignores" "1 1 0" \
   "$(grep -c '^omitClaudeMd: true$' "$H") $(grep -c '^maxTurns: [0-9]' "$H") $(grep -cE '^(hooks|mcpServers|permissionMode):' "$H")"
+# Issue 203: a helper answers by its 20th tool call and names what it did not find, and every helper prompt carries
+# those caps and reuses an earlier helper's file:line pointers. A Builder waiting on its own run keeps its cache warm on
+# a Signal WARM line, and a worker's ask fits under the prompt cache (issue 214).
+BT=$REAL/templates/_builder-brief-template.md
+check "helper.md and the Builder template carry the helper caps, the reuse rule, the WARM reply and the 240 s ask" "1 1 1 1 1 1" \
+  "$(grep -c 'NOT FOUND: <what you searched, where>' "$H") $(grep -c '20th tool call' "$H") $(for p in 'NOT FOUND:' \
+    'already answered part of it' 'Signal WARM' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
 # Issue 201: the lean agents start small (no CLAUDE.md, no skill or MCP tool), and set no model or effort, so
 # routing's roles.lean-worker and roles.lean-checker (filled in by agent-model-guard.sh) are never outranked.
 for a in lean-worker lean-checker; do

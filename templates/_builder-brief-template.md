@@ -27,9 +27,16 @@ merges with `merge-unit-local.sh {unit}`.
   edits, runs or tests is `commandeck:lean-worker`; a blind re-check is
   `commandeck:lean-checker`. These start without CLAUDE.md, so the prompt
   carries every fact and limit the helper needs.
-- A helper answers in at most 15 lines: say so in its prompt. A command whose
+- Every helper prompt, Explore included, carries three caps: at most 15 lines,
+  an answer by the 20th tool call with what it has, and one `NOT FOUND: <what
+  it searched, where>` line for anything it did not find. Before sending a
+  helper, check whether an earlier helper this session
+  already answered part of it, and put those `file:line` pointers in the new
+  prompt instead of asking again. A command whose
   output runs past 40 lines writes to a file, and you read the part you need:
   whatever comes back is sent again on every later turn of the build.
+- A `Signal WARM` line keeps your prompt cache alive while you wait: reply
+  with one `.` and end the turn.
 - Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
   line per batch item in the evidence file: the build review reads that shape.
 - Builders never write new end-to-end tests: no test installs or uninstalls
@@ -54,7 +61,8 @@ merges with `merge-unit-local.sh {unit}`.
   a runner that died with no result means rerun the needed file alone, never a
   second wait. It knows a `<n> passed, <n> failed` last line and node:test's
   summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
-  wait`: its first output line is the runner pid.
+  wait`: its first output line is the runner pid. `orca-ide orchestration ask`
+  takes `--timeout-ms 240000`, and is resumed with the message id it returns.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product

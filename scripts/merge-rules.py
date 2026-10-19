@@ -189,7 +189,7 @@ def main(argv):
             i += 1
         else:
             sys.exit(__doc__)
-    theirs = {}
+    theirs, earlier = {}, set()
     for f in against:
         if excluded(f, exclude):
             continue
@@ -212,6 +212,9 @@ def main(argv):
         for kind, lines in parse(BLOCK.sub("", text)):
             if kind == "u":
                 theirs.setdefault(norm(lines), f)
+        # Setup's own block from an earlier run is not the owner's: only named in the report (issue 209).
+        for b in BLOCK.finditer(text):
+            earlier.update(norm(lines) for kind, lines in parse(re.sub(r"<!-- commandeck:[^>]*-->", "", b.group(0))) if kind == "u")
     if mode == "sources":
         return
     text = sys.stdin.read() if template == "-" else open(template, encoding="utf-8-sig").read()
@@ -238,7 +241,9 @@ def main(argv):
             mine.append(lines)
     if mode == "report":
         n = sum(1 for k, _ in items if k == "u") - len(gone)
-        print(f"{n} plugin rules kept, {len(same)} already in your files (left out), {len(mine)} where you keep your own (left out)")
+        k = sum(1 for j, (kind, lines) in enumerate(items) if kind == "u" and j not in gone and norm(lines) in earlier)
+        was = f" ({k} already in setup's block from an earlier run)" if k else ""
+        print(f"{n} plugin rules kept{was}, {len(same)} already in your files (left out), {len(mine)} where you keep your own (left out)")
         for f, lines in same:
             print(f"  already in {f}: {lines[0].strip()[:90]}")
         for lines in mine:

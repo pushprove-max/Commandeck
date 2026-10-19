@@ -1,16 +1,25 @@
 # dashboard_builders.jq -- a Builder's card and signals from its event log
 #, pure so the tests run it with no collect. Callers: dashboard.sh
 # units() and main-watch.sh. Input (jq -s): the log's rows. Args: $now (epoch),
-# and optionally sessionAt (epoch the seat's session log was last written, or null).
+# and optionally sessionAt (epoch the seat's session log was last written, or null) and bgOpen (background
+# shell jobs the session started and has not seen finish, or null: an unreadable log counts as none, so it still alerts).
+# Also optional, from main-watch.sh only: cache (pp_session_cache's object) and tick (its tick in seconds), which add the
+# warm signal.
 # Output {lastAt, round, stage, steps, signals}; signals are
-# {kind, since (epoch, stable while the condition lasts), limitSec}.
+# {kind, since (epoch, stable while the condition lasts), limitSec}; warm adds anchor and maxPings.
 # Limits are owner ruling 2026-10-10: a tool call with no end is
 # STUCK past 600 s (test), 180 s (shell), 60 s (tool) -- codex is exempt, its
-# pass has its own rows; QUIET is 300 s with nothing open; LOOP is the same
+# pass has its own rows; QUIET is 300 s (225 s on a 5-minute Builder) with nothing open, a background job (bgOpen)
+# included; LOOP is the same
 # call three times, or four failed calls, in a row.
 def ep: try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null;
 # wait: an inbox wait (`orchestration check --wait`) blocks for 540 s by design.
 def limits: {test: 600, shell: 180, tool: 60, wait: 600};
+# WARM prices, in base-input token units at the published multipliers (cache read 0.1x, 5-minute write 1.25x, output 5x).
+# A ping reads the cache once, writes the ~240 tokens it adds (the host project's measured median) and answers ~10; a
+# rewrite it avoids costs 1.25x instead of 0.1x of the context. Constants, not settings.
+def pingCost($ctx): 0.1 * $ctx + 1.25 * 240 + 5 * 10;
+def rewriteSaved($ctx): 1.15 * $ctx;
 # The newest-first run of equal $f values at the end of the rows; empty for no rows.
 def trail(f): reverse | map(f) as $v
   | (first(range(0; length) | select($v[.] != $v[0])) // length) as $n | .[:$n];
@@ -50,6 +59,9 @@ map(select(type == "object" and (.event | type) == "string")) as $r
     | {c: $c, e: (first($ri[] | select(.key > $i and .value.event == "codex-end" and .value.pass == $c.pass and .value.round == $c.round) | .value) // null)}]) as $cx
 | ([$cx[] | select(.e == null) | .c]) as $openCodex
 | ([$ss[] | select(.agent_id == null or ($stopSet[.agent_id | tostring] | not))]) as $openSub
+# WARM's budget anchor: the newest row only the parent writes. A tool-end, batch-end or tool-refused row names no agent,
+# a helper's included, so only a tool-start with no agent or the parent's subagent-request counts.
+| ([($starts[] | select(.agent == null)), $sr[]] | map(.ts | ep | numbers) | max) as $own
 | {
     lastAt: (if $last == null then null else $last | todate end),
     round: ($cs | last | .round // null),
@@ -70,9 +82,24 @@ map(select(type == "object" and (.event | type) == "string")) as $r
         | select($t != null and $now - $t > $lim) | {kind: "stuck", since: $t, limitSec: $lim}]
        | if length > 1 then [min_by(.since)] else . end)
       # One long model turn writes the session log and no event row: quiet is timed from the later of the two.
+      # A 5-minute Builder is told 15 s before its keep-warm window opens (cache.ttl 300 and tick passed), so the nudge
+      # lands while its cache is still warm (issue 203); dashboard.sh and 1-hour panes keep 300. A Builder idle on its
+      # own background job (bgOpen) is waiting, not quiet.
       + (([$last, ($ARGS.named.sessionAt | numbers)] | max) as $sign
-         | if $last != null and $now - $sign > 300 and ($openTool | not) and ($openCodex | length) == 0 and ($openSub | length) == 0
-           then [{kind: "quiet", since: $sign, limitSec: 300}] else [] end)
+         | (if ([$ARGS.named.cache | objects | select(.ttl == 300)] | length) > 0 and ($ARGS.named.tick | type) == "number"
+              then 300 - $ARGS.named.tick - 15 else 300 end) as $ql
+         | if $last != null and $now - $sign > $ql and ($openTool | not) and ($openCodex | length) == 0 and ($openSub | length) == 0
+             and ($ARGS.named.bgOpen | numbers // 0) == 0
+           then [{kind: "quiet", since: $sign, limitSec: $ql}] else [] end)
+      # WARM (issue 203): a 5-minute Builder at its prompt (cache.ended) waiting on something QUIET waits on, from 15 s
+      # before the last tick that can reach it to 300 s after its own last request (cache.at), while a ping costs less
+      # than the rewrite it saves. Needs cache and tick, which dashboard.sh does not pass.
+      + [($ARGS.named.cache | objects) as $c | ($ARGS.named.tick | numbers) as $tick
+         | ($c.ctx | numbers) as $ctx | ($c.at | numbers) as $at
+         | (rewriteSaved($ctx) / pingCost($ctx) | floor) as $max
+         | select($c.ttl == 300 and $c.ended == true and $now - $at >= 300 - $tick - 15 and $now - $at < 300 and $max > 0
+             and (($ARGS.named.bgOpen | numbers // 0) > 0 or ($openSub | length) > 0 or ($openCodex | length) > 0))
+         | {kind: "warm", since: $at, anchor: $own, limitSec: 300, maxPings: $max}]
       # Both detectors can see one run (four failures of one call): one episode, from its earliest start.
       + ([([$starts | trail(.call)] | map(select(length >= 3 and .[0].call != null) | .[-1].ts | ep)),
           ([$ends | trail(.ok == false)] | map(select(length >= 4 and .[0].ok == false) | .[-1].ts | ep))]

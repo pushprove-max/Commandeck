@@ -349,6 +349,17 @@ a.t:hover { color: var(--accent-ink); }
 /* Needs a look: only panels with an alert, a warning or something waiting stay. */
 body.look-only .card:not([data-look]) { display: none; }
 
+/* The phone's tab bar, step chips and More sheet (issue 211): the bar and chips show only under 760 px. */
+#tabs, #unit-steps { display: none; }
+#more-sheet { position: fixed; inset: 0; z-index: 20; }
+#more-sheet[hidden] { display: none; }
+#more-sheet .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); }
+#more-sheet .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+#more-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: minmax(64px, auto); gap: 6px; }
+#more-tiles button { min-height: 44px; background: var(--chip); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 6px; font: inherit; font-size: 13px;
+  overflow-wrap: anywhere; cursor: pointer; }
+
 /* Ultrawide: the page fills the window and gains columns; a panel's width stays 1 to 4 of them. */
 @media (min-width: 2200px) {
   .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -367,7 +378,25 @@ body.look-only .card:not([data-look]) { display: none; }
   .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid { grid-template-columns: minmax(0, 1fr); }
   .card[data-size] { grid-column: auto; }
-  .stages { grid-template-columns: repeat(5, minmax(150px, 1fr)); overflow-x: auto; }
+  /* issue 211: the stages stack; the chips pick one, so nothing scrolls sideways. */
+  #stages { grid-template-columns: minmax(0, 1fr); }
+  body { margin: 12px 12px calc(72px + env(safe-area-inset-bottom)); }
+  .card, .summary { overflow-wrap: anywhere; }
+  /* A dragged desktop height is the desktop's: on a phone a panel is as tall as its content. */
+  .card { height: auto !important; max-height: none !important; grid-row: auto; resize: none; }
+  body:not([data-tab="units"]) #summary { display: none; }
+  .card:not(.tab-on) { display: none; }
+  #tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    padding: 4px 4px env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--line); }
+  #tabs button { min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0;
+    background: none; color: var(--muted); border: 0; border-radius: 8px; font: inherit; font-size: 12px; cursor: pointer; }
+  #tabs button[aria-current] { color: var(--accent-ink); background: var(--accent-bg); }
+  .tab-badge { font: 600 11px var(--mono); }
+  .tab-badge:empty { display: none; }
+  #unit-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  #unit-steps button { min-height: 44px; padding: 0 12px; background: var(--chip); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font: inherit; cursor: pointer; }
+  #unit-steps button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent-ink); border-color: #2f5a94; }
+  body:not([data-step="all"]) #stages > .stage:not(.step-on), body:not([data-step="all"]) #permanent, body:not([data-step="all"]) #unclassified { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; transition: none; animation: none; } }
 /* A Builder's time and cost (#94): the top line, the figures under each stage, the compact stage list, the table. */

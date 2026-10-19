@@ -24,6 +24,8 @@
 - **A ruling that something stays as it is goes under `## Stated limits`** in
   `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
   when written: the pass reads limits there only, and raises one written elsewhere again.
+- **A build whose last pass ended NO-GO merges only on the owner's word**, even when the merge check passes it under
+  the P2-tail rule.
 - **Also standing (Details)**: checklist, announcements, re-asks, helpers, effort, mid-build work, tooling.
 
 ## Main never compacts: write the checkpoint, the hook restarts main

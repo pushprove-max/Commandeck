@@ -45,5 +45,27 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
   COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 60 bash "$REAL/scripts/orca-wait.sh" 2>&1); RC=$?
 check "a 1.2 MB batch drains: exit 0, all twelve bodies saved whole" "0 12" \
   "$RC $(for i in $(seq 1 12); do f=$T/sc/main-watch/messages/q$i.md; [ -f "$f" ] && [ "$(wc -c < "$f" | tr -d ' ')" = 100000 ] && echo y; done | wc -l | tr -d ' ')"
+# Issue 212: after a pass that ended NO-GO the next step main reads is a fix round, never "merge it", even when the
+# merge check passes the tip under the P2-tail rule: that merge is the owner's call. A GO that passes still merges.
+PL=$T/plug; mkdir -p "$PL"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$PL/"
+U=$WS/u212; git init -q -b main "$U"; mkdir -p "$U/.claude/briefs"; echo brief > "$U/.claude/briefs/u212.md"
+wake() {  # wake <last verdict> <--verify exit code>
+  printf 'Pass: review\n[P2] could wipe a reply\nVERDICT: %s\n' "$1" > "$U/.claude/briefs/u212-r5-reports.md"
+  printf 'VERDICT: GO\n' > "$U/.claude/briefs/u212-r4-reports.md"
+  git -C "$U" add -A && git -C "$U" -c user.name=t -c user.email=t@t commit -qm r5
+  printf '#!/usr/bin/env bash\necho "refused: a P1 is open" >&2\nexit %s\n' "$2" > "$PL/scripts/builder-codex-pass.sh"
+  msg w1 term_u status "pass done (u212)" "r5 is in" | jq -sc '{ok: true, result: {deliveryId: "d3", messages: .}}' > "$T/batch.json"
+  rm -rf "$T/sc"
+  (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+    COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$PL/scripts/orca-wait.sh" 2>&1)
+}
+OUT=$(wake NO-GO 1)
+check "a NO-GO the merge check refuses: next is a fix round, never merge it" "1 0" \
+  "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
+OUT=$(wake NO-GO 0)
+check "a NO-GO the merge check passes (P2 tail): a fix round, the owner's word named, never merge it" "1 1 0" \
+  "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c "merge only on the owner's word; ask them first" <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
+OUT=$(wake GO 0)
+check "a GO the merge check passes still prints merge it" "1 0" "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c 'fix round' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -293,7 +293,7 @@ bounded() {  # bounded <file> <lines allowed> -- the file indented; past the all
   SHOWN=$((2 * k + 1))
 }
 serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
-  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root
+  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2
   id=$(jq -r '(.id // "") | gsub("[^A-Za-z0-9._-]"; "_")' <<<"$m"); file=$MSGDIR/$id.md
   from=$(jq -r '.from_handle // ""' <<<"$m"); type=$(jq -r '.type // ""' <<<"$m"); subject=$(jq -r '.subject // ""' <<<"$m")
   # The text, unless the first line already carried all of it (a heads-up relay prints its own whole).
@@ -315,8 +315,8 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     echo "  unit $unit: $ahead commit$([ "$ahead" = 1 ] || echo s) ahead of main, $dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, last Codex round ${verdict:-none on file}"
     # The next step for the three kinds of wake a unit sends, and no stage machine:
     # a question waits on an answer; anything else merges or does not.
-    # Whether it merges is the merge's own check and nothing read off the round
-    # file here: only that check knows a GO that covers an older commit from one
+    # Whether it merges is the merge's own check, never the round file read here
+    # (that only turns a NO-GO into a fix round): only that check knows a GO that covers an older commit from one
     # that covers the tip, and a NO-GO that is a mergeable P2/P3 tail.
     if { [ "$type" = question ] || [ "$type" = escalation ]; } && [[ "$subject" != *"turn complete"* ]]; then
       echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
@@ -324,15 +324,21 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" --waits-on main >/dev/null 2>&1 \
         || echo "  (not recorded in the decisions ledger: it is there already, or the ledger refused it)"
     else
-      why=""
+      why="" nogo="" p2=""
       if [ "$(jq -r --arg u "$unit" 'index($u) != null' <<<"$3")" = true ]; then why="its driver acts on this; see the driver line below"
       elif [ "$dirty" != 0 ]; then why="$dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, which no Codex pass read"
+      # The pass writes its own verdict line last. After a NO-GO the next step is a fix round even when the merge
+      # check passes a P2/P3 tail: that merge is the owner's call (issue 212). This line only advises; the merge checks.
+      elif [ -n "$round" ] && [ "$(grep '^VERDICT:' "$round" | tail -1)" = "VERDICT: NO-GO" ]; then nogo=1
+        [ -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$wt" "$unit" HEAD >/dev/null 2>&1 </dev/null && p2=1
       elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ]; then why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"
       elif ! why=$(bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$wt" "$unit" HEAD 2>&1 >/dev/null </dev/null); then
         why=$(printf '%s\n' "$why" | grep . | tail -1 | cut -c1-300); why=${why:-the merge check refused it and gave no reason}
       else why=""
       fi
-      if [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
+      if [ -n "$nogo" ]; then echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"
+        [ -z "$p2" ] || echo "  the P2-tail rule lets this tip merge with its P2/P3 open: merge only on the owner's word; ask them first"
+      elif [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
       else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit"
       fi
     fi

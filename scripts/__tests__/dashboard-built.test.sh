@@ -229,5 +229,56 @@ check "an empty registry: the home project is not collected" '[]' "$(off EMPTY)"
 check "no registry yet: the home project is collected, as before" '["demo"]' "$(off)"
 check "a registry listing the home project: it is collected" '["demo"]' "$(off "$MAIN")"
 
+# Issue 203: a 5-minute Builder at its prompt, waiting on something open, gets a keep-alive WARM just before its own
+# cache lapses (225-300 s after its last request, on a 60 s tick), while a ping costs less than the rewrite it saves; a
+# Builder idle on its own background job is waiting, not QUIET; and QUIET comes at 225 s on a 5-minute cache, while the
+# cache is still warm. dashboard.sh passes no cache or tick, so the dashboard shows what it did before.
+BJQ=$SOURCE/scripts/dashboard_builders.jq; N=2000000000
+at() { jq -nr --argjson t "$((N - $1))" '$t | todate'; }
+ts_() { printf '{"ts":"%s","event":"tool-start","use":"%s","tool":"Bash","kind":"%s","call":"c%s"}\n' "$(at "$1")" "$2" "$3" "$2"; }
+te_() { printf '{"ts":"%s","event":"tool-end","use":"%s","ok":true}\n' "$(at "$1")" "$2"; }
+sig() { jq -sc --argjson now "$N" ${1:+--argjson bgOpen "$1"} ${2:+--argjson cache "$2"} ${3:+--argjson tick "$3"} -f "$BJQ"; }
+kinds() { sig "$@" | jq -c '[.signals[] | [.kind, .limitSec]]'; }
+warm() { sig "$@" | jq -c '[.signals[] | select(.kind == "warm")]'; }
+WC() { printf '{"ttl":%s,"ctx":%s,"at":%s,"ended":%s}' "${1:-300}" "${2:-100000}" "$((N - ${3:-230}))" "${4:-true}"; }
+OWN() { ts_ 400 u1 shell; te_ 399 u1; }
+check "warm: idle 230 s with a job open on a 100k context is one warm signal from the request, anchored on the parent's row, 11 pings" \
+  "[{\"kind\":\"warm\",\"since\":$((N - 230)),\"anchor\":$((N - 400)),\"limitSec\":300,\"maxPings\":11}]" "$(OWN | warm 1 "$(WC)" 60)"
+check "warm: none at 200 s or 310 s idle, on a 1-hour cache at 3530 s, mid-turn, with nothing open, or with no cache" "[] [] [] [] [] []" \
+  "$(OWN | warm 1 "$(WC 300 100000 200)" 60) $(OWN | warm 1 "$(WC 300 100000 310)" 60) $(OWN | warm 1 "$(WC 3600 100000 3530)" 60) $(OWN | warm 1 "$(WC 300 100000 230 false)" 60) $(OWN | warm 0 "$(WC)" 60) $(OWN | warm 1 '' 60)"
+check "warm: a 1000-token context buys 2 pings (a ping costs 450, a saved rewrite 1150)" 2 "$(OWN | warm 1 "$(WC 300 1000)" 60 | jq -c '.[0].maxPings')"
+HELP=$(printf '{"ts":"%s","event":"tool-start","use":"h2","tool":"Grep","kind":"tool","agent":"a1","call":"g"}\n{"ts":"%s","event":"tool-end","use":"h2","ok":true}\n{"ts":"%s","event":"batch-end","uses":["h2"]}\n' "$(at 100)" "$(at 99)" "$(at 98)")
+check "warm: a helper's rows after the parent's do not move the anchor; the parent's own subagent-request does" "$((N - 400)) $((N - 40))" \
+  "$({ OWN; printf '%s\n' "$HELP"; } | warm 1 "$(WC)" 60 | jq -c '.[0].anchor') $({ OWN; printf '%s\n' "$HELP"; printf '{"ts":"%s","event":"subagent-request","type":"Explore"}\n' "$(at 40)"; } | warm 1 "$(WC)" 60 | jq -c '.[0].anchor')"
+check "quiet: 226 s idle is QUIET at 225 s on a 5-minute cache and a 60 s tick, and nothing without a cache" '[["quiet",225]] []' \
+  "$({ ts_ 400 u1 shell; te_ 226 u1; } | kinds '' "$(WC)" 60) $({ ts_ 400 u1 shell; te_ 226 u1; } | kinds)"
+check "quiet: 301 s idle with a background job open is no signal; with none, or an unreadable log, it is QUIET" '[] [["quiet",300]] [["quiet",300]]' \
+  "$({ ts_ 400 u1 shell; te_ 301 u1; } | kinds 1) $({ ts_ 400 u1 shell; te_ 301 u1; } | kinds 0) $({ ts_ 400 u1 shell; te_ 301 u1; } | kinds null)"
+# pp_session_bg_open and pp_session_cache read the newest session record of a worktree, on its real row shapes.
+CW=$T/cwt; CL=$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$CW"); mkdir -p "$CW" "$CL"
+pp() { (. "$SOURCE/scripts/paths.sh" && "$1" "$CW" | jq -c .); }
+{ printf '{"type":"user","toolUseResult":{"stdout":"","backgroundTaskId":"bAAA1"}}\n{"type":"user","toolUseResult":{"backgroundTaskId":"bBBB2"}}\n'
+  printf '{"type":"user","toolUseResult":"a result that quotes backgroundTaskId bZZZ9"}\n'
+  printf '{"type":"queue-operation","content":"<task-notification>\\n<task-id>bAAA1</task-id>\\n<status>completed</status>\\n</task-notification>"}\n'; } > "$CL/s1.jsonl"
+check "bg_open: two jobs started and one notified is 1 open, a quoted id not counted" 1 "$(pp pp_session_bg_open)"
+# A TaskStop sends no notification; its successful result is the job's end, else the job holds QUIET off for good.
+printf '{"type":"user","toolUseResult":{"task_id":"bBBB2"},"message":{"content":[{"type":"tool_result","content":"Successfully stopped task: bBBB2"}]}}\n' >> "$CL/s1.jsonl"
+check "bg_open: a job TaskStop stopped is closed" 0 "$(pp pp_session_bg_open)"
+printf '{"type":"user","toolUseResult":{"backgroundTaskId":"bCCC3"}}\n{"type":"user","toolUseResult":{"task_id":"bCCC3"},"message":{"content":"Error: no task bCCC3"}}\n' >> "$CL/s1.jsonl"
+check "bg_open: a TaskStop that failed closes nothing" 1 "$(pp pp_session_bg_open)"
+crow() { printf '{"type":"assistant","isSidechain":%s,"timestamp":"%s","message":{"stop_reason":"%s","usage":{"input_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"cache_creation":{"ephemeral_1h_input_tokens":%s,"ephemeral_5m_input_tokens":%s}}}}\n' "${7:-false}" "$1" "$2" "$3" "$4" "$5" "${6%/*}" "${6#*/}"; }
+urow() { printf '{"type":"user","isSidechain":false,"timestamp":"%s","message":{}}\n' "$1"; }
+E1=$(jq -n '"2026-10-18T10:00:00Z" | fromdateiso8601'); E2=$(jq -n '"2026-10-18T10:00:30Z" | fromdateiso8601')
+{ urow 2026-10-18T09:59:58Z; crow 2026-10-18T10:00:00Z tool_use 10 90000 5000 0/5000; urow 2026-10-18T10:00:30Z; crow 2026-10-18T10:00:45Z end_turn 12 95000 0 0/0; } > "$CL/s1.jsonl"
+check "session_cache: a 5m write, then an end_turn reply: ttl 300, ctx of the newest reply, at its request, ended" "{\"ttl\":300,\"ctx\":95012,\"at\":$E2,\"ended\":true}" "$(pp pp_session_cache)"
+{ urow 2026-10-18T10:00:00Z; crow 2026-10-18T10:00:00Z tool_use 10 90000 5000 5000/0; } > "$CL/s1.jsonl"
+check "session_cache: a 1h write is ttl 3600, and a tool_use reply newest is not ended" '[3600,false]' "$(pp pp_session_cache | jq -c '[.ttl, .ended]')"
+{ urow 2026-10-18T10:00:00Z; crow 2026-10-18T10:00:00Z tool_use 10 90000 5000 0/5000; crow 2026-10-18T10:00:30Z end_turn 12 95000 0 0/0 true; } > "$CL/s1.jsonl"
+check "session_cache: a newer isSidechain row is skipped" "[95010,$E1,false]" "$(pp pp_session_cache | jq -c '[.ctx, .at, .ended]')"
+{ crow 2026-10-18T10:00:00Z end_turn 10 90000 0 0/0; } > "$CL/s1.jsonl"
+check "session_cache: no reply that wrote cache is null" null "$(pp pp_session_cache)"
+rm -rf "$CL"
+check "bg_open and session_cache: no session record is null" "null null" "$(pp pp_session_bg_open) $(pp pp_session_cache)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

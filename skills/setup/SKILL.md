@@ -18,7 +18,7 @@ Rule: every question goes through `AskUserQuestion`, with exactly the headers an
 
 Rule: free text the owner types (the relay's name and its line, the merge check command, a host name) is passed to `setup.sh` exactly as typed, never corrected, completed or reformatted; a suspected slip may be asked about before anything is sent, and the original is sent unless the owner changes it.
 
-Rule: a saved answer is offered first, marked "(saved)" (and "(recommended)" too when it is that one). Only the questions that apply are asked: the step says when one is skipped.
+Rule: a saved answer is offered first, marked "(saved)" (and "(recommended)" too when it is that one: the same answer once case and surrounding spaces are set aside, offered as one option and sent as the saved text). Only the questions that apply are asked: the step says when one is skipped.
 
 Before the first question, run one probe: `bash -c 'command -v orca-ide; true'`.
 It changes nothing, and no answer from it is a failure. If a hook that is not

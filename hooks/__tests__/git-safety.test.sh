@@ -44,6 +44,11 @@ blocks 'git checkout -- .' 'git restore .' 'git clean -fdx' 'git stash drop' 'gi
   'git worktree remove --force /tmp/wt'
 passes 'git switch feature' 'git restore --staged src/x.ts' 'git clean -n' 'git stash list' 'git branch -d merged'
 
+# r6 finding: an empty pair of quotes adds nothing to the word bash passes, so `clean""` is still clean.
+blocks 'git clean"" -fdx' 'git clean -f""dx' 'git"" clean -fdx' "git restore'' ." 'git stash"" drop' 'git checkout"" -- .'
+passes 'git clean"" -n' 'git stash"" list'
+# r7 finding: quoting next to quoting is still the one word bash passes.
+blocks '"""git" clean -fdx' '""\git clean -fdx' 'git """clean" -fdx' "git ''\"clean\" -fdx" 'git ""\reset --hard'
 # Without its strip helper the hook must refuse, not read an empty command.
 LONE=$(mktemp -d); cp "$HOOK" "$LONE/"
 check "a missing strip-quoted.sh blocks"        2 \

@@ -132,8 +132,6 @@ print(names[0])') && rc=0 || rc=$?
   esac
 }
 
-# pp_waited_on <handle> [now] [turn text] -- a `seat.sh wait` watches this pane:
-# it is still waiting (its pid, line 1 of $PP_SCRATCH/waiting-<handle>), or under
 # pp_session_log <worktree> -- the worktree's newest Claude session record, or nothing.
 # pp_session_log_at <worktree> -- the epoch that record was last written, or null: a seat in one long model
 # turn writes it while its event log shows nothing, so the dashboard and main-watch.sh both read it.
@@ -143,7 +141,55 @@ pp_session_log_at() {
   f=$(pp_session_log "$1")
   [ -n "$f" ] && stat -c %Y "$f" 2>/dev/null || echo null
 }
+# pp_session_bg_open <worktree> -- how many background shell jobs the newest session record started (a tool result's
+# toolUseResult.backgroundTaskId) and holds no <task-notification> or successful TaskStop for, or null with no record (issue 203). A background
+# call ends at once in the event log, so a Builder idle while its job runs is working, not QUIET; the notification row is
+# the job's own completion, whatever its status. A notification quoted in the record can only clear a job, which lets
+# QUIET fire, never hide it.
+pp_session_bg_open() {
+  local f
+  f=$(pp_session_log "$1")
+  [ -n "$f" ] || { echo null; return; }
+  comm -23 \
+    <(grep -F backgroundTaskId "$f" | jq -Rr 'fromjson? | .toolUseResult | objects | .backgroundTaskId | strings' 2>/dev/null | sort -u) \
+    <({ grep -F '<task-notification>' "$f" | grep -o '<task-id>[A-Za-z0-9_-]*</task-id>' | sed 's/<[^>]*>//g'
+        # A TaskStop sends no notification: its successful result ends the job, as read-verdict.sh reads it.
+        grep -F 'Successfully stopped' "$f" | jq -Rr 'fromjson? | select(.message.content | tostring | contains("Successfully stopped"))
+          | .toolUseResult | objects | .task_id | strings' 2>/dev/null; } | sort -u) | wc -l | tr -d ' '
+}
+# pp_session_cache <worktree> -- the parent's prompt cache from the last 400 lines of the newest session record, as
+# {ttl, ctx, at, ended} or null (issue 203). Main-thread rows only (a helper writes its own subagents/agent-*.jsonl; an
+# isSidechain row is skipped). ctx: the newest reply carrying usage, the context the parent's cache holds. at: when that
+# reply's request started, the newest user row before its first block (every block repeats message.id): the TTL runs from
+# request start, so a reply's end would let a slow reply ping a lapsed cache. No such row in the window is at null, and
+# WARM never pings on it. ttl: the newest reply that wrote cache says which one applied (1h tokens 3600, 5m tokens 300).
+# ended: the newest assistant or user row is an end_turn reply, so the parent is at its prompt. No usage row, or no
+# cache write in the window, is null, and null means no ping.
+pp_session_cache() {
+  local f
+  f=$(pp_session_log "$1")
+  [ -n "$f" ] || { echo null; return; }
+  tail -n 400 "$f" | jq -cRn '
+    def ep: sub("\\.[0-9]+"; "") | fromdateiso8601;
+    def rk: .message.id // .uuid // .timestamp;
+    [inputs | fromjson? | objects | select(.isSidechain != true and (.type == "assistant" or .type == "user"))] as $rows
+    | [$rows[] | select(.type == "assistant" and .message.usage != null)] as $rep
+    | ([$rep[] | select((.message.usage.cache_creation_input_tokens // 0) > 0)] | last) as $w
+    | ($w.message.usage.cache_creation // {}) as $c
+    | (if ($c.ephemeral_1h_input_tokens // 0) > 0 then 3600 elif ($c.ephemeral_5m_input_tokens // 0) > 0 then 300 else null end) as $ttl
+    | ($rep | last) as $n
+    | if $ttl == null or $n == null then null
+      else ($n | rk) as $k
+      | ([range($rows | length) | select($rows[.] | .type == "assistant" and rk == $k)] | first) as $i
+      | {ttl: $ttl,
+         ctx: (($n.message.usage.input_tokens // 0) + ($n.message.usage.cache_read_input_tokens // 0) + ($n.message.usage.cache_creation_input_tokens // 0)),
+         at: ([$rows[:$i][] | select(.type == "user" and .timestamp != null)] | last | .timestamp | if . then ep else null end),
+         ended: ($rows | last | .type == "assistant" and .message.stop_reason == "end_turn")}
+      end' 2>/dev/null || echo null
+}
 
+# pp_waited_on <handle> [now] [turn text] -- a `seat.sh wait` watches this pane:
+# it is still waiting (its pid, line 1 of $PP_SCRATCH/waiting-<handle>), or under
 # 5 minutes ago it saw the marker this turn's text prints on a line of its own
 # (`seen <epoch> <marker>`; a warm pane's next marker is a new event). That wait
 # is the pane's report, so main-watch.sh and the turn-complete hooks do not wake

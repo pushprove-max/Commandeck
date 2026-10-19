@@ -65,6 +65,7 @@
     <header class="card-head"><h2>Units</h2></header>
     <p class="sub"><span>every worktree, by step · model and effort from each seat's own session</span><span class="age"></span></p>
     <p class="card-note" hidden></p>
+    <div id="unit-steps" role="group" aria-label="Show one stage"></div>
     <div id="units-bar"></div>
     <div id="units-legend" class="legend"></div>
     <div class="more">
@@ -216,6 +217,18 @@
   </section>
 </main>
 <footer id="sources-foot" class="foot"></footer>
+<!-- The phone's tab bar (issue 211); app.css shows it under 760 px only. -->
+<nav id="tabs" aria-label="Sections">
+  <button type="button" data-tab="units"><span class="tab-label">Units</span><span class="tab-badge" data-badge="units"></span></button>
+  <button type="button" data-tab="builds"><span class="tab-label">Builds</span><span class="tab-badge" data-badge="builds"></span></button>
+  <button type="button" data-tab="alerts"><span class="tab-label">Alerts</span><span class="tab-badge" data-badge="alerts"></span></button>
+  <button type="button" data-tab="you"><span class="tab-label">You</span><span class="tab-badge" data-badge="you"></span></button>
+  <button type="button" data-tab="more"><span class="tab-label">More</span></button>
+</nav>
+<div id="more-sheet" role="dialog" aria-modal="true" aria-label="More panels" tabindex="-1" hidden>
+  <div class="scrim" data-scrim></div>
+  <div class="sheet"><div id="more-tiles"></div></div>
+</div>
 <script src="layout.js"></script>
 <script src="app.js"></script>
 </body>

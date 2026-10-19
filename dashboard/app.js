@@ -436,6 +436,22 @@
     byId('stages').style.setProperty('--cols', cols.map((s) => (size(s) ? 'minmax(0, 2fr)' : 'minmax(70px, 0.6fr)')).join(' '));
     byId('units-foot').textContent = 'A unit is marked stale after a day with no sign.';
     flag('units', lists['waiting-main'].length + lists.stale.length > 0 || Boolean(q('#units .stage-time.crit')));
+    // issue 211: the phone's step chips, counted as the columns are; app.css shows only the chosen stage under 760 px.
+    put(byId('unit-steps'), [...STAGES, 'all'].map((s) => {
+      const b = h('button', null, `${STEP_CHIP[s]} `);
+      b.type = 'button';
+      b.dataset.step = s;
+      b.append(h('span', 'count', String(s === 'all' ? STAGES.reduce((a, x) => a + size(x), 0) : size(s))));
+      return b;
+    }));
+    applyStep();
+  }
+  const STEP_CHIP = { ...STAGE_LABEL, review: 'Review', 'waiting-main': 'On main', all: 'All' };
+  let unitStep = 'all';
+  function applyStep() {
+    document.body.dataset.step = unitStep;
+    for (const b of document.querySelectorAll('#unit-steps button')) b.setAttribute('aria-pressed', String(b.dataset.step === unitStep));
+    for (const el of document.querySelectorAll('#stages > .stage')) el.classList.toggle('step-on', el.dataset.stage === unitStep);
   }
 
   // A Builder counts as working while Orca shows a working agent in its worktree; an agent list not read is not measured.
@@ -1371,6 +1387,8 @@
       measure('Host load', hostInfo.load === null ? null : hostInfo.load.toFixed(2), per === null ? 'nm' : per >= 2 ? 'crit' : per >= 1 ? 'warn' : 'ok',
         hostInfo.cpus ? `${hostInfo.cpus} cores` : null, 'host'),
     ]);
+    // issue 211: the phone tab badges count what the tiles above count; empty when not measured.
+    for (const [k, v] of [['units', inflight], ['builds', used], ['alerts', al ? al.length : null], ['you', dec]]) q(`#tabs [data-badge="${k}"]`).textContent = v === null ? '' : String(v);
   }
 
   // The footer: how many of the collector's sources are fresh, and which are not.
@@ -1581,8 +1599,8 @@
   // wins at load, and every change sends the whole layout back to that host (dashboard_serve.py checks and writes it).
   // The file holds each project's layout in its own slot, projects[<name>], each with its own save number.
   // Each value is still read through restore()'s own checks, so the host's file is trusted no more than this browser's.
-  // shortcut: a page already open does not pick up another page's change until it is reloaded, and its own next change
-  // is then refused and reloads it (sendLayout); merge per key if two PCs are ever used at once.
+  // shortcut: a page already open does not pick up another page's change until its own next change is refused and
+  // merged (sendLayout); re-read layout.js on each refresh if a phone beside a PC needs it sooner.
   const LAYOUT = { order: ORDER_KEY, sizes: SIZES_KEY, heights: HEIGHTS_KEY, hidden: HIDDEN_KEY, closed: CLOSED_KEY, collapsed: COLLAPSED_KEY, builds: BUILDS_KEY };
   const UNSAVED_KEY = `commandeck-dashboard-unsaved${NS}`;
   const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -1598,6 +1616,8 @@
   // when it holds another (dashboard_serve.py), so a save that lands late cannot undo a newer one.
   // The number is this project's slot's own, so a save on another project's page refuses none on this one.
   let rev = Number.isSafeInteger(held.rev) && held.rev > 0 ? held.rev : 0;
+  // The host layout this page's changes are made over: what differs from it is this page's own (merge).
+  let base = held;
   // This browser's own copy wins over the host's in two cases, and is then sent up: a change the host never
   // confirmed (a reload while its save was unanswered), and a host that holds no layout and no number while
   // this browser holds one. A numbered empty layout is another PC's Reset layout, and wins.
@@ -1638,19 +1658,21 @@
     // winning on load; upgrade if a record can go missing in normal use.
     if (listedBuilds && Array.isArray(body.closed)) body.closed = body.closed.filter((x) => listedBuilds.includes(x));
     else { owed = owed || (mine && closedBuilds().length > 0); delete body.closed; }
-    const done = (ok) => {
+    const done = (ok, again) => {
       sending = false;
-      if (ok) rev += 1;
-      if (unsent) { unsent = false; sendLayout(); } else if (ok && !owed) store((s) => s.removeItem(UNSAVED_KEY));
+      if (ok) { rev += 1; base = body; }
+      if (unsent || again) { unsent = false; sendLayout(); } else if (ok && !owed) store((s) => s.removeItem(UNSAVED_KEY));
     };
-    // 409: another page changed the layout since this one loaded it. Sending this page's whole layout again would
-    // undo that change (a Reset layout came back as the old widths), so this page drops its change and reloads
-    // onto the host's layout; with no unsaved mark the reload takes the host's copy.
-    // shortcut: a build cleared in the refused save shows again after the reload; resend clears alone if that bites.
+    // 409: another page changed the layout since this one read it (issue 211: a phone beside a PC). The page re-reads
+    // layout.js, merges it (merge, below) and goes again over the host's number; the save stays in flight meanwhile.
+    // A read that fails, or one at the refused number, leaves the change unsaved for the next change or load.
     const answer = (res) => {
       if (res.status !== 409) return done(res.ok === true);
-      store((s) => s.removeItem(UNSAVED_KEY));
-      window.location.reload();
+      const s = document.createElement('script');
+      s.src = `layout.js?${Date.now()}`;
+      s.onload = () => { s.remove(); const was = rev; merge(plain(plain(plain(window.DASH_LAYOUT).projects)[asked])); done(false, rev !== was); };
+      s.onerror = () => { s.remove(); done(false); };
+      document.head.append(s);
     };
     window.fetch('layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(answer).catch(() => done(false));
   };
@@ -1659,6 +1681,31 @@
   const closedBuilds = () => { const v = saved(CLOSED_KEY); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; };
   // Each build the owner folded (true) or unfolded (false), by the key block() gives it; a value not true or false is no choice.
   const buildFolds = () => { const v = plain(saved(BUILDS_KEY)); return Object.fromEntries(Object.entries(v).filter(([, x]) => typeof x === 'boolean')); };
+  // The host's layout over this page's, key by key: a key this page did not change takes the host's value. In a
+  // map (widths, heights, folds) only the panels this page changed keep its value, so another page's Reset layout
+  // stands for the rest; a width or height still at its default is no change. Cleared builds join (a clear only adds).
+  const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+  const field = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null);
+  const UNSET = { sizes: (id) => Number(DEFAULT_SIZE.get(id)), heights: () => 'auto' };
+  function merge(l) {
+    for (const [k, key] of Object.entries(LAYOUT)) {
+      const own = saved(key), was = field(base, k), theirs = field(l, k);
+      let v = theirs;
+      if (k === 'closed') {
+        const both = [...new Set([].concat(Array.isArray(theirs) ? theirs : [], closedBuilds()))];
+        v = both.length ? both : null;
+      } else if (plain(own) === own) {
+        const changed = Object.entries(own).filter(([id, x]) => !same(x, field(plain(was), id) ?? (UNSET[k] ? UNSET[k](id) : null)));
+        if (changed.length) v = { ...plain(theirs), ...Object.fromEntries(changed) };
+      } else if (!same(own, was)) v = own;
+      mem.set(key, v);
+      store((s) => (v === null ? s.removeItem(key) : s.setItem(key, JSON.stringify(v))));
+    }
+    base = l;
+    rev = Number.isSafeInteger(l.rev) && l.rev > 0 ? l.rev : 0;
+    restore();
+    if (data) render(data);
+  }
   // Cleared builds are only ever added to: where this browser's copy won above, the host's cleared builds join it.
   if (mine && Array.isArray(held.closed)) {
     const v = [...new Set(held.closed.filter((x) => typeof x === 'string').concat(closedBuilds()))];
@@ -1708,12 +1755,17 @@
       setHeight(c, HEIGHTS.includes(t) || isPx(t) ? t : 'auto');
     }
     setHidden(Array.isArray(hidden) ? hidden : []);
+    // A fold merged from another page shows here too, or this page's next fold, read off its sections, undoes it.
+    const folded = saved(COLLAPSED_KEY);
+    for (const d of document.querySelectorAll('details[data-fold]')) d.open = !(Array.isArray(folded) && folded.includes(d.id));
   }
   const saveMap = (key, read) => keep(key, Object.fromEntries(cards().map((c) => [c.id, read(c)])));
+  const titles = new Map();
   for (const card of cards()) {
     const head = q('.card-head', card);
     const title = q('h2', head);
     const name = title.textContent;
+    titles.set(card.id, name);
     title.setAttribute('draggable', 'true');
     title.prepend(h('span', 'grip', '⋮⋮'));
     q('.grip', title).setAttribute('aria-hidden', 'true');
@@ -1818,16 +1870,57 @@
     if (!isCard(card)) return;
     if (card.hidden) { setHidden(hiddenIds().filter((id) => id !== card.id)); keep(HIDDEN_KEY, hiddenIds()); }
     if (look.checked && !('look' in card.dataset)) { look.checked = false; document.body.classList.remove('look-only'); }
+    // On a phone only the current tab's panels show: the tab holding this one, or the panel alone as More shows it.
+    const tab = Object.keys(TABS).find((t) => TABS[t].includes(card.id));
+    showTab(tab || 'more', tab ? undefined : card.id);
   });
   restore();
   if (mine) sendLayout();
 
+  // issue 211: under 760 px a bottom tab bar picks the panels shown (app.css hides the rest); wider, the bar is
+  // hidden and every panel shows as before. More offers every other panel not hidden, as tiles.
+  const TABS = { units: ['units'], builds: ['builds'], alerts: ['alerts'], you: ['needs'] };
+  const tabBar = byId('tabs'), sheet = byId('more-sheet');
+  function showTab(tab, one) {
+    document.body.dataset.tab = tab;
+    for (const c of cards()) c.classList.toggle('tab-on', one ? c.id === one : TABS[tab].includes(c.id));
+    for (const b of tabBar.querySelectorAll('button')) { if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+  }
+  const closeSheet = () => { sheet.hidden = true; q('[data-tab="more"]', tabBar).focus(); };
+  tabBar.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-tab]');
+    if (!b) return;
+    if (b.dataset.tab !== 'more') { sheet.hidden = true; showTab(b.dataset.tab); return; }
+    const onTabs = Object.values(TABS).flat();
+    put(byId('more-tiles'), cards().filter((c) => !c.hidden && !onTabs.includes(c.id)).map((c) => {
+      const t = h('button', null, titles.get(c.id));
+      t.type = 'button';
+      t.dataset.card = c.id;
+      return t;
+    }));
+    sheet.hidden = false;
+    sheet.focus();
+  });
+  sheet.addEventListener('click', (e) => {
+    if (e.target.closest('[data-scrim]')) { closeSheet(); return; }
+    const t = e.target.closest('button[data-card]');
+    if (!t) return;
+    sheet.hidden = true;
+    showTab('more', t.dataset.card);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
+  showTab('units');
+  byId('unit-steps').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-step]');
+    if (!b) return;
+    unitStep = b.dataset.step;
+    applyStep();
+  });
+
   // The ids of the details[data-fold] sections the owner folded, kept per browser;
-  // open by default. Render only sets hidden, never open, so a refresh keeps the fold.
+  // open by default; restore() applies them. Render only sets hidden, never open, so a refresh keeps the fold.
   const folds =[...document.querySelectorAll('details[data-fold]')];
-  const folded = saved(COLLAPSED_KEY);
   for (const d of folds) {
-    if (Array.isArray(folded) && folded.includes(d.id)) d.open = false;
     // A browser fires toggle at load for each fold the markup opens: only a set of folds other than the saved
     // one is a change, or every page load would send a layout.
     d.addEventListener('toggle', () => {

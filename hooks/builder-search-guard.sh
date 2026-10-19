@@ -51,10 +51,8 @@ search() {
     # shellcheck source=lib/strip-quoted.sh
     . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || return 1
     M=$'\x01'
-    # strip_quoted drops an empty quoted argument; keep its place, or the flag
-    # after `-e ""` is read as the pattern.
-    E=${CMD//\"\"/\"$M\"}; E=${E//\'\'/\'$M\'}
-    S=$(strip_quoted "$E" "$M")
+    # An empty quoted argument prints the mark, so the flag after `-e ""` is not read as the pattern.
+    S=$(strip_quoted "$CMD" "$M")
     S=${S//||/$'\n'}; S=${S//&/$'\n'}; S=${S//;/$'\n'}; S=${S//(/$'\n'}; S=${S//\`/$'\n'}
     FOUND=0
     while IFS= read -r SEG; do

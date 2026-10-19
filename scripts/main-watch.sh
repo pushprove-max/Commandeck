@@ -193,7 +193,8 @@ post() {
 # builder_card <unit> <launched> -- the Builder's card from the rows of its event log since that launch.
 builder_card() {
   jq -cR --argjson la "$2" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$1/.claude/builder-events.jsonl" 2>/dev/null \
-    | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$1")" -f "$HERE/dashboard_builders.jq" 2>/dev/null
+    | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$1")" --argjson bgOpen "$(pp_session_bg_open "$WS/$1")" \
+      --argjson cache "$(pp_session_cache "$WS/$1")" --argjson tick "$TICK" -f "$HERE/dashboard_builders.jq" 2>/dev/null
 }
 # helper_out <unit> <launched> -- a helper or a review pass the Builder started has not finished: a helper
 # that logged a row within STALL_S, or a pass started within HOLD_S. A Builder that ended its turn to wait on
@@ -214,7 +215,7 @@ helper_out() {
 # dashboard card shows every signal; this function only types one line and
 # posts, and no path in it ends, closes or relaunches a pane.
 builder_watch() {
-  local r u h out sig kind since lim text n state hist la
+  local r u h out sig kind since lim text n state hist la anchor
   for r in "$SCRATCH"/seat-*-builder.txt; do
     # A record the origin run placed is that run's to watch, as in the seat loop.
     [ -f "$r" ] && ! grep -q '^origin=' "$r" || continue
@@ -222,9 +223,11 @@ builder_watch() {
     [ -n "$u" ] && [ -n "$h" ] && [ -f "$WS/$u/.claude/builder-events.jsonl" ] || continue
     # Episodes are per pane: a replacement pane's first signal is its first, not the old pane's third.
     hist=$ST/builder-$u-$h
-    # A pane that is not mid-turn is main-watch's own item, not a signal.
+    # A pane that is not mid-turn is main-watch's own item, not a signal. WARM alone also acts on done and idle: Orca
+    # reads a Builder waiting on a background job or helper as working or done, so WARM trusts the session log's
+    # end_turn marker (cache.ended) for "at the prompt". waiting, blocked and none never get one.
     state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
-    [ "$state" = working ] || continue
+    case $state in working|done|idle) ;; *) continue ;; esac
     # The log outlives a crashed Builder: only rows since this pane's launch are
     # its own, or it is nudged for a call the dead pane never ended.
     la=$(sed -n 's/^launched=//p' "$r" | head -1); [[ "$la" =~ ^[0-9]+$ ]] || la=0
@@ -232,9 +235,23 @@ builder_watch() {
     while IFS= read -r sig; do
       [ -n "$sig" ] || continue
       kind=$(jq -r '.kind | ascii_upcase' <<<"$sig"); since=$(jq -r .since <<<"$sig"); lim=$(jq -r '.limitSec // 0' <<<"$sig")
+      [ "$kind" = WARM ] || [ "$state" = working ] || continue
+      if [ "$kind" = WARM ]; then
+        # Its own history, never a row in $hist: the episode count below reads only $hist, so a ping cannot push a
+        # later QUIET, STUCK or LOOP over the third-episode line, and WARM never posts to main. One line per window
+        # (each . reply moves since); at most maxPings lines per anchor, which only the parent's own call moves.
+        anchor=$(jq -r .anchor <<<"$sig")
+        grep -qxF -- "$since $anchor" "$hist.warm" 2>/dev/null && continue
+        n=$(grep -cxE -- "[0-9]+ $anchor" "$hist.warm" 2>/dev/null)
+        [ "${n:-0}" -lt "$(jq -r .maxPings <<<"$sig")" ] || continue
+        echo "$since $anchor" >> "$hist.warm"
+        orca-ide terminal send --terminal "$h" --text "Signal WARM: keep-alive while you wait. Reply with one . and end your turn." --enter >/dev/null 2>&1 \
+          || echo "main-watch: nudge to $h for $u failed" >&2
+        continue
+      fi
       case $kind in
         STUCK) text="Signal STUCK: one tool call has run for over $((lim / 60)) min. If you are waiting on it, say what; otherwise interrupt it and continue the batch." ;;
-        QUIET) text="Signal QUIET: no tool call for 5 min. If you are waiting on something, say what; otherwise continue the batch." ;;
+        QUIET) text="Signal QUIET: no tool call for $lim s. If you are waiting on something, say what; otherwise continue the batch." ;;
         *) text="Signal LOOP: the same call 3 times, or 4 failed calls in a row. Try a different approach, or say what blocks you." ;;
       esac
       # Recorded before the send: a nudge that fails is not retried, so one episode never sends twice.

@@ -34,6 +34,10 @@ check_try() { # label, command, [seat dir]
 # --- heap cap on node's test runner -------
 check "bare node --test blocks" 2 \
   "$(run_hook "$(json 'node --test src/x.test.ts')")"
+for c in 'node"" --test a.js' "node --test'' a.js" '""node --test a.js' '"""node" --test a.js' '""\node --test a.js' 'node """--test" a.js'; do
+  check "an empty pair of quotes leaves the word node runs: $c blocks" 2 "$(run_hook "$(json "$c")")"
+done
+check "and a capped node\"\" --test passes" 0 "$(run_hook "$(json 'node"" --max-old-space-size=4096 --test a.js')")"
 check "capped segment does not vouch for an uncapped one" 2 \
   "$(run_hook "$(json 'node --max-old-space-size=4096 --test a.test.ts && node --test b.test.ts')")"
 check "npm test passes" 0 \

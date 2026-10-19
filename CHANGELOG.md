@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.20.0 -- 2026-10-19
+
+- Issues #191-#202 and #205 shipped in 0.18.0 and 0.19.0.
+- After a pass that ended NO-GO, the inbox drain names a fix round, never "merge it". When the merge check would pass
+  the tip under the P2-tail rule, it says that merge is the owner's call, and main's rules say to ask the owner (#212).
+- Setup's own preview and apply are no longer blocked by the dependency guard when the test command starts with npm:
+  the plugin's own `setup.sh`, named by an absolute or `~` path, is a sender of its quoted answers (#206).
+- A planning worktree's settings are compared as JSON, so keys in another order no longer refuse its close (#204).
+- No notify question when the Codex wrapper already calls the stable link, and none whose old and new lines are
+  the same (#207).
+- Setup's marked blocks are replaced where they stand: a run with nothing new writes nothing, the blocks no longer
+  swap places or add a blank line each run, and a preview says "would copy" once per file (#208).
+- The merge report names rules already in setup's block from an earlier run (#209).
+- A saved setup answer equal to the recommended one, ignoring case and surrounding spaces, is one option (#210).
+- Helpers answer by their 20th tool call and say `NOT FOUND:` for what they did not find; Builder briefs reuse an
+  earlier helper's pointers. `unit-cost.sh` counts cold replies and helpers' repeated searches and overruns. A
+  5-minute Builder waiting on a background job, helper or pass gets a `Signal WARM` keep-alive before its cache
+  lapses, while a ping costs less than the rewrite it saves. QUIET now comes at 225 s for Builders on the 5-minute
+  cache, and never while a background job of theirs runs (#203).
+- The dashboard has a phone view: a bottom tab bar (Units, Builds, Alerts, You, More), a More sheet, step chips,
+  and tab badges; a refused layout save re-reads and merges instead of dropping the change (#211).
+- The batching advice reads commands with their quoted text set aside, so `rg "a|b" | head`, echo separators and
+  `for` loops count as looks (#213).
+- A worker's foreground call may not wait past the prompt cache: its stated waits are summed against 270 s (540 s
+  on the 1-hour cache). A worker's foreground sleep loop is now refused, not advised, and the ask the plugin prints
+  takes `--timeout-ms 240000` (#214).
+
 ## 0.19.0 -- 2026-10-19
 
 - 0.18.0 stays red on the Linux CI job until this release merges: `install-lib.test.sh` found no project from its fixture folders and passed only in an Orca pane; the helper now names its project. No change to the plugin's behaviour.

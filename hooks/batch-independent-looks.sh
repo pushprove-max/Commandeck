@@ -84,9 +84,11 @@ if [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ]; then CALLS=$(count_calls); fi
 
 # Read-only: Read/Grep/Glob, serena and codebase-memory lookups, and a Bash
 # call whose every segment is a look (rg/grep, ls, git log/show/diff/status,
-# board/status scripts, and the read filters they pipe into).
+# board/status scripts, and the read filters they pipe into). Segments are read
+# after strip_quoted, so a `|`, `;` or `>` inside quotes is pattern text.
 # ponytail: an allowlist, so an unlisted look resets instead of counting; add
 # it here when a token review shows it streaking.
+. "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 read_only() {
   local CMD SEG
@@ -100,14 +102,21 @@ read_only() {
   esac
   CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
   [ -n "$CMD" ] || return 1
+  # A backtick or $( runs even inside double quotes: asked of the raw command, before the quotes are set aside.
+  case "$CMD" in *'`'*|*'$('*) return 1 ;; esac
+  declare -F strip_quoted >/dev/null || return 1
+  CMD=$(strip_quoted "$CMD")
   CMD=${CMD//2>\/dev\/null/}; CMD=${CMD//2>&1/}
-  case "$CMD" in *'>'*|*'`'*|*'$('*) return 1 ;; esac
+  case "$CMD" in *'>'*) return 1 ;; esac
   while IFS= read -r SEG; do
     SEG=${SEG#"${SEG%%[![:space:]]*}"}
+    [[ $SEG =~ ^do[[:space:]]+(.*)$ ]] && SEG=${BASH_REMATCH[1]}
     [ -n "$SEG" ] || continue
-    [[ $SEG =~ ^(cd|rg|grep|ls|cat|head|tail|wc|sort|uniq|cut|jq|stat)([[:space:]]|$) ]] && continue
+    [[ $SEG =~ ^(cd|rg|grep|ls|cat|head|tail|wc|sort|uniq|cut|jq|stat|echo|printf|done)([[:space:]]|$) ]] && continue
+    [[ $SEG =~ ^for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in([[:space:]]|$) ]] && continue
+    [[ $SEG =~ ^gh[[:space:]]+(issue|pr)[[:space:]]+(view|list)([[:space:]]|$) ]] && continue
     [[ $SEG =~ ^sed[[:space:]]+-n[[:space:]] ]] && continue
-    [[ $SEG =~ ^git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(log|show|diff|status)([[:space:]]|$) ]] && continue
+    [[ $SEG =~ ^git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(log|show|diff|status|rev-parse|ls-files)([[:space:]]|$) ]] && continue
     [[ $SEG =~ ^(bash[[:space:]]+)?([^[:space:]]*/)?scripts/(board|[a-z-]*status[a-z-]*)\.sh([[:space:]]|$) ]] && continue
     return 1
   done < <(printf '%s\n' "$CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/[;|&]/\n/g')

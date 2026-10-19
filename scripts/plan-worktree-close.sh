@@ -46,7 +46,8 @@ setup_made() {
     .claude/settings.local.json)
       [ -f "$WT/$1" ] && [ ! -L "$WT/$1" ] || return 1
       [ "$SETDONE" = 1 ] || { SETDONE=1; bash "$HERE/worktree-setup.sh" "$WT" --print-settings > "$SETF" 2>/dev/null || : > "$SETF"; }
-      [ -s "$SETF" ] && cmp -s "$WT/$1" "$SETF" ;;
+      # Compared as JSON (members are unordered): an older generator wrote the same keys in another order (issue 204).
+      [ -s "$SETF" ] && a=$(jq -S . "$WT/$1" 2>/dev/null) && [ -n "$a" ] && [ "$a" = "$(jq -S . "$SETF")" ] ;;
     *) return 1 ;;
   esac
 }

@@ -23,11 +23,22 @@
 # data from typed text. A span that is one plain token follows its mark as
 # written, because that is the argument bash passes; a span holding a space or
 # an operator is prose and prints the mark alone, so it still cannot read as a
-# command. An empty span prints nothing. Without a mark the output is what it
+# command. An empty pair of quotes and a backslash-escaped character are
+# quoting too, so each prints the mark (`""done` and `d\one` are commands, never the `done`
+# keyword; `\sleep` still runs sleep). An empty pair beside a word's text marks
+# the word's start (`done""` prints mark-done), so the word bash passes is
+# unchanged. Without a mark the output is what it
 # always was.
-_strip_keep_span() { # uses strip_quoted's MARK, SPAN and OUT
-  if [ -n "$MARK" ] && [ -n "$SPAN" ]; then
-    OUT+=$MARK
+_strip_keep_span() { # [<char before the closing quote>]; uses strip_quoted's MARK, SPAN, CHAR and OUT
+  local W
+  if [ -n "$MARK" ] && [ -z "$SPAN" ] && [ "${1-}" = "$CHAR" ]; then
+    # Empty: the mark goes before the word's text, never after it, since a mark
+    # before a space reads as quoted prose to every caller (`clean""` is clean).
+    W=${OUT##*[[:space:]\;\&\|\(\)\<\>\`]}
+    case "$W" in '') OUT+=$MARK ;; "$MARK"*) ;; *) OUT=${OUT%"$W"}$MARK$W ;; esac
+  elif [ -n "$MARK" ] && [ -n "$SPAN" ]; then
+    # One mark per run of quoting: a mark before a mark reads as a quoted word of its own (`"""sleep"` is sleep).
+    [ "${OUT: -${#MARK}}" = "$MARK" ] || OUT+=$MARK
     case "$SPAN" in *[[:space:]\;\&\|\(\)\<\>]*) ;; *) OUT+=$SPAN ;; esac
   fi
   SPAN=""
@@ -49,10 +60,10 @@ strip_quoted() {
   for ((I=0; I<${#TEXT}; I++)); do
     CHAR=${TEXT:I:1}; NEXT=${TEXT:I+1:1}
     case "$MODE" in
-      sq) if [ "$CHAR" = "'" ]; then MODE=code; _strip_keep_span; else SPAN+=$CHAR; fi ;;
+      sq) if [ "$CHAR" = "'" ]; then MODE=code; _strip_keep_span "$PREV"; else SPAN+=$CHAR; fi ;;
       dq)
         if [ "$CHAR" = '\' ]; then SPAN+=$NEXT; I=$((I+1))
-        elif [ "$CHAR" = '"' ]; then MODE=code; _strip_keep_span
+        elif [ "$CHAR" = '"' ]; then MODE=code; _strip_keep_span "$PREV"
         elif [ "$CHAR" = '$' ] && [ "$NEXT" = '(' ]; then
           # `$((` runs inside double quotes as well; code mode never sees its first bracket, so its span is found here.
           [ "${TEXT:I+2:1}" != '(' ] || [ "$I" -lt "$AEND" ] || _strip_arith_end "$((I+1))"
@@ -76,7 +87,8 @@ strip_quoted() {
           K=${TEXT:I}; K=${K%%]*}; AEND=$((I + ${#K}))
         fi
         case "$CHAR" in
-          '\') I=$((I+1)) ;;
+          # A backslash-newline is a line continuation: bash drops both.
+          '\') [ "$NEXT" = $'\n' ] || { SPAN=$NEXT; _strip_keep_span; }; I=$((I+1)) ;;
           "'") MODE=sq ;;
           '"') MODE=dq ;;
           '#') case "$PREV" in ''|' '|$'\t'|$'\n'|';'|'&'|'|'|'(') MODE=comment ;; *) OUT+=$CHAR ;; esac ;;

@@ -521,10 +521,13 @@ il_notify_report() {
 il_notify_repoint() {
   local w s t p old new
   w=$(il_notify_wrapper); [ -n "$w" ] || return 0
-  s=$(il_notify_stale "$w"); [ -n "$s" ] || return 0
+  # A path that is the stable link is not asked about: setup re-points the link in this same run (issue 207).
+  s=$(il_notify_stale "$w" | while IFS= read -r p; do [ "${p/#\~/$HOME}" = "$IL_LINK/hooks/codex-notify.sh" ] || printf '%s\n' "$p"; done)
+  [ -n "$s" ] || return 0
   t=$(cat "$w") old=$(grep -F -f <(printf '%s\n' "$s") "$w" | paste -sd'|' - | sed 's/|/ \/ /g')
   new=$old
   while IFS= read -r p; do t=${t//"$p"/"$IL_LINK/hooks/codex-notify.sh"} new=${new//"$p"/"$IL_LINK/hooks/codex-notify.sh"}; done <<<"$s"
+  [ "$new" != "$old" ] || return 0
   case ${2:-} in
     yes) il_record "$1" merge "$w" && printf '%s\n' "$t" | il_write "$w" \
            && echo "codex notify: $w now calls $IL_LINK/hooks/codex-notify.sh, not $(paste -sd' ' - <<<"$s")" ;;
@@ -544,13 +547,21 @@ il_notify() {
 # file: replaced by <text file>'s content, or taken out when none is given.
 il_block() {
   local new
-  if [ -n "${2:-}" ]; then il_block_text "$1" "$2" | il_write "$1"
-  elif [ -e "$1" ]; then new=$(il_block_text "$1"); [ "$new" = "$(il_cat "$1")" ] || printf '%s\n' "$new" | il_write "$1"; fi
+  [ -n "${2:-}" ] || [ -e "$1" ] || return 0
+  new=$(il_block_text "$1" "${2:-}"); [ -e "$1" ] && [ "$new" = "$(il_cat "$1")" ] || printf '%s\n' "$new" | il_write "$1"
 }
-# il_block_text <file> [text file] -- the file's text with that block replaced (or taken out), the owner's text as it was.
+# il_block_text <file> [text file] -- the file's text with that block replaced where it stands (or taken out), the
+# owner's text as it was. A file without the block gets it at the end. In place, as Ansible's blockinfile: replacing
+# by removal and append moved each block below the other and left a blank line on every run (issue 208).
 il_block_text() {
-  local body=''
-  body=$({ il_cat "$1" 2>/dev/null || true; } | awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }')
+  local body='' cur
+  cur=$(il_cat "$1" 2>/dev/null || true)
+  if [ -n "${2:-}" ] && grep -qxF -- "$IL_BEGIN" <<<"$cur"; then
+    IL_TEXT=$2 awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b && !done { print; while ((getline l < ENVIRON["IL_TEXT"]) > 0) print l; print e; done = 1 }
+      $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' <<<"$cur"
+    return
+  fi
+  body=$(awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' <<<"$cur")
   if [ -n "${2:-}" ]; then { [ -z "$body" ] || printf '%s\n\n' "$body"; printf '%s\n' "$IL_BEGIN"; cat "$2"; printf '%s\n' "$IL_END"; }
   else printf '%s\n' "$body"; fi
 }
@@ -590,7 +601,11 @@ il_backup() {
   local b=$2.commandeck-bak-$(date +%Y%m%d)
   # A file setup itself created holds nothing of the owner's to keep.
   [ -s "$2" ] && [ ! -e "$b" ] && [ "$(jq -r --arg p "$2" '.entries[$p].prior // empty' "$1" 2>/dev/null)" != "did not exist" ] || return 0
-  if [ -n "${IL_PLAN:-}" ]; then echo "plan: would copy $2 to $b first (a backup; yours to keep)"; return 0; fi
+  # A plan says it once per file: the copy is taken once, before the first change.
+  if [ -n "${IL_PLAN:-}" ]; then
+    case $'\n'${IL_BAK_SAID:-} in *$'\n'"$2"$'\n'*) return 0 ;; esac; IL_BAK_SAID+=$2$'\n'
+    echo "plan: would copy $2 to $b first (a backup; yours to keep)"; return 0
+  fi
   il_record "$1" backup "$b" && cp -p "$2" "$b" && { [ -z "${IL_WROTE:-}" ] || printf 'backup\t%s\n' "$b" >> "$IL_WROTE"; }
 }
 

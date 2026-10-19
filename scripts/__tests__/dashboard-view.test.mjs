@@ -54,6 +54,8 @@ async function settled(...pages) {
   while (n !== pages.reduce((a, w) => a + w.puts, 0)) { n = pages.reduce((a, w) => a + w.puts, 0); await sleep(250); }
 }
 const storeOf = (w) => Object.fromEntries(Object.keys(w.localStorage).map((k) => [k, w.localStorage.getItem(k)]));
+// A refused page asks for layout.js again; jsdom loads no script, so the host's file is handed over here.
+const relayout = (w) => { w.DASH_LAYOUT = onDisk(); w.document.querySelector('script[src^="layout.js?"]').dispatchEvent(new w.Event('load')); };
 
 test('a page behind a reset does not write its old widths back over it', async () => {
   fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {"rev": 5, "sizes": {"alerts": 2}}}};\n');
@@ -66,15 +68,20 @@ test('a page behind a reset does not write its old widths back over it', async (
   // ...then changes a width on the other, which still holds the old layout.
   a.document.querySelector('#builds .sz button[data-s="3"]').click();
   await settled(a);
-  assert.deepEqual(onDisk().projects.demo, { rev: 6 }, 'the reset still stands: the older page wrote nothing over it');
-  assert.equal(a.puts, 1, 'the refused save is not sent again');
-  assert.equal(a.reloads, 1, 'the page that fell behind reloads onto the newer layout');
-  // The reload shows the host's layout and sends nothing of its own.
+  assert.deepEqual(onDisk().projects.demo, { rev: 6 }, 'refused: the older page wrote nothing over the reset');
+  assert.equal(a.puts, 1, 'and holds its change until it has read the host\'s layout');
+  // issue 211: the refused page re-reads layout.js and sends only its own change again, over the reset.
+  relayout(a);
+  await settled(a);
+  assert.deepEqual(onDisk().projects.demo, { rev: 7, sizes: { builds: 3 } }, 'the reset still stands, with the one width the older page changed');
+  assert.equal(a.reloads, 0);
+  assert.equal(a.document.getElementById('alerts').dataset.size, '4', 'the older page shows the reset width');
+  // A reload shows the host's layout and sends nothing of its own.
   const again = boot(storeOf(a));
   await settled(again);
   assert.equal(again.document.getElementById('alerts').dataset.size, '4', 'the reloaded page shows the reset width');
   assert.equal(again.puts, 0);
-  assert.equal(onDisk().projects.demo.rev, 6);
+  assert.equal(onDisk().projects.demo.rev, 7);
 });
 
 // Each project's page saves only that project's slot, so a save on one project's page leaves another's
@@ -575,4 +582,166 @@ test("a raised Builder's unit card says main raised its effort, with the reason 
   const chip = w.document.querySelector('#builds .mdl.e');
   assert.equal(text(chip), 'effort high, raised by main');
   assert.equal(chip.title, 'effort raised by main: touches billing');
+});
+
+// issue 211: on a phone every panel was one long column. A bottom tab bar picks what shows; More reaches the rest.
+// jsdom lays nothing out, so where the page's look is the point the phone rules are read from app.css.
+const CSS = fs.readFileSync(path.join(ROOT, 'dashboard', 'app.css'), 'utf8');
+const PHONE = (() => {
+  const at = CSS.indexOf('@media (max-width: 760px) {');
+  let i = CSS.indexOf('{', at), depth = 0;
+  do { depth += { '{': 1, '}': -1 }[CSS[i]] || 0; i += 1; } while (depth);
+  return CSS.slice(at, i);
+})();
+const tabOn = (w) => [...w.document.querySelectorAll('.card.tab-on')].map((c) => c.id);
+const tabBtn = (w, t) => w.document.querySelector(`#tabs button[data-tab="${t}"]`);
+const reshow = (w) => { w.refresh(); w.document.querySelector('script[src^="data.js"]').dispatchEvent(new w.Event('load')); };
+// Two units in flight, one Builder working, two alerts (one about the 7-day limit), one decision waiting.
+function phone() {
+  const w = fresh();
+  w.DASH = { updatedAt: iso(NOW), home: 'demo', sources: {},
+    alerts: [{ id: 'limit-claude', severity: 'crit', text: 'over pace', since: iso(NOW) }, { id: 'host-load', severity: 'warn', text: 'busy', since: iso(NOW) }],
+    projects: { demo: { units: { inFlight: [builder(), builder({ unit: 'batch-r', stage: 'review', agents: 'claude:idle' })] },
+      needsOwner: { decisions: [{ id: 'd1', question: 'Ship?', proposedDefault: 'wait', askedAt: iso(NOW), answeredAt: null }] } } } };
+  w.document.querySelector('script[src^="data.js"]').dispatchEvent(new w.Event('load'));
+  return w;
+}
+
+test('issue 211: a phone has a bottom tab bar, each tab shows only its own panels, the current one marked', () => {
+  const w = phone();
+  assert.deepEqual([...w.document.querySelectorAll('#tabs .tab-label')].map((l) => l.textContent), ['Units', 'Builds', 'Alerts', 'You', 'More']);
+  assert.deepEqual(tabOn(w), ['units'], 'the page opens on Units');
+  for (const [t, want] of [['builds', ['builds']], ['alerts', ['alerts']], ['you', ['needs']], ['units', ['units']]]) {
+    tabBtn(w, t).click();
+    assert.deepEqual(tabOn(w), want, `${t} shows its own panels`);
+    assert.equal(tabBtn(w, t).getAttribute('aria-current'), 'page');
+    assert.equal(w.document.querySelectorAll('#tabs [aria-current]').length, 1, 'one tab is current');
+  }
+  tabBtn(w, 'alerts').click();
+  reshow(w);
+  assert.deepEqual(tabOn(w), ['alerts'], 'a refresh keeps the tab');
+  assert.match(PHONE, /\.card:not\(\.tab-on\) \{ display: none; \}/, 'every panel off the tab is hidden');
+  assert.match(PHONE, /#tabs \{[^}]*position: fixed;[^}]*bottom: 0;/, 'the bar is fixed to the bottom edge');
+  assert.match(PHONE, /body \{ margin: [^;]*calc\(/, 'the page scrolls as a whole above a pad the bar\'s height');
+  assert.match(PHONE, /#tabs button \{[^}]*min-height: 44px/, 'a tab is a 44 px touch target');
+  assert.match(PHONE, /\.card \{ height: auto !important;[^}]*resize: none;/, 'a height dragged on a desktop is ignored on a phone');
+  assert.doesNotMatch(CSS, /(html|body)[^{]*\{[^}]*overflow-x: hidden/, 'nothing hides a sideways overflow');
+});
+
+test('issue 211: More lists every other panel not hidden, shows the one picked alone, and closes on Escape', async () => {
+  const w = phone();
+  const sheet = w.document.getElementById('more-sheet');
+  const tiles = () => [...w.document.querySelectorAll('#more-tiles button')];
+  w.document.querySelector('#held .card-head button[data-hide]').click();
+  await settled(w);
+  assert.equal(sheet.hidden, true);
+  tabBtn(w, 'more').click();
+  assert.equal(sheet.hidden, false);
+  assert.ok(sheet.contains(w.document.activeElement), 'the sheet takes focus');
+  assert.deepEqual(tiles().map((b) => b.dataset.card), ['main-chain', 'merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'guard-blocks',
+    'chief-of-staff', 'agents'], 'every panel on no tab, less the one the owner hid');
+  assert.equal(tiles()[0].textContent, 'Main', 'a tile is its panel\'s title');
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(sheet.hidden, true, 'Escape closes it');
+  assert.equal(w.document.activeElement, tabBtn(w, 'more'), 'and gives focus back to More');
+  tabBtn(w, 'more').click();
+  w.document.querySelector('#more-sheet [data-scrim]').click();
+  assert.equal(sheet.hidden, true, 'a tap beside the sheet closes it');
+  tabBtn(w, 'more').click();
+  tiles().find((b) => b.dataset.card === 'limit').click();
+  assert.equal(sheet.hidden, true);
+  assert.deepEqual(tabOn(w), ['limit'], 'a tile shows its panel alone');
+  assert.equal(tabBtn(w, 'more').getAttribute('aria-current'), 'page');
+});
+
+test('issue 211: on the units board a step chip leaves one stage; All shows every stage again', () => {
+  const w = phone();
+  const chips = () => [...w.document.querySelectorAll('#unit-steps button')];
+  const on = () => [...w.document.querySelectorAll('#stages .step-on')].map((s) => s.dataset.stage);
+  assert.deepEqual(chips().map((c) => c.textContent), ['Planning 0', 'Building 1', 'Review 1', 'Fixing 0', 'On main 0', 'All 2'], 'each chip counts its column');
+  assert.equal(w.document.body.dataset.step, 'all');
+  chips()[1].click();
+  assert.deepEqual(on(), ['building']);
+  assert.equal(chips()[1].getAttribute('aria-pressed'), 'true');
+  reshow(w);
+  assert.deepEqual(on(), ['building'], 'a refresh keeps the chip');
+  chips()[5].click();
+  assert.equal(w.document.body.dataset.step, 'all');
+  assert.match(PHONE, /body:not\(\[data-step="all"\]\) #stages > \.stage:not\(\.step-on\)[^{]*\{ display: none; \}/, 'the CSS hides every other stage');
+  assert.match(PHONE, /#stages \{ grid-template-columns: minmax\(0, 1fr\); \}/, 'the stages stack, never a sideways scroll');
+  assert.match(PHONE, /#unit-steps \{[^}]*flex-wrap: wrap/, 'and the chips wrap');
+});
+
+test('issue 211: each tab badge is the count its summary tile shows, and empty when that is not measured', () => {
+  const w = phone();
+  const badge = (t) => w.document.querySelector(`#tabs [data-badge="${t}"]`).textContent;
+  const tile = (panel) => w.document.querySelector(`#summary a[href="#${panel}"] .measure-value`).textContent;
+  assert.deepEqual(['units', 'builds', 'alerts', 'you'].map(badge), ['2', '1', '2', '1']);
+  for (const [t, panel] of [['units', 'units'], ['builds', 'builds'], ['alerts', 'alerts'], ['you', 'needs']]) assert.equal(badge(t), tile(panel), `${t} counts what its tile counts`);
+  const v = fresh();
+  show(v, {});
+  assert.equal(v.document.querySelector('#tabs [data-badge="units"]').textContent, '', 'no number where the tile reads not measured');
+});
+
+test('issue 211: a summary tile or an alert link switches to the tab that holds its panel', () => {
+  const w = phone();
+  w.document.querySelector('#summary a[href="#needs"]').click();
+  assert.deepEqual(tabOn(w), ['needs'], 'Waiting on the owner opens You');
+  assert.equal(tabBtn(w, 'you').getAttribute('aria-current'), 'page');
+  tabBtn(w, 'alerts').click();
+  w.document.querySelector('#alerts-list a[href="#limit"]').click();
+  assert.deepEqual(tabOn(w), ['limit'], 'a panel on no tab shows alone, as its More tile shows it');
+  assert.equal(tabBtn(w, 'more').getAttribute('aria-current'), 'page');
+});
+
+test('issue 211: at desktop width no tab bar and no step chip show; only the phone rules show them', () => {
+  const desk = CSS.replace(PHONE, '');
+  assert.match(desk, /\n#tabs, #unit-steps \{ display: none; \}/);
+  assert.doesNotMatch(desk, /#(tabs|unit-steps)[^{,]*\{[^}]*display: (?!none)/, 'no rule outside the phone block shows them');
+  assert.match(PHONE, /#tabs \{ display: grid;/);
+  assert.match(PHONE, /#unit-steps \{ display: flex;/);
+});
+
+// issue 211: a phone beside a PC. A save refused as out of date re-reads the host's layout, keeps this page's own
+// change and the other page's, and goes again; the page used to reload and lose a build it had just cleared.
+test('issue 211: a refused save re-reads the layout and merges it, keeping the other page\'s cleared build', async () => {
+  fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {"rev": 3}}};\n');
+  const fin = (unit, sha) => ({ unit, sha, at: iso(ago(5)), how: 'merged' });
+  const snap = { units: { inFlight: [], finishedBuilds: [fin('done-a', 'aaaaaaaa1'), fin('done-b', 'bbbbbbbb2')] } };
+  const a = boot(), b = boot();
+  show(a, snap); show(b, snap);
+  a.document.querySelector('#builds button[data-close="aaaaaaaa1"]').click();
+  a.document.querySelector('#host .sz button[data-s="2"]').click();
+  await settled(a);
+  b.document.querySelector('#builds button[data-close="bbbbbbbb2"]').click();
+  b.document.querySelector('#alerts .sz button[data-s="2"]').click();
+  await settled(b);
+  assert.equal(b.puts, 1, 'refused, and held until the host\'s layout is read');
+  relayout(b);
+  await settled(b);
+  assert.equal(b.reloads, 0);
+  const held = onDisk().projects.demo;
+  assert.deepEqual(held.closed, ['aaaaaaaa1', 'bbbbbbbb2'], 'both pages\' cleared builds stand');
+  assert.deepEqual([held.sizes.host, held.sizes.alerts], [2, 2], 'and both pages\' widths');
+  assert.equal(b.document.querySelectorAll('#builds .build.finished').length, 0, 'the refused page shows the other\'s clear');
+  assert.equal(b.document.getElementById('host').dataset.size, '2', 'and its width');
+});
+
+// r1 finding: a merge took the other page's folds into the saved layout but left this page's sections as they were,
+// so this page's next fold, read off its own sections, sent the other page's fold back as open.
+test('issue 211: a refused save shows the other page\'s folded sections, and a later fold keeps them', async () => {
+  fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {"rev": 3}}};\n');
+  const fold = (w, id) => { const d = w.document.getElementById(id); d.open = false; d.dispatchEvent(new w.Event('toggle')); };
+  const a = boot(), b = boot();
+  fold(a, 'limit-body');
+  await settled(a);
+  b.document.querySelector('#alerts .sz button[data-s="2"]').click();
+  await settled(b);
+  assert.equal(b.puts, 1, 'refused, and held until the host\'s layout is read');
+  relayout(b);
+  await settled(b);
+  assert.equal(b.document.getElementById('limit-body').open, false, 'the refused page shows the other\'s fold');
+  fold(b, 'permanent');
+  await settled(b);
+  assert.deepEqual([...onDisk().projects.demo.collapsed].sort(), ['limit-body', 'permanent'], 'both pages\' folds stand');
 });

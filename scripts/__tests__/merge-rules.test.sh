@@ -17,9 +17,9 @@ f7c75c86 8361fb71 8ade2fb3 f6e2fbb0 2848b779 48b02596 a4d1bca5 6743a4ac 5f6ba6aa
 # shellcheck disable=SC2046
 # The rules kept are new since 0.7.1, so no owner has a wording of them to keep: plan before every build, its full
 # text below Details a second unit, the worker-memory note below Details a third, and 0.18.0's denied
-# self-modification rule a fourth.
+# self-modification rule a fourth, and 0.20.0's NO-GO-merges-on-the-owner's-word rule a fifth.
 check "an owner who kept their own wording for every 0.7.1 main rule gets only the rule added since" \
-  "4 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
+  "5 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
 check "the relay rule an owner kept their own wording for in 0.7.1 stays out" 0 \
   "$(MS --drop 34ec1023 | grep -c 'goes to the relay pane')"
 check "a rule reworded alone stays out under its 0.7.1 id" 0 \
@@ -37,7 +37,7 @@ check "keep both for a rule made from two loads it, though keep mine was saved f
 # Main writes each planner's spec from the planning rule, so that rule is where a planner hears to name a fitting
 # mattpocock-skills skill (the owner's, 2026-10-17); it stays one rule. An owner who kept their own wording of the
 # planning rule before (871dfc54) does not get the reworded one too.
-check "the planning rule names the skills line, inside the same rule" "1:28" \
+check "the planning rule names the skills line, inside the same rule" "1:29" \
   "$(MS | awk '/^- \*\*/ { p = /Plan before every build/ } p' | grep -c 'If the mattpocock-skills plugin'):$(MS --units | wc -l | tr -d ' ')"
 check "an owner who kept their own planning rule does not get the reworded one" 0 \
   "$(MS --drop 871dfc54 | grep -c 'If the mattpocock-skills plugin')"
@@ -63,6 +63,16 @@ Call setup.sh --plan first.|Call setup.sh plan first.|1
 Keep the limit at -1.|Keep the limit at 1.|1
 Run  MAKE before you push.|run make before   you push.|0
 RULES
+
+# Issue 209: rules found only inside setup's own block from an earlier run are named as such in the report, and are
+# still not the owner's: the merged text keeps every one of them, so the next block still carries them.
+TPL=$(printf -- '- Rule one for this test.\n- Rule two for this test.\n')
+OWN=$(printf '<!-- commandeck:rules:begin -->\n%s\n<!-- commandeck:rules:end -->\n' "$TPL")
+check "the report names rules already in setup's block from an earlier run, none as the owner's" \
+  "2 plugin rules kept (2 already in setup's block from an earlier run), 0 already in your files (left out), 0 where you keep your own (left out)" \
+  "$(python3 "$REAL/scripts/merge-rules.py" <(printf '%s\n' "$TPL") --against <(printf '%s' "$OWN") --report | head -1)"
+check "the merged text still holds both rules from setup's earlier block" 2 \
+  "$(python3 "$REAL/scripts/merge-rules.py" <(printf '%s\n' "$TPL") --against <(printf '%s' "$OWN") | grep -c 'for this test')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

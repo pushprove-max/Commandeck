@@ -308,7 +308,7 @@ units() {
       bj='{"steps":null,"signals":null,"verdict":null,"verdictRound":null}'
       bl=$wt/.claude/builder-events.jsonl
       if [ ! -e "$bl" ]; then st='"building"' bj='{"steps":[],"signals":[],"verdict":null,"verdictRound":null}'
-      elif rows=$(jq -cR 'fromjson? | objects' "$bl" 2>/dev/null) && b=$(jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$wt")" -f "$HERE/dashboard_builders.jq" <<<"$rows" 2>/dev/null); then
+      elif rows=$(jq -cR 'fromjson? | objects' "$bl" 2>/dev/null) && b=$(jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$wt")" --argjson bgOpen "$(pp_session_bg_open "$wt")" -f "$HERE/dashboard_builders.jq" <<<"$rows" 2>/dev/null); then
         st=$(jq -c '.stage' <<<"$b"); rd=$(jq -c '.round' <<<"$b")
         age=$(jq -c --argjson now "$NOW" '.lastAt | if . == null then null else [$now - fromdateiso8601, 0] | max end' <<<"$b")
         bj=$(jq -c '{steps, signals, verdict: null, verdictRound: null}' <<<"$b")

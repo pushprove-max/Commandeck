@@ -85,6 +85,12 @@ refused "node_modules dangling, its readlink unchanged" node_modules untracked
 mv "$P/nm2" "$P/node_modules"
 fresh; jq '.env.LOCAL_NOTE = "x"' "$WT/.claude/settings.local.json" > "$T/s.json" && cp "$T/s.json" "$WT/.claude/settings.local.json"
 refused "settings plus a custom key" .claude/settings.local.json ignored
+# Issue 204: JSON members are unordered, so setup's settings with their keys in another order (an older generator's)
+# are still setup's own: the close goes ahead. The case above, a changed value, is still refused.
+fresh; S=$WT/.claude/settings.local.json; jq 'to_entries | reverse | from_entries' "$S" > "$T/s.json"
+cmp -s "$T/s.json" "$S" && echo "FAIL the reordered settings fixture is byte-identical, so it tests nothing"; cp "$T/s.json" "$S"
+close
+check "setup's settings with the top-level keys reordered: the pane closes, the worktree is removed" "0:1" "$RC:$(calls 'worktree remove')"
 fresh; echo k > "$WT/.env"
 refused "an ignored .env" .env ignored
 fresh; mkdir -p "$WT/.claude/briefs"; echo d > "$WT/.claude/briefs/draft.md"

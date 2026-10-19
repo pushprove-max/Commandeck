@@ -122,6 +122,21 @@ ln -s "$TMP/shared/root-modules" "$WTX/node_modules"
 check "npm ci through a linked node_modules blocks" 2 "$(run "$(bash_p "npm ci" "$WTX")")"
 check "approval cannot carry npm ci through a link" 2 "$(run "$(bash_p "COMMANDECK_DEP_APPROVED=1 npm ci" "$WTX")")"
 
+# Issue 206: setup.sh only saves its quoted answers (a test command such as 'npm test') and never runs them, so its
+# own preview is a sender of its quoted text; setup's answers `add` and `install` had joined 'npm test' into an install.
+SETUP=$(cd "$(dirname "$0")/../.." && pwd)/scripts/setup.sh
+mkdir -p "$TMP/h"; ln -s "${SETUP%/scripts/setup.sh}" "$TMP/h/plug"
+check "the plugin's own setup preview with --auto-mode add is not blocked" 0 \
+  "$(run "$(bash_p "bash $SETUP --profile claude --test-command 'npm test' --auto-mode add --cache-ttl 5m --plan")")"
+check "the plugin's own setup preview with install answers, named through ~, is not blocked" 0 \
+  "$(run_env HOME="$TMP/h" "$(bash_p "bash ~/plug/scripts/setup.sh --test-command 'npm test' --global-claude merge --global-rules install --rules merge --plan")")"
+check "another setup.sh with the same flags still blocks" 2 \
+  "$(run "$(bash_p "bash ./other/setup.sh --test-command 'npm test' --auto-mode add --cache-ttl 5m --plan")")"
+check "an install after the plugin's setup on the same line still blocks" 2 \
+  "$(run "$(bash_p "bash $SETUP --test-command 'npm test' --plan && npm install lodash")")"
+check "a quoted install run by bash -c beside the plugin's setup still blocks" 2 \
+  "$(run "$(bash_p "bash $SETUP --plan; bash -c 'npm install lodash'")")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
