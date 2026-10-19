@@ -154,7 +154,7 @@ seat_role() {
 }
 
 # plan_seats <unit> [before-iso] -- the unit's planning, read from its plan seats' records (seat.sh launch; never
-# deleted), so it outlives <unit>-plan: {worktree, from (the first launch, a relaunched seat's first= too), seats: [{role, task, from, model, effort,
+# deleted), so it outlives the planning worktree, <unit> or <unit>-plan before 0.18.0: {worktree (the newest record's), from (the first launch, a relaunched seat's first= too), seats: [{role, task, from, model, effort,
 # session, completedAt}]}, or null. Model and effort are the record's command's (--model, --effort, Codex's
 # model_reasoning_effort); session its Claude id or its bound log path (seat.sh bind_session), else the seat ledger row's log (a collected Codex judge), which
 # also gives completedAt. With `before`, only seats first launched before it: a Builder's own planning, a planner
@@ -168,14 +168,14 @@ plan_seats() {
   done | jq -Rn --arg u "$1" --arg b "${2:-}" --arg ws "$PP_WORKSPACES" \
     --slurpfile ev <(jq -cR 'fromjson? | objects | select(.taskId | type == "string")' "$METRICS/seat-events.jsonl" 2>/dev/null) '
     ($ev | map({key: .taskId, value: .}) | from_entries) as $e
-    | [inputs | split("\t") | select(length == 8 and .[3] == $u and .[4] == "\($u)-plan" and (.[0] | test("^[0-9]+$")))
+    | [inputs | split("\t") | select(length == 8 and .[3] == $u and (.[4] == $u or .[4] == "\($u)-plan") and (.[0] | test("^[0-9]+$")))
        | ([.[0], .[7]] | map(tonumber? // empty) | min) as $f
        | select($b == "" or $f < ($b | fromdateiso8601)) | ($e[.[2]] // {}) as $r
-       | {role: .[1], task: .[2], from: (.[0] | tonumber | todate), first: $f,
+       | {role: .[1], task: .[2], from: (.[0] | tonumber | todate), first: $f, wt: .[4],
           model: ((.[6] | capture("--model[ =](?<m>[^ ;[]+)") | .m) // $r.model // null),
           effort: ((.[6] | capture("--effort[ =](?<l>[a-z]+)|model_reasoning_effort=\"?(?<c>[a-z]+)") | .l // .c) // null),
           session: (if .[5] != "" then .[5] else $r.session // null end), completedAt: ($r.completedAt // null)}]
-    | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\($u)-plan", from: (map(.first) | min | todate), seats: map(del(.first))} end'
+    | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\(max_by(.from) | .wt)", from: (map(.first) | min | todate), seats: map(del(.first, .wt))} end'
 }
 
 # seat_actual <worktree> -- what the seat really runs: the model, effort and advisor on the last
@@ -255,14 +255,15 @@ units() {
   for wt in "$PP_WORKSPACES"/*/; do
     wt=${wt%/}; [ -e "$wt/.git" ] || continue
     u=${wt##*/}
-    # A plan seat's worktree (marked <unit>-plan, seat.sh) is the unit's Planning stage. With the unit's own
-    # worktree there, that one card carries the planning: one unit, one card.
-    po=
-    if [[ $u == *-plan ]]; then
-      po=$(cat "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)/commandeck-plan-of" 2>/dev/null) || po=
-      [ "$po" = "${u%-plan}" ] || po=
-      [ -z "$po" ] || [ ! -e "$PP_WORKSPACES/$po/.git" ] || continue
-    fi
+    # A plan seat's worktree, marked by seat.sh, is the unit's Planning stage until the Builder's launch adopts it and
+    # drops the mark: <unit> itself, or <unit>-plan for a unit planned before 0.18.0, whose card the unit's own
+    # worktree carries when it is there: one unit, one card.
+    po=$(cat "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)/commandeck-plan-of" 2>/dev/null) || po=
+    case $po in
+      ''|"$u") ;;
+      "${u%-plan}") [ ! -e "$PP_WORKSPACES/$po/.git" ] || continue ;;
+      *) po= ;;
+    esac
     # The relay pane's worktree is a seat, not a unit. Exact name only; app.js SEATS names the same stage.
     case $u in Chief-of-Staff) seat=chief-of-staff ;; *) seat= ;; esac
     ag=null

@@ -22,10 +22,11 @@ merges with `merge-unit-local.sh {unit}`.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
-  after another: a helper started late is waited on alone. A helper that runs
-  commands or counts (not a code search, which stays Explore) is
-  `commandeck:helper`; it starts without CLAUDE.md, so its prompt carries every
-  fact and limit it needs.
+  after another: a helper started late is waited on alone. A helper that counts
+  (not a code search, which stays Explore) is `commandeck:helper`; one that
+  edits, runs or tests is `commandeck:lean-worker`; a blind re-check is
+  `commandeck:lean-checker`. These start without CLAUDE.md, so the prompt
+  carries every fact and limit the helper needs.
 - A helper answers in at most 15 lines: say so in its prompt. A command whose
   output runs past 40 lines writes to a file, and you read the part you need:
   whatever comes back is sent again on every later turn of the build.

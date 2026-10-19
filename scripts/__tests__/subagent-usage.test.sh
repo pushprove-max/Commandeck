@@ -16,7 +16,7 @@ P=$T/projects; slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
 run() { local f="$P/$1/s1/subagents/agent-$2.jsonl"; mkdir -p "${f%/*}"
   printf '{"type":"user","cwd":"%s","timestamp":"2026-10-10T12:00:00Z"}\n' "$3" > "$f"; touch -d "@$(( $(date +%s) - $4 * 60 ))" "$f"; }
 usage() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
-  COMMANDECK_CLAUDE_PROJECTS="$P" bash "$REAL/scripts/subagent-usage.sh"); }
+  COMMANDECK_CLAUDE_PROJECTS="$P" bash "$REAL/scripts/subagent-usage.sh" "$@"); }
 rows() { jq -r .agentId "$T/proj/.claude/metrics/subagent-usage.jsonl" 2>/dev/null | sort | tr '\n' ' '; }
 
 run "$(slug "$T/proj")" main1 "$T/proj" 20
@@ -30,5 +30,27 @@ check "a second collect with nothing new records nothing" "main1 wt1 " "$(rows)"
 touch -d "@$(( $(date +%s) - 15 * 60 ))" "$P/$(slug "$T/proj")/s1/subagents/agent-main1.jsonl"
 usage
 check "a run written since its row gets a new one" "main1 main1 wt1 " "$(rows)"
+
+# --start measures what a helper costs before it does anything: each run's first request input
+# (input + cache creation + cache read), not a later, larger one. It is read-only.
+# start <folder> <agent id> <type> <first input> -- a finished run of that type (one a collect would record);
+# its second request is bigger.
+start() { local f="$P/$1/s2/subagents/agent-$2.jsonl"; mkdir -p "${f%/*}"
+  printf '{"agentType":"%s"}\n' "$3" > "${f%.jsonl}.meta.json"
+  { printf '{"type":"user","cwd":"%s"}\n' "$T/proj"
+    printf '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":%s,"cache_creation_input_tokens":1000,"cache_read_input_tokens":2000}}}\n' "$4"
+    printf '{"type":"assistant","message":{"id":"m2","usage":{"input_tokens":90000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n'; } > "$f"
+  touch -d "@$(( $(date +%s) - 20 * 60 ))" "$f"; }
+start "$(slug "$T/proj")" e1 Explore 1000
+start "$(slug "$T/proj")" e2 Explore 3000
+start "$(slug "$T/ws")-u1" l1 commandeck:lean-worker 10
+start "$(slug "$T/ws")-u1" l2 commandeck:lean-worker 30
+BEFORE=$(cat "$T/proj/.claude/metrics/subagent-usage.jsonl")
+OUT=$(usage --start)
+check "two runs of a type give the median of their first request's input" \
+  "Explore: 2 runs, median 5000, p90 6000" "$(grep '^Explore:' <<<"$OUT")"
+check "a worktree's runs are measured too" \
+  "commandeck:lean-worker: 2 runs, median 3020, p90 3030" "$(grep '^commandeck:lean-worker:' <<<"$OUT")"
+check "and the ledger is untouched" "$BEFORE" "$(cat "$T/proj/.claude/metrics/subagent-usage.jsonl")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

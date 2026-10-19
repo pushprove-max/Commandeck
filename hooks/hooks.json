@@ -11,7 +11,8 @@
       {"hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-awareness.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/context-line.sh\""},
-        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/ruling-log.sh\""}
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/ruling-log.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/cos-own-echo.sh\""}
       ]}
     ],
     "PreToolUse": [

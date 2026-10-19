@@ -22,10 +22,10 @@ SWT=$HOME/orca/workspaces/proj/seat-builder; mkdir -p "$HOME/orca/workspaces/pro
 cat > "$BIN/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  "terminal create"*) touch "$T/pane-up"; [ ! -e "$T/on-create" ] || { cp "$T/on-create" "$T/screen"; touch "$T/grow"; }; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
+  "terminal create"*) echo "\$*" >> "$T/creates"; touch "$T/pane-up"; [ ! -e "$T/on-create" ] || { cp "$T/on-create" "$T/screen"; touch "$T/grow"; }; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
   "terminal list"*) [ -e "$T/pane-up" ] && t='[{"handle":"h1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT"}]' || t='[]'
     echo "{\"ok\":true,\"result\":{\"terminals\":\$t}}" ;;
-  "terminal read"*) [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
+  "terminal read"*) [ ! -e "$T/read-fails" ] || exit 1; [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
     jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
   "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
@@ -60,6 +60,12 @@ check "a fenced verdict in an unfinished pane's last lines is no verdict" '3:0' 
 rm -f "$T/pane-up"
 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" --effort high >"$T/out" 2>&1
 check "a raised Builder's pane opens with --effort high" '0:1' "$?:$(grep -cE -- '^cmd=.* --effort high( |$)' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt)"
+# Pass 3: the screen read that prints a launched seat's state failed the whole launch, and builder-launch.sh then
+# undid the files the running Builder had opened on.
+rm -f "$T/pane-up"; touch "$T/read-fails"
+COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" --effort high >"$T/out" 2>&1
+check "a launched seat whose last screen read fails exits 0, its state unknown" '0:1' "$?:$(grep -c 'state=unknown' "$T/out")"
+rm "$T/read-fails"
 run launch builder seat-builder "$T/spec.md" --effort max >"$T/out" 2>&1
 check "--effort max is refused before any pane opens" '2:1' "$?:$(grep -c 'REFUSED: --effort takes medium or high' "$T/out")"
 # A seat launched by hand is held to the launcher's floor: medium under a project default of high would lower it.
@@ -75,9 +81,17 @@ check "--effort medium under a Builder default of high is refused before any pan
 # A wait that never sees its marker ends at its own --timeout-s, not the test's.
 srun() { (export COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 COMMANDECK_LOOP_POLL_SECONDS=0 COMMANDECK_DRIVER=1; run "$@"); }
 printf 'Plan the unit.\nEnd on a line of its own.\n' > "$T/plan-spec.md"
+# A unit is planned and built in one worktree: a plan seat works in <unit>, which the Builder's launch takes over.
+# An unmarked <unit> is a Builder's, never taken for planning.
+UWT=$HOME/orca/workspaces/proj/pv; git -C "$PROJ" worktree add -q "$UWT"; : > "$T/creates"
+srun launch plan-author pv "$T/plan-spec.md" >"$T/out" 2>&1
+check "a plan seat for a unit whose unmarked worktree exists is refused before any pane opens" '2:1:0' \
+  "$?:$(grep -c "REFUSED: $UWT is not pv's planning worktree" "$T/out"):$(grep -c . "$T/creates")"
 # The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
-PWT=$HOME/orca/workspaces/proj/pu-plan; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?
+check "which is the unit's own worktree, and its record names it" '1:1' \
+  "$(grep -c -- "path:$PWT " "$T/creates"):$(grep -cx 'worktree=pu' "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt)"
 for m in PLAN-DONE REVISED PLAN-DONE; do echo "$m" > "$T/screen"; srun wait plan-author pu --marker "$m" --timeout-s 10 >"$T/out" 2>&1 || echo "wait $m: $(tail -2 "$T/out")"; done
 srun collect plan-author pu >"$T/out" 2>&1
 check "collect with no --marker closes on the marker the last wait saw" '0:1' "$?:$(grep -c 'closed seat=plan-author unit=pu PLAN-DONE' "$T/out")"
@@ -145,7 +159,7 @@ check "so collect with no --marker leaves the planner open" '3:0' "$?:$(grep -c 
 # Claude one elsewhere, so the verdict is the screen's marker; the ledger's lookup is the seat's own, by its role.)
 echo PLAN-DONE > "$T/screen"; L=$(($(date +%s) - 5))
 JH=$T/judge-home; mkdir -p "$JH/sessions/2026/10/17"; JL=$JH/sessions/2026/10/17/rollout-sol.jsonl
-printf 'handle=h1\ntask=task_1\nrole=plan-judge-sol\nunit=pu\nworktree=pu-plan\nlaunched=%s\nfirst=%s\ntag=seat-sol-1\ncmd=export COMMANDECK_SEAT=plan-judge-sol; CODEX_HOME=%s codex --model gpt-6.1-sol\n' \
+printf 'handle=h1\ntask=task_1\nrole=plan-judge-sol\nunit=pu\nworktree=pu\nlaunched=%s\nfirst=%s\ntag=seat-sol-1\ncmd=export COMMANDECK_SEAT=plan-judge-sol; CODEX_HOME=%s codex --model gpt-6.1-sol\n' \
   "$L" "$L" "$JH" > "$(dirname "$AREC")/seat-pu-plan-judge-sol.txt"
 jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$PWT" '
   {type: "session_meta", timestamp: $t, payload: {cwd: $w}},
@@ -192,6 +206,14 @@ EOF
 chmod +x "$B2/orca-ide"
 (cd "$PROJ" && COMMANDECK_SCRATCH=$T/scratch PATH="$B2:$PATH" bash "$REAL/scripts/dispatch-task.sh" task_1 terminal:h1 --keep-task </dev/null >"$T/out" 2>&1)
 check "a pointer dispatch-task.sh types to a Codex pane carries the spec's seat tag" 'Seat tag seat-judge-7-8' "$(grep -o 'Seat tag seat-judge-7-8' "$T/typed" 2>&1)"
+
+# A unit planned before 0.18.0 plans in its marked <unit>-plan, its plan not yet committed: a seat launched in a new
+# <unit> cut from main read no plan.
+LWT=$HOME/orca/workspaces/proj/pl-plan; git -C "$PROJ" worktree add -q "$LWT" && echo pl > "$(git -C "$LWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+mkdir -p "$LWT/.claude/plans" && echo draft > "$LWT/.claude/plans/pl.md"; : > "$T/creates"
+srun launch plan-judge-claude pl "$T/judge-spec.md" >"$T/out" 2>&1
+check "a plan seat of a unit planned in <unit>-plan opens there, its record names it, and no <unit> is made" '0:1:1:no' \
+  "$?:$(grep -c -- "path:$LWT " "$T/creates"):$(grep -cx 'worktree=pl-plan' "$HOME/.commandeck/scratch/"*/seat-pl-plan-judge-claude.txt):$([ -e "$HOME/orca/workspaces/proj/pl" ] && echo yes || echo no)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

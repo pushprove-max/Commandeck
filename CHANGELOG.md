@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.18.0 -- 2026-10-18
+
+- 0.17.0 could launch no seat under jq 1.7, the jq of CI's Ubuntu: one line of `worktree-setup.sh` used a form only
+  jq 1.8 accepts. 0.18.0 fixes it, and CONTRIBUTING.md says to run the suite once with jq 1.7 first on `PATH`.
+- The review prompts ask about callers the change left untouched and about cost over time (#191). A build in
+  progress when the plugin updates moves to a new unit, as the existing `UPDATED` rule says.
+- #192 shipped in 0.16.0 (the doctor's check for keys the main checkout's `settings.local.json` also sets).
+- Every dashboard alert ends with the action it asks for, and the cache-builder alert waits until a Builder's
+  24 h input passes its warm-up (#193).
+- The inbox watcher, `read-verdict.sh`, `wait-test-run.sh`, the platform audit and a tripwire hook no longer print
+  "No such file" for a missing file they read on purpose (#194).
+- An alert seen once stays quiet when only its stamp moves; it is raised again 24 h after the relay's watcher last
+  told it, as Alertmanager repeats, so one that stays on is a daily reminder (#195).
+- `to-main.sh` says when the pane it sent to has a question or permission prompt open, and prints Orca's reason
+  when a send fails (#196).
+- Setup adds the plugin's role seats that a routing file of your own lacks, checks the routing as it will leave
+  it, and records what it added; uninstall takes out only those seats, and a later setup run keeps the earlier
+  record. Projects sharing one routing file keep the added seats until the last of them uninstalls, however each
+  names it (a relative `COMMANDECK_ROUTING` included); a relative `CODEX_HOME` is recorded as the folder it names (#197).
+  A relative routing path an earlier release recorded names no folder it was read from, so uninstall leaves that
+  file and its seats as they are and says so; the same for Codex files an earlier release recorded under a relative
+  `CODEX_HOME`, which a later setup no longer takes for its own. Uninstall takes a seat out only by its own absolute record that no
+  other project's record could share, and names each seat it keeps and why.
+- `main-watch.sh` tells the relay once when main has not read finished work after its typed wakes, or has a prompt
+  open; the relay's inbox no longer counts main-watch's own notes as sends; `cos-tell.sh` says why a typed send was
+  not taken (#198).
+- Main sends a self-modification step it was denied to the relay as a note, and the relay applies it only from a
+  note its inbox watcher names as main's, by Orca's sender; notes the watcher held from before 0.18.0 print quoted,
+  never as main's (#199).
+- The relay pane spends no turn on Orca's notice of messages that are all its own: a new UserPromptSubmit hook,
+  `cos-own-echo.sh`, acknowledges them and drops the prompt (#200).
+- New `commandeck:lean-worker` and `commandeck:lean-checker` agents, with no CLAUDE.md, MCP or skills. Their model
+  and effort come from routing's new `lean-worker` and `lean-checker` roles; a general-purpose dispatch is told of
+  them; `subagent-usage.sh --start` prints each agent type's first-request input (#201).
+- A unit is planned and built in one worktree: plan seats run in `<unit>`, and the Builder's launch takes it over
+  with `plan-worktree-close.sh --adopt` once every other check has passed, giving the planner its worktree back
+  when the launch fails after that and no pane opened in it. A unit planned before 0.18.0, in `<unit>-plan`, goes on planning there and
+  closes as before (#202).
+
 ## 0.17.0 -- 2026-10-18
 
 - Worker and Builder panes take your own cuts on top of 0.16.0's: setup asks once for the skills

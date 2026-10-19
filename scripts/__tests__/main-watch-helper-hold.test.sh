@@ -44,7 +44,8 @@ case "\$1 \$2" in
     echo "{\"ok\":true,\"result\":{\"task\":{\"id\":\"task_new\$n\"}}}" ;;
   "orchestration send") printf '%s' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"; echo '{"ok":true}' ;;
   "terminal send") printf '%s\n' "\$*" >> "$T/typed"; echo '{"ok":true,"result":{"stages":["typed","submitted","turn_started"]}}' ;;
-  "terminal read") echo '{"result":{"terminal":{"tail":[],"latestCursor":"0"}}}' ;;
+  "terminal read") if [ -e "$F/screen" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen"
+    else echo '{"result":{"terminal":{"tail":[],"latestCursor":"0"}}}'; fi ;;
   "terminal list")
     jq -Rn --arg main "$REPO" '{result:{terminals:[inputs | split(" ") | {handle:.[0], tabId:.[0], leafId:"l",
       worktreePath:(if (.[0] | startswith("term_main")) then \$main else "/elsewhere" end), agentIdentity:"claude"}]}}' < "$F/agents" ;;
@@ -114,6 +115,22 @@ tick $((M + 420))
 tick $((M + 480))
 [ "$(typed)" = 1 ] || fail "an unanswered main was woken again inside 2 minutes"
 rm -f "$F/inbox"
+
+# Issue 198: main idle with its own question open reads nothing, and main-watch gave up on it without a word. The
+# relay hears once per wake episode, through main's run under main's handle: the service has no pane of its own.
+unset ORCA_TERMINAL_HANDLE
+rm -f "$S/main-watch/wake" "$S/main-watch/unread-since"; : > "$T/typed"; W=35000
+printf 'Which release?\n> 1. 0.18.0\nEnter to select, Esc to cancel\n' > "$F/screen"
+msg term_x "order from the relay" | inbox
+tick $W; tick $((W + 120))
+[ "$(typed)" = 0 ] || fail "main was typed into while its screen showed an open question"
+[ "$(posts 'cos: main-watch')" = 0 ] || fail "the relay was told with no Chief-of-Staff worktree"
+mkdir -p "$T/ws/Chief-of-Staff"; tick $((W + 180)); tick $((W + 240))
+[ "$(posts 'cos: main-watch: main has not read finished work')" = 1 ] || fail "main blocked on a prompt with work unread: the relay was told $(posts 'cos: main-watch') times, not once"
+grep 'cos: main-watch' "$T/sends" | grep -q -- '--to run:run_test.*--from term_main' || fail "the relay's note did not go to main's run under main's handle"
+grep 'cos: main-watch' "$T/sends" | grep -q 'answer the prompt in main' || fail "the relay's note does not name the fix"
+[ "$(typed)" = 0 ] || fail "main was typed into while its screen showed an open question"
+rm -rf "$F/screen" "$F/inbox" "$T/ws/Chief-of-Staff" "$S/main-watch/wake" "$S/main-watch/unread-since"
 
 # Sol r3: a planner runs in <unit>-plan before its unit has a worktree, and a seat was watched only in <unit>.
 mkdir -p "$T/ws/pu-plan"; printf 'handle=term_pu\ntask=task_pu\nrole=plan-author\nunit=pu\nlaunched=40000\nworktree=pu-plan\n' > "$S/seat-pu-plan-author.txt"

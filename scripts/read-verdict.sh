@@ -156,7 +156,7 @@ reduce (inputs | select(startswith("{\"type\":\"api-request") | not) | (fromjson
 session_state() { # provider file task marker -- one JSON object
   local prog=$STATE_JQ_CLAUDE
   [ "$1" = codex ] && prog=$STATE_JQ_CODEX
-  jq -ncR --arg task "$3" --arg marker "$4" "$STATE_JQ_DEFS $prog" < "$2" 2>/dev/null \
+  jq -ncR --arg task "$3" --arg marker "$4" "$STATE_JQ_DEFS $prog" 2>/dev/null < "$2" \
     || echo '{"state":"unknown","reason":"unreadable log"}'
 }
 
@@ -337,7 +337,7 @@ pane_sessions() { # handle
   local p penv
   for p in $(pgrep -x claude 2>/dev/null); do
     # macOS has no /proc; its `ps -E` appends the environment to the command.
-    if [ -d /proc/self ]; then penv=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null)
+    if [ -d /proc/self ]; then penv=$(tr '\0' '\n' 2>/dev/null < "/proc/$p/environ")
     else penv=$(ps -Eww -o command= -p "$p" 2>/dev/null | tr ' ' '\n'); fi
     grep -qxF "ORCA_TERMINAL_HANDLE=$1" <<<"$penv" || continue
     claude_ancestor "$p" && continue

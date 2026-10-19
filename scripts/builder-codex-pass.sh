@@ -110,7 +110,11 @@ ONE='Prefer one strong finding over several weak ones.'
 MANY='List every finding you can defend, worst first. After each one, look for the same mistake elsewhere in the diff and list those too.'
 # A build that added a required setting read only the new format; every deployed environment ran the old one.
 SETTINGS='A change that adds or changes a required setting (a config key, an environment variable, a file format) with no test that the release still accepts the format already deployed is P1.'
-FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS"
+# A diff shows the changed function, not the unchanged code that calls it or reads its data.
+CALLERS='When the change alters a function'"'"'s signature or behaviour, or a data shape (a type, a stored record, an API payload), open the callers and readers the diff did not touch and check that each still holds.'
+# Right today is not enough: some code costs more, or breaks, as time and data grow.
+LATER='Cost over time is a finding class: code that is right today but grows in cost or breaks later. Examples: retries stacked across layers, or with no backoff or cap; a full-table scan or an unindexed query on a hot path; local time where UTC is needed, a day boundary or DST.'
+FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER"
 # Asked in every pass and by every reviewer, after its focus.
 LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -127,7 +131,7 @@ $CLOSE
 # it is one reviewer handed all of them (SMALL_BUILD).
 ANGLES=(
   'Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts.'
-  "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS"
+  "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER"
   'Angle 3 of 3, tests and words: a changed behaviour with no test, a test that cannot fail, and comments, rule text or docs the change leaves untrue.'
 )
 # The first line of the review input says which pass this is, then "Reviewer <k>

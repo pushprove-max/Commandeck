@@ -19,7 +19,7 @@ PID=${1:-} OUT=${2:-} MAX=${3:-540}
 END=$((SECONDS + MAX))
 while kill -0 "$PID" 2>/dev/null && [ "$SECONDS" -lt "$END" ]; do sleep 1; done
 if kill -0 "$PID" 2>/dev/null; then
-  echo "runner $PID is still running after ${MAX}s; $OUT so far: $(wc -l < "$OUT" 2>/dev/null | tr -d ' ') lines"
+  echo "runner $PID is still running after ${MAX}s; $OUT so far: $(wc -l 2>/dev/null < "$OUT" | tr -d ' ') lines"
   exit 3
 fi
 # Only the output's last block counts: a summary from an earlier suite followed

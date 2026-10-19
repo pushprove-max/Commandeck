@@ -25,6 +25,8 @@ IL_LINK=$HOME/.commandeck/plugin
 IL_VERSION=1   # the config schema this plugin writes and reads; there is no migration
 IL_CONFIG=$PP_MAIN/.claude/commandeck.json
 IL_CODEX=${CODEX_HOME:-$HOME/.codex}
+# A relative CODEX_HOME is the folder it names from here: the manifest key must name it from any later cwd.
+case $IL_CODEX in /*) ;; *) IL_CODEX=$(cd "$IL_CODEX" 2>/dev/null && pwd -P) || IL_CODEX=$PWD/${CODEX_HOME#./} ;; esac
 IL_OURS=/hooks/codex-dispatch.sh   # the one command the plugin's Codex entries run
 # An entry is the plugin's when its command STARTS as the template's does. A
 # hook of the owner's that only mentions the path (a comment, an argument) is
@@ -91,7 +93,7 @@ il_write() {
     return 0
   fi
   t=$p.new.$$
-  { mkdir -p "${p%/*}" && cat > "$t" && { [ ! -e "$p" ] || { k=changed; ! cmp -s "$t" "$p" || k=; chmod --reference="$p" "$t"; }; } && mv -f "$t" "$p"; } \
+  { mkdir -p "$(dirname -- "$p")" && cat > "$t" && { [ ! -e "$p" ] || { k=changed; ! cmp -s "$t" "$p" || k=; chmod --reference="$p" "$t"; }; } && mv -f "$t" "$p"; } \
     || { rm -f "$t"; echo "commandeck: could not write $p" >&2; return 1; }
   [ -z "$k" ] || [ -z "${IL_WROTE:-}" ] || printf '%s\t%s\n' "$k" "$p" >> "$IL_WROTE"
 }
@@ -106,10 +108,13 @@ il_record() {
   mkdir -p "$IL_DIR/blobs" && chmod 700 "$IL_DIR" || return 1
   j=$(cat "$m" 2>/dev/null) && [ -n "$j" ] || j='{"version": 1, "entries": {}}'
   for p; do
+    # A relative key an older setup left is never taken for this path: the cwd it was written in is in no manifest,
+    # so read from here it can name another project's file (il_drop_relative_keys).
     ! jq -e --arg p "$p" '.entries | has($p)' <<<"$j" >/dev/null || continue
-    d=${p%/*}
+    # dirname, not ${p%/*}: a path with no / (or under a missing top folder) stays itself and never ended the loop.
+    d=$(dirname -- "$p")
     while [ ! -d "$d" ]; do
-      j=$(jq --arg p "$d" '.entries[$p] //= {prior: "did not exist", kind: "dir"}' <<<"$j"); d=${d%/*}
+      j=$(jq --arg p "$d" '.entries[$p] //= {prior: "did not exist", kind: "dir"}' <<<"$j"); d=$(dirname -- "$d")
     done
     prior="did not exist"
     # A link to a file not made yet is the owner's: setup writes through it.
@@ -123,8 +128,9 @@ il_record() {
 il_set() { local m=$1 j; shift; [ -z "${IL_PLAN:-}" ] || return 0; j=$(jq "$@" "$m") && il_write "$m" <<<"$j"; }
 # il_has <manifest> <path> -- setup recorded this path.
 il_has() { jq -e --arg p "$2" '.entries | has($p)' "$1" >/dev/null 2>&1; }
-# il_projects -- every project manifest on this machine, one a line.
-il_projects() { find "$IL_DIR" -maxdepth 1 -name '*.json' ! -name '_machine.json' 2>/dev/null | sort; }
+# il_projects -- every project manifest on this machine, one a line. None yet (no install folder, as in a first
+# setup --plan) is an empty list, not a failure: under pipefail find's error failed setup's routing step.
+il_projects() { [ ! -d "$IL_DIR" ] || find "$IL_DIR" -maxdepth 1 -name '*.json' ! -name '_machine.json' 2>/dev/null | sort; }
 
 # --- what the plugin adds, and how it comes back out ---
 
@@ -148,6 +154,78 @@ il_allow_set() {
       | if .permissions == {} then del(.permissions) else . end' <<<"$doc" 2>/dev/null) \
     || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
   il_write "$f" <<<"$j" && il_set "$m" --arg p "$f" --argjson new "$added" '.entries[$p].added = $new'
+}
+
+# il_routing_merged <file> <defaults> -- a routing file of the owner's own (COMMANDECK_ROUTING) with each role the
+# defaults have and it lacks added from the defaults; a role it has stays as it is. Writes nothing, and prints
+# nothing for the defaults file itself or a file that does not exist.
+il_routing_merged() {
+  [ -f "$1" ] && ! [ "$1" -ef "$2" ] || return 0
+  jq --slurpfile d "$2" '(.roles // {}) as $r | .roles = $r + ($d[0].roles | with_entries(select(.key as $k | $r | has($k) | not)))' "$1"
+}
+# il_abs <path> [base] -- the path absolute, a relative one taken from <base> (default here) with its folder's links
+# resolved; an absolute one as it is. A manifest key names its file from any cwd.
+il_abs() {
+  case $1 in /*) printf '%s\n' "$1" ;;
+    *) (cd "${2:-.}" && cd "$(dirname -- "$1")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "${1##*/}") || printf '%s/%s\n' "${2:-$PWD}" "$1" ;; esac
+}
+# il_drop_relative_keys <manifest> <where> [what] -- drops each relative key an older setup recorded (a
+# COMMANDECK_ROUTING of ../x, a CODEX_HOME of .codex), and says so: that setup's cwd went unrecorded, and every folder
+# it could have been names another file for some layout. What it added stays in, and no bytes are put back at a
+# guessed path.
+il_drop_relative_keys() {
+  local k
+  [ -s "$1" ] || return 0
+  jq -r '.entries | keys[] | select(startswith("/") | not)' "$1" | while IFS= read -r k; do
+    echo "an older setup recorded ${3:-a routing file} as $k, relative to a folder it did not record; that file is left as it is, with what setup added to it ($2)"
+    il_set "$1" --arg k "$k" 'del(.entries[$k])' || return 1
+  done
+}
+# il_routing_others <manifest> <file> [maybe] -- each role every other project's manifest records for <file>, with
+# every value any of them recorded for it ({role: [values]}: one record must not hide another's), under an
+# absolute key of the same file (another spelling, a ./ or a symlink, compared as files): proof it is that file. maybe:
+# also under every relative key an older setup left, whatever its name, since nothing proves which file it names.
+il_routing_others() {
+  local o k
+  il_projects | while IFS= read -r o; do
+    [ "$o" -ef "$1" ] && continue
+    jq -r '.entries | to_entries[] | select(.value.roles) | .key' "$o" 2>/dev/null | while IFS= read -r k; do
+      case $k in /*) [ "$k" -ef "$2" ] ;; *) [ -n "${3:-}" ] ;; esac || continue
+      jq -c --arg p "$k" '.entries[$p].roles' "$o"
+    done
+  done | jq -cs 'reduce (.[] | to_entries[]) as $e ({}; .[$e.key] += [$e.value])'
+}
+# il_routing_seats <manifest> <file> <merged doc file> [off] -- setup: the file becomes the merged doc when that
+# adds a role, and the manifest records each added role under .entries[<file>].roles, merged into what an earlier
+# setup recorded, with each role of the file another project's setup added and records under the same file (one
+# routing file, two projects). off: takes out each recorded role whose value is still what setup added and that no
+# other project's record could share, and says which it kept and why; one the owner changed since stays, as does
+# every role of the owner's own. il_restore's merge rule then does the rest.
+il_routing_seats() {
+  local m=$1 f=$2 add doc shared maybe
+  shared=$(il_routing_others "$m" "$f") || return 1
+  if [ "${4:-}" = off ]; then
+    [ -e "$f" ] || return 0
+    maybe=$(il_routing_others "$m" "$f" maybe) || return 1
+    jq -r --arg p "$f" --argjson s "$shared" --argjson y "$maybe" '.entries[$p].roles // {} | to_entries
+      | ([.[] | select(.value as $v | any($s[.key][]?; . == $v)) | .key],
+         [.[] | select(.value as $v | any($s[.key][]?; . == $v) | not) | select(.value as $v | any($y[.key][]?; . == $v)) | .key])
+      | join(", ")' "$m" | { IFS= read -r a; IFS= read -r b
+      [ -z "$a" ] || echo "kept seats $a in $f: another project's install record names this file"
+      [ -z "$b" ] || echo "kept seats $b in $f: an older setup's install record in another project names a routing file by a relative path, which may be this one"; }
+    add=$(jq -c --arg p "$f" --argjson s "$maybe" '.entries[$p].roles // {} | with_entries(select(.value as $v | any($s[.key][]?; . == $v) | not))' "$m") || return 1
+    doc=$(jq --argjson a "$add" '.roles |= with_entries(select(.key as $k | .value as $v | ($a | has($k)) and $a[$k] == $v | not))' "$f" 2>/dev/null) \
+      || { echo "commandeck: $f is not JSON; the seats setup added to it are left in" >&2; return 0; }
+    il_write "$f" <<<"$doc"; return
+  fi
+  shared=$(jq -c --argjson s "$shared" '.roles // {} | with_entries(select(.value as $v | any($s[.key][]?; . == $v)))' "$f") || return 1
+  add=$(jq -c --slurpfile o "$f" '.roles | with_entries(select(.key as $k | $o[0].roles // {} | has($k) | not))' "$3") || return 1
+  if [ "$add" != '{}' ]; then
+    il_record "$m" merge "$f" && il_write "$f" < "$3" || return 1
+    echo "Routing: added seats $(jq -r 'keys_unsorted | join(", ")' <<<"$add") to $f from the plugin's defaults; uninstall takes them out again."
+  fi
+  [ "$add$shared" != '{}{}' ] || return 0
+  il_set "$m" --arg p "$f" --argjson a "$add" --argjson s "$shared" '.entries[$p].roles = (.entries[$p].roles // {}) + $s + $a'
 }
 
 # il_workflows <manifest> <project settings file> [off] -- "enableWorkflows": true
@@ -623,7 +701,7 @@ il_restore() {
     elif [ ! -e "$p" ] || [ "$kind" = own ] || il_same "$p" "$blob"; then
       [ -e "$p" ] && [ "$(il_sha "$p")" = "${prior#sha256:}" ] || il_write "$p" < "$blob"
     else echo "changed since setup, left as it is: $p"; fi
-  done < <(jq -r '.entries | to_entries | sort_by(.value.kind == "backup")[] | select(.value.kind != "dir") | [.value.kind, .value.prior, .key] | @tsv' "$m")
+  done < <(jq -r '.entries | to_entries | sort_by(.value.kind == "backup")[] | select(.value.prior and .value.kind != "dir") | [.value.kind, .value.prior, .key] | @tsv' "$m")
   # The folders setup made, deepest first; one that now holds something stays.
   jq -r '.entries | to_entries[] | select(.value.kind == "dir") | .key' "$m" | awk '{ print length($0) "\t" $0 }' | sort -rn | cut -f2- \
     | while IFS= read -r p; do rmdir "$p" 2>/dev/null || true; done

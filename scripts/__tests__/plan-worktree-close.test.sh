@@ -4,14 +4,16 @@
 # worktree and its panes close only when everything in it is identical on local main, so a plan, a rename, a staged
 # or unstaged revision, an ignored file, a changed link or settings file is never lost to a close; a pane that does
 # not close, or a file written while the panes close, keeps the worktree; and another unit's or an unmarked worktree
-# is never touched.
+# is never touched. --adopt, the Builder launch's way into the unit's planning worktree, runs the same checks and
+# closes the same panes, then drops the mark and keeps the worktree; a plain close still finds a unit planned
+# before 0.18.0 in <unit>-plan.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 export HOME=$T/home; mkdir -p "$HOME" "$T/bin"
-P=$T/proj WS=$T/ws WT=$T/ws/u-plan
+P=$T/proj WS=$T/ws WT=$T/ws/u
 G() { git -C "$P" -c user.name=t -c user.email=t@t "$@"; }
 W() { git -C "$WT" -c user.name=t -c user.email=t@t "$@"; }
 mkdir -p "$P/.claude/plans" "$P/node_modules" "$WS"
@@ -37,7 +39,7 @@ case "\$*" in
   "terminal close"*) [ ! -e "$T/close-fail" ] || exit 1
     [ ! -e "$T/close-hook" ] || bash "$T/close-hook"
     [ -e "$T/close-noop" ] || rm -f "$T/pane" ;;
-  "worktree remove"*) git -C "$P" worktree remove --force "$WT" ;;
+  "worktree remove"*) p="\$*"; p=\${p#*path:}; git -C "$P" worktree remove --force "\${p%% *}" ;;
 esac
 EOF
 chmod +x "$T/bin/orca-ide"
@@ -61,7 +63,7 @@ refused() {
 # --- closes ---
 fresh; echo plan2 > "$WT/.claude/plans/p2.md"; cp "$WT/.claude/plans/p2.md" "$P/.claude/plans/p2.md"; G add -A; G commit -q -m p2
 close
-check "only setup's own files and an untracked plan identical to main's: the pane closes, the worktree is removed, exit 0" "0:closed u-plan:1:1:no" \
+check "only setup's own files and an untracked plan identical to main's: the pane closes, the worktree is removed, exit 0" "0:closed u:1:1:no" \
   "$RC:$(cat "$T/out"):$(calls 'terminal close'):$(calls 'worktree remove'):$([ -d "$WT" ] && echo yes || echo no)"
 rm -f "$P/.claude/plans/p2.md"; G add -A; G commit -q -m drop-p2
 
@@ -133,7 +135,7 @@ check "a failed terminal list: kept, no close, no removal" "1:1:0:0" "$RC:$(grep
 
 # --- not this unit's, and --dry-run ---
 fresh; rm "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; echo x > "$WT/stray"; close
-check "an unmarked worktree named u-plan (a Builder unit's): left, exit 0, nothing closed" "0:1:0:0" \
+check "an unmarked worktree named u (a Builder unit's): left, exit 0, nothing closed" "0:1:0:0" \
   "$RC:$(grep -c "^left .*: not u's planning worktree" "$T/out"):$(calls 'terminal close'):$(calls 'worktree remove')"
 echo other > "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; close
 check "another unit's mark: left, exit 0, nothing closed" "0:1:0:0" \
@@ -149,8 +151,30 @@ check "and the real run closes it and removes the worktree" "0:1:no" "$RC:$(grep
 fresh
 echo x > "$WT/stray"; close --dry-run
 check "--dry-run on a dirty worktree: refused like the real run" "1:1" "$RC:$(grep -c '^REFUSED: .* holds stray (untracked)' "$T/err")"
+
+# --- --adopt: the Builder takes the planning worktree over, so nothing in it may be lost to the reset to main ---
+mark() { cat "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of" 2>/dev/null; }
+fresh; close --adopt --dry-run
+check "--adopt --dry-run says what it would do, closes nothing, keeps the mark" "0:would close 1 panes and adopt $WT:0:u" \
+  "$RC:$(cat "$T/out"):$(calls 'terminal close'):$(mark)"
+close --adopt
+check "--adopt on a clean marked worktree: its pane closes, the mark goes, the worktree stays, exit 0" "0:adopted $WT:1:0:yes:" \
+  "$RC:$(cat "$T/out"):$(calls 'terminal close'):$(calls 'worktree remove'):$([ -d "$WT" ] && echo yes || echo no):$(mark)"
+fresh; echo x > "$WT/stray"; close --adopt
+check "--adopt on a dirty one keeps all of it, exit 1, one kept line naming the file" "1:1:0:u" \
+  "$RC:$(grep -c '^kept: .* holds stray (untracked), not identical on local main' "$T/err"):$(calls 'terminal close'):$(mark)"
+fresh; rm "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; close --adopt
+check "--adopt on an unmarked worktree (a Builder unit's): kept, exit 1, saying why, nothing closed" "1:1:0" \
+  "$RC:$(grep -c "^kept: .*: not u's planning worktree" "$T/err"):$(calls 'terminal close')"
 rm -rf "$WT"; git -C "$P" worktree prune; close
 check "no planning worktree: silent, exit 0" "0::" "$RC:$(cat "$T/out"):$(cat "$T/err")"
+
+# --- a unit planned before 0.18.0, in <unit>-plan, still closes; an unmarked <unit> beside it is a Builder's ---
+fresh; rm -f "$T/pane" "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; OLD=$T/ws/u-plan
+git -C "$P" worktree add -q --detach "$OLD" main && echo u > "$(git -C "$OLD" rev-parse --absolute-git-dir)/commandeck-plan-of"
+close
+check "a plain close finds the old layout's u-plan and leaves the unmarked u" "0:closed u-plan:no:yes" \
+  "$RC:$(cat "$T/out"):$([ -d "$OLD" ] && echo yes || echo no):$([ -d "$WT" ] && echo yes || echo no)"
 
 # --- worktree-setup.sh --print-settings writes nothing in the worktree ---
 rm -rf "$WT"; git -C "$P" worktree prune; git -C "$P" worktree add -q --detach "$WT" main

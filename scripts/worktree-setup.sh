@@ -207,7 +207,7 @@ jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" --argj
   | if $sumhook and .enabledPlugins["ponytail@ponytail"] == false then del(.enabledPlugins["ponytail@ponytail"]) else . end
   | reduce ($kp[] | select(IN($fixed[]))) as $n (.; if $ownfix | has($n) then .enabledPlugins[$n] = $ownfix[$n] else del(.enabledPlugins[$n]) end)
   | (.skillOverrides // {}) as $so | (.enabledPlugins // {}) as $ep
-  | if keeps("all") then [] else $m1 - $ks + [$stripe] - $kp | map(select(. as $n | $so + $ep | has($n) | not)) end as $w1
+  | (if keeps("all") then [] else $m1 - $ks + [$stripe] - $kp | map(select(. as $n | $so + $ep | has($n) | not)) end) as $w1
   | .env.COMMANDECK_DEFAULT_CUTS = ($fixed - $kp - ($ownfix | keys) + $w1 | join(","))
   | ([$ownfix | to_entries[] | select(.value == true).key] - $kp) as $on | (if $on != [] then .env.COMMANDECK_OWNER_ON = ($on | join(",")) else . end)
   | ($cuts.s - $m1 - $ks | unique | map(select(. as $n | $so | has($n) | not))) as $os

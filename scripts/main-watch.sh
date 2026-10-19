@@ -405,6 +405,16 @@ mail_wake() {
   printf '0\nmail\n%s\n' "$RUN" > "$ST/wake"
   echo "$NOW" > "$ST/unread-since"
 }
+# tell_relay <why> <fix> -- wake() gave up on main (a prompt open in its pane, or no wake proven): the relay hears,
+# once per wake episode (the wake's task list, kept in wake-told), through main's run under main's handle, as
+# flush() sends. Only a send Orca took marks the episode told, so a refused one is tried again next tick.
+tell_relay() {
+  [ -d "$PP_WORKSPACES/Chief-of-Staff" ] && [ "$(cat "$ST/wake-told" 2>/dev/null)" != "$tasks" ] || return 0
+  orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type status \
+    --subject "cos: main-watch: main has not read finished work" \
+    --body "$(wc -w <<<"$tasks" | tr -d ' ') item(s) wait unread in main's inbox for run $RUN: $1. Fix: $2." --json \
+    && printf '%s\n' "$tasks" > "$ST/wake-told"
+}
 wake() {
   [ -e "$ST/wake" ] || return 0
   local tries tasks t open=0 screen r diag text
@@ -429,6 +439,7 @@ wake() {
   fi
   if [ "${tries:-0}" -ge "$WAKE_TRIES" ] 2>/dev/null; then
     echo "main-watch: wake not proven after $WAKE_TRIES tries; the items re-post in 5 minutes" >&2
+    tell_relay "main did not wake after $WAKE_TRIES typed wakes" "restart main"
     rm -f "$ST/wake"; return 0
   fi
   main_now
@@ -436,7 +447,7 @@ wake() {
   case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
   screen=$(orca-ide terminal read --terminal "$MAIN_H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null) \
     || { echo "main-watch: main's screen is unreadable; no wake typed" >&2; return 0; }
-  ! grep -qiE "$PROMPT_BLOCKED" <<<"$screen" || return 0
+  ! grep -qiE "$PROMPT_BLOCKED" <<<"$screen" || { tell_relay "main's pane shows an open question or permission prompt" "answer the prompt in main's pane"; return 0; }
   text="main-watch: items are waiting in your Orca inbox for run $RUN; read them and handle each."
   # The recovery is built here, outside the stored reason arm_diag truncates, and
   # the command ends the line so it can be copied whole. It is offered only when
@@ -449,7 +460,7 @@ wake() {
   [ -z "$diag" ] || text="main-watch: Orca did not take these for run $RUN, so they are NOT in your inbox: $diag. Each retries every tick.$([ "$open" = 0 ] || echo ' Other items are waiting in your Orca inbox.')$fix"
   r=$(orca-ide terminal send --terminal "$MAIN_H" --text "$text" --enter --wait-submit 10 --json 2>/dev/null)
   if jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' <<<"$r" >/dev/null 2>&1; then
-    rm -f "$ST/wake"
+    rm -f "$ST/wake" "$ST/wake-told"
   else
     printf '%s\n%s\n%s\n%s\n' "$((tries + 1))" "$tasks" "$RUN" "$diag" > "$ST/wake"
     echo "main-watch: wake not proven for $MAIN_H (try $((tries + 1)) of $WAKE_TRIES): $(jq -r '.error.message // "no turn_started in the receipt"' <<<"$r" 2>/dev/null || echo "no receipt")" >&2
@@ -646,7 +657,7 @@ proc_warn() {
 }
 
 seat() { # handle task unit role launched [session id] [seat tag] [worktree name]
-  # A planner runs in <unit>-plan before its unit has a worktree: the record names where the seat runs.
+  # A planner of a unit planned before 0.18.0 runs in <unit>-plan: the record names where the seat runs.
   local h=$1 task=$2 u=$3 w=$WS/${8:-$3} key="seat-$1-$2" state kind since at ep item
   # The closing line compared below is this seat's own read, never the last seat's.
   RV_OUT=

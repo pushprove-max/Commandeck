@@ -249,15 +249,22 @@ done
 # Extra names the dashboard answers to (a tailnet's name for this machine). None by default: a name
 # not listed is one another site may have pointed here, and gets a 403.
 [[ ${HOSTS:-a} =~ ^[A-Za-z0-9.-]+(,[A-Za-z0-9.-]+)*$ ]] || { echo "setup: --hosts takes host names separated by commas" >&2; usage; }
+# --- routing: the checks read the routing file as setup will leave it ---
+# A routing file of the owner's own (COMMANDECK_ROUTING) kept from before a role was added lacks that seat: the
+# checks below and the review preflight read it with the plugin's missing roles added, as the manifest block writes it.
+# The same decoy rule as the trap above (a real run with no --questions), now with the temp file too.
+RT=$(mktemp); trap 'rm -f "$RT"; [ -n "$PLAN" ] || [ -n "$QUESTIONS" ] || rm -f "$ASKING"' EXIT
+il_routing_merged "$(pp_routing)" "$IL_ROOT/config/routing.json" > "$RT" && [ -s "$RT" ] || cp "$(pp_routing)" "$RT" 2>/dev/null
+COMMANDECK_ROUTING=$RT pp_routing_valid || die "the routing file $(pp_routing), with the plugin's missing seats added, does not validate (above). Nothing was changed"
 # The Builder's model: no answer means the routing file's own; a name is one routing already names.
 # No advisor is asked: every Builder runs with none, and a rerun drops one an older set-up stored.
-[ -z "$BMODEL" ] || jq -e --arg a "$BMODEL" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null \
-  || die "the Builder's model is one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)"), not '$BMODEL'. Nothing was changed"
+[ -z "$BMODEL" ] || jq -e --arg a "$BMODEL" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$RT" >/dev/null \
+  || die "the Builder's model is one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$RT"), not '$BMODEL'. Nothing was changed"
 # A Codex model id named at setup is the project's own, so a plugin update keeps it (paths.sh pp_codex_model).
 # Only a Codex role takes one, and only an id: a bare family name would be looked up again.
 for r in $(jq -r 'keys[]' <<<"$CMODELS"); do
-  jq -e --arg r "$r" '.roles[$r].agent == "codex"' "$(pp_routing)" >/dev/null \
-    || die "--codex-model takes a Codex role, one of $(jq -r '[.roles | to_entries[] | select(.value.agent == "codex") | .key] | join(", ")' "$(pp_routing)"), not '$r'. Nothing was changed"
+  jq -e --arg r "$r" '.roles[$r].agent == "codex"' "$RT" >/dev/null \
+    || die "--codex-model takes a Codex role, one of $(jq -r '[.roles | to_entries[] | select(.value.agent == "codex") | .key] | join(", ")' "$RT"), not '$r'. Nothing was changed"
   m=$(jq -r --arg r "$r" '.[$r]' <<<"$CMODELS")
   [[ $m =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] && ! [[ $m =~ ^[a-z]+$ ]] \
     || die "--codex-model $r=$m: name a model id, such as gpt-6.1-sol, not a family or other text. Nothing was changed"
@@ -265,15 +272,15 @@ done
 # Leaving fable out opts out of Fable, leaving every Codex model out opts out of Codex. A Claude model stays: it
 # writes the plan. A Codex one only on the Claude+OpenAI profile, which has Codex.
 for m in ${PMODELS//,/ }; do
-  jq -e --arg m "$m" --arg p "$PROFILE" 'any(.roles[] | (.candidates // [.])[]; .model == $m and (.agent == "claude" or $p == "claude-openai"))' "$(pp_routing)" >/dev/null \
-    || die "--plan-models takes models routing.json gives a seat ($(jq -r --arg p "$PROFILE" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "claude-openai") | .model] | unique | join(", ")' "$(pp_routing)")), not '$m'. Nothing was changed"
+  jq -e --arg m "$m" --arg p "$PROFILE" 'any(.roles[] | (.candidates // [.])[]; .model == $m and (.agent == "claude" or $p == "claude-openai"))' "$RT" >/dev/null \
+    || die "--plan-models takes models routing.json gives a seat ($(jq -r --arg p "$PROFILE" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "claude-openai") | .model] | unique | join(", ")' "$RT")), not '$m'. Nothing was changed"
 done
-[ -z "$PMODELS" ] || jq -e --arg l "$PMODELS" 'any(.roles[] | (.candidates // [.])[]; .agent == "claude" and IN(.model; ($l | split(",")[])))' "$(pp_routing)" >/dev/null \
+[ -z "$PMODELS" ] || jq -e --arg l "$PMODELS" 'any(.roles[] | (.candidates // [.])[]; .agent == "claude" and IN(.model; ($l | split(",")[])))' "$RT" >/dev/null \
   || die "--plan-models keeps at least one Claude model, the one that writes the plan. Nothing was changed"
 # A fast plan seat is a plan role routing.json names; a Codex one needs the Codex home's fast tier, as the review pass does.
 for r in ${PFAST//,/ }; do
-  a=$(jq -r --arg r "$r" 'if ($r | startswith("plan-")) then .roles[$r].agent // empty else empty end' "$(pp_routing)")
-  [ -n "$a" ] || die "--plan-fast takes plan seats, $(jq -r '[.roles | keys[] | select(startswith("plan-"))] | join(", ")' "$(pp_routing)"), not '$r'. Nothing was changed"
+  a=$(jq -r --arg r "$r" 'if ($r | startswith("plan-")) then .roles[$r].agent // empty else empty end' "$RT")
+  [ -n "$a" ] || die "--plan-fast takes plan seats, $(jq -r '[.roles | keys[] | select(startswith("plan-"))] | join(", ")' "$RT"), not '$r'. Nothing was changed"
   [ "$a" != codex ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
     || die "$r was set to fast, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line. Add that line and run setup again, or leave $r out of --plan-fast. Nothing was changed"
 done
@@ -303,7 +310,7 @@ fi
 # tier itself is the Codex home's own setting, which setup never writes: a yes that home does not match is refused here.
 [ "$FAST" != true ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
   || die "Codex fast mode was chosen, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so the review passes would run on the standard tier. Add that line and run setup again, or answer off (--no-codex-fast). Nothing was changed"
-COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
+COMMANDECK_ROUTING=$RT COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
 [ "$PROFILE" != claude-openai ] || echo "setup: $(pp_codex_route)"
 [ -L "$IL_LINK" ] || [ ! -e "$IL_LINK" ] || die "$IL_LINK is not a link; setup keeps a link to the plugin there. Move it aside. Nothing was changed"
 for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "$HOME/.claude/settings.json" "$IL_CODEX/hooks.json"; do
@@ -358,8 +365,10 @@ il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --ar
 AUTO_DO=${AUTO:-leave}; [ "$AUTO" != remove ] || AUTO=leave
 # What setup really writes in the project: il_write notes each path whose content is new or different.
 # The exclude file is also written by worktree-setup.sh, by itself, so it is compared at the end.
-IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".*; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
+IL_WROTE=$(mktemp); export IL_WROTE; trap 'rm -f "$IL_WROTE" "$IL_WROTE".* "$RT"; [ -n "$PLAN" ] || rm -f "$ASKING"' EXIT
 EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
+# After every refusal above, so a refused run leaves the owner's routing file as it was.
+il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could not add the plugin's missing seats to $(pp_routing)"
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \

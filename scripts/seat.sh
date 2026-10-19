@@ -28,7 +28,7 @@ set -euo pipefail
 usage() { cat <<'EOF'
 usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 reruns a spec that already finished)
        seat.sh launch builder <unit> <spec-file> [--model <alias>] [--effort medium|high] [--no-advisor]   (one launch only; builder-launch.sh passes them)
-       seat.sh launch plan-<seat> <unit> <spec-file> [--model <alias>] [--effort <level>]   (the plan seat's model and effort the owner picked; it runs in <unit>-plan, made on its first launch)
+       seat.sh launch plan-<seat> <unit> <spec-file> [--model <alias>] [--effort <level>]   (the plan seat's model and effort the owner picked; it runs in <unit>, made on its first launch, or a marked <unit>-plan from before 0.18.0)
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
        seat.sh effort  <role> <unit> <handle> <level>
@@ -62,16 +62,19 @@ SCRATCH=$PP_SCRATCH
 # with "." this repo's unit "ops.foo" and repo "ops" unit "foo" shared a record.
 case $UNIT in *@*) echo "a unit name cannot hold @: $UNIT" >&2; exit 2 ;; esac
 REC=$SCRATCH/seat-${SEAT_REPO:+$SEAT_REPO@}$UNIT-$ROLE.txt
-# A plan seat runs before its Builder, whose launch makes the unit's worktree and refuses one already made: it works
-# in its own planning worktree, <unit>-plan, which its first launch cuts from local main (below). A launched seat is
-# read in the worktree its record names (worktree=); a record naming none is from before, when every seat ran in <unit>.
-if [ "$CMDNAME" = launch ]; then WTN=$UNIT; [[ $ROLE != plan-* ]] || WTN=$UNIT-plan
+# A unit is planned and built in one worktree, <unit>: a plan seat's first launch cuts it from local main (below) and
+# marks it, and the Builder's launch adopts it (plan-worktree-close.sh --adopt). A launched seat is read in the
+# worktree its record names (worktree=): <unit>-plan for a unit planned before 0.18.0, and <unit> when it names none.
+# <unit> is also the Builder's worktree: a plan seat reuses one only when its own first launch made it.
+PLAN_OF=commandeck-plan-of
+if [ "$CMDNAME" = launch ]; then WTN=$UNIT
+  # A plan seat of a unit planned before 0.18.0 goes on in its marked <unit>-plan: a <unit> cut from main lacks the
+  # plan not yet committed there.
+  [[ $ROLE != plan-* || -d $WS/$UNIT ]] || [ "$(cat "$(git -C "$WS/$UNIT-plan" rev-parse --absolute-git-dir 2>/dev/null)/$PLAN_OF" 2>/dev/null)" != "$UNIT" ] || WTN=$UNIT-plan
 else WTN=$(grep '^worktree=' "$REC" 2>/dev/null | tail -1 | cut -d= -f2- || true); WTN=${WTN:-$UNIT}; fi
 WT=$WS/$WTN
-# <unit>-plan is also a name a Builder unit can take: a plan seat reuses one only when its own first launch made it.
-PLAN_OF=commandeck-plan-of
 # The Panel's planners launch in parallel: the check here and the make and mark below are one step under this lock,
-# or the second saw <unit>-plan made and not yet marked, and refused it (Sol r4). Released once the worktree is marked.
+# or the second saw <unit> made and not yet marked, and refused it (Sol r4). Released once the worktree is marked.
 if [[ $CMDNAME == launch && $ROLE == plan-* ]]; then
   mkdir -p "$SCRATCH" && exec {PLAN_LOCK_FD}>>"$SCRATCH/${SEAT_REPO:+$SEAT_REPO@}$UNIT-plan-worktree.lock" && flock -w 600 "$PLAN_LOCK_FD" \
     || { echo "cannot lock $SCRATCH/$UNIT-plan-worktree.lock; nothing was opened" >&2; exit 1; }
@@ -386,7 +389,8 @@ launch)
   if [ "$PROVEN" = 1 ]; then bash "$PP_SCRIPTS/seat-go.sh" "$H" "$CMD"
   else echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
   fi
-  state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ')
+  # The seat is launched: a failed read only leaves its state unknown, never fails the launch (builder-launch.sh undoes those).
+  state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true
   echo "seat=$ROLE unit=$UNIT handle=$H task=$T state=${state:-unknown} record=$REC"
   ;;
 collect)

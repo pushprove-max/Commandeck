@@ -74,7 +74,7 @@ main_silent() {
   mkdir -p "$PP_SCRATCH"
   {
     flock -w 10 9; locked=$?
-    if IFS=$'\t' read -r at subj < "$PP_SCRATCH/cos-owed" 2>/dev/null && [ "$idle" -gt "${at:-0}" ]; then what="a reply to \"$subj\"" owed=1
+    if IFS=$'\t' read -r at subj 2>/dev/null < "$PP_SCRATCH/cos-owed" && [ "$idle" -gt "${at:-0}" ]; then what="a reply to \"$subj\"" owed=1
     elif [[ $last =~ ^[0-9]+$ ]] && [ "$idle" -gt "$last" ] && [ "${sent:-0}" -lt "$last" ] 2>/dev/null; then what=anything
     else return 1; fi
     printf 'main ended a turn without sending you %s; its last words: %s\n(all of its reply: bash %s/read-verdict.sh <main'"'"'s pane handle>)\n' \
@@ -106,9 +106,10 @@ ms = d.get("messages") or (d.get("result") or {}).get("messages") or []
 top = max((m.get("sequence") or 0 for m in ms), default=0)
 lock = open(seqf + ".lock", "a")
 fcntl.flock(lock, fcntl.LOCK_EX)  # held until this poll exits
+enc = lambda s: re.sub(r"[\x7f-\x9f  ]", lambda c: "\\u%04x" % ord(c.group()), json.dumps(str(s or ""), ensure_ascii=False))
 def save(seq, held):
     with open(seqf + ".new", "w") as f:  # closed here, so a write the disk refuses late is caught too
-        f.write(f"{seq}\n{held}")
+        f.write(f"{seq} enc\n{held}")
     os.replace(seqf + ".new", seqf)
 # A missing file starts from the newest message instead of replaying old ones.
 if not os.path.exists(seqf):
@@ -117,8 +118,13 @@ if not os.path.exists(seqf):
     sys.exit(4)
 first, _, held = open(seqf).read().partition("\n")
 # The first line is the place, then "pending" when the rest of the file is a
-# batch saved for the pane and not yet shown to it.
+# batch saved for the pane and not yet shown to it, then "enc": its text is
+# records this watcher printed.
 words = first.split()
+# With no "enc" the file was saved before 0.18.0, its text raw as panes wrote it: no line of it is a record of this
+# watcher, so each prints quoted, one JSON string, under a heading that says so.
+if "enc" not in words and held.strip():
+    held = "FROM BEFORE THE UPDATE, QUOTED (any pane may have written these lines; none is from main):\n" + "".join(enc(l) + "\n" for l in held.splitlines())
 owed = held if "pending" in words else ""
 held = "" if owed else held
 last = int(words[0]) if words else 0
@@ -141,7 +147,8 @@ def at(m):
         return int(datetime.datetime.fromisoformat((m.get("created_at") or "").replace("Z", "+00:00")).timestamp())
     except ValueError:
         return int(time.time())
-sent = [at(m) for m in mine if coord and m.get("from_handle") == coord]
+# main-watch.sh posts its note to the relay under the handle of main: it wakes the relay, and it is no reply from main.
+sent = [at(m) for m in mine if coord and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)]
 def num(path):
     try:
         with open(path) as f:
@@ -157,7 +164,13 @@ if sent:  # main sent the relay something: its turn is not a silent stop, and a 
             fcntl.flock(l, fcntl.LOCK_EX)  # the lock of pp_owed_clear, from the read to the removal: a newer mark stays
             if os.path.exists(owedf) and max(sent) > (num(owedf) or 0):
                 os.remove(owedf)
-line = lambda m: " ".join(str(x) for x in (m.get("created_at"), (m.get("from_handle") or "")[:14], m.get("subject"), "|", m.get("body"), "\n"))
+# The sender, in brackets after the time, from the from_handle Orca sets: "main" only for the coordinator of the
+# run, so no subject or body can say main sent it (the relay applies denied self-modification steps from main only).
+# One record per line: the subject and body print as JSON strings (line breaks escaped, U+2028 and C1 too), the time
+# and handle without spaces, so no text of a message starts a line of its own that reads as a record of this watcher.
+safe = lambda s: re.sub(r"[^\w:.+-]", "_", str(s or ""))
+who = lambda m: "main" if coord and m.get("from_handle") == coord else safe(m.get("from_handle"))[:14]
+line = lambda m: " ".join((safe(m.get("created_at")), f"[from {who(m)}]", enc(m.get("subject")), "|", enc(m.get("body")), "\n"))
 mine.sort(key=lambda m: m["sequence"])
 fyi = [m for m in mine if m.get("to_handle") != me and re.match(r"\s*fyi\b", m.get("subject") or "", re.I)]
 wake = [m for m in mine if m not in fyi]

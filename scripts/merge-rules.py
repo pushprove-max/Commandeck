@@ -125,6 +125,8 @@ MADE_FROM = {
     "1cf4ae22": ("1cf7c669", "6d119e42", "c89a261a", "ea79fcf3", "f949bcf5", "0c39c843", "8ecde936"),
     "95273f82": ("f652f9a1",), "c16a1020": ("f949bcf5",), "5f729572": ("0c39c843",), "cd93267c": ("8ecde936",),
     "a726a12f": ("8361fb71", "1cf7c669"), "6398c17f": ("8ade2fb3", "c89a261a"), "6a82c4ab": ("2848b779", "6d119e42"),
+    # 0.18.0 main-session.md and AGENT_STARTUP.md: planning in the unit's own worktree; the lean helper agents
+    "4fd3af2e": ("95273f82",), "ae5d50a4": ("a4d1bca5",), "77c5016d": ("1bc6a1b6",),
 }
 
 

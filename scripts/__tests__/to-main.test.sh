@@ -18,9 +18,10 @@ cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "terminal list") cat "$T/list.json" ;;
-  "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
+  "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }; while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
     jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" '{subject: \$s, type: \$t, body: \$b}' >> "$T/inbox-\$to"; echo '{"ok":true}' ;;
   "orchestration check") h=\$4; [ ! -e "$T/fail-\$h" ] || exit 1; [ ! -e "$T/hang" ] && [ ! -e "$T/hang-\$h" ] || sleep 10; jq -s '{ok: true, result: {messages: .}}' "$T/inbox-\$h" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; rm -f "$T/inbox-\$h" ;;
+  "terminal read") jq -Rn --arg h "\$4" '{ok: true, result: {terminal: {handle: \$h, tail: [inputs]}}}' "$T/screen-\$4" 2>/dev/null || exit 1 ;;
   *) echo '{"ok":true}' ;;
 esac
 EOF
@@ -148,6 +149,23 @@ check "a message the relay sends main is marked owed, with its subject, under th
   "$(cut -f2 "$T/scratch/cos-owed" 2>/dev/null):$(grep -c unlocked "$T/date.log")"
 rm -f "$T/scratch/cos-owed"; send eleven >/dev/null 2>&1
 check "a message sent from main's checkout is not" no "$([ -e "$T/scratch/cos-owed" ] && echo yes || echo no)"
+
+# Main with its own question or permission prompt open reads nothing until the owner answers it in main's pane:
+# the relay thought its sends were lost. The message is stored either way; the sender is told why no reply comes.
+main_is term_12; start term_12 >/dev/null
+printf 'Which release?\n> 1. 0.18.0\n  2. 0.17.1\nEnter to select, Esc to cancel\n' > "$T/screen-term_12"
+OUT=$(send twelve); RC=$?
+check "main showing an open question: sent, and the sender told main reads it only once that prompt is answered" "0:1" \
+  "$RC:$(grep -c '^to-main: sent to main (term_12), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane$' <<<"$OUT")"
+printf 'Done: u1 merged.\n> \n' > "$T/screen-term_12"
+check "a plain screen gets the plain sent line" "to-main: sent to main (term_12)" "$(send thirteen)"
+rm "$T/screen-term_12"
+check "an unreadable screen gets the plain sent line" "to-main: sent to main (term_12)" "$(send fourteen)"
+# A send Orca refused said only "failed": its reason is what the sender needs.
+echo '{"ok":false,"error":{"message":"terminal term_12 is not accepting input"}}' > "$T/send-fail"
+OUT=$(send fifteen); RC=$?
+check "a failed send exits 1 and prints Orca's error" "1:1" "$RC:$(grep -c 'failed: terminal term_12 is not accepting input' <<<"$OUT")"
+rm "$T/send-fail"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

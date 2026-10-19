@@ -58,6 +58,13 @@ done
 H=$REAL/agents/helper.md
 check "agents/helper.md sets omitClaudeMd and maxTurns, and none of the keys a plugin agent ignores" "1 1 0" \
   "$(grep -c '^omitClaudeMd: true$' "$H") $(grep -c '^maxTurns: [0-9]' "$H") $(grep -cE '^(hooks|mcpServers|permissionMode):' "$H")"
+# Issue 201: the lean agents start small (no CLAUDE.md, no skill or MCP tool), and set no model or effort, so
+# routing's roles.lean-worker and roles.lean-checker (filled in by agent-model-guard.sh) are never outranked.
+for a in lean-worker lean-checker; do
+  F=$REAL/agents/$a.md; FM=$(awk 'NR == 1 && /^---$/ { on = 1; next } on && /^---$/ { exit } on' "$F" 2>/dev/null)
+  check "agents/$a.md omits CLAUDE.md, lists no Skill or mcp__ tool, and names no model or effort" "1 1 0 0" \
+    "$(grep -c '^omitClaudeMd: true$' <<<"$FM") $(grep -c '^tools: ' <<<"$FM") $(grep -E '^tools: ' <<<"$FM" | grep -cE 'Skill|mcp__') $(grep -cE '^(model|effort):' <<<"$FM")"
+done
 # The fast-tier question's "None" answer is `--plan-fast ''` (skills/setup): the flag takes the empty value, and an empty value saves no planFast.
 check "setup.sh takes --plan-fast as a value flag and saves nothing for an empty one" "1 1" \
   "$(grep -c '^TAKES=.* --plan-fast ' "$REAL/scripts/setup.sh") $(grep -c 'if $pf == "" then {} else {planFast' "$REAL/scripts/setup.sh")"

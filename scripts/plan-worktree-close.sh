@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# plan-worktree-close.sh <unit> [--dry-run] -- close <unit>'s planning worktree (<unit>-plan, made and marked by seat.sh)
-# and its panes. builder-launch.sh runs it once the Builder's pane is open; main runs it by hand on a rejected plan.
-# Refused (exit 1, worktree kept) when the worktree holds a file that is not identical on local main, or a pane does
-# not close. No planning worktree of that unit: silent, exit 0. --dry-run closes and removes nothing.
+# plan-worktree-close.sh <unit> [--adopt] [--dry-run] -- close <unit>'s planning worktree (<unit>, made and marked by
+# seat.sh) and its panes. Main runs it by hand on a rejected plan. Refused (exit 1, worktree kept) when the worktree
+# holds a file that is not identical on local main, or a pane does not close. No planning worktree of that unit:
+# silent, exit 0. --dry-run closes and removes nothing.
+# --adopt: builder-launch.sh's way into the unit's planning worktree. The same checks and pane close, then the mark
+# goes and the worktree stays for the Builder. Exit 0 adopted; exit 1 kept, with one "kept:" line saying why.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
-UNIT=${1:?usage: plan-worktree-close.sh <unit> [--dry-run]}
-DRY=0; [ "${2:-}" = --dry-run ] && DRY=1
+UNIT=${1:?usage: plan-worktree-close.sh <unit> [--adopt] [--dry-run]}
+DRY=0 ADOPT=0
+for a in "${@:2}"; do case $a in --dry-run) DRY=1 ;; --adopt) ADOPT=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac; done
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
-WT=$PP_WORKSPACES/$UNIT-plan
-[ -d "$WT" ] || exit 0
 # Every git below reads $WT's own index and objects, never a routed one (GIT_INDEX_FILE, GIT_DIR, ...).
 unset $(git rev-parse --local-env-vars) GIT_CEILING_DIRECTORIES
 export GIT_LITERAL_PATHSPECS=1
+marked() { [ "$(cat "$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)/commandeck-plan-of" 2>/dev/null)" = "$UNIT" ]; }
+WT=$PP_WORKSPACES/$UNIT
+# shortcut: a unit planned before 0.18.0 has its planning worktree at <unit>-plan; drop this line once no such unit is open.
+[ "$ADOPT" = 1 ] || marked "$WT" || [ ! -d "$WT-plan" ] || WT=$WT-plan
+[ -d "$WT" ] || { [ "$ADOPT" = 0 ] || echo "kept: $WT: no such worktree" >&2; exit "$ADOPT"; }
 # The lock seat.sh takes to make and mark the worktree; held until this script exits.
 mkdir -p "$PP_SCRATCH" && exec {LOCK_FD}>>"$PP_SCRATCH/$UNIT-plan-worktree.lock" && flock -w 600 "$LOCK_FD" \
   || { echo "cannot lock $PP_SCRATCH/$UNIT-plan-worktree.lock; $WT left in place" >&2; exit 1; }
-[ "$(cat "$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)/commandeck-plan-of" 2>/dev/null)" = "$UNIT" ] \
-  || { echo "left $WT: not $UNIT's planning worktree"; exit 0; }
+marked "$WT" || { [ "$ADOPT" = 1 ] && echo "kept: $WT: not $UNIT's planning worktree" >&2 || echo "left $WT: not $UNIT's planning worktree"; exit "$ADOPT"; }
 LIST=$(mktemp) SETF=$(mktemp); SETDONE=0; trap 'rm -f "$LIST" "$SETF"' EXIT
 
 # "<mode> <id>" of a path on local main, empty when main lacks it.
@@ -72,6 +77,7 @@ dirty() {
 }
 refuse() {
   dirty || return 0
+  [ "$ADOPT" = 0 ] || { echo "kept: $WT holds $HIT, not identical on local main; the Builder's launch resets it to main$1" >&2; exit 1; }
   echo "REFUSED: $WT holds $HIT, not identical on local main; left in place (bash $PP_SCRIPTS_Q/plan-worktree-close.sh $UNIT once it is)$1" >&2
   exit 1
 }
@@ -84,7 +90,7 @@ panes() {
 refuse ""
 PL=$(panes) || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
 N=0; [ -z "$PL" ] || N=$(printf '%s\n' "$PL" | wc -l | tr -d ' ')
-[ "$DRY" = 0 ] || { echo "would close $N panes and remove $WT"; exit 0; }
+[ "$DRY" = 0 ] || { echo "would close $N panes and $([ "$ADOPT" = 1 ] && echo adopt || echo remove) $WT"; exit 0; }
 while IFS= read -r h; do
   [ -z "$h" ] || timeout 20 orca-ide terminal close --terminal "$h" --json >/dev/null 2>&1 || KEPT="${KEPT:-}$h"$'\n'
 done <<<"$PL"
@@ -97,5 +103,6 @@ if [ -n "$BAD" ]; then
   exit 1
 fi
 refuse " (written while panes closed)"
+[ "$ADOPT" = 0 ] || { rm -f "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of" && echo "adopted $WT"; exit; }
 orca-ide worktree remove --worktree "path:$WT" --force >/dev/null || { echo "kept: $WT: worktree remove failed" >&2; exit 1; }
-echo "closed $UNIT-plan"
+echo "closed ${WT##*/}"

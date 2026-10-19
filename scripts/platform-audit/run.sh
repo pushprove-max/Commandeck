@@ -43,7 +43,7 @@ one() {
     END {exit bad || !hf || !hc}' "$A/out/$id.md" \
     || { echo "no Findings or Coverage section, a ## heading the template lacks, repeats or misorders, or a line in Findings that is not the template's header row, a separator or a row with its own id ${id%%-*}-<n>" >> "$A/logs/$id.log"; rc=1; }
   [ "$rc" = 0 ] || rm -f "$A/out/$id.md"
-  echo "$id exit=$rc $(wc -c < "$A/out/$id.md" 2>/dev/null || echo 0) bytes $(date +%H:%M)"
+  echo "$id exit=$rc $(wc -c 2>/dev/null < "$A/out/$id.md" || echo 0) bytes $(date +%H:%M)"
   return "$rc"
 }
 export -f one; export A HERE COMMIT AUDITOR_ARGV HEADER FILL

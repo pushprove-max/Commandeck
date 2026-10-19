@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] <unit> <batch-brief>
 # -- open one Builder:
-# a NEW worktree on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
+# a NEW worktree, or the unit's planning one it takes over (plan-worktree-close.sh --adopt), on local main, fast-forwarded from origin first (pp_sync_main), with the Builder profile (worktree-setup.sh
 # --builder), the one-page brief rendered from
 # templates/_builder-brief-template.md into <wt>/.claude/briefs/<unit>.md,
 # and one roles.builder pane (seat.sh launch). --dry-run prints the rendered
@@ -90,9 +90,14 @@ fi
 # A risky launch's second call is not asked again: its first call checked the plan, or ran before the rule, and the
 # brief it wrote, which the Builder opens with, must match this call's (checked below).
 plan_ok
-# Two Builders never share a worktree: a reused one carries another batch's diff and event log.
-# A risky launch's own worktree, made by its first call, is the one exception.
-if [ -e "$WT" ] && [ "$RESUME" = 0 ]; then echo "REFUSED: $WT already exists; a Builder starts in a new worktree" >&2; exit 2; fi
+# Two Builders never share a worktree: a reused one carries another batch's diff and event log. A risky launch's own
+# worktree, made by its first call, is one exception; the unit's planning worktree, adopted below, is the other.
+ADOPT=0
+if [ -e "$WT" ] && [ "$RESUME" = 0 ]; then
+  KEPT=$(bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt --dry-run 2>&1 >/dev/null) \
+    || { echo "REFUSED: $WT already exists and is not $UNIT's planning worktree to take over (${KEPT:-no reason given}); a Builder starts in a new worktree" >&2; exit 2; }
+  ADOPT=1
+fi
 
 if [ "$PICK" = 1 ]; then
   pp_builder_model_ok "$BMODEL" || exit 2
@@ -143,8 +148,9 @@ open_builder() {
       || { echo "could not write the routing log; the Builder was not launched" >&2; exit 1; }
   fi
   bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} || exit $?
-  # The plan is on main and the Builder runs: its planning worktree closes. A refusal is printed and never fails the launch.
-  bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
+  # The plan is on main and the Builder runs: a unit planned before 0.18.0, in <unit>-plan, has that worktree closed.
+  # A refusal is printed and never fails the launch.
+  [ ! -d "$WT-plan" ] || bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
   exit 0
 }
 
@@ -207,7 +213,7 @@ if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
   || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
-if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" --dry-run >&2 || true; exit 0; fi
+if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run >&2 || true; exit 0; fi
 
 # The second call of a risky launch: the first made the worktree and opened the
 # design pane. The Builder opens only once the note is written; nothing waits.
@@ -249,7 +255,33 @@ fi
 pp_sync_main "$PP_MAIN" || exit 1
 # Fast-forwarding main from origin may have removed the plan the worktree is about to be cut without.
 plan_ok
-pp_worktree_new "$UNIT" || exit 1
+if [ "$ADOPT" = 1 ]; then
+  # After every other check, so a launch refused earlier leaves the planner and its mark as they were. Adoption
+  # proved nothing in it differs from local main, so the reset to main, as pp_worktree_new bases a new one, loses nothing.
+  bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt >&2 || { echo "the Builder was not launched: $WT was not taken over (above)" >&2; exit 1; }
+  # Adoption took the mark, and the launch writes the Builder's settings and brief into the planner's worktree: a
+  # launch that fails from here on gives the mark back, takes back the briefs it writes and puts the planner's
+  # settings back as they were, or every later launch refused the unmarked worktree or the files it found there.
+  GD=$(git -C "$WT" rev-parse --absolute-git-dir) SET=$WT/.claude/settings.local.json
+  SAVED=$GD/commandeck-adopt-settings; rm -f "$SAVED"; [ ! -f "$SET" ] || cp -p "$SET" "$SAVED"
+  undo() {
+    local f live
+    # seat.sh can fail after its pane opened (a screen read after the dispatch): a pane in the worktree runs on what
+    # the launch wrote, so all of it stays and no mark comes back. A list that cannot be read is no proof of none.
+    live=$(orca-ide terminal list --worktree "path:$WT" --json 2>/dev/null | jq -er '.result | if type == "array" then . else .terminals end
+      | map(select(.connected != false and .orphaned != true) | .handle) | join(" ")' 2>/dev/null) || live="its pane list could not be read"
+    if [ -n "$live" ]; then
+      rm -f "$SAVED"; echo "kept: $WT has a pane open ($live) on what this launch wrote; its brief and settings stay, and it is not the planner's again. Read the pane before launching again." >&2; return
+    fi
+    for f in "$WT/.claude/briefs/$UNIT"{,-evidence,-design-spec}.md; do git -C "$WT" checkout -q HEAD -- "$f" 2>/dev/null || rm -f "$f"; done
+    if [ -f "$SAVED" ]; then mv -f "$SAVED" "$SET"; else rm -f "$SET"; fi
+    echo "$UNIT" > "$GD/commandeck-plan-of"
+  }
+  trap '[ $? = 0 ] && rm -f "$SAVED" || undo' EXIT
+  git -C "$WT" reset --hard "$(git -C "$PP_MAIN" rev-parse refs/heads/main)" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
+else
+  pp_worktree_new "$UNIT" || exit 1
+fi
 bash "$HERE/worktree-setup.sh" "$WT" --builder ${KEEP:+--keep "$KEEP"}
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"

@@ -152,7 +152,7 @@ echo "== seats (live worktrees only)"
 # Seat records are never deleted, so the whole history of every merged unit is
 # on disk. Only a unit whose worktree still exists can still be waited on.
 #
-# One awk names every record's unit and worktree (a planner's is <unit>-plan, before its unit has one), and only a
+# One awk names every record's unit and worktree (a planner's is <unit>-plan for a unit planned before 0.18.0), and only a
 # live worktree's record is opened: a process or three per record (1,044 records on 2026-10-11) took 16 s.
 SEATS=()
 while IFS=$'\x1f' read -r f u w; do

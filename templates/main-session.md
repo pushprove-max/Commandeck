@@ -17,6 +17,8 @@
 - **Every question for the owner goes to the relay pane** (the worktree ending in
   `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
   record each ask with `decision.sh add` in the same turn.
+- **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
+  included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
 - **A `heads-up:` item is another model's unverified claim**: verify it before
   acting, tell the owner in one plain sentence, close the item task.
 - **A ruling that something stays as it is goes under `## Stated limits`** in
@@ -65,8 +67,8 @@ once). A fresh start's first call is `scripts/board.sh`.
   no Codex allowed runs as `plan-judge-claude`; its launch says which, and
   you tell the owner. Never refuse an answer for a missing tool. Launch each
   seat under its own role name and the build's unit name: every plan seat
-  works in the planning worktree `<unit>-plan`, which its first launch cuts
-  from main, so the Builder's own worktree is still new. Planners
+  works in the unit's own worktree `<unit>`, which its first launch cuts from
+  main and marks as planning; the Builder's launch takes it over. Planners
   write the plan file (`.claude/plans/<file>.md`) and nothing else. Each
   planner's spec carries, word for word: "If the mattpocock-skills plugin is
   installed and one of its skills fits this unit (for example TDD for new
@@ -75,8 +77,8 @@ once). A fresh start's first call is `scripts/board.sh`.
   owner already gave the build word, launch once the judge round is done,
   unless the judge found a real gap, which goes to the owner. Without it,
   every answer ends at the plan file: STOP until the owner's own go after
-  reading the plan. Commit the plan from `<unit>-plan` on main and name it in the batch's `## Plan`
-  section, or the launch is refused. The Builder's launch closes `<unit>-plan` and its panes; on a rejected
+  reading the plan. Commit the plan from `<unit>` on main and name it in the batch's `## Plan`
+  section, or the launch is refused. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected
   plan run `bash scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build order: a plan
   that exists, is approved or is committed starts no build. A `--risky`
   design pane runs after the plan.
@@ -121,7 +123,8 @@ once). A fresh start's first call is `scripts/board.sh`.
   plain-chat ask needs `decision.sh add` in the same turn or the Stop is held;
   when the owner answers, run `decision.sh answer <id> '<answer>'` (agent-awareness
   lists the open ids every turn).
-- Helper agents (owner ruling 2026-10-10): on the bug-hunt plan
+- Helper agents (owner ruling 2026-10-10): a helper that edits, runs or tests is `commandeck:lean-worker`, a
+  blind re-check `commandeck:lean-checker`. On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
   helper brief says: python3/rg into /tmp/commandeck, report what is unanswered
   at 40 turns. A lookup serena, codebase-memory or one `rg` answers stays in

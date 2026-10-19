@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.17.0-111111?style=flat-square" alt="Version 0.17.0">
+  <img src="https://img.shields.io/badge/version-0.18.0-111111?style=flat-square" alt="Version 0.18.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -177,7 +177,7 @@ brief with you (the items and how each will be judged done), asks whether
 to write a plan first (no plan, one planner, a plan and a judge, or a panel
 of two plans, two judges and one merge), and once you say go launches a Builder (a batch that
 names no committed plan is refused unless launched with
-`--skip-plan --reason '<one line>'`; the Builder's launch closes the plan's worktree once everything in it is on main):
+`--skip-plan --reason '<one line>'`; the Builder takes over the unit's planning worktree once everything in it is on main):
 
 ```bash
 bash "$PLUGIN/scripts/builder-launch.sh" add-csv-export .claude/briefs/add-csv-export-batch.md

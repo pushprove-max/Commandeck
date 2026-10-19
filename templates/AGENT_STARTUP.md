@@ -29,9 +29,9 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
    A seat whose model is not allowed, or a Codex judge with no Codex,
    runs on an allowed model or as `plan-judge-claude`, and says so; no answer
    is refused. The planners write the plan file (`.claude/plans/<file>.md`)
-   and nothing else, in the planning worktree `<unit>-plan` that the first
+   and nothing else, in the unit's worktree `<unit>`, which the first
    `seat.sh launch plan-<seat> <unit>` cuts from main; main commits that file
-   on main; the Builder's launch then closes `<unit>-plan`. With the owner's build word already given, the build
+   on main; the Builder's launch then takes it over. With the owner's build word already given, the build
    starts after the judge round unless the judge found a real gap; otherwise
    main STOPS and step 1 runs
    only on the owner's own go after reading the plan. A plan is never a build

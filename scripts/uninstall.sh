@@ -43,6 +43,9 @@ if [ -s "$IL_PROJECT" ]; then
   for S in "$PP_MAIN/AGENT_STARTUP.md" "$PP_MAIN/.claude/main-session.md"; do
     ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || IL_BEGIN='<!-- commandeck:merge:begin -->' IL_END='<!-- commandeck:merge:end -->' il_block "$S"
   done
+  # The seats setup added to a routing file of the owner's own, by the manifest's path, not today's COMMANDECK_ROUTING.
+  il_drop_relative_keys "$IL_PROJECT" "$PP_MAIN"
+  while IFS= read -r S; do il_routing_seats "$IL_PROJECT" "$S" - off; done < <(jq -r '.entries | to_entries[] | select(.value.roles) | .key' "$IL_PROJECT")
   il_restore "$IL_PROJECT"
   echo "commandeck is out of $PP_MAIN"
 else
@@ -52,6 +55,8 @@ fi
 LAST=; [ -n "$(il_projects)" ] || LAST=1
 if [ -n "$LAST" ] && [ -s "$IL_MACHINE" ]; then
   bash "$HERE/dashboard.sh" --uninstall >/dev/null
+  # The relative keys an older setup left (a relative CODEX_HOME) name no folder it was read from.
+  il_drop_relative_keys "$IL_MACHINE" "this machine" "a Codex path"
   # Every Codex home setup wrote to, by the manifest: CODEX_HOME today may not be the one it was then.
   while IFS= read -r h; do
     IL_CODEX=${h%/hooks.json}

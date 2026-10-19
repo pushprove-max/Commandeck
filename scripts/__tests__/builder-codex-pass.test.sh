@@ -149,6 +149,10 @@ check "with the scope record deleted, a review pass reads the whole branch" 1 "$
 # every reviewer is told a new required setting with no deployed-format test blocks the merge.
 check "the first and later passes' prompts carry the deployed-format rule" "1 1" \
   "$(grep -c 'format already deployed' "$B/$U-r1-prompt-1.md") $(grep -c 'format already deployed' "$B/$U-r4-prompt-1.md")"
+# A diff that changes a function or a data shape can break callers it never shows, and code right today can
+# grow in cost later: both are asked of the behaviour reviewer in every pass.
+check "the first and later passes' prompts ask about untouched callers and cost over time" "1 1 1 1" \
+  "$(grep -c 'callers and readers the diff did not touch' "$B/$U-r1-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r1-prompt-1.md") $(grep -c 'callers and readers the diff did not touch' "$B/$U-r4-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r4-prompt-1.md")"
 # Every pass asks whether the change hand-builds what the project's paved-road registry or a standard covers,
 # and has such a finding cite the registry row.
 check "the first and later passes' prompts ask the paved-road question, citing the registry row" "1 1 1 1" \

@@ -32,7 +32,13 @@ if [ -z "$H" ]; then
   echo "to-main: $WHO is not running; message queued ($PP_SCRATCH/queue/$KEY.jsonl), shown first when it starts again" >&2
   owed "$2"; exit 3
 fi
-orca-ide orchestration send --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null | jq -e '.ok' >/dev/null \
-  || { echo "to-main: the send to $WHO ($H) failed; the message was not delivered" >&2; exit 1; }
+OUT=$(orca-ide orchestration send --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null)
+jq -e '.ok' >/dev/null 2>&1 <<<"$OUT" \
+  || { echo "to-main: the send to $WHO ($H) failed: $(jq -r '.error.message // tostring' 2>/dev/null <<<"$OUT" || head -c 300 <<<"$OUT"); the message was not delivered" >&2; exit 1; }
 owed "$2"
-echo "to-main: sent to $WHO ($H)"
+# A pane with its own question or permission prompt open reads nothing until that prompt is answered there.
+if orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null | grep -Eq "$PROMPT_BLOCKED"; then
+  echo "to-main: sent to $WHO ($H), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"
+else
+  echo "to-main: sent to $WHO ($H)"
+fi

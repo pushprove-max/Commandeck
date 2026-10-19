@@ -201,7 +201,7 @@ done <<< "$TRIPLES"
 case "$FILE_PATH" in
   */memory/MEMORY.md|memory/MEMORY.md)
     _mem_cap=18000
-    _mem_cur=$(wc -c < "$FILE_PATH" 2>/dev/null || echo 0)
+    _mem_cur=$(wc -c 2>/dev/null < "$FILE_PATH" || echo 0)
     _mem_src=$FILE_PATH; [ -f "$_mem_src" ] || _mem_src=/dev/null
     _mem_new=$(jq -r --rawfile cur "$_mem_src" '.tool_input as $t
       | if $t.content != null then ($t.content | utf8bytelength)

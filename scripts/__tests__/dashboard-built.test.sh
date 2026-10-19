@@ -203,6 +203,21 @@ stg() { jq -c --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $
 check "a marked planning worktree with an idle pane reads Planning, not waiting on main" '["planning"]' "$(stg pw-plan)"
 check "with its Builder there, the planning worktree has no card of its own; the Builder's carries it" '[]:1' "$(stg pv-plan):$(stg pv | jq length)"
 check "an unmarked worktree named <name>-plan still waits on main" '["waiting-main"]' "$(stg foo-plan)"
+# A unit is planned and built in one worktree: a marked <unit> is its Planning stage from the mark, its planner's task
+# completed and none open (so no live seat names it), its seats read from records naming <unit>. An unmarked <unit>
+# with an idle pane is no plan.
+for w in px py; do git -C "$MAIN" worktree add -q "$WS/$w"; done
+echo px > "$(git -C "$WS/px" rev-parse --absolute-git-dir)/commandeck-plan-of"
+printf 'handle=h-px\ntask=task_px\nrole=plan-author\nunit=px\nworktree=px\nlaunched=%s\ncmd=claude --model opus\n' $((NOW - 600)) > "$SCR/seat-px-plan-author.txt"
+jq -cn --arg c "$(iso $((NOW - 60)))" '{taskId: "task_px", completedAt: $c}' >> "$MAIN/.claude/metrics/seat-events.jsonl"
+PS=$(jq -cn --arg ws "$WS" '{result: {worktrees: [("px", "py") | {path: "\($ws)/\(.)", agents: [{agentType: "claude", state: "idle", updatedAt: 0}]}]}}')
+printf '#!/usr/bin/env bash\ncase "$*" in "orchestration task-list"*) echo %s ;; "worktree ps"*) echo %q ;; *) exit 1 ;; esac\n' \
+  "'{\"result\":{\"tasks\":[]}}'" "$PS" > "$BIN/orca-ide"
+dash
+check "a marked <unit> is one Planning card, its seats and their completion read from records naming <unit>" \
+  "[[\"planning\",\"$WS/px\",[[\"plan-author\",\"$(iso $((NOW - 60)))\"]]]]" \
+  "$(jq -c 'first(.[]) | [.units.inFlight[]? | select(.unit == "px") | [.stage, .plan.worktree, [.plan.seats[]? | [.role, .completedAt]]]]' "$T/out/run/project.json" 2>&1)"
+check "an unmarked <unit> with an idle pane is not Planning" '["waiting-main"]' "$(stg py)"
 
 # The dashboard off for every project (the registry exists and lists none) collects no home project either; a job
 # installed before any registration (no registry yet) keeps collecting it.

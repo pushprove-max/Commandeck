@@ -27,5 +27,10 @@ HANDLE=$(pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")
 [ "${1:-}" != --handle ] || { echo "$HANDLE"; exit 0; }
 TEXT=${*:-$(cat)}
 [ -n "$TEXT" ] || { echo "nothing to send" >&2; exit 1; }
-orca-ide terminal send --terminal "$HANDLE" --text "[dictated] $TEXT" --enter --json >/dev/null 2>&1 \
-  && echo "Sent to the Chief of Staff" || { echo "Send failed" >&2; exit 1; }
+OUT=$(orca-ide terminal send --terminal "$HANDLE" --text "[dictated] $TEXT" --enter --json 2>&1)
+# accepted:false: Orca took the request and typed nothing (a paired phone can hold the pane's keyboard).
+if jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$OUT"; then
+  echo "cos-tell: NOT sent: Orca took no input in the relay pane (accepted:false); a paired phone may hold its keyboard. Main's notes go with --note, which does not type" >&2; exit 1
+fi
+jq -e '.ok == true' >/dev/null 2>&1 <<<"$OUT" || { echo "cos-tell: NOT sent: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+echo "Sent to the Chief of Staff"
