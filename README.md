@@ -12,10 +12,14 @@ Commandeck is a Claude Code plugin that runs on
 [Orca](https://github.com/stablyai/orca). It splits agent work into three
 jobs. One Claude session in your main checkout, the orchestrator, plans with
 you, launches builds and merges them; it does not write the code. Each batch
-of work gets a Builder, a second session in its own git worktree. A reviewer
-on another model reads what the Builder committed, and the merge script takes
+of work gets a Builder, a second session in its own git worktree. A separate reviewer
+session reads what the Builder committed, and the merge script takes
 a branch only when it can find that reviewer's verdict for the commit being
-merged: a `VERDICT: GO`, or a closing pass that left nothing above P2.
+merged: a `VERDICT: GO`, or the verified P2/P3 tail described below.
+
+It is for a developer who wants to plan several units of work, let Builders
+work in parallel, and keep review and merge evidence in one place. You still
+choose the work, answer decisions and push the finished commits.
 
 ## What it looks like
 
@@ -40,14 +44,19 @@ Orca with the Chief of Staff pinned, main orchestrating and one worktree per Bui
 | GNU `sed`, `stat`, `date`, `readlink`, `grep`, `realpath`, `timeout`, `sha1sum` and `sha256sum`; `flock` | the scripts |
 | Codex CLI and the `openai-codex` Claude Code plugin, both signed in | the `claude-openai` profile only: its review passes run on Codex |
 
-It runs on macOS and Linux, and on Windows through WSL. The table is
-the list in `scripts/requirements.sh`, the one set-up, `doctor.sh` and the scripts'
-own preflight read. `/commandeck:setup` checks all of it at once and names
+The service code supports macOS with launchd and Linux with systemd user
+services. On Windows, use WSL with systemd user services available; there is
+no native Windows service backend. The table is
+the list in `scripts/requirements.sh`, shared by setup and the doctor.
+Scripts also run the common preflight on macOS. The setup skill checks all of it at once and names
 what is missing in two groups. What a package manager supplies comes with the
-one command for your machine (`brew install ...` on macOS, `sudo apt-get
-install -y ...` on Linux), and set-up runs that command when you say yes, and
-nothing without it. The rest is yours to do, each with its step: Orca,
-Homebrew itself, `gh auth login`, the Codex CLI.
+one command for your machine (Homebrew on macOS, apt-get on Linux), and set-up runs that command when you say yes, and
+nothing without it. The rest is yours to do, each with its printed step: Orca,
+Homebrew itself, GitHub sign-in and the Codex CLI. For GitHub:
+
+```bash
+gh auth login
+```
 
 Orca is a desktop app you install yourself, from
 [its releases page](https://github.com/stablyai/orca/releases): the `.dmg` for
@@ -69,68 +78,131 @@ every session and hook gets, in place of your shell's. Set-up checks both: a
 tool that is on one and not the other is named in one line, and the `orca-ide`
 link goes into a folder on the session's. Set-up never edits that setting.
 
-GitHub is the only git host, and a project needs a GitHub remote to get a
-dashboard. Everything runs on one machine. Nothing here pushes: a merge is a
-local squash commit on `main`, and pushing it is yours to do.
+The dashboard collects registered projects whose `origin` is on GitHub.
+Other git hosts have no dashboard integration. The agents, jobs and worktrees
+run on one machine; model requests and GitHub calls use the network. The merge
+script makes a local squash commit on `main`. Pushing it is yours to do.
+
+Claude Code must already be installed and signed in. The repository does not
+declare a minimum supported Claude Code or Codex CLI version. CI validates the
+plugin with Claude Code 2.1.302; that is a test pin, not a minimum. The Codex
+profile also needs Node.js to run the companion from the separately installed
+Codex plugin. Add-ons have their own requirements. Tests additionally use
+ripgrep and Node.js; see [Tests](#tests).
 
 ## Install
 
+Add this repository as a Claude Code marketplace, then install its plugin.
+Replace `<marketplace-source>` with this repository's GitHub owner/repository
+or the path to a local clone. The repository URL is also recorded in
+[the plugin manifest](.claude-plugin/plugin.json).
+
 In Claude Code, as two separate prompts:
 
+```text
+/plugin marketplace add <marketplace-source>
 ```
-/plugin marketplace add pushprove-max/Commandeck
-```
-```
+
+```text
 /plugin install commandeck@commandeck
 ```
 
 Or from a terminal:
 
 ```bash
-claude plugin marketplace add pushprove-max/Commandeck
+claude plugin marketplace add <marketplace-source>
 claude plugin install commandeck@commandeck
 ```
 
-Then, in each project, in a Claude Code session:
+Open a Claude Code session in your project's primary git checkout on `main`:
 
-| Command | Does |
-|---|---|
-| `/commandeck:setup` | checks the requirements, asks its questions once, shows every change it would make (`setup.sh --plan`), and only on your Apply writes the project's config, the permission rules, the watcher job and the answers you chose. Every file it changes is recorded first, and a file of yours is copied beside it (`<file>.commandeck-bak-<date>`) |
-| `/commandeck:doctor` | checks the wiring and changes nothing; each `FAIL` line ends with the command that fixes it |
-| `/commandeck:update` | after `claude plugin update`: points everything at the plugin's new folder, runs the doctor, and puts the files back if it fails |
-| `/commandeck:uninstall` | puts every file back as it was; the gathered data is kept unless you say delete |
+```text
+/commandeck:setup
+```
 
-The same four are scripts: `scripts/setup.sh`, `doctor.sh`, `update.sh` and
-`uninstall.sh [--delete-data]`. They live in the plugin's own folder, where
-Claude Code installed it, and not in your project. Setup's output ends with
-a `check it: bash <path>/scripts/doctor.sh` line; the commands below call
-that `<path>`, the folder that holds `scripts/`, `$PLUGIN`, and are run from
-your project. Script names in the text are relative to it. Setup
-never commits. When it wrote files that
-every worktree needs, its output ends with the `git add` and `git commit`
-line to run.
+The setup skill checks requirements, asks the questions below, shows a plan,
+and applies it only after you choose Apply. The underlying `setup.sh` script
+asks nothing: its flags are the answers. Do not run it without choosing them.
+A rerun keeps saved answers for flags you leave out.
+
+Setup records each managed path before changing it. Existing user files it
+manages get a visible sibling backup named `<file>.commandeck-bak-<date>`.
+The install manifests and original content blobs live in
+`~/.commandeck/install/`. Add-on installers run their own commands; those
+external changes are not all covered by the file restore mechanism.
+
+Setup writes the project config and settings, permission rules, git's local excludes, brief templates and the test-audit
+workflow. Depending on your answers it also changes global rules, an AGENTS.md block, Codex hooks
+and trust, prompt cache settings and auto-mode entries. It installs a main
+watcher job and, if enabled, the machine's dashboard job. It creates an Orca
+run and can create the Chief of Staff worktree and pane. Its output lists what
+changed, what needs you and what is optional. It never commits. Review and run
+the exact commit command it prints so new worktrees inherit the shared files.
+
+Then check the wiring:
+
+```text
+/commandeck:doctor
+```
+
+The doctor reports failures and warnings without applying fixes. A failure
+may name a command or explain what to repair. Resolve those before launching
+a build. Start fresh sessions after changing hooks or startup settings.
+
+For terminal examples below, `$PLUGIN` is the installed plugin folder. Setup
+prints its full path in the doctor command. Setup also maintains this stable
+link, so after setup you can use:
+
+```bash
+PLUGIN="$HOME/.commandeck/plugin"
+bash "$PLUGIN/scripts/doctor.sh"
+```
+
+Run project commands from the primary checkout. These scripts live in the
+plugin folder, not in your project.
 
 ### Updating
 
-A plugin update takes two steps; the first alone leaves Codex and the background jobs on the
-old version.
+First update the plugin:
 
-1. Update the plugin: `claude plugin update commandeck`.
-2. In each project that is set up, in a Claude Code session, run `/commandeck:update`
-   (or `bash <plugin folder>/scripts/update.sh`). Claude Code puts the new version in a new
-   folder; Codex's hooks, the permission rule and the two background jobs still name the old
-   one until this runs. It re-points them, runs setup again with your earlier answers (which
-   also updates every add-on to its latest), prints the changelog and runs the doctor. If the
-   doctor fails, every file is put back as it was and its `FAIL` lines say why.
-3. Start new Claude and Codex sessions. A session already open keeps the hooks it started with.
+```bash
+claude plugin update commandeck
+```
 
-- codebase-memory updates only while no Claude or Codex session is open. If one is open it
-  stays on the old version and setup lists it under "Needs you"; close the sessions and run
-  `/commandeck:update` again.
-- A config version the new release does not know is refused and nothing changes. There is no
-  migration: uninstall with the old version, then set up again.
-- Going back a version: install the earlier version with `claude plugin install`, then run
-  `update.sh` from that version's folder.
+Then, in each configured project:
+
+```text
+/commandeck:update
+```
+
+Or run `scripts/update.sh` from the **new plugin folder** printed by Claude
+Code. Do not start an update through the stable link while it still points
+at the old version.
+
+```bash
+bash "<new-plugin-folder>/scripts/update.sh"
+```
+
+Update prints the changelog, reruns setup with saved answers, refreshes the
+managed hooks, permissions and jobs, and runs the doctor. Setup's add-on
+selection is not saved: an update attempts the default add-on list again.
+On failure, update restores the recorded files. Jobs may still need a rerun
+of setup from the old folder, and external add-on updates are not rolled back.
+The failure output names that limitation.
+
+The update skill also checks whether the relay worktree is behind `main` and
+offers to rebase it. It refuses a dirty relay or a conflicting rebase. Start
+new Claude and Codex sessions after updating; open sessions retain startup
+state.
+
+Codebase-memory updates are deferred when its client process is detected.
+Follow the printed close-sessions instructions and retry. An unknown config
+schema is refused; the update skill recommends uninstalling with the old
+plugin and setting up again. There is no automatic schema migration.
+
+To return to an earlier release, install that release with Claude Code's
+plugin management, then run its update script. This repository does not
+supply a version-selection flag for the external CLI.
 
 ### What setup asks
 
@@ -140,51 +212,175 @@ setup asks, the picker guard's stray-keypress option is off.
 
 | Question | Choices |
 |---|---|
-| Reviewer | `claude`: a second Claude on a different model family reviews each build. `claude-openai`: Codex reviews it (offered when the Codex CLI is ready) |
+| Reviewer | `claude`: a separate headless Claude reviews each build (Sonnet by default). `claude-openai`: Codex reviews it (offered when the Codex CLI is ready) |
 | Permissions | this project: the rules go in `.claude/settings.local.json`, which git never sees (they name this machine's plugin folder). Every project: in `~/.claude/settings.json`. A changed answer moves them |
 | Your rules | asked when the project has a `CLAUDE.md` or `.claude/rules/`: merge (sessions leave out the plugin's rules yours already state word for word; for a rule that only says the same in other words, or disagrees, you choose keep mine, use the plugin's or keep both) or keep both |
 | Your own startup files | asked each time for a project's own `AGENT_STARTUP.md` and `.claude/main-session.md`, which otherwise load instead of the plugin's: merge (the plugin's rules yours lack are added in a marked block), replace (sessions load the plugin's; yours stays on disk) or skip |
 | Global rules, global CLAUDE.md | when `~/.claude/CLAUDE.md` exists: merge (only the rules it lacks), add as block, or skip; when it does not: install or skip. Your own text is never changed; uninstall takes out only the plugin's blocks |
-| Builder model, context | Opus (the default) or Sonnet for less usage; every Builder runs with no advisor. 200K or a larger window |
+| Builder model, context | Opus (the default) or Sonnet for less usage; no advisor is added by setup. 200K or a larger window |
 | Builder effort | medium (the default), low, high or max, for every Builder; review seats keep their own |
 | Builder clear line | 180K tokens of context (the default), another count, or off: past it the Builder writes a handoff and goes on in a fresh session of its pane, and its card on the dashboard shows its context against the line |
 | Issue sizing | 40K tokens (the default), another count, or off: an issue the batch brief sizes as sharing no files and needing more reading than this is proposed as its own unit when the Builder is launched; off keeps today's grouping |
 | Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
-| Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network, and a name not on its list still gets a 403 |
+| Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network; unknown DNS names get 403, while machine names and IP addresses are accepted |
 | Merge check | the command that must pass before a merge, or none |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Ponytail | on (the skill is installed) or off |
 | Prompt cache | 5m for main and worker panes (`promptCacheTtl` and `subagentPromptCacheTtl` in `.claude/settings.json`, `CLAUDE_CODE_PROMPT_CACHE_TTL` in each worktree's `settings.local.json`; a value you set stays), 1h for the relay pane (its worktree's `settings.local.json`, its other settings kept), each with Leave as is (writes nothing) |
 | Auto mode | add two lines to the auto-mode classifier's list in `~/.claude/settings.json` (kept with `"$defaults"`; they apply in every project on this machine), leave it as is (writes nothing), or take setup's lines out; a list of yours without `"$defaults"` is never touched |
-| Add-ons | any of serena, codebase-memory, agent-browser, or none (see [Add-ons](#add-ons)) |
+| Add-ons | All (the default), serena, agent-browser, or None; the script can select any name from `config/addons.tsv` (see [Add-ons](#add-ons)) |
 | Review loop | defaults, keep saved, or tune: the most review rounds (no cap by default), whether a closing pass reads the whole branch (it runs by default), the small-build line for a one-reviewer first pass (200; off gives every first pass three reviewers), and when a finished build is flagged for a written review (30 minutes of Codex review, a third of the clock on tests or idle waits when they also pass 10 minutes, $30). Numbers are saved as typed; taking every default saves nothing |
+| Plan models, plan fast | which model families planning may use, and which planning seats use the fast tier; no fast planning seats by default |
 | Codex fast, Codex model | with the Codex reviewer only: fast mode, offered when your Codex config allows it, and a model id when setup found none |
 
-Then setup prints the plan, every file it would create or change with a
-diff, and asks Apply, Change an answer, or Cancel. Its summary ends in three
+Then setup prints the plan: changed files with diffs, and new files with
+line counts (their content is printed only when at most 30 lines), and asks Apply, Change an answer, or Cancel. Its summary ends in three
 parts: what it did, what needs you (a command it could not run, files to
 commit), and what is optional (a project with no `.claude/paved-road.md`
 is pointed to the template that starts it), with how to change any answer later: run
-`/commandeck:setup` again, or `setup.sh` with only that flag. It also creates
-the project's Orca run, or prints the one command for it. Your own status
-line is set with `--status-line` (uninstall puts the earlier one back).
+the setup skill again, or the setup script with only that flag. It also creates
+the project's Orca run, or prints the one command for it. A status line is changed only if you give setup a command with
+`--status-line`; uninstall restores the earlier one if the setting is still
+the plugin's.
+
+## Commands and skills
+
+The plugin ships six skills. Type these in Claude Code; setup, update,
+uninstall, handoff and worktreereview require an explicit user invocation.
+Doctor can also be selected by the model when diagnosing wiring.
+
+```text
+/commandeck:setup
+/commandeck:doctor
+/commandeck:update
+/commandeck:uninstall
+/commandeck:handoff
+/commandeck:worktreereview <unit>
+```
+
+| Skill | Use it for |
+|---|---|
+| setup | Requirements, first-time setup and changing saved answers. |
+| doctor | Read-only wiring diagnosis. |
+| update | Repointing managed state after a plugin update. |
+| uninstall | Removing project wiring and choosing whether to delete gathered data. |
+| handoff | Checkpointing and restarting the main session on demand. |
+| worktreereview | A running or finished unit's HTML time, token and cost report. |
+
+Setup also installs this project workflow. Give it repository-relative
+folders, a mode and optionally a worker count:
+
+```text
+/test-audit src full 4 agents
+```
+
+With no mode it uses Basic. The count is 1–16, default 4. Basic looks
+for mechanical test problems; Full also looks for missing coverage. It writes
+scratch reports, leaves repository files alone and runs no tests.
+
+If you enable the bundled Ponytail skill, invoke it separately:
+
+```text
+/ponytail
+```
+
+It supplies smallest-change coding rules. It is not a seventh Commandeck
+plugin skill. Optional add-ons can expose their own commands.
+
+## Roles and configuration
+
+A unit starts with a batch brief and acceptance criteria. Main chooses a
+planning tier with you. Planning seats write and judge the plan; you give
+the build its go. A Builder works in the unit's worktree, gathers facts with
+helpers, implements and runs the configured review loop. It fixes findings
+and leaves evidence. Main checks the proof, runs the merge check on the
+squashed tree and merges locally. The relay brings decisions to you.
+
+[`config/routing.json`](config/routing.json) is the default routing file.
+It owns launch templates, agent types, model families and effort. A model
+family is resolved at launch; available model ids depend on the account.
+A null effort is omitted from the command.
+
+| Role | Default agent / model | Effort |
+|---|---|---|
+| orchestrator | Claude / opus | omitted |
+| plan-author | Claude / opus | high |
+| plan-author-second | Claude / fable | high |
+| plan-judge-sol | Codex / sol | high |
+| plan-judge-astra | Codex / astra | high |
+| plan-judge-claude | Claude / sonnet, used without Codex | high |
+| builder | Claude / opus | medium |
+| codex-reviewer | Codex / sol | medium |
+| claude-reviewer | Claude / sonnet, headless | high |
+| design-coauthor | Claude / fable | high |
+| audit-auditor | Codex / astra, headless platform audit | xhigh |
+| audit-verifier | Claude / opus, headless platform verifier | omitted |
+| lean-worker | Claude / sonnet helper | medium |
+| lean-checker | Claude / sonnet blind checker | high |
+
+Fable planning falls back to another allowed Claude model when unavailable.
+The Claude-only profile uses its Claude judge instead of the Codex plan
+judges. Its stock code reviewer is Sonnet, distinct from the default Opus Builder.
+A Builder model override can make both Sonnet; the scripts do not enforce
+different families.
+
+The three plugin agent definitions in `agents/` are `commandeck:helper`
+(read-only fact gathering), `commandeck:lean-worker` (edits and checks) and
+`commandeck:lean-checker` (blind criterion checks). They omit CLAUDE.md and
+have narrow tool lists. The model guard fills missing lean-agent settings
+from routing; the helper uses Sonnet when no model is named.
+
+| Location | Owns |
+|---|---|
+| `.claude/commandeck.json` | Project answers, schema version 1. |
+| `.claude/settings.json` | Shared project workflow and selected cache settings. |
+| `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
+| `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line. |
+| `~/.claude/CLAUDE.md` | Optional marked global instruction blocks. |
+| `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks and trust, relocated when CODEX_HOME is set. |
+| `~/.commandeck/install/` | Per-project and machine manifests, original blobs and saved dashboard bind/port/hosts. |
+| `~/.commandeck/plugin` | Stable link to the plugin folder setup last applied. |
+
+Use setup to change answers. Its project keys include `profile`, `testCommand`,
+`strictHooks`, `serena`, `standardContext`, `builder.model`, `builder.effort`,
+`builder.clearLine`, `issueSizing`, `chiefOfStaff`, `ponytail`, `cacheTtl`,
+`autoMode`, `workerSkillsOff`, `workerPluginsOff`, `keeps`, `planModels`,
+`planFast`, `codexModels`, `codexFast` and `reviewLoop`.
+
+Review-loop keys are `maxRounds`, `closingPass`, `smallBuild`, `maxReviewMinutes`,
+`maxTestPercent` and `maxUsd`. Setup saves tuned numeric answers as strings.
+Defaults are no cap, a closing pass, one reviewer below 200 changed lines,
+and report flags at 30 review minutes, a third of the clock on tests/idle
+with over 10 minutes, and $30. Those report flags do not block a merge.
+`generatedFiles` lets merge accept a tail of commits changing only the listed
+generated paths after the reviewed commit; do not list handwritten source.
+
+Set `COMMANDECK_ROUTING` in the launching environment to use your own routing
+file instead of editing the installed copy. Project Builder and review answers
+still apply. Other useful overrides are `COMMANDECK_MAIN`,
+`COMMANDECK_WORKSPACES`, `COMMANDECK_SCRATCH` and `CODEX_HOME`. Git decides the
+primary checkout from inside a linked worktree. The dashboard/report collector
+also reads `COMMANDECK_CODEX_REVIEW_HOME`, default `~/.codex-review`, for review
+spend; it does not itself change where reviewer processes run.
 
 ## The first build
 
 After setup, the Claude session in the project's main checkout is the
 orchestrator. You tell it what you want in plain words. It writes a batch
 brief with you (the items and how each will be judged done), asks whether
-to write a plan first (no plan, one planner, a plan and a judge, or a panel
+to write a plan first (Auto, no plan, one planner, a plan and a judge, or a panel
 of two plans, two judges and one merge), and once you say go launches a Builder (a batch that
 names no committed plan is refused unless launched with
-`--skip-plan --reason '<one line>'`; the Builder takes over the unit's planning worktree once everything in it is on main):
+the explicit skip shown below; the Builder can take over the unit's
+planning worktree once its plan is on main):
 
 ```bash
 bash "$PLUGIN/scripts/builder-launch.sh" add-csv-export .claude/briefs/add-csv-export-batch.md
 ```
 
 You do not type that; the orchestrator does. The launcher makes a new Orca
-worktree on local `main`, puts the rendered brief in it, opens one Builder
+worktree on local `main` (after fast-forwarding from `origin` where available),
+puts the rendered brief in it, opens one Builder
 pane and prints one line:
 
 ```
@@ -193,8 +389,8 @@ seat=builder unit=add-csv-export handle=term_… task=task_… state=… record=
 
 The Builder builds the batch, then runs its own review passes with
 `builder-codex-pass.sh` (or `builder-claude-pass.sh` in the `claude`
-profile). Each pass commits the worktree first, so the reviewer reads exactly
-one commit, and writes a round file from the reviewer's own session record.
+profile). Each pass commits the worktree first, excluding its brief files, so the
+reviewer reads a fixed commit, and writes a round file from the reviewer's own session record.
 The merge takes the verdict from the reviewer's session files and not from
 the round file, so a round file written by hand merges nothing. That stops a
 Builder from passing itself by mistake. The session files belong to the same
@@ -240,9 +436,36 @@ on a copy of the squashed tree before it commits, and a red run undoes the
 squash. Then it closes the unit's panes and removes the worktree. It does
 not write the build review: that runs only when you ask for it.
 
-`bash "$PLUGIN/scripts/board.sh"` prints the state of every worktree, seat and open
-task at any point. `merge-unit-local.sh <unit> --dry-run` runs the checks and
-merges nothing.
+To inspect worktrees, seats and open tasks:
+
+```bash
+bash "$PLUGIN/scripts/board.sh"
+```
+
+To check merge preconditions and print its plan without rebasing, merging or
+removing the worktree:
+
+```bash
+bash "$PLUGIN/scripts/merge-unit-local.sh" add-csv-export --dry-run
+```
+
+This dry run does not run the configured test command. A failed real check
+undoes the squash. Exit 3 means the merge committed but archiving or cleanup
+failed: finish that step by hand. Exit 4 means it merged but could not file
+all open findings as GitHub issues: use the printed retry command. Do not
+merge an already merged unit again.
+
+The launcher refuses a batch without a nonempty plan committed on `main`,
+unless main explicitly records a skip:
+
+```bash
+bash "$PLUGIN/scripts/builder-launch.sh" --skip-plan --reason 'Small documentation change' add-csv-export .claude/briefs/add-csv-export-batch.md
+```
+
+Auto planning reads `config/plan-triggers.tsv`, or the project's
+`.claude/plan-triggers.tsv`, and reports the tier and trigger it chose. The
+batch and Builder templates are in `templates/`. Main should write explicit
+acceptance criteria and a merge check before launching.
 
 ## Review passes
 
@@ -269,13 +492,13 @@ fix round is reviewed with the rest. The Builder's evidence-file lines
 `Different fix r<N>: <why>` and `Other cases checked r<N>: <which>` go into the
 prompt of pass N.
 
-Each pass is checked against the exact prompt it was sent, and so is every
-earlier pass of the same worktree. A plugin update that changes the review
-prompt's text (this plugin building itself is where that happens) therefore
-refuses a build whose passes ran under the old text, at its next pass or at
-its merge. This is expected, and it never gives a wrong GO. The refusal names
-the way on: make a new unit from that branch and run its first pass; a GO
-there with nothing committed after it merges.
+Each pass is checked against its saved prompt and its own reviewer session,
+and earlier passes are checked too. Prompts are kept under the reviewer
+home's `builder-pass-prompts/`. An update to the external Codex plugin's
+prompt alone does not invalidate a saved pass. A missing prompt record, a
+changed session prompt, or an incompatible change to this script's required
+review text can still refuse it. Follow the refusal; a new unit reviewed
+from pass 1 is the recovery it names.
 
 Findings are graded P0 to P3. A P0 or P1 refuses the merge. A closing pass
 that leaves only P2 or P3 findings still merges: the merge prints each one as
@@ -286,114 +509,143 @@ A launch with `--risky` opens a design pane first. It writes a design note
 that the Builder reads before it builds; running the same command again opens
 the Builder at the effort the first call recorded. Given `--effort` and `--reason`,
 that second call rewrites the brief's override and logs the change in the evidence
-file before the Builder opens; it refuses while that Builder already runs. Every Builder runs with no advisor, a `--risky` one included. A
+file before the Builder opens; it refuses while that Builder already runs. Setup adds no advisor, including for risky builds. A manually configured
+`roles.builder.advisor` can still add one. A
 launch with `--small` says the batch is expected under 200 changed lines; it
 also drops an advisor written into `config/routing.json`'s `roles.builder` by
-hand. `--model <alias> --reason '<one line>'` puts one launch on
-another allowed model.
+hand. A model override with a reason puts one launch on another allowed model.
+For example:
 
-`scripts/merge-queue.sh <unit> ...` merges several finished units in the
-order given, one at a time, and stops at the first that does not merge, or
-that merged and then failed a later step (exit code 3); it says which.
+```bash
+bash "$PLUGIN/scripts/builder-launch.sh" --small --model sonnet --reason 'Small tooling change' add-csv-export .claude/briefs/add-csv-export-batch.md
+```
+
+To merge several finished units in order:
+
+```bash
+bash "$PLUGIN/scripts/merge-queue.sh" first-unit second-unit
+```
+
+The queue stops when a unit is refused or cleanup fails after its merge.
+It continues past issue-filing failures and returns 4 after the queue ends.
 
 ## Hooks
 
-`hooks/` holds about forty scripts, registered in `hooks/hooks.json`. They
-come in two tiers. The default tier is always on. The strict tier is a setup
-answer (`"strictHooks": true` in `.claude/commandeck.json`). The hooks catch
-honest mistakes. An agent that sets out to get round one can.
+The hooks catch mistakes; they are not a security boundary against an agent
+or process running as your user. Most are registered in
+[`hooks/hooks.json`](hooks/hooks.json). Builder and worker hooks are added by
+`worktree-setup.sh`. A warning allows the call; a block refuses it.
 
-The default tier covers git, the orchestrator's lane and a few mistakes that
-are expensive later:
+The default tier applies in configured projects, subject to each hook's seat
+and event checks:
 
-- `git-safety.sh` refuses a force push, a remote branch deletion, `--mirror`
-  and `git reset --hard`. It reads through quoting tricks such as `pu''sh`.
-  It does not screen `eval` or a command held in a variable.
-- `main-edit-guard.sh` blocks edits to project code in the main checkout, so
-  the orchestrator hands code to a Builder. Everything under `.claude/`, docs
-  and Markdown files stay editable there.
-- `duplicate-agent-guard.sh` refuses a second agent pane in a worktree that
-  already has a live one, and a new job sent to a pane whose agent is
-  mid-turn.
-- `dependency-addition-guard.sh` blocks a new npm dependency, whether it
-  arrives by `npm install <pkg>` or by an edit to `package.json`, until you
-  approve it. Approval is a prefix on the command:
-  `COMMANDECK_DEP_APPROVED=1 npm install <pkg>`. It knows npm only.
-- `literal-secret-warning.sh` warns when an edit assigns a quoted literal of
-  eight characters or more to something named `password`, `secret`, `apiKey`,
-  `token` or `credential`. It warns and lets the edit through, and it skips
-  test files and env files.
-- `agent-model-guard.sh` sets the model of helper agents. A helper call that
-  names no model would inherit the orchestrator's, the most expensive one, so
-  an unnamed Explore call runs on Haiku, an unnamed general-purpose or
-  debugger call on Sonnet and any other unnamed call on Opus. It rewrites the
-  call and never refuses one.
-- `no-poll-loops.sh` stops the orchestrator from waiting in a `sleep` loop;
-  it waits on Orca's inbox. A bare `orca orchestration check` with none of
-  `--wait`, `--peek`, `--all`, `--ack` or `--terminal` is refused in every
-  pane, and a worker's `sleep` loop is pointed at `run_in_background` or the
-  Monitor tool.
-- `worker-ask-guard.sh` stops a worker or reviewer
-  from opening a question picker in its own pane, where nobody would see it.
-- `write-existing-file-guard.sh` warns when an edit mostly restates lines
-  it replaces.
+| Hook | What it does and why |
+|---|---|
+| `git-safety.sh` | Blocks force pushes, remote branch deletion, mirror pushes and hard resets to protect work; it handles quoted command words, but does not interpret arbitrary shell evaluation. |
+| `main-edit-guard.sh` | Blocks main from writing project code, including code in its worktrees; allows instruction and documentation paths, but caps counted uncommitted files at three even under `.claude/`. |
+| `duplicate-agent-guard.sh` | Blocks a second live agent in one worktree and a new job sent to a busy pane. |
+| `dependency-addition-guard.sh` | Blocks unapproved new npm packages in install commands and package edits; protects dependency and supply-chain decisions. |
+| `literal-secret-warning.sh` | Warns about quoted secret-like literals of eight or more characters in executable code; excludes tests and config/env files. |
+| `agent-model-guard.sh` | Fills missing helper models, forces Builder Explore calls to Haiku, and suggests lean helpers; it never refuses the call. |
+| `no-poll-loops.sh` | Blocks main's sleep polling, unqualified Orca inbox checks and worker foreground waits past the cache budget; use event waits or background jobs. |
+| `worker-ask-guard.sh` | Blocks worker pickers that would never reach you; main and the relay can ask, with a decoy first option outside setup. |
+| `write-existing-file-guard.sh` | Warns when a large edit mostly repeats existing lines, so the edit can stay small. |
+| `agent-startup-context.sh` | Loads instructions for the seat; does not block. |
+| `resume-context.sh` | Loads a pending main checkpoint, board and run binding once; does not block. |
+| `agent-awareness.sh` | Reminds main about dispatched work and unfinished state; does not block. |
+| `context-line.sh` | Prompts main to checkpoint at its clear line and Builders to write a fresh-session handoff; does not block. |
+| `context-clear-stop.sh` | Holds main's stop for a checkpoint, checks carry-over and starts the Orca restart when eligible. |
+| `ask-records-decision.sh` | Records main's picker questions and blocks repeated unresolved or recently answered questions. |
+| `ask-stop-records-decision.sh` | Holds a stop when a plain-text question was not entered in the decision ledger. |
+| `ruling-log.sh` | Records owner answers with ids and flags suspiciously fast picker answers; does not block. |
+| `cos-own-echo.sh` | Acknowledges the relay's own message echoes so they do not cause another turn. |
+| `cos-inbox-waiter-stop.sh` | Holds the relay's stop until all four watchers are alive. |
+| `opus-orchestrator-autonomy.sh` | Loads main's autonomy instructions and blocks an Opus orchestrator stop asking to continue already authorized work. |
 
-The strict tier adds the hooks that hold a session to cheaper habits and
-catch weak tests:
+The strict tier is off by default. Setup saves the answer as `strictHooks`
+in `.claude/commandeck.json`:
 
-- `test-skip-only-blocker.sh` blocks an edit that adds `.only`, `.skip`,
-  `xit`, `fit` or `it.todo` to a test.
-- `suite-rerun-guard.sh` blocks the same test or type-check command on an
-  unchanged tree within 30 minutes, with or without commands chained on;
-  edits under `.claude/briefs/` leave the tree unchanged. Prefix `RERUN=1` to
-  run it anyway. It recognises npm's test and typecheck scripts, `tsc` and
-  `vitest`.
-- `edit-content-tripwires.sh` blocks new CRLF line endings, deferred-work
-  markers, comments that suppress TypeScript and `eslint-disable`.
-  `file-size-cop.sh` holds a `.ts` file to 500 lines and a `.tsx` file to
-  400. `bash-guardrails.sh` caps the heap of Node's test runner at 4 GB.
-- A handful only advise: three turns in a row with one read-only call each,
-  the fifth file of one kind opened from one folder, a written file that git
-  ignores, a new test file for a module that already has one.
+| Hook | What it does and why |
+|---|---|
+| `test-skip-only-blocker.sh` | Blocks focused, skipped and todo tests that could hide failures. |
+| `suite-rerun-guard.sh` | Blocks the same completed test/type-check command on an unchanged tree within 30 minutes; recognizes npm test/typecheck, tsc and Vitest. |
+| `edit-content-tripwires.sh` | Blocks new CRLF, deferred-work markers and specified TypeScript/lint suppressions, with the exemptions and reason annotations in its rule table. |
+| `file-size-cop.sh` | Blocks a whole-file Write crossing 500 lines for TS or 400 for TSX; an Edit crossing the cap warns and asks for a follow-up. |
+| `bash-guardrails.sh` | Blocks Node test runs without the 4 GB heap cap and refuses unsupported heredoc end words so commands remain inspectable. |
+| `pane-budget-gate.sh` | Holds workers for missing configured code-server startup or a handoff after the pane budget is exhausted. |
+| `read-tracker.sh` | Nudges shell-only source searching when configured code navigation is unused. |
+| `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each; also active for planning seats without strict mode. |
+| `script-over-reads.sh` | Advises using a script after five same-kind files from one directory. |
+| `git-ignore-warn.sh` | Warns when a written file is ignored and would not ship, except deliberate scratch paths. |
+| `new-test-file-guard.sh` | Advises extending an existing test when another file already tests the imported subject. |
+| `staged-index-warn.sh` | Reports indexed files whose working copies differ after a suite; this is not proof of which bytes the test read. |
+| `web-fetch-blocker.sh` | Despite its name, only advises using agent-browser for browser-dependent pages; it allows the fetch. |
 
-A Builder's worktree gets two more: a guard that sends long runs of searches
-to a Haiku subagent, and an event log of subagent and review-pass starts and
-stops.
+Only use approval overrides after the corresponding decision. For an npm
+install, the approval is in the command text:
 
-In the `claude-openai` profile the same hooks run for Codex. Setup puts one
-entry per event in Codex's `hooks.json`, pointing at
-`hooks/codex-dispatch.sh`, which reads the plugin's own `hooks.json` and
-turns each file of a Codex patch into the edit payload the hooks were written
-for. They run only in a project that is set up for the plugin and trusted by
-Codex. Hooks that depend on a Claude-only tool (the serena lookups, the pane
-budget) are marked `# codex: skip` and do not run there.
+```bash
+COMMANDECK_DEP_APPROVED=1 npm install <package>
+```
 
-Several of these know only npm and TypeScript. In another stack they stay
-silent.
+For a direct package.json edit, the hook instead reads an exact comma-separated
+package list in `COMMANDECK_DEP_APPROVED` in the worktree's settings env.
+A deliberate repeat test run uses:
+
+```bash
+RERUN=1 npm test
+```
+
+Worker-specific hooks:
+
+| Hook | What it does and why |
+|---|---|
+| `builder-search-guard.sh` | Blocks long consecutive searches and whole-repository searches in the Builder's main thread; sends fact gathering to Explore helpers. |
+| `builder-event-log.sh` | Records tool, helper and review activity in the worktree's `.claude/builder-events.jsonl`; does not block. |
+| `claude-worker-notify.sh` | Notifies main when a Claude worker stops; does not block. |
+| `codex-notify.sh` | Notifies main when a Codex turn ends; does not block. |
+
+In the Codex profile, `codex-dispatch.sh` translates Codex hook events and
+patches into the registered hooks' payloads. Setup writes five event entries
+in Codex's `hooks.json`. Dispatch requires a configured project and Codex
+trust for the checkout or its primary checkout. Claude-only hooks marked
+`# codex: skip` are omitted. `hooks/lib/run-hook.sh` finds Bash 4+; without it,
+it prints a warning and none of the plugin's hooks run.
+
+Several checks understand only npm and TypeScript. Other stacks get only the
+checks whose patterns apply.
 
 ## What each pane starts with
 
-A worker pane (a Builder, a planner, a reviewer) starts with less context than main. `scripts/worktree-setup.sh`
-writes the difference into the worktree's `.claude/settings.local.json`:
+A worker pane starts with less context than main. `scripts/worktree-setup.sh`
+writes the settings into its `.claude/settings.local.json`.
 
-| Seat | Stripe plugin and the three browser skills | Auto memory | Ponytail |
-|---|---|---|---|
-| Main, the Chief of Staff, a `--keep all` seat | kept | kept | the plugin |
-| Builder, planner, plan judge, other worker panes | off, except what `--keep` lists | off | a summary of about 1 KB |
+| Seat | Startup settings |
+|---|---|
+| Main | The worktree setup script does not change main. |
+| Worker or Builder | Disables business plugins, memoir, selected connectors and code/browser tools; disables auto memory; drops Stripe and three browser skills unless kept; uses the Ponytail summary when applicable. |
+| Chief of Staff | Disables code and business plugins, selected MCP servers and connectors; keeps the owner's Ponytail setting and uses relay-only permissions. |
 
-`--keep billing` brings the Stripe plugin back for a billing unit (`builder-launch.sh --keep billing`, or
-`worktree-setup.sh <worktree> --keep billing`); `--keep all` changes none of this. The list is stored in the
-worktree, so a rerun without the flag keeps it. With auto memory off, the brief carries every fact the unit
-depends on. The ponytail summary replaces the plugin's full text only where you have the plugin on and chose
-ponytail in setup. The doctor warns when a key in the main checkout's `.claude/settings.local.json` would shadow
-one of these per-worktree settings, because Claude Code applies that file over a worktree's own.
+A brief must carry facts the worker needs because auto memory is off.
+The exact tool and plugin lists live in `scripts/worktree-setup.sh`.
+A keep word restores its named skills and plugins. Billing keeps Stripe;
+all skips the additional skill/plugin, auto-memory and Ponytail-summary cuts.
+It does not undo the earlier worker tool, MCP, business-plugin or memoir settings.
+
+```bash
+bash "$PLUGIN/scripts/builder-launch.sh" --keep billing add-csv-export .claude/briefs/add-csv-export-batch.md
+bash "$PLUGIN/scripts/worktree-setup.sh" "<worktree-path>" --keep billing
+```
+
+The keep list is stored in the worktree; a rerun without it retains that list.
+The doctor warns about main-checkout settings that can shadow the worktree's.
 
 Your own lists go on top. Setup asks for the skills and plugins worker and Builder panes turn off, and for keep
 words: `workerSkillsOff` (skill names, written as `skillOverrides` `"off"`), `workerPluginsOff` (`plugin@marketplace`
 keys, written as `enabledPlugins` `false`) and `keeps` (a word and the skills and plugins it brings back) in
-`.claude/commandeck.json`. `--keep <word>` brings a word's set back for one unit, a plugin cut by default (the business
+`.claude/commandeck.json`. A keep word brings its set back for one unit, a plugin cut by default (the business
 plugins, memoir, ponytail) included; a rerun after a list shrinks takes the dropped names back out. A name you set
-yourself in a worktree's `settings.local.json` keeps your value. The plugin ships no names: with no answer, nothing beyond the table above is cut. Plugin
+yourself in a worktree's `settings.local.json` keeps your value. The extra user lists default to empty; the built-in cuts still apply. Plugin
 skills cannot be turned off one at a time. Only a whole plugin can be.
 
 ## Chief of Staff
@@ -418,43 +670,54 @@ it found and exits, which wakes the pane:
 | `cos-watch-inbox.sh` | the orchestrator sends it a message, or anyone sends to its own handle (checked every 20 s). A subject starting `FYI` is held and shown with the next message that does wake it, unless it was sent to its own handle |
 | `cos-watch-decisions.sh` | a decision in the ledger is open and you have not been asked yet (every 20 s) |
 | `cos-watch-alerts.sh` | the dashboard raises an alert for this project or the machine (every 60 s) |
-| `cos-watch-limit.sh [<percent>]` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |
+| `cos-watch-limit.sh` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |
 
-A Stop hook keeps the pane from ending a turn with no inbox watcher alive.
-`scripts/cos-tell.sh <text>` sends text to the pane from a terminal, which is
-how a dictation shortcut reaches it. `scripts/cos-tell.sh --note <subject>
-<body>` is the orchestrator's note to it: stored in the orchestrator's run,
+A Stop hook keeps the pane from ending a turn unless all four watchers are alive.
+To send text from a terminal, including a dictation shortcut:
+
+```bash
+bash "$PLUGIN/scripts/cos-tell.sh" 'What needs my attention?'
+```
+
+Main's durable note uses:
+
+```bash
+bash "$PLUGIN/scripts/cos-tell.sh" --note 'Build ready' 'The export unit is waiting for review.'
+```
+
+That note is stored in the orchestrator's run,
 where the inbox watcher finds it even if the pane was busy, and it exits 1
 when Orca does not confirm the note was stored.
 
 The decision ledger is `.claude/metrics/decisions.jsonl` in the main
-checkout. Every question the orchestrator puts to you becomes a row, written
-by a hook, and the dashboard's "Needs the owner" card reads it.
-`scripts/decision.sh` has `add`, `check`, `answer`, `reopen` and `list`. A
+checkout. Picker questions are recorded by a hook. A plain-text question
+must be entered in the ledger; a Stop hook holds an unrecorded question.
+The dashboard's "Needs the owner" card reads the ledger.
+`scripts/decision.sh` has add, check, answer, reopen and list operations. A
 question that is still open, or was answered in the last 24 hours, cannot be
 asked again without `--reask` and a line on what is new.
 
 The ruling log is `~/.claude/rulings/<project>.jsonl`. A hook appends one row
-for every answer you give, by picker or by prompt, with the time it happened
-and an id. Agents cite that id when they write "the owner decided X", so a
+for recognized answers, by picker or by prompt, with the time it happened
+and an id. Slash commands and recognized control or nudge prompts are skipped. Agents cite that id when they write "the owner decided X", so a
 decision can be traced to your words. An answer that comes back in under two
 seconds is marked suspect: it may be text another pane typed into the open
 picker.
 
 ## Cost control
 
-- Startup size. Claude Code shows the model only a 2 KB preview of a session
-  start that prints more than 10,240 bytes. `scripts/startup-size.sh
-  [--role main|worker|builder|chief-of-staff] [--per-prompt]` measures what
-  each seat's hooks really print and exits 1 over the limit.
+- Startup size. The plugin budgets hook output at 10,240 bytes to avoid
+  Claude Code truncating startup context. `scripts/startup-size.sh` measures
+  each seat and exits 1 over the limit; it supports `--role` and `--per-prompt`.
 - The clear line. Past 200K tokens of context (150K with
   `--standard-context`) the orchestrator gets a line on every prompt telling
   it to checkpoint. See [Checkpoints](#checkpoints-resume-and-handoff).
 - The pane budget (strict tier). A worker pane past 450,000 tokens of context
-  (`config/pane-budget.json`) may not edit or run commands until it has
+  (the fallback in `config/pane-budget.json`; measured budget data can replace it)
+  may not edit or run commands until it has
   written a handoff file with its decisions, open findings, current commit
   and test evidence.
-- The cache check. `scripts/builder-cache-check.sh <worktree> [session-id]`
+- The cache check. `scripts/builder-cache-check.sh`
   reads a Builder's transcripts and fails unless its main thread wrote only
   5-minute prompt cache, and its subagents only 5-minute cache.
 - The price of each build. The build review prices every request at list
@@ -462,7 +725,7 @@ picker.
   $30. These are list-price equivalents and a subscription plan bills
   differently. A model with no list price on file is shown as unpriced,
   never as $0.
-  `scripts/unit-cost.sh <unit>` prints the same build as turns, tool calls
+  `scripts/unit-cost.sh` prints a build as turns, tool calls
   and tokens per session.
 - Helper usage. `scripts/subagent-usage.sh` records one row per finished
   subagent run (type, model, tokens) in
@@ -474,39 +737,44 @@ picker.
 
 ## Checkpoints, resume and handoff
 
-The orchestrator's session never compacts. Past the clear line a Stop hook
-holds its turn until it has written a checkpoint to
-`~/.claude/checkpoints/<session id>.md` from `templates/checkpoint.md`: the
-goal, the live units, what it is waiting on, the queue, what was ruled out
-and how to resume. `scripts/state-snapshot.sh` fills in the mechanical
-fields. With a checkpoint under 30 minutes old the hook restarts the
-orchestrator in a fresh Orca pane and closes the old one.
+Main is instructed to checkpoint and restart instead of compacting. Past the
+clear line, a Stop hook asks for a checkpoint at
+`~/.claude/checkpoints/<session-id>.md`, using `templates/checkpoint.md`: the
+goal, live units, waits, queue, rulings and how to resume.
+`scripts/state-snapshot.sh` fills the mechanical fields. A fresh checkpoint
+is under 30 minutes old.
 
-Claude Code (2.1.299 and later) compacts an idle session by itself: past
-200K tokens and about 54 idle minutes (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`
-moves the line). That suits the relay and Builder panes, and the plugin
-ships no compactor of its own. The orchestrator restarts at the clear line
-before it can sit idle that large; if a restart fails, it can still be
-compacted, unless `"idleCompaction": false` is in the main checkout's
-`.claude/settings.local.json`.
+In Orca, the hook can open a fresh main pane, supply the resume prompt and
+close the old pane after takeover. Background helpers can defer a restart;
+failures leave the old pane available and write `clear-hook.log` beside the
+checkpoints. This is not a guarantee that Claude Code will never compact.
+Idle compaction is Claude Code's behavior, not a compactor supplied here.
+The repository does not establish the runtime's exact idle-compaction version,
+timeout or settings contract.
 
 The new session starts with that checkpoint, the board, its run binding and
-your last eight prompts word for word already in context, under the same
-10,240-byte limit. A check compares the new checkpoint with the one the
+up to your last eight prompts word for word, under the same 10,240-byte
+limit. When the block is too large it substitutes pointers or omits older
+prompts, so the new session may need to read the source files. A check compares the new checkpoint with the one the
 session resumed from and blocks the restart when an open item was dropped
 without a reason.
 
-`/commandeck:handoff` does the same checkpoint and restart on demand, below
-the line. You have to type it; the model cannot invoke it.
+The handoff skill does the same checkpoint and restart on demand, below
+the line. You have to type it; the model cannot invoke it:
+
+```text
+/commandeck:handoff
+```
 
 Outside Orca the hook cannot restart the pane. It says so and asks you to
-type `/clear`, and the new session does not get the resume block.
+clear the session manually, and the new session does not get the resume block.
 
 ## Dashboard, build review and test audit
 
 The dashboard is one local page for all your projects, with a bar to switch
-between them. A background job collects its data every 60 seconds with no
-model call, and the page reloads every 15. Each project's view shows alerts,
+between them. A background job waits 60 seconds between collections, with no
+model call; collection time adds to that interval. The page refreshes its
+data every 15 seconds. Each project's view shows alerts,
 builds in progress, decisions waiting on you, `main` against its remote,
 every worktree by stage, a unit's planning as its Planning stage, seat by seat,
 counted in its build's cost, the 7-day limit, tokens per role over 7 days, recent
@@ -520,13 +788,19 @@ A planning card lists every plan seat with its model, effort and state;
 `COMMANDECK_CODEX_REVIEW_HOME` (default `~/.codex-review`) names the review
 Codex home whose spend counts.
 
-It serves plain HTTP on `127.0.0.1`, on the first free port from 8791, and
+It serves plain HTTP on `127.0.0.1`, on the first available port in 8791–8890 unless you set a port, and
 setup prints the address. It has no login. On the loopback bind it answers
 403 to any other host name; `--bind` and `--hosts` at setup open it to your
-own network, and it still has no login there.
+own network, and it still has no login there. Network mode also accepts
+the machine's own names and IP addresses; the hosts list is not an
+authentication mechanism.
 
-The build review runs only when you ask for it:
-`/commandeck:worktreereview <unit>`, for a merged build or one still running.
+The build review runs only when you ask for it, for a merged build or one
+still running:
+
+```text
+/commandeck:worktreereview add-csv-export
+```
 The merge does not run it. It makes one HTML page per build under
 `~/.commandeck/reviews/`, with the session's notes on what to learn from it.
 It shows where the time went stage by stage, every review pass with its full
@@ -539,71 +813,108 @@ shown on its own and flags nothing. A lesson that proposes a change becomes
 a draft issue, and only the drafts you approve are filed. It reads logs
 only, so it works after the worktree is gone.
 
-`/test-audit <scope dir...> [basic|full] [N agents]` has agents read a
+The test-audit workflow has agents read a
 folder's tests against its code and report what is redundant, slow or unable
 to fail, and in `full` mode what is missing. Up to 16 Haiku agents read in parallel (4 by default), and a
 last Sonnet stage checks the audit itself: that every file was read and that
-the counts agree. It changes no file and runs no test. It stops above 200
+the counts agree. It changes no repository file and runs no test; it writes reports to scratch. It stops above 200
 test files, so give it a folder and not the repository. It is a Claude Code
 workflow, which setup installs in the project and turns on.
 
-## Numbers
+### Dashboard panels and mobile use
 
-`scripts/proof-run.sh` builds a throwaway machine in a temp folder (an empty
-home that another tool has already written to, a small Node project, stubs
-for Orca, `claude` and `codex`), runs setup, the scripted steps of one unit
-and uninstall for each profile, and prints one row per measure. No model
-runs. From version 0.1.0, run on 2026-10-13, the same for both profiles
-unless noted:
-
-| Measure | Result |
-|---|---|
-| Startup bytes, orchestrator | 7437 (limit 10240) |
-| Startup bytes, Builder | 4037 |
-| Startup bytes, worker | 3746 |
-| Startup bytes, Chief of Staff | 2064 |
-| Hook cost over the scripted unit | 9 hooks, 29 fires, 2 blocks; slowest p95 126 ms (`claude`), 119 ms (`claude-openai`) |
-| The 150K clear line of `--standard-context` | fires on a 160K transcript |
-| Another tool's hooks, settings and job file while installed | identical |
-| After uninstall, data kept | identical but for the kept data (19 paths) |
-| After uninstall, data deleted | identical |
-
-The timings vary from run to run and machine to machine. Tokens per role,
-cache hit rate and passes to GO need a real build, so the script prints them
-as "not measured" with the command that measures each. To reproduce, from a
-clone of this repository:
+Open the HTTP address setup prints. If you lost it, the read-only job-file
+command prints the path to the service configuration; read that file for the
+port. The status command checks whether the job is running:
 
 ```bash
-bash scripts/proof-run.sh                      # both profiles
-bash scripts/proof-run.sh --profile claude     # one
+bash "$PLUGIN/scripts/dashboard.sh" --job-file
+bash "$PLUGIN/scripts/dashboard.sh" --status
+```
+
+| Panel | Shows |
+|---|---|
+| Alerts | Current project and machine warnings, with source freshness. |
+| Builds in progress | Active builds and their progress. |
+| Needs the owner | Open decisions, questions and high-priority findings. |
+| Main | Branch state against its remote and recent commits. |
+| Units | Planning, Building, In review, Fixing and Waiting on main, with seat activity and cost. |
+| Merge line | Open GitHub pull requests and their checks. |
+| Who holds what | GitHub issues grouped by milestone and the unit holding each. |
+| Next push | Local main commits ahead of origin/main and related checks. |
+| 7-day limit | Account usage windows where available, history and list-price spend; API billing uses a spend view. |
+| Main's to-do list | The project's `todo/main-todo.md`. |
+| Host | Machine load and swap readings. |
+| Tokens per role, 7 days | Input/output totals across roles and models. |
+| Recent guard blocks | Recent blocking hook events and counts. |
+| Chief of Staff's inbox | Relay messages for the project. |
+| Main's background agents | Main's running helper agents. |
+
+Panels can be reordered, resized, folded and hidden. Needs a look filters for
+warnings and pending work. Layouts are kept per project in browser storage
+and saved on the dashboard host, so another browser can pick them up. These
+layout writes are the page's supported server mutation; it does not merge
+branches or answer decisions.
+
+At phone width, panels use one column with bottom navigation and stage chips.
+To reach the page from another device, choose network access in setup, or
+apply the corresponding settings after reviewing that the server has no login
+and uses plain HTTP:
+
+```bash
+bash "$PLUGIN/scripts/setup.sh" --dashboard --bind 0.0.0.0 --hosts <dashboard-name>
+```
+
+Replace the name with the one the other device uses for this machine. This
+changes the machine's shared dashboard service. Use the printed port. Unknown
+DNS names are refused, but IP access and the machine's own names are allowed.
+
+## Numbers
+
+`scripts/proof-run.sh` builds a throwaway fixture machine in a temporary
+folder: an isolated home with existing settings, a small Node project, and
+stubs for Orca, Claude, Codex and the service manager. It runs setup, a scripted
+unit and uninstall for each profile. No real model or service is started.
+
+It reports startup bytes, scripted hook counts and timings, clear-line checks
+and restoration of fixture files. These are fixture measurements, not a
+promise of production speed. Tokens, cache behavior, real review convergence
+and restart takeover need a live build; the script labels those not measured.
+Run it from a clone when you want current figures:
+
+```bash
+bash scripts/proof-run.sh
+bash scripts/proof-run.sh --profile claude
 ```
 
 ## Add-ons
 
-Setup installs every add-on, and on each later run updates each one to its
-latest; no command names a version. Its question (several answers) can narrow
-that: each one you pick is run for the project's main checkout by its command
-in `config/addons.tsv`, and setup reports it as installed or, with the command
-to run, as failed. One you do not pick installs nothing; setup prints its
-command and what it costs you. Installing serena also turns on the hooks that
-use it (`--serena`). codebase-memory is installed from its own page; once it is
-there, setup updates it only while no Claude or Codex session is open (its one
-daemon refuses a client of another version), then checks that a new session
-reaches it and says FAILED under Needs you if not. The ponytail plugin is
-installed only when you already have it and ponytail is on. The [Ponytail](https://github.com/DietrichGebert/ponytail)
-skill (`templates/ponytail`) is its own question, on by default, and left
-alone when you already have it.
+Setup's default is to attempt the add-ons listed in `config/addons.tsv`.
+Commands with installers install or update to latest; no version is pinned.
+Entries that say to see an upstream installer page need manual installation.
+The full Ponytail plugin is attempted by default only if already enabled and
+the setup Ponytail answer is on. The bundled Ponytail skill is separate,
+on by default and never overwrites an existing copy.
 
-| Add-on | What it adds | What it costs |
+Selecting specific add-ons or None limits **that setup run**. The selection
+is not saved, so a later setup or update without a selection attempts the
+default list. Setup prints failures under Needs you and prints commands for
+anything it did not install. A successful setup message does not mean every
+add-on succeeded.
+
+| Add-on | What it adds | Local cost or setup behavior |
 |---|---|---|
-| [serena](https://github.com/oraios/serena) | symbol lookup for code | one language-server process per project |
-| [codebase-memory](https://github.com/DeusData/codebase-memory-mcp) | a graph of the whole repository | one background indexer; its tool list rides in every session |
-| [agent-browser](https://github.com/vercel-labs/agent-browser) | a browser the agent can drive | a browser download of a few hundred MB |
-| [ponytail](https://github.com/DietrichGebert/ponytail), the full plugin | its rules at every session start | about 1 KB per session |
-| [ui-themes](https://github.com/yugal1107/ui-themes) | UI theme skills | loaded only when asked for |
-| [mattpocock/skills](https://github.com/mattpocock/skills) | a set of engineering skills | one line per skill in every session's skill list |
+| serena | Symbol lookup | Language-server processes; selecting it enables its hook setting unless explicitly disabled. |
+| codebase-memory | Repository graph | Background indexer and MCP tools; manual first install, then guarded updates and a tool-list check. |
+| agent-browser | Browser automation | Global npm package and a browser download. |
+| ponytail, full plugin | Startup coding rules | Separate from the bundled on-demand skill; its registry description estimates about 1 KB of rules. |
+| ui-themes | Theme skills | Installed by a plugin command; loaded when requested. |
+| Engineering-skills add-on | Engineering skills | No one-line installer in this registry; skill descriptions add session context. |
 
-Who wrote each one, and under what licence, is in [`NOTICE`](NOTICE).
+Upstream sources and recorded licences are in [`NOTICE`](NOTICE). That file's
+older statement that setup only prints add-on commands is stale; the current
+`setup.sh` and `config/addons.tsv` determine installation behavior. Uninstall
+does not remove external add-ons or undo their updates.
 
 ## Layout
 
@@ -615,34 +926,195 @@ Who wrote each one, and under what licence, is in [`NOTICE`](NOTICE).
 | `hooks/` | the hook scripts and `hooks.json`, which registers them |
 | `dashboard/` | the dashboard's page; `scripts/dashboard.sh` collects its data |
 | `templates/`, `skills/` | the brief, checkpoint and Codex templates and the test-audit workflow; the setup, doctor, update, uninstall, handoff and build review skills |
-| `ci/` | the leak test and its word list |
+| `ci/` | the leak test, its word list and the release-version check |
 
-State lives under `~/.commandeck/`; the record of what setup changed is in
+Plugin state lives under `~/.commandeck/`, with project ledgers, Claude logs
+and Codex logs in the locations below; the record of what setup changed is in
 `~/.commandeck/install/`. Worktrees go under `~/orca/workspaces/<project>/`.
 Environment overrides start with `COMMANDECK_`; `scripts/paths.sh` lists the
 path ones.
 
-## Tests
+## Uninstalling
 
-From a clone of this repository:
+In every configured project, while the plugin is still installed:
 
-```bash
-bash scripts/run-shell-tests.sh    # every shell self-test
-bash scripts/run-shell-tests.sh --changed main  # only the tests your change touches
-bash ci/leak-test.sh               # no name from the source project in the tree
-bash scripts/proof-run.sh          # the numbers above
+```text
+/commandeck:uninstall
 ```
 
-This repository's merge check (`testCommand` in `.claude/commandeck.json`) is
-`bash scripts/run-shell-tests.sh --changed`: it runs only the shell tests the
-change touches, each test it adds or edits and the same-name test of each
-script or hook it adds or edits. The whole suite stays `bash scripts/run-shell-tests.sh`.
+The skill asks whether to keep or delete gathered data. The equivalent
+terminal commands are alternatives; choose one:
+
+```bash
+bash "$PLUGIN/scripts/uninstall.sh"
+```
+
+```bash
+bash "$PLUGIN/scripts/uninstall.sh" --delete-data
+```
+
+Uninstall stops that project's watcher, removes its dashboard registration
+when setup added it, and restores managed project files. In merged settings
+it removes the plugin's entries and preserves your later edits. A `changed
+since setup` line means that file cannot be restored byte for byte. The last
+project releases the machine's managed Codex hooks, dashboard job, global
+entries, installed Ponytail skill and unchanged managed status line.
+
+By default it keeps decision, seat and helper ledgers, scratch, hook logs,
+rulings, relay state and finished-build records. Delete-data removes those
+for this project, and the dashboard's generated data with the last project.
+It can be run later to remove kept data. It leaves briefs, review rounds,
+checkpoints, HTML reviews, Claude/Codex transcripts, your visible backup
+copies and external add-ons. It does not promise to remove active Builder
+or relay worktrees: inspect those in Orca and keep any unfinished work.
+
+After uninstalling the wiring in every project, remove the plugin package:
+
+```bash
+claude plugin uninstall commandeck
+```
+
+## Troubleshooting
+
+Start with the doctor in the primary checkout and keep its FAIL and warn
+lines. Do not treat a successful setup exit as proof that optional add-ons
+worked.
+
+| Symptom | What to check |
+|---|---|
+| Setup lists missing tools | Install the reported tools, or accept its exact package-manager command. Compare shell PATH with `env.PATH` in global Claude settings. Setup does not edit that PATH. |
+| Hooks say no Bash 4+ | Install a newer Bash; on macOS use the Homebrew package. Until then the plugin's hooks check nothing. |
+| Linux/WSL jobs do not start | Make sure systemd user services are available for the logged-in user. There is no Windows-native backend. |
+| Setup refuses a duplicate project name or record | It guards shared watcher/log names and normalized path collisions. Use a distinct checkout folder name or uninstall the conflicting project first. |
+| Builder refuses to launch | Commit the referenced nonempty plan on main, check the batch path and review preflight, or record an explicit reason to skip the plan. |
+| Codex reviewer cannot start | Check Codex sign-in, the separately installed Codex plugin's companion, account models and any fast-tier setting. The real pass also probes provider access before committing. |
+| Claude-only review cannot start | Check that the configured Claude reviewer role is usable and Claude is available. If you changed the Builder to Sonnet, choose a different reviewer family yourself. |
+| Merge refuses proof | Review the current tip again as directed. Missing reviewer sessions or saved prompts cannot be replaced by typing GO into a round file. |
+| Merge check is red | Fix the reported failure in the Builder. The squash is undone; rerun review if the code changes. |
+| Merge exits 3 or 4 | The commit already exists. Finish cleanup for 3; file the missing issues using the printed command for 4. |
+| Dashboard is missing or stale | Check its status and job file, its registered GitHub origin, GitHub sign-in, and each source's error/freshness. A slow collector adds time to the 60-second sleep. |
+| Dashboard returns 403 | Open its own page at the loopback address, or use a configured network name/IP. Cross-site requests are refused. |
+| Relay is silent | Check the stored relay name, project run and all four watchers. FYI notes wait for a waking message. |
+| Worker waits on an unseen picker | Workers must send questions through Orca to main; only main and the relay have owner-facing pickers. |
+| Worktree settings have no effect | Read the doctor's shadow warnings and main's settings.local.json. Start a fresh session after fixing precedence. |
+| Handoff leaves the old pane open | Read `~/.claude/checkpoints/clear-hook.log` and the next prompt's HANDOFF NOT DONE line. Fix checkpoint freshness/carry-over or Orca takeover before retrying. |
+| Update fails after rewriting files | Read its rollback message. Recorded files are restored, but jobs may need old setup rerun and add-ons may already have updated. |
+
+## Security and privacy
+
+Agents run on your machine, using your credentials and tool permissions.
+Claude and Codex requests send prompts, code, diffs and relevant context to
+their configured providers. Codex can use a provider configured in its own
+config; it is not restricted here to one endpoint. Add-on installers download
+code and packages and may start MCP servers or browser processes. Review their
+commands in `config/addons.tsv` before applying setup.
+
+The dashboard collector calls GitHub through gh for issues, pull requests,
+milestones and checks. A local merge can create GitHub issues containing open
+findings. Build-review issue drafts are filed only after your approval.
+The account-usage reader uses Claude credentials from the macOS keychain or
+`~/.claude/.credentials.json` to call Anthropic's usage API. Codex limit
+readings and token totals come from local session records. The dashboard
+collector makes no model call; the plugin does not supply a separate hosted
+dashboard backend.
+
+Local records can contain code, prompts, paths and your decisions:
+
+| Location | Stored data |
+|---|---|
+| `.claude/briefs/` | Batch briefs, rendered Builder instructions, evidence and review rounds. |
+| `.claude/metrics/` | Decisions, seat events and helper usage. |
+| `~/.commandeck/scratch/` | Per-project orchestration and temporary state. |
+| `~/.commandeck/builds/`, `~/.commandeck/reviews/` | Finished-build records and HTML reviews. |
+| `~/.commandeck/dashboard/` | Collected snapshots, usage caches/history, project registrations and saved layouts. |
+| `~/.commandeck/install/` | Restore manifests and original configuration contents; treat backup blobs as private. |
+| `~/.claude/projects/`, `~/.codex/sessions/` | Claude and Codex transcripts, under the active homes. |
+| `~/.claude/checkpoints/`, `~/.claude/rulings/` | Resume checkpoints and recorded owner answers. |
+| `~/.claude/hook-fire-log/` | Hook timing and action summaries. |
+| `<reviewer-home>/builder-pass-prompts/` | Exact prompts used as review evidence. |
+
+The dashboard is unauthenticated HTTP. Loopback is the default. Network mode
+exposes its snapshots and layout controls to reachable clients; host and
+same-origin checks are not user authentication or encryption. Keep it on a
+network you trust. Hooks and reviewer evidence deter mistakes, but a process
+with your filesystem access can forge local records. The literal-secret
+warning is a narrow pattern check, not a full secret scanner.
+
+Do not publish logs or reports without reviewing them. Report vulnerabilities
+privately through this repository's Security tab, as described in
+[`SECURITY.md`](SECURITY.md). Only the latest release is supported there.
+
+## Tests
+
+From a clone, list or run the ordinary shell suite:
+
+```bash
+bash scripts/run-shell-tests.sh --list
+bash scripts/run-shell-tests.sh
+```
+
+The runner covers top-level shell tests in `hooks/__tests__/` and
+`scripts/__tests__/`. Parked tests are reported as skipped. Tests marked
+own-lane are skipped by the ordinary run and have a separate mode:
+
+```bash
+bash scripts/run-shell-tests.sh --own-lane
+```
+
+For a focused check, compare to `main` from a branch:
+
+```bash
+bash scripts/run-shell-tests.sh --changed main
+```
+
+This selects edited tests and same-name tests for changed scripts or hooks;
+it does not discover every caller of a shared helper. With no base argument,
+the base is HEAD. Documentation changes select no shell tests.
+
+The other repository checks are:
+
+```bash
+bash ci/leak-test.sh
+bash ci/version-check.sh
+claude plugin validate .
+bash scripts/startup-size.sh
+```
+
+Version check compares to `origin/main` by default. Documentation-only changes
+need no version bump. Plugin changes need a version and changelog entry; see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Use the runtime requirements above plus ripgrep and Node.js. Dashboard DOM
+tests need jsdom 26. CI installs it into a temporary prefix and supplies the
+path rather than adding a project dependency. To match that locally:
+
+```bash
+COMMANDECK_TEST_DEPS=$(mktemp -d)
+npm install --prefix "$COMMANDECK_TEST_DEPS" --no-save jsdom@26
+COMMANDECK_TEST_NODE_MODULES="$COMMANDECK_TEST_DEPS/node_modules" bash scripts/run-shell-tests.sh
+```
+
+The runner needs Bash 4+ and GNU tools. CI uses Ubuntu's jq 1.7; verify against
+that version when changing jq programs. Test concurrency and per-file timeout
+can be set with `COMMANDECK_SHELL_TEST_JOBS` and
+`COMMANDECK_SHELL_TEST_TIMEOUT`. Defaults are half the CPUs (at least one)
+and 120 seconds, except a test's own timeout marker.
+
+Contributions should branch from `main`, keep one change per pull request,
+and add a test that fails without a behavior fix. Open an issue first for a
+larger change. Follow the repository's contributing instructions; do not add
+whole-install tests for new behavior. The fixture proof is a separate manual check described in [Numbers](#numbers).
 
 ## Support
 
 Best effort, no guaranteed response time. Report every problem in one place:
-the Issues tab of this repository. Include the output of the command that
-failed and of `claude --version`.
+the Issues tab of this repository, except security vulnerabilities (see
+[Security](SECURITY.md)). Include the output of the command that
+failed, plus the CLI version:
+
+```bash
+claude --version
+```
 
 ## Licence
 
