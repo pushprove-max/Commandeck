@@ -38,30 +38,18 @@ def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
 def writes(mode):  # True, False, or None when the mode is not a plain string
     v = lit(mode)
     return None if v is None else bool(re.search(r"[wax+]", v))
-def omode(b, i):  # an open call's mode: mode=, else argument i unless it is a keyword, else read
-    k = next((x.split("=", 1)[1] for x in b if re.match(r"\s*mode\s*=", x)), None)
-    return k if k is not None else b[i] if len(b) > i and not re.match(r"\s*(\w+\s*=|$)", b[i]) else "'r'"
+LANG = set(re.findall(r"(?:^|[^\w.-])(python|perl|node)[0-9.]*(?=\s|$)", s))
+PY, JS = "python" in LANG, "node" in LANG
+def may_write(b, i, py, js):  # an open call's mode, argument i: True unless each reading of it is read-only
+    modes = []
+    if py:  # mode=, else argument i unless it is a keyword, else read
+        k = next((x.split("=", 1)[1] for x in b if re.match(r"\s*mode\s*=(?!=)", x)), None)
+        modes.append(k if k is not None else b[i] if len(b) > i and not re.match(r"\s*(\w+\s*=(?!=)|$)", b[i]) else "'r'")
+    if js:  # r5: in JavaScript flags='w' is an assignment, and its value is the mode
+        modes.append(re.sub(r"^(\s*[\w$]+\s*=(?!=))+", "", b[i]) if len(b) > i and b[i].strip() else "'r'")
+    return any(writes(x) is not False for x in modes)
 dests = []  # each a literal path, or None for one that cannot be read
-TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
-AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
-      "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
-for m in re.finditer(r"(?<![\w$])(open|openSync|" + TO + "|" + AT + r")\s*\(", s):
-    name, (a, _) = m.group(1), args(m.end() - 1)
-    if name in ("open", "openSync"):
-        if s[:m.start()].endswith(")."): continue  # Path(...).open: below
-        if re.match(r"\s*(my\s+)?[$A-Z]", a[0]) and len(a) >= 2:  # perl: open(F, '>x') or open(my $f, '>', 'x')
-            v = lit(a[1])
-            if len(a) == 2:
-                if v is None: dests.append(None)
-                elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
-            elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
-            continue
-        if writes(omode(a, 1)) is not False: dests.append(lit(a[0]))
-    elif re.fullmatch(TO, name):
-        dests.append(lit(a[1]) if len(a) > 1 else None)
-        if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
-    else: dests.append(lit(a[0]))
-seen = set()  # where a Path(...) method call starts, read below
+seen = set()  # where a Path(...) method call starts
 for m in re.finditer(r"\bPath\s*\(", s):
     a, end = args(m.end() - 1)
     t = re.match(r"\s*\.\s*(\w+)\s*\(", s[end:])
@@ -69,15 +57,42 @@ for m in re.finditer(r"\bPath\s*\(", s):
     seen.add(end + t.start(1))
     b = args(end + t.end() - 1)[0]
     if t.group(1) in ("write_text", "write_bytes", "touch", "unlink", "rename", "replace", "symlink_to", "hardlink_to", "chmod", "rmdir") \
-       or (t.group(1) == "open" and writes(omode(b, 0)) is not False):
+       or (t.group(1) == "open" and may_write(b, 0, True, False)):
         dests.append(lit(a[0]))
         if t.group(1) in ("rename", "replace"): dests.append(lit(b[0]))
+TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
+AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
+      "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
+for m in re.finditer(r"(?<![\w$])(open|openSync|" + TO + "|" + AT + r")\s*\(", s):
+    name, (a, _) = m.group(1), args(m.end() - 1)
+    if name in ("open", "openSync"):
+        if m.start() in seen: continue  # Path(...).open: read above
+        recv = re.search(r"\.\s*$", s[:m.start()])
+        # r5: perl's open has no receiver; a bare uppercase name is a perl handle only in a perl command
+        if name == "open" and not recv and len(a) >= 2 and (re.match(r"\s*(my\s|\$)", a[0]) or "perl" in LANG and re.match(r"\s*[A-Z]\w*\s*$", a[0])):
+            v = lit(a[1])  # perl: open(F, '>x') or open(my $f, '>', 'x')
+            if len(a) == 2:
+                if v is None: dests.append(None)
+                elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
+            elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
+            if not (PY or JS): continue  # else it is read as their open as well
+        js = name == "openSync" or JS and bool(recv)  # JavaScript's open is a method (fs.open, fsp.open)
+        if may_write(a, 1, name == "open" and (PY or not JS), js): dests.append(lit(a[0]))
+    elif re.fullmatch(TO, name):
+        dests.append(lit(a[1]) if len(a) > 1 else None)
+        if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
+    else: dests.append(lit(a[0]))
 # r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
 for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to|open)\s*\(", s):
     if m.start(1) in seen: continue
-    if m.group(1) == "open" and re.search(r"(?<![\w$])(io|os|codecs|gzip|bz2|lzma|fs|promises|webbrowser)\s*$", s[:m.start()]): continue  # the open( loop read it
-    v = lit(omode(args(m.end() - 1)[0], 0))  # r3: a mode the text does not spell out (m='w'; p.open(m)) may write
-    if m.group(1) != "open" or v is None or re.fullmatch(r"[rbtU]*[wax+][rwabxtU+]*", v): dests.append(None)
+    b = args(m.end() - 1)[0]
+    # r5: a quoted path first is a module's open(path, mode) (io.open, fsp.open), which the open( loop read; the
+    # receiver's name proves nothing (io = Path('x')), so any other first argument is read as a Path mode
+    if m.group(1) == "open" and lit(b[0]) is not None and not re.fullmatch(r"[rwabxtU+]*", lit(b[0])): continue
+    r = re.search(r"(?<![\w$.])(\w+)\s*$", s[:m.start()])  # a module the script imports and never rebinds
+    if m.group(1) == "open" and r and re.search(r"\bimport\s+([\w.]+\s*,\s*)*" + r[1] + r"\b(?!\s*as)|\b" + r[1] + r"\s*=\s*require\s*\(", s) \
+       and len(re.findall(r"(?<![\w$.])" + r[1] + r"\s*=(?!=)", s)) <= len(re.findall(r"\b" + r[1] + r"\s*=\s*require\s*\(", s)): continue
+    if m.group(1) != "open" or may_write(b, 0, True, False): dests.append(None)  # r3: m='w'; p.open(m) may write
 try: words = shlex.split(s)
 except ValueError: words = s.split()
 for i, w in enumerate(words):  # perl -i edits in place the files after the script
