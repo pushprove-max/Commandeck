@@ -148,13 +148,17 @@ RETRYING = threading.Lock()  # one retry batch at a time
 
 
 def kept(directory):
-    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key}."""
+    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key}. A send pass 2 kept has no key:
+    its content is one, the same on every read, and the next write keeps it."""
     try:
         with open(os.path.join(directory, 'answer-retry.json')) as f:
-            return [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
-                    and isinstance(m.get('key'), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
+            ms = [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
+                  and isinstance(m.get('key', ''), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
     except (OSError, ValueError, TypeError):
         return []
+    for m in ms:
+        m.setdefault('key', json.dumps(m, sort_keys=True))
+    return ms
 
 
 def marks(directory):
@@ -192,8 +196,9 @@ def deliver(directory, m):
     return r.returncode in ((0, 3) if m['to'] == 'main' else (0,)), False, m['to'] == 'main' and PICKER in r.stdout
 
 
-def settle(directory, taken, tried):
-    """`taken` is out of flight again; of `tried` ([(send, delivered, picker)]) the delivered leave the file, and each
+def settle(directory, taken, tried, slow=()):
+    """`taken` is out of flight again; of `tried` ([(send, delivered, picker)]) the delivered leave the file, those
+    that timed out (keys in `slow`) go to its end so the next batch tries the rest first, and each
     delivery to main updates the picker marks: a picker open marks its answer, none open drops that main's marks.
     shortcut: a mark stays until a later delivery to that main finds no picker; read main's pane if that proves stale.
     A file that cannot be written keeps what it had: a delivered send may then go twice, which beats never."""
@@ -208,7 +213,8 @@ def settle(directory, taken, tried):
                 elif {'main': m['main'], 'id': m['id']} not in held:
                     held.append({'main': m['main'], 'id': m['id']})
         try:
-            write(directory, 'answer-retry.json', [m for m in kept(directory) if m['key'] not in gone])
+            left = [m for m in kept(directory) if m['key'] not in gone]
+            write(directory, 'answer-retry.json', [m for m in left if m['key'] not in slow] + [m for m in left if m['key'] in slow])
             write(directory, 'answer-picker.json', held)
         except OSError:
             pass
@@ -228,28 +234,32 @@ def send(directory, msgs):
             write(directory, 'answer-retry.json', kept(directory) + msgs)
         except OSError:
             pass
-    tried = []
+    tried, slow = [], set()
     for m in msgs:
-        ok, _, picker = deliver(directory, m)
+        ok, late, picker = deliver(directory, m)
         tried.append((m, ok, picker))
-    settle(directory, msgs, tried)
+        if late:
+            slow.add(m['key'])
+    settle(directory, msgs, tried, slow)
     return sum(not ok for _, ok, _ in tried), any(p for _, _, p in tried)
 
 
 def retry(directory):
     """The kept sends not in flight, tried again in order; the batch stops at its first timeout, so one costs at most
-    SEND_TIMEOUT and what follows waits for the next refresh. What still fails stays kept."""
+    SEND_TIMEOUT and what follows waits for the next refresh. What still fails stays kept, a timed-out send behind the
+    rest so it cannot starve them."""
     try:
         with SENDS:
             todo = [m for m in kept(directory) if m['key'] not in FLYING]
             FLYING.update(m['key'] for m in todo)
-        tried = []
+        tried, slow = [], set()
         for m in todo:
-            ok, slow, picker = deliver(directory, m)
+            ok, late, picker = deliver(directory, m)
             tried.append((m, ok, picker))
-            if slow:
+            if late:
+                slow.add(m['key'])
                 break
-        settle(directory, todo, tried)
+        settle(directory, todo, tried, slow)
     finally:
         RETRYING.release()
 

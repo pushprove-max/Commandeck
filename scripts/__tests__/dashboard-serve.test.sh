@@ -312,5 +312,39 @@ check "main's open picker is named in the reply and kept for the collector; a de
 False []" "$(sed -n 6,7p <<<"$OUT")"
 check "a resent answer that finds main's picker open is kept for the collector" "[] ['again-1999-01-01']" "$(sed -n 8p <<<"$OUT")"
 
+# Pass 2 kept sends without a key, and their ledger rows are already closed: an upgrade that drops them on its next
+# write loses those answers for good. And a send that always times out must not starve the ones behind it: each
+# batch stops at its first timeout, so the timed-out send goes to the back of the file.
+mkdir -p "$T/retry"
+OUT=$(python3 - "$ROOT/scripts" "$T/retry" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+D = sys.argv[2]
+held = lambda: [m["id"] for m in json.load(open(D + "/answer-retry.json"))]
+json.dump([{"main": "/project", "id": "old-1999-01-01", "to": "main", "args": ["question", "old-1999-01-01", "yes"]}], open(D + "/answer-retry.json", "w"))
+print([m["id"] for m in d.kept(D)])
+d.deliver = lambda directory, m: (False, False, False)
+d.send(D, [{"main": "/project", "id": "new-1999-01-01", "to": "main", "args": ["question", "new-1999-01-01", "yes"]}])
+print(held())
+d.deliver = lambda directory, m: (True, False, False)
+d.RETRYING.acquire(); d.retry(D)
+print(held())
+json.dump([{"main": "/project", "id": i, "to": "main", "args": [i], "key": i} for i in ("A", "B")], open(D + "/answer-retry.json", "w"))
+tried = []
+def deliver(directory, m):
+    tried.append(m["id"])
+    return (False, True, False) if m["id"] == "A" else (True, False, False)
+d.deliver = deliver
+for _ in range(3):
+    d.RETRYING.acquire(); d.retry(D)
+print(tried, held())
+PY
+)
+check "a pass-2 send without a key is still kept" "['old-1999-01-01']" "$(sed -n 1p <<<"$OUT")"
+check "and survives the next write" "['old-1999-01-01', 'new-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
+check "and leaves the file once delivered" "[]" "$(sed -n 3p <<<"$OUT")"
+check "a send that always times out goes behind the rest, which are delivered" "['A', 'B', 'A', 'A'] ['A']" "$(sed -n 4p <<<"$OUT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
