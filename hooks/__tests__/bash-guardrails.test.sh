@@ -174,7 +174,12 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "python3 -c \"from shutil import copy as c; c('/tmp/a', 'scripts/x.sh')\"" \
   "python3 -c \"from shutil import copy as f; f('/tmp/a', 'scripts/x.sh'); from io import open as f\"" \
   "python3 -c \"from io import open as copy; import shutil; shutil.copy('/tmp/a', 'scripts/x.sh')\"" \
-  "python3 -c \"from io import open as copy; copy('/tmp/a', 'scripts/x.sh')\"" \
+  $'python3 -c "from io import open as copy\nfrom shutil import copy\ncopy(\'/tmp/a\', \'scripts/x.sh\')"' \
+  $'python3 -c "from shutil import copy as c\n# Copy.\nc(\'/etc/hosts\',\'scripts/x.sh\')"' \
+  $'node -e "const {copyFileSync: c}=require(\'fs\') // copy.\nc(\'/etc/hosts\',\'scripts/x.sh\')"' \
+  $'python3 -c "from shutil import copy as c; x = 1.\nc(\'/etc/hosts\',\'scripts/x.sh\')"' \
+  "node -e \"const {copyFileSync: c}=require('fs'); Math.max(...c('/etc/hosts','scripts/x.sh'))\"" \
+  "python3 -c \"from os import *; from io import open as remove; remove('scripts/x.sh')\"" \
   "python3 -c \"import io; from pathlib import Path; io, other = Path('scripts/x.sh'), None; io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; (io := Path('scripts/x.sh')).open('w')\"" \
@@ -198,7 +203,9 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   "python3 -c \"import io; print(io.open('scripts/x.sh').read())\"" \
   "node -e \"const {open}=require('fs'); open('scripts/x.sh','r',()=>{})\"" \
   "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\"" \
-  "python3 -c \"from shutil import copy as w; import io; print(io.w('/tmp/z', 'scripts/x.sh'))\""; do
+  "python3 -c \"from shutil import copy as w; import io; print(io.w('/tmp/z', 'scripts/x.sh'))\"" \
+  "python3 -c \"from io import open as remove; print(remove('scripts/x.sh').read())\"" \
+  "node -e \"const {readFileSync: unlink}=require('fs'); console.log(unlink('scripts/x.sh','utf8'))\""; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done
 

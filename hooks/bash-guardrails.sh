@@ -68,6 +68,13 @@ NAMES = "open|openSync|" + TO + "|" + AT
 # r7: the text's order is not run order, so a name bound twice is read as each binding, and as itself
 alias = {}
 for m in re.finditer(r"(?<![\w$.])(" + NAMES + r")(?:\s*:\s*|\s+as\s+)([\w$]+)", s): alias.setdefault(m[2], set()).add(m[1])
+# r8: a name something else is bound to (from io import open as remove) is the API itself only where the text binds it
+# so too: a builtin (python's open, perl's own), import *, or the name bare (from os import remove; {remove})
+REN = r"(?<![\w$.])[\w$]+(?:\s*:\s*|\s+as\s+)"
+renamed = set(re.findall(REN + r"(" + NAMES + r")(?![\w$])", s))
+def itself(n):
+    return n not in renamed or n == "open" and PY or "perl" in LANG or re.search(r"\bimport\s+\*", s) \
+        or re.search(r"(?<![\w$.])" + n + r"(?![\w$]|\s*\()", re.sub(REN + r"[\w$]+", "", s))
 def screen(name, a, recv):
     if name in ("open", "openSync"):
         # r5: perl's open has no receiver; a bare uppercase name is a perl handle only in a perl command
@@ -85,8 +92,10 @@ def screen(name, a, recv):
         if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
     else: dests.append(lit(a[0]))
 for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
-    recv = re.search(r"\.\s*$", s[:m.start()])  # r7: an alias rebinds a bare name only, never shutil.copy
-    names = {m[1]} & set(NAMES.split("|")) | (set() if recv else alias.get(m[1], set()))
+    # r7: an alias rebinds a bare name only, never shutil.copy. r8: a receiver is a name, ) ] or a string on the
+    # same line, so neither a comment's closing dot (# Copy.\nc(...)), 1.\nc(...) nor a spread (...c()) is one
+    recv = re.search(r"[\w$)\]'\"`][ \t]*\??\.[ \t]*\Z", s[:m.start()])
+    names = ({m[1]} & set(NAMES.split("|")) if recv or itself(m[1]) else set()) | (set() if recv else alias.get(m[1], set()))
     for name in names:
         if not (name in ("open", "openSync") and m.start() in seen): screen(name, args(m.end() - 1)[0], recv)  # Path(...).open: read above
 # r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
