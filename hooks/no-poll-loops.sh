@@ -240,9 +240,44 @@ if [ "$WORKER" = 1 ]; then
   # of CMD_CODE (shlex), by the same rules and recursively (issue 216). One shlex cannot read is a wait not read.
   WAITED=$(printf '%s' "$JOINED" | NPL_RAW=$CMD_CODE python3 -I -c 'import os, shlex, sys; exec(os.environ["NPL_WORDS"])
 UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+ESC = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+def ansi_c(m):
+    e = m.group(1)
+    if e[0] in "xuU":
+        return chr(int(e[1:], 16))
+    return chr(int(e, 8) & 255) if e[0] in "01234567" else ESC.get(e, e)
+def dollar_quotes(text):
+    # $'...' as its decoded text in single quotes, $"..." as "...", outside other quotes only: shlex reads neither.
+    out, i, q = [], 0, None
+    while i < len(text):
+        c = text[i]
+        if q == "\x27":
+            q = None if c == "\x27" else q
+        elif c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        elif q == "\"":
+            q = None if c == "\"" else q
+        elif c == "$" and text[i + 1:i + 2] == "\x27":
+            m = re.compile(r"((?:[^\x27\\]|\\.)*)\x27", re.S).match(text, i + 2)
+            if not m:
+                raise ValueError("no closing quotation")
+            body = re.sub(r"\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|.)", ansi_c, m.group(1), flags=re.S)
+            out.append(shlex.quote(body))
+            i = m.end()
+            continue
+        elif c == "$" and text[i + 1:i + 2] == "\"":
+            i += 1
+            continue
+        elif c in "\x27\"":
+            q = c
+        out.append(c)
+        i += 1
+    return "".join(out)
 def raw_tokens(text):
     # Words with their quotes removed, separators as one ";", redirections as TOK reads them.
-    lex = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>\n")
+    lex = shlex.shlex(dollar_quotes(text), posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     out = []
     for t in lex:

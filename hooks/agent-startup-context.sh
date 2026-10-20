@@ -33,11 +33,13 @@ own .claude/main-session.md || MAIN_ONLY="$PLUGIN/templates/main-session.md"
 # Issue 228: Claude Code passes a print over 10,240 bytes as a 2 KB preview, and a project's long rule file crossed
 # that live. The print is held in a file: a rule file goes in whole only when it fits with 800 bytes left for the
 # lines after it, else as one pointer line.
+# SENT counts what already went out past it (the inbox drain); appended, so the print goes on at the end once emptied.
 HELD=$(mktemp) || exit 0
-exec 3>&1 >"$HELD"; trap 'cat "$HELD" >&3; rm -f "$HELD"' EXIT
+SENT=0
+exec 3>&1 >>"$HELD"; trap 'cat "$HELD" >&3; rm -f "$HELD"' EXIT
 fit() { # fit <file> -- stdin whole if it fits under the cap, else one pointer line
   local s LC_ALL=C; s=$(cat)
-  if [ $(( $(wc -c < "$HELD") + ${#s} + 800 )) -le 10240 ]; then printf '%s\n' "$s"
+  if [ $(( SENT + $(wc -c < "$HELD") + ${#s} + 800 )) -le 10240 ]; then printf '%s\n' "$s"
   else echo "[left out to fit the 10,240-byte startup print: Read $1 (${#s} bytes) before anything else]"; fi
 }
 # inject <file> -- stdin to stdout. A plugin template names the plugin's scripts
@@ -106,8 +108,15 @@ fi
 # and templates/...; a session runs in the project, where none of them is.
 echo "# Commandeck plugin folder: $PLUGIN. A path that starts scripts/, hooks/ or templates/ in the plugin's files and messages is under it, not in this project."
 # Main and a Builder restart under a new handle: what was sent while the seat was down comes first (to-main.sh queues it).
-if [ "$MAIN" = 1 ]; then timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" main 2>/dev/null
-elif [ "$LINKED" = 1 ] && [ "${COMMANDECK_BUILDER:-}" = 1 ]; then timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" --unit "${TOP##*/}" 2>/dev/null; fi
+# The drain takes a message off once printed, so it prints straight out, after what is held so far: held, a hook
+# killed before its exit lost it.
+DRAIN=()
+if [ "$MAIN" = 1 ]; then DRAIN=(main)
+elif [ "$LINKED" = 1 ] && [ "${COMMANDECK_BUILDER:-}" = 1 ]; then DRAIN=(--unit "${TOP##*/}"); fi
+if [ ${#DRAIN[@]} -gt 0 ]; then
+  cat "$HELD" >&3; SENT=$(wc -c < "$HELD"); : > "$HELD"
+  SENT=$(( SENT + $(timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" "${DRAIN[@]}" 2>/dev/null | tee /dev/fd/3 | wc -c) ))
+fi
 
 # Codex cuts hook output past ~10K bytes out of the middle, so a Codex seat
 # reads the file itself, once, as its first step.

@@ -147,5 +147,16 @@ P5=$T/p5; project "$P5" '{}'
 check "main records its Claude config folder for the limit panel" "$T/cfg-b" \
   "$(cat "$HOME/.commandeck/scratch/${P5//[^A-Za-z0-9]/-}/claude-config-dir" 2>/dev/null)"
 
+# The drain takes a queued message off once printed: printed into the held startup print, a hook killed before its
+# exit (here while a stalled check of an old handle runs) lost it. Printed straight out, the killed hook still showed it.
+P6=$T/p6; project "$P6" '{}'; S6=$HOME/.commandeck/scratch/${P6//[^A-Za-z0-9]/-}
+mkdir -p "$S6/queue" "$S6/handles" "$T/bin6"; echo term_old > "$S6/handles/main"
+jq -nc '{type: "note", subject: "kept", body: "the queued body", at: "now"}' > "$S6/queue/main.jsonl"
+printf '#!/bin/sh\nsleep 20\n' > "$T/bin6/orca-ide"; chmod +x "$T/bin6/orca-ide"
+K6=$(cd "$P6" && PATH=$T/bin6:$PATH ORCA_TERMINAL_HANDLE=term_new env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_SCRATCH \
+  timeout -s KILL 3 bash "$REAL/hooks/agent-startup-context.sh" </dev/null 2>/dev/null)
+check "a hook killed after the drain took a queued message has printed it" "1:gone" \
+  "$(grep -c 'the queued body' <<<"$K6"):$([ -e "$S6/queue/main.jsonl" ] || [ -e "$S6/queue/main.jsonl.taking" ] || echo gone)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
