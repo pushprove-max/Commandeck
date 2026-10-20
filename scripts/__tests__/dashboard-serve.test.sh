@@ -359,8 +359,16 @@ check "a second answer the ledger refuses keeps nothing more" "409 2" "$(sed -n 
 D add stop-1999-01-01 'Stop here?' yes main --options 'yes|no' >/dev/null
 D add took-1999-01-01 'Took it?' yes main --options 'yes|no' >/dev/null
 D add late-1999-01-01 'Too late?' yes main --options 'yes|no' >/dev/null; D answer late-1999-01-01 yes >/dev/null
+# Only the last row for an id stands: an answer corrected, reopened, re-asked, or re-asked and moved to a new
+# day's id since must not reach main.
+for i in corr reop reas rasa; do D add $i-1999-01-01 "$i?" yes main --options 'yes|no' >/dev/null; D answer $i-1999-01-01 yes >/dev/null; done
+CORR=$(at corr-1999-01-01) REOP=$(at reop-1999-01-01) REAS=$(at reas-1999-01-01) RASA=$(at rasa-1999-01-01)
+D answer corr-1999-01-01 no --correct >/dev/null; D reopen reop-1999-01-01 >/dev/null
+D add reas-1999-01-01 'reas?' yes main --reask 'new facts' >/dev/null
+D add rasa-1999-01-01 'rasa?' yes main --reask 'new facts' >/dev/null; D add rasa-1999-01-02 'rasa?' yes main >/dev/null
+[ "$(D list | jq -r '.[] | select(.id == "rasa-1999-01-01") | .answer')" = "re-asked as rasa-1999-01-02" ] || echo "FAIL setup: rasa not moved"
 : > "$T/sent"
-OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at stop-1999-01-01)" "$(at took-1999-01-01)" "$(at late-1999-01-01)" "$T" "$M" <<'PY'
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at stop-1999-01-01)" "$(at took-1999-01-01)" "$(at late-1999-01-01)" "$T" "$M" "$CORR" "$REOP" "$REAS" "$RASA" <<'PY'
 import errno, functools, http.client, http.server, json, os, subprocess, sys, threading, time
 sys.path.insert(0, sys.argv[1])
 import dashboard_serve as d
@@ -416,6 +424,13 @@ print(req("POST", "/answer", {"project": "proj", "id": "late-1999-01-01", "asked
 d.write = write
 restart()
 print(sent("late-1999-01-01"), held())
+for i, ask in zip(("corr-1999-01-01", "reop-1999-01-01", "reas-1999-01-01", "rasa-1999-01-01"), sys.argv[8:12]):
+    writes.clear()
+    d.write = full
+    st = req("POST", "/answer", {"project": "proj", "id": i, "askedAt": ask, "answer": "yes"})
+    d.write = write
+    restart()
+    print(st, sent(i), held())
 PY
 )
 check "a host stopped before the ledger took the answer" "stopped" "$(sed -n 1p <<<"$OUT")"
@@ -425,6 +440,10 @@ check "a host stopped after the ledger took the answer" "stopped" "$(sed -n 4p <
 check "restarted, it sends that answer to main and the relay" "2 []" "$(sed -n 5p <<<"$OUT")"
 check "an answer the ledger refused whose sends cannot be dropped" "409 ['late-1999-01-01']" "$(sed -n 6p <<<"$OUT")"
 check "is never sent by a restarted host, and its sends are dropped" "0 []" "$(sed -n 7p <<<"$OUT")"
+check "an answer corrected since is never sent, and its sends are dropped" "409 0 []" "$(sed -n 8p <<<"$OUT")"
+check "an answer reopened since is never sent, and its sends are dropped" "409 0 []" "$(sed -n 9p <<<"$OUT")"
+check "an answer re-asked since is never sent, and its sends are dropped" "409 0 []" "$(sed -n 10p <<<"$OUT")"
+check "an answer re-asked as a new day's id since is never sent, and its sends are dropped" "409 0 []" "$(sed -n 11p <<<"$OUT")"
 
 # Pass 2 kept sends without a key, and their ledger rows are already closed: an upgrade that drops them on its next
 # write loses those answers for good. And a send that always times out must not starve the ones behind it: each

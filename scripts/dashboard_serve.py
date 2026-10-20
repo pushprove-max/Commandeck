@@ -259,8 +259,8 @@ def send(directory, msgs):
 
 
 def accepted(m):
-    """For a send kept with its `ask`: True when the ledger took that answer to that ask, False when it never will
-    (the row is closed or asked again), None while the row is still open at that ask."""
+    """For a send kept with its `ask`: True when the ledger holds that answer to that ask, False when it never will
+    (the row is closed another way, corrected, or asked again), None while the row is still open at that ask."""
     rows = []
     try:
         with open(os.path.join(m['main'], '.claude', 'metrics', 'decisions.jsonl')) as f:
@@ -276,10 +276,13 @@ def accepted(m):
         return False
     except OSError:
         return None
-    ask = m['ask']
-    if any(r.get('askedAt') == ask['askedAt'] and r.get('answeredAt') and r.get('answer') == ask['answer'] for r in rows):
-        return True
-    return None if rows and rows[-1].get('askedAt') == ask['askedAt'] and rows[-1].get('answeredAt') is None else False
+    # Only the last row stands: a later --correct or reopen revokes the answer an earlier row took.
+    ask, last = m['ask'], rows[-1] if rows else {}
+    if last.get('askedAt') != ask['askedAt']:
+        return False
+    if last.get('answeredAt') is None:
+        return None
+    return last.get('answer') == ask['answer']
 
 
 def retry(directory):
