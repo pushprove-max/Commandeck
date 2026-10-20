@@ -334,6 +334,13 @@ jq -cn --arg m "$MAIN" '[{main: $m, id: "ship-1999-01-01", to: "relay", args: []
 dash
 check "an answer whose send failed is listed on its own project's card" '[{"id":"ship-1999-01-01","to":"relay"}]' \
   "$(jq -c 'first(.[]) | .needsOwner.unsent' "$T/out/run/project.json" 2>&1)"
+check "and none is said to wait on main's picker with no record" '[]' "$(jq -c 'first(.[]) | .needsOwner.picker' "$T/out/run/project.json" 2>&1)"
+# An answer delivered while main's own picker was open waits on that picker: the host records it, and this
+# project's card names it until a delivery to main finds no picker.
+jq -cn --arg m "$MAIN" '[{main: $m, id: "ship-1999-01-01"}, {main: "/elsewhere", id: "x-1999-01-01"}]' > "$T/out/answer-picker.json"
+dash
+check "an answer waiting on main's open picker is named on its own project's card" '["ship-1999-01-01"]' \
+  "$(jq -c 'first(.[]) | .needsOwner.picker' "$T/out/run/project.json" 2>&1)"
 check "with no relay configured there is no relay card" '[true,false]' \
   "$(jq -c 'first(.[]) | [(.seats.main | type == "object"), (.seats | has("relay"))]' "$T/out/run/project.json" 2>&1)"
 

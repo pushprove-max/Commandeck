@@ -855,3 +855,21 @@ test('issue 240: a reopened decision is answerable again in the same tab; an ope
   assert.match(text(w.document.getElementById('decisions')), /ship-1999-01-01.*main's picker for it was open: pick or press Esc in main's pane/,
     'and the list keeps naming it after the answered row is gone');
 });
+
+// The reply is lost when only a later refresh delivers the answer, and on a reload: the host keeps the word, and the
+// page names each answer the snapshot says waits on main's picker, once even when this tab's reply named it too.
+test("issue 240: the snapshot's answers waiting on main's picker are named", async () => {
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [], picker: ['ship-1999-01-01'] } });
+  assert.match(text(w.document.getElementById('decisions')), /ship-1999-01-01.*main's picker for it was open: pick or press Esc in main's pane/);
+  const d = { id: 'keys-1999-01-01', question: 'Rotate?', proposedDefault: 'yes', options: ['yes', 'no'], source: 'AskUserQuestion',
+    askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  w.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ruling: null, unsent: 0, picker: true }) });
+  w.refresh();
+  show(w, { needsOwner: { decisions: [d] } });
+  w.document.querySelector('#decisions .answer button').click();
+  await settled(w);
+  w.refresh();
+  show(w, { needsOwner: { decisions: [], picker: ['keys-1999-01-01'] } });
+  assert.equal((text(w.document.getElementById('decisions')).match(/keys-1999-01-01/g) || []).length, 1, 'named once');
+});

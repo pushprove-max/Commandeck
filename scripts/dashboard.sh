@@ -415,7 +415,7 @@ finished_builds() {
 # What waits on the owner is the decision ledger. The owner is whoever runs the plugin here: git's user.name for
 # this checkout, else the account's name, cut to one line of 80 characters; neither is null.
 needs_owner() {
-  local dec=null name unsent
+  local dec=null name unsent picker
   name=$(git -C "$PP_MAIN" config user.name 2>/dev/null) || name=
   [ -n "${name//[[:space:]]/}" ] || name=$(id -un 2>/dev/null) || name=
   if [ ! -e "$METRICS/decisions.jsonl" ]; then nm decisions "no ledger at $METRICS/decisions.jsonl"
@@ -425,8 +425,10 @@ needs_owner() {
   # Issue 240: this project's answers from the page whose send failed; dashboard_serve.py keeps them and sends them
   # again on each refresh.
   unsent=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | {id, to}]' "$OUT/answer-retry.json" 2>/dev/null) || unsent='[]'
-  jq -cn --argjson dec "$dec" --arg name "$name" --argjson u "${unsent:-[]}" \
-    '{decisions: $dec, unsent: $u, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
+  # And the ones delivered while main's own picker was open: main reads them only once that picker is answered.
+  picker=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | .id | strings]' "$OUT/answer-picker.json" 2>/dev/null) || picker='[]'
+  jq -cn --argjson dec "$dec" --arg name "$name" --argjson u "${unsent:-[]}" --argjson pk "${picker:-[]}" \
+    '{decisions: $dec, unsent: $u, picker: $pk, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
 }
 
 # owner/name of the checkout's GitHub origin, or nothing. Every gh read names it as GH_REPO, so a gh default set

@@ -32,8 +32,10 @@ One answer (issue 240): a `POST /answer` ({project, id, askedAt, answer}) answer
 one out: only a loopback client, under a loopback Host name, with this page's own Origin, may answer. The answer
 goes through `decision.sh answer --asked-at`, so the first answer wins and a second is refused (409); it is logged
 as a ruling the way ruling-log.sh logs one, and sent to main (to-main.sh) and, with a relay configured, to the relay
-(cos-tell.sh --note). A send that fails is kept in <directory>/answer-retry.json and sent again on the next
-refresh, the page's next read of data.js; the collector lists what is still kept on the card. The project's
+(cos-tell.sh --note). A send that fails is kept in <directory>/answer-retry.json and sent again after the next
+refresh, the page's next read of data.js, by a batch that refresh does not wait on; the collector lists what is still
+kept on the card. An answer delivered while main's own picker was open is kept in <directory>/answer-picker.json,
+which the collector shows too: main reads it only after that picker is answered in its pane. The project's
 folder is read from the collector's own data.js, never from the request.
 """
 import fcntl
@@ -140,16 +142,36 @@ def project_path(directory, name):
 
 
 SCRIPT = {'main': 'to-main.sh', 'relay': 'cos-tell.sh'}
+# SENDS guards the two files below and FLYING, the keys of the kept sends being tried now; no send runs under it.
+FLYING = set()
+RETRYING = threading.Lock()  # one retry batch at a time
 
 
 def kept(directory):
-    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args}."""
+    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key}."""
     try:
         with open(os.path.join(directory, 'answer-retry.json')) as f:
             return [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
-                    and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
+                    and isinstance(m.get('key'), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
     except (OSError, ValueError, TypeError):
         return []
+
+
+def marks(directory):
+    """The answers <directory>/answer-picker.json keeps, each {main, id}: delivered while main's own picker was open."""
+    try:
+        with open(os.path.join(directory, 'answer-picker.json')) as f:
+            return [m for m in json.load(f) if isinstance(m, dict) and isinstance(m.get('main'), str) and isinstance(m.get('id'), str)]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def write(directory, name, value):
+    path = os.path.join(directory, name)
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w') as f:
+        json.dump(value, f)
+    os.replace(tmp, path)
 
 
 SEND_TIMEOUT = 60
@@ -157,52 +179,85 @@ SEND_TIMEOUT = 60
 PICKER = 'but its pane shows an open question or permission prompt'
 
 
-def send(directory, msgs, again=False):
-    """Each message sent with its script; the file then keeps the ones that failed, after the ones it kept before
-    (`again`: msgs are those, tried again). The number that failed, and whether main's own picker was open. Under SENDS."""
-    path = os.path.join(directory, 'answer-retry.json')
-    held = [] if again else kept(directory)
+def deliver(directory, m):
+    """One send with its script: (delivered, timed out, main's own picker open)."""
+    # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
+    try:
+        r = subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=SEND_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, True, False
+    except OSError:
+        return False, False, False
+    return r.returncode in ((0, 3) if m['to'] == 'main' else (0,)), False, m['to'] == 'main' and PICKER in r.stdout
 
-    def keep(ms):
-        tmp = '%s.%d.tmp' % (path, os.getpid())
-        with open(tmp, 'w') as f:
-            json.dump(ms, f)
-        os.replace(tmp, path)
+
+def settle(directory, taken, tried):
+    """`taken` is out of flight again; of `tried` ([(send, delivered, picker)]) the delivered leave the file, and each
+    delivery to main updates the picker marks: a picker open marks its answer, none open drops that main's marks.
+    shortcut: a mark stays until a later delivery to that main finds no picker; read main's pane if that proves stale.
+    A file that cannot be written keeps what it had: a delivered send may then go twice, which beats never."""
+    with SENDS:
+        FLYING.difference_update(m['key'] for m in taken)
+        gone = {m['key'] for m, ok, _ in tried if ok}
+        held = marks(directory)
+        for m, ok, picker in tried:
+            if ok and m['to'] == 'main':
+                if not picker:
+                    held = [p for p in held if p['main'] != m['main']]
+                elif {'main': m['main'], 'id': m['id']} not in held:
+                    held.append({'main': m['main'], 'id': m['id']})
+        try:
+            write(directory, 'answer-retry.json', [m for m in kept(directory) if m['key'] not in gone])
+            write(directory, 'answer-picker.json', held)
+        except OSError:
+            pass
+
+
+def send(directory, msgs):
+    """Each message sent with its script, kept in the file until it is delivered. The number that failed, and
+    whether main's own picker was open."""
     # Kept before the first try: the ledger row is already closed, so a send that hangs, or a server stopped
     # mid-send, must leave it for the next refresh. A send that timed out may have gone: twice beats never. A file
     # that cannot be written does not stop the sends.
-    try:
-        keep(held + msgs)
-    except OSError:
-        pass
-    picker = False
-
-    def ok(m):
-        nonlocal picker
-        # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
+    with SENDS:
+        for m in msgs:
+            m['key'] = secrets.token_hex(8)
+        FLYING.update(m['key'] for m in msgs)
         try:
-            r = subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
-                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=SEND_TIMEOUT)
-        except (subprocess.TimeoutExpired, OSError):
-            return False
-        picker = picker or (m['to'] == 'main' and PICKER in r.stdout)
-        return r.returncode in ((0, 3) if m['to'] == 'main' else (0,))
-    left = [m for m in msgs if not ok(m)]
-    keep(held + left)
-    return len(left), picker
+            write(directory, 'answer-retry.json', kept(directory) + msgs)
+        except OSError:
+            pass
+    tried = []
+    for m in msgs:
+        ok, _, picker = deliver(directory, m)
+        tried.append((m, ok, picker))
+    settle(directory, msgs, tried)
+    return sum(not ok for _, ok, _ in tried), any(p for _, _, p in tried)
+
+
+def retry(directory):
+    """The kept sends not in flight, tried again in order; the batch stops at its first timeout, so one costs at most
+    SEND_TIMEOUT and what follows waits for the next refresh. What still fails stays kept."""
+    try:
+        with SENDS:
+            todo = [m for m in kept(directory) if m['key'] not in FLYING]
+            FLYING.update(m['key'] for m in todo)
+        tried = []
+        for m in todo:
+            ok, slow, picker = deliver(directory, m)
+            tried.append((m, ok, picker))
+            if slow:
+                break
+        settle(directory, todo, tried)
+    finally:
+        RETRYING.release()
 
 
 def resend(directory):
-    """The kept sends, tried again: what still fails stays kept. A refresh while another runs skips it."""
-    if os.path.exists(os.path.join(directory, 'answer-retry.json')) and SENDS.acquire(blocking=False):
-        try:
-            held = kept(directory)
-            if held:
-                send(directory, held, True)
-        except OSError:
-            pass
-        finally:
-            SENDS.release()
+    """A retry batch started off the request, so a refresh never waits on a send. A refresh while one runs starts none."""
+    if os.path.exists(os.path.join(directory, 'answer-retry.json')) and RETRYING.acquire(blocking=False):
+        threading.Thread(target=retry, args=(directory,), daemon=True).start()
 
 
 def log_ruling(main, row, answer):
@@ -326,8 +381,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             relay = None
         if relay:
             msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id'], body]})
-        with SENDS:
-            unsent, picker = send(self.directory, msgs)
+        unsent, picker = send(self.directory, msgs)
         out = json.dumps({'ruling': rid, 'unsent': unsent, 'picker': picker}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')

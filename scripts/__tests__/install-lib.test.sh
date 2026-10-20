@@ -129,7 +129,7 @@ replay() {
   echo "$1" > "$T/replay.json"
   ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0 CLAUDE_CONFIG_DIR=$T/replay-cc
     il_cache_ttl() { calls=$((calls + 1)); }
-    eval "$(sed -n '/^pp_config_option()/,/^}/p' "$REAL/scripts/paths.sh")"
+    eval "$(sed -n '/^PP_OPTS_KEY=/,/^}/p' "$REAL/scripts/paths.sh")"
     for l in '^old()' 'CACHE=$(old .cacheTtl)' '^CACHE_ON=' '\[ "$CACHE_ON" != 5m \] || il_cache_ttl' 'Prompt cache: not answered since 0.15.0'; do eval "$(grep -- "$l" "$REAL/scripts/setup.sh")"; done
     echo "$calls:${#NEED[@]}" )
 }

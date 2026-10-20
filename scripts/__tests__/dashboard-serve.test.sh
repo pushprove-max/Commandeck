@@ -215,7 +215,10 @@ open(sys.argv[5] + "/no-send", "w").close()
 print(req(near, "POST", "/answer", {"project": "proj", "id": "keys-1999-01-01", "askedAt": sys.argv[4], "answer": "not yet"}))
 held = json.load(open(sys.argv[2] + "/answer-retry.json"))
 os.remove(sys.argv[5] + "/no-send")
-print(len(held), req(near, "GET", "/data.js"), len(json.load(open(sys.argv[2] + "/answer-retry.json"))))
+st = req(near, "GET", "/data.js")
+while getattr(d, "RETRYING", threading.Lock()).locked():  # the refresh's retry runs off the request
+    threading.Event().wait(0.05)
+print(len(held), st, len(json.load(open(sys.argv[2] + "/answer-retry.json"))))
 PY
 )
 check "another machine's POST and another site's are refused; the first loopback answer is taken, a second is refused" \
@@ -232,15 +235,26 @@ check "a failed send is kept for main and the relay, and sent again on the next 
 check "the resent messages are the failed answer's" 2 "$(grep -c 'keys-1999-01-01|not yet (ruling r-' "$T/sent")"
 
 # The ledger row is closed before the sends, so a send that hangs past its timeout must still be kept for the next
-# refresh: lost, a second answer gets 409 and nothing resends it. A refresh whose resend hangs still serves data.js.
+# refresh: lost, a second answer gets 409 and nothing resends it. A refresh never waits on the resend: four kept sends
+# that each hang to their timeout would hold the page's data.js for four timeouts, and an answer given meanwhile
+# would wait behind them too. A retry batch stops at its first timeout, so one batch costs at most one.
 # Main reads no inbox message while its own picker is open (to-main.sh says so): the reply names it, so the page
-# can tell the owner to pick or press Esc there, and names no picker when to-main.sh saw none.
-printf '#!/usr/bin/env bash\n[ ! -e "%s/hang" ] || sleep 5\n[ ! -e "%s/picker" ] || echo "to-main: sent to main (h), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"\nprintf "%%s|" "${0##*/}" "$@" >> "%s/sent"; echo >> "%s/sent"\n' "$T" "$T" "$T" "$T" > "$P/scripts/to-main.sh"
+# can tell the owner to pick or press Esc there, and names no picker when to-main.sh saw none. The host keeps that
+# word for the collector, a resent answer's too: the reply alone is lost to a send that only a refresh delivers.
+# A later delivery to main that finds no picker open drops it.
+cat > "$P/scripts/to-main.sh" <<EOF
+#!/usr/bin/env bash
+printf "%s|" "\${0##*/}" "\$@" >> "$T/tried"; echo >> "$T/tried"
+[ ! -e "$T/no-send" ] || exit 1
+case "\$*" in *hang-*) [ ! -e "$T/hang" ] || sleep 5 ;; esac
+[ ! -e "$T/picker" ] || echo "to-main: sent to main (h), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"
+printf "%s|" "\${0##*/}" "\$@" >> "$T/sent"; echo >> "$T/sent"
+EOF
 cp "$P/scripts/to-main.sh" "$P/scripts/cos-tell.sh"
 check "the stub's picker line is to-main.sh's own" 1 "$(grep -c 'but its pane shows an open question or permission prompt' "$ROOT/scripts/to-main.sh")"
-for k in hang pick calm; do D add $k-1999-01-01 "$k?" yes main --options 'yes|no' >/dev/null; done
-OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at hang-1999-01-01)" "$(at pick-1999-01-01)" "$(at calm-1999-01-01)" "$T" <<'PY'
-import functools, http.client, http.server, json, os, sys, threading
+for k in hang fast pick calm again; do D add $k-1999-01-01 "$k?" yes main --options 'yes|no' >/dev/null; done
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at hang-1999-01-01)" "$(at pick-1999-01-01)" "$(at calm-1999-01-01)" "$T" "$(at fast-1999-01-01)" "$(at again-1999-01-01)" <<'PY'
+import functools, http.client, http.server, json, os, sys, threading, time
 sys.path.insert(0, sys.argv[1])
 import dashboard_serve as d
 d.SEND_TIMEOUT = 1
@@ -257,20 +271,46 @@ flag = lambda k: open(os.path.join(sys.argv[6], k), "w").close()
 flag("hang")
 st, body = req("POST", "/answer", {"project": "proj", "id": "hang-1999-01-01", "askedAt": sys.argv[3], "answer": "yes"})
 print(st, json.loads(body).get("unsent"), held())
-print(req("GET", "/data.js")[0], held())
+tries = lambda: sum("hang-1999-01-01" in l for l in open(os.path.join(sys.argv[6], "tried")))
+def settled():  # the refresh's retry batch, run off the request, has finished
+    for _ in range(600):
+        if not d.RETRYING.locked():
+            return
+        time.sleep(0.05)
+before, t0 = tries(), time.monotonic()
+st = req("GET", "/data.js")[0]
+print(st, time.monotonic() - t0 < 0.5, held())
+t0 = time.monotonic()
+st, body = req("POST", "/answer", {"project": "proj", "id": "fast-1999-01-01", "askedAt": sys.argv[7], "answer": "yes"})
+print(st, json.loads(body).get("unsent"), time.monotonic() - t0 < 3)
+settled()
+print(tries() - before)
 os.remove(os.path.join(sys.argv[6], "hang"))
-print(req("GET", "/data.js")[0], held())
+req("GET", "/data.js")
+settled()
+print(held())
+marks = lambda: [m["id"] for m in json.load(open(sys.argv[2] + "/answer-picker.json"))]
 flag("picker")
-print(json.loads(req("POST", "/answer", {"project": "proj", "id": "pick-1999-01-01", "askedAt": sys.argv[4], "answer": "yes"})[1]).get("picker"))
+print(json.loads(req("POST", "/answer", {"project": "proj", "id": "pick-1999-01-01", "askedAt": sys.argv[4], "answer": "yes"})[1]).get("picker"), marks())
 os.remove(os.path.join(sys.argv[6], "picker"))
-print(json.loads(req("POST", "/answer", {"project": "proj", "id": "calm-1999-01-01", "askedAt": sys.argv[5], "answer": "yes"})[1]).get("picker"))
+print(json.loads(req("POST", "/answer", {"project": "proj", "id": "calm-1999-01-01", "askedAt": sys.argv[5], "answer": "yes"})[1]).get("picker"), marks())
+flag("no-send")
+req("POST", "/answer", {"project": "proj", "id": "again-1999-01-01", "askedAt": sys.argv[8], "answer": "yes"})
+os.remove(os.path.join(sys.argv[6], "no-send"))
+flag("picker")
+req("GET", "/data.js")
+settled()
+print(held(), marks())
 PY
 )
 check "a send that hangs is kept for the next refresh, main's and the relay's" "200 2 ['hang-1999-01-01', 'hang-1999-01-01']" "$(sed -n 1p <<<"$OUT")"
-check "a refresh whose resend hangs still serves data.js, and keeps them" "200 ['hang-1999-01-01', 'hang-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
-check "and the next refresh sends them" "200 []" "$(sed -n 3p <<<"$OUT")"
-check "main's open picker is named in the reply, and none when it is closed" "True
-False" "$(sed -n 4,5p <<<"$OUT")"
+check "a refresh whose resend hangs serves data.js at once, and keeps them" "200 True ['hang-1999-01-01', 'hang-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
+check "an answer given while a resend hangs is sent at once" "200 0 True" "$(sed -n 3p <<<"$OUT")"
+check "a retry batch stops at its first send that times out" 1 "$(sed -n 4p <<<"$OUT")"
+check "and the next refresh sends them" "[]" "$(sed -n 5p <<<"$OUT")"
+check "main's open picker is named in the reply and kept for the collector; a delivery that finds none drops it" "True ['pick-1999-01-01']
+False []" "$(sed -n 6,7p <<<"$OUT")"
+check "a resent answer that finds main's picker open is kept for the collector" "[] ['again-1999-01-01']" "$(sed -n 8p <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
