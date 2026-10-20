@@ -14,13 +14,13 @@ INPUT=$(cat)
 # pieces, a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
 if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
   IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
-  if [[ $IW =~ (^|[^[:alnum:]_./-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then
+  if [[ $IW =~ (^|[^[:alnum:]_.-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then  # r2: /usr/bin/python3 too
     IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I - <<'PY'
 import os, re, shlex, subprocess
-s = os.environ["IW"].replace('\\"', '"').replace("\\'", "'")
-def lit(a):  # the text of a plain quoted string, else None
-    m = re.match(r"""\s*[rbuRBU]{0,2}(['"])([^'"\n]*)\1\s*$""", a or "")
-    return m.group(2) if m else None
+s = os.environ["IW"].replace('\\"', '"').replace("\\'", "'").replace("\\`", "`")
+def lit(a):  # the text of a plain quoted string (a template literal or f-string without a hole too), else None
+    m = re.match(r"""\s*([rbufRBUF]{0,2})(['"`])([^'"`\n]*)\2\s*$""", a or "")
+    return None if not m or "{" in m.group(3) and (m.group(2) == "`" or "f" in m.group(1).lower()) else m.group(3)
 def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
     depth, cur, out, q = 0, "", [], None
     for j in range(i + 1, len(s)):
@@ -59,15 +59,23 @@ for m in re.finditer(r"(?<![\w$])(open|" + TO + "|" + AT + r")\s*\(", s):
         dests.append(lit(a[1]) if len(a) > 1 else None)
         if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
     else: dests.append(lit(a[0]))
+seen = set()  # where a Path(...) method call starts, read below
 for m in re.finditer(r"\bPath\s*\(", s):
     a, end = args(m.end() - 1)
     t = re.match(r"\s*\.\s*(\w+)\s*\(", s[end:])
     if not t: continue
+    seen.add(end + t.start(1))
     b = args(end + t.end() - 1)[0]
     if t.group(1) in ("write_text", "write_bytes", "touch", "unlink", "rename", "replace", "symlink_to", "hardlink_to", "chmod", "rmdir") \
        or (t.group(1) == "open" and writes(b[0] if b[0].strip() else "'r'") is not False):
         dests.append(lit(a[0]))
         if t.group(1) in ("rename", "replace"): dests.append(lit(b[0]))
+# r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
+for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to|open)\s*\(", s):
+    if m.start(1) in seen: continue
+    b = args(m.end() - 1)[0]
+    mode = next((x.split("=", 1)[1] for x in b if re.match(r"\s*mode\s*=", x)), b[0])
+    if m.group(1) != "open" or re.fullmatch(r"[rbtU]*[wax+][rwabxtU+]*", lit(mode) or ""): dests.append(None)
 try: words = shlex.split(s)
 except ValueError: words = s.split()
 for i, w in enumerate(words):  # perl -i edits in place the files after the script
@@ -78,7 +86,7 @@ def tracked(p):
 for d in dests:
     if d and tracked(d): print("W " + d); raise SystemExit
 if None in dests:
-    for q in sorted(set(re.findall(r"""['"]([A-Za-z0-9_./-]+)['"]""", s))):
+    for q in sorted(set(re.findall(r"""(?:['"`]|\bqq?\s*[({\[<])([A-Za-z0-9_./-]+)[)}\]>'"`]""", s))):
         if tracked(q): print("U " + q); raise SystemExit
 PY
 )

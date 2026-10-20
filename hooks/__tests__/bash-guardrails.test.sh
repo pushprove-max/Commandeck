@@ -145,14 +145,24 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "perl -pi -e 's/old/new/' scripts/x.sh" \
   "perl -e 'open(my \$f, \">\", \"scripts/x.sh\"); print \$f \"new\"'" \
   "perl -e 'open(F, \">>scripts/x.sh\"); print F \"new\"'" \
-  "python3 -c \"import os; os.remove('scripts/x.sh')\""; do
+  "python3 -c \"import os; os.remove('scripts/x.sh')\"" \
+  "/usr/bin/python3 -c \"open('scripts/x.sh','w').write('new')\"" \
+  "/usr/bin/env perl -pi -e 's/old/new/' scripts/x.sh" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); p.write_bytes(b'new')\"" \
+  "python3 -c \"import pathlib; p = pathlib.Path('scripts/x.sh'); f = p.open(mode='w')\"" \
+  "python3 -c \"from pathlib import Path; (Path('scripts') / 'x.sh').write_text('new')\"" \
+  "node -e 'require(\"fs\").writeFileSync(\`scripts/x.sh\`,\"new\")'" \
+  "node -e 'const d=\`scripts\`; require(\"fs\").writeFileSync(\`\${d}/x.sh\`,\"new\")'" \
+  "perl -e 'open(my \$f, \">\", q(scripts/x.sh)); print \$f \"new\"'"; do
   sel "a Builder's tracked write blocks: $W" && check "a Builder's tracked write blocks: $W" 2 "$(bld "$W")"
 done
 for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-copy.txt','w').write(data)\"" \
   "node -e \"const fs=require('fs'); fs.writeFileSync('/tmp/y', fs.readFileSync('scripts/x.sh'))\"" \
   "python3 -c \"from pathlib import Path; print(Path('scripts/x.sh').read_text())\"" \
   "perl -ne 'print if /old/' scripts/x.sh" \
-  "python3 -c \"open('scripts/x.sh', 'r').read(); open('/tmp/z', 'wb')\""; do
+  "python3 -c \"open('scripts/x.sh', 'r').read(); open('/tmp/z', 'wb')\"" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); Path('/tmp/z').write_text(p.read_text().replace('old','new'))\"" \
+  "node -e 'require(\"fs\").writeFileSync(\`/tmp/y\`, require(\"fs\").readFileSync(\"scripts/x.sh\"))'"; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done
 

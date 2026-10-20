@@ -64,10 +64,21 @@ touch "$T/send-fails"
 OUT=$(order ship-z yes); RC=$?
 check "a send Orca refuses exits 1 and says main was not told" "1 1" "$RC $(grep -c 'NOT told' <<<"$OUT")"
 rm "$T/send-fails"
+# r2: a newer ruling with the same words does not change the stored one, so the retry still matches it.
+printf '%s\n' '{"id":"r-new-2","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"prompt","question":null,"answer":"yes"}' >> "$COMMANDECK_RULING_LOG"
 OUT=$(order ship-z yes); RC=$?
 check "the same order again tells main, and the answer is written once" "0 1 yes (r-new-1)" \
   "$RC $(grep -c 'r-new-1' "$T/sent") $(dec list | jq -r '.[] | select(.id == "ship-z") | .answer')"
 OUT=$(order ship-z "something else"); RC=$?
 check "other words on an answered decision are still refused" "1 1" "$RC $(grep -c 'r-new-1' "$T/sent")"
+# r2: the stored ruling is reused only while it still gives these words: voided since, the retry is refused.
+dec add ship-w "Ship w now?" yes main >/dev/null
+printf '%s\n' '{"id":"r-w-1","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship w now?","answer":"go w"}' >> "$COMMANDECK_RULING_LOG"
+touch "$T/send-fails"; order ship-w "go w" >/dev/null; rm "$T/send-fails"
+printf '%s\n' '{"id":"r-w-2","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship w now?","answer":"go w"}' >> "$COMMANDECK_RULING_LOG"
+jq -c 'if .id == "r-w-1" then .void = true else . end' "$COMMANDECK_RULING_LOG" > "$T/log" && mv "$T/log" "$COMMANDECK_RULING_LOG"
+: > "$T/sent"
+OUT=$(order ship-w "go w"); RC=$?
+check "a retry whose stored ruling was voided is refused, and main is not told" "1 0" "$RC $(grep -c . "$T/sent")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
