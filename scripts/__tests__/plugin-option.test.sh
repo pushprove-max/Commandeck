@@ -65,6 +65,12 @@ check "another plugin's options stay as they were" '{"ponytail":true,"builderEff
 echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/dev/null
 check "the plugin's key is the one it is enabled under" '{"ponytail":false}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
 check "and that is the one read" "false|/config" "$(O ponytail)"
+# A disabled install's options left in settings are not the running plugin's: reader and pre-fill take the enabled key.
+echo '{"enabledPlugins":{"commandeck@a-old":false,"commandeck@commandeck":true},"pluginConfigs":{"commandeck@a-old":{"options":{"fullSuiteBeforeFinal":false}},"commandeck@commandeck":{"options":{"fullSuiteBeforeFinal":true}}}}' > "$S"
+check "a disabled install's /config answer is not read over the enabled one's" "true|/config" "$(O fullSuiteBeforeFinal)"
+L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/dev/null
+check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"ponytail":false}|{"fullSuiteBeforeFinal":false}' \
+  "$(jq -cS '.pluginConfigs["commandeck@commandeck"].options, .pluginConfigs["commandeck@a-old"].options' "$S" | paste -sd'|' -)"
 
 echo "plugin-option: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

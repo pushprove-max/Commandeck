@@ -231,5 +231,46 @@ check "a failed send is kept for main and the relay, and sent again on the next 
 2 200 0" "$(sed -n '2,3p' <<<"$OUT")"
 check "the resent messages are the failed answer's" 2 "$(grep -c 'keys-1999-01-01|not yet (ruling r-' "$T/sent")"
 
+# The ledger row is closed before the sends, so a send that hangs past its timeout must still be kept for the next
+# refresh: lost, a second answer gets 409 and nothing resends it. A refresh whose resend hangs still serves data.js.
+# Main reads no inbox message while its own picker is open (to-main.sh says so): the reply names it, so the page
+# can tell the owner to pick or press Esc there, and names no picker when to-main.sh saw none.
+printf '#!/usr/bin/env bash\n[ ! -e "%s/hang" ] || sleep 5\n[ ! -e "%s/picker" ] || echo "to-main: sent to main (h), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"\nprintf "%%s|" "${0##*/}" "$@" >> "%s/sent"; echo >> "%s/sent"\n' "$T" "$T" "$T" "$T" > "$P/scripts/to-main.sh"
+cp "$P/scripts/to-main.sh" "$P/scripts/cos-tell.sh"
+check "the stub's picker line is to-main.sh's own" 1 "$(grep -c 'but its pane shows an open question or permission prompt' "$ROOT/scripts/to-main.sh")"
+for k in hang pick calm; do D add $k-1999-01-01 "$k?" yes main --options 'yes|no' >/dev/null; done
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at hang-1999-01-01)" "$(at pick-1999-01-01)" "$(at calm-1999-01-01)" "$T" <<'PY'
+import functools, http.client, http.server, json, os, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+d.SEND_TIMEOUT = 1
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def req(method, path, body=None):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=30)
+    c.request(method, path, body and json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    r = c.getresponse()
+    return r.status, r.read()
+held = lambda: [m["id"] for m in json.load(open(sys.argv[2] + "/answer-retry.json"))]
+flag = lambda k: open(os.path.join(sys.argv[6], k), "w").close()
+flag("hang")
+st, body = req("POST", "/answer", {"project": "proj", "id": "hang-1999-01-01", "askedAt": sys.argv[3], "answer": "yes"})
+print(st, json.loads(body).get("unsent"), held())
+print(req("GET", "/data.js")[0], held())
+os.remove(os.path.join(sys.argv[6], "hang"))
+print(req("GET", "/data.js")[0], held())
+flag("picker")
+print(json.loads(req("POST", "/answer", {"project": "proj", "id": "pick-1999-01-01", "askedAt": sys.argv[4], "answer": "yes"})[1]).get("picker"))
+os.remove(os.path.join(sys.argv[6], "picker"))
+print(json.loads(req("POST", "/answer", {"project": "proj", "id": "calm-1999-01-01", "askedAt": sys.argv[5], "answer": "yes"})[1]).get("picker"))
+PY
+)
+check "a send that hangs is kept for the next refresh, main's and the relay's" "200 2 ['hang-1999-01-01', 'hang-1999-01-01']" "$(sed -n 1p <<<"$OUT")"
+check "a refresh whose resend hangs still serves data.js, and keeps them" "200 ['hang-1999-01-01', 'hang-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
+check "and the next refresh sends them" "200 []" "$(sed -n 3p <<<"$OUT")"
+check "main's open picker is named in the reply, and none when it is closed" "True
+False" "$(sed -n 4,5p <<<"$OUT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

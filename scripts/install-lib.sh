@@ -424,13 +424,12 @@ il_options_report() {
 # il_plugin_options <user settings> <answers> -- setup's answers into /config's options (issue 245), each only where
 # /config has none, under the key the plugin is enabled by. The owner's /config answer beats every project's, so one
 # that differs from this setup's is named.
-IL_OPTS_KEY='def key: first((.pluginConfigs // {} | keys[]), (.enabledPlugins // {} | keys[]) | select(startswith("commandeck@"))) // "commandeck@commandeck";'
 il_plugin_options() {
   [ -f "$1" ] || return 0
-  jq -r --argjson a "$2" "$IL_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != .value)
+  jq -r --argjson a "$2" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != .value)
     | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' "$1"
   [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none ($1)"; return 0; }
-  il_set "$1" --argjson a "$2" "$IL_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))'
+  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))'
 }
 # il_tool_search_report -- the doctor's line on MCP tool search, "ok <why>" or "warn <what is wrong>". Whether it is on
 # follows Claude Code's docs ("Configure tool search"); each variable is read from the environment, else from `env`

@@ -152,21 +152,44 @@ def kept(directory):
         return []
 
 
+SEND_TIMEOUT = 60
+# to-main.sh's line for a pane whose own picker is open: main reads no inbox message until it is answered there.
+PICKER = 'but its pane shows an open question or permission prompt'
+
+
 def send(directory, msgs, again=False):
     """Each message sent with its script; the file then keeps the ones that failed, after the ones it kept before
-    (`again`: msgs are those, tried again). The number that failed. Under SENDS."""
-    # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
-    ok = lambda m: subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
-                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=60).returncode in ((0, 3) if m['to'] == 'main' else (0,))
+    (`again`: msgs are those, tried again). The number that failed, and whether main's own picker was open. Under SENDS."""
     path = os.path.join(directory, 'answer-retry.json')
     held = [] if again else kept(directory)
-    left = [m for m in msgs if not ok(m)]
-    if again or left:
+
+    def keep(ms):
         tmp = '%s.%d.tmp' % (path, os.getpid())
         with open(tmp, 'w') as f:
-            json.dump(held + left, f)
+            json.dump(ms, f)
         os.replace(tmp, path)
-    return len(left)
+    # Kept before the first try: the ledger row is already closed, so a send that hangs, or a server stopped
+    # mid-send, must leave it for the next refresh. A send that timed out may have gone: twice beats never. A file
+    # that cannot be written does not stop the sends.
+    try:
+        keep(held + msgs)
+    except OSError:
+        pass
+    picker = False
+
+    def ok(m):
+        nonlocal picker
+        # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
+        try:
+            r = subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=SEND_TIMEOUT)
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        picker = picker or (m['to'] == 'main' and PICKER in r.stdout)
+        return r.returncode in ((0, 3) if m['to'] == 'main' else (0,))
+    left = [m for m in msgs if not ok(m)]
+    keep(held + left)
+    return len(left), picker
 
 
 def resend(directory):
@@ -283,8 +306,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         main = project_path(self.directory, a.get('project'))
         if not main:
             return self.send_error(404, "no such project on this dashboard")
-        r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
-                           env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        try:
+            r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
+                               env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return self.send_error(504, "the ledger took no answer in 60 s; refresh: a question gone from the list was answered, and main was not told")
         if r.returncode != 0:
             why = r.stderr.strip().splitlines()[-1:] or ['the answer was not recorded']
             code = 409 if re.search(r'already answered|reopened after', why[0]) else 404 if 'unknown decision' in why[0] else 500
@@ -301,8 +327,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if relay:
             msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id'], body]})
         with SENDS:
-            unsent = send(self.directory, msgs)
-        out = json.dumps({'ruling': rid, 'unsent': unsent}).encode()
+            unsent, picker = send(self.directory, msgs)
+        out = json.dumps({'ruling': rid, 'unsent': unsent, 'picker': picker}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(out)))

@@ -611,9 +611,14 @@ pp_review_loop() {
 # .claude-plugin/plugin.json), set in /config. The owner's /config answer beats the project's saved one. It is read
 # from the user's settings file, not CLAUDE_PLUGIN_OPTION_*: that reaches hooks only, and may carry the manifest's
 # default, which would hide the project's answer.
+# PP_OPTS_KEY -- jq's key: the commandeck@<marketplace> the plugin is enabled under, else one with options that is not
+# disabled; a disabled install's leftover options are not the running plugin's.
+PP_OPTS_KEY='def key: . as $s | first(((.enabledPlugins // {}) | to_entries[] | select(.value == true) | .key),
+  ((.pluginConfigs // {}) | keys[] | select(($s.enabledPlugins // {})[.] != false)), ((.enabledPlugins // {}) | keys[])
+  | select(startswith("commandeck@"))) // "commandeck@commandeck";'
 # pp_config_option <key> -- the /config answer in the form the project's file saves it; fails when there is none.
 pp_config_option() {
-  jq -er --arg k "$1" 'first(.pluginConfigs // {} | to_entries[] | select(.key | startswith("commandeck@")) | .value.options[$k]? | select(. != null))
+  jq -er --arg k "$1" "$PP_OPTS_KEY"' .pluginConfigs[key].options[$k]? | select(. != null)
     | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' \
     "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
 }

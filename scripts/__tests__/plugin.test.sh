@@ -37,7 +37,7 @@ check "it carries a description" yes "$(jq -r 'if (.description | type == "strin
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
 # Issue 245: an option /config shows that nothing reads is a setting that does nothing; a default other than setup's
 # recommended answer shows the owner one thing in /config while setup recommends another.
-READ=$(cd "$REAL" && grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' | grep -v '/__tests__/' | awk '{print $2}' | sort -u)
+READ=$(cd "$REAL" && grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' --exclude-dir=__tests__ | awk '{print $2}' | sort -u)
 for k in $(jq -r '.userConfig | keys[]' "$M"); do
   check "option $k has a reader" 1 "$(grep -cx "$k" <<<"$READ")"
 done

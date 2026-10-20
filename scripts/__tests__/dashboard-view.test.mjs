@@ -827,3 +827,31 @@ test('issue 240: answer buttons, the default marked, and an Other box show on a 
   assert.equal(far.document.querySelectorAll('#decisions .answer').length, 0, 'another host: no answer controls');
   assert.match(text(far.document.getElementById('decisions')), /Ship it\?/, 'the question still shows');
 });
+
+// A decision reopened (decision.sh reopen: the same id, a newer askedAt) is a new question: the page's word on the
+// old answer must not stand in for its controls. And main's native picker for a question blocks it from reading the
+// answer sent to its inbox, so when the host saw that picker open the page says so, and keeps saying it after the
+// answered row leaves the list: the owner has to pick or press Esc in main's pane.
+test('issue 240: a reopened decision is answerable again in the same tab; an open picker in main is named', async () => {
+  const d = { id: 'ship-1999-01-01', question: 'Ship it?', proposedDefault: 'yes', options: ['yes', 'no'], source: 'AskUserQuestion',
+    askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  const w = fresh();
+  let reply = { ruling: 'r-19990101-000000-d-abcdef', unsent: 0, picker: false };
+  w.fetch = () => { w.puts += 1; return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(reply) }); };
+  show(w, { needsOwner: { decisions: [d] } });
+  w.document.querySelector('#decisions .answer button').click();
+  await settled(w);
+  assert.match(text(w.document.querySelector('#decisions .answer')), /^Answered: yes/, 'the answer is shown as taken');
+  assert.doesNotMatch(text(w.document.getElementById('decisions')), /picker/, 'no picker open: none named');
+  w.refresh();
+  show(w, { needsOwner: { decisions: [{ ...d, askedAt: iso(NOW - 1000) }] } });
+  assert.equal(w.document.querySelectorAll('#decisions .answer button').length, 3, 'reopened: its buttons are back');
+  reply = { ...reply, picker: true };
+  w.document.querySelector('#decisions .answer button').click();
+  await settled(w);
+  assert.match(text(w.document.querySelector('#decisions .answer')), /main's picker for it was open: pick or press Esc in main's pane/, 'the reply names the open picker');
+  w.refresh();
+  show(w, { needsOwner: { decisions: [{ ...d, answeredAt: iso(NOW), answer: 'yes' }] } });
+  assert.match(text(w.document.getElementById('decisions')), /ship-1999-01-01.*main's picker for it was open: pick or press Esc in main's pane/,
+    'and the list keeps naming it after the answered row is gone');
+});

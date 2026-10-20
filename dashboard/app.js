@@ -172,19 +172,26 @@
   // Issue 240: the owner answers on this machine's own page only (dashboard_serve.py takes an answer from a loopback
   // client alone); every other host's page, the phone's, shows the question read-only.
   const LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname);
-  const answered = new Map(); // decision id -> the host's word on its answer, until a snapshot drops the row
+  // One asking of a decision: decision.sh reopen keeps the id and moves askedAt, and that is a new question.
+  const asking = (d) => `${d.id} ${d.askedAt}`;
+  const answered = new Map(); // asking -> the host's word on its answer, until a snapshot drops that asking
+  // Main reads no inbox message while its own picker is open; said in the past tense, it stays true until a reload.
+  const pickerOpen = new Map(); // decision id -> the line saying main's picker was open when its answer was sent
   function answerBox(d) {
     const box = h('div', 'answer');
-    if (answered.has(d.id)) { box.append(h('p', 'answered', answered.get(d.id))); return box; }
+    if (answered.has(asking(d))) { box.append(h('p', 'answered', answered.get(asking(d)))); return box; }
     const said = h('p', 'meta');
     const post = (answer) => {
       for (const c of box.querySelectorAll('button, input')) c.disabled = true;
       window.fetch('answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: asked, id: d.id, askedAt: d.askedAt, answer }) })
-        .then((r) => (r.ok ? r.json().then((j) => `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}`)
+        .then((r) => (r.ok ? r.json().then((j) => {
+          if (j.picker) pickerOpen.set(d.id, `The answer to ${d.id} is recorded and sent, but main's picker for it was open: pick or press Esc in main's pane.`);
+          return `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}${j.picker ? "; main's picker for it was open: pick or press Esc in main's pane" : ''}`;
+        })
           : `Not answered: ${r.status === 409 ? 'it was answered or asked again since this page read it' : `the host said ${r.status}`}`))
         .catch(() => 'Not answered: the host could not be reached')
         .then((t) => {
-          if (t.startsWith('Answered')) { answered.set(d.id, t); box.replaceChildren(h('p', 'answered', t)); return; }
+          if (t.startsWith('Answered')) { answered.set(asking(d), t); box.replaceChildren(h('p', 'answered', t)); return; }
           said.textContent = t;
           for (const c of box.querySelectorAll('button, input')) c.disabled = false;
         });
@@ -219,6 +226,7 @@
     // A Builder's question to main (waitsOn "main") is listed apart and never counted as the owner's.
     const open = rows && rows.filter((d) => d.waitsOn !== 'main');
     const onMain = rows ? rows.filter((d) => d.waitsOn === 'main') : [];
+    for (const k of answered.keys()) if (!open || !open.some((d) => asking(d) === k)) answered.delete(k);
     const dl = byId('needs-facts');
     dl.replaceChildren();
     fact(dl, `Waiting on ${who}`, open === null ? nm() : [strong(open.length), ' open ', open.length ? null : badge('nothing waiting', 'ok')]);
@@ -248,7 +256,8 @@
           if (LOCAL) li.append(answerBox(d));
           return li;
         })).concat(mainItems, (Array.isArray(n.unsent) ? n.unsent : []).map((u) =>
-          h('li', 'decision crit', `The answer to ${u.id} is not sent to ${u.to === 'relay' ? 'the relay' : 'main'} yet; the host sends it again on each refresh.`))));
+          h('li', 'decision crit', `The answer to ${u.id} is not sent to ${u.to === 'relay' ? 'the relay' : 'main'} yet; the host sends it again on each refresh.`)),
+        [...pickerOpen.values()].map((t) => h('li', 'decision crit', t))));
     // An open decision is the owner's to act on here, and so is a P1 a finished build left open: clearing the build
     // from the list is tidying, not an answer, so a cleared build's P1 still counts. So is an open P1 issue.
     flag('needs', Boolean(open && open.length) || p1 > 0 || issues > 0);
