@@ -242,10 +242,15 @@ if [ "$WORKER" = 1 ]; then
 UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 ESC = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
 def ansi_c(m):
+    # As bash decodes: \cX is control-X (\c? DEL, \c\\ one backslash), and an unknown escape keeps its backslash.
     e = m.group(1)
-    if e[0] in "xuU":
+    if e[0] in "xuU" and len(e) > 1:
         return chr(int(e[1:], 16))
-    return chr(int(e, 8) & 255) if e[0] in "01234567" else ESC.get(e, e)
+    if e[0] == "c" and len(e) > 1:
+        return "\x7f" if e[1] == "?" else chr(ord(e[1].upper()) & 31)
+    if e[0] in "01234567":
+        return chr(int(e, 8) & 255)
+    return e if e in "\\\x27\"?" else ESC.get(e, "\\" + e)
 def dollar_quotes(text):
     # $'...' as its decoded text in single quotes, $"..." as "...", outside other quotes only: shlex reads neither.
     out, i, q = [], 0, None
@@ -263,7 +268,7 @@ def dollar_quotes(text):
             m = re.compile(r"((?:[^\x27\\]|\\.)*)\x27", re.S).match(text, i + 2)
             if not m:
                 raise ValueError("no closing quotation")
-            body = re.sub(r"\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|.)", ansi_c, m.group(1), flags=re.S)
+            body = re.sub(r"\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c\\{1,2}|c.|.)", ansi_c, m.group(1), flags=re.S)
             out.append(shlex.quote(body))
             i = m.end()
             continue

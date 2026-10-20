@@ -366,10 +366,12 @@ for c in "bash -c 'sleep 100'" "bash -c 'echo hi'" "eval 'echo sleep 400'" "bash
 done
 # The script of a shell string quoted $'...' or $"..." is read as bash reads it: shlex took the $ for part of the word.
 for c in "bash -c \$'sleep 400'" 'bash -c $"sleep 400"' "env -S \$'sleep 400'" "sh -c \$'echo \\'hi\\'; sleep 400'" \
-  "bash -c \$'sleep\\x20400'" "bash -c \"bash -c \$'sleep 400'\"" "echo 'cost \$'; bash -c 'sleep 400'"; do
+  "bash -c \$'sleep\\x20400'" "bash -c \"bash -c \$'sleep 400'\"" "echo 'cost \$'; bash -c 'sleep 400'" \
+  "bash -c \$'sleep\\cI400'" "env -S \$'sleep\\cI400'" "bash -c \$'sleep\\ci400'"; do
   check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
 done
-for c in "bash -c \$'echo sleep 400'" "bash -c \$'sleep 100'" 'bash -c $"sleep 100"'; do
+for c in "bash -c \$'echo sleep 400'" "bash -c \$'sleep 100'" 'bash -c $"sleep 100"' "bash -c \$'sleep\\cI100'" \
+  "bash -c \$'echo \\x; sleep 100'"; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
 done
 check "worker: a shell string the hook cannot read is refused, and says why" 1 \
