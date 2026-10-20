@@ -11,7 +11,7 @@ INPUT=$(cat)
 # destination or mode the text does not spell out (a variable) cannot be screened, so it is refused when the
 # script quotes a tracked path at all. perl -i edits the files named on the command line.
 # Known gaps: a write call this list does not name (subprocess, os.write on a descriptor), a path built from
-# pieces, a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
+# pieces, a call through a variable (w = fs.writeFileSync), a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
 if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
   IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
   if [[ $IW =~ (^|[^[:alnum:]_.-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then  # r2: /usr/bin/python3 too
@@ -63,8 +63,11 @@ for m in re.finditer(r"\bPath\s*\(", s):
 TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
 AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
       "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
-for m in re.finditer(r"(?<![\w$])(open|openSync|" + TO + "|" + AT + r")\s*\(", s):
-    name, (a, _) = m.group(1), args(m.end() - 1)
+NAMES = "open|openSync|" + TO + "|" + AT
+# r6: a call by another name (const {writeFileSync: w} = require('fs'); from shutil import copy as c) is read as the call
+alias = {m[2]: m[1] for m in re.finditer(r"(?<![\w$.])(" + NAMES + r")(?:\s*:\s*|\s+as\s+)([\w$]+)", s)}
+for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
+    name, (a, _) = alias.get(m.group(1), m.group(1)), args(m.end() - 1)
     if name in ("open", "openSync"):
         if m.start() in seen: continue  # Path(...).open: read above
         recv = re.search(r"\.\s*$", s[:m.start()])
@@ -76,7 +79,7 @@ for m in re.finditer(r"(?<![\w$])(open|openSync|" + TO + "|" + AT + r")\s*\(", s
                 elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
             elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
             if not (PY or JS): continue  # else it is read as their open as well
-        js = name == "openSync" or JS and bool(recv)  # JavaScript's open is a method (fs.open, fsp.open)
+        js = name == "openSync" or JS  # r6: a bare open in a node script is fs's (const {open} = require('fs'))
         if may_write(a, 1, name == "open" and (PY or not JS), js): dests.append(lit(a[0]))
     elif re.fullmatch(TO, name):
         dests.append(lit(a[1]) if len(a) > 1 else None)
@@ -89,9 +92,11 @@ for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to
     # r5: a quoted path first is a module's open(path, mode) (io.open, fsp.open), which the open( loop read; the
     # receiver's name proves nothing (io = Path('x')), so any other first argument is read as a Path mode
     if m.group(1) == "open" and lit(b[0]) is not None and not re.fullmatch(r"[rwabxtU+]*", lit(b[0])): continue
-    r = re.search(r"(?<![\w$.])(\w+)\s*$", s[:m.start()])  # a module the script imports and never rebinds
-    if m.group(1) == "open" and r and re.search(r"\bimport\s+([\w.]+\s*,\s*)*" + r[1] + r"\b(?!\s*as)|\b" + r[1] + r"\s*=\s*require\s*\(", s) \
-       and len(re.findall(r"(?<![\w$.])" + r[1] + r"\s*=(?!=)", s)) <= len(re.findall(r"\b" + r[1] + r"\s*=\s*require\s*\(", s)): continue
+    r = re.search(r"(?<![\w$.])(\w+)\s*$", s[:m.start()])  # a module the script imports and never rebinds:
+    imp = r and r"\bimport\s+([\w.]+\s*,\s*)*" + r[1] + r"\b(?!\s*as)|\b" + r[1] + r"\s*=\s*require\s*\("
+    # r6: past its import every use is r.attr, so no assignment of any form (io, x = ...; io: T = ...) rebinds it
+    if m.group(1) == "open" and r and re.search(imp, s) and all(re.match(r"\s*\.", x.string[x.end():])
+       for x in re.finditer(r"(?<![\w$.])" + r[1] + r"(?![\w$])", re.sub(imp, "", s))): continue
     if m.group(1) != "open" or may_write(b, 0, True, False): dests.append(None)  # r3: m='w'; p.open(m) may write
 try: words = shlex.split(s)
 except ValueError: words = s.split()

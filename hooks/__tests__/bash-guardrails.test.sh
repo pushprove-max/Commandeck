@@ -167,7 +167,16 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "node -e \"require('fs').promises.open('scripts/x.sh', flags='w')\"" \
   "node -e \"const fsp=require('fs/promises'); fsp.open('scripts/x.sh','w')\"" \
   "python3 -c \"from pathlib import Path; io=Path('scripts/x.sh'); io.open('w').write('new')\"" \
-  "python3 -c \"import io; from pathlib import Path; io=Path('scripts/x.sh'); m='w'; io.open(m)\""; do
+  "python3 -c \"import io; from pathlib import Path; io=Path('scripts/x.sh'); m='w'; io.open(m)\"" \
+  "node -e \"const {open}=require('fs'); open('scripts/x.sh','w',()=>{})\"" \
+  "node -e \"const {writeFileSync: w}=require('fs'); w('scripts/x.sh','new')\"" \
+  "node -e \"const {openSync: o}=require('fs'); o('scripts/x.sh','w')\"" \
+  "python3 -c \"from shutil import copy as c; c('/tmp/a', 'scripts/x.sh')\"" \
+  "python3 -c \"import io; from pathlib import Path; io, other = Path('scripts/x.sh'), None; io.open('w').write('new')\"" \
+  "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \
+  "python3 -c \"import io; from pathlib import Path; (io := Path('scripts/x.sh')).open('w')\"" \
+  "python3 -c \"import io; from pathlib import Path\nfor io in [Path('scripts/x.sh')]: io.open('w')\"" \
+  "node -e \"const {open}=require('fs'); const {writeFileSync}=require('fs'); writeFileSync('/tmp/y','ok'); open('scripts/x.sh','a',()=>{})\""; do
   sel "a Builder's tracked write blocks: $W" && check "a Builder's tracked write blocks: $W" 2 "$(bld "$W")"
 done
 for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-copy.txt','w').write(data)\"" \
@@ -183,7 +192,9 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   "node -e 'require(\"fs\").writeFileSync(\`/tmp/y\`, require(\"fs\").readFileSync(\"scripts/x.sh\"))'" \
   "python3 -c \"print(open('scripts/x.sh', encoding='latin-1').read())\"" \
   "node -e \"const fs=require('fs'); let flags; fs.readSync(fs.openSync('scripts/x.sh', flags='r'), Buffer.alloc(9))\"" \
-  "python3 -c \"import io; print(io.open('scripts/x.sh').read())\""; do
+  "python3 -c \"import io; print(io.open('scripts/x.sh').read())\"" \
+  "node -e \"const {open}=require('fs'); open('scripts/x.sh','r',()=>{})\"" \
+  "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\""; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done
 
