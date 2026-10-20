@@ -8,8 +8,8 @@
                           Always exits 0; a problem is a WARNING line.
   carry <baseline> <new>  every open item of the checkpoint the session resumed
                           from (and every file it carries by reference) is
-                          still open in the new one or its references, or
-                          closed there with a reason. Exit 1 lists each miss;
+                          still open in the new one's own text, or closed
+                          there with a reason. Exit 1 lists each miss;
                           exit 2 means a file in either chain is unreadable or
                           has no open section.
 
@@ -121,8 +121,8 @@ def prompt_block(path, budget):
 OPEN = ("waiting on", "rulings this session", "queue")
 BULLET = re.compile(r"\s*(?:[-*+]|\d+[.)])\s+")
 STATUS = re.compile(r"\[([ xX>])\]\s*")
-# "Carries open items of: <checkpoint file>" stands for that file's open items,
-# so a checkpoint need not copy them. Relative paths resolve against
+# "Carries open items of: <checkpoint file>" names the file a checkpoint resumed
+# from, for recovery; "none" names none. Relative paths resolve against
 # the referencing file's directory.
 REF = re.compile(r"Carries open items of: (\S+)\s*$")
 
@@ -191,7 +191,7 @@ def read(path):
 def refs(path, text):
     here = os.path.dirname(os.path.abspath(path))
     return [os.path.join(here, os.path.expanduser(m.group(1)))
-            for m in map(REF.match, text.splitlines()) if m]
+            for m in map(REF.match, text.splitlines()) if m and m.group(1) != "none"]  # the template's fresh start
 
 
 def own(text):
@@ -247,9 +247,9 @@ def carry(base, new):
         memo = {}
         inherited = effective(base, frozenset(), memo)[0]
         new_text = read(new)
+        # Issue 252: only the new file's own text keeps an item; its reference line is for recovery, and counting
+        # the referenced file's items as kept passed every restart that reworded or dropped one.
         still_open, closures = own(new_text)
-        for ref in refs(new, new_text):
-            still_open += effective(ref, frozenset({os.path.realpath(new)}), memo)[0]
     except OSError as e:
         print(f"{e}; an unreadable checkpoint in the carry chain cannot show what this session inherited")
         return 2

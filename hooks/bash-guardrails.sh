@@ -6,22 +6,21 @@
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # Issue 247, in a Builder and in any tier: a python3/perl/node script in the command (-c/-e, a here-document, a
-# pipe) that writes a tracked file goes around Edit and the guards on it. Each write call's destination is read:
-# a quoted path git tracks is refused; a scratch path passes, whatever tracked file the script also reads. A
-# destination or mode the text does not spell out (a variable) cannot be screened, so it is refused when the
-# script quotes a tracked path at all. perl -i edits the files named on the command line.
-# Known gaps: a write call this list does not name (subprocess, os.write on a descriptor), a path built from
-# pieces, a call through a variable (w = fs.writeFileSync), a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
+# pipe) that writes a tracked file goes around Edit and the guards on it. A tripwire for honest mistakes, not a
+# wall (ruling 1, 2026-10-20): a script that holds a write call and quotes a path git tracks is refused.
+# Known gaps: a write call this list does not name (subprocess, os.write on a descriptor), a path or mode built
+# in code, a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
 if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
   IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
   if [[ $IW =~ (^|[^[:alnum:]_.-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then  # r2: /usr/bin/python3 too
-    IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I - <<'PY'
+    # Read outside $( ): Bash 3.2 mis-scans quotes in a here-document inside a command substitution.
+    IFS= read -r -d '' IW_PY <<'PY'
 import os, re, shlex, subprocess
 s = os.environ["IW"].replace('\\"', '"').replace("\\'", "'").replace("\\`", "`")
 def lit(a):  # the text of a plain quoted string (a template literal or f-string without a hole too), else None
     m = re.match(r"""\s*([rbufRBUF]{0,2})(['"`])([^'"`\n]*)\2\s*$""", a or "")
     return None if not m or "{" in m.group(3) and (m.group(2) == "`" or "f" in m.group(1).lower()) else m.group(3)
-def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
+def args(i):  # s[i] is "(": its top-level arguments
     depth, cur, out, q = 0, "", [], None
     for j in range(i + 1, len(s)):
         c = s[j]
@@ -30,11 +29,11 @@ def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
         if c in "'\"`": q = c
         elif c in "([{": depth += 1
         elif c in ")]}":
-            if depth == 0: return out + [cur], j + 1
+            if depth == 0: return out + [cur]
             depth -= 1
         elif c == "," and depth == 0: out.append(cur); cur = ""; continue
         cur += c
-    return out + [cur], len(s)
+    return out + [cur]
 def writes(mode):  # True, False, or None when the mode is not a plain string
     v = lit(mode)
     return None if v is None else bool(re.search(r"[wax+]", v))
@@ -48,94 +47,39 @@ def may_write(b, i, py, js):  # an open call's mode, argument i: True unless eac
     if js:  # r5: in JavaScript flags='w' is an assignment, and its value is the mode
         modes.append(re.sub(r"^(\s*[\w$]+\s*=(?!=))+", "", b[i]) if len(b) > i and b[i].strip() else "'r'")
     return any(writes(x) is not False for x in modes)
-dests = []  # each a literal path, or None for one that cannot be read
-seen = set()  # where a Path(...) method call starts
-for m in re.finditer(r"\bPath\s*\(", s):
-    a, end = args(m.end() - 1)
-    t = re.match(r"\s*\.\s*(\w+)\s*\(", s[end:])
-    if not t: continue
-    seen.add(end + t.start(1))
-    b = args(end + t.end() - 1)[0]
-    if t.group(1) in ("write_text", "write_bytes", "touch", "unlink", "rename", "replace", "symlink_to", "hardlink_to", "chmod", "rmdir") \
-       or (t.group(1) == "open" and may_write(b, 0, True, False)):
-        dests.append(lit(a[0]))
-        if t.group(1) in ("rename", "replace"): dests.append(lit(b[0]))
-TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
-AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
-      "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
-NAMES = "open|openSync|" + TO + "|" + AT
-# r6: a call by another name (const {writeFileSync: w} = require('fs'); from shutil import copy as c) is read as the call
-# r7: the text's order is not run order, so a name bound twice is read as each binding, and as itself
-alias = {}
-for m in re.finditer(r"(?<![\w$.])(" + NAMES + r")(?:\s*:\s*|\s+as\s+)([\w$]+)", s): alias.setdefault(m[2], set()).add(m[1])
-# r8: a name something else is bound to (from io import open as remove) is the API itself only where the text binds it
-# so too: a builtin (python's open, perl's own), import *, or the name bare (from os import remove; {remove})
-REN = r"(?<![\w$.])[\w$]+(?:\s*:\s*|\s+as\s+)"
-renamed = set(re.findall(REN + r"(" + NAMES + r")(?![\w$])", s))
-def itself(n):
-    return n not in renamed or n == "open" and PY or "perl" in LANG or re.search(r"\bimport\s+\*", s) \
-        or re.search(r"(?<![\w$.])" + n + r"(?![\w$]|\s*\()", re.sub(REN + r"[\w$]+", "", s))
-def screen(name, a, recv):
-    if name in ("open", "openSync"):
-        # r5: perl's open has no receiver; a bare uppercase name is a perl handle only in a perl command
-        if name == "open" and not recv and len(a) >= 2 and (re.match(r"\s*(my\s|\$)", a[0]) or "perl" in LANG and re.match(r"\s*[A-Z]\w*\s*$", a[0])):
-            v = lit(a[1])  # perl: open(F, '>x') or open(my $f, '>', 'x')
-            if len(a) == 2:
-                if v is None: dests.append(None)
-                elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
-            elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
-            if not (PY or JS): return  # else it is read as their open as well
-        js = name == "openSync" or JS  # r6: a bare open in a node script is fs's (const {open} = require('fs'))
-        if may_write(a, 1, name == "open" and (PY or not JS), js): dests.append(lit(a[0]))
-    elif re.fullmatch(TO, name):
-        dests.append(lit(a[1]) if len(a) > 1 else None)
-        if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
-    else: dests.append(lit(a[0]))
-for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
-    # r7: an alias rebinds a bare name only, never shutil.copy. r8: a receiver is a name, ) ] or a string on the
-    # same line, so neither a comment's closing dot (# Copy.\nc(...)), 1.\nc(...) nor a spread (...c()) is one
-    # r9: a dot across a line break (a.\nb, a\n.b, a.\\\nb) may be either, so the call is read as the API and as each alias
-    recv = re.search(r"[\w$)\]'\"`][ \t]*\??\.[ \t]*\Z", s[:m.start()])
-    near = re.search(r"[\w$)\]'\"`](?:\s|\\\n)*\??\.(?:\s|\\\n)*\Z", s[:m.start()])
-    # r10: but not a dot that ends a comment (# Read.\nc(...), // read.) or a number (1.\nc(...)): the dot's line,
-    # its quoted strings dropped, has # or // in it, or ends in digits and the dot
-    d = near and near.start() + near[0].index(".")
-    if near and re.search(r"#|//|(?<![\w$.])\d+\.\Z", re.sub(r"(['\"`]).*?\1", "", s[s.rfind("\n", 0, d) + 1:d + 1])):
-        near = None
-    names = ({m[1]} & set(NAMES.split("|")) if near or itself(m[1]) else set()) | (set() if recv else alias.get(m[1], set()))
-    for name in names:
-        if not (name in ("open", "openSync") and m.start() in seen): screen(name, args(m.end() - 1)[0], recv)  # Path(...).open: read above
-# r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
-for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to|open)\s*\(", s):
-    if m.start(1) in seen: continue
-    b = args(m.end() - 1)[0]
-    # r5: a quoted path first is a module's open(path, mode) (io.open, fsp.open), which the open( loop read; the
-    # receiver's name proves nothing (io = Path('x')), so any other first argument is read as a Path mode
-    if m.group(1) == "open" and lit(b[0]) is not None and not re.fullmatch(r"[rwabxtU+]*", lit(b[0])): continue
-    r = re.search(r"(?<![\w$.])(\w+)\s*$", s[:m.start()])  # a module the script imports and never rebinds:
-    imp = r and r"\bimport\s+([\w.]+\s*,\s*)*" + r[1] + r"\b(?!\s*as)|\b" + r[1] + r"\s*=\s*require\s*\("
-    # r6: past its import every use is r.attr, so no assignment of any form (io, x = ...; io: T = ...) rebinds it
-    if m.group(1) == "open" and r and re.search(imp, s) and all(re.match(r"\s*\.", x.string[x.end():])
-       for x in re.finditer(r"(?<![\w$.])" + r[1] + r"(?![\w$])", re.sub(imp, "", s))): continue
-    if m.group(1) != "open" or may_write(b, 0, True, False): dests.append(None)  # r3: m='w'; p.open(m) may write
+def open_writes(m):  # an open call: True unless its mode is read-only (a missing or literal read mode)
+    a = args(m.end() - 1) if m[0].endswith("(") else re.match(r"[^;\n]*", s[m.end():])[0].split(",")  # perl: open F, '>x'
+    if m[1] == "open" and len(a) >= 2 and (re.match(r"\s*(my\s|\$)", a[0]) or "perl" in LANG and re.match(r"\s*[A-Z]\w*\s*$", a[0])):
+        v = lit(a[1])  # perl: open(F, '<x'), open(my $f, '>', 'x')
+        return v is None or bool(re.search(r"[>+|]", v))
+    # a dotted open whose first argument is no quoted path is Path's open(mode) (p.open('w'), fs.openSync(FILE, 'w'))
+    if re.search(r"\.\s*\Z", s[:m.start()]) and not (lit(a[0]) and not re.fullmatch(r"[rwabxtU+]*", lit(a[0]))):
+        return may_write(a, 0, True, False)
+    return may_write(a, 1, PY or not JS, JS or m[1] == "openSync")
+# Ruling 1 (2026-10-20): presence, not parsing. A writer name anywhere (a call, an alias, an import, a comment),
+# an open whose mode is not a literal read mode (or open named, not called, beside a write-mode string), or perl -i, plus a quoted path git tracks (or a file perl -i names): refused.
+# A false refusal of an odd read one-liner (str.replace, a reader aliased to a writer's name) is accepted.
+# Out of scope: a path or mode computed in code ('scr' + 'ipts/x.sh', getattr, eval).
+WRITERS = ("write_text|write_bytes|touch|symlink_to|hardlink_to|copy|copy2|copyfile|copytree|move|rename|renameSync|replace"
+           "|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync|writeFile|writeFileSync|appendFile|appendFileSync"
+           "|createWriteStream|outputFile|outputFileSync|truncate|truncateSync|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync"
+           "|remove|rmtree|removedirs|chmod|chmodSync")
 try: words = shlex.split(s)
 except ValueError: words = s.split()
-for i, w in enumerate(words):  # perl -i edits in place the files after the script
+inplace = []  # perl -i edits in place the files after the script
+for i, w in enumerate(words):
     if re.fullmatch(r"(.*/)?perl", w) and any(re.fullmatch(r"-[a-zA-Z]*i\S*", x) for x in words[i + 1:]):
-        dests += [x for x in words[i + 1:] if not x.startswith("-")]
-def tracked(p):
-    return subprocess.run(["git", "ls-files", "--error-unmatch", "--", p], capture_output=True).returncode == 0
-for d in dests:
-    if d and tracked(d): print("W " + d); raise SystemExit
-if None in dests:
-    for q in sorted(set(re.findall(r"""(?:['"`]|\bqq?\s*[({\[<])([A-Za-z0-9_./-]+)[)}\]>'"`]""", s))):
-        if tracked(q): print("U " + q); raise SystemExit
+        inplace += [x for x in words[i + 1:] if not x.startswith("-")]
+writer = inplace or re.search(r"(?<![\w$])(" + WRITERS + r")(?![\w$])", s) \
+    or re.search(r"(?<![\w$])(open|openSync)(?![\w$]|\s*\()", s) and re.search(r"""(['"`])[rbtU]*[wax+][rwabxtU+]*\1""", s) \
+    or any(open_writes(m) for m in re.finditer(r"(?<![\w$])(open|openSync)" + (r"(\s*\(|\s+(?=[\w$]))" if "perl" in LANG else r"\s*\("), s))
+if writer:
+    for p in sorted(set(re.findall(r"""(?:['"`]|\bqq?\s*[({\[<])[\s+<>]*([A-Za-z0-9_./-]+)[)}\]>'"`]""", s)) | set(inplace)):
+        if subprocess.run(["git", "ls-files", "--error-unmatch", "--", p], capture_output=True).returncode == 0:
+            print(p); raise SystemExit
 PY
-)
-    case $IW_OUT in
-      "W "*) echo "BLOCKED: an inline script writes ${IW_OUT#W }, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder)." >&2; exit 2 ;;
-      "U "*) echo "BLOCKED: an inline script writes to a path or with a mode it does not spell out, and names ${IW_OUT#U }, a tracked file. Make the change with the \`Edit\` tool, or write to a quoted scratch path (\$TMPDIR, the unit's scratch folder) so the write can be screened." >&2; exit 2 ;;
-    esac
+    IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I -c "$IW_PY")
+    [ -n "$IW_OUT" ] && { echo "BLOCKED: an inline script holds a write call and names $IW_OUT, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder) and name no tracked file." >&2; exit 2; }
   fi
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).

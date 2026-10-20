@@ -53,7 +53,7 @@ if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
   if ! miss=$(python3 "$(dirname "$0")/../scripts/checkpoint-context.py" carry "$base" "$cp" 2>&1); then
     echo "$(date +%FT%T) stop-hook: carry-over check failed for $cp against ${base:-<empty $anc>}" >> "$HOME/.claude/checkpoints/clear-hook.log"
     HOOK_FIRE_BLOCK=1
-    jq -n --arg r "CARRY-OVER CHECK FAILED: $cp drops open work this session inherited from ${base:-<empty $anc>}. Keep each item below open (Waiting on, the unsaved rulings, Queue, or an unchecked or > Todo), carry its checkpoint file by reference with a 'Carries open items of: <file>' line, or add it verbatim under '## Closed since last checkpoint' with what closed it. Fix the checkpoint, then end the turn; main restarts once nothing is missing.
+    jq -n --arg r "CARRY-OVER CHECK FAILED: $cp drops open work this session inherited from ${base:-<empty $anc>}. Keep each item below open in this checkpoint's own text (Waiting on, the unsaved rulings, Queue, or an unchecked or > Todo; a 'Carries open items of:' line keeps none), or add it verbatim under '## Closed since last checkpoint' with what closed it. Fix the checkpoint, then end the turn; main restarts once nothing is missing.
 $miss" '{decision:"block", reason:$r}'
     exit 0
   fi

@@ -35,7 +35,7 @@ there, the red test is replaced by a timing taken before and after, and the comm
 
 Main sends each one as a decision. The recommended answer comes first.
 
-Answered 2026-10-19 (r-20261019-220436-1-b2686c): the recommended answer to all eleven. So this unit builds
+Answered 2026-10-19 (owner answer): the recommended answer to all eleven. So this unit builds
 items 1-25 and 28-32; items 26, 27 and 33 (issues 224, 240, 245) are a second unit, planned and built right
 after this one merges.
 

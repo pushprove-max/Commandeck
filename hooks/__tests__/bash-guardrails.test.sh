@@ -189,25 +189,39 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; (io := Path('scripts/x.sh')).open('w')\"" \
   "python3 -c \"import io; from pathlib import Path\nfor io in [Path('scripts/x.sh')]: io.open('w')\"" \
-  "node -e \"const {open}=require('fs'); const {writeFileSync}=require('fs'); writeFileSync('/tmp/y','ok'); open('scripts/x.sh','a',()=>{})\""; do
+  "node -e \"const {open}=require('fs'); const {writeFileSync}=require('fs'); writeFileSync('/tmp/y','ok'); open('scripts/x.sh','a',()=>{})\"" \
+  $'python3 -c "from io import open as copy; import shutil; ((1//1, shutil)[1].\ncopy(\'/etc/hosts\', \'scripts/x.sh\'))"' \
+  $'node -e "class A { #r = require(\'fs\'); w() { return this.#r.\ncopyFileSync(\'/etc/hosts\', \'scripts/x.sh\') } }; const {readFileSync: copyFileSync}=require(\'fs\'); new A().w()"' \
+  "perl -e 'open F, \">\", \"scripts/x.sh\"; print F \"new\"'"; do
   sel "a Builder's tracked write blocks: $W" && check "a Builder's tracked write blocks: $W" 2 "$(bld "$W")"
 done
-for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-copy.txt','w').write(data)\"" \
-  "node -e \"const fs=require('fs'); fs.writeFileSync('/tmp/y', fs.readFileSync('scripts/x.sh'))\"" \
+# Ruling 1: reads stay allowed. open with no mode or a literal read mode is a read; a path built in code is out of scope (the last one).
+for W in "python3 -c \"print(open('scripts/x.sh').read(), open('scripts/x.sh', 'rb').read(), open('scripts/x.sh', 'rt').read())\"" \
+  "python3 -c \"import json; json.load(open('scripts/x.sh'))\"" \
+  "node -e \"console.log(require('fs').readFileSync('scripts/x.sh','utf8'), require('fs').openSync('scripts/x.sh'))\"" \
+  "node -e \"const {open}=require('fs'); open('scripts/x.sh','r',()=>{})\"" \
+  "perl -e 'open F, \"<\", \"scripts/x.sh\"; print <F>'" \
+  "perl -e 'open(my \$f, \"scripts/x.sh\"); print <\$f>'" \
   "python3 -c \"from pathlib import Path; print(Path('scripts/x.sh').read_text())\"" \
   "perl -ne 'print if /old/' scripts/x.sh" \
-  "python3 -c \"open('scripts/x.sh', 'r').read(); open('/tmp/z', 'wb')\"" \
-  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); Path('/tmp/z').write_text(p.read_text().replace('old','new'))\"" \
   "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); print(p.open().read(), p.open('r').read(), p.open(encoding='utf8').read())\"" \
   "python3 -c \"from pathlib import Path; print(Path('scripts/x.sh').open(mode='r').read())\"" \
-  "python3 -c \"import io; p='scripts/x.sh'; print(io.open(p).read())\"" \
   "node -e \"const fs=require('fs'); fs.readSync(fs.openSync('scripts/x.sh','r'), Buffer.alloc(9))\"" \
-  "node -e 'require(\"fs\").writeFileSync(\`/tmp/y\`, require(\"fs\").readFileSync(\"scripts/x.sh\"))'" \
   "python3 -c \"print(open('scripts/x.sh', encoding='latin-1').read())\"" \
   "node -e \"const fs=require('fs'); let flags; fs.readSync(fs.openSync('scripts/x.sh', flags='r'), Buffer.alloc(9))\"" \
   "python3 -c \"import io; print(io.open('scripts/x.sh').read())\"" \
-  "node -e \"const {open}=require('fs'); open('scripts/x.sh','r',()=>{})\"" \
   "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\"" \
+  "python3 -c \"import shutil; shutil.copy('/tmp/a', 'scr' + 'ipts/x.sh')\""; do
+  sel "a Builder's read of a tracked file passes: $W" && check "a Builder's read of a tracked file passes: $W" 0 "$(bld "$W")"
+done
+# Ruling 1 (2026-10-20): presence, not parsing. A read that holds a writer name (an alias, a comment) or a
+# writing open beside a tracked path is refused too; that false refusal is accepted.
+for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-copy.txt','w').write(data)\"" \
+  "node -e \"const fs=require('fs'); fs.writeFileSync('/tmp/y', fs.readFileSync('scripts/x.sh'))\"" \
+  "python3 -c \"open('scripts/x.sh', 'r').read(); open('/tmp/z', 'wb')\"" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); Path('/tmp/z').write_text(p.read_text().replace('old','new'))\"" \
+  "python3 -c \"import io; p='scripts/x.sh'; print(io.open(p).read())\"" \
+  "node -e 'require(\"fs\").writeFileSync(\`/tmp/y\`, require(\"fs\").readFileSync(\"scripts/x.sh\"))'" \
   "python3 -c \"from shutil import copy as w; import io; print(io.w('/tmp/z', 'scripts/x.sh'))\"" \
   "python3 -c \"from io import open as remove; print(remove('scripts/x.sh').read())\"" \
   "node -e \"const {readFileSync: unlink}=require('fs'); console.log(unlink('scripts/x.sh','utf8'))\"" \
@@ -215,7 +229,7 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   $'node -e "const {readFileSync: unlink}=require(\'fs\') // read.\nunlink(\'scripts/x.sh\',\'utf8\')"' \
   $'python3 -c "from io import open as remove; x = 1.\nremove(\'scripts/x.sh\').read()"' \
   $'python3 -c "from io import open as remove; x = 1# Read.\nremove(\'scripts/x.sh\').read()"'; do
-  sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
+  sel "a Builder's read beside a writer name and a tracked path blocks: $W" && check "a Builder's read beside a writer name and a tracked path blocks: $W" 2 "$(bld "$W")"
 done
 
 if [ -z "${BASH_GUARDRAILS_TEST_CASE+x}" ]; then
