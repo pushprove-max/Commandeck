@@ -56,6 +56,8 @@ config/addons.tsv. Each is its author's work, under its own terms.
     Its repository carried no licence file when this notice was written, so
     no rights to copy or change it are granted by its author. Commandeck
     only prints its install command.
+  codevibez, by leonhong18                       MIT
+    https://github.com/leonhong18/codevibez
   skills, by Matt Pocock                         MIT
     https://github.com/mattpocock/skills
 

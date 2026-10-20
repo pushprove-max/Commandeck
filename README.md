@@ -912,6 +912,7 @@ add-on succeeded.
 | agent-browser | Browser automation | Global npm package and a browser download. |
 | ponytail, full plugin | Startup coding rules | Separate from the bundled on-demand skill; its registry description estimates about 1 KB of rules. |
 | ui-themes | Theme skills | Installed by a plugin command; loaded when requested. |
+| codevibez | Plain-English tool rows | Installed by a plugin command; a display mod in every pane, English by default (`/codevibez raw` switches back); no model calls or network. |
 | Engineering-skills add-on | Engineering skills | No one-line installer in this registry; skill descriptions add session context. |
 
 Upstream sources and recorded licences are in [`NOTICE`](NOTICE). That file's
