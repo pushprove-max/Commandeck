@@ -127,16 +127,22 @@ check "taking setup's keys out leaves the owner's own 1h" '{"promptCacheTtl":"1h
 # hand-written config, as requirements.test.sh runs one of its lines; il_cache_ttl is a counter, no setup run.
 replay() {
   echo "$1" > "$T/replay.json"
-  ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0
+  ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0 CLAUDE_CONFIG_DIR=$T/replay-cc
     il_cache_ttl() { calls=$((calls + 1)); }
-    for l in '^old()' 'CACHE=$(old .cacheTtl)' '\[ "$CACHE" != 5m \] || il_cache_ttl' 'Prompt cache: not answered since 0.15.0'; do eval "$(grep -- "$l" "$REAL/scripts/setup.sh")"; done
+    eval "$(sed -n '/^pp_config_option()/,/^}/p' "$REAL/scripts/paths.sh")"
+    for l in '^old()' 'CACHE=$(old .cacheTtl)' '^CACHE_ON=' '\[ "$CACHE_ON" != 5m \] || il_cache_ttl' 'Prompt cache: not answered since 0.15.0'; do eval "$(grep -- "$l" "$REAL/scripts/setup.sh")"; done
     echo "$calls:${#NEED[@]}" )
 }
+mkdir -p "$T/replay-cc" && echo '{}' > "$T/replay-cc/settings.json"
 check "a stored \"recommended\" is not an answer: nothing is written, and the question is asked" 0:1 "$(replay '{"cacheTtl":"recommended"}')"
 check "a stored \"default\" is the same" 0:1 "$(replay '{"cacheTtl":"default"}')"
 check "a config with no answer is asked" 0:1 "$(replay '{"version":1}')"
 check "a stored 5m is written again on every replay, and not asked" 1:0 "$(replay '{"cacheTtl":"5m"}')"
 check "a stored leave writes nothing and is not asked" 0:0 "$(replay '{"cacheTtl":"leave"}')"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "5m"}}}}' > "$T/replay-cc/settings.json"
+check "a /config 5m beats a stored leave: the 5m is written, and nothing is asked (issue 245)" 1:0 "$(replay '{"cacheTtl":"leave"}')"
+check "and answers a config with none" 1:0 "$(replay '{"version":1}')"
+echo '{}' > "$T/replay-cc/settings.json"
 
 # --- the owner's worker cuts: setup ships no name, and update (setup with no answers) keeps the owner's lists ---
 # setup.sh's own read lines and its config write run on a hand-written config, il_write printing what it would write;

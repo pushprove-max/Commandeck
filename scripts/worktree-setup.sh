@@ -97,7 +97,7 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   # Ponytail runs in every seat, the relay pane too (owner, 2026-10-16): the off an earlier run wrote goes, and the
   # pane follows the owner's own setting; worker panes run it through a summary instead of the plugin. The typescript-lsp plugin is gone, and so is the key for it.
   # The setup answer for the relay's prompt cache: 1h is written into env by path, so its other env entries stay.
-  jq --arg rttl "$(jq -r '.chiefOfStaff.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" "$DISOWN"'
+  jq --arg rttl "$(PP_MAIN=$PROJECT pp_option relayPromptCacheTtl)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" "$DISOWN"'
     disown
     | (if $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h" else . end)
     | .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
@@ -163,7 +163,7 @@ OWNFIX=$(jq -c --argjson fixed "$FIXED" '(.env.COMMANDECK_DEFAULT_CUTS // "" | s
     | select(.value != false or (.key | IN($r[]) | not)))' "$F")
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
-jq --arg ttl "$(jq -r '.cacheTtl // empty' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+jq --arg ttl "$(PP_MAIN=$PROJECT pp_option promptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
@@ -194,7 +194,7 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 #     this run's only beside the summary hook, so an owner's own leaf is neither deleted, claimed nor swapped.
 CUTS=$(jq -c '{s: [.workerSkillsOff[]? | strings], p: [.workerPluginsOff[]? | strings], k: (.keeps | if type == "object" then . else {} end)}' "$PROJECT/.claude/commandeck.json" 2>/dev/null) || CUTS='{"s":[],"p":[],"k":{}}'
 PONY=0
-[ "$(jq -r '.ponytail // false' "$PROJECT/.claude/commandeck.json" 2>/dev/null)" = true ] \
+[ "$(PP_MAIN=$PROJECT pp_option ponytail)" = true ] \
   && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1 && PONY=1
 jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
   def keeps($w): ($keep | split(",") | index($w)) != null;

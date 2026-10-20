@@ -67,6 +67,7 @@ h1 { font-size: 20px; }
 .card[data-size="3"] { grid-column: span 3; }
 .card[data-size="4"] { grid-column: 1 / -1; }
 .card[data-size="1"] .more { display: none; }
+.card[data-absent] { display: none; }
 .card[data-height="half"] { grid-row: span 1; }
 /* The cap lets go as soon as a drag writes a height to the panel's style, or half could not be dragged taller. */
 .card[data-height="half"]:not([style*="height"]) { max-height: 190px; overflow-y: auto; }
@@ -289,6 +290,10 @@ a.t:hover { color: var(--accent-ink); }
 .question { font-weight: 600; overflow-wrap: anywhere; }
 .default { margin-top: 4px; overflow-wrap: anywhere; }
 .default-label { color: var(--muted); }
+.answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.answer .default-opt { font-weight: 600; }
+.answer .other { flex: 1 1 8em; min-width: 0; }
+.answered { margin-top: 6px; color: var(--muted); }
 .sha { color: var(--accent-ink); font-family: var(--mono); flex: none; }
 
 

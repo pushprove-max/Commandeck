@@ -35,6 +35,30 @@ check "the README shows no other version badge" 1 "$(grep -c 'badge/version-' "$
 check "and the CHANGELOG's newest entry is that version" "## $V -- " "$(grep -m1 -o '^## [^ ]* -- ' "$REAL/CHANGELOG.md")"
 check "it carries a description" yes "$(jq -r 'if (.description | type == "string" and length > 20) then "yes" else "no" end' "$M" 2>/dev/null)"
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
+# Issue 245: an option /config shows that nothing reads is a setting that does nothing; a default other than setup's
+# recommended answer shows the owner one thing in /config while setup recommends another.
+READ=$(cd "$REAL" && grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' | grep -v '/__tests__/' | awk '{print $2}' | sort -u)
+for k in $(jq -r '.userConfig | keys[]' "$M"); do
+  check "option $k has a reader" 1 "$(grep -cx "$k" <<<"$READ")"
+done
+# <key> <default> <setup's recommended answer, as SKILL.md asks it>; none: no default, as the recommended answer saves none.
+while IFS='|' read -r k d a; do
+  check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
+done <<'EOF'
+builderModel|"opus"|Ask "Builder model": Opus
+builderEffort|"medium"|Ask "Builder effort": Medium
+maxReviewRounds|"none"|Ask "Review rounds": No cap
+closingPass|true|Ask "Closing pass": Runs
+fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
+ponytail|true|Ask "Ponytail": On
+promptCacheTtl|"5m"|Ask "Prompt cache": 5m for main and workers
+relayPromptCacheTtl|"1h"|Ask "Relay prompt cache": 1h
+dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
+dashboardPort|"none"|Ask "Dashboard": On, this machine only
+EOF
+check "the set is the ten options of the plan's question 9" 10 "$(jq '.userConfig | length' "$M")"
+check "every picker's labels are 1 to 64 characters and hold its default" true \
+  "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and ($o.default == null or any($o.options[]; . == $o.default))] | all' "$M")"
 # An instruction file over 200 lines loads in every session and is followed less well (Claude Code's memory guide).
 # startup-size.sh holds the bytes the hooks print; global-claude.md and global-rules.md never pass through a hook.
 for t in AGENT_STARTUP main-session global-claude global-rules; do

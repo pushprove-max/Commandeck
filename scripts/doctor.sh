@@ -55,7 +55,8 @@ else
   # The merge check runs on a copy that links main's node_modules (merge-unit-local.sh).
   ! jq -r '.testCommand // empty' "$IL_CONFIG" | grep -qE '(^|[^[:alnum:]_-])(npm (ci|install)|pnpm install|yarn install)([^[:alnum:]_-]|$)' \
     || warn "check command: it installs packages, and the merge check shares the main checkout's node_modules, so each merge rewrites main's packages; install in the project's setup, not in the check"
-  ok "full suite before the final review: $(jq -r 'if .fullSuiteBeforeFinal then "on" else "off" end' "$IL_CONFIG") (setup.sh --full-suite on|off)"
+  ok "full suite before the final review: $([ "$(pp_option fullSuiteBeforeFinal)" = true ] && echo on || echo off) (setup.sh --full-suite on|off, or /config)"
+  while IFS= read -r L; do ok "${L#ok }"; done < <(il_options_report)
   if [ -s "$IL_PROJECT" ]; then ok "install manifest: $IL_PROJECT"
   else bad "install manifest: none for this project, so uninstall cannot put it back; run: bash $(printf '%q' "$HERE")/setup.sh"; fi
   [ "$(jq -r '.root // empty' "$IL_PROJECT" 2>/dev/null)" = "$IL_ROOT" ] || [ ! -s "$IL_PROJECT" ] \

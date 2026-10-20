@@ -17,7 +17,7 @@ git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t c
 mkdir -p "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"
 printf '#!/usr/bin/env bash\necho "{\\"ok\\":true,\\"result\\":{}}"\n' > "$BIN/orca-ide"; chmod +x "$BIN/orca-ide"
 printf 'notify = ["%s/hooks/codex-notify.sh"]\nmodel = "other"\n' "$REAL" > "$CFG"
-in_proj() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_HOST_OS=Linux "$@"); }
+in_proj() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_HOST_OS=Linux "$@"); }
 # lib <shell> [args] -- the shell runs with install-lib.sh loaded and the args as "$1"...
 lib() { in_proj bash -c '. "$0/paths.sh" && . "$0/install-lib.sh" && c=$1 && shift && eval "$c"' "$REAL/scripts" "$@" 2>&1; }
 # report -- the notify check doctor.sh prints, called by itself ("ok ..." or "warn ...").
@@ -199,6 +199,16 @@ check "an offline worktree's metadata survives the check" 1 "$(git -C "$PROJ" wo
 mv "$T/away.gone" "$T/away" && git -C "$PROJ" worktree remove --force "$T/away"
 rm -f "$PROJ/.claude/settings.local.json"
 check "no local file: nothing shadowed" 1 "$(shadow | grep -c '^ok settings')"
+
+# --- issue 245: each /config option, its value and where that comes from, so an owner sees which answer runs ---
+echo '{"version": 1, "profile": "claude", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
+OUT=$(lib il_options_report)
+check "the doctor names each option's value and source: /config, the project's file, or the default" '1:1:1' \
+  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option promptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option maxReviewRounds: none (from the default)$' <<<"$OUT")"
+check "one line for each option the manifest declares" "$(jq '.userConfig | length' "$REAL/.claude-plugin/plugin.json")" "$(grep -c '^ok option ' <<<"$OUT")"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
+check "the cache report follows the /config answers over the project's" 1 "$(cache | grep -c '^ok prompt cache: setup sets none$')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

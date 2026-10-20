@@ -176,5 +176,60 @@ PY
 )
 check "a save on one project refuses no save on another; a stale one on the same project still is" "204 204 409 204" "$OUT"
 
+# Issue 240: the owner answers a decision from the "Needs me" panel, from this machine only (a token in the page
+# would be readable by anyone on the network who loads it). A POST from another address, or with another site's
+# Origin, is refused. A loopback answer closes the ledger row, logs a ruling and tells main and the relay (stubs
+# here, writing what they were sent); a second answer to the same id is refused; a send that failed is kept and
+# sent again on the next refresh, the page's next read of data.js. The project's folder comes from the host's
+# own data.js, never from the request.
+P=$T/plugin; mkdir -p "$P"; cp -R "$ROOT/scripts" "$ROOT/hooks" "$P/"
+printf '#!/usr/bin/env bash\n[ ! -e "%s/no-send" ] || exit 1\nprintf "%%s|" "${0##*/}" "$@" >> "%s/sent"; echo >> "%s/sent"\n' "$T" "$T" "$T" > "$P/scripts/to-main.sh"
+cp "$P/scripts/to-main.sh" "$P/scripts/cos-tell.sh"
+M=$T/proj W=$T/www; git init -q -b main "$M"; mkdir -p "$M/.claude" "$W"
+echo '{"chiefOfStaff": {"name": "Relay"}}' > "$M/.claude/commandeck.json"
+printf 'window.DASH = %s;\n' "$(jq -cn --arg p "$M" '{home: "proj", projects: {proj: {path: $p}}}')" > "$W/data.js"
+D() { (cd "$M" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$M" bash "$ROOT/scripts/decision.sh" "$@"); }
+D add ship-1999-01-01 'Ship it?' yes main --options 'yes|no' >/dev/null; D add keys-1999-01-01 'Rotate the keys?' yes main >/dev/null
+at() { D list | jq -r --arg id "$1" '.[] | select(.id == $id) | .askedAt'; }
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at ship-1999-01-01)" "$(at keys-1999-01-01)" "$T" <<'PY'
+import functools, http.client, http.server, json, os, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+class Far(d.Handler):  # the same server as another machine on the network reaches it
+    def setup(self):
+        super().setup()
+        self.client_address = ("192.0.2.7", 40000)
+def serve(h):
+    s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(h, directory=sys.argv[2]))
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    return s.server_address[1]
+near, far = serve(d.Handler), serve(Far)
+def req(port, method, path, body=None, origin=None):
+    c = http.client.HTTPConnection("127.0.0.1", port)
+    own = "127.0.0.1:%d" % port
+    c.request(method, path, body and json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": origin or "http://" + own})
+    return c.getresponse().status
+a = {"project": "proj", "id": "ship-1999-01-01", "askedAt": sys.argv[3], "answer": "no"}
+print(req(far, "POST", "/answer", a), req(near, "POST", "/answer", a, "http://attacker.example"), req(near, "POST", "/answer", a), req(near, "POST", "/answer", a))
+open(sys.argv[5] + "/no-send", "w").close()
+print(req(near, "POST", "/answer", {"project": "proj", "id": "keys-1999-01-01", "askedAt": sys.argv[4], "answer": "not yet"}))
+held = json.load(open(sys.argv[2] + "/answer-retry.json"))
+os.remove(sys.argv[5] + "/no-send")
+print(len(held), req(near, "GET", "/data.js"), len(json.load(open(sys.argv[2] + "/answer-retry.json"))))
+PY
+)
+check "another machine's POST and another site's are refused; the first loopback answer is taken, a second is refused" \
+  "403 403 200 409" "$(sed -n 1p <<<"$OUT")"
+check "the ledger row is answered" '"no"' "$(D list | jq -c '.[] | select(.id == "ship-1999-01-01") | .answer')"
+RID=$(jq -r 'select(.question == "Ship it?") | .id' "$T/rulings.jsonl" 2>/dev/null)
+check "the answer is logged as a ruling, by the ruling log's id form" 'yes dashboard no option' \
+  "$([[ $RID =~ ^r-[0-9]{8}-[0-9]{6}-d-[0-9a-f]{6}$ ]] && echo yes) $(jq -r 'select(.question == "Ship it?") | "\(.source) \(.answer) \(.pick)"' "$T/rulings.jsonl" 2>/dev/null)"
+check "main is told the answer and its ruling, and so is the relay" \
+  "to-main.sh|question|ship-1999-01-01|no (ruling $RID)|
+cos-tell.sh|--note|answered on the dashboard: ship-1999-01-01|no (ruling $RID)|" "$(head -2 "$T/sent")"
+check "a failed send is kept for main and the relay, and sent again on the next refresh" "200
+2 200 0" "$(sed -n '2,3p' <<<"$OUT")"
+check "the resent messages are the failed answer's" 2 "$(grep -c 'keys-1999-01-01|not yet (ruling r-' "$T/sent")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

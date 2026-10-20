@@ -36,11 +36,15 @@ ask_decoy_first "$INPUT" || exit 0
 
 DECIDE="$(dirname "${BASH_SOURCE[0]}")/../scripts/decision.sh"
 LOG="$(dirname "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/x}")/ask-records-decision.log"
-ROWS=$(jq -c -L "${BASH_SOURCE[0]%/*}/lib" --arg day "$(date +%Y-%m-%d)" 'include "decision-id"; .tool_input.questions[]? | [
+# The options are the labels less the decoy and the marker, for the dashboard's answer buttons (issue 240); a
+# label holding "|" cannot be told apart from the next, so then none are kept.
+ROWS=$(jq -c -L "${BASH_SOURCE[0]%/*}/lib" --arg day "$(date +%Y-%m-%d)" --arg decoy "$ASK_DECOY" 'include "decision-id"; .tool_input.questions[]? | [
   decision_id($day),
   (.question // ""),
   ([.options[]?.label // "" | select(test("\\(Recommended\\)\\s*$"))] | first
-    | if . == null then "none" else sub("\\s*\\(Recommended\\)\\s*$"; "") end)]' <<<"$INPUT" 2>/dev/null)
+    | if . == null then "none" else sub("\\s*\\(Recommended\\)\\s*$"; "") end),
+  ([.options[]?.label // "" | select(. != $decoy) | sub("\\s*\\(Recommended\\)\\s*$"; "")]
+    | if length >= 2 and length <= 4 and all(length > 0 and (contains("|") | not)) then join("|") else "" end)]' <<<"$INPUT" 2>/dev/null)
 
 RELAY=$(jq -r '.chiefOfStaff.name // empty' "${ROOT:-.}/.claude/commandeck.json" 2>/dev/null)
 blocked() {
@@ -65,8 +69,8 @@ done <<<"$ROWS"
 [ ${#dups[@]} -eq 0 ] || blocked "${dups[@]}"
 while IFS= read -r row; do
   [ -n "$row" ] || continue
-  id=$(jq -r '.[0]' <<<"$row") q=$(jq -r '.[1]' <<<"$row") d=$(jq -r '.[2]' <<<"$row")
-  err=$(bash "$DECIDE" add "$id" "$q" "$d" AskUserQuestion 2>&1 >/dev/null) && continue
+  id=$(jq -r '.[0]' <<<"$row") q=$(jq -r '.[1]' <<<"$row") d=$(jq -r '.[2]' <<<"$row") o=$(jq -r '.[3]' <<<"$row")
+  err=$(bash "$DECIDE" add "$id" "$q" "$d" AskUserQuestion ${o:+--options "$o"} 2>&1 >/dev/null) && continue
   # A repeat that raced in after the check above.
   if [ $? -eq 3 ]; then blocked "$err"; continue; fi
   HOOK_FIRE_ADVISE=1

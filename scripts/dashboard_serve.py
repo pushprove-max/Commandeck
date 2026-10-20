@@ -26,17 +26,31 @@ The same save appends each newly cleared build to <directory>/closed.log, the
 uncut history that tells a stale tab's replay from a new clear.
 Every file is served `no-cache`, so a browser revalidates the page's code
 instead of guessing it is fresh.
+
+One answer (issue 240): a `POST /answer` ({project, id, askedAt, answer}) answers an open decision from the
+"Needs me" panel. The page every machine on the network loads is the same page, so a token in it would keep no
+one out: only a loopback client, under a loopback Host name, with this page's own Origin, may answer. The answer
+goes through `decision.sh answer --asked-at`, so the first answer wins and a second is refused (409); it is logged
+as a ruling the way ruling-log.sh logs one, and sent to main (to-main.sh) and, with a relay configured, to the relay
+(cos-tell.sh --note). A send that fails is kept in <directory>/answer-retry.json and sent again on the next
+refresh, the page's next read of data.js; the collector lists what is still kept on the card. The project's
+folder is read from the collector's own data.js, never from the request.
 """
+import fcntl
 import functools
 import http.server
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
+import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 SAVING = threading.Lock()
 MAX_BODY = 16384
@@ -109,6 +123,87 @@ def cleared(log, key):
         return set()
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+SENDS = threading.Lock()
+STAMP = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+
+
+def project_path(directory, name):
+    """The main checkout of the dashboard's project `name` (None: the home project), from the collector's data.js."""
+    try:
+        with open(os.path.join(directory, 'data.js')) as f:
+            dash = json.loads(f.read().partition('=')[2].strip().rstrip(';'))
+        path = dash['projects'][name if name is not None else dash['home']]['path']
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return path if isinstance(path, str) and os.path.isabs(path) else None
+
+
+SCRIPT = {'main': 'to-main.sh', 'relay': 'cos-tell.sh'}
+
+
+def kept(directory):
+    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args}."""
+    try:
+        with open(os.path.join(directory, 'answer-retry.json')) as f:
+            return [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
+                    and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def send(directory, msgs, again=False):
+    """Each message sent with its script; the file then keeps the ones that failed, after the ones it kept before
+    (`again`: msgs are those, tried again). The number that failed. Under SENDS."""
+    # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
+    ok = lambda m: subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
+                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=60).returncode in ((0, 3) if m['to'] == 'main' else (0,))
+    path = os.path.join(directory, 'answer-retry.json')
+    held = [] if again else kept(directory)
+    left = [m for m in msgs if not ok(m)]
+    if again or left:
+        tmp = '%s.%d.tmp' % (path, os.getpid())
+        with open(tmp, 'w') as f:
+            json.dump(held + left, f)
+        os.replace(tmp, path)
+    return len(left)
+
+
+def resend(directory):
+    """The kept sends, tried again: what still fails stays kept. A refresh while another runs skips it."""
+    if os.path.exists(os.path.join(directory, 'answer-retry.json')) and SENDS.acquire(blocking=False):
+        try:
+            held = kept(directory)
+            if held:
+                send(directory, held, True)
+        except OSError:
+            pass
+        finally:
+            SENDS.release()
+
+
+def log_ruling(main, row, answer):
+    """The answer as one ruling-log row (hooks/ruling-log.sh's form, source "dashboard"), its id or None."""
+    now = datetime.now(timezone.utc)
+    et = now.astimezone(ZoneInfo('America/New_York'))
+    rid = 'r-%s-d-%s' % (et.strftime('%Y%m%d-%H%M%S'), secrets.token_hex(3))
+    name = re.sub(r'[^A-Za-z0-9_.-]', '-', os.path.basename(main.rstrip('/'))) or 'unknown'
+    log = os.environ.get('COMMANDECK_RULING_LOG') or os.path.join(os.path.expanduser('~'), '.claude', 'rulings', name + '.jsonl')
+    options = row.get('options') if isinstance(row.get('options'), list) else []
+    pick = 'recommended' if answer == row.get('proposedDefault') and answer in options else 'option' if answer in options else 'typed'
+    line = json.dumps({'id': rid, 'utc': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'et': et.strftime('%Y-%m-%d %H:%M:%S %Z'), 'session': None,
+                       'cwd': main, 'source': 'dashboard', 'question': row.get('question'), 'answer': answer, 'annotations': None, 'pick': pick})
+    try:
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, 'a') as f:
+            # The lock ruling-log.sh holds for its appends (flock on the log itself).
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(line + '\n')
+    except OSError:
+        return None
+    return rid
+
+
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 # The names this machine goes by on its network.
 # A name from other DNS (a tailnet's) is refused unless the owner listed it:
@@ -158,7 +253,61 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.foreign():
             self.send_error(403, "the dashboard answers its own page only")
         else:
+            if urlsplit(self.path).path == '/data.js':
+                resend(self.directory)
             super().do_GET()
+
+    def do_POST(self):
+        host = self.headers.get('Host', '')
+        try:
+            name = urlsplit('//' + host).hostname or ''
+            ip = ipaddress.ip_address(self.client_address[0].split('%')[0])
+            near = ip.is_loopback or bool(getattr(ip, 'ipv4_mapped', None) and ip.ipv4_mapped.is_loopback)
+        except ValueError:
+            near = False
+        if (self.path != '/answer' or not near or name not in LOOPBACK or self.foreign()
+                or self.headers.get('Origin') != 'http://' + host or self.headers.get('Content-Type') != 'application/json'):
+            return self.send_error(403, "an answer is taken from this machine's own page only")
+        length = self.headers.get('Content-Length', '')
+        if not length.isdigit() or int(length) > MAX_BODY:
+            return self.send_error(413)
+        try:
+            a = json.loads(self.rfile.read(int(length)))
+        except ValueError:
+            return self.send_error(400)
+        text = lambda k, ok: isinstance(a.get(k), str) and ok(a[k])
+        if not (isinstance(a, dict) and set(a) <= {'project', 'id', 'askedAt', 'answer'} and text('id', ID.match) and text('askedAt', STAMP.match)
+                and text('answer', lambda s: s.strip() and len(s) <= 2000 and not re.search(r'[\x00-\x1f\x7f]', s))
+                and (a.get('project') is None or text('project', PROJECT.match))):
+            return self.send_error(400)
+        main = project_path(self.directory, a.get('project'))
+        if not main:
+            return self.send_error(404, "no such project on this dashboard")
+        r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
+                           env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            why = r.stderr.strip().splitlines()[-1:] or ['the answer was not recorded']
+            code = 409 if re.search(r'already answered|reopened after', why[0]) else 404 if 'unknown decision' in why[0] else 500
+            return self.send_error(code, why[0])
+        row = json.loads(r.stdout.strip().splitlines()[-1])
+        rid = log_ruling(main, row, a['answer'])
+        body = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
+        msgs = [{'main': main, 'id': a['id'], 'to': 'main', 'args': ['question', a['id'], body]}]
+        try:
+            with open(os.path.join(main, '.claude', 'commandeck.json')) as f:
+                relay = json.load(f).get('chiefOfStaff', {}).get('name')
+        except (OSError, ValueError, AttributeError):
+            relay = None
+        if relay:
+            msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id'], body]})
+        with SENDS:
+            unsent = send(self.directory, msgs)
+        out = json.dumps({'ruling': rid, 'unsent': unsent}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
 
     def do_HEAD(self):
         if self.foreign():

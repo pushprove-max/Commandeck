@@ -383,12 +383,13 @@ il_shadow_report() {
 # the per-worktree answers setup wrote; the relay's own value is the last of: user file, the relay's project and local
 # files, the main checkout's local file (the order Claude Code reads them). The owner's key is reported, never edited.
 il_cache_ttl_report() {
-  local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n=0 f fs=() s w x
-  jq -e '.cacheTtl == "5m" or .chiefOfStaff.cacheTtl == "1h"' "$IL_CONFIG" >/dev/null 2>&1 || { echo "ok prompt cache: setup sets none"; return 0; }
+  local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n=0 f fs=() s w x mt rt
+  mt=$(pp_option promptCacheTtl) rt=$(pp_option relayPromptCacheTtl)
+  [ "$mt" = 5m ] || [ "$rt" = 1h ] || { echo "ok prompt cache: setup sets none"; return 0; }
   # A TTL in that file is reported by il_shadow_report; here it only keeps the "no file overrides" line from being said.
   v=$(jq -r --arg k $k '.env[$k] // empty' "$ml" 2>/dev/null)
   [ -z "$v" ] || n=1
-  if [ -z "$v" ] && jq -e '.cacheTtl == "5m"' "$IL_CONFIG" >/dev/null 2>&1; then
+  if [ -z "$v" ] && [ "$mt" = 5m ]; then
     # an env key beats the promptCacheTtl keys, so main's answer is the last env key of the user and project files;
     # with none, it is the last promptCacheTtl key of the user, project and local files (the order Claude Code reads them)
     for f in "$HOME/.claude/settings.json" "$PP_MAIN/.claude/settings.json"; do [ ! -f "$f" ] || fs+=("$f"); done
@@ -404,12 +405,32 @@ il_cache_ttl_report() {
     fi
     fs=()
   fi
-  if jq -e '.chiefOfStaff.cacheTtl == "1h"' "$IL_CONFIG" >/dev/null 2>&1 && [ -d "$rw" ]; then
+  if [ "$rt" = 1h ] && [ -d "$rw" ]; then
     for f in "$HOME/.claude/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
     v=$(jq -rs --arg k $k 'map(.env[$k] // empty) | last // "unset"' "${fs[@]}" 2>/dev/null)
     [ "$v" = 1h ] || { n=1; echo "warn prompt cache: the relay pane runs $v, not the 1h you chose; run setup again, or see the line above"; }
   fi
   [ "$n" != 0 ] || echo "ok prompt cache: no file overrides the answers setup wrote"
+}
+# il_options_report -- the doctor's line for each /config option (issue 245): the value its readers take, and where it
+# comes from: /config, the project's file (the dashboard's: this machine's), or the default.
+il_options_report() {
+  local k s
+  for k in $(jq -r '.userConfig | keys_unsorted[]' "$IL_ROOT/.claude-plugin/plugin.json"); do
+    s=$(pp_option "$k" source); [ "$s" != default ] || s="the default"
+    echo "ok option $k: $(pp_option "$k" | sed 's/^$/none/') (from $s)"
+  done
+}
+# il_plugin_options <user settings> <answers> -- setup's answers into /config's options (issue 245), each only where
+# /config has none, under the key the plugin is enabled by. The owner's /config answer beats every project's, so one
+# that differs from this setup's is named.
+IL_OPTS_KEY='def key: first((.pluginConfigs // {} | keys[]), (.enabledPlugins // {} | keys[]) | select(startswith("commandeck@"))) // "commandeck@commandeck";'
+il_plugin_options() {
+  [ -f "$1" ] || return 0
+  jq -r --argjson a "$2" "$IL_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != .value)
+    | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' "$1"
+  [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none ($1)"; return 0; }
+  il_set "$1" --argjson a "$2" "$IL_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))'
 }
 # il_tool_search_report -- the doctor's line on MCP tool search, "ok <why>" or "warn <what is wrong>". Whether it is on
 # follows Claude Code's docs ("Configure tool search"); each variable is read from the environment, else from `env`

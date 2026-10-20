@@ -615,10 +615,10 @@ if [ "${1:-}" = --verify ]; then
     }
   # With the full suite on (issue 243), a closing pass merges only on a green run of the commit it read, as its own
   # recorded prompt states it on the line after its head line: the round file is the Builder's to edit.
-  if [ "$WHAT" = "closing pass" ] && [ "$(jq -r '.fullSuiteBeforeFinal // false' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)" = true ]; then
+  if [ "$WHAT" = "closing pass" ] && [ "$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)" = true ]; then
     for TID in $TIDS; do
       awk 'p { print; exit } / Reviewer [0-9]+ of [0-9]+, round [0-9]+\.$/ { p = 1 }' "$RHOME/builder-pass-prompts/$TID" | grep -qE "^Suite: $WAS_READ pass " \
-        || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and main's .claude/commandeck.json has fullSuiteBeforeFinal on. Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
+        || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
     done
   fi
   if [ "$RULE" = "P2 tail" ] && [ "$WHAT" = "closing pass" ]; then
@@ -764,7 +764,7 @@ WT=$PP_WORKSPACES/$UNIT
 MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} \
   || die "$WT is not a git worktree"
 # The owner's extra rounds for this unit (review-cap.sh), read from main's checkout only, before the project's limit.
-CAP=$MAIN_OF_WT/.claude/briefs/$UNIT-review-cap.md LIMIT_FROM='reviewLoop.maxRounds, chosen at setup'
+CAP=$MAIN_OF_WT/.claude/briefs/$UNIT-review-cap.md LIMIT_FROM='reviewLoop.maxRounds, chosen at setup, or maxReviewRounds in /config'
 if [ -e "$CAP" ]; then
   MAX_ROUNDS=$(tr -d '[:space:]' < "$CAP") && [[ $MAX_ROUNDS =~ ^[1-9][0-9]*$ ]] || die "$CAP must hold a whole number of rounds; set it with review-cap.sh $UNIT <rounds>"
   LIMIT_FROM="review-cap.sh for $UNIT"
@@ -845,10 +845,10 @@ Add one per guard test, then rerun the pass."
 }
 # The full suite before the closing pass (issue 243), when main's config asks for it. A pass with nothing to run
 # refuses before anything is committed.
-SUITE_ON=$(jq -r '.fullSuiteBeforeFinal // false' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || echo false)
+SUITE_ON=$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)
 if [ "$KIND" = final ] && [ "$SUITE_ON" = true ]; then
   TEST_CMD=$(jq -r '.testCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)
-  [ -n "$TEST_CMD" ] || die "fullSuiteBeforeFinal is on in main's .claude/commandeck.json and it has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off"
+  [ -n "$TEST_CMD" ] || die "fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)) and main's .claude/commandeck.json has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off, or in /config"
   # The merge check's own command, run whole: --changed (and the base it may take) is taken off.
   TEST_CMD=$(sed -E 's/[[:space:]]--changed([[:space:]]+[^-&|;[:space:]][^&|;[:space:]]*)?//g' <<<"$TEST_CMD")
 fi

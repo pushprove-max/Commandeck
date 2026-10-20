@@ -109,13 +109,13 @@ fi
 echo "# Commandeck plugin folder: $PLUGIN. A path that starts scripts/, hooks/ or templates/ in the plugin's files and messages is under it, not in this project."
 # Main and a Builder restart under a new handle: what was sent while the seat was down comes first (to-main.sh queues it).
 # The drain takes a message off once printed, so it prints straight out, after what is held so far: held, a hook
-# killed before its exit lost it.
+# killed before its exit lost it. tee -a: on Linux /dev/fd/3 reopens the file, and a plain open truncates it.
 DRAIN=()
 if [ "$MAIN" = 1 ]; then DRAIN=(main)
 elif [ "$LINKED" = 1 ] && [ "${COMMANDECK_BUILDER:-}" = 1 ]; then DRAIN=(--unit "${TOP##*/}"); fi
 if [ ${#DRAIN[@]} -gt 0 ]; then
   cat "$HELD" >&3; SENT=$(wc -c < "$HELD"); : > "$HELD"
-  SENT=$(( SENT + $(timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" "${DRAIN[@]}" 2>/dev/null | tee /dev/fd/3 | wc -c) ))
+  SENT=$(( SENT + $(timeout 30 bash "$PLUGIN/scripts/inbox-drain.sh" "${DRAIN[@]}" 2>/dev/null | tee -a /dev/fd/3 | wc -c) ))
 fi
 
 # Codex cuts hook output past ~10K bytes out of the middle, so a Codex seat

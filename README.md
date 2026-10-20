@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.21.0-111111?style=flat-square" alt="Version 0.21.0">
+  <img src="https://img.shields.io/badge/version-0.22.0-111111?style=flat-square" alt="Version 0.22.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -83,9 +83,10 @@ Other git hosts have no dashboard integration. The agents, jobs and worktrees
 run on one machine; model requests and GitHub calls use the network. The merge
 script makes a local squash commit on `main`. Pushing it is yours to do.
 
-Claude Code must already be installed and signed in. The repository does not
-declare a minimum supported Claude Code or Codex CLI version. CI validates the
-plugin with Claude Code 2.1.302; that is a test pin, not a minimum. The Codex
+Claude Code must already be installed and signed in, at version 2.1.271 or
+later: the plugin's `/config` options use pickers, which came in that version.
+The repository declares no minimum Codex CLI version. CI validates the plugin
+with Claude Code 2.1.302; that is a test pin. The Codex
 profile also needs Node.js to run the companion from the separately installed
 Codex plugin. Add-ons have their own requirements. Tests additionally use
 ripgrep and Node.js; see [Tests](#tests).
@@ -336,7 +337,7 @@ from routing; the helper uses Sonnet when no model is named.
 | `.claude/commandeck.json` | Project answers, schema version 1. |
 | `.claude/settings.json` | Shared project workflow and selected cache settings. |
 | `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
-| `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line. |
+| `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line; the plugin's `/config` options (`pluginConfigs`), which setup fills where they are empty. A `/config` option beats the project's answer, and the doctor names where each value comes from. |
 | `~/.claude/CLAUDE.md` | Optional marked global instruction blocks. |
 | `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks and trust, relocated when CODEX_HOME is set. |
 | `~/.commandeck/install/` | Per-project and machine manifests, original blobs and saved dashboard bind/port/hosts. |

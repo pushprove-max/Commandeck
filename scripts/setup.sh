@@ -410,7 +410,9 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || echo "permissions: moved from $WAS scope to $SCOPE scope ($SETTINGS)"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
-[ "$CACHE" != 5m ] || il_cache_ttl "$IL_PROJECT" "$PSET"
+# Issue 245: an option the owner set in /config beats this setup's answer, here and in every reader (pp_option).
+CACHE_ON=$(pp_config_option promptCacheTtl || echo "$CACHE") RCACHE_ON=$(pp_config_option relayPromptCacheTtl || echo "$RCACHE")
+[ "$CACHE_ON" != 5m ] || il_cache_ttl "$IL_PROJECT" "$PSET"
 il_auto_mode "$IL_MACHINE" "$HOME/.claude/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
@@ -423,6 +425,8 @@ if [ "$PROFILE" = claude-openai ]; then
   if [ -n "$PLAN" ]; then echo "plan: would mark the plugin's Codex hooks trusted in $IL_CODEX/config.toml"
   else python3 "$HERE/codex-hook-trust.py" "$IL_CODEX" >/dev/null; fi
 fi
+! V=$(pp_config_option dashboardBind) || BIND=$V
+! V=$(pp_config_option dashboardPort) || PORT=$V
 if [ -n "$PLAN" ]; then
   if [ -n "$DASHBOARD" ]; then echo "plan: would register this project with the dashboard and install its job ($DASH_JOB), serving http://${BIND:-127.0.0.1}:${PORT:-<a free port>}/"
   elif jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1; then echo "plan: would take this project off the dashboard"; fi
@@ -449,7 +453,7 @@ for f in "${OWN[@]}"; do
   # shellcheck disable=SC2086 # --drop/--keep and ids of 8 hex digits each
   il_own "$IL_PROJECT" "$PP_MAIN/$f" "$IL_ROOT/templates/${f#.claude/}" "$c" $D
 done
-if [ "$PONYTAIL" = false ]; then
+if [ "$(pp_config_option ponytail || echo "$PONYTAIL")" = false ]; then
   if [ -n "$PONY_OURS" ] && [ -e "$PONY/SKILL.md" ]; then
     if [ -n "$PLAN" ]; then echo "plan: would remove the ponytail skill an earlier setup installed ($PONY)"
     else rm -f "$PONY/SKILL.md" "$PONY/LICENSE"; rmdir "$PONY" 2>/dev/null || true; fi
@@ -457,6 +461,13 @@ if [ "$PONYTAIL" = false ]; then
 elif [ -n "$PONY_OURS" ]; then
   for f in SKILL.md LICENSE; do il_write "$PONY/$f" < "$IL_ROOT/templates/ponytail/$f"; done
 fi
+# The answers that are the same in every project go into /config's options where it has none (issue 245).
+il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --arg bm "$BMODEL" --arg be "$BEFFORT" --argjson rl "$RL" \
+  --arg full "$FULL" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
+  {builderModel: $bm, builderEffort: $be, maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
+   closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony != "false"),
+   promptCacheTtl: $cache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
+  | with_entries(select(.value != ""))')"
 if [ -n "$STATUS" ]; then
   ST=$(il_cat "$HOME/.claude/settings.json" 2>/dev/null) || ST=; [ -n "${ST//[[:space:]]/}" ] || ST='{}'
   ST=$(jq --arg c "$STATUS" '.statusLine = {type: "command", command: $c}' <<<"$ST") && il_write "$HOME/.claude/settings.json" <<<"$ST"
@@ -466,8 +477,8 @@ fi
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
-case $CACHE in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
-[ -z "$NAME" ] || case $RCACHE in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac
+case $CACHE_ON in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
+[ -z "$NAME" ] || case $RCACHE_ON in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac
 [ -z "$SERENA_AUTO" ] || NOTES+=("serena: on, because a serena server is configured on this machine (--no-serena turns it off)")
 for f in "${OWN[@]}"; do
   c=$OWNS flag=--own-startup; [ "$f" = AGENT_STARTUP.md ] || c=$OWNM flag=--own-main-session

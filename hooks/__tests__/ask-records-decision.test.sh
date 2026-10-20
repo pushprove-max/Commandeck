@@ -25,6 +25,7 @@ check "a first question is let through" 0 "$(ask 'Ship: Now?' 'Ship the release 
 check "it is recorded once" 1 "$(wc -l < "$L" | tr -d ' ')"
 check "its id is the header slug plus the date" "ship-now-$DAY" "$(jq -r .id "$L")"
 check "its default is the recommended option, unmarked" "Ship it" "$(jq -r .proposedDefault "$L")"
+check "its options are the picker's labels, unmarked, with the decoy left out (issue 240)" '["Ship it","Hold"]' "$(jq -c .options "$L")"
 check "the same question again is blocked" 2 "$(ask 'Ship: Now?' 'Ship the release today?')"
 check "and adds no row" 1 "$(wc -l < "$L" | tr -d ' ')"
 check "a question with another header gets its own id" "0 deploy-window-$DAY" \

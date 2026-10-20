@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0 -- 2026-10-20
+
+- The dashboard has a card for the main session and one for the Chief of Staff session: context, today's tokens and
+  cost, the 7-day daily average, and today's restarts with the average gap between them (#224).
+- A decision can be answered from the dashboard's "Needs me" panel: its options as buttons, the default marked, and
+  an "Other" box. Only a page on this machine can send an answer (loopback client, Host and Origin); the phone view
+  stays read-only. The first answer wins, the ruling is logged, and main (and the relay) are told; a message that
+  could not be sent is listed on the card and sent again on the next refresh (#240).
+- The settings that are the same in every project are also the plugin's `/config` options: Builder model and effort,
+  review rounds, closing pass, the prompt cache of main and workers and of the relay, ponytail, dashboard address
+  and port, and the full suite before the final review. A `/config` answer beats the project's; setup fills the
+  empty ones from its answers; the doctor names where each value comes from. Needs Claude Code 2.1.271 or later (#245).
+- On Linux, main's startup context no longer loses the lines before its queued messages (the persona, the plugin
+  folder): the hook now appends the messages to its output file, where it truncated it.
+
 ## 0.21.0 -- 2026-10-20
 
 - Issues #203-#214 shipped in 0.20.0, and #251 was already met. #224, #240 and #245 are not in this release.

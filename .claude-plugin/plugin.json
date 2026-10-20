@@ -1,9 +1,76 @@
 {
   "name": "commandeck",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
   "repository": "https://github.com/pushprove-max/Commandeck",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "userConfig": {
+    "builderModel": {
+      "type": "string",
+      "title": "Builder model",
+      "description": "The model each Builder runs. Set here, it beats every project's setup answer.",
+      "options": ["opus", "sonnet", "fable"],
+      "default": "opus"
+    },
+    "builderEffort": {
+      "type": "string",
+      "title": "Builder effort",
+      "description": "The Builder's reasoning effort. Set here, it beats every project's setup answer.",
+      "options": ["low", "medium", "high", "max"],
+      "default": "medium"
+    },
+    "maxReviewRounds": {
+      "type": "number",
+      "title": "Review rounds",
+      "description": "The most review passes a build may run. Empty: no cap.",
+      "min": 1
+    },
+    "closingPass": {
+      "type": "boolean",
+      "title": "Closing pass",
+      "description": "After the narrowed review passes end GO, one more pass reads the whole branch, and its GO merges.",
+      "default": true
+    },
+    "fullSuiteBeforeFinal": {
+      "type": "boolean",
+      "title": "Full suite before the final review",
+      "description": "The closing review pass runs the project's test command once on the build's tip.",
+      "default": true
+    },
+    "ponytail": {
+      "type": "boolean",
+      "title": "Ponytail",
+      "description": "Worker panes run the ponytail skill's smallest-change coding rules.",
+      "default": true
+    },
+    "promptCacheTtl": {
+      "type": "string",
+      "title": "Prompt cache",
+      "description": "5m: main and worker panes keep their prompt cache 5 minutes. leave: nothing is written.",
+      "options": ["5m", "leave"],
+      "default": "5m"
+    },
+    "relayPromptCacheTtl": {
+      "type": "string",
+      "title": "Relay prompt cache",
+      "description": "1h: the relay pane keeps its prompt cache 1 hour. leave: nothing is written.",
+      "options": ["1h", "leave"],
+      "default": "1h"
+    },
+    "dashboardBind": {
+      "type": "string",
+      "title": "Dashboard address",
+      "description": "The address the dashboard listens on: 127.0.0.1 is this machine only. Applies at the next setup.",
+      "default": "127.0.0.1"
+    },
+    "dashboardPort": {
+      "type": "number",
+      "title": "Dashboard port",
+      "description": "The dashboard's port. Empty: the first free port from 8791. Applies at the next setup.",
+      "min": 1024,
+      "max": 65535
+    }
+  }
 }

@@ -31,9 +31,9 @@ const onDisk = () => JSON.parse(fs.readFileSync(path.join(dir, 'layout.js'), 'ut
 // One page, as the browser opens it: layout.js read from the host's folder, then app.js. `store` is the
 // localStorage a page before it left (a reload). Every save goes to the real host; w.puts counts them and
 // w.reloads counts the page asking to reload itself (jsdom reports that as navigation it cannot do).
-function boot(store = {}, project = 'demo', clock = Date) {
+function boot(store = {}, project = 'demo', clock = Date, at = '127.0.0.1') {
   const virtualConsole = new VirtualConsole();
-  const dom = new JSDOM(html, { url: `http://127.0.0.1:${port}/index.html?project=${project}`, virtualConsole });
+  const dom = new JSDOM(html, { url: `http://${at}:${port}/index.html?project=${project}`, virtualConsole });
   const w = dom.window;
   w.reloads = 0;
   w.puts = 0;
@@ -652,7 +652,7 @@ test('issue 211: More lists every other panel not hidden, shows the one picked a
   assert.equal(sheet.hidden, false);
   assert.ok(sheet.contains(w.document.activeElement), 'the sheet takes focus');
   assert.deepEqual(tiles().map((b) => b.dataset.card), ['main-chain', 'merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'guard-blocks',
-    'chief-of-staff', 'agents'], 'every panel on no tab, less the one the owner hid');
+    'chief-of-staff', 'main-seat', 'agents'], 'every panel on no tab, less the one the owner hid and the relay seat this project has not');
   assert.equal(tiles()[0].textContent, 'Main', 'a tile is its panel\'s title');
   w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   assert.equal(sheet.hidden, true, 'Escape closes it');
@@ -783,4 +783,47 @@ test('issue 217: two pages folding at once keep both folds, and an unfold remove
   relayout(d);
   await settled(d);
   assert.deepEqual(onDisk().projects.demo.collapsed, ['limit-body'], 'the unfold removes only its own section');
+});
+
+// Issue 224: main's and the relay's own cards, in the card style. The relay's shows only with a relay configured
+// (the collector then sends a relay key); main's shows its context against its clear line, the relay's has none.
+test("issue 224: main's and the relay's cards show their figures, and the relay's is absent with no relay", () => {
+  const seat = (over) => ({ context: 150000, line: 200000, today: { tokens: 2500000, usd: 12.5, partial: false }, avg7: { tokens: 1000000, usd: 4.25, partial: false },
+    restarts: 2, restartGapSec: 3600, restartTimes: [iso(NOW - 7200000), iso(NOW - 3600000)], ...over });
+  const w = fresh();
+  show(w, { seats: { main: seat(), relay: seat({ context: 40000, line: null, restarts: 0, restartGapSec: null, restartTimes: [] }) } });
+  const facts = (id) => text(w.document.getElementById(`${id}-facts`));
+  assert.match(facts('main-seat'), /Context150\.0k of 200\.0k/, 'main: context against its line');
+  assert.match(facts('main-seat'), /Today2\.5M tokens · \$12\.50/, 'main: tokens and list cost today');
+  assert.match(facts('main-seat'), /7-day daily average1\.0M tokens · \$4\.25/, 'main: the 7-day daily average');
+  assert.match(facts('main-seat'), /Restarts today2, every 60 min on average/, 'main: restarts today with the average gap');
+  assert.equal(w.document.getElementById('relay-seat').dataset.absent, undefined, 'a configured relay has its card');
+  assert.match(facts('relay-seat'), /Context40\.0k.*Restarts today0/, 'the relay: its context, no line, no restarts');
+  const v = fresh();
+  show(v, { seats: { main: seat() } });
+  assert.equal(v.document.getElementById('relay-seat').dataset.absent, '', 'no relay configured: no relay card');
+  assert.equal(v.document.getElementById('main-seat').dataset.absent, undefined, "main's card stays");
+});
+
+// Issue 240: the owner answers a decision from the "Needs me" panel, on this machine's own page only: the host
+// takes an answer from a loopback client alone, so another host's page (the phone) shows the question read-only.
+// An answer whose send failed is listed until the host has sent it again.
+test('issue 240: answer buttons, the default marked, and an Other box show on a loopback page and not on another host', async () => {
+  const d = { id: 'ship-1999-01-01', question: 'Ship it?', proposedDefault: 'yes', options: ['yes', 'no'], source: 'AskUserQuestion',
+    askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [d], unsent: [{ id: 'keys-1999-01-01', to: 'relay' }] } });
+  const buttons = [...w.document.querySelectorAll('#decisions .answer button')].map((b) => `${b.className}:${text(b)}`);
+  assert.deepEqual(buttons, ['opt default-opt:yes (default)', 'opt:no', 'opt:Send'], 'one button per option, the default marked');
+  assert.ok(w.document.querySelector('#decisions .answer input.other'), 'and an Other box');
+  assert.match(text(w.document.getElementById('decisions')), /The answer to keys-1999-01-01 is not sent to the relay yet/, 'a failed send is shown');
+  // This test host has no data.js, so it takes no answer: the page says so and the question stays answerable.
+  w.document.querySelector('#decisions .answer button').click();
+  await settled(w);
+  assert.equal(w.puts, 1, 'one answer was sent');
+  assert.match(text(w.document.querySelector('#decisions .answer')), /Not answered/, 'a refused answer is said, not shown as answered');
+  const far = boot({}, 'demo', Date, '192.0.2.7');
+  show(far, { needsOwner: { decisions: [d] } });
+  assert.equal(far.document.querySelectorAll('#decisions .answer').length, 0, 'another host: no answer controls');
+  assert.match(text(far.document.getElementById('decisions')), /Ship it\?/, 'the question still shows');
 });

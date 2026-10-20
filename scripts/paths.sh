@@ -590,7 +590,13 @@ pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(jq -r '.code
 # the file can be edited by hand, and a wrong number must not pass for a setting.
 # COMMANDECK_REVIEW_LOOP: setup's own check reads the answers it is about to save, not the old ones.
 pp_review_loop() {
-  local f=$PP_MAIN/.claude/commandeck.json v src=/dev/stdin
+  local f=$PP_MAIN/.claude/commandeck.json v src=/dev/stdin o=
+  # The owner's /config answer beats the project's (issue 245); setup's own check reads the answers it saves.
+  if case $1:${COMMANDECK_REVIEW_LOOP:-} in maxRounds:) o=maxReviewRounds v=$(pp_config_option maxReviewRounds) ;;
+       closingPass:) o=closingPass v=$(pp_config_option closingPass) ;; *) false ;; esac; then
+    [[ $v =~ $3 ]] || { echo "$o = \"$v\" in /config is not a value it takes; change it with /config" >&2; return 1; }
+    echo "$v"; return 0
+  fi
   # Setup's answers come in on stdin: a <(...) file is closed before the next line could read it.
   [ -n "${COMMANDECK_REVIEW_LOOP:-}" ] || { [ -e "$f" ] || { echo "$2"; return 0; }; src=$f; }
   # No config is the defaults; one that cannot be read is no setting, and says so.
@@ -600,6 +606,35 @@ pp_review_loop() {
   [ -n "$v" ] || { echo "$2"; return 0; }
   [[ $v =~ $3 ]] || { echo "$PP_MAIN/.claude/commandeck.json has reviewLoop.$1 = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
   echo "$v"
+}
+# Issue 245: the settings that are the same in every project are also the plugin's options (userConfig in
+# .claude-plugin/plugin.json), set in /config. The owner's /config answer beats the project's saved one. It is read
+# from the user's settings file, not CLAUDE_PLUGIN_OPTION_*: that reaches hooks only, and may carry the manifest's
+# default, which would hide the project's answer.
+# pp_config_option <key> -- the /config answer in the form the project's file saves it; fails when there is none.
+pp_config_option() {
+  jq -er --arg k "$1" 'first(.pluginConfigs // {} | to_entries[] | select(.key | startswith("commandeck@")) | .value.options[$k]? | select(. != null))
+    | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' \
+    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
+}
+# pp_option <key> [source] -- the value a reader takes: the /config answer, else the project's saved one (the
+# dashboard's: this machine's), else what the reader took before 0.22.0. With "source", where that value is from.
+pp_option() {
+  local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config
+  case $1 in
+    builderModel) p=.builder.model ;; builderEffort) p=.builder.effort ;;
+    maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
+    fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=false ;;
+    promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
+    dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
+    dashboardPort) p=.dashboard.port f=$HOME/.commandeck/install/_machine.json ;;
+    *) echo "pp_option: no option $1" >&2; return 2 ;;
+  esac
+  if ! v=$(pp_config_option "$1"); then
+    src=$f v=$(jq -r "$p | if . == null then empty else tostring end" "$f" 2>/dev/null) || v=
+    [ -n "$v" ] || src=default v=$d
+  fi
+  if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
 }
 # pp_issue_sizing -- setup's issue sizing line (issueSizing: tokens, or off), default 40000. A saved value it does
 # not take fails, naming the key, as pp_review_loop does.
@@ -624,6 +659,8 @@ pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has
   local cfg m=${3:-} b pf d; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
   b=$(jq -c '.builder // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$b" ] || b='{}'
+  b=$(jq -c --arg m "$(pp_config_option builderModel)" --arg e "$(pp_config_option builderEffort)" \
+    '. + ({model: $m, effort: $e} | with_entries(select(.value != "")))' <<<"$b" 2>/dev/null || echo "$b")
   pf=$(jq -c '.planFast // []' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$pf" ] || pf='[]'
   # Every Codex role's model goes through the resolver, one handed in (a plan seat's pick) too. The project's saved
   # id is for the role's own model: it beats that family and an id alike, never another family picked for the seat.

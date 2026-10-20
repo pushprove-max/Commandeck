@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main]
+# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
 #           | reopen <id> | list
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
@@ -29,7 +29,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -38,7 +38,7 @@ lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || di
 # whole read: a corrupt ledger is never an empty one.
 fold() {
   jq -cs 'if all(.[]; type == "object"
-                 and (keys - ["history", "waitsOn"] == ["answer","answeredAt","askedAt","id","proposedDefault","question","source"])
+                 and (keys - ["history", "waitsOn", "options"] == ["answer","answeredAt","askedAt","id","proposedDefault","question","source"])
                  and (.id | type == "string" and length > 0))
           then [to_entries[] | .value + {_i: .key}] | group_by(.id) | map(last + {_i: first._i}) | sort_by(._i) | map(del(._i))
           else error("malformed record") end' "$L" 2>/dev/null || die "malformed ledger $L"
@@ -161,7 +161,13 @@ gate() {
 
 case "${1:-}" in
   add)
-    reask="" waits=""
+    reask="" waits="" opts=""
+    # --options: the 2 to 4 answers the picker offered (issue 240), the dashboard's buttons; last on the line.
+    if [ $# -ge 7 ] && [ "${*: -2:1}" = --options ]; then
+      opts=$(jq -cne --arg o "${*: -1}" '$o | split("|") | select(length >= 2 and length <= 4 and all(length > 0))') \
+        || die "--options takes 2 to 4 answers, none empty, split by |"
+      set -- "${@:1:$#-2}"
+    fi
     if [ $# -eq 7 ] && [ "$6" = --reask ]; then
       reask=$7; [ -n "${reask//[[:space:]]/}" ] || die "--reask needs the new facts"
     elif [ $# -eq 7 ] && [ "$6" = --waits-on ]; then
@@ -178,9 +184,9 @@ case "${1:-}" in
       ! jq -e --arg id "$2" 'any(.[]; .id == $id)' <<<"$cur" >/dev/null || die "decision $2 already exists"
     elif [ -z "$reask" ]; then gate "$cur" "$2" "$3" "$5"; fi
     append "$(jq -cn --arg id "$2" --arg q "$3" --arg d "$4" --arg s "$5${reask:+; re-ask: $reask}" \
-      --arg at "$(fresh "$(jq -r --arg id "$2" '.[] | select(.id == $id) | .askedAt' <<<"$cur")")" --arg w "$waits" \
+      --arg at "$(fresh "$(jq -r --arg id "$2" '.[] | select(.id == $id) | .askedAt' <<<"$cur")")" --arg w "$waits" --argjson o "${opts:-null}" \
       '{id: $id, askedAt: $at, question: $q, proposedDefault: $d, source: $s, answeredAt: null, answer: null}
-       + (if $w == "" then {} else {waitsOn: $w} end)')" ;;
+       + (if $w == "" then {} else {waitsOn: $w} end) + (if $o == null then {} else {options: $o} end)')" ;;
   check)
     # check <id> <question> [<question asked beside it>...]: the picker hook
     # passes the questions before this one, so one asked twice in a single

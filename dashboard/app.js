@@ -169,6 +169,42 @@
   const ownerName = (n) => (n && typeof n.name === 'string' && n.name.trim() ? n.name : 'the owner');
   // The finished builds the collector listed, cleared or not; a list that was not read is null.
   const finishedBuilds = (units) => (units && Array.isArray(units.finishedBuilds) ? units.finishedBuilds.filter((f) => f && typeof f.unit === 'string' && f.unit && typeof f.sha === 'string' && f.sha) : null);
+  // Issue 240: the owner answers on this machine's own page only (dashboard_serve.py takes an answer from a loopback
+  // client alone); every other host's page, the phone's, shows the question read-only.
+  const LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname);
+  const answered = new Map(); // decision id -> the host's word on its answer, until a snapshot drops the row
+  function answerBox(d) {
+    const box = h('div', 'answer');
+    if (answered.has(d.id)) { box.append(h('p', 'answered', answered.get(d.id))); return box; }
+    const said = h('p', 'meta');
+    const post = (answer) => {
+      for (const c of box.querySelectorAll('button, input')) c.disabled = true;
+      window.fetch('answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: asked, id: d.id, askedAt: d.askedAt, answer }) })
+        .then((r) => (r.ok ? r.json().then((j) => `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}`)
+          : `Not answered: ${r.status === 409 ? 'it was answered or asked again since this page read it' : `the host said ${r.status}`}`))
+        .catch(() => 'Not answered: the host could not be reached')
+        .then((t) => {
+          if (t.startsWith('Answered')) { answered.set(d.id, t); box.replaceChildren(h('p', 'answered', t)); return; }
+          said.textContent = t;
+          for (const c of box.querySelectorAll('button, input')) c.disabled = false;
+        });
+    };
+    for (const o of Array.isArray(d.options) ? d.options : []) {
+      const b = h('button', o === d.proposedDefault ? 'opt default-opt' : 'opt', o === d.proposedDefault ? `${o} (default)` : o);
+      b.type = 'button';
+      b.addEventListener('click', () => post(o));
+      box.append(b);
+    }
+    const other = h('input', 'other');
+    other.placeholder = 'Other';
+    other.setAttribute('aria-label', 'Other answer');
+    const go = h('button', 'opt', 'Send');
+    go.type = 'button';
+    go.addEventListener('click', () => { if (other.value.trim()) post(other.value.trim()); });
+    box.append(other, go, said);
+    return box;
+  }
+
   function renderNeeds(n, now, units, githubP1) {
     n = n || {};
     const who = ownerName(n);
@@ -199,7 +235,9 @@
       li.append(h('p', 'question', d.question), h('p', 'meta', asked(d).meta));
       return li;
     })) : [];
-    put(byId('decisions'), open === null ? [h('li', 'empty', 'Decisions ledger not measured')]
+    // A refresh while the owner types an answer leaves the list as it is: rebuilt, it would drop the typing.
+    const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#decisions .answer');
+    if (!typing) put(byId('decisions'), open === null ? [h('li', 'empty', 'Decisions ledger not measured')]
       : (open.length === 0 ? [h('li', 'empty', 'No open decisions')]
         : open.map((d) => {
           const { wait, meta } = asked(d);
@@ -207,8 +245,10 @@
           const dflt = h('p', 'default');
           dflt.append(h('span', 'default-label', 'If no answer: '), h('span', null, d.proposedDefault));
           li.append(h('p', 'question', d.question), dflt, h('p', 'meta', meta));
+          if (LOCAL) li.append(answerBox(d));
           return li;
-        })).concat(mainItems));
+        })).concat(mainItems, (Array.isArray(n.unsent) ? n.unsent : []).map((u) =>
+          h('li', 'decision crit', `The answer to ${u.id} is not sent to ${u.to === 'relay' ? 'the relay' : 'main'} yet; the host sends it again on each refresh.`))));
     // An open decision is the owner's to act on here, and so is a P1 a finished build left open: clearing the build
     // from the list is tidying, not an answer, so a cleared build's P1 still counts. So is an open P1 issue.
     flag('needs', Boolean(open && open.length) || p1 > 0 || issues > 0);
@@ -904,6 +944,22 @@
     flag('chief-of-staff', (old !== null && old > 600) || Boolean(s.incomplete));
   }
 
+  // Main's and the relay's own cards (issue 224). `absent`: no relay is configured, so its card is not shown.
+  function renderSeat(id, s, absent) {
+    const card = byId(id), dl = byId(`${id}-facts`);
+    if (absent) card.dataset.absent = ''; else delete card.dataset.absent;
+    dl.replaceChildren();
+    if (!s) { fact(dl, 'Context', nm()); return; }
+    const ctx = num(s.context), line = num(s.line), gap = num(s.restartGapSec);
+    const spend = (t) => (t && num(t.tokens) !== null && num(t.usd) !== null ? `${tokens(t.tokens)} tokens · ${money(t.usd)}${t.partial ? ' or more' : ''}` : nm());
+    fact(dl, 'Context', ctx === null ? nm() : line === null ? tokens(ctx) : `${tokens(ctx)} of ${tokens(line)}`);
+    fact(dl, 'Today', spend(s.today));
+    fact(dl, '7-day daily average', spend(s.avg7));
+    fact(dl, 'Restarts today', `${num(s.restarts) ?? 0}${gap === null ? '' : `, every ${ago(gap)} on average`}`);
+    fact(dl, 'Restarted at', (Array.isArray(s.restartTimes) ? s.restartTimes : []).map((t) => clock(parseTime(t))).join(', ') || 'none', true);
+    flag(id, ctx !== null && line !== null && ctx > line);
+  }
+
 
   function renderHost(x) {
     x = x || {};
@@ -1425,6 +1481,8 @@
     renderNextPush(d.nextPush, d.github, d.sources, now);
     renderChain(d.mainChain);
     renderCos(d.chiefOfStaff);
+    renderSeat('main-seat', d.seats && d.seats.main, false);
+    renderSeat('relay-seat', d.seats && d.seats.relay, !(d.seats && 'relay' in d.seats));
     const hostInfo = renderHost(d.host);
     renderCost(d.costPerRole);
     renderTodos(d.todos);
@@ -1897,7 +1955,7 @@
     if (!b) return;
     if (b.dataset.tab !== 'more') { sheet.hidden = true; showTab(b.dataset.tab); return; }
     const onTabs = Object.values(TABS).flat();
-    put(byId('more-tiles'), cards().filter((c) => !c.hidden && !onTabs.includes(c.id)).map((c) => {
+    put(byId('more-tiles'), cards().filter((c) => !c.hidden && !('absent' in c.dataset) && !onTabs.includes(c.id)).map((c) => {
       const t = h('button', null, titles.get(c.id));
       t.type = 'button';
       t.dataset.card = c.id;

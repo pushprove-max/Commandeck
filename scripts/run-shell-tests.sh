@@ -51,7 +51,8 @@ cd "$ROOT" || exit 2
 export TMPDIR
 # paths.sh takes the project from these two before the folder a test runs in:
 # inherited from the caller's session, they would point a fixture's script at a real project.
-unset CLAUDE_PROJECT_DIR COMMANDECK_MAIN
+# CLAUDE_CONFIG_DIR the same for the owner's settings file, where the /config options are (issue 245).
+unset CLAUDE_PROJECT_DIR COMMANDECK_MAIN CLAUDE_CONFIG_DIR
 TMPDIR=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
 
 ONLY_OWN_LANE=0

@@ -22,6 +22,8 @@
   dashboard_limit.py units <now-epoch> <cache-dir> <projects-dir> <codex-sessions-dir>
       Each Builder's cost by stage, from its worktree's own sessions; the units
       ([{unit, worktree, stages}]) on stdin, {unit: {stages, total} or null} out.
+  dashboard_limit.py seats <now-epoch> <cache-dir> <projects-dir> <clear-hook-log> <main-checkout> [<relay-worktree>]
+      Main's and the relay's day, 7-day daily average and restarts today, from their own sessions.
 
 Every figure comes from that reading or from Claude Code's own transcripts; a
 figure with no source is null, never 0 or an estimate. Dollars are list-price
@@ -1065,6 +1067,48 @@ def unit_costs(units, now, cache_dir, projects, sessions):
     return out
 
 
+def seats(now, cache_dir, projects, log, main, relay=None):
+    """Main's and the relay's own figures (issue 224), {main, relay}: no relay key with no relay configured.
+
+    A seat's sessions are its checkout's projects folder: main's is the main checkout's (the one unit_costs leaves
+    out), the relay's the Chief-of-Staff worktree's. Today runs from host-local midnight; the 7-day average is the
+    last 7 x 24 h over 7. A restart is a clear-hook.log line of a completed one (context-clear-restart.sh) whose
+    checkpoint, <session id>.md, is one of the seat's sessions; its `.restarted` stamp keeps only a checkpoint's
+    last restart, so the log is the one source. None for a seat whose sessions cannot all be read.
+    """
+    midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week = now - 7 * 86400
+    done = []
+    try:
+        with open(log, errors="replace") as f:
+            for line in f:
+                m = re.match(r"(\S+) restart: new pane \S+ resumed from (\S+)\.md; closing ", line)
+                try:
+                    if m:
+                        done.append((datetime.fromisoformat(m[1]).timestamp(), os.path.basename(m[2])))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    figures = lambda rs: (lambda t: {"tokens": t["input"] + t["output"], "usd": t["usd"], "partial": t["partial"]})(tally(rs, 0))
+    out = {}
+    for name, wt in (("main", main), ("relay", relay)):
+        if not wt:
+            continue
+        folder = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
+        rows = [] if gone(folder) else requests(folder, os.path.join(cache_dir, f"seat-requests-{name}.json"), min(week, midnight), now)
+        if rows is None:
+            out[name] = None
+            continue
+        wk = figures([r for r in rows if week <= r[0] <= now])
+        times = sorted(at for at, sid in done if midnight <= at <= now and os.path.exists(os.path.join(folder, sid + ".jsonl")))
+        out[name] = {"today": figures([r for r in rows if midnight <= r[0] <= now]),
+                     "avg7": {"tokens": round(wk["tokens"] / 7), "usd": round(wk["usd"] / 7, 4), "partial": wk["partial"]},
+                     "restarts": len(times), "restartGapSec": round((times[-1] - times[0]) / (len(times) - 1)) if len(times) > 1 else None,
+                     "restartTimes": [iso(t) for t in times]}
+    return out
+
+
 def main(argv):
     if argv[1:] == ["fetch"]:
         return fetch()
@@ -1074,6 +1118,9 @@ def main(argv):
     if len(argv) == 6 and argv[1] == "units":
         # units <now> <cache dir> <Claude projects folder> <Codex sessions folder>; the units on stdin.
         json.dump(unit_costs(json.load(sys.stdin), float(argv[2]), argv[3], argv[4], argv[5] or None), sys.stdout)
+        return 0
+    if len(argv) in (7, 8) and argv[1] == "seats":
+        json.dump(seats(float(argv[2]), argv[3], argv[4], argv[5], argv[6], argv[7] if len(argv) > 7 else None), sys.stdout)
         return 0
     if len(argv) in (7, 8, 9) and argv[1] == "build":
         return build(argv[2], argv[3], float(argv[4]), argv[5], argv[6], argv[7] if len(argv) > 7 else None,

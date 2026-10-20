@@ -415,15 +415,18 @@ finished_builds() {
 # What waits on the owner is the decision ledger. The owner is whoever runs the plugin here: git's user.name for
 # this checkout, else the account's name, cut to one line of 80 characters; neither is null.
 needs_owner() {
-  local dec=null name
+  local dec=null name unsent
   name=$(git -C "$PP_MAIN" config user.name 2>/dev/null) || name=
   [ -n "${name//[[:space:]]/}" ] || name=$(id -un 2>/dev/null) || name=
   if [ ! -e "$METRICS/decisions.jsonl" ]; then nm decisions "no ledger at $METRICS/decisions.jsonl"
   elif dec=$(COMMANDECK_MAIN=$PP_MAIN bash "$HERE/decision.sh" list 2>"$RUN/err-decisions"); then
     ok decisions; dec=$(jq -c 'map(select(.answeredAt == null))' <<<"$dec")
   else dec=null; nm decisions "$(head -1 "$RUN/err-decisions")"; fi
-  jq -cn --argjson dec "$dec" --arg name "$name" \
-    '{decisions: $dec, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
+  # Issue 240: this project's answers from the page whose send failed; dashboard_serve.py keeps them and sends them
+  # again on each refresh.
+  unsent=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | {id, to}]' "$OUT/answer-retry.json" 2>/dev/null) || unsent='[]'
+  jq -cn --argjson dec "$dec" --arg name "$name" --argjson u "${unsent:-[]}" \
+    '{decisions: $dec, unsent: $u, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
 }
 
 # owner/name of the checkout's GitHub origin, or nothing. Every gh read names it as GH_REPO, so a gh default set
@@ -776,6 +779,21 @@ chief_of_staff() {
   else nm chief-of-staff "orca-ide orchestration inbox failed"; echo null; fi
 }
 
+# Main's and the relay's own cards (issue 224): main's sessions are the main checkout's projects folder, the
+# relay's the Chief-of-Staff worktree's; with no relay configured there is no relay key. Each carries its live
+# context beside its clear line; the relay pane has no clear line (context-line.sh exempts it).
+seats() {
+  local relay='' out
+  [ -z "$(jq -r '.chiefOfStaff.name // empty' "$PP_PROJECT_DIR/.claude/commandeck.json" 2>/dev/null)" ] || relay=$PP_WORKSPACES/Chief-of-Staff
+  if out=$(python3 "$HERE/dashboard_limit.py" seats "$NOW" "$CACHE" "$HOME/.claude/projects" "$HOME/.claude/checkpoints/clear-hook.log" \
+      "$PP_MAIN" ${relay:+"$relay"} 2>"$RUN/err-seats") && jq -e 'objects' >/dev/null 2>&1 <<<"$out"; then ok seats
+  else nm seats "main's and the relay's figures could not be read: $(head -1 "$RUN/err-seats" 2>/dev/null)"; echo null; return 0; fi
+  jq -c --arg mc "$(context_size "$(pp_session_log "$PP_MAIN")")" --arg ml "$(pp_clear_line)" \
+    --arg rc "$([ -z "$relay" ] || context_size "$(pp_session_log "$relay")")" '
+    (.main | objects) |= . + {context: ($mc | tonumber? // null), line: ($ml | tonumber? // null)}
+    | (.relay | objects) |= . + {context: ($rc | tonumber? // null), line: null}' <<<"$out"
+}
+
 # The active alerts from the parts already built this collect; the rules are
 # dashboard_alerts.jq. Each alert's start persists in the cache, so its id
 # holds across collects. An input not measured makes the record not measured,
@@ -819,7 +837,7 @@ project() {
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role \
     && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \
-    && part chiefOfStaff chief_of_staff || return 1
+    && part chiefOfStaff chief_of_staff && part seats seats || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
   jq -cs --arg n "$PP_PROJECT" --arg p "$PP_MAIN" --arg w "$PP_WORKSPACES" '{($n): (add + {path: $p, workspaces: $w})}' "$RUN"/parts/*.json > "$RUN/project.json"
 }
