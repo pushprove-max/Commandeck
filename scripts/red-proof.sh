@@ -63,7 +63,8 @@ scratch() {
   return 0
 }
 
-run_test() { (cd "$WT" && "$@") > "$BOX/out" 2>&1; }
+# No stdin: in a batch it is the list, and a test that read it would swallow the proofs after it.
+run_test() { (cd "$WT" && "$@") < /dev/null > "$BOX/out" 2>&1; }
 show() { tail -n 15 "$BOX/out" | sed 's/^/  | /'; }
 # break_line -- write the break into the scratch copy's file.
 # Through ENVIRON, not -v: awk -v rewrites backslash escapes, so a replacement holding a regex would change.
@@ -73,8 +74,11 @@ break_line() { RP_NEW=$NEW awk -v n="$LINE" 'NR == n { print ENVIRON["RP_NEW"]; 
 if [ "$1" = --batch ]; then
   # One copy for every proof: the file is put back from the copy's own text after each break.
   scratch batch; WORST=0
-  while IFS=$'\t' read -r F L N C || [ -n "$F" ]; do
-    [ -n "$F" ] || continue
+  while IFS= read -r ROW || [ -n "$ROW" ]; do
+    [ -n "$ROW" ] || continue
+    # Split by hand: read with IFS=TAB merges two tabs, so an empty replacement would shift the test into its place.
+    [[ $ROW == *$'\t'*$'\t'*$'\t'* ]] || { echo "red-proof: a batch line needs 4 tab-separated fields: $ROW"; WORST=2; continue; }
+    F=${ROW%%$'\t'*} ROW=${ROW#*$'\t'}; L=${ROW%%$'\t'*} ROW=${ROW#*$'\t'}; N=${ROW%%$'\t'*} C=${ROW#*$'\t'}
     valid "$F" "$L" "$N" "$C" 2>&1 || { WORST=2; continue; }
     cp "$WT/$REL" "$BOX/keep"
     if ! run_test bash -c "$C"; then echo "red-proof: $REL:$LINE: NO PROOF: the test already fails without the break"; show; WORST=2; continue; fi

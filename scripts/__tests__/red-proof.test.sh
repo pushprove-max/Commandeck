@@ -69,6 +69,14 @@ printf '%s\t%s\t%s\t%s\n' lib.sh 2 'limit() { echo 6; }' 'bash t.sh' lib.sh 1 '#
 out=$(run --batch "$BOX/batch.tsv"); rc=$?
 check "a batch with one proof NOT RED exits 1, and the file is restored between proofs" "1 1 1" \
   "$rc $(grep -c 'NOT RED' <<<"$out") $(grep -c 'RED: the test passes as is and fails' <<<"$out")"
+# A test that reads stdin must not eat the rows after it: the second proof below is NOT RED, so the batch exits 1.
+printf '%s\t%s\t%s\t%s\n' lib.sh 2 'limit() { echo 6; }' 'cat >/dev/null; bash t.sh' lib.sh 1 '# renamed comment' 'bash t.sh' > "$BOX/batch.tsv"
+out=$(run --batch "$BOX/batch.tsv"); rc=$?
+check "a test that reads stdin does not swallow the batch's later proofs" "1 1" "$rc $(grep -c 'NOT RED' <<<"$out")"
+# An empty replacement (blank the line) keeps its column: the test runs, and blanking line 2 breaks it.
+printf '%s\t%s\t%s\t%s\n' lib.sh 2 '' 'bash t.sh' > "$BOX/batch.tsv"
+out=$(run --batch "$BOX/batch.tsv"); rc=$?
+check "an empty replacement in a batch blanks the line and proves RED" "0 1" "$rc $(grep -c 'RED: the test passes as is and fails' <<<"$out")"
 check "the checkout's file is untouched" "limit() { echo 5; }" "$(sed -n 2p lib.sh)"
 check "no scratch worktree is left behind" 1 "$(git worktree list | wc -l | tr -d ' ')"
 check "no scratch folder is left behind" 0 "$(find "$BOX" -maxdepth 1 -name 'red-proof.*' | wc -l | tr -d ' ')"

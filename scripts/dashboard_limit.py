@@ -9,7 +9,7 @@
       config folder, which Orca may set per pane.
   dashboard_limit.py account <cache-dir>
       The signed-in account ({account, label}). When it is not the one the
-      cached reading was taken for, that reading and its retry note are
+      cached reading was taken for, or no record says whose it is, that reading and its retry note are
       removed, and limit-history.jsonl moves aside to limit-history.<old>.jsonl.
   dashboard_limit.py build <status> <usage-file> <now-epoch> <cache-dir> <projects-dir> [<codex-sessions-dir> [<day-projects-json>]]
       The panel's JSON. <status> is dashboard.sh's record for the usage file.
@@ -87,11 +87,11 @@ def switch_account(cache_dir):
     path = os.path.join(cache_dir, "claude-account.json")
     try:
         with open(path) as f:
-            old = json.load(f).get("account")
-    except (OSError, ValueError, AttributeError):
-        old = None
-    # No record yet (the release before this one) is the same account: nothing is dropped on the update.
-    if old and now["account"] != old:
+            old = json.load(f)["account"]
+    except (OSError, ValueError, LookupError, TypeError):
+        old = "unknown"
+    # No record (the release before this one, or a broken file): whose the reading is cannot be known, so it goes too.
+    if now["account"] != old:
         for f in ("claude-usage", "claude-usage.retry"):
             try:
                 os.remove(os.path.join(cache_dir, f))
@@ -99,7 +99,7 @@ def switch_account(cache_dir):
                 pass
         hist = os.path.join(cache_dir, "limit-history.jsonl")
         if os.path.exists(hist):
-            os.replace(hist, os.path.join(cache_dir, f"limit-history.{old}.jsonl"))
+            os.replace(hist, os.path.join(cache_dir, f"limit-history.{old or 'unknown'}.jsonl"))
     tmp = f"{path}.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(now, f)

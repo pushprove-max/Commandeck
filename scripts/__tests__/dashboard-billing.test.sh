@@ -100,6 +100,14 @@ check "the label is B's masked email" "b…@example.org" "$(jq -r .label <<<"$OU
 check "B's credentials are the ones read" tok-b "$(lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -c 'import dashboard_limit as d; print(d.token())')"
 check "the panel JSON names B's label" "b…@example.org" \
   "$(lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -B dashboard_limit.py build missing /nonexistent 0 "$C" /nonexistent | jq -r .accountLabel)"
+# An upgrade from the release with no account record: whose the cached reading is cannot be known, so it goes, and
+# its retry note with it, or B's label would show A's figure and A's backoff.
+C=$T/acct/up; mkdir -p "$C"
+echo '{"seven_day": {"utilization": 70}}' > "$C/claude-usage"; echo '9999999999 1 HTTP 500' > "$C/claude-usage.retry"
+echo '{"at": "1999-01-01T00:00:00Z", "pct": 70}' > "$C/limit-history.jsonl"
+lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -B dashboard_limit.py account "$C" >/dev/null
+check "no account record: the reading and retry note go, the history is kept aside" "gone 1 0" \
+  "$([ ! -e "$C/claude-usage" ] && [ ! -e "$C/claude-usage.retry" ] && echo gone) $(ls "$C"/limit-history.*.jsonl 2>/dev/null | wc -l | tr -d ' ') $(cat "$C/limit-history.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
 # On a Mac the keychain item of a non-default folder is not known: no figure, never the default login's.
 check "a Mac with a non-default folder: not measured, and says why" "1 config folder" \
   "$(cd "$ROOT/scripts" && HOME="$T/home" CLAUDE_CONFIG_DIR="$T/cfgB" COMMANDECK_HOST_OS=Darwin python3 -B dashboard_limit.py fetch >/dev/null 2>"$T/why"
