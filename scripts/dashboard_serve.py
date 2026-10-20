@@ -33,7 +33,9 @@ one out: only a loopback client, under a loopback Host name, with this page's ow
 goes through `decision.sh answer --asked-at`, so the first answer wins and a second is refused (409); it is logged
 as a ruling the way ruling-log.sh logs one, and sent to main (to-main.sh) and, with a relay configured, to the relay
 (cos-tell.sh --note). The sends are kept in <directory>/answer-retry.json before the answer is recorded, and an
-answer whose sends cannot be kept there is refused (503): main is never left untold. A send that fails stays kept and is sent again after the next
+answer whose sends cannot be kept there is refused (503): main is never left untold. Until the ledger takes the answer
+its sends keep the ask they answer, and one the host did not finish (stopped, or the ledger slow) is sent only once the
+ledger shows that answer taken: main is never told one it refused. A send that fails stays kept and is sent again after the next
 refresh, the page's next read of data.js, by a batch that refresh does not wait on; the collector lists what is still
 kept on the card. An answer delivered while main's own picker was open is kept in <directory>/answer-picker.json,
 which the collector shows too: main reads it only after that picker is answered in its pane. The project's
@@ -149,12 +151,14 @@ RETRYING = threading.Lock()  # one retry batch at a time
 
 
 def kept(directory):
-    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key}. A send pass 2 kept has no key:
+    """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key[, ask]}; `ask` ({askedAt, answer})
+    is the answer's, kept until the ledger takes it. A send pass 2 kept has no key:
     its content is one, the same on every read, and the next write keeps it."""
     try:
         with open(os.path.join(directory, 'answer-retry.json')) as f:
             ms = [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
-                  and isinstance(m.get('key', ''), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])]
+                  and isinstance(m.get('key', ''), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])
+                  and ('ask' not in m or isinstance(m['ask'], dict) and all(isinstance(m['ask'].get(k), str) for k in ('askedAt', 'answer')))]
     except (OSError, ValueError, TypeError):
         return []
     for m in ms:
@@ -197,15 +201,15 @@ def deliver(directory, m):
     return r.returncode in ((0, 3) if m['to'] == 'main' else (0,)), False, m['to'] == 'main' and PICKER in r.stdout
 
 
-def settle(directory, taken, tried, slow=()):
-    """`taken` is out of flight again; of `tried` ([(send, delivered, picker)]) the delivered leave the file, those
+def settle(directory, taken, tried, slow=(), drop=()):
+    """`taken` is out of flight again; the keys in `drop` leave the file; of `tried` ([(send, delivered, picker)]) the delivered leave it, those
     that timed out (keys in `slow`) go to its end so the next batch tries the rest first, and each
     delivery to main updates the picker marks: a picker open marks its answer, none open drops that main's marks.
     shortcut: a mark stays until a later delivery to that main finds no picker; read main's pane if that proves stale.
     A file that cannot be written keeps what it had: a delivered send may then go twice, which beats never."""
     with SENDS:
         FLYING.difference_update(m['key'] for m in taken)
-        gone = {m['key'] for m, ok, _ in tried if ok}
+        gone = {m['key'] for m, ok, _ in tried if ok} | set(drop)
         held = marks(directory)
         for m, ok, picker in tried:
             if ok and m['to'] == 'main':
@@ -254,6 +258,30 @@ def send(directory, msgs):
     return sum(not ok for _, ok, _ in tried), any(p for _, _, p in tried)
 
 
+def accepted(m):
+    """For a send kept with its `ask`: True when the ledger took that answer to that ask, False when it never will
+    (the row is closed or asked again), None while the row is still open at that ask."""
+    rows = []
+    try:
+        with open(os.path.join(m['main'], '.claude', 'metrics', 'decisions.jsonl')) as f:
+            fcntl.flock(f, fcntl.LOCK_SH)  # decision.sh appends under LOCK_EX
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get('id') == m['id']:
+                    rows.append(r)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    ask = m['ask']
+    if any(r.get('askedAt') == ask['askedAt'] and r.get('answeredAt') and r.get('answer') == ask['answer'] for r in rows):
+        return True
+    return None if rows and rows[-1].get('askedAt') == ask['askedAt'] and rows[-1].get('answeredAt') is None else False
+
+
 def retry(directory):
     """The kept sends not in flight, tried again in order; the batch stops at its first timeout, so one costs at most
     SEND_TIMEOUT and what follows waits for the next refresh. What still fails stays kept, a timed-out send behind the
@@ -262,14 +290,20 @@ def retry(directory):
         with SENDS:
             todo = [m for m in kept(directory) if m['key'] not in FLYING]
             FLYING.update(m['key'] for m in todo)
-        tried, slow = [], set()
+        tried, slow, drop = [], set(), set()
         for m in todo:
+            if 'ask' in m:
+                took = accepted(m)
+                if took is False:
+                    drop.add(m['key'])
+                if not took:
+                    continue
             ok, late, picker = deliver(directory, m)
             tried.append((m, ok, picker))
             if late:
                 slow.add(m['key'])
                 break
-        settle(directory, todo, tried, slow)
+        settle(directory, todo, tried, slow, drop)
     finally:
         RETRYING.release()
 
@@ -390,9 +424,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if relay:
             msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id']]})
         # The sends are kept, in flight so no retry batch tries them, before the row closes: once it closes a second
-        # answer is refused, so sends that could not be kept and then failed would be lost for good.
+        # answer is refused, so sends that could not be kept and then failed would be lost for good. Their ask lets a
+        # later batch tell an answer the ledger took from one it never did.
         for m in msgs:
             m['key'] = secrets.token_hex(8)
+            m['ask'] = {'askedAt': a['askedAt'], 'answer': a['answer']}
             m['args'].append('%s (no ruling id: the dashboard host stopped before logging it)' % a['answer'])
         with SENDS:
             FLYING.update(m['key'] for m in msgs)
@@ -409,16 +445,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             r = None
         if r is None or r.returncode != 0:
-            # shortcut: a drop that cannot be written leaves the sends in flight, unsent by this host, but a restarted
-            # host sends them; keep a state per send if a disk that fills between two writes proves real.
-            try:
-                keep(self.directory, [], {m['key'] for m in msgs})
-                with SENDS:
-                    FLYING.difference_update(m['key'] for m in msgs)
-            except OSError:
-                pass
+            # A refused answer's sends are dropped; a drop that cannot be written, or a timeout (decision.sh killed
+            # before or after its append), leaves them to a retry batch, which sends them only if the ledger took it.
+            if r is not None:
+                try:
+                    keep(self.directory, [], {m['key'] for m in msgs})
+                except OSError:
+                    pass
+            with SENDS:
+                FLYING.difference_update(m['key'] for m in msgs)
             if r is None:
-                return self.send_error(504, "the ledger took no answer in 60 s; refresh: a question gone from the list was answered, and main was not told")
+                return self.send_error(504, "the ledger took no answer in 60 s; refresh: a question gone from the list was answered, and main is told on a later refresh")
             why = r.stderr.strip().splitlines()[-1:] or ['the answer was not recorded']
             code = 409 if re.search(r'already answered|reopened after', why[0]) else 404 if 'unknown decision' in why[0] else 500
             return self.send_error(code, why[0])

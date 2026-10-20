@@ -352,6 +352,80 @@ check "its ledger row stays open" "[null]" "$(sed -n 2p <<<"$OUT")"
 check "with the disk back, the same answer is taken and its failed sends kept" "200 2 2" "$(sed -n 3p <<<"$OUT")"
 check "a second answer the ledger refuses keeps nothing more" "409 2" "$(sed -n 4p <<<"$OUT")"
 
+# The sends are kept before the ledger takes the answer, so a host stopped in between, or one that cannot drop
+# the sends of an answer the ledger refused, leaves sends for an answer that may never have been taken. A
+# restarted host checks the ledger before it sends one: taken, it goes; refused, it is dropped; the row still
+# open at that ask, it waits (a decision.sh the stopped host started may still take it).
+D add stop-1999-01-01 'Stop here?' yes main --options 'yes|no' >/dev/null
+D add took-1999-01-01 'Took it?' yes main --options 'yes|no' >/dev/null
+D add late-1999-01-01 'Too late?' yes main --options 'yes|no' >/dev/null; D answer late-1999-01-01 yes >/dev/null
+: > "$T/sent"
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at stop-1999-01-01)" "$(at took-1999-01-01)" "$(at late-1999-01-01)" "$T" "$M" <<'PY'
+import errno, functools, http.client, http.server, json, os, subprocess, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+s.handle_error = lambda *a: None  # the stopped host's traceback
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def req(method, path, body=None):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=30)
+    c.request(method, path, body and json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    try:
+        return c.getresponse().status
+    except http.client.RemoteDisconnected:
+        return "stopped"
+class Stop(Exception):
+    pass
+def stop(*a, **k):
+    raise Stop()
+def restart():  # a new host: nothing in flight; its first refresh runs a retry batch
+    d.FLYING.clear()
+    req("GET", "/data.js")
+    for _ in range(600):
+        if not d.RETRYING.locked():
+            break
+        time.sleep(0.05)
+held = lambda: sorted({m["id"] for m in json.load(open(sys.argv[2] + "/answer-retry.json"))})
+sent = lambda i: sum(i in l for l in open(sys.argv[6] + "/sent"))
+ledger = lambda *a: subprocess.run(["bash", os.path.join(sys.argv[1], "decision.sh")] + list(a), cwd=sys.argv[7], capture_output=True,
+                                   env=dict(os.environ, COMMANDECK_MAIN=sys.argv[7]))
+run = d.subprocess.run
+d.subprocess.run = stop  # stopped after the sends are kept, before decision.sh
+print(req("POST", "/answer", {"project": "proj", "id": "stop-1999-01-01", "askedAt": sys.argv[3], "answer": "no"}))
+d.subprocess.run = run
+restart()
+print(sent("stop-1999-01-01"), held())
+ledger("answer", "stop-1999-01-01", "yes")  # answered in main's own pane
+restart()
+print(sent("stop-1999-01-01"), held())
+log = d.log_ruling
+d.log_ruling = stop  # stopped after the ledger took the answer, before the sends
+print(req("POST", "/answer", {"project": "proj", "id": "took-1999-01-01", "askedAt": sys.argv[4], "answer": "no"}))
+d.log_ruling = log
+restart()
+print(sent("took-1999-01-01|no (no ruling id: the dashboard host stopped before logging it)"), held())
+write, writes = d.write, []
+def full(*a):  # the disk fills between the keep and the drop
+    writes.append(1)
+    if len(writes) > 1:
+        raise OSError(errno.ENOSPC, "No space left on device")
+    write(*a)
+d.write = full
+print(req("POST", "/answer", {"project": "proj", "id": "late-1999-01-01", "askedAt": sys.argv[5], "answer": "no"}), held())
+d.write = write
+restart()
+print(sent("late-1999-01-01"), held())
+PY
+)
+check "a host stopped before the ledger took the answer" "stopped" "$(sed -n 1p <<<"$OUT")"
+check "restarted, it sends nothing while the row is still open at that ask" "0 ['stop-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
+check "and drops the sends once the row is answered another way" "0 []" "$(sed -n 3p <<<"$OUT")"
+check "a host stopped after the ledger took the answer" "stopped" "$(sed -n 4p <<<"$OUT")"
+check "restarted, it sends that answer to main and the relay" "2 []" "$(sed -n 5p <<<"$OUT")"
+check "an answer the ledger refused whose sends cannot be dropped" "409 ['late-1999-01-01']" "$(sed -n 6p <<<"$OUT")"
+check "is never sent by a restarted host, and its sends are dropped" "0 []" "$(sed -n 7p <<<"$OUT")"
+
 # Pass 2 kept sends without a key, and their ledger rows are already closed: an upgrade that drops them on its next
 # write loses those answers for good. And a send that always times out must not starve the ones behind it: each
 # batch stops at its first timeout, so the timed-out send goes to the back of the file.
