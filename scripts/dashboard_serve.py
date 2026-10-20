@@ -102,12 +102,13 @@ def held(path):
     """The file on disk as (home number, home layout, project slots), each value checked again as a save's is.
     Each slot keeps its own number as its `rev`.
 
-    No file, or one no numbered save wrote, is number 0.
+    No file, or one no numbered save wrote, is number 0. One that is there but cannot be read raises OSError: a save
+    on it would replace every slot it could not see.
     """
     try:
         with open(path) as f:
             disk = json.loads(f.read().partition('=')[2].strip().rstrip(';'))
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         disk = None
     disk = disk if isinstance(disk, dict) else {}
     part = lambda d: {k: v for k, v in d.items() if k not in ('rev', 'project') and k in HELD and HELD[k](v)}
@@ -120,11 +121,12 @@ def held(path):
 def cleared(log, key):
     """Every build the host dropped from one slot's cleared list ('' is the home project's): closed.log, a
     `<slot>\\t<name>` line each. Unlike the layout it is never cut, so it grows by one short line per drop.
+    A log that is there but cannot be read raises OSError: a dropped name would read as new.
     """
     try:
         with open(log) as f:
             return {v for k, _, v in (line.rstrip('\n').partition('\t') for line in f) if k == key}
-    except OSError:
+    except FileNotFoundError:
         return set()
 
 
@@ -150,16 +152,23 @@ FLYING = set()
 RETRYING = threading.Lock()  # one retry batch at a time
 
 
-def kept(directory):
+def kept(directory, strict=False):
     """The sends <directory>/answer-retry.json keeps, each {main, id, to, args, key[, ask]}; `ask` ({askedAt, answer})
     is the answer's, kept until the ledger takes it. A send pass 2 kept has no key:
-    its content is one, the same on every read, and the next write keeps it."""
+    its content is one, the same on every read, and the next write keeps it. `strict`: a file that is there but
+    cannot be read raises OSError, so a write never replaces sends it could not see."""
     try:
         with open(os.path.join(directory, 'answer-retry.json')) as f:
             ms = [m for m in json.load(f) if isinstance(m, dict) and m.get('to') in SCRIPT and isinstance(m.get('main'), str)
                   and isinstance(m.get('key', ''), str) and isinstance(m.get('args'), list) and all(isinstance(a, str) for a in m['args'])
                   and ('ask' not in m or isinstance(m['ask'], dict) and all(isinstance(m['ask'].get(k), str) for k in ('askedAt', 'answer')))]
-    except (OSError, ValueError, TypeError):
+    except FileNotFoundError:
+        return []
+    except OSError:
+        if strict:
+            raise
+        return []
+    except (ValueError, TypeError):
         return []
     for m in ms:
         m.setdefault('key', json.dumps(m, sort_keys=True))
@@ -167,11 +176,14 @@ def kept(directory):
 
 
 def marks(directory):
-    """The answers <directory>/answer-picker.json keeps, each {main, id}: delivered while main's own picker was open."""
+    """The answers <directory>/answer-picker.json keeps, each {main, id}: delivered while main's own picker was open.
+    A file that is there but cannot be read raises OSError: its only caller writes it back."""
     try:
         with open(os.path.join(directory, 'answer-picker.json')) as f:
             return [m for m in json.load(f) if isinstance(m, dict) and isinstance(m.get('main'), str) and isinstance(m.get('id'), str)]
-    except (OSError, ValueError, TypeError):
+    except FileNotFoundError:
+        return []
+    except (ValueError, TypeError):
         return []
 
 
@@ -206,31 +218,32 @@ def settle(directory, taken, tried, slow=(), drop=()):
     that timed out (keys in `slow`) go to its end so the next batch tries the rest first, and each
     delivery to main updates the picker marks: a picker open marks its answer, none open drops that main's marks.
     shortcut: a mark stays until a later delivery to that main finds no picker; read main's pane if that proves stale.
-    A file that cannot be written keeps what it had: a delivered send may then go twice, which beats never."""
+    A file that cannot be read or written keeps what it had: a delivered send may then go twice, which beats never.
+    The marks are saved first: a delivered send is the only way to rebuild its mark."""
     with SENDS:
         FLYING.difference_update(m['key'] for m in taken)
         gone = {m['key'] for m, ok, _ in tried if ok} | set(drop)
-        held = marks(directory)
-        for m, ok, picker in tried:
-            if ok and m['to'] == 'main':
-                if not picker:
-                    held = [p for p in held if p['main'] != m['main']]
-                elif {'main': m['main'], 'id': m['id']} not in held:
-                    held.append({'main': m['main'], 'id': m['id']})
         try:
-            left = [m for m in kept(directory) if m['key'] not in gone]
-            write(directory, 'answer-retry.json', [m for m in left if m['key'] not in slow] + [m for m in left if m['key'] in slow])
+            held = marks(directory)
+            for m, ok, picker in tried:
+                if ok and m['to'] == 'main':
+                    if not picker:
+                        held = [p for p in held if p['main'] != m['main']]
+                    elif {'main': m['main'], 'id': m['id']} not in held:
+                        held.append({'main': m['main'], 'id': m['id']})
+            left = [m for m in kept(directory, True) if m['key'] not in gone]
             write(directory, 'answer-picker.json', held)
+            write(directory, 'answer-retry.json', [m for m in left if m['key'] not in slow] + [m for m in left if m['key'] in slow])
         except OSError:
             pass
 
 
 def keep(directory, msgs, drop=()):
     """msgs written to the file, each in place of the kept send with its key or else at its end, and the keys in
-    `drop` taken out. Raises OSError when the file cannot be written."""
+    `drop` taken out. Raises OSError when the file cannot be read or written."""
     with SENDS:
         new = {m['key']: m for m in msgs}
-        held = [new.pop(m['key'], m) for m in kept(directory) if m['key'] not in drop]
+        held = [new.pop(m['key'], m) for m in kept(directory, True) if m['key'] not in drop]
         write(directory, 'answer-retry.json', held + list(new.values()))
 
 

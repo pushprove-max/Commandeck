@@ -104,6 +104,41 @@ PY
 )
 check "a save whose closed.log append fails does not land, and the replay after it pushes out nothing" "True 5 b0002 fresh 2000" "$OUT"
 
+# A layout.js or closed.log that is there but cannot be read is not an empty one: a save on it would replace every
+# other project's slot, or log a held clear as new. Such a save does not land.
+mkdir "$T/unread"
+OUT=$(python3 - "$ROOT/scripts" "$T/unread" <<'PY'
+import builtins, errno, functools, http.client, http.server, json, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+D = sys.argv[2]
+with open(D + "/layout.js", "w") as f:
+    f.write("window.DASH_LAYOUT = %s;\n" % json.dumps({"rev": 0, "projects": {"demo": {"rev": 3, "closed": ["x"]}}}))
+locked = []
+def unreadable(path, mode="r", *a, **k):
+    if str(path).endswith(tuple(locked)) and mode == "r":
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+    return builtins.open(path, mode, *a, **k)
+d.open = unreadable
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=D))
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+def put(body):
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])
+    c.request("PUT", "/layout", json.dumps(body), {"Content-Type": "application/json"})
+    try:
+        return c.getresponse().status
+    except Exception:
+        return "dropped"
+locked.append("layout.js")
+codes = [put({"rev": 0, "project": "other"})]
+locked[:] = ["closed.log"]
+codes.append(put({"rev": 3, "project": "demo", "closed": ["y"]}))
+del d.open
+print(codes[0] != 204, codes[1] != 204, json.dumps(d.held(D + "/layout.js")[2], sort_keys=True))
+PY
+)
+check "a save on a layout.js or closed.log that cannot be read does not land" 'True True {"demo": {"closed": ["x"], "rev": 3}}' "$OUT"
+
 # The other order: the append lands and the layout write fails. The page sends its clear again, and it is held.
 mkdir "$T/rep"
 OUT=$(python3 - "$ROOT/scripts" "$T/rep" <<'PY'
@@ -478,6 +513,52 @@ check "a pass-2 send without a key is still kept" "['old-1999-01-01']" "$(sed -n
 check "and survives the next write" "['old-1999-01-01', 'new-1999-01-01']" "$(sed -n 2p <<<"$OUT")"
 check "and leaves the file once delivered" "[]" "$(sed -n 3p <<<"$OUT")"
 check "a send that always times out goes behind the rest, which are delivered" "['A', 'B', 'A', 'A'] ['A']" "$(sed -n 4p <<<"$OUT")"
+
+# The kept sends belong to answers whose ledger rows are already closed, and a picker mark is main's only way out of
+# its own open prompt: a file that cannot be read is not an empty one, so no write may replace it, and a delivered
+# send leaves the outbox only once its picker mark is saved.
+mkdir -p "$T/locked"
+OUT=$(python3 - "$ROOT/scripts" "$T/locked" <<'PY'
+import builtins, errno, json, sys
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+D = sys.argv[2]
+held = lambda name="answer-retry.json": [m["id"] for m in json.load(open(D + "/" + name))]
+msg = lambda i: {"main": "/project", "id": i, "to": "main", "args": [i], "key": i}
+def locked(name):
+    def opener(path, mode="r", *a, **k):
+        if path.endswith(name) and "r" in mode:
+            raise PermissionError(errno.EACCES, "Permission denied", path)
+        return builtins.open(path, mode, *a, **k)
+    return opener
+json.dump([msg("old")], open(D + "/answer-retry.json", "w"))
+d.open = locked("answer-retry.json")
+try:
+    d.keep(D, [msg("new")]); print("written")
+except OSError:
+    print("refused")
+d.settle(D, [], [(msg("old"), True, False)])
+del d.open
+print(held())
+json.dump([{"main": "/project", "id": "mark"}], open(D + "/answer-picker.json", "w"))
+d.open = locked("answer-picker.json")
+d.settle(D, [], [(msg("old"), True, True)])
+del d.open
+print(held(), held("answer-picker.json"))
+write = d.write
+def full(directory, name, value):
+    if name == "answer-picker.json":
+        raise OSError(errno.ENOSPC, "No space left on device")
+    write(directory, name, value)
+d.write = full
+d.settle(D, [], [(msg("old"), True, True)])
+print(held(), held("answer-picker.json"))
+PY
+)
+check "an outbox that cannot be read refuses a new send" "refused" "$(sed -n 1p <<<"$OUT")"
+check "and a settle keeps what it holds" "['old']" "$(sed -n 2p <<<"$OUT")"
+check "picker marks that cannot be read are not replaced, and the outbox keeps the send" "['old'] ['mark']" "$(sed -n 3p <<<"$OUT")"
+check "a picker mark that cannot be saved keeps its delivered send in the outbox" "['old'] ['mark']" "$(sed -n 4p <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
