@@ -109,6 +109,15 @@ order u13 'Launch: new unit u99'
 check "a batch whose order names another unit is refused" "2:1:0" "$RC:$(grep -c "REFUSED: .*names u99, not u13" "$T/out"):$(grep -c . "$T/seats")"
 order u14 'Launch: new unit u14'
 check "a batch whose Launch line names this unit as new opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u14' "$T/seats")"
+# r1: a risky build launched before the Launch line existed has a batch with none. Its first call ran (the
+# release before this one); after the update its second call still opens the Builder.
+printf '## The issues\n\n1. #1: x\n\n## Prior art\n\nnone\n\n## Plan\n\n.claude/plans/toy.md\n' > "$T/legacy-batch.md"
+cp "$T/plug/scripts/builder-launch.sh" "$T/new-launch"; git -C "$REAL" show b15d8ee:scripts/builder-launch.sh > "$T/plug/scripts/builder-launch.sh"
+legacy() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u15 "$T/legacy-batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+: > "$T/seats"; legacy; cp "$T/new-launch" "$T/plug/scripts/builder-launch.sh"
+mkdir -p "$WS/u15/.claude/briefs"; echo note > "$WS/u15/.claude/briefs/u15-design.md"
+legacy
+check "after the update, a risky build begun on a batch with no Launch line opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u15' "$T/seats")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

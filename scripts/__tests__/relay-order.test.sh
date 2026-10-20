@@ -15,7 +15,7 @@ cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "terminal list") jq -n '{result: {terminals: [{handle: "term_main", worktreePath: "$T/p", agentIdentity: "claude"}]}}' ;;
-  "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --subject) s=\$2 ;; --body) b=\$2 ;; --type) ty=\$2 ;; esac; shift; done
+  "orchestration send") [ -e "$T/send-fails" ] && { echo '{"ok":false}'; exit 0; }; while [ \$# -gt 0 ]; do case \$1 in --subject) s=\$2 ;; --body) b=\$2 ;; --type) ty=\$2 ;; esac; shift; done
     jq -cn --arg s "\$s" --arg b "\$b" --arg t "\$ty" '{type: \$t, subject: \$s, body: \$b}' >> "$T/sent"; echo '{"ok":true}' ;;
   *) echo '{"ok":true}' ;;
 esac
@@ -28,9 +28,10 @@ order() { (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/relay-order.sh" "$@" 2>&1)
 SEEN=$(cd "$T/p" && "${E[@]}" bash -c ". '$REAL/scripts/cos-lib.sh' && printf '%s' \"\$COS_KEY\"").decisions-seen
 
 dec add ship-x "Ship x now?" yes main >/dev/null
-printf '%s\n' '{"id":"r-19991017-101010-p-a1b2c3","source":"prompt","answer":"yes, ship it"}' \
-  '{"id":"r-19991017-111111-p-d4e5f6","source":"prompt","answer":"yes, ship it"}' \
-  '{"id":"r-19991017-121212-p-0a0b0c","source":"prompt","answer":"something else"}' > "$COMMANDECK_RULING_LOG"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' '{"id":"r-19991017-101010-p-a1b2c3","utc":"'"$NOW"'","source":"prompt","question":null,"answer":"yes, ship it"}' \
+  '{"id":"r-19991017-111111-p-d4e5f6","utc":"'"$NOW"'","source":"ask","question":"Ship x now?","answer":"yes, ship it"}' \
+  '{"id":"r-19991017-121212-p-0a0b0c","utc":"'"$NOW"'","source":"prompt","question":null,"answer":"something else"}' > "$COMMANDECK_RULING_LOG"
 OUT=$(order ship-x "yes, ship it"); RC=$?
 check "the order answers the decision with the words and the newest ruling id for them" "yes, ship it (r-19991017-111111-p-d4e5f6)" \
   "$(dec list | jq -r '.[] | select(.id == "ship-x") | .answer')"
@@ -46,5 +47,27 @@ dec add ship-y "Ship y now?" yes main >/dev/null
 OUT=$(order ship-y "words nobody said"); RC=$?
 check "words the ruling log does not hold exit 1, and the decision stays open" "1 null" \
   "$RC $(dec list | jq -r '.[] | select(.id == "ship-y") | .answeredAt')"
+# A ruling binds only the decision it answers: one for another question, or given before this ask, is no authority.
+dec add ship-z "Ship z now?" yes main >/dev/null
+printf '%s\n' '{"id":"r-old-1","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Enable dashboard?","answer":"yes"}' \
+  '{"id":"r-old-2","utc":"2000-01-01T00:00:00Z","source":"prompt","question":null,"answer":"go"}' >> "$COMMANDECK_RULING_LOG"
+: > "$T/sent"
+OUT=$(order ship-z yes); RC=$?
+check "a ruling on another question does not answer this decision" "1 null 0" \
+  "$RC $(dec list | jq -r '.[] | select(.id == "ship-z") | .answeredAt') $(grep -c . "$T/sent")"
+OUT=$(order ship-z go); RC=$?
+check "a ruling given before the decision was asked does not answer it" "1 null" \
+  "$RC $(dec list | jq -r '.[] | select(.id == "ship-z") | .answeredAt')"
+# A failed delivery is resumed by the same order again, not refused as already answered.
+printf '%s\n' '{"id":"r-new-1","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship z now?","answer":"yes"}' >> "$COMMANDECK_RULING_LOG"
+touch "$T/send-fails"
+OUT=$(order ship-z yes); RC=$?
+check "a send Orca refuses exits 1 and says main was not told" "1 1" "$RC $(grep -c 'NOT told' <<<"$OUT")"
+rm "$T/send-fails"
+OUT=$(order ship-z yes); RC=$?
+check "the same order again tells main, and the answer is written once" "0 1 yes (r-new-1)" \
+  "$RC $(grep -c 'r-new-1' "$T/sent") $(dec list | jq -r '.[] | select(.id == "ship-z") | .answer')"
+OUT=$(order ship-z "something else"); RC=$?
+check "other words on an answered decision are still refused" "1 1" "$RC $(grep -c 'r-new-1' "$T/sent")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

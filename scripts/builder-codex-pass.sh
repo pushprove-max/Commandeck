@@ -903,7 +903,8 @@ if [ -n "${TEST_CMD:-}" ]; then
   case $RC in 0) R=pass ;; 124) R=timeout ;; *) R=fail ;; esac
   TOTALS=$(grep -E '[0-9]+ (passed|failed)' "$SUITE_LOG" | tail -1 | tr -s ' \t' ' ' | sed 's/^ //; s/ $//' || true)
   SUITE="Suite: $SHA $R ${TOTALS:-no totals printed} $((SECONDS - T0))s $SUITE_LOG"
-  [ "$R" = pass ] || SUITE_RED=$(grep -m5 'FAIL' "$SUITE_LOG" || tail -n 1 "$SUITE_LOG")
+  # Set on the run's exit, never left empty: a red run whose log names nothing still forces the NO-GO below.
+  [ "$R" = pass ] || SUITE_RED="$R (exit $RC)${TOTALS:+, $TOTALS}: $(grep -m5 'FAIL' "$SUITE_LOG" || tail -n 1 "$SUITE_LOG")"
   echo "$SUITE"
 fi
 # The first pass's reviewers, by the size rule on the commit just made; the line goes into the round file.

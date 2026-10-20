@@ -306,5 +306,12 @@ pass 16 review
 check "a pass over a change to hooks/ asks for an executed probe; one with no hook change does not" "1 0" \
   "$(grep -c 'hook-probe.sh <hook>' "$B/$U-r16-prompt-1.md") $(grep -c 'hook-probe.sh' "$B/$U-r15-prompt-1.md")"
 
+# r1: a red run that printed nothing still binds: the NO-GO follows the run's exit, not its log text.
+cfg '.fullSuiteBeforeFinal = true | .testCommand = "exit 1"'; printf 'echo seventeen\n' > "$W/a.sh"
+pass 17 final
+check "a red suite with an empty log: the round file ends NO-GO, though the reviewer said GO" "1 1" \
+  "$(tail -1 "$B/$U-r17-reports.md" | grep -cx 'VERDICT: NO-GO') $(grep -c 'The full suite is red on .*exit 1' "$B/$U-r17-reports.md")"
+cfg 'del(.fullSuiteBeforeFinal)'
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -110,6 +110,11 @@ check "which is the unit's own worktree, and its record names it" '1:1' \
 for m in PLAN-DONE REVISED PLAN-DONE; do echo "$m" > "$T/screen"; srun wait plan-author pu --marker "$m" --timeout-s 10 >"$T/out" 2>&1 || echo "wait $m: $(tail -2 "$T/out")"; done
 MW=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1)main-watch; mkdir -p "$MW"; : > "$T/updates"
 printf 'posted=1\ntask=task_item_s\n' > "$MW/item-seat-h1-task_1"; printf 'posted=1\ntask=task_item_o\n' > "$MW/item-seat-h9-task_9"
+# r1: a collect before the marker writes the unfinished report and keeps the pane; the collect after it rewrites it.
+printf '# Draft\nstill planning\n' > "$T/screen"; srun collect plan-author pu >"$T/out" 2>&1
+check "an early collect keeps the pane open and writes the report so far" "3:1" \
+  "$?:$(grep -c 'still planning' "$(sed -n 's/^report=//p' "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt | tail -1)" 2>/dev/null)"
+echo PLAN-DONE > "$T/screen"
 srun collect plan-author pu >"$T/out" 2>&1
 check "collect with no --marker closes on the marker the last wait saw" '0:1' "$?:$(grep -c 'closed seat=plan-author unit=pu PLAN-DONE' "$T/out")"
 # Issue 227: main closed a collected seat's main-watch item task by hand; collect does it.
@@ -119,6 +124,7 @@ check "collect completes the seat's main-watch item task, and not another pane's
 RP=$(sed -n 's/^report=//p' "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt | tail -1)
 check "collect with no --report keeps the report under the scratch folder's reports/, prints and records its path" '1:1:1' \
   "$(grep -cxF "report: $RP ($(wc -l < "$RP" 2>/dev/null | tr -d ' ') lines)" "$T/out"):$(grep -c PLAN-DONE "$RP" 2>/dev/null):$(case $RP in "$HOME"/.commandeck/scratch/*/reports/pu-plan-author-[0-9]*.md) echo 1 ;; esac)"
+check "the finishing collect rewrote the report an early collect left" 0 "$(grep -c 'still planning' "$RP" 2>/dev/null)"
 check "read-verdict.sh --seat prints the verdict collect closed on, then that report" "PLAN-DONE:$(cat "$RP" 2>/dev/null)" \
   "$(cd "$PROJ" && env -u COMMANDECK_SCRATCH -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR bash "$REAL/scripts/read-verdict.sh" --seat pu plan-author 2>&1 | { read -r v; printf '%s:%s' "$v" "$(cat)"; })"
 # A silent read-only seat is relaunched from its record, which the relaunch writes again: the marker must survive it.

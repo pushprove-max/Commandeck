@@ -134,6 +134,14 @@ check "a message holding a word of the project's ci/leak-words.txt is refused, a
   "$(merge z) $(grep -c '^FAILED step 4 message: .*Zebraword' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
 echo 'feat(q): clean' > "$TMP/clean-msg"
 check "ci/leak-test.sh --text on a clean file exits 0" 0 "$(bash "$REPO/ci/leak-test.sh" --text "$TMP/clean-msg" >/dev/null 2>&1; echo $?)"
+# r1: a scanner that supports --text and fails is no screening: the merge is refused, not let through.
+printf '# words\n(?i)zebraword\n(\n' > "$REPO/ci/leak-words.txt"
+check "a word list the scanner cannot run refuses the merge, and main is unchanged" "1 1 $H0" \
+  "$(merge z) $(grep -c '^FAILED step 4 message: .*could not run' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+# A project's leak-test.sh from before --text cannot read the message: said, and the merge goes on.
+git -C "$REAL" show b15d8ee:ci/leak-test.sh > "$REPO/ci/leak-test.sh"
+check "a leak-test.sh older than --text: the merge goes on and says the word list was not applied" "0 1" \
+  "$(merge z) $(grep -c 'the project.s word list was not applied' "$TMP/out")"
 rm -rf "$REPO/ci"
 # Issue 230: run in main's foreground (a Claude session), the merge returns at once with its log and pid; the merge
 # then completes detached and its result reaches main as a status message.
@@ -144,5 +152,13 @@ check "in main's foreground the merge returns 0 at once, naming its log" "0 1" "
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "the detached merge completed, and main heard its result" "1 1" \
   "$(grep -c '^DONE unit=d merged=local' "$COMMANDECK_SCRATCH/merge-d.log" 2>/dev/null) $(cat "$TMP/orca-calls" "$COMMANDECK_SCRATCH"/queue/*.jsonl 2>/dev/null | grep -c 'merge-unit-local.sh d: exit 0')"
+# r1: the queue waits on each merge, so in main's foreground the queue detaches itself and runs its merges in its
+# own foreground: a detached merge's exit 0 is no merge.
+OUT=$(cd "$REPO" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 bash "$REAL/scripts/merge-queue.sh" no-such-a no-such-b </dev/null 2>&1); RC=$?
+PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the merge queue returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $COMMANDECK_SCRATCH/merge-queue.log" <<<"$OUT")"
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "the detached queue stopped at the first unit that did not merge, and never says all merged" "1 0" \
+  "$(grep -c 'STOPPED at no-such-a (not merged)' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null) $(grep -c 'all 2 unit' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

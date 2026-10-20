@@ -5,18 +5,87 @@
 # incident traces to, and Codex has neither tool.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
-# Issue 247, in a Builder and in any tier: an inline python3/perl/node script that opens a tracked file for writing
-# goes around Edit and the guards on it. A quoted path the script names that git tracks is that file; a scratch
-# path is not tracked and passes.
+# Issue 247, in a Builder and in any tier: a python3/perl/node script in the command (-c/-e, a here-document, a
+# pipe) that writes a tracked file goes around Edit and the guards on it. Each write call's destination is read:
+# a quoted path git tracks is refused; a scratch path passes, whatever tracked file the script also reads. A
+# destination or mode the text does not spell out (a variable) cannot be screened, so it is refused when the
+# script quotes a tracked path at all. perl -i edits the files named on the command line.
+# Known gaps: a write call this list does not name (subprocess, os.write on a descriptor), a path built from
+# pieces, a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
 if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
   IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
-  if [[ $IW =~ (^|[^[:alnum:]_])(python3?|perl|node)([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[ce]|-[[:space:]]*<<) ]] \
-    && grep -qE "open\([^)]*,[[:space:]]*['\"]\+?[wa>]|write_text\(|writeFileSync\(" <<<"$IW"; then
-    for P in $(grep -oE "['\"][A-Za-z0-9_./-]+['\"]" <<<"$IW" | tr -d "'\"" | sort -u); do
-      git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" ls-files --error-unmatch -- "$P" >/dev/null 2>&1 || continue
-      echo "BLOCKED: an inline script writes $P, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder)." >&2
-      exit 2
-    done
+  if [[ $IW =~ (^|[^[:alnum:]_./-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then
+    IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I - <<'PY'
+import os, re, shlex, subprocess
+s = os.environ["IW"].replace('\\"', '"').replace("\\'", "'")
+def lit(a):  # the text of a plain quoted string, else None
+    m = re.match(r"""\s*[rbuRBU]{0,2}(['"])([^'"\n]*)\1\s*$""", a or "")
+    return m.group(2) if m else None
+def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
+    depth, cur, out, q = 0, "", [], None
+    for j in range(i + 1, len(s)):
+        c = s[j]
+        if q:
+            cur += c; q = None if c == q else q; continue
+        if c in "'\"`": q = c
+        elif c in "([{": depth += 1
+        elif c in ")]}":
+            if depth == 0: return out + [cur], j + 1
+            depth -= 1
+        elif c == "," and depth == 0: out.append(cur); cur = ""; continue
+        cur += c
+    return out + [cur], len(s)
+def writes(mode):  # True, False, or None when the mode is not a plain string
+    v = lit(mode)
+    return None if v is None else bool(re.search(r"[wax+]", v))
+dests = []  # each a literal path, or None for one that cannot be read
+TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
+AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
+      "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
+for m in re.finditer(r"(?<![\w$])(open|" + TO + "|" + AT + r")\s*\(", s):
+    name, (a, _) = m.group(1), args(m.end() - 1)
+    if name == "open":
+        if s[:m.start()].endswith(")."): continue  # Path(...).open: below
+        if re.match(r"\s*(my\s+)?[$A-Z]", a[0]) and len(a) >= 2:  # perl: open(F, '>x') or open(my $f, '>', 'x')
+            v = lit(a[1])
+            if len(a) == 2:
+                if v is None: dests.append(None)
+                elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
+            elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
+            continue
+        mode = next((x.split("=", 1)[1] for x in a[1:] if re.match(r"\s*mode\s*=", x)), a[1] if len(a) > 1 and "=" not in a[1] else None)
+        if mode is not None and writes(mode) is not False: dests.append(lit(a[0]))
+    elif re.fullmatch(TO, name):
+        dests.append(lit(a[1]) if len(a) > 1 else None)
+        if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
+    else: dests.append(lit(a[0]))
+for m in re.finditer(r"\bPath\s*\(", s):
+    a, end = args(m.end() - 1)
+    t = re.match(r"\s*\.\s*(\w+)\s*\(", s[end:])
+    if not t: continue
+    b = args(end + t.end() - 1)[0]
+    if t.group(1) in ("write_text", "write_bytes", "touch", "unlink", "rename", "replace", "symlink_to", "hardlink_to", "chmod", "rmdir") \
+       or (t.group(1) == "open" and writes(b[0] if b[0].strip() else "'r'") is not False):
+        dests.append(lit(a[0]))
+        if t.group(1) in ("rename", "replace"): dests.append(lit(b[0]))
+try: words = shlex.split(s)
+except ValueError: words = s.split()
+for i, w in enumerate(words):  # perl -i edits in place the files after the script
+    if re.fullmatch(r"(.*/)?perl", w) and any(re.fullmatch(r"-[a-zA-Z]*i\S*", x) for x in words[i + 1:]):
+        dests += [x for x in words[i + 1:] if not x.startswith("-")]
+def tracked(p):
+    return subprocess.run(["git", "ls-files", "--error-unmatch", "--", p], capture_output=True).returncode == 0
+for d in dests:
+    if d and tracked(d): print("W " + d); raise SystemExit
+if None in dests:
+    for q in sorted(set(re.findall(r"""['"]([A-Za-z0-9_./-]+)['"]""", s))):
+        if tracked(q): print("U " + q); raise SystemExit
+PY
+)
+    case $IW_OUT in
+      "W "*) echo "BLOCKED: an inline script writes ${IW_OUT#W }, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder)." >&2; exit 2 ;;
+      "U "*) echo "BLOCKED: an inline script writes to a path or with a mode it does not spell out, and names ${IW_OUT#U }, a tracked file. Make the change with the \`Edit\` tool, or write to a quoted scratch path (\$TMPDIR, the unit's scratch folder) so the write can be screened." >&2; exit 2 ;;
+    esac
   fi
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).

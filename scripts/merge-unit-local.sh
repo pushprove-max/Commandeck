@@ -287,8 +287,11 @@ LEAK=$(grep -nE '/(Users|home)/[^/[:space:]]+' "$MSG" || true)
 if [ -z "$LEAK" ] && [ -f "$ROOT/ci/leak-test.sh" ]; then
   rc=0; LEAK=$(bash "$ROOT/ci/leak-test.sh" --text "$MSG" 2>/dev/null) || rc=$?
   LEAK=${LEAK//"$MSG:"/}
-  # A project's own leak-test.sh older than --text cannot read the message: said, not refused.
-  case $rc in 0) LEAK= ;; 1) ;; *) LEAK=; echo "step 4 message: ci/leak-test.sh --text could not run (exit $rc); the project's word list was not applied" >&2 ;; esac
+  # A project's own leak-test.sh older than --text cannot read the message: said, not refused. A scanner that
+  # has --text and fails screened nothing, so it refuses.
+  case $rc in 0) LEAK= ;; 1) ;;
+    *) grep -q '^# leak-test.sh --text' "$ROOT/ci/leak-test.sh" && LEAK="ci/leak-test.sh --text could not run (exit $rc), so the message was not screened" \
+         || { LEAK=; echo "step 4 message: ci/leak-test.sh predates --text; the project's word list was not applied" >&2; } ;; esac
 fi
 rm -f "$MSG"
 [ -z "$LEAK" ] || fail "step 4 message" "the commit message leaks: $(head -1 <<<"$LEAK")"

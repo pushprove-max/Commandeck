@@ -90,5 +90,23 @@ check "--full prints the heads-up whole" 400 "$(grep -c '^claim line' <<<"$OUT")
 OUT=$(drain); REST=$(sed -n 's/.*whole wake: \([^ ]*\)).*/\1/p' <<<"$OUT" | tail -1)
 check "a long wake is cut, keeps its next: line, and names the file that holds the rest" "1 1 1" \
   "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c '^orca-wait: cut at 3,000 bytes' <<<"$OUT") $(grep -c '| pass done (u212) |' "$REST" 2>/dev/null)"
+# r1: the drain prints each message before it acknowledges it; the default wake must hand that print on at once.
+# Two deliveries, the second's ack hangs: a call killed then has already printed both acknowledged messages.
+msg k1 term_w question "first delivered" "one" | jq -sc '{ok: true, result: {deliveryId: "d6", messages: .}}' > "$T/k1.json"
+msg k2 term_w question "second delivered" "two" | jq -sc '{ok: true, result: {deliveryId: "d7", messages: .}}' > "$T/k2.json"
+cat > "$T/bin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"orchestration check"*"--ack d6"*) cat "$T/k2.json" ;;
+  *"orchestration check"*"--ack d7"*) sleep 8; echo '{"ok":true,"result":{"messages":[]}}' ;;
+  *"orchestration check"*) cat "$T/k1.json" ;;
+  *) echo '{"ok":true}' ;;
+esac
+EOF
+rm -rf "$T/sc"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 4 bash "$PL/scripts/orca-wait.sh" 2>&1)
+check "a wake killed while a later ack is pending has printed every message acknowledged so far" "1 1" \
+  "$(grep -c '| first delivered |' <<<"$OUT") $(grep -c '| second delivered |' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

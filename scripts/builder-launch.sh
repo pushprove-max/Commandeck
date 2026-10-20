@@ -74,18 +74,19 @@ pp_unit_name "$UNIT" || exit 2
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
 # Every batch says which standard governs it, what library or service already does it, and why we build if we do.
 grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
-# A new unit opens only on an order that names it (issue 234): the batch's ## Launch section quotes the order.
+WT=$PP_WORKSPACES/$UNIT
+# The second call of a risky launch: the first made the worktree, wrote the brief and evidence and opened the design pane.
+RESUME=0
+[ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ] && RESUME=1
+# A new unit opens only on an order that names it (issue 234): the batch's ## Launch section quotes the order. A risky
+# launch's second call opens no new unit: its first call did, maybe under a release with no Launch line.
 LAUNCH=$(sed -n 's/^Launch:[[:space:]]*//p' "$BATCH" | head -1 | sed 's/[[:space:]]*$//')
-case $LAUNCH in
+[ "$RESUME" = 1 ] || case $LAUNCH in
   "new unit $UNIT") ;;
   '') echo "REFUSED: $BATCH has no Launch line (a '## Launch' section with 'Launch: new unit $UNIT' and 'Order: <the owner's words>'): a new unit opens only on an order that names it" >&2; exit 2 ;;
   "add to "*) echo "REFUSED: $BATCH adds work to ${LAUNCH#add to }: run builder-add-work.sh ${LAUNCH#add to } instead; nothing was opened" >&2; exit 2 ;;
   *) echo "REFUSED: $BATCH's Launch line names ${LAUNCH#new unit }, not $UNIT ('$LAUNCH'); nothing was opened" >&2; exit 2 ;;
 esac
-WT=$PP_WORKSPACES/$UNIT
-# The second call of a risky launch: the first made the worktree, wrote the brief and evidence and opened the design pane.
-RESUME=0
-[ "$RISKY" = 1 ] && [ "$DRY" = 0 ] && [ -f "$WT/.claude/briefs/$UNIT-design-spec.md" ] && RESUME=1
 # The plan is read where the worktree is cut from, local main (pp_worktree_new): a nonempty regular file there.
 PLAN=$(awk '/^#+[[:space:]]/ { on = $0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/ } on' "$BATCH" | grep -oE '\.claude/plans/[A-Za-z0-9._-]+\.md' | head -1) || PLAN=
 plan_ok() {

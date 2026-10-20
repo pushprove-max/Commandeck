@@ -125,7 +125,7 @@ elif [ "$COS" = 1 ]; then
   cat <<EOF
 # Wake-ups: run each in the background (run_in_background) and start it again when it exits. A turn may not end without all four running.
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-inbox.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: main's messages for you or the owner.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/relay-order.sh <id> '<the owner's words verbatim>'\`: it answers the decision, tells main with the ruling id and marks it seen.
+- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner its question word for word with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/relay-order.sh <id> '<the owner's words verbatim>'\`: it answers the decision, tells main with the ruling id and marks it seen.
 - \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-alerts.sh\` and \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-limit.sh\`: dashboard alerts and the 7-day limit. Tell the owner, then append the alert id to ${COS_STATE%.md}.alerts-seen
 # Read at most the last 600 characters of a watcher's output: a longer wake is one line naming the file that holds it. A task that would read more than about 10 KB you will not need again goes to a subagent that answers in at most 40 lines.
 # Before a picker, search the rulings log ($RULINGS) for its topic and answer from a ruling that covers it. One question per picker, the decoy first; an empty answer is asked again on its own.

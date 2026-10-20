@@ -455,8 +455,10 @@ collect)
   # sitting at that path is a PREVIOUS round's and the pane is the only source
   # of truth: overwrite it. Skipping the write served h1c's triage the voided
   # report from a superseded brief on 2026-09-13 and cost the round.
+  # The same holds for a file an earlier collect wrote (the record lists it): it is the pane text of a seat that
+  # had not finished, and this collect's is newer.
   RO=0; seat_readonly && RO=1
-  if [ -n "$REPORT" ] && { [ "$RO" = 1 ] || [ ! -s "$REPORT" ]; } && [ -n "$OUT" ]; then
+  if [ -n "$REPORT" ] && { [ "$RO" = 1 ] || [ ! -s "$REPORT" ] || grep -qxF "report=$REPORT" "$REC"; } && [ -n "$OUT" ]; then
     # A report with no `# ` heading would transcribe as an empty file and the pane
     # is closed right after, so fall back to the whole pane text.
     BODY=$(printf '%s\n' "$OUT" | sed -n '/^# /,$p'); [ -n "$BODY" ] || BODY=$OUT

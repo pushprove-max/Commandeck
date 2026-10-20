@@ -11,6 +11,10 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ $# -gt 0 ] || { echo "usage: merge-queue.sh <unit> ..." >&2; exit 2; }
 COMMANDECK_MAIN=$(git rev-parse --show-toplevel) . "$HERE/paths.sh" || exit 1
 mkdir -p "$PP_SCRATCH" || exit 1
+# Each merge's exit is what the queue goes on: in main's foreground the queue detaches itself (issue 230), and its
+# merges run in its own foreground, never detached.
+if pp_main_foreground; then pp_detach "$PP_SCRATCH/merge-queue.log" "merge-queue.sh $*" bash "$0" "$@"; exit; fi
+export COMMANDECK_FOREGROUND=1
 UNFILED=0
 
 for unit in "$@"; do

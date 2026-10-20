@@ -58,11 +58,14 @@ fi
 if [ "$FULL" = 0 ] && [ ${#CLOSE[@]} = 0 ] && [ -z "${ORCA_WAIT_UNCUT:-}" ]; then
   mkdir -p "$PP_SCRATCH/main-watch" || exit 3
   W=$PP_SCRATCH/main-watch/wake-$$.txt
-  ORCA_WAIT_UNCUT=1 bash "${BASH_SOURCE[0]}" ${ARGS[@]+"${ARGS[@]}"} > "$W"; rc=$?
-  awk -v f="$W" '!cut && n + length($0) < 2800 { print; n += length($0) + 1; next }
-    /^ *next: |NEEDS-MAIN/ { print; next } { cut = 1 }
-    END { if (cut) print "orca-wait: cut at 3,000 bytes (whole wake: " f ")"; exit !cut }' "$W" || rm -f "$W"
-  exit $rc
+  # Streamed, each line flushed: the drain prints a message before it acknowledges it, and a call killed mid-drain
+  # must already have shown what was acknowledged. The cut line prints when the cut happens, for the same reason.
+  ORCA_WAIT_UNCUT=1 bash "${BASH_SOURCE[0]}" ${ARGS[@]+"${ARGS[@]}"} | tee "$W" | awk -v f="$W" '
+    !cut && n + length($0) < 2800 { print; fflush(); n += length($0) + 1; next }
+    !cut { cut = 1; print "orca-wait: cut at 3,000 bytes (whole wake: " f ")"; fflush() }
+    /^ *next: |NEEDS-MAIN/ { print; fflush() } END { exit !cut }'
+  rc=("${PIPESTATUS[@]}"); [ "${rc[2]}" = 0 ] || rm -f "$W"
+  exit "${rc[0]}"
 fi
 # board.sh records the project's run here; --run overrides it. With neither, the run
 # this pane is bound to is asked for, because the printed-id record below is
