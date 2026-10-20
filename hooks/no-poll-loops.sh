@@ -247,6 +247,8 @@ def ansi_c(m):
     if e[0] in "xuU" and len(e) > 1:
         return chr(int(e[1:], 16))
     if e[0] == "c" and len(e) > 1:
+        if not e[1].isascii():
+            raise ValueError("control escape of a multibyte character")  # bash takes one byte of it
         return "\x7f" if e[1] == "?" else chr(ord(e[1].upper()) & 31)
     if e[0] in "01234567":
         return chr(int(e, 8) & 255)
@@ -358,6 +360,8 @@ if STRINGS[0]:
         un = True
     total, looped, unread = total + t, looped or lp, unread or un
 print("loop" if looped else "unread" if unread else total)')
+  # A decoder that crashed printed nothing: a wait not read, never an allow.
+  case $WAITED in loop|unread) ;; ''|*[!0-9]*) WAITED=unread ;; esac
   if [ "$WAITED" = loop ]; then
     printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache. A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
     exit 2

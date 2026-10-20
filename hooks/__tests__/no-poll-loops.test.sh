@@ -376,6 +376,18 @@ for c in "bash -c \$'echo sleep 400'" "bash -c \$'sleep 100'" 'bash -c $"sleep 1
 done
 check "worker: a shell string the hook cannot read is refused, and says why" 1 \
   "$(run_wt "$(bg "bash -c 'sleep \"400'" false)" | grep -c 'cannot read')"
+# \c of a non-ASCII character: bash takes one byte of it, the decoder cannot say what; read as unread, not a crash that allows.
+check "worker: bash -c \$'sleep 400; echo \\cß' is refused as unread" 1 \
+  "$(run_wt "$(bg "bash -c \$'sleep 400; echo \\cß'" false)" | grep -c 'cannot read')"
+check "worker: ... and the decoder rejects it, no traceback in the refusal" 0 \
+  "$(run_wt "$(bg "bash -c \$'sleep 400; echo \\cß'" false)" | grep -c 'Traceback')"
+check "worker: bash -c \$'echo \\cß' names no wait and passes" rc=0 "$(rc_wt "bash -c \$'echo \\cß'")"
+# Any crash of the wait reader (the one `python3 -I`) is a wait not read: it printed nothing, which once allowed.
+mkdir -p "$TEST_REPO/crashpy"
+printf '#!/bin/sh\n[ "$1" = -I ] && exit 1\nexec %s "$@"\n' "$(command -v python3)" > "$TEST_REPO/crashpy/python3"
+chmod +x "$TEST_REPO/crashpy/python3"
+check "worker: a crashed wait reader refuses, not allows" 1 \
+  "$(PATH="$TEST_REPO/crashpy:$PATH" run_wt "$(bg 'sleep 400' false)" | grep -c 'cannot read')"
 
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.
