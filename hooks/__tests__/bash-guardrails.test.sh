@@ -153,7 +153,13 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "python3 -c \"from pathlib import Path; (Path('scripts') / 'x.sh').write_text('new')\"" \
   "node -e 'require(\"fs\").writeFileSync(\`scripts/x.sh\`,\"new\")'" \
   "node -e 'const d=\`scripts\`; require(\"fs\").writeFileSync(\`\${d}/x.sh\`,\"new\")'" \
-  "perl -e 'open(my \$f, \">\", q(scripts/x.sh)); print \$f \"new\"'"; do
+  "perl -e 'open(my \$f, \">\", q(scripts/x.sh)); print \$f \"new\"'" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); m='w'; p.open(mode=m).write('new')\"" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); m='w'; p.open(m).write('new')\"" \
+  "python3 -c \"from pathlib import Path; m='w'; Path('scripts/x.sh').open(m).write('new')\"" \
+  "python3 -c \"import io; m='w'; io.open('scripts/x.sh', m).write('new')\"" \
+  "node -e \"const fs=require('fs'); fs.writeSync(fs.openSync('scripts/x.sh','w'),'new')\"" \
+  "node -e \"const fs=require('fs'); const f='w'; fs.openSync('scripts/x.sh', f)\""; do
   sel "a Builder's tracked write blocks: $W" && check "a Builder's tracked write blocks: $W" 2 "$(bld "$W")"
 done
 for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-copy.txt','w').write(data)\"" \
@@ -162,6 +168,10 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   "perl -ne 'print if /old/' scripts/x.sh" \
   "python3 -c \"open('scripts/x.sh', 'r').read(); open('/tmp/z', 'wb')\"" \
   "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); Path('/tmp/z').write_text(p.read_text().replace('old','new'))\"" \
+  "python3 -c \"from pathlib import Path; p=Path('scripts/x.sh'); print(p.open().read(), p.open('r').read(), p.open(encoding='utf8').read())\"" \
+  "python3 -c \"from pathlib import Path; print(Path('scripts/x.sh').open(mode='r').read())\"" \
+  "python3 -c \"import io; p='scripts/x.sh'; print(io.open(p).read())\"" \
+  "node -e \"const fs=require('fs'); fs.readSync(fs.openSync('scripts/x.sh','r'), Buffer.alloc(9))\"" \
   "node -e 'require(\"fs\").writeFileSync(\`/tmp/y\`, require(\"fs\").readFileSync(\"scripts/x.sh\"))'"; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done

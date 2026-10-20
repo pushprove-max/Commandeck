@@ -38,13 +38,16 @@ def args(i):  # s[i] is "(": its top-level arguments, and the index after ")"
 def writes(mode):  # True, False, or None when the mode is not a plain string
     v = lit(mode)
     return None if v is None else bool(re.search(r"[wax+]", v))
+def omode(b, i):  # an open call's mode: mode=, else argument i unless it is a keyword, else read
+    k = next((x.split("=", 1)[1] for x in b if re.match(r"\s*mode\s*=", x)), None)
+    return k if k is not None else b[i] if len(b) > i and not re.match(r"\s*(\w+\s*=|$)", b[i]) else "'r'"
 dests = []  # each a literal path, or None for one that cannot be read
 TO = "copy|copy2|copyfile|copytree|move|rename|renameSync|replace|copyFile|copyFileSync|cp|cpSync|symlink|symlinkSync|link|linkSync"
 AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outputFile|outputFileSync|truncate|truncateSync"
       "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
-for m in re.finditer(r"(?<![\w$])(open|" + TO + "|" + AT + r")\s*\(", s):
+for m in re.finditer(r"(?<![\w$])(open|openSync|" + TO + "|" + AT + r")\s*\(", s):
     name, (a, _) = m.group(1), args(m.end() - 1)
-    if name == "open":
+    if name in ("open", "openSync"):
         if s[:m.start()].endswith(")."): continue  # Path(...).open: below
         if re.match(r"\s*(my\s+)?[$A-Z]", a[0]) and len(a) >= 2:  # perl: open(F, '>x') or open(my $f, '>', 'x')
             v = lit(a[1])
@@ -53,8 +56,7 @@ for m in re.finditer(r"(?<![\w$])(open|" + TO + "|" + AT + r")\s*\(", s):
                 elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
             elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
             continue
-        mode = next((x.split("=", 1)[1] for x in a[1:] if re.match(r"\s*mode\s*=", x)), a[1] if len(a) > 1 and "=" not in a[1] else None)
-        if mode is not None and writes(mode) is not False: dests.append(lit(a[0]))
+        if writes(omode(a, 1)) is not False: dests.append(lit(a[0]))
     elif re.fullmatch(TO, name):
         dests.append(lit(a[1]) if len(a) > 1 else None)
         if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
@@ -67,15 +69,15 @@ for m in re.finditer(r"\bPath\s*\(", s):
     seen.add(end + t.start(1))
     b = args(end + t.end() - 1)[0]
     if t.group(1) in ("write_text", "write_bytes", "touch", "unlink", "rename", "replace", "symlink_to", "hardlink_to", "chmod", "rmdir") \
-       or (t.group(1) == "open" and writes(b[0] if b[0].strip() else "'r'") is not False):
+       or (t.group(1) == "open" and writes(omode(b, 0)) is not False):
         dests.append(lit(a[0]))
         if t.group(1) in ("rename", "replace"): dests.append(lit(b[0]))
 # r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
 for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to|open)\s*\(", s):
     if m.start(1) in seen: continue
-    b = args(m.end() - 1)[0]
-    mode = next((x.split("=", 1)[1] for x in b if re.match(r"\s*mode\s*=", x)), b[0])
-    if m.group(1) != "open" or re.fullmatch(r"[rbtU]*[wax+][rwabxtU+]*", lit(mode) or ""): dests.append(None)
+    if m.group(1) == "open" and re.search(r"(?<![\w$])(io|os|codecs|gzip|bz2|lzma|fs|promises|webbrowser)\s*$", s[:m.start()]): continue  # the open( loop read it
+    v = lit(omode(args(m.end() - 1)[0], 0))  # r3: a mode the text does not spell out (m='w'; p.open(m)) may write
+    if m.group(1) != "open" or v is None or re.fullmatch(r"[rbtU]*[wax+][rwabxtU+]*", v): dests.append(None)
 try: words = shlex.split(s)
 except ValueError: words = s.split()
 for i, w in enumerate(words):  # perl -i edits in place the files after the script
