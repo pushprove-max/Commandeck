@@ -144,7 +144,7 @@ find "$OPEN" -type f -mmin +1440 -delete 2>/dev/null
 # The owner typed. "(Recommended)" is how a brief marks the suggested option. A
 # whole-label match comes first: a label may itself hold ", ".
 # The decoy is what a stray Enter picks, so the owner chose nothing: the
-# row is voided whoever picked it, and it closes no decision.
+# row is voided whoever picked it, and it closes no decision. So is an empty answer.
 . "${BASH_SOURCE[0]%/*}/lib/ask-decoy.sh"
 ROWS=$(printf '%s' "$INPUT" | jq -c --arg stamp "$STAMP" --arg rnd "$RND" --arg utc "$UTC" --arg et "$ET" --argjson lat "$LAT" --arg decoy "$ASK_DECOY" '
   . as $in | ($in.tool_response // {}) as $r
@@ -162,7 +162,7 @@ ROWS=$(printf '%s' "$INPUT" | jq -c --arg stamp "$STAMP" --arg rnd "$RND" --arg 
            elif ($labels | index($a)) and ($a | test("\\(Recommended\\)")) then "recommended"
            elif ($labels | index($a)) or (($parts | all(. as $p | $labels | index($p))) and $a != "") then "option"
            else "typed" end)}
-  | if .pick == "auto" then .void = true else . end' 2>/dev/null)
+  | if .pick == "auto" or .answer == "" then .void = true else . end' 2>/dev/null)
 [ -n "$ROWS" ] || exit 0
 # An id is only announced once it is on disk: a note citing an id the log
 # never received would then fail the gate with no way back to the answer.
@@ -184,6 +184,9 @@ answer_decisions --argjson rows "$(printf '%s\n' "$ROWS" | jq -s .)" --arg day "
 MSG="ruling logged: $(printf '%s\n' "$ROWS" | jq -r '"\(.id) (\(.pick))"' | paste -sd, - | sed 's/,/, /g')"
 [ "$LAT" != null ] && [ "$LAT" -lt 2000 ] && HOOK_FIRE_ADVISE=1 && MSG="$MSG
 This answer came back in under 2 s and may be an Orca nudge, not the owner. Confirm it with the owner in plain chat before acting on it."
-printf '%s\n' "$ROWS" | jq -e 'select(.void == true)' >/dev/null 2>&1 && HOOK_FIRE_ADVISE=1 && MSG="$MSG
+printf '%s\n' "$ROWS" | jq -e 'select(.pick == "auto")' >/dev/null 2>&1 && HOOK_FIRE_ADVISE=1 && MSG="$MSG
 The owner did not answer; ask again. The decoy was picked (a stray Enter, or the owner choosing it), so that answer is void."
+# Issue 232: an empty answer (a multi-question picker that came back blank) is void too, and no ruling.
+printf '%s\n' "$ROWS" | jq -e 'select(.void == true)' >/dev/null 2>&1 && HOOK_FIRE_ADVISE=1 && MSG="$MSG
+The answer came back empty; ask it once more as a single question."
 jq -cn --arg m "$MSG" '{hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$m}}'

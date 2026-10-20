@@ -62,6 +62,7 @@
 # and takes only the pass the configured profile uses.
 # Ceiling: a same-user process could still forge the reviewer's own session
 # files or that record; the upgrade path is a merge-side re-run.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
@@ -97,7 +98,7 @@ pass_waits() {
 # asks for JSON against a schema only that plugin's own review command
 # attaches; FORMAT replaces that block's content, so the prompt carries one
 # output instruction, and every other block goes out as the plugin wrote it.
-FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. P0 is critical, P1 high, P2 medium, P3 low. P0-P2 block the merge; P3 is a nit. Your last line must be exactly VERDICT: GO when no finding is P0-P2, otherwise exactly VERDICT: NO-GO.'
+FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. P0-P2 block the merge; P3 is a nit. Your last line must be exactly VERDICT: GO when no finding is P0-P2, otherwise exactly VERDICT: NO-GO.'
 # A pass is proved by this prompt, whole. A build whose earlier passes were sent another
 # (the plugin was updated mid-build) is refused, and the refusal ends with the one way on.
 UPDATED='If the plugin was updated during this build, its earlier passes were sent the earlier prompt and count no longer: move the build to a new unit (a new worktree made from this branch) and review that from pass 1'
@@ -523,15 +524,15 @@ if [ "${1:-}" = --verify ]; then
   SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
   FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
   # A finding main ruled out is named under "Cleared findings" in main's rulings file by its own first two parts,
-  # "<title> -- <file>:<line>": it then blocks nothing and is not open at merge, and the proof prints it as cleared.
+  # "<title> -- <file>:<line>" (a finding's class tag is not part of it): it then blocks nothing and is not open at merge, and the proof prints it as cleared.
   # Read from main's checkout only, as the limits are: the Builder can write the worktree's copy.
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
-  export PP_CLEARED; PP_CLEARED=$(awk 'on && /^#/ { on = 0 } on && NF { sub(/^[[:space:]]*[-*][[:space:]]*/, ""); sub(/^\[P[0-3]\][[:space:]]*/, ""); print }
+  export PP_CLEARED; PP_CLEARED=$(awk 'on && /^#/ { on = 0 } on && NF { sub(/^[[:space:]]*[-*][[:space:]]*/, ""); sub(/^\[P[0-3]\][[:space:]]*/, ""); sub(/^\(class: [^)]*\)[[:space:]]*/, ""); print }
     /^#+ Cleared findings/ { on = 1 }' "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null || true)
   CLEARED=$(mktemp) || die "cannot make a temp file"; trap 'rm -f "$CLEARED"' EXIT
   # uncleared -- the finding lines on stdin less those main's ruling clears, which go to $CLEARED.
   uncleared() { awk -v out="$CLEARED" 'BEGIN { n = split(ENVIRON["PP_CLEARED"], c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
-    { s = $0; sub(/^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\][[:space:]]*/, "", s); split(s, f, " -- ")
+    { s = $0; sub(/^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\][[:space:]]*/, "", s); sub(/^\(class: [^)]*\)[[:space:]]*/, "", s); split(s, f, " -- ")
       if ((f[1] " -- " f[2]) in want) { sub(/^[[:space:]]*/, ""); print "Cleared by main'\''s ruling: " $0 >> out } else print }'; }
   cleared() { [ ! -s "$CLEARED" ] || awk '!seen[$0]++' "$CLEARED"; }
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
@@ -612,6 +613,14 @@ if [ "${1:-}" = --verify ]; then
       [ -n "$SOLO" ] || die "no pass before ${LAST##*/} is the first pass of $UNIT: the closing pass's GO merges only on top of it. Run: builder-$BY-pass.sh $UNIT <N> adversarial, then the closing pass again"
       while read -r SOLO_TID SOLO_READ; do one_reviewer_allowed "$WT" "$SOLO_READ" "$NAME $SOLO_TID, before ${LAST##*/},"; done <<<"$SOLO"
     }
+  # With the full suite on (issue 243), a closing pass merges only on a green run of the commit it read, as its own
+  # recorded prompt states it on the line after its head line: the round file is the Builder's to edit.
+  if [ "$WHAT" = "closing pass" ] && [ "$(jq -r '.fullSuiteBeforeFinal // false' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)" = true ]; then
+    for TID in $TIDS; do
+      awk 'p { print; exit } / Reviewer [0-9]+ of [0-9]+, round [0-9]+\.$/ { p = 1 }' "$RHOME/builder-pass-prompts/$TID" | grep -qE "^Suite: $WAS_READ pass " \
+        || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and main's .claude/commandeck.json has fullSuiteBeforeFinal on. Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
+    done
+  fi
   if [ "$RULE" = "P2 tail" ] && [ "$WHAT" = "closing pass" ]; then
     # The tail with nothing after it: the closing pass under merge is the last word on the
     # whole branch, checked above like a closing GO, and every finding it left is printed as open.
@@ -834,6 +843,15 @@ stage_and_check() {
 Add one per guard test, then rerun the pass."
   return 0
 }
+# The full suite before the closing pass (issue 243), when main's config asks for it. A pass with nothing to run
+# refuses before anything is committed.
+SUITE_ON=$(jq -r '.fullSuiteBeforeFinal // false' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || echo false)
+if [ "$KIND" = final ] && [ "$SUITE_ON" = true ]; then
+  TEST_CMD=$(jq -r '.testCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)
+  [ -n "$TEST_CMD" ] || die "fullSuiteBeforeFinal is on in main's .claude/commandeck.json and it has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off"
+  # The merge check's own command, run whole: --changed (and the base it may take) is taken off.
+  TEST_CMD=$(sed -E 's/[[:space:]]--changed([[:space:]]+[^-&|;[:space:]][^&|;[:space:]]*)?//g' <<<"$TEST_CMD")
+fi
 if [ "$CHECK" = 1 ]; then
   cp "$(git -C "$WT" rev-parse --absolute-git-dir)/index" "$LOCK/index" || die "cannot copy the index of $WT"
   GIT_INDEX_FILE=$LOCK/index stage_and_check
@@ -872,6 +890,22 @@ stage_and_check
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
 git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N${NOTES:+$'\n\n'$NOTES}"
 SHA=$(git -C "$WT" rev-parse HEAD)
+# The suite runs on the tip just committed, before any reviewer starts. Its line goes first in the review input,
+# where --verify reads it from the prompt the pass recorded; a red run makes the pass NO-GO whatever the reviewer says.
+SUITE="" SUITE_RED=""
+if [ -n "${TEST_CMD:-}" ]; then
+  SUITE_LOG=$PP_SCRATCH/$UNIT-suite-${SHA:0:8}.log
+  mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the suite's log"
+  echo "Full suite before the closing pass: $TEST_CMD (log $SUITE_LOG)"
+  T0=$SECONDS RC=0
+  # An hour: the whole suite runs about 12 minutes on an idle machine.
+  (cd "$WT" && timeout 3600 bash -c "$TEST_CMD") > "$SUITE_LOG" 2>&1 || RC=$?
+  case $RC in 0) R=pass ;; 124) R=timeout ;; *) R=fail ;; esac
+  TOTALS=$(grep -E '[0-9]+ (passed|failed)' "$SUITE_LOG" | tail -1 | tr -s ' \t' ' ' | sed 's/^ //; s/ $//' || true)
+  SUITE="Suite: $SHA $R ${TOTALS:-no totals printed} $((SECONDS - T0))s $SUITE_LOG"
+  [ "$R" = pass ] || SUITE_RED=$(grep -m5 'FAIL' "$SUITE_LOG" || tail -n 1 "$SUITE_LOG")
+  echo "$SUITE"
+fi
 # The first pass's reviewers, by the size rule on the commit just made; the line goes into the round file.
 RULE_LINE=""
 if [ "$KIND" = adversarial ]; then
@@ -910,6 +944,10 @@ if [ "${#DIFF}" -gt "$DIFF_HARD" ]; then
   DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color --stat=200 "$RANGE"; git -C "$WT" diff --no-ext-diff --no-textconv --name-only "$RANGE") || die "cannot diff $RANGE in $WT"
   NOTE+="${NOTE:+ }The diff is over the reviewer's input limit, so only its file list follows. Read it file by file, from the review worktree: git diff $RANGE -- <path>."
 fi
+# Issue 250: a change to a hook is checked by running the hook, not only by reading it.
+if git -C "$WT" diff --name-only "$RANGE" -- 'hooks/*.sh' | grep -q .; then
+  NOTE+="${NOTE:+ }This change touches hooks/. Run at least one probe of a changed hook from the review worktree and put its output in the report: bash $HERE/hook-probe.sh <hook> '<command>' [--tool <tool> '<tool_input json>'] prints allow, refuse (<exit>) or ask, and the hook's message. If your sandbox refuses the probe's scratch folder, list the probes you would run instead."
+fi
 # The limits main stated, from the brief and from its rulings: without them each
 # pass raised the same accepted limit again with a new wrapping case. Read from
 # main's checkout only (the launcher's copy of the brief, main's rulings file):
@@ -920,7 +958,9 @@ done)
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
 DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
-REST=${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
+SUITE_TEXT=""
+[ -z "$SUITE" ] || SUITE_TEXT="$SUITE"$'\n'"The project's full test command ran on this tip before this pass; the line above is its result. GO only when that run is green for this exact tip."${SUITE_RED:+$'\n'"Failing: $SUITE_RED"}
+REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
@@ -1091,8 +1131,10 @@ for i in "${!FOCI[@]}"; do
   TIDS+=("$TID") BODY+=${BODY:+$'\n\n'}$SAID
 done
 HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
+# A red suite is the pass's NO-GO with no reviewer's word needed.
+[ -z "$SUITE_RED" ] || { VERDICT="VERDICT: NO-GO" BODY+=${BODY:+$'\n\n'}"The full suite is red on $SHA: $SUITE_RED"; }
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
-  printf 'Pass: %s\n%s\n%s\n\n%s\n' "$KIND" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+  printf 'Pass: %s\n%s%s\n%s\n\n%s\n' "$KIND" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
 

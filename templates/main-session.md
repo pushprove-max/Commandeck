@@ -2,6 +2,12 @@
 
 ## Working rules (standing instruction 2026-08-07; orchestrator and advisor ruling 2026-09-12)
 
+- **Do not -> instead** (what the guards block):
+  - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
+  - a long job in main's foreground -> its own pane, or `run_in_background` and `wait-test-run.sh <pid> <file>`
+  - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`
+  - an edit to project code -> a batch brief, then `builder-launch.sh <unit> <brief>`
+  - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every
   implementation and review runs as a visible CLI in its own Orca worktree.
   Main writes only intents, briefs, findings and config; reads worker_done
@@ -19,14 +25,12 @@
   record each ask with `decision.sh add` in the same turn.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
   included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
-- **A `heads-up:` item is another model's unverified claim**: verify it before
-  acting, tell the owner in one plain sentence, close the item task.
-- **A ruling that something stays as it is goes under `## Stated limits`** in
-  `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
-  when written: the pass reads limits there only, and raises one written elsewhere again.
 - **A build whose last pass ended NO-GO merges only on the owner's word**, even when the merge check passes it under
-  the P2-tail rule.
-- **Also standing (Details)**: checklist, announcements, re-asks, helpers, effort, mid-build work, tooling.
+  the P2-tail rule. Before offering a merge, run `builder-codex-pass.sh --verify <worktree> <unit> <tip>`, the
+  merge's own gate; when it refuses, offer the pass it names instead.
+- **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
+  needs the detail.
+- **Also standing (Details)**: heads-up items, stated limits, checklist, announcements, re-asks, helpers, effort, tooling.
 
 ## Main never compacts: write the checkpoint, the hook restarts main
 
@@ -34,12 +38,17 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 line", or a batch ends: finish the
 step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
 `templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
-After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
-neither again, except a part its RESUMED line names as cut (read that pointer
-once). A fresh start's first call is `scripts/board.sh`.
 
 ## Details (not injected)
 
+- **A `heads-up:` item is another model's unverified claim**: verify it before
+  acting, tell the owner in one plain sentence, close the item task.
+- **A ruling that something stays as it is goes under `## Stated limits`** in
+  `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
+  when written: the pass reads limits there only, and raises one written elsewhere again.
+- After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
+  neither again, except a part its RESUMED line names as cut (read that pointer
+  once). A fresh start's first call is `scripts/board.sh`.
 - Worker panes run without auto memory. Copy into the brief every memory fact the unit depends on: the ruling with
   its id, configured values, known traps. A brief never cites a memory by file name alone. A worker and a Builder
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
@@ -75,7 +84,8 @@ once). A fresh start's first call is `scripts/board.sh`.
   planner's spec carries, word for word: "If the mattpocock-skills plugin is
   installed and one of its skills fits this unit (for example TDD for new
   logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what
-  the plan names." When the
+  the plan names." It also carries the batch's `Launch:` and `Order:` lines: a
+  plan seat that would open a new unit is refused without them. When the
   owner already gave the build word, launch once the judge round is done,
   unless the judge found a real gap, which goes to the owner. Without it,
   every answer ends at the plan file: STOP until the owner's own go after
@@ -89,6 +99,12 @@ once). A fresh start's first call is `scripts/board.sh`.
 - Work added mid-build goes in that rulings file first; then
   `builder-add-work.sh <unit>` stops the Builder, and a fresh session of its
   pane takes the work from a hand-off that stands alone.
+- Two NO-GOs in a row on one finding class (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next line names
+  it): no third fix round. Ask the owner one class-level question, or merge and file the rest of the class as one
+  issue. A fix-round brief lists every variant of the class it fixes.
+- Pickers: before a picker, search the rulings log (`~/.claude/rulings/<project>.jsonl`) for its topic and answer
+  from a ruling that covers it. One question per picker, the decoy first (`hooks/lib/ask-decoy.sh`); an answer that
+  comes back empty is void, and the hook says to ask it again on its own.
 - Tooling (ruling 2026-10-06): a new tool needs the owner's approval before
   work starts; broken tooling is fixed now. Suggest only with a count. Details below.
 
@@ -101,7 +117,7 @@ once). A fresh start's first call is `scripts/board.sh`.
 - Re-asks: never ask the owner a question they already have; `decision.sh` exits 3 (and the picker is blocked) on a question still
   open or answered in the last 24 hours and names the earlier decision and
   answer: use it. Two re-asks are allowed: a picker retry after the decoy voided
-  his pick (it passes by itself), and new facts, asked in plain chat and
+  their pick (it passes by itself), and new facts, asked in plain chat and
   recorded with
   `bash scripts/decision.sh add <id> <question> <default> <source> --reask "<what is new>"`.
 - `heads-up:` items: main-watch relays every Claude session's "you should know"

@@ -11,6 +11,7 @@
 # a live unit (tokens, cache, review passes, the restart resuming) are printed
 # as "not measured" with the command that measures them after a real toy unit.
 # Exit 1 when a measured row breaks its limit. --keep leaves the temp folder.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"

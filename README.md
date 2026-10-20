@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.20.0-111111?style=flat-square" alt="Version 0.20.0">
+  <img src="https://img.shields.io/badge/version-0.21.0-111111?style=flat-square" alt="Version 0.21.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -224,6 +224,7 @@ setup asks, the picker guard's stray-keypress option is off.
 | Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
 | Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network; unknown DNS names get 403, while machine names and IP addresses are accepted |
 | Merge check | the command that must pass before a merge, or none |
+| Full suite | on (recommended when the whole suite takes under about 10 minutes) or off: one full run of the test command per build, beside the closing review pass; a red run is a NO-GO (`--full-suite on\|off`) |
 | Strict hooks | off or on (see [Hooks](#hooks)) |
 | Ponytail | on (the skill is installed) or off |
 | Prompt cache | 5m for main and worker panes (`promptCacheTtl` and `subagentPromptCacheTtl` in `.claude/settings.json`, `CLAUDE_CODE_PROMPT_CACHE_TTL` in each worktree's `settings.local.json`; a value you set stays), 1h for the relay pane (its worktree's `settings.local.json`, its other settings kept), each with Leave as is (writes nothing) |
@@ -571,10 +572,10 @@ in `.claude/commandeck.json`:
 | `suite-rerun-guard.sh` | Blocks the same completed test/type-check command on an unchanged tree within 30 minutes; recognizes npm test/typecheck, tsc and Vitest. |
 | `edit-content-tripwires.sh` | Blocks new CRLF, deferred-work markers and specified TypeScript/lint suppressions, with the exemptions and reason annotations in its rule table. |
 | `file-size-cop.sh` | Blocks a whole-file Write crossing 500 lines for TS or 400 for TSX; an Edit crossing the cap warns and asks for a follow-up. |
-| `bash-guardrails.sh` | Blocks Node test runs without the 4 GB heap cap and refuses unsupported heredoc end words so commands remain inspectable. |
+| `bash-guardrails.sh` | Blocks Node test runs without the 4 GB heap cap and refuses unsupported heredoc end words so commands remain inspectable. In a Builder it also refuses, in every tier, an inline Python, Perl or Node script that writes a tracked file: that edit goes through Edit. |
 | `pane-budget-gate.sh` | Holds workers for missing configured code-server startup or a handoff after the pane budget is exhausted. |
 | `read-tracker.sh` | Nudges shell-only source searching when configured code navigation is unused. |
-| `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each; also active for planning seats without strict mode. |
+| `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each; also active for planning seats without strict mode, and for Builders at the second such turn. |
 | `script-over-reads.sh` | Advises using a script after five same-kind files from one directory. |
 | `git-ignore-warn.sh` | Warns when a written file is ignored and would not ship, except deliberate scratch paths. |
 | `new-test-file-guard.sh` | Advises extending an existing test when another file already tests the imported subject. |
@@ -600,7 +601,8 @@ Worker-specific hooks:
 
 | Hook | What it does and why |
 |---|---|
-| `builder-search-guard.sh` | Blocks long consecutive searches and whole-repository searches in the Builder's main thread; sends fact gathering to Explore helpers. |
+| `builder-search-guard.sh` | Blocks long consecutive searches and whole-repository searches in the Builder's main thread; sends fact gathering to Explore helpers. A search for one bare identifier gets a symbol-lookup note. |
+| `read-range-guard.sh` | Blocks a Builder's Read of a whole text file over 400 lines; names a `grep -n` and a range to read instead. |
 | `builder-event-log.sh` | Records tool, helper and review activity in the worktree's `.claude/builder-events.jsonl`; does not block. |
 | `claude-worker-notify.sh` | Notifies main when a Claude worker stops; does not block. |
 | `codex-notify.sh` | Notifies main when a Codex turn ends; does not block. |

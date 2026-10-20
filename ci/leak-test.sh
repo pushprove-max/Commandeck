@@ -7,10 +7,13 @@
 # any other folder is searched whole. A .png's pixels are not searched (an
 # owner reviews each new or changed image); its text chunks (tEXt, zTXt, iTXt)
 # are, and a match is named as <image>:<line of its chunk text>.
+# leak-test.sh --text <file> -- the same search over one file (a commit message, issue 221), no file exempt.
 # Exit 0 clean, 1 on a match, 2 when the search itself could not run.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-cd "${1:-$HERE/..}" || exit 2
+ONE=
+if [ "${1:-}" = --text ]; then ONE=${2:-}; [ -f "$ONE" ] || { echo "leak-test: --text needs a file" >&2; exit 2; }
+else cd "${1:-$HERE/..}" || exit 2; fi
 PAT=$(mktemp) || exit 2; trap 'rm -f "$PAT"' EXIT
 grep -v -e '^# ' -e '^#$' -e '^$' "$HERE/leak-words.txt" > "$PAT"
 [ -s "$PAT" ] || { echo "leak-test: no pattern in ci/leak-words.txt" >&2; exit 2; }
@@ -37,8 +40,9 @@ while i + 8 <= len(d):
     elif t != b"tEXt":
         continue
     sys.stdout.buffer.write(k + b" " + v + b"\n")' "$1"; }
-list > "$LIST" || { echo "leak-test: could not list the files" >&2; exit 2; }
 FILES=()
+if [ -n "$ONE" ]; then FILES=("$ONE"); : > "$LIST"
+else list > "$LIST" || { echo "leak-test: could not list the files" >&2; exit 2; }; fi
 while IFS= read -r -d '' f; do
   case $f in CHANGELOG.md|ci/leak-words.txt) continue ;; esac
   # Pixels are approved by hand and their compressed bytes spell a pattern by
@@ -51,7 +55,7 @@ done < "$LIST"
 [ ${#FILES[@]} -gt 0 ] || exit 0
 # The owner's name is allowed in these four, as real files only: a link is searched under what it holds.
 NAMED=()
-for f in LICENSE NOTICE .claude-plugin/plugin.json .claude-plugin/marketplace.json; do [ -L "$f" ] || NAMED+=("$f"); done
+[ -n "$ONE" ] || for f in LICENSE NOTICE .claude-plugin/plugin.json .claude-plugin/marketplace.json; do [ -L "$f" ] || NAMED+=("$f"); done
 HITS=$(rg --json --text -f "$PAT" -- "${FILES[@]}"); rc=$?   # --text: a NUL byte ends no search
 [ "$rc" -le 1 ] || { echo "leak-test: rg failed" >&2; exit 2; }
 # Each allowed text is taken out of a matching line, in its exact case, and

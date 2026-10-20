@@ -8,6 +8,7 @@
 # cannot read main's checkout. A pane that never settles keeps the work in its old session.
 # Exit 0 handed over (the /clear follows in the background), 1 not sent, 3 no live Builder pane.
 # Self-test: bash scripts/__tests__/builder-add-work.test.sh
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"

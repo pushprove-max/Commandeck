@@ -15,12 +15,15 @@
 #
 # Usage: scripts/read-verdict.sh <terminal-handle> [lines-before-verdict]
 #        [worktree-path] [agent] [unit] [model] [verdict-ordinal] [launched-epoch]
+#        scripts/read-verdict.sh --repeat-class <round file>   (see below)
+#        scripts/read-verdict.sh --seat <unit> <role>   (the report seat.sh collect kept)
 # The extra arguments bind a round to the reviewer session review-round.sh
 # launched. They are optional for interactive use and old handles files.
 #
 # Prefer eligible structured session logs; otherwise read the accumulated
 # buffer, with an explicitly reported screen fallback. An unfinished result
 # remains incomplete.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 
 HANDLE="${1:-}"
@@ -345,6 +348,17 @@ pane_sessions() { # handle
   done | sort -u
 }
 
+# --repeat-class <round file>: two NO-GOs in a row on one finding class are a loop, not progress (issue 225).
+# Prints REPEAT CLASS: <class> (r<N-1>, r<N>) when this round and the one before it both end NO-GO with a P0-P2
+# finding of that (class: <tag>); nothing otherwise.
+if [ "${1:-}" = --repeat-class ]; then
+  n=$(sed -n 's/.*-r\([0-9]*\)-reports\.md$/\1/p' <<<"${2:-}"); [ -n "$n" ] || exit 0
+  classes() { [ "$(grep '^VERDICT:' "$1" 2>/dev/null | tail -1)" = "VERDICT: NO-GO" ] || return 0
+    grep -oE '\[P[0-2]\] \(class: [^)]+\)' "$1" | sed 's/.*(class: //; s/)$//' | sort -u; }
+  c=$(comm -12 <(classes "${2%-r"$n"-reports.md}-r$((n - 1))-reports.md") <(classes "$2") | head -1)
+  [ -z "$c" ] || echo "REPEAT CLASS: $c (r$((n - 1)), r$n)"
+  exit 0
+fi
 if [ "${1:-}" = --state ]; then
   shift
   worker_state "$@"
@@ -496,6 +510,13 @@ LAUNCHED=${8:-0}
 [[ "$LAUNCHED" =~ ^[0-9]+$ ]] || LAUNCHED=0
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 SCRATCH=$PP_SCRATCH
+# --seat <unit> <role>: the verdict seat.sh collect closed that seat on, then the report it kept (issue 236).
+if [ "$HANDLE" = --seat ]; then
+  REC=$SCRATCH/seat-${COMMANDECK_SEAT_REPO:+$COMMANDECK_SEAT_REPO@}${2:?unit}-${3:?role}.txt
+  R=$(sed -n 's/^report=//p' "$REC" 2>/dev/null | tail -1)
+  [ -s "$R" ] || { echo "read-verdict: no report on record for $3 $2 ($REC); seat.sh collect writes it" >&2; exit 3; }
+  sed -n 's/^verdict=//p' "$REC" | tail -1; cat "$R"; exit 0
+fi
 # One grep over every record, never one per record: the records are never deleted.
 SEAT_REC=$(grep -lx "handle=$HANDLE" "$SCRATCH"/seat-*.txt 2>/dev/null | head -1 || true)
 SEAT_SESSION=""; SEAT_SPEC=""

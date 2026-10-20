@@ -25,6 +25,7 @@
 # answers; the plugin ships no name): workerSkillsOff and workerPluginsOff are cut too, and a --keep word named in
 # keeps brings its skills and plugins back, the ones cut by default included. The leaves a run cuts for the lists are
 # stored in env, so a list that shrinks loses them; a name the owner already set in the file is theirs, never cut or stored.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 USAGE="usage: worktree-setup.sh <worktree-path> [--builder] [--keep <billing|all|a keep word>[,...]] [--print-settings]"
 WT=${1:?$USAGE}; shift

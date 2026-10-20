@@ -16,6 +16,7 @@
 # Main's rulings file adds the issues its numbered lines name.
 # shortcut: an issue mentioned on an item's own first line counts as a work
 # item; give the briefs a marked issue list if that ever miscounts.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 list() { awk '!s[$0]++' | jq -Rcn '[inputs | select(length > 1) | if startswith("#") then (.[1:] | tonumber) else .[1:] end]'; }
 [ "${1:-}" != --list ] || { list; exit; }

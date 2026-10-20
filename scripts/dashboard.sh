@@ -25,6 +25,7 @@
 # (the page's title), COMMANDECK_DASHBOARD_BIND (127.0.0.1; 0.0.0.0 serves the
 # LAN) and COMMANDECK_DASHBOARD_PORT (unset: the first free port from 8791).
 # Test seams: COMMANDECK_DASHBOARD_DIR, plus paths.sh's COMMANDECK_* overrides.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # Sampling never writes a worktree: git status would otherwise refresh its index.
 # Porcelain git diff rewrites it even so; use diff-index for diffs.
@@ -738,15 +739,19 @@ host() {
 # The 7-day limit panel. The usage read is Claude's own quota reading, the
 # statusline's source, never a model call; dashboard_limit.py owns the math.
 limit() {
-  local st
-  cached claude-usage python3 "$HERE/dashboard_limit.py" fetch > /dev/null
+  local st ccd
+  # The login is the one main last started under (agent-startup-context.sh records its config folder); a
+  # reading cached for another account is dropped first (issue 226).
+  ccd=CLAUDE_CONFIG_DIR=$(cat "$PP_SCRATCH/claude-config-dir" 2>/dev/null)
+  env "$ccd" python3 "$HERE/dashboard_limit.py" account "$CACHE" > /dev/null
+  cached claude-usage env "$ccd" python3 "$HERE/dashboard_limit.py" fetch > /dev/null
   st=$(jq -r '.[].status' "$RUN/src/claude-usage.json")
   if [ -d "$HOME/.claude/projects" ]; then ok claude-logs; else nm claude-logs "no Claude Code transcripts"; fi
   # Codex's own 7-day reading comes from its session files (the folder builder-codex-pass.sh uses).
   local cx=${CODEX_HOME:-$HOME/.codex}/sessions
   if [ -d "$cx" ]; then ok codex-usage; else nm codex-usage "no Codex sessions at $cx"; fi
   # The day's cost is each project's own: its sessions are the ones run in its main checkout or its worktrees.
-  python3 "$HERE/dashboard_limit.py" build "$st" "$CACHE/claude-usage" "$NOW" "$CACHE" "$HOME/.claude/projects" "$cx" \
+  env "$ccd" python3 "$HERE/dashboard_limit.py" build "$st" "$CACHE/claude-usage" "$NOW" "$CACHE" "$HOME/.claude/projects" "$cx" \
     "$(jq -c '.projects | map_values([.path, .workspaces])' "$RUN/parts/projects.json")"
 }
 
@@ -754,7 +759,7 @@ limit() {
 # unread message's age. `orchestration inbox` only lists; `check` is the verb
 # that marks messages read, so a collect never acks its mail.
 chief_of_staff() {
-  local ts h out
+  local ts h out pk
   if ! ts=$(timeout 8 orca-ide terminal list --json 2>/dev/null) || ! jq -e 'has("result")' >/dev/null 2>&1 <<<"$ts"; then
     nm chief-of-staff "orca-ide terminal list failed"; echo null; return 0
   fi
@@ -765,7 +770,9 @@ chief_of_staff() {
       | jq -ce --argjson now "$NOW" '.result.messages | arrays | (length >= 1000) as $cap | map(select(.read == 0))
         | {unread: length, oldestUnreadAgeSec: (if length == 0 then null else $now - (map(.created_at | fromdateiso8601) | min) end),
            incomplete: $cap}' 2>/dev/null); then
-    ok chief-of-staff; echo "$out"
+    # The relay's open picker, as main-watch.sh records it (issue 232); none is null.
+    pk=$(jq -ce 'objects' "$PP_SCRATCH/main-watch/relay-picker.json" 2>/dev/null) || pk=null
+    ok chief-of-staff; jq -c --argjson pk "$pk" '. + {picker: $pk}' <<<"$out"
   else nm chief-of-staff "orca-ide orchestration inbox failed"; echo null; fi
 }
 

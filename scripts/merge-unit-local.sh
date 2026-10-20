@@ -27,6 +27,11 @@ EOF
 }
 # Before the lock: a usage error must not wait behind a running merge.
 case "${1:-}" in --help|-h) usage; exit 0 ;; "") usage >&2; exit 2 ;; esac
+# In main's own foreground the merge restarts itself detached and returns at once (issue 230).
+if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -qx -- --dry-run \
+   && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" && pp_main_foreground; then
+  pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@"; exit
+fi
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
   exec env MERGE_UNIT_LOCAL_LOCK=1 flock \
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
@@ -169,6 +174,25 @@ file_open_findings() { # <commit> [--dry-run]
   FILE_AGAIN="printf '%s\\n' $(printf '%q ' "$(grep -E '^(Builder proof|Open at merge): ' <<<"$BUILDER_PROOF")") | $(printf '%q ' "${cmd[@]}")"
   return 0
 }
+# The unit's issues, closed at its merge (issue 239): each one the brief lists that the commit message names (#N),
+# and each one under the brief's "Close as shipped" heading. One the message does not name stays open and is named.
+# A close GitHub refuses is printed last as NOT CLOSED with its command, and the script ends with code 3.
+NOT_CLOSED=""
+close_issues() { # [--dry-run]
+  local listed shipped named n ver c left=""
+  listed=$(bash "$HERE/brief-issues.sh" "$BRIEF" 2>/dev/null | jq -r '.[] | numbers' 2>/dev/null || true)
+  shipped=$(awk '/^#+[[:space:]].*[Cc]lose as shipped/ { on = 1; next } /^#/ { on = 0 } on' "$BRIEF" | grep -oE '#[0-9]+' | tr -d '#' || true)
+  named=$(grep -oE '#[0-9]+' <<<"$TITLE" | tr -d '#' || true)
+  ver=$(jq -r '.version // empty' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null || jq -r '.version // empty' "$ROOT/package.json" 2>/dev/null || true)
+  c="Fixed in $(git rev-parse --short=8 HEAD)${ver:+ ($ver)}; ships with the next push."
+  for n in $(printf '%s\n' $listed $shipped | awk 'NF && !s[$0]++'); do
+    if ! printf '%s\n' $named $shipped | grep -qx -- "$n"; then left+=" #$n"
+    elif [ "${1:-}" = --dry-run ]; then echo "step 4 issues: would close #$n"
+    elif (cd "$ROOT" && gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
+    else NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
+  done
+  [ -z "$left" ] || echo "step 4 issues: left open:$left (the brief lists them; the commit message does not name them)"
+}
 # Every way out once the commit stands ends here, a failed step and a command
 # that stops the script included: the merge is done and stays done, so the
 # last lines say so, and what GitHub refused is printed under the command that
@@ -181,6 +205,10 @@ merged_end() {
     echo "MERGED, but $(grep -c . <<<"$NOT_FILED") finding(s) left open have no issue. File them from the main checkout with: $FILE_AGAIN" >&2
     echo "$NOT_FILED" >&2
     [ "$rc" = 3 ] || rc=4
+  fi
+  if [ -n "$NOT_CLOSED" ]; then
+    echo "MERGED, but GitHub did not close $(grep -c . <<<"$NOT_CLOSED") issue(s); close them by hand:" >&2
+    printf '%s' "$NOT_CLOSED" >&2; rc=3
   fi
   exit "$rc"
 }
@@ -249,9 +277,25 @@ done < <(git diff --no-relative --diff-filter=D --name-only "$BASE" "$BRANCH")
 # mutation note the pass commit carried would refuse it, so the notes ride along.
 MUTATIONS=$(git -C "$WT" log --format=%B "$BASE".."$BRANCH" | grep -i -A2 '^Mutation-verified' || true)
 [ -z "$MUTATIONS" ] || TITLE=$(printf '%s\n\n%s' "$TITLE" "$MUTATIONS")
+# The message is the one text of the unit no file check reads (issue 221): a home path, this machine's name or a
+# word of the project's own leak list refuses the merge before anything is merged.
+MSG=$(mktemp) || fail "step 4 message" "could not write the message to a file"
+printf '%s\n' "$TITLE" > "$MSG"
+HOST=$(hostname -s 2>/dev/null || true)
+LEAK=$(grep -nE '/(Users|home)/[^/[:space:]]+' "$MSG" || true)
+[ -n "$LEAK" ] || [ "${#HOST}" -le 3 ] || LEAK=$(grep -niF -- "$HOST" "$MSG" || true)
+if [ -z "$LEAK" ] && [ -f "$ROOT/ci/leak-test.sh" ]; then
+  rc=0; LEAK=$(bash "$ROOT/ci/leak-test.sh" --text "$MSG" 2>/dev/null) || rc=$?
+  LEAK=${LEAK//"$MSG:"/}
+  # A project's own leak-test.sh older than --text cannot read the message: said, not refused.
+  case $rc in 0) LEAK= ;; 1) ;; *) LEAK=; echo "step 4 message: ci/leak-test.sh --text could not run (exit $rc); the project's word list was not applied" >&2 ;; esac
+fi
+rm -f "$MSG"
+[ -z "$LEAK" ] || fail "step 4 message" "the commit message leaks: $(head -1 <<<"$LEAK")"
 CHECK_CMD=$(jq -r '.testCommand // empty' "$ROOT/.claude/commandeck.json" 2>/dev/null || true)
 CHECKED="no testCommand in .claude/commandeck.json, so no check ran"
 echo "STEP 4 merge: git merge --squash $BRANCH; ${CHECK_CMD:-(no check command)}; git commit -m $(printf '%q' "$TITLE")"
+[ "$DRY_RUN" = 0 ] || close_issues --dry-run
 if [ "$DRY_RUN" = 0 ]; then
   # Until the squash is committed, any exit undoes it. Step 1 proved the index
   # clean and no dirt in the squash's paths, so the staged paths are exactly
@@ -360,6 +404,7 @@ if [ "$DRY_RUN" = 0 ]; then
   fi
   echo "step 4 evidence: merged $UNIT as $(git rev-parse --short=8 "$MERGE_SHA"); tree $TREES"
   file_open_findings "$MERGE_SHA"
+  close_issues
   # The finished-builds record, which the dashboard lists: one line a merge, appended here and nowhere else, once
   # the commit stands. One short write in append mode, under a lock on the home folder: uninstall rewrites this
   # file for a same-named checkout under the same lock, so no line is appended to a file being replaced. The home
@@ -397,3 +442,5 @@ if [ "$DRY_RUN" = 0 ]; then
   bash "$HERE/codex-helpers.sh" stop "$WT" || true
 fi
 echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${MERGE_ISSUES:+; issues for the findings left open: $MERGE_ISSUES}"
+# The unit's seats are done with: main-watch's item tasks about them are handled by this merge.
+[ "$DRY_RUN" = 1 ] || pp_close_items $(sed -n 's/^handle=//p' "$PP_SCRATCH"/seat-"$UNIT"-*.txt 2>/dev/null || true)

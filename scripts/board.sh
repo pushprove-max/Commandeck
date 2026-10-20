@@ -11,13 +11,39 @@
 # It opens no worktree, acks no message and closes no task. In the main
 # checkout it writes two things: the run id file, when Orca's run differs from
 # it, and the terminal's binding to that run, when the terminal is unbound.
-# Usage: board.sh [unit]   -- with a unit, only that unit's rows.
+# Usage: board.sh [--full] [unit]   -- with a unit, only that unit's rows; --full uncut.
+#        board.sh --unit <unit> --seats   -- each seat record of the unit: role, handle, phase, verdict.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 WS=$PP_WORKSPACES
 . "$(dirname "${BASH_SOURCE[0]}")/host-services.sh"
 SCRATCH=$PP_SCRATCH
+# A seat's launch runs in the background (issue 233): its record's last phase= line says where it is. No Orca call.
+if [ "${1-}" = --unit ]; then
+  [ -n "${2-}" ] && [ "${3-}" = --seats ] || { echo "usage: board.sh --unit <unit> --seats" >&2; exit 2; }
+  for r in "$SCRATCH"/seat-"$2"-*.txt; do
+    [ -f "$r" ] && [ "$(sed -n 's/^unit=//p' "$r" | head -1)" = "$2" ] || continue
+    line=; for k in role handle phase verdict; do v=$(sed -n "s/^$k=//p" "$r" | tail -1); line+=" ${v:--}"; done
+    echo " $line"
+  done
+  exit 0
+fi
+# Issue 223: thirty worktrees filled main's context. By default each section shows at most 12 lines and the
+# board 3,000 bytes; section headers and alert lines always print, and the last line names the whole board's file.
+# shortcut: one board-<pid>.txt per cut board, never pruned; prune by age if the folder grows.
+FULL=0; [ "${1-}" != --full ] || { FULL=1; shift; }
+if [ "$FULL" = 0 ] && [ -z "${BOARD_UNCUT:-}" ]; then
+  mkdir -p "$SCRATCH" || exit 1
+  B=$SCRATCH/board-$$.txt
+  BOARD_UNCUT=1 bash "${BASH_SOURCE[0]}" "$@" > "$B"; rc=$?
+  awk -v f="$B" '/^== / { s = 0 } { s++ }
+    /^ *[A-Z][A-Z ,-]{5,}( --|:)|^== |^RUN=/ { print; n += length($0) + 1; next }
+    s <= 13 && n + length($0) < 2800 { print; n += length($0) + 1; next } { cut++ }
+    END { if (cut) print "board: " cut " lines not shown (whole board: " f "; board.sh --full)"; exit !cut }' "$B" || rm -f "$B"
+  exit $rc
+fi
 RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)
 ONLY=${1:-}
 # The project's run is the one main's own terminal is bound to, and this is

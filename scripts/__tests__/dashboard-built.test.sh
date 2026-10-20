@@ -191,6 +191,20 @@ m = []
 d.codex_requests(sys.argv[1], sys.argv[2], 0, 2**40, m)
 print(bool(m) and "true")' "$T/locked/home/sessions" "$T/seat-cache/x.json" 2>&1)"
 chmod 755 "$T/locked"
+# Issue 242: the Builder took over the worktree its plan seat cut (plan-worktree-close.sh --adopt), so the plan's and the
+# build's worktree are one. Every request landed in planning; each now goes to the stage it was made in.
+OW=$WS/one-wt OP=$T/one-projects OC=$T/one-codex/2026/10/17; mkdir -p "$OP/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$OW")" "$OC"
+orow() { jq -cn --arg t "$(iso "$2")" --arg id "$1" --arg w "$OW" '{type: "assistant", timestamp: $t, cwd: $w, requestId: $id,
+  message: {id: $id, model: "claude-haiku-5-5", usage: {input_tokens: 100000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}}'; }
+{ orow o-plan $((P0 + 10)); orow o-build $((P0 + 200)); } > "$OP/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$OW")/s.jsonl"
+xrow x-pass $((P0 + 400)) | sed "s#$WS/pv-plan#$OW#" > "$OC/rollout-pass.jsonl"
+check "one worktree as plan and build: each request on its own stage, the total unchanged" '[["planning",1],["building",1],["review",1],3]' \
+  "$(rm -rf "$T/one-cache"; mkdir -p "$T/one-cache"; cd "$SOURCE/scripts" && python3 -c '
+import json, sys, dashboard_limit as d
+wt, p0, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+st = [{"stage": "building", "from": d.iso(p0 + 100), "to": d.iso(p0 + 300)}, {"stage": "review", "from": d.iso(p0 + 300), "to": None}]
+c = d.unit_costs([{"unit": "u", "worktree": wt, "stages": st, "plan": {"worktree": wt, "from": d.iso(p0), "seats": []}}], now, sys.argv[4], sys.argv[5], sys.argv[6])["u"]
+print(json.dumps([[s["stage"], s["calls"]] for s in c["stages"]] + [c["total"]["calls"]]).replace(" ", ""))' "$OW" "$P0" "$NOW" "$T/one-cache" "$OP" "${OC%/2026/10/17}" 2>&1)"
 # Live planning worktrees, marked as seat.sh marks them, each with an idle pane: a finished plan waits on main and
 # still reads Planning; with the Builder there too, the unit is one card. An unmarked <name>-plan is no plan.
 for w in pv-plan pw-plan foo-plan; do git -C "$MAIN" worktree add -q "$WS/$w"; done
@@ -279,6 +293,16 @@ check "session_cache: a newer isSidechain row is skipped" "[95010,$E1,false]" "$
 check "session_cache: no reply that wrote cache is null" null "$(pp pp_session_cache)"
 rm -rf "$CL"
 check "bg_open and session_cache: no session record is null" "null null" "$(pp pp_session_bg_open) $(pp pp_session_cache)"
+
+# Issue 232: the relay's open picker, as main-watch.sh records it, rides on the Chief of Staff part for the alert rule.
+mkdir -p "$SCR/main-watch"; echo '{"since":1000,"waiting":2}' > "$SCR/main-watch/relay-picker.json"
+printf '#!/usr/bin/env bash\ncase "$*" in "terminal list"*) echo %q ;; "orchestration inbox"*) echo %s ;; *) exit 1 ;; esac\n' \
+  "$(jq -cn --arg p "$WS/Chief-of-Staff" '{result: {terminals: [{handle: "h-cos", worktreePath: $p}]}}')" \
+  "'{\"result\":{\"messages\":[]}}'" > "$BIN/orca-ide"
+dash
+check "the relay's picker record is on the Chief of Staff part" '{"since":1000,"waiting":2}' "$(jq -c 'first(.[]) | .chiefOfStaff.picker' "$T/out/run/project.json" 2>&1)"
+rm "$SCR/main-watch/relay-picker.json"; dash
+check "no record is no picker" 'null' "$(jq -c 'first(.[]) | .chiefOfStaff.picker' "$T/out/run/project.json" 2>&1)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

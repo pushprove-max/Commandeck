@@ -56,6 +56,10 @@ def builder_warmup_input: 3300000;
             + {since: (.stageSince | ts)}),
         ($v.needsOwner.decisions // [] | .[] | (.askedAt | ts) as $at | select($at != null and $now - $at > 3600)
           | a("question-\($p)-\(.id)"; "warn"; "\($p): question waiting on \(if .waitsOn == "main" then "main (a Builder's)" else "the owner" end) over 1 h: \(.question)"; "\(if .waitsOn == "main" then "main answers it" else "the owner answers it" end)") + {since: $at}),
+        # An open picker blocks the relay pane itself, and its mail waits behind it (main-watch.sh records it, issue 232).
+        ($v.chiefOfStaff.picker? // null | select(type == "object" and (.since | type) == "number" and $now - .since >= 1800)
+          | a("relay-picker-\($p)"; "warn"; "\($p): relay picker open \(($now - .since) / 60 | floor) min; \(.waiting) messages waiting behind it"; "answer or close the picker in the relay's pane")
+            + {since: .since}),
         # A Builder's signals (dashboard_builders.jq), one alert per unit and kind.
         ($v.units.inFlight // [] | .[] | select((.builder.signals | type) == "array") | .unit as $u | .builder.signals[]
           | a("builder-\($p)/\($u)-\(.kind)"; "warn"; "\($p): Builder \($u): \(.kind | ascii_upcase)"; "inspect or nudge the Builder") + {since: .since}),

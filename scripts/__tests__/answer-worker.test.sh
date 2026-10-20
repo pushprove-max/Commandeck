@@ -31,6 +31,7 @@ case "\$1 \$2" in
     echo '{"ok":true}' ;;
   "orchestration check") if [ -e "$T/asked" ]; then echo '{"ok":true,"result":{"messages":[]}}'; else touch "$T/asked"
     jq -n '{ok: true, result: {deliveryId: "d1", messages: [{id: "msg_q1", from_handle: "term_b", type: "question", subject: "question (u1)", body: "which option?"}]}}'; fi ;;
+  "orchestration task-update") echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
   "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; esac; shift; done; printf '%s\n' "\$b" >> "$T/inbox"; echo '{"ok":true}' ;;
   *) echo '{"ok":true}' ;;
 esac
@@ -71,8 +72,13 @@ check "an answer after the done marker is typed in and read, though Orca says wo
 rm "$T/two"
 
 echo idle > "$T/state"
+# Issue 227: main closed the main-watch item task of a question by hand once it was answered; the delivery does it.
+mkdir -p "$T/scratch/main-watch"; : > "$T/updates"
+printf 'posted=1\ntask=task_item_b\n' > "$T/scratch/main-watch/item-seat-term_b-task_b"; printf 'posted=1\ntask=task_item_o\n' > "$T/scratch/main-watch/item-seat-term_o-task_o"
 OUT=$(answer term_b "go ahead"); RC=$?
 check "an answer typed into an idle pane that shows it is delivered" "0:1" "$RC:$(grep -c 'delivered to term_b (typed into the pane)' <<<"$OUT")"
+check "a delivered answer completes that pane's item task, and not another pane's" "1:0" \
+  "$(grep -c -- '--id task_item_b --status completed' "$T/updates"):$(grep -c task_item_o "$T/updates")"
 touch "$T/deaf"
 OUT=$(answer term_b "stop here"); RC=$?
 check "an idle pane whose log never shows the answer: NOT delivered" "1:1:0" "$RC:$(grep -c 'NOT delivered' <<<"$OUT"):$(grep -c 'queued' <<<"$OUT")"

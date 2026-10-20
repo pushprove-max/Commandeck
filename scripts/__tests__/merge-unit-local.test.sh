@@ -11,6 +11,8 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 TMP=$(cd "$TMP" && pwd -P)
 # An empty HOME: no Codex plugin, no model list, no signed-in CLI.
 export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
+# Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.
+export COMMANDECK_FOREGROUND=1
 unset COMMANDECK_MAIN COMMANDECK_ROUTING
 REPO=$TMP/proj
 mkdir -p "$HOME" "$TMP/ws" "$TMP/bin"; : > "$TMP/orca-calls"
@@ -29,8 +31,8 @@ case "\$1 \$2" in
   *) echo '{"ok":true}' ;;
 esac
 STUB
-# gh is never the real one: here it has no answer, so the P1 count is not measured.
-printf '#!/usr/bin/env bash\nexit 1\n' > "$TMP/bin/gh"
+# gh is never the real one: it records its calls and answers only `issue close`, and that fails once gh-fails exists.
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/gh-calls"\n[ "$1 $2" = "issue close" ] && [ ! -e "%s/gh-fails" ]\n' "$TMP" "$TMP" > "$TMP/bin/gh"
 chmod +x "$TMP/bin/orca-ide" "$TMP/bin/gh"
 PATH=$TMP/bin:$PATH
 
@@ -64,12 +66,12 @@ printf 'model = "x"\nservice_tier = "fast"\n' > "$CODEX_HOME/config.toml"
 jq '.roles["codex-reviewer"].model = "gpt-9.9-probe"' "$REAL/config/routing.json" > "$TMP/routing.json"
 # Signed in, and answers the pass's one-word sign-in probe (codex exec).
 printf '#!/bin/sh\n[ "$*" = "login status" ] || [ "$1" = exec ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
-mk() { # <unit>: a Builder worktree with one commit, its brief and its evidence
+mk() { # <unit> [subject]: a Builder worktree with one commit, its brief and its evidence
   local w=$COMMANDECK_WORKSPACES/$1
   git -C "$REPO" worktree add -q "$w" -b "builder/$1"
   mkdir -p "$w/.claude/briefs"; echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$w/.claude/settings.local.json"
   echo "brief for $1" > "$w/.claude/briefs/$1.md"; echo "evidence for $1" > "$w/.claude/briefs/$1-evidence.md"
-  echo built > "$w/$1.txt"; git -C "$w" add "$1.txt"; git -C "$w" commit -qm "feat($1): the unit"
+  echo built > "$w/$1.txt"; git -C "$w" add "$1.txt"; git -C "$w" commit -qm "${2:-feat($1): the unit}"
 }
 pass() { # <unit> <N> <kind>: one pass of the real pass script on the unit's worktree
   (cd "$COMMANDECK_WORKSPACES/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-$2 \
@@ -100,5 +102,47 @@ go v
 check "a GO merge of v ends 0" 0 "$(merge v)"
 check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
   "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
+
+# Issue 239: the merge closes each issue the brief lists that its commit names, with the commit and the version; one
+# the commit does not name stays open and is named. Issue 227: main-watch's item task about the unit's seat is
+# closed by the merge, another unit's is left open.
+mk w "feat(w): the unit (#5)"; printf '# w\n\n## The issues\n\n1. #5: one\n2. #6: two\n' > "$COMMANDECK_WORKSPACES/w/.claude/briefs/w.md"
+printf 'handle=t_w\ntask=task_w\nunit=w\nrole=builder\nlaunched=%s\n' "$LA" > "$COMMANDECK_SCRATCH/seat-w-builder.txt"
+mkdir -p "$COMMANDECK_SCRATCH/main-watch"
+printf 'posted=1\ntask=task_item_w\n' > "$COMMANDECK_SCRATCH/main-watch/item-seat-t_w-task_w"
+printf 'posted=1\ntask=task_item_o\n' > "$COMMANDECK_SCRATCH/main-watch/item-seat-t_o-task_o"
+go w; : > "$TMP/gh-calls"; : > "$TMP/orca-calls"
+check "a GO merge of w ends 0" 0 "$(merge w)"
+check "the issue the commit names is closed once, naming the merge commit" 1 "$(grep -c "^issue close 5 --comment Fixed in $(git -C "$REPO" rev-parse --short=8 HEAD)" "$TMP/gh-calls")"
+check "the issue the commit does not name stays open, and is named" "0 1" "$(grep -c '^issue close 6' "$TMP/gh-calls") $(grep -c 'left open: #6' "$TMP/out")"
+check "the unit's item task is completed, another unit's is not" "1 0" \
+  "$(grep -c 'task-update --id task_item_w --status completed' "$TMP/orca-calls") $(grep -c 'task_item_o' "$TMP/orca-calls")"
+# A dry run closes nothing; a close GitHub refuses ends the merge with code 3 and the command that closes it.
+mk x "feat(x): the unit (#7)"; printf '# x\n\n## The issues\n\n1. #7: one\n' > "$COMMANDECK_WORKSPACES/x/.claude/briefs/x.md"
+go x; : > "$TMP/gh-calls"
+check "a dry run closes no issue, and says which it would" "0 0 1" "$(merge x --dry-run) $(grep -c . "$TMP/gh-calls") $(grep -c 'would close #7' "$TMP/out")"
+: > "$TMP/gh-fails"
+check "a close GitHub refuses ends the merge with code 3 and a NOT CLOSED line" "3 1" "$(merge x) $(grep -c '^NOT CLOSED: gh issue close 7 --comment' "$TMP/out")"
+rm -f "$TMP/gh-fails"
+# Issue 221: the squash message is checked before anything is merged: a home path, and a word of the project's own list.
+mk y "feat(y): read /home/someone/x"; go y; H0=$(git -C "$REPO" rev-parse HEAD)
+check "a message holding a home path is refused, naming the line, and main is unchanged" "1 1 $H0" \
+  "$(merge y) $(grep -c '^FAILED step 4 message: .*/home/someone/x' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mkdir -p "$REPO/ci"; cp "$REAL/ci/leak-test.sh" "$REPO/ci/"; printf '# words\n(?i)zebraword\n' > "$REPO/ci/leak-words.txt"
+mk z "feat(z): the Zebraword unit"; go z
+check "a message holding a word of the project's ci/leak-words.txt is refused, and main is unchanged" "1 1 $H0" \
+  "$(merge z) $(grep -c '^FAILED step 4 message: .*Zebraword' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+echo 'feat(q): clean' > "$TMP/clean-msg"
+check "ci/leak-test.sh --text on a clean file exits 0" 0 "$(bash "$REPO/ci/leak-test.sh" --text "$TMP/clean-msg" >/dev/null 2>&1; echo $?)"
+rm -rf "$REPO/ci"
+# Issue 230: run in main's foreground (a Claude session), the merge returns at once with its log and pid; the merge
+# then completes detached and its result reaches main as a status message.
+mk d; go d
+OUT=$(cd "$REPO" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 bash "$MERGE" d </dev/null 2>&1); RC=$?
+PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the merge returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $COMMANDECK_SCRATCH/merge-d.log" <<<"$OUT")"
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "the detached merge completed, and main heard its result" "1 1" \
+  "$(grep -c '^DONE unit=d merged=local' "$COMMANDECK_SCRATCH/merge-d.log" 2>/dev/null) $(cat "$TMP/orca-calls" "$COMMANDECK_SCRATCH"/queue/*.jsonl 2>/dev/null | grep -c 'merge-unit-local.sh d: exit 0')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

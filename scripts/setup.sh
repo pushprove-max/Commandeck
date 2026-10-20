@@ -8,7 +8,7 @@
 #          [--issue-sizing <tokens>|off] [--codex-fast|--no-codex-fast] [--plan-models <model>[,<model>...]|'']
 #          [--codex-model <Codex role>=<model id>|<Codex role>= ...] [--plan-fast <plan seat>[,<plan seat>...]|'']
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--max-rounds <n>] [--closing-pass yes|no] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
+#          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
@@ -44,6 +44,7 @@
 # --auto-mode add puts two lines into the auto-mode classifier's list in ~/.claude/settings.json (every project on
 # this machine); leave, and no answer, change nothing there; remove takes out the lines setup added (an update
 # replays add or leave, never a remove).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 # Ahead of paths.sh, which on a Mac refuses to load without the tools this
@@ -52,7 +53,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -111,6 +112,7 @@ STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena
 BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
 PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
+FULL=$(old .fullSuiteBeforeFinal)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
@@ -217,6 +219,8 @@ while [ $# -gt 0 ]; do
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
     --max-rounds) rl maxRounds "$2" "$INT" "$1" "a whole number of passes"; shift 2 ;;
     --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
+    # The closing pass's full run of the test command (builder-codex-pass.sh), saved as fullSuiteBeforeFinal.
+    --full-suite) case $2 in on) FULL=true ;; off) FULL=false ;; *) die "--full-suite takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     # off is saved as the word: no build is small, so every first pass has three reviewers.
     --small-build) rl smallBuild "$2" '^(off|[1-9][0-9]*)$' "$1" "a whole number of changed lines, or off"; shift 2 ;;
     --max-review-min) rl maxReviewMinutes "$2" "$OFFNUM" "$1" "a number of minutes, or off"; shift 2 ;;
@@ -237,6 +241,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 SCOPE=${SCOPE:-project}
+[ -n "$TEST" ] || FULL=false  # no test command: the closing pass has no suite to run
 case $PROFILE in claude|claude-openai) ;; *) echo "setup: --profile is claude (Claude does the review passes) or claude-openai (Codex does them)" >&2; usage ;; esac
 case $SCOPE in project|machine) ;; *) usage ;; esac
 for a in $ADDONS; do
@@ -372,7 +377,7 @@ il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could n
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" '
+  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
@@ -389,6 +394,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + {ponytail: ($pony != "false")}
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
+  + (if $full == "" then {} else {fullSuiteBeforeFinal: ($full == "true")} end)
   + $cuts
   + {chiefOfStaff: ({name: $name, persona: $persona, cacheTtl: $rcache} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
@@ -583,6 +589,7 @@ for a in $ADDONS; do
 done
 # Read back from the config written above, so this line and the hooks agree.
 echo "serena (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG")"
+echo "full suite before the final review: $([ "$FULL" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
 if [ "$PONYTAIL" = false ]; then echo "ponytail skill: off (--ponytail turns it on)"
 elif [ -n "$PONY_OURS" ]; then echo "ponytail skill: installed ($PONY)"
 else echo "ponytail skill: the one already on this machine was left as it is"; fi

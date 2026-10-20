@@ -51,6 +51,24 @@ out=$(run node_modules/pkg/README.md 1 PROBE -- bash -c '! grep -qx PROBE node_m
 check "an installed dependency is refused and left as it was" "2 orig" "$rc $(cat node_modules/pkg/README.md)"
 out=$(run link.txt 1 PROBE -- bash -c '! grep -qx PROBE link.txt'); rc=$?
 check "a tracked link out of the copy is refused and its target left as it was" "2 outside" "$rc $(cat "$BOX/outside.txt")"
+# Issue 246: a whole run of a test file that can run one case reruns every case three times for one proof. A file
+# that reads a *_TEST_CASE variable is refused unless the call sets it, and the refusal names it.
+printf '. ./lib.sh\n: "${CA_TEST_CASE-}"\n[ "$(limit)" = 5 ]\n' > ca.test.sh
+out=$(run lib.sh 2 'limit() { echo 6; }' -- bash ca.test.sh); rc=$?
+check "a whole run of a case-aware test file is refused, naming its variable" "2 1" "$rc $(grep -c 'CA_TEST_CASE' <<<"$out")"
+out=$(CA_TEST_CASE=limit run lib.sh 2 'limit() { echo 6; }' -- bash ca.test.sh); rc=$?
+out2=$(run lib.sh 2 'limit() { echo 6; }' -- env CA_TEST_CASE=limit bash ca.test.sh); rc2=$?
+check "with the variable set, in the environment or the command, the proof runs" "0 0" "$rc $rc2"
+# --batch runs many proofs in one scratch worktree; each test records how many worktrees it sees (this one and the copy).
+printf '%s\t%s\t%s\t%s\n' lib.sh 2 'limit() { echo 6; }' "git worktree list | wc -l >> '$BOX/wts'; bash t.sh" \
+  lib.sh 2 'limit() { echo 7; }' "git worktree list | wc -l >> '$BOX/wts'; bash t.sh" > "$BOX/batch.tsv"
+out=$(run --batch "$BOX/batch.tsv"); rc=$?
+check "a batch of two proofs reports both RED from one scratch worktree" "0 2 2" \
+  "$rc $(grep -c 'RED: the test passes as is and fails' <<<"$out") $(sort -u "$BOX/wts" | tr -d ' ' | paste -sd' ' -)"
+printf '%s\t%s\t%s\t%s\n' lib.sh 2 'limit() { echo 6; }' 'bash t.sh' lib.sh 1 '# renamed comment' 'bash t.sh' > "$BOX/batch.tsv"
+out=$(run --batch "$BOX/batch.tsv"); rc=$?
+check "a batch with one proof NOT RED exits 1, and the file is restored between proofs" "1 1 1" \
+  "$rc $(grep -c 'NOT RED' <<<"$out") $(grep -c 'RED: the test passes as is and fails' <<<"$out")"
 check "the checkout's file is untouched" "limit() { echo 5; }" "$(sed -n 2p lib.sh)"
 check "no scratch worktree is left behind" 1 "$(git worktree list | wc -l | tr -d ' ')"
 check "no scratch folder is left behind" 0 "$(find "$BOX" -maxdepth 1 -name 'red-proof.*' | wc -l | tr -d ' ')"

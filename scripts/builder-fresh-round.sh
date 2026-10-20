@@ -10,6 +10,7 @@
 # A hand-off that does not start gets nothing typed: the reason and a re-run line go to stderr and to main
 # (to-main.sh: a log alone was never read), the exit is 1, and the round stays in the old session.
 # Self-test: bash scripts/__tests__/builder-fresh-round.test.sh
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 H=${1:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}
 HAND=${2:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}

@@ -15,6 +15,7 @@
 # waiter fenced for 12 minutes on 2026-09-19. A shell whose pane is
 # gone acts as the run's live coordinator instead: that is exactly the handle a
 # driver launched from main's live pane carries, and it moves no binding.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 RUN=${COMMANDECK_RUN:-}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 2
 [ -n "$RUN" ] || RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)

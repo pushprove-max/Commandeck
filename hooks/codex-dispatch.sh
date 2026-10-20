@@ -295,7 +295,7 @@ run_matcher() {
       # run, as Claude Code does. Either way Codex is told which hook it was.
       printf '%s\t%s\t%s\texit %s\n' "$(date -Is)" "${TOOL:-$event}" "${script##*/}" "$rc" >>"$LOG" 2>/dev/null
       if [ "$onfail" = block ]; then
-        echo "BLOCKED: codex-dispatch: ${script##*/} exited $rc, so it could not screen this call, and it is a guard that must (onFailure: block). Reinstall the plugin or run its doctor." >&2
+        echo "BLOCKED: codex-dispatch: ${script##*/} exited $rc, so it could not screen this call, and it is a guard that must (onFailure: block). Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) or run its doctor (\`/commandeck:doctor\`)." >&2
         return 2
       fi
       echo "codex-dispatch: ${script##*/} exited $rc, so its rule did not run for this call" >&2

@@ -27,5 +27,25 @@ mkdir -p "$T/scratch" "$T/ws/u2-plan"; printf 'handle=h7\ntask=task_7\nrole=plan
 check "a planner in its planning worktree is listed under its unit" "  u2 plan-author h7 task_7" \
   "$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
   COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" u2 2>&1 | grep '^  u2 plan-author')"
+# Issue 233 put a seat's launch in the background: main reads where each seat of a unit is, one line per seat record.
+printf 'handle=h8\ntask=task_8\nrole=builder\nunit=u3\nphase=launching\nphase=dispatched\nverdict=VERDICT: GO\n' > "$T/scratch/seat-u3-builder.txt"
+printf 'handle=h9\nrole=plan-judge-sol\nunit=u3\n' > "$T/scratch/seat-u3-plan-judge-sol.txt"
+printf 'handle=h6\nrole=builder\nunit=u3-x\n' > "$T/scratch/seat-u3-x-builder.txt"
+check "--unit u3 --seats prints each of u3's seats (role, handle, phase, verdict), and no other unit's" \
+  "$(printf '  builder h8 dispatched VERDICT: GO\n  plan-judge-sol h9 - -')" \
+  "$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" bash "$REAL/scripts/board.sh" --unit u3 --seats 2>&1)"
+# Issue 223: board.sh printed every worktree whole, and thirty of them filled main's context. The default is cut at
+# 3,000 bytes, each section still shown, with the whole board in a named file; --full prints the whole.
+for i in $(seq -w 1 30); do
+  git -C "$T/proj" worktree add -q "$T/ws/w$i" -b "w$i"; mkdir -p "$T/ws/w$i/.claude/briefs"
+  echo brief > "$T/ws/w$i/.claude/briefs/w$i.md"; printf 'Pass: review\n\nVERDICT: GO\n' > "$T/ws/w$i/.claude/briefs/w$i-r1-reports.md"
+done
+bd() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" "$@" 2>&1); }
+OUT=$(bd); WHOLE=$(sed -n 's/.*(whole board: \([^;]*\);.*/\1/p' <<<"$OUT")
+check "thirty worktrees: under 3,000 bytes, every section header kept, the whole board in the named file" "yes 1 30" \
+  "$([ "$(printf '%s' "$OUT" | wc -c)" -lt 3000 ] && echo yes) $(grep -c '^== loops and main-watch' <<<"$OUT") $(grep -c '^  w[0-9]* \[' "$WHOLE" 2>/dev/null)"
+check "--full prints every worktree" 30 "$(bd --full | grep -c '^  w[0-9]* \[')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

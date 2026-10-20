@@ -5,6 +5,7 @@
 # again each time, so the percent it last told is kept in <state>/<project>.limit-told:
 # it speaks again only a whole percent higher, or after usage fell back under
 # the threshold (a new week).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 THRESHOLD=${1:-90}

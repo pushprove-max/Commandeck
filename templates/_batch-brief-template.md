@@ -10,6 +10,17 @@
 One paragraph per item above, by its number: what is built, and what done
 means. Then the tests to write first, and how the batch will be reviewed.
 
+## Launch
+
+Required: builder-launch.sh refuses a batch without it, and a plan seat's
+spec copies both lines. A new unit opens only on an order that names it.
+
+Launch: new unit <unit> | add to <unit>
+Order: <the owner's words, verbatim>
+
+`add to <unit>` is not a launch: put the work in that unit's rulings file
+and run `builder-add-work.sh <unit>`.
+
 ## Prior art
 
 Required: builder-launch.sh refuses a batch without it. Which standard

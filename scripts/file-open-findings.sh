@@ -25,6 +25,7 @@
 # Last, "Issues: <n>..." for the merge's output. Exit 0; 2 usage; 4 when a finding
 # could not be filed.
 # shortcut: the key changes when a reviewer rewords the title, and that finding is filed again; match on the file alone if that happens often.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 usage() { sed -n '2p' "$0" | sed 's/^# /usage: /' >&2; exit 2; }
 UNIT=${1:-} SHA=${2:-}

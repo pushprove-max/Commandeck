@@ -7,4 +7,5 @@
 #
 # One body for both passes, so the proof cannot drift between them: this file
 # only picks the reviewer.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 COMMANDECK_PASS=claude exec bash "$(dirname "${BASH_SOURCE[0]}")/builder-codex-pass.sh" "$@"

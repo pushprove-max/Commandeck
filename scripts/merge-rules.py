@@ -127,6 +127,9 @@ MADE_FROM = {
     "a726a12f": ("8361fb71", "1cf7c669"), "6398c17f": ("8ade2fb3", "c89a261a"), "6a82c4ab": ("2848b779", "6d119e42"),
     # 0.18.0 main-session.md and AGENT_STARTUP.md: planning in the unit's own worktree; the lean helper agents
     "4fd3af2e": ("95273f82",), "ae5d50a4": ("a4d1bca5",), "77c5016d": ("1bc6a1b6",),
+    # 0.21.0 startup trim (issue 228): reworded, or split with a part moved below Details; step 0 a pointer
+    "918c136f": ("1cf4ae22",), "57db6b3a": ("4fd3af2e",), "f36e6d57": ("5bde6db4",), "8265905f": ("6398c17f",),
+    "1b13979f": ("d96617b8",), "5a0821ee": ("d96617b8",), "f4e12488": ("77c5016d",),
 }
 
 

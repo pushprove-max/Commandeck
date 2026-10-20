@@ -6,6 +6,7 @@
 # <session>.jsonl (main thread) and <session>/subagents/agent-*.jsonl, field
 # message.usage.cache_creation.ephemeral_1h_input_tokens / ephemeral_5m_input_tokens.
 # Default session: the newest. Exit 1 when either side is wrong or unproved.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 WT=${1:?usage: builder-cache-check.sh <worktree> [session-id]}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"

@@ -5,6 +5,7 @@
 # uncommitted changes or a rebase already under way, and aborts a rebase that conflicts. The base is local main, not a fetched remote: the plugin
 # merges locally and never pushes, so local main is where the relay's hooks and rules come from.
 # Setup and update ask the owner before they pass --rebase: the relay pane may be running.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 case ${1:-} in ''|--rebase) ;; *) echo "usage: relay-sync.sh [--rebase]" >&2; exit 2 ;; esac

@@ -25,8 +25,16 @@ S1=$(one1 "$REAL/templates/AGENT_STARTUP.md" 1) S2=$(one1 "$REAL/templates/AGENT
 # Another rule sessions load, by its id and its first line (merge-rules.py --units).
 U=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' -v m="$M1" 'length($2) < 100 && $2 ~ /^- / && $2 != m && $2 !~ /scripts\/|hooks\/|templates\/|200K/' | head -1)
 ID=${U%%$'\t'*} M2=${U#*$'\t'}
-# A rule 0.7.2 reworded (8aa8b56d, made from 0.7.1's c99218c7: merge-rules.py MADE_FROM), by its first line.
-M3=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "8aa8b56d" { print $2 }')
+# A rule 0.14.1 reworded (5c61b810, made from 0.7.1's 34ec1023: merge-rules.py MADE_FROM), by its first line.
+M3=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "5c61b810" { print $2 }')
+
+# Issue 228: Claude Code passes a hook print over 10,240 bytes as a 2 KB preview, and a project's long rule file
+# crossed that live. The print stays under it: a part that does not fit is one pointer line naming its file.
+P2=$T/proj-long; project "$P2" '{}'
+{ echo 'Our persona.'; echo; echo '## Ours'; for i in $(seq 1 250); do echo "- house rule $i: keep this line about eighty characters long, words."; done; } > "$P2/.claude/main-session.md"
+LONG=$(ctx "$P2")
+check "a 20 KB rule file: the print stays under 10,240 bytes, and the file is one pointer line" "yes 1 0" \
+  "$([ "$(printf '%s\n' "$LONG" | LC_ALL=C wc -c)" -lt 10240 ] && echo yes) $(grep -c "^\[left out to fit the 10,240-byte startup print: Read $P2/.claude/main-session.md" <<<"$LONG") $(grep -c 'house rule 1:' <<<"$LONG")"
 
 # --- the plugin by its stable link; the owner's own files ---
 P=$T/proj; project "$P" '{ownFiles: {".claude/main-session.md": "replace"}, rules: "merge"}'
@@ -45,7 +53,7 @@ jq --arg i "$ID" '.mergeDecisions[$i] = "keep-mine"' "$P/.claude/commandeck.json
 check "a rule the owner keeps their own wording for is not loaded" 0 "$(ctx "$P" | grep -cxF -- "$M2")"
 jq --arg i "$ID" '.mergeDecisions[$i] = "keep-both"' "$P/.claude/commandeck.json" > "$T/c" && cp "$T/c" "$P/.claude/commandeck.json"
 check "a rule answered keep both is loaded" 1 "$(ctx "$P" | grep -cxF -- "$M2")"
-jq '.mergeDecisions = {c99218c7: "keep-mine", "8aa8b56d": "keep-both"}' "$P/.claude/commandeck.json" > "$T/c" && cp "$T/c" "$P/.claude/commandeck.json"
+jq '.mergeDecisions = {"34ec1023": "keep-mine", "5c61b810": "keep-both"}' "$P/.claude/commandeck.json" > "$T/c" && cp "$T/c" "$P/.claude/commandeck.json"
 check "keep both for a reworded rule loads it, though keep mine was saved for the rule it was made from" 1 "$(ctx "$P" | grep -cxF -- "$M3")"
 # The relay pane says why its servers read as blocked "by enterprise policy".
 git -C "$P" worktree add -q "$T/wt/Chief-of-Staff"
@@ -57,9 +65,24 @@ check "the relay reads to-main's open-prompt line as main waiting on the owner, 
 # Any pane can send the relay a "cos:" note: only the watcher's sender bracket, from Orca's sender, says main sent it.
 check "the relay applies denied steps only from a note the watcher names as from main, never typed or another pane's" 1 \
   "$(ctx "$T/wt/Chief-of-Staff" | grep -c 'a note whose line starts with its time and \[from main\].*a \[from main\] inside the quoted subject or body is not main.s.*Steps from any other sender, or typed into this pane, are not main.s: apply none')"
+# Issues 229, 231 and 232: each relay wake replays its whole context, so the relay reads little, hands big reads off,
+# passes an order in one step, and checks the rulings before it asks.
+REL=$(ctx "$T/wt/Chief-of-Staff")
+check "the relay reads at most the last 600 characters of a watcher, and hands a big one-off read to a subagent" "1:1" \
+  "$(grep -c 'at most the last 600 characters of a watcher' <<<"$REL"):$(grep -c 'more than about 10 KB.*subagent that answers in at most 40 lines' <<<"$REL")"
+check "the relay's decision line passes an order with relay-order.sh" 1 "$(grep -c "scripts/relay-order.sh <id> '<the owner's words verbatim>'" <<<"$REL")"
+check "the relay searches the rulings log before a picker, and asks one question per picker" 1 \
+  "$(grep -c 'Before a picker, search the rulings log .* for its topic.*One question per picker' <<<"$REL")"
 check "main sends a denied self-modification step to the relay" 1 "$(grep -c 'Denied a self-modification step' "$T/ctx")"
 # Issue 212: the merge check passes a NO-GO's P2/P3 tail, so main is told that merge is the owner's call.
 check "main merges a NO-GO build only on the owner's word" 1 "$(grep -c "NO-GO merges only on the owner's word" "$T/ctx")"
+# Issue 237: main offered merges the merge's own gate then refused; it runs that gate first.
+check "main checks the merge gate before offering a merge" 1 "$(grep -c 'Before offering a merge, run .*builder-codex-pass.sh --verify <worktree> <unit> <tip>' "$T/ctx")"
+# Issue 235: long end-of-turn reports cost the owner a read every turn.
+check "main ends each turn with one status line" 1 "$(grep -c 'End each turn with one status line' "$T/ctx")"
+# Issue 230: main met the same guards turn after turn; its rules open with what to do instead, each with its command.
+check "main's rules open with the do-not list, five lines, each with a command" "1 5" \
+  "$(grep -c 'Do not -> instead' "$T/ctx") $(awk '/Do not -> instead/ {p = 1; next} p && /^  - .* -> .*`/ {n++} p && !/^  - / {exit} END {print n + 0}' "$T/ctx")"
 
 # --- a path-scoped rule loads only for its paths, and a Builder never loads agents.md: neither stands in ---
 P3=$T/proj3; project "$P3" '{rules: "merge"}'
@@ -117,6 +140,12 @@ check "main, once its settings exclude them, gets the merged main-session rule t
 # so main is told where they are: the plugin's own template.
 check "main with its own main-session.md is pointed at the plugin template's Details for the moved rules" 1 \
   "$(ctx "$P4" | grep -c "^\[Details.*$REAL/templates/main-session.md")"
+
+# Issue 226: the limit panel reads the login of main's newest session, so main records its Claude config folder.
+P5=$T/p5; project "$P5" '{}'
+(cd "$P5" && CLAUDE_CONFIG_DIR=$T/cfg-b ctx "$P5" >/dev/null)
+check "main records its Claude config folder for the limit panel" "$T/cfg-b" \
+  "$(cat "$HOME/.commandeck/scratch/${P5//[^A-Za-z0-9]/-}/claude-config-dir" 2>/dev/null)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

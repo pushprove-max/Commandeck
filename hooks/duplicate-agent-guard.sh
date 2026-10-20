@@ -204,7 +204,7 @@ while IFS=$'\t' read -r kind val; do
       [ -n "$WT" ] || WT="path:$(git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" rev-parse --show-toplevel 2>/dev/null)"
       case $WT in *'$'*) block "a hand-made agent pane in a worktree given as a variable ($WT): the live-agent check cannot read it. Spell the worktree out; $SCRIPTED." ;; esac
       out=$(orca-ide terminal list --worktree "$WT" --json 2>/dev/null) && jq -e 'has("result")' <<<"$out" >/dev/null 2>&1 \
-        || block "a hand-made agent pane in $WT: Orca's pane list cannot be read, and an unknown state is not an absent agent."
+        || block "a hand-made agent pane in $WT: Orca's pane list cannot be read, and an unknown state is not an absent agent. Retry once \`orca-ide terminal list --worktree <path> --json\` answers."
       live=$(jq -r '[.result | if type == "array" then . else (.terminals // []) end | .[]
         | select(.connected != false and .orphaned != true and .agentIdentity != null)
         | "\(.handle) (\(.agentIdentity), \(.title))"] | join(", ")' <<<"$out")
@@ -212,11 +212,11 @@ while IFS=$'\t' read -r kind val; do
     job)
       H=$val
       [ -n "$H" ] || continue
-      case $H in *'$'*) block "a job sent to a pane given as a variable ($H): the busy check cannot read it. Spell the handle out." ;; esac
+      case $H in *'$'*) block "a job sent to a pane given as a variable ($H): the busy check cannot read it. Spell the handle out; \`orca-ide terminal list --json\` prints them." ;; esac
       rc=0; pane_is_busy "$H" || rc=$?
       case $rc in
-        0) block "a new job into ${H#terminal:}, whose agent is mid-turn: it would queue behind that turn and run as a second job. Wait for the turn to end; dispatch-task.sh refuses a busy pane the same way." ;;
-        2) block "a job sent to ${H#terminal:}: Orca cannot report its agent state, and an unknown state is not an idle pane." ;;
+        0) block "a new job into ${H#terminal:}, whose agent is mid-turn: it would queue behind that turn and run as a second job. Wait for the turn to end (\`orca-ide terminal wait --terminal <handle> --for tui-idle --timeout-ms 240000\`); dispatch-task.sh refuses a busy pane the same way." ;;
+        2) block "a job sent to ${H#terminal:}: Orca cannot report its agent state, and an unknown state is not an idle pane. Retry once \`orca-ide terminal list --json\` shows it." ;;
       esac ;;
   esac
 done <<<"$PLAN"

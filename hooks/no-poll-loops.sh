@@ -19,7 +19,12 @@
 # may not wait past the prompt cache, since the next reply then rewrites it. Its
 # stated waits are summed against one budget, and a wait in a loop, which states
 # no end, is refused. A background call or a Monitor ends the turn and its exit
-# wakes the pane, so neither is held.
+# wakes the pane, so neither is held. The script of `bash -c`, `sh -c`, `zsh -c`,
+# `eval` and `env -S` is summed by the same rules (issue 216), and `$'sleep'` is
+# the word sleep (issue 215). These are cost guards for agents that cooperate,
+# not a security boundary; open on purpose (issue 215): a command word built by
+# expansion (`s=sleep; $s 400`), a wrapping function or alias, and the
+# over-block of `"a b""sleep"`, which errs toward refusing.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -106,6 +111,37 @@ WRAP = {"command": "", "builtin": "", "exec": "a", "time": "fo", "nohup": "", "e
 LONG_ARG = {"--unset", "--chdir", "--split-string", "--argv0", "--signal", "--kill-after", "--adjustment", "--input",
             "--output", "--error", "--format", "--rcfile", "--init-file"}
 RESERVED = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
+SHELLS = ("bash", "sh", "zsh")
+def opts(name, ws):
+    # The option words a wrapper takes at the front of ws, each option-argument with its option.
+    got, k = [], 0
+    while k < len(ws) and ws[k].startswith("-") and ws[k] != "-":
+        o = ws[k]
+        got.append(o)
+        k += 1
+        if o == "--":
+            break
+        short = next((j for j, c in enumerate(o[1:]) if c in WRAP.get(name, "")), None) if o[1:2] != "-" else None
+        if o in LONG_ARG or short == len(o) - 2:
+            got.append(ws[k] if k < len(ws) else "")
+            k += 1
+    return got
+def string_run(name, ws):
+    # A wrapper that runs a string as a script (issue 216): a shell with -c, and env -S. Its script, else None.
+    o = opts(name, ws)
+    if name in SHELLS and any(x[:1] == "-" and x[1:2] != "-" and "c" in x[1:] for x in o):
+        rest = ws[len(o):]
+        return rest[0] if rest else ""
+    if name == "env":
+        for k, x in enumerate(o):
+            if x == "--split-string":
+                return o[k + 1] if k + 1 < len(o) else ""
+            if x.startswith("--split-string="):
+                return x.split("=", 1)[1]
+            j = next((j for j, c in enumerate(x[1:]) if c in WRAP["env"]), None) if x[1:2] != "-" else None
+            if j is not None and x[j + 1] == "S":
+                return (o[k + 1] if k + 1 < len(o) else "") if j == len(x) - 2 else x[j + 2:]
+    return None
 def run(words):
     out, it = [], iter(words)
     for w in it:
@@ -121,7 +157,7 @@ def run(words):
         if out[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", out[0]):
             out = out[1:]
             continue
-        if name not in WRAP:
+        if name not in WRAP or string_run(name, out[1:]) is not None:
             break
         out = out[1:]
         while out and out[0].startswith("-"):
@@ -200,18 +236,51 @@ if [ "$WORKER" = 1 ]; then
   # every operand of sleep, an orca command's --timeout-ms, a wait-test-run.sh (its max, else 270). A wait inside a
   # loop (its condition or body) repeats, so the one-pass sum bounds nothing: `loop`, refused.
   LIMIT=270; [ "${CLAUDE_CODE_PROMPT_CACHE_TTL:-}" = 1h ] && LIMIT=540
-  WAITED=$(printf '%s' "$JOINED" | python3 -I -c 'import os, sys; exec(os.environ["NPL_WORDS"])
+  # A shell string (`bash -c`, `eval`, `env -S`) is one quoted word in JOINED: its script is read from the raw words
+  # of CMD_CODE (shlex), by the same rules and recursively (issue 216). One shlex cannot read is a wait not read.
+  WAITED=$(printf '%s' "$JOINED" | NPL_RAW=$CMD_CODE python3 -I -c 'import os, shlex, sys; exec(os.environ["NPL_WORDS"])
 UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+def raw_tokens(text):
+    # Words with their quotes removed, separators as one ";", redirections as TOK reads them.
+    lex = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>\n")
+    lex.whitespace = " \t\r"
+    out = []
+    for t in lex:
+        if t and set(t) <= set(";&|()\n"):
+            out.append(";")
+        else:
+            out.append(t)
+    return out
+def script_wait(text, depth=0):
+    # (total, looped, unread) of a script, read as raw words; None for one that cannot be read.
+    if depth > 8:
+        return 0, False, True
+    try:
+        return walk(raw_tokens(text), True, False, depth + 1)
+    except ValueError:
+        return 0, False, True
+STRINGS = [False]
 def secs(a):
     # The whole operand first: 0x1d is hex, not 1 day.
     v = num(a)
     if v is None and a[-1:] in UNIT and len(a) > 1 and num(a[:-1]) is not None:
         v = num(a[:-1]) * UNIT[a[-1]]
     return None if v is None else math.ceil(min(v, 10**9))
-def wait(words):
+def wait(words, raw, only, d):
+    # (seconds, looped) for one command; seconds None when a wait cannot be read. A shell string is counted only
+    # on raw words (JOINED holds it as QUOTED); `only` counts nothing else, as the JOINED walk counted it.
     if not words:
-        return 0
+        return 0, False
     name, args = words[0].rsplit("/", 1)[-1], words[1:]
+    s = " ".join(args) if name == "eval" else string_run(name, args) if name in SHELLS or name == "env" else None
+    if s is not None:
+        STRINGS[0] = True
+        if not raw:
+            return 0, False
+        t, lp, un = script_wait(s, d)
+        return (None if un else t), lp
+    return (0 if only else plain_wait(name, args)), False
+def plain_wait(name, args):
     if name == "sleep":
         n = [secs(a) for a in args]
         return None if None in n else sum(n)
@@ -223,21 +292,31 @@ def wait(words):
         n = [num(v) for v in vals]
         return None if None in n else sum(math.ceil(min(v, 10**12) / 1000) for v in n)
     return 0
-depth, cmd, total, looped, unread = 0, [], 0, False, False
-for w in TOK.findall(sys.stdin.read()) + [";"]:
-    if w in SEPS:
-        n = wait(run(cmd))
-        unread = unread or n is None
-        total, looped, cmd = total + (n or 0), looped or ((n is None or n > 0) and depth > 0), []
-    elif cmd:
-        cmd.append(w)
-    elif w in ("while", "until", "for", "select"):
-        depth += 1
-        cmd = [w] if w in ("for", "select") else []  # its name word (`for done in`) is never a keyword
-    elif w == "done":
-        depth = max(depth - 1, 0)
-    elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p"):
-        cmd = [w]
+def walk(tokens, raw, only, d):
+    depth, cmd, total, looped, unread = 0, [], 0, False, False
+    for w in tokens + [";"]:
+        if w in SEPS:
+            n, lp = wait(run(cmd), raw, only, d)
+            unread = unread or n is None
+            total, looped, cmd = total + (n or 0), looped or lp or ((n is None or n > 0) and depth > 0), []
+        elif cmd:
+            cmd.append(w)
+        elif w in ("while", "until", "for", "select"):
+            depth += 1
+            cmd = [w] if w in ("for", "select") else []  # its name word (`for done in`) is never a keyword
+        elif w == "done":
+            depth = max(depth - 1, 0)
+        elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p"):
+            cmd = [w]
+    return total, looped, unread
+total, looped, unread = walk(TOK.findall(sys.stdin.read()), False, False, 0)
+if STRINGS[0]:
+    t, lp, un = 0, False, False
+    try:
+        t, lp, un = walk(raw_tokens(os.environ["NPL_RAW"]), True, True, 0)
+    except ValueError:
+        un = True
+    total, looped, unread = total + t, looped or lp, unread or un
 print("loop" if looped else "unread" if unread else total)')
   if [ "$WAITED" = loop ]; then
     printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache. A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
@@ -248,7 +327,7 @@ print("loop" if looped else "unread" if unread else total)')
     exit 2
   fi
   if [ "${WAITED:-0}" -gt "$LIMIT" ] 2>/dev/null; then
-    printf "BLOCKED: this call can wait up to %s s in all, past the prompt cache's life, so the next reply rewrites it.\nOne wait per call, at most %s s: an ask takes --timeout-ms 240000 and on a timeout reruns with --resume <message id>.\n" "$WAITED" "$LIMIT" >&2
+    printf "BLOCKED: this call can wait up to %s s in all, past the prompt cache's life, so the next reply rewrites it.\nOne wait per call, at most %s s: an ask takes \`--timeout-ms 240000\` and on a timeout reruns with \`--resume <message id>\`.\n" "$WAITED" "$LIMIT" >&2
     exit 2
   fi
   exit 0

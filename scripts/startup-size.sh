@@ -10,6 +10,7 @@
 # What is measured is the hooks' real output for the project this runs in
 # (CLAUDE_PROJECT_DIR or the current checkout), not a sum of file sizes. The
 # seats are a scratch repo's checkout and worktrees; nothing is logged.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"

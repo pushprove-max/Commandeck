@@ -7,6 +7,8 @@ set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 RUNNER=$REAL/scripts/run-shell-tests.sh
 PASS=0 FAIL=0
+# Run by hand from a Claude session the runner would detach itself (issue 230): these cases read its output here.
+export COMMANDECK_FOREGROUND=1
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
@@ -53,6 +55,17 @@ git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm mo
 echo '// edited' >> "$R/scripts/__tests__/view.test.mjs"; echo '// edited' >> "$R/hooks/__tests__/lone.test.mjs"
 ran
 check "an edited test module runs its wrapper; one with no wrapper selects nothing" "view" "$GOT"
+git -C "$R" checkout -q -- .
+
+# Issue 230: in main's own foreground (a Claude session in the main checkout) a run returns at once with its log,
+# runs detached, and its result reaches main as a status message; the tests it runs are not main's foreground.
+: > "$RAN"; printf '#!/usr/bin/env bash\necho "fg=$COMMANDECK_FOREGROUND" >> "$RAN"\n' > "$R/scripts/__tests__/touched.test.sh"
+OUT=$(cd "$R" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 COMMANDECK_SCRATCH="$TMP/scratch" bash "$RUNNER" scripts/__tests__/touched.test.sh </dev/null 2>&1); RC=$?
+PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the run returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $TMP/scratch/shell-tests.log" <<<"$OUT")"
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "the detached run ran the test outside main's foreground, and main heard its result" "fg=1 1" \
+  "$(cat "$RAN") $(cat "$TMP/scratch"/queue/*.jsonl 2>/dev/null | grep -c 'run-shell-tests.sh: exit 0')"
 git -C "$R" checkout -q -- .
 
 echo; echo "$PASS passed, $FAIL failed"

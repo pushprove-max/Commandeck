@@ -80,5 +80,29 @@ check "Claude on API, Codex on a subscription and over its pace: the Codex alert
   "$(limit_ids '{"billing": "api", "codexBilling": "subscription", "codex": {"usedPct": 95, "goalPct": 50}}')"
 check "Claude on a subscription, Codex on API and over its pace: no Codex alert" '[]' \
   "$(limit_ids '{"billing": "subscription", "codexBilling": "api", "codex": {"usedPct": 95, "goalPct": 50}}')"
+# Issue 226: the panel follows the signed-in account. Orca can run main under its own Claude config folder
+# (CLAUDE_CONFIG_DIR); a switch made that way kept the old login's reading, its history and its figure.
+C=$T/acct/cache; mkdir -p "$C" "$T/cfgB"
+lim() { (cd "$ROOT/scripts" && env -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_HOST_OS=Linux "$@" 2>&1); }
+echo '{"oauthAccount": {"accountUuid": "uuid-a", "emailAddress": "alice@example.com"}}' > "$T/home/.claude.json"
+lim python3 -B dashboard_limit.py account "$C" >/dev/null
+echo '{"seven_day": {"utilization": 70}}' > "$C/claude-usage"; echo '9999999999 1 HTTP 500' > "$C/claude-usage.retry"
+echo '{"at": "1999-01-01T00:00:00Z", "pct": 70}' > "$C/limit-history.jsonl"
+check "the same account again keeps the reading" kept "$(lim python3 -B dashboard_limit.py account "$C" >/dev/null; [ -s "$C/claude-usage" ] && echo kept)"
+echo '{"oauthAccount": {"accountUuid": "uuid-b", "emailAddress": "bob@example.org"}}' > "$T/cfgB/.claude.json"
+echo '{"claudeAiOauth": {"accessToken": "tok-b"}}' > "$T/cfgB/.credentials.json"
+OUT=$(lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -B dashboard_limit.py account "$C")
+check "another account's folder: the old reading and its retry note are gone" "gone" \
+  "$([ ! -e "$C/claude-usage" ] && [ ! -e "$C/claude-usage.retry" ] && echo gone)"
+check "the history starts empty for B, A's kept aside under A's hash" "1 0" \
+  "$(ls "$C"/limit-history.*.jsonl 2>/dev/null | wc -l | tr -d ' ') $(cat "$C/limit-history.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
+check "the label is B's masked email" "b…@example.org" "$(jq -r .label <<<"$OUT")"
+check "B's credentials are the ones read" tok-b "$(lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -c 'import dashboard_limit as d; print(d.token())')"
+check "the panel JSON names B's label" "b…@example.org" \
+  "$(lim CLAUDE_CONFIG_DIR="$T/cfgB" python3 -B dashboard_limit.py build missing /nonexistent 0 "$C" /nonexistent | jq -r .accountLabel)"
+# On a Mac the keychain item of a non-default folder is not known: no figure, never the default login's.
+check "a Mac with a non-default folder: not measured, and says why" "1 config folder" \
+  "$(cd "$ROOT/scripts" && HOME="$T/home" CLAUDE_CONFIG_DIR="$T/cfgB" COMMANDECK_HOST_OS=Darwin python3 -B dashboard_limit.py fetch >/dev/null 2>"$T/why"
+     echo "$? $(grep -o 'config folder' "$T/why")")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

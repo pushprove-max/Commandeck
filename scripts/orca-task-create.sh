@@ -11,6 +11,7 @@
 # "no longer bound to Run" (2026-09-30). run-bound.sh names the run's live
 # coordinator without moving the run; an explicit --run pins which run, and a
 # caller's --from is replaced by that handle, never doubled.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 args=("$@") run=""
 for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" != --run ] || run=${args[i+1]:-}; done

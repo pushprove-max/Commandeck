@@ -31,8 +31,9 @@ esac
 echo '{"ok":true,"result":{}}'
 EOS
 chmod +x "$T"/bin/orca-ide "$T"/plug/scripts/*.sh
-printf '## The issues\n\n1. #1: x\n\n## Prior art\n\nnone\n\n## Plan\n\n.claude/plans/toy.md\n' > "$T/batch.md"
-launch() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky "$@" u1 "$T/batch.md" </dev/null 2>&1); }
+# batchfor <unit> [launch line] -- the batch, its Launch line naming <unit> as a new unit unless one is given (issue 234).
+batchfor() { printf '## The issues\n\n1. #1: x\n\n## Launch\n\n%s\nOrder: build issue 1\n\n## Prior art\n\nnone\n\n## Plan\n\n.claude/plans/toy.md\n' "${2-Launch: new unit $1}" > "$T/batch.md"; }
+launch() { batchfor u1; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky "$@" u1 "$T/batch.md" </dev/null 2>&1); }
 launch >"$T/out"; check "the first call opens the design pane and no Builder" "1:0" "$(grep -c 'design pane open' "$T/out"):$(test -e "$T/keep-at-open" && echo 1 || echo 0)"
 mkdir -p "$WS/u1/.claude/briefs"; echo note > "$WS/u1/.claude/briefs/u1-design.md"
 launch --keep billing >"$T/out"
@@ -41,7 +42,7 @@ check "a second call with --keep billing opens the Builder with Stripe kept" "bi
 
 # --- a unit planned in its own worktree: the real plan-worktree-close.sh, a launch with no --risky ---
 cp "$REAL/scripts/plan-worktree-close.sh" "$T/plug/scripts/"
-build() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+build() { batchfor "$1"; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
 # planned <unit> -- the worktree a plan seat's first launch leaves: cut from main and marked as that unit's.
 planned() { git -C "$P" worktree add -q "$WS/$1" && echo "$1" > "$(git -C "$WS/$1" rev-parse --absolute-git-dir)/commandeck-plan-of"; }
 mark() { cat "$(git -C "$WS/$1" rev-parse --absolute-git-dir)/commandeck-plan-of" 2>/dev/null; }
@@ -63,7 +64,7 @@ check "so the same launch run again adopts it and opens the Builder" "0:1:" "$RC
 # and the planner's settings come back byte for byte.
 planned u6; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/worktree-setup.sh" "$WS/u6" >/dev/null 2>&1)
 cp "$WS/u6/.claude/settings.local.json" "$T/u6-settings"
-skip() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS "$@" bash "$T/plug/scripts/builder-launch.sh" --skip-plan --reason retry-test u6 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+skip() { batchfor u6; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS "$@" bash "$T/plug/scripts/builder-launch.sh" --skip-plan --reason retry-test u6 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
 : > "$T/seats"; skip COMMANDECK_ROUTING_LOG=.
 check "a launch that fails after its brief and Builder settings are written takes both back, and the mark comes back" "1:0:0:same:u6" \
   "$RC:$(grep -c . "$T/seats"):$(ls "$WS/u6/.claude/briefs" 2>/dev/null | grep -c '^u6'):$(cmp -s "$T/u6-settings" "$WS/u6/.claude/settings.local.json" && echo same || echo changed):$(mark u6)"
@@ -72,10 +73,10 @@ check "so the same launch run again adopts it and opens the Builder" "0:1:" "$RC
 # The same for a risky launch whose design pane did not open: its design spec, left behind, made the retry read
 # as the second call and wait for a design note no pane would write.
 planned u7; touch "$T/seat-fails"; : > "$T/seats"
-(cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u7 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
+batchfor u7; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u7 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
 check "a risky launch whose design pane fails takes its design spec and brief back, and the mark comes back" "1:0:u7" "$RC:$(ls "$WS/u7/.claude/briefs" 2>/dev/null | grep -c '^u7'):$(mark u7)"
 rm "$T/seat-fails"
-(cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u7 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
+batchfor u7; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u7 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
 check "so the retry adopts it and opens the design pane" "0:1:" "$RC:$(grep -cx 'launch design-coauthor u7' "$T/seats"):$(mark u7)"
 # Pass 3: seat.sh can fail after its pane opened (its last screen read, after the dispatch). The rollback then took
 # the brief and settings from under the running Builder and gave its worktree the planner's mark, so the next launch
@@ -84,7 +85,7 @@ planned u8; touch "$T/seat-opens-fails"; : > "$T/seats"; build u8
 check "a launch whose seat fails after its pane opened keeps the Builder's brief and settings, names the pane, gives no mark back" "1:yes:yes:1:" \
   "$RC:$([ -s "$WS/u8/.claude/briefs/u8.md" ] && echo yes || echo no):$([ -f "$WS/u8/.claude/settings.local.json" ] && echo yes || echo no):$(grep -c 'term_b8' "$T/out"):$(mark u8)"
 rm "$T/pane-open"; planned u9
-(cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u9 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
+batchfor u9; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u9 "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?
 check "the same for a risky launch's design pane: its spec stays, so the retry waits for the note that pane writes" "1:yes:" \
   "$RC:$([ -s "$WS/u9/.claude/briefs/u9-design-spec.md" ] && echo yes || echo no):$(mark u9)"
 rm "$T/pane-open"; planned u10; touch "$T/list-fails"; build u10
@@ -94,6 +95,20 @@ rm "$T/seat-opens-fails" "$T/pane-open" "$T/list-fails"
 git -C "$P" worktree add -q "$WS/u4"; : > "$T/seats"; build u4
 check "an existing unmarked worktree (another Builder's) is refused as before" "2:1:0" \
   "$RC:$(grep -c "^REFUSED: $WS/u4 already exists" "$T/out"):$(grep -c . "$T/seats")"
+
+# Issue 234: a unit opened on an order that never named it. The batch quotes the order, and its Launch line must
+# name this unit as new; adding work to a unit is builder-add-work.sh's.
+# order <unit> <launch line> -- a launch of <unit> on a batch with that Launch line ('' for none); RC and $T/out as build's.
+order() { : > "$T/seats"; : > "$T/orca.log"; batchfor "$1" "$2"; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS \
+  bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+order u11 ''
+check "a batch with no Launch line is refused before anything opens" "2:1:0:0" "$RC:$(grep -c 'REFUSED: .* has no Launch line' "$T/out"):$(grep -c . "$T/seats"):$(grep -c . "$T/orca.log")"
+order u12 'Launch: add to u2'
+check "a batch that adds to a unit is refused, pointing to builder-add-work.sh" "2:1:0" "$RC:$(grep -c 'REFUSED: .*adds work to u2: run builder-add-work.sh u2' "$T/out"):$(grep -c . "$T/seats")"
+order u13 'Launch: new unit u99'
+check "a batch whose order names another unit is refused" "2:1:0" "$RC:$(grep -c "REFUSED: .*names u99, not u13" "$T/out"):$(grep -c . "$T/seats")"
+order u14 'Launch: new unit u14'
+check "a batch whose Launch line names this unit as new opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u14' "$T/seats")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

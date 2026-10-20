@@ -12,6 +12,7 @@
 # the log, tokens is null and tokensReason (SEAT_EVENT_REASON or a default) says
 # why. session is that log's path (null without one): the dashboard ties a planning
 # seat's spend to it after the pane is gone. SEAT_EVENT_STOP is why the seat stopped: done, killed, wedged or budget.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(dirname "${BASH_SOURCE[0]}")
 # provider log [since-epoch] -- {model, tokens:{input, cachedInput, output}} or

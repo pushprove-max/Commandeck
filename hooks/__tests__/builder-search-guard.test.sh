@@ -88,5 +88,11 @@ mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho 1234567890\n' > "$TMP/bin/date"; ch
 rm -f /tmp/claude-builder-search-streak-gs-clk; PATH="$TMP/bin:$PATH" sg gs-clk "$GREP" >/dev/null
 check "the streak carries the time date(1) gives" 1234567890 "$(cut -d' ' -f2 /tmp/claude-builder-search-streak-gs-clk)"
 
+# Issue 247: a search for one bare identifier is a symbol lookup done the slow way (a search, then a read).
+note() { ev PreToolUse "$1" "$2" 2>/dev/null | jq -r '.hookSpecificOutput.additionalContext // empty' | grep -c find_symbol; }
+check "a search for one bare identifier is let through with the symbol-lookup note, Bash or Grep" "1 1" \
+  "$(note gs-p "$(bash_ 'rg -n strip_quoted')") $(note gs-p2 "$(tool Grep '{"pattern":"strip_quoted","path":"src"}')")"
+check "a regex or a short word gets no note" "0 0" "$(note gs-q "$(bash_ "rg -n 'a.*b' src")") $(note gs-q2 "$(bash_ 'rg -n abc src')")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

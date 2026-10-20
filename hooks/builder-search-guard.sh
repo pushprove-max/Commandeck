@@ -26,9 +26,9 @@ SIB=${COMMANDECK_SEARCH_SIBLING_MS:-1500}
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 {
-  IFS=$'\001' read -r AID SID TOOL PTH EVT TUID TXP
+  IFS=$'\001' read -r AID SID TOOL PTH EVT TUID TXP PAT
   CMD=$(cat)
-} < <(jq -r '([.agent_id // "", .session_id // "", .tool_name // "", (.tool_input.path // .tool_input.relative_path // ""), .hook_event_name // "", .tool_use_id // "", .transcript_path // ""] | join("\u0001")),
+} < <(jq -r '([.agent_id // "", .session_id // "", .tool_name // "", (.tool_input.path // .tool_input.relative_path // ""), .hook_event_name // "", .tool_use_id // "", .transcript_path // "", (.tool_input.pattern // "" | gsub("[\u0001\n]"; " "))] | join("\u0001")),
   (.tool_input.command // "")' <<<"$INPUT" 2>/dev/null)
 [ -z "$AID" ] || exit 0
 STREAK=/tmp/claude-builder-search-streak-${SID:-none}
@@ -36,6 +36,8 @@ ROOT=${CLAUDE_PROJECT_DIR:-}
 ROOT=${ROOT%/}
 
 case "$TOOL" in Edit|Write|MultiEdit|Agent|Task) : > "$STREAK"; exit 0 ;; esac
+# operand <index> -- PAT is the first word of W from there that is no flag: the pattern, as a search names it.
+operand() { local A; for A in "${W[@]:$1}"; do case "$A" in -*) ;; *) PAT=$A; return ;; esac; done; }
 # search <tool> <path> <command> -- 0 for a search, with WHOLE=1 for a whole-repo one; 1 for any other call.
 search() {
   local P M E S FOUND SEG W k V i C SKIP A OP CMD=$3
@@ -67,9 +69,10 @@ search() {
       done
       C=${W[i]:-}; C=${C##*/}
       case "$C" in
-        rg) FOUND=1 ;;
-        git) [ "${W[i+1]:-}" = grep ] && FOUND=1 ;;
+        rg) FOUND=1; operand $((i+1)) ;;
+        git) [ "${W[i+1]:-}" = grep ] && FOUND=1 && operand $((i+2)) ;;
         grep)
+          operand $((i+1))
           SKIP=0
           for A in "${W[@]:i+1}"; do
             [ "$SKIP" = 0 ] || { SKIP=0; continue; }
@@ -106,13 +109,20 @@ search() {
   return 0
 }
 search "$TOOL" "$PTH" "$CMD" || exit 0
+# allow -- let the search run; a search for one bare identifier is told the symbol lookup that answers it in one call.
+allow() {
+  [[ $EVT == PreToolUse && $PAT =~ ^[A-Za-z_][A-Za-z0-9_]{3,}$ ]] && HOOK_FIRE_ADVISE=1 \
+    && jq -cn --arg m "Note: \`$PAT\` is one identifier. A symbol lookup answers it in one call: mcp__serena__find_symbol (name_path $PAT, include_body for its source) or find_referencing_symbols for its callers, instead of a search and a read." \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
+  exit 0
+}
 
 # Prints "<searches in this call's turn> <message id>"; 0 when the call is not on disk yet (the transcript lags the hook).
 # Only distinct searches that are let through count: a lone search sent with any other call, a whole-repo search
 # (always refused) or the same search again is no batch. Records end in NUL, so a command keeps its newlines and
 # its heredoc data stays data.
 turn_calls() {
-  local n=0 id='' t p c W0=$WHOLE
+  local n=0 id='' t p c W0=$WHOLE P0=$PAT
   [ -n "$TUID" ] && [ -r "$TXP" ] || { echo "0 "; return; }
   {
     read -r -d '' id
@@ -122,7 +132,7 @@ turn_calls() {
     | if $m == null or $m.message.id == null then empty
       else $m.message.id as $id | $id + "\u0000", ([map(select(.message.id == $id))[] | (.message.content // [])[] | select(.type == "tool_use")]
         | unique_by([.name, .input])[] | [.name, (.input.path // .input.relative_path // ""), (.input.command // "")] | join("\u0001") + "\u0000") end' 2>/dev/null)
-  WHOLE=$W0
+  WHOLE=$W0 PAT=$P0
   [ -n "$id" ] || n=0
   echo "$n $id"
 }
@@ -141,11 +151,11 @@ if [ "$WHOLE" = 1 ]; then
   REASON=whole-repo
   MSG='A whole-repo search is a large search. Hand it to an Explore subagent (Agent, subagent_type Explore), or name a directory.'
 else
-  [ "$N" -ge "$LIMIT" ] || exit 0
+  [ "$N" -ge "$LIMIT" ] || allow
   # The first call of a batch can be checked before its siblings are on disk: wait one sibling window, then count again.
   if [ -n "$TUID" ] && [ -r "$TXP" ]; then
     sleep "$((SIB / 1000)).$(printf '%03d' $((SIB % 1000)))"
-    read -r CALLS _ < <(turn_calls); [ "${CALLS:-0}" -lt 2 ] || exit 0
+    read -r CALLS _ < <(turn_calls); [ "${CALLS:-0}" -lt 2 ] || allow
   fi
   REASON=streak
   # The refusal names the forms that run now: each refusal costs a request, and a retry that guesses costs another.

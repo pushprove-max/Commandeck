@@ -210,6 +210,19 @@ test('API billing leaves out the usage-window tiles and says why; a subscription
   assert.match(text(v.document.getElementById('limit-facts')), /5-hour/);
 });
 
+// Issue 226: the panel names the account its figure is for, so a switched login cannot pass for the old one.
+test('the limit panel names the signed-in account, masked, in either billing mode', () => {
+  const w = fresh();
+  show(w, { limit: { billing: 'subscription', usedPct: 40, accountLabel: 'b…@example.org' } });
+  assert.match(text(w.document.getElementById('limit-who')), /b…@example\.org/);
+  const v = fresh();
+  show(v, { limit: { billing: 'api', codexBilling: 'none', api: { spentUsd: 12, complete: true }, accountLabel: 'b…@example.org' } });
+  assert.match(text(v.document.getElementById('limit-who')), /b…@example\.org/);
+  const u = fresh();
+  show(u, { limit: { billing: 'subscription', usedPct: 40, accountLabel: null } });
+  assert.equal(text(u.document.getElementById('limit-who')), 'Claude and Codex', 'no label read: the plain title');
+});
+
 // A 7-day tile is for a provider used through a subscription, the only case with a 7-day window: elsewhere it
 // was a dead "not measured" box. Claude's follows its billing, Codex's its sign-in; a failed read on a
 // subscription, or a sign-in that could not be read, still shows the tile as not measured, never hides it.
@@ -744,4 +757,30 @@ test('issue 211: a refused save shows the other page\'s folded sections, and a l
   fold(b, 'permanent');
   await settled(b);
   assert.deepEqual([...onDisk().projects.demo.collapsed].sort(), ['limit-body', 'permanent'], 'both pages\' folds stand');
+});
+
+// Issue 217: the fold lists merged whole, so the page that saved last replaced the other page's folds. A fold list is
+// merged as a set: the host's list, plus this page's additions, less its removals. `hidden` shares the cause.
+test('issue 217: two pages folding at once keep both folds, and an unfold removes only that one', async () => {
+  const fold = (w, id, open = false) => { const d = w.document.getElementById(id); d.open = open; d.dispatchEvent(new w.Event('toggle')); };
+  fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {"rev": 3}}};\n');
+  const a = boot(), b = boot();
+  fold(a, 'limit-body');
+  await settled(a);
+  fold(b, 'permanent');
+  await settled(b);
+  assert.equal(b.puts, 1, 'refused: page A saved first');
+  relayout(b);
+  await settled(b);
+  assert.deepEqual([...onDisk().projects.demo.collapsed].sort(), ['limit-body', 'permanent'], 'both pages\' folds stand');
+  // Page D unfolds the section folded before both pages read the layout; page C's new fold stays.
+  fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {"rev": 3, "collapsed": ["permanent"]}}};\n');
+  const c = boot(), d = boot();
+  fold(c, 'limit-body');
+  await settled(c);
+  fold(d, 'permanent', true);
+  await settled(d);
+  relayout(d);
+  await settled(d);
+  assert.deepEqual(onDisk().projects.demo.collapsed, ['limit-body'], 'the unfold removes only its own section');
 });

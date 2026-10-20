@@ -7,6 +7,7 @@
 # mailbox the relay's inbox watcher reads. A pane handle is a live-only mailbox,
 # and notes sent there while the pane was busy never reached it. Exits 1, saying
 # so, unless Orca confirms a stored message.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 if [ "${1:-}" = --note ]; then

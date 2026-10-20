@@ -13,7 +13,9 @@
 # id, or of a chat or earlier day's id this header names, armed (its add below
 # spends the grant). Any other refused add (a same-day header reused for another
 # question) is logged and the question still goes out. Plain-chat asks:
-# ask-stop-records-decision.sh.
+# ask-stop-records-decision.sh. With no relay (no chiefOfStaff.name, setup's
+# default) nothing is blocked: main is the only asker, and a block hid its
+# question from the owner (issue 241). The ledger row is still written or kept.
 #
 # Self-test: bash hooks/__tests__/ask-records-decision.test.sh
 set -uo pipefail
@@ -40,9 +42,11 @@ ROWS=$(jq -c -L "${BASH_SOURCE[0]%/*}/lib" --arg day "$(date +%Y-%m-%d)" 'includ
   ([.options[]?.label // "" | select(test("\\(Recommended\\)\\s*$"))] | first
     | if . == null then "none" else sub("\\s*\\(Recommended\\)\\s*$"; "") end)]' <<<"$INPUT" 2>/dev/null)
 
+RELAY=$(jq -r '.chiefOfStaff.name // empty' "${ROOT:-.}/.claude/commandeck.json" 2>/dev/null)
 blocked() {
+  [ -n "$RELAY" ] || return 0
   printf '%s\n' "BLOCKED: this question is already in front of the owner (state below); do not ask it again." \
-    "Still open: do not re-ask; carry on with other work or end the turn, his answer arrives by itself. Answered: use that answer." "$@" >&2
+    "Still open: do not re-ask; carry on with other work or end the turn, the answer arrives by itself. Answered: use that answer. Its state: \`bash scripts/decision.sh list\`." "$@" >&2
   exit 2
 }
 dups=() seen=() restore='{}'
@@ -64,7 +68,7 @@ while IFS= read -r row; do
   id=$(jq -r '.[0]' <<<"$row") q=$(jq -r '.[1]' <<<"$row") d=$(jq -r '.[2]' <<<"$row")
   err=$(bash "$DECIDE" add "$id" "$q" "$d" AskUserQuestion 2>&1 >/dev/null) && continue
   # A repeat that raced in after the check above.
-  [ $? -eq 3 ] && blocked "$err"
+  if [ $? -eq 3 ]; then blocked "$err"; continue; fi
   HOOK_FIRE_ADVISE=1
   mkdir -p "${LOG%/*}" 2>/dev/null
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$err" | tee -a "$LOG" >&2

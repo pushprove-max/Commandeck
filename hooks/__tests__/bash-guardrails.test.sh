@@ -17,7 +17,9 @@ READ_TMP=$(mktemp -d)
 trap 'rm -rf "$MAIN_TMP" "$READ_TMP"' EXIT
 
 run_hook() { ( cd "$MAIN_TMP" && echo "$1" | "$HOOK" >/dev/null 2>&1; echo $? ); }
-check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
+# BASH_GUARDRAILS_TEST_CASE=<text> counts only the cases whose name holds <text>, for a red run or a fix round;
+# the closing run is the whole file. A filter that matches no case fails.
+check() { case $1 in *"${BASH_GUARDRAILS_TEST_CASE-}"*) ;; *) return 0 ;; esac; if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 json() { jq -cn --arg cmd "$1" '{tool_input:{command:$cmd}}'; }
 # A refusal these guards keep must hand back a concrete command. Take its
 # `Try:` line and replay it in the same seat: it has to pass, or the advice is
@@ -111,7 +113,27 @@ check "bare-pid kill passes" 0 \
 check "a child job the same command started passes" 0 \
   "$(run_hook "$(json 'sleep 30 & W=$!; kill $W')")"
 
+# --- inline-script writes in a Builder (issue 247) -------
+# An inline script that writes a tracked file goes around Edit, so the guards on Edit never see the change.
+mkdir -p "$MAIN_TMP/scripts" && echo old > "$MAIN_TMP/scripts/x.sh" && git -C "$MAIN_TMP" add scripts/x.sh
+bld() { ( cd "$MAIN_TMP" && json "$1" | COMMANDECK_BUILDER=1 COMMANDECK_HOOK_TIER=default "$HOOK" >/dev/null 2>&1; echo $? ); }
+check "a Builder's python3 -c that writes a tracked file blocks, in any tier" 2 \
+  "$(bld "python3 -c \"open('scripts/x.sh','w').write('new')\"")"
+check "a Builder's python3 heredoc that names the tracked file in a variable blocks" 2 \
+  "$(bld $'python3 - <<\'EOF\'\np = "scripts/x.sh"\nopen(p, "w").write("new")\nEOF')"
+check "the same write to \$TMPDIR passes, and a read of the tracked file passes" "0 0" \
+  "$(bld "python3 -c \"open('\$TMPDIR/x','w').write('new')\"") $(bld "python3 -c \"print(open('scripts/x.sh').read())\"")"
+check "a seat that is no Builder is not asked" 0 \
+  "$( ( cd "$MAIN_TMP" && json "python3 -c \"open('scripts/x.sh','w').write('new')\"" | env -u COMMANDECK_BUILDER COMMANDECK_HOOK_TIER=default "$HOOK" >/dev/null 2>&1; echo $? ) )"
+
+if [ -z "${BASH_GUARDRAILS_TEST_CASE+x}" ]; then
+  check "a case filter counts only the case it names" "1 passed, 0 failed" \
+    "$(BASH_GUARDRAILS_TEST_CASE='bare-pid kill passes' bash "$0" | tail -1)"
+  check "a case filter that matches no case fails, and says so" "1 1" \
+    "$(BASH_GUARDRAILS_TEST_CASE='no such case' bash "$0" >"$READ_TMP/none"; echo "$? $(grep -c 'no case matched' "$READ_TMP/none")")"
+fi
 
 echo
+[ $((PASS + FAIL)) -gt 0 ] || { echo "no case matched ${BASH_GUARDRAILS_TEST_CASE-}"; exit 1; }
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

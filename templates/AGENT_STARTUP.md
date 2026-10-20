@@ -17,26 +17,9 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 
 ## Builder flow
 
-0. Main, before every build: ask the owner "Write a plan first?": Auto (the
-   default: `scripts/plan-tier.sh <batch file>` picks a tier below from the
-   trigger file, one tier up when unsure, and says which and why), No plan,
-   One planner (`plan-author`), Plan + judge (`plan-judge-sol` reads the plan,
-   the planner revises once) or Panel (`plan-author` and `plan-author-second`
-   in parallel, `plan-judge-astra` and `plan-judge-sol` read both, one merge;
-   the owner picks the second planner's model). Then "Which model and
-   effort?" for each seat, among the models setup allows for that seat's agent
-   (default: the model `plan-tier.sh` prints for that seat, at high effort).
-   A seat whose model is not allowed, or a Codex judge with no Codex,
-   runs on an allowed model or as `plan-judge-claude`, and says so; no answer
-   is refused. The planners write the plan file (`.claude/plans/<file>.md`)
-   and nothing else, in the unit's worktree `<unit>`, which the first
-   `seat.sh launch plan-<seat> <unit>` cuts from main; main commits that file
-   on main; the Builder's launch then takes it over. With the owner's build word already given, the build
-   starts after the judge round unless the judge found a real gap; otherwise
-   main STOPS and step 1 runs
-   only on the owner's own go after reading the plan. A plan is never a build
-   order: a plan that exists, is approved or is committed starts no build. A
-   `--risky` design pane runs after the plan, not instead of it.
+0. Main, before every build: ask the owner "Write a plan first?". The tiers, seats and models are in
+   `templates/main-session.md` under Details. A plan is never a build order: with no build word from the owner,
+   main STOPS at the plan file.
 1. Main: `bash scripts/builder-launch.sh <unit> <batch file>` opens the
    worktree, the brief and the Builder pane. With `--risky` it opens a design
    pane instead; run it again once the design note exists to open the Builder.

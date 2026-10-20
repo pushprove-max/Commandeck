@@ -5,6 +5,20 @@
 # incident traces to, and Codex has neither tool.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Issue 247, in a Builder and in any tier: an inline python3/perl/node script that opens a tracked file for writing
+# goes around Edit and the guards on it. A quoted path the script names that git tracks is that file; a scratch
+# path is not tracked and passes.
+if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
+  IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
+  if [[ $IW =~ (^|[^[:alnum:]_])(python3?|perl|node)([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[ce]|-[[:space:]]*<<) ]] \
+    && grep -qE "open\([^)]*,[[:space:]]*['\"]\+?[wa>]|write_text\(|writeFileSync\(" <<<"$IW"; then
+    for P in $(grep -oE "['\"][A-Za-z0-9_./-]+['\"]" <<<"$IW" | tr -d "'\"" | sort -u); do
+      git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" ls-files --error-unmatch -- "$P" >/dev/null 2>&1 || continue
+      echo "BLOCKED: an inline script writes $P, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder)." >&2
+      exit 2
+    done
+  fi
+fi
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -22,7 +36,7 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # Without the helper no end word is checked and every bare node --test would pass.
 type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; exit 2; }
 ODD=$(strip_odd_end "$CMD")
-[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
+[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
 
 # Block node's test runner without the 4 GB heap cap.
 # Root cause of four WSL crashes on 2026-08-24: one uncapped
@@ -70,7 +84,7 @@ while IFS= read -r SEG; do
   # --max_old_space_size=8192` ran at 8 GB behind a guard that read one spelling.
   HEAPS=$(echo "$SEG" | grep -oE -- '--max[-_]old[-_]space[-_]size(=|[[:space:]]+)[0-9]+' | grep -oE '[0-9]+$')
   if [ -z "$HEAPS" ] || [ -n "$(awk '$1 > 4096' <<<"$HEAPS")" ]; then
-    echo "BLOCKED: bare node --test without --max-old-space-size=4096, or with a larger heap flag beside it. Add the flag and drop any larger one, or run the project's own test script when it carries the cap." >&2
+    echo "BLOCKED: bare node --test without --max-old-space-size=4096, or with a larger heap flag beside it. Add the flag (\`node --max-old-space-size=4096 --test\`) and drop any larger one, or run the project's own test script when it carries the cap." >&2
     exit 2
   fi
 done < <(printf '%s\n' "$HEAP_CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/&/\n/g' -e 's/|/\n/g' -e 's/;/\n/g')
@@ -499,7 +513,7 @@ for i in "${!SRCH_TEXT[@]}"; do
   if [ "$FILES_MODE" = 1 ]; then TRY="rg --files $TRYDIR"
   elif [ "$TOOL" = grep ]; then TRY="grep -rn -e $(shq "$PATTERN") $TRYDIR"
   else TRY="rg -n -e $(shq "$PATTERN") $TRYDIR"; fi
-  echo "BLOCKED: $TOOL over an unbounded path: $BAD. Name a directory relative to the checkout, an existing file, or an absolute log path such as /tmp/<unit>-*.log -- never the checkout root, a parent of it, or an unresolved variable. A repo-wide search took main down on 2026-09-10." >&2
+  echo "BLOCKED: $TOOL over an unbounded path: $BAD. Name a directory relative to the checkout (\`rg <pattern> scripts/\`), an existing file, or an absolute log path such as /tmp/<unit>-*.log -- never the checkout root, a parent of it, or an unresolved variable. A repo-wide search took main down on 2026-09-10." >&2
   # The rule never said how to ask the whole-repo question, which is sometimes
   # the real one: 19 of 51 blocks were followed by another block of this same
   # rule. Both sanctioned answers are named here.

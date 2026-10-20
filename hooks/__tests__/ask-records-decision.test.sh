@@ -10,6 +10,8 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 git init -q "$TMP/main"; mkdir -p "$TMP/main/.claude/metrics" "$TMP/home"
 L=$TMP/main/.claude/metrics/decisions.jsonl; : > "$L"
+# The repeat block guards the relay's question queue; with no relay (setup's default) main is the only asker.
+echo '{"chiefOfStaff": {"name": "Relay"}}' > "$TMP/main/.claude/commandeck.json"
 . "$REAL/hooks/lib/ask-decoy.sh"
 ask() { # header question -> the hook's exit code
   jq -cn --arg d "$ASK_DECOY" --arg h "$1" --arg q "$2" --arg cwd "$TMP/main" \
@@ -127,6 +129,13 @@ mkdir -p "$TMP/gbin"; printf '#!/bin/sh\ncase "$*" in *cos-owed) flock -n %q tru
   "$TMP/scratch/cos-owed.lock" "$TMP/grep.log" "$(command -v grep)" > "$TMP/gbin/grep"; chmod +x "$TMP/gbin/grep"; : > "$TMP/grep.log"
 printf '1000\tis u2 merged?\n' > "$TMP/scratch/cos-owed"
 check "the hold reads and marks the message under the writer's lock" "2:0" "$(PATH="$TMP/gbin:$PATH" stop):$(grep -c unlocked "$TMP/grep.log")"
+
+# No relay configured: main's repeat must reach the owner, or nobody asks it.
+echo '{}' > "$TMP/main/.claude/commandeck.json"; ROWS0=$(wc -l < "$L")
+check "with no relay the same question again goes out" 0 "$(ask 'Ship: Now?' 'Ship the release today?')"
+check "and its ledger row is kept, not duplicated" "$ROWS0" "$(wc -l < "$L")"
+rm "$TMP/main/.claude/commandeck.json"
+check "with no project config the repeat goes out too" 0 "$(ask 'Ship: Now?' 'Ship the release today?')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

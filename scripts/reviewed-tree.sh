@@ -9,6 +9,7 @@
 # The dashboard's step strip and the build review both say "ready to merge" and
 # "skipped, unchanged" from this one fact. It is a display's fact: the merge
 # itself proves the tip with builder-codex-pass.sh --verify.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 WT=${1:?worktree} UNIT=${2:?unit}
 newest=$(for f in "$WT/.claude/briefs/$UNIT-r"[0-9]*-reports.md; do

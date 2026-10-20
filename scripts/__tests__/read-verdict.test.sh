@@ -42,5 +42,17 @@ printf 'handle=term_r\ntask=task_r\nrole=plan-author\nlaunched=%s\nsession=%s\n'
 jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type: "assistant", timestamp: $t, message: {content: [{type: "text", text: "Done.\nVERDICT: NO-GO"}]}},
   {type: "system", subtype: "turn_duration", timestamp: $t}' > "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl"
 check "a record's bound Codex log path is not read as a Claude session id" "VERDICT: NO-GO" "$(verdict 'Working.\n')"
+# Issue 225: two NO-GOs in a row on one finding class are a loop, not progress: --repeat-class names the class.
+# rf <round> <verdict> <finding line> -- a round file as builder-codex-pass.sh writes it.
+B=$T/briefs; mkdir -p "$B"
+rf() { printf 'Pass: review\n%s\n\nVERDICT: %s\n' "$3" "$2" > "$B/u-r$1-reports.md"; }
+repeat() { bash "$REAL/scripts/read-verdict.sh" --repeat-class "$B/u-r4-reports.md" 2>&1; }
+rf 3 NO-GO '- [P2] (class: old-format-case) a case -- a.sh:1 -- why -- input'
+rf 4 NO-GO '- [P1] (class: old-format-case) another case -- b.sh:2 -- why -- input'
+check "two NO-GOs in a row sharing a class print REPEAT CLASS" "REPEAT CLASS: old-format-case (r3, r4)" "$(repeat)"
+rf 4 NO-GO '- [P1] (class: lost-reply) another case -- b.sh:2 -- why -- input'
+check "two NO-GOs on different classes print nothing" "" "$(repeat)"
+rf 3 GO '- [P3] (class: lost-reply) a nit -- a.sh:1 -- why -- input'
+check "a GO before, or a P3 of the class, is no repeat" "" "$(repeat)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

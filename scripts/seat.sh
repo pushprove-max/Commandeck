@@ -3,10 +3,14 @@
 #     unit's worktree, hand it the spec (dispatch-task.sh's worker-start, retried
 #     for about 60 s while Orca has not yet detected the pane's agent, then a
 #     pane send when it is still refused), record handle and task under
-#     $SCRATCH/seat-<unit>-<role>.txt.
+#     $SCRATCH/seat-<unit>-<role>.txt. It returns once the pane, its task and that
+#     record exist (phase=launching); the rest runs in the background, logged to
+#     the record's .log, and ends phase=dispatched or phase=failed.
+# seat.sh status <role> <unit> -- the record's phase, handle and task, and its log's last line.
 # seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
 #     -- read the pane's verdict and findings (read-verdict.sh), write them to
-#     --report when the pane could not (a read-only Codex sandbox cannot), close
+#     --report when the pane could not (a read-only Codex sandbox cannot), or with
+#     none to $SCRATCH/reports/<unit>-<role>-<launched>.md (read-verdict.sh --seat), close
 #     the task and the pane, print the findings and the VERDICT line, then run
 #     the --on-go or --on-nogo command (from the repo root, via eval) that the
 #     verdict selects, so a GO launches the next seat or loop in the same call.
@@ -31,11 +35,12 @@ usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 rerun
        seat.sh launch plan-<seat> <unit> <spec-file> [--model <alias>] [--effort <level>]   (the plan seat's model and effort the owner picked; it runs in <unit>, made on its first launch, or a marked <unit>-plan from before 0.18.0)
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
+       seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed)
        seat.sh effort  <role> <unit> <handle> <level>
 Open one routing.json seat in the unit's worktree, collect its verdict, or wait for its marker.
 effort sends /effort <level> to the pane only while it is an idle Claude pane, and
 never below routing's effort-stages.reviewer-floor to a read-only role.
-  --report <path>   collect: write the findings here when the pane could not
+  --report <path>   collect: write the findings here when the pane could not (default: the scratch folder's reports/)
   --marker <text>   collect: a marker line that stands in for VERDICT (collect falls back to the marker of the last wait); wait: the line to wait for
   --on-go <cmd>     collect: run this from the repo root on VERDICT: GO
   --on-nogo <cmd>   collect: run this from the repo root on VERDICT: NO-GO
@@ -44,7 +49,7 @@ never below routing's effort-stages.reviewer-floor to a read-only role.
 example: scripts/seat.sh collect certifier my-unit --report /tmp/commandeck/my-unit-r1.md
 EOF
 }
-case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort) ;; *) usage >&2; exit 2 ;; esac
+case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status) ;; *) usage >&2; exit 2 ;; esac
 [ $# -ge 3 ] || { usage >&2; exit 2; }
 CMDNAME=$1; shift
 ROLE=$1; UNIT=$2; shift 2
@@ -111,6 +116,10 @@ worker_state_kv() {
   timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --agent "${AGENT:-}" --marker "${MARKER:-}" "$@" 2>/dev/null || true
 }
 kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
+rec() { sed -n "s/^$1=//p" "$REC" 2>/dev/null | tail -1; }
+seat_status() { printf 'phase=%s handle=%s task=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(grep . "$REC.log" 2>/dev/null | tail -1)"; }
+# settled -- wait out a launch's background part; fails when it ended phase=failed.
+settled() { local p; p=$(rec pid); while [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do sleep 1; done; [ "$(rec phase)" != failed ]; }
 # A record with no session= (a Codex seat, or a Claude pid lookup that failed) takes the log the reader found, so
 # the seat's spend is its own (dashboard_limit.py seat_costs), not "Not tied to a seat". A Claude log binds as
 # its session id, the form every reader of session= builds <projects>/<id>.jsonl from.
@@ -139,6 +148,10 @@ unfenced() {
 }
 
 case "$CMDNAME" in
+status)
+  [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
+  seat_status
+  ;;
 effort)
   # The one /effort send. Sent mid-turn, /effort is queued as the
   # pane's next user message, so only an idle (Orca state done) Claude pane
@@ -163,6 +176,10 @@ effort)
 launch)
   SPEC=${1:?spec file}
   [ -s "$SPEC" ] || { echo "empty spec: $SPEC" >&2; exit 2; }
+  # A launch of this seat still running in the background is this seat: a retry opens no second pane.
+  if [ "$(rec phase)" = launching ] && kill -0 "$(rec pid)" 2>/dev/null; then
+    echo "REFUSED: $ROLE for $UNIT is still launching: $(seat_status)" >&2; exit 2
+  fi
   # One Builder launch may name its model, raise its effort or drop its advisor (builder-launch.sh); a plan seat
   # takes the model and effort the owner picked for it. No other seat takes any. The model and effort are checked
   # here too: this launch is also run by hand.
@@ -246,6 +263,9 @@ launch)
   # A plan seat's first launch cuts its planning worktree from local main, as builder-launch.sh cuts a Builder's.
   # Its git dir is marked as this unit's, the mark the reuse check above reads.
   if [ ! -d "$WT" ]; then
+    # A new unit opens only on an order that names it (issue 234), as builder-launch.sh holds a batch to.
+    sed -n 's/^Launch:[[:space:]]*//p' "$SPEC" | sed 's/[[:space:]]*$//' | grep -qxF "new unit $UNIT" \
+      || { echo "REFUSED: $SPEC has no 'Launch: new unit $UNIT' line, and this launch would open the unit $UNIT: copy the batch's Launch and Order lines into the spec. Nothing was opened." >&2; exit 2; }
     pp_worktree_new "$WTN" && echo "$UNIT" > "$(git -C "$WT" rev-parse --absolute-git-dir)/$PLAN_OF" || exit 1
   fi
   [ -z "${PLAN_LOCK_FD:-}" ] || exec {PLAN_LOCK_FD}>&-
@@ -281,7 +301,6 @@ launch)
     echo "seat=$ROLE unit=$UNIT handle=$H task=$(sed -n 's/^task=//p' "$REC" | tail -1) state=reused record=$REC"
     exit 0
   fi
-  orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 120000 --json >/dev/null || true
   # orca-task-create.sh retries a missing id once and prints Orca's reason;
   # a launch it fails closes the pane rather than leave a stale seat record.
   # A task created with no run has runId null, so the seat's messages never
@@ -311,87 +330,98 @@ launch)
   send_pointer() { orca-ide terminal send --terminal "$H" --text "$SPEC_TEXT" --enter --wait-submit 10 "$@" --json 2>/dev/null; }
   T=$("$PP_SCRIPTS/orca-task-create.sh" --spec "$SPEC_TEXT" ${LAUNCH_RUN:+--run "$LAUNCH_RUN"}) \
     || { echo "task-create failed for $ROLE $UNIT; closing pane $H" >&2; orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true; exit 1; }
-  # Orca detects the agent in a fresh pane seconds after tui-idle, and until then
-  # refuses inject with "no recognized agent". Retrying that refusal is
-  # fewer lines than polling the pane's agent state; --keep-task leaves the task
-  # open for the next try. Any other refusal falls through at once.
-  dispatch_when_detected() {
-    local err
-    for _ in $(seq 30); do
-      err=$("$PP_SCRIPTS/dispatch-task.sh" "$T" "terminal:$H" --keep-task 2>&1) \
-        && { [ -z "$err" ] || printf '%s\n' "$err" >&2; return 0; }
-      case $err in *"no recognized agent"*) sleep 2 ;; *) break ;; esac
-    done
-    printf '%s\n' "$err" >&2; return 1
-  }
-  PROVEN=0 DIRECT=0
-  if ! dispatch_when_detected; then
-    # Load-bearing: a pane Orca still does not see as an agent after the retry
-    # window, or one refusing for another reason, gets the pointer typed, and
-    # collect (not a worker_done) is what closes that seat. Say it loudly.
-    echo "NO-WAKE: task $T was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
-    DIRECT=1
-    # No Orca preamble names the task in a typed pane: the id ties its session to the task (read-verdict.sh --task).
-    SPEC_TEXT+=" Task id $T."
-    # dispatch-task.sh's busy refusal lands here too; typing would bypass it.
-    rc=0; pane_is_busy "$H" || rc=$?
-    [ "$rc" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read; the pointer was not typed" >&2; exit 1; }
-    RECEIPT=$(send_pointer || true)
-    printf '%s' "$RECEIPT" | jq -e '.ok' >/dev/null 2>&1 || { echo "send failed to $H" >&2; exit 1; }
-    if printf '%s' "$RECEIPT" | submitted; then PROVEN=1
-    else
-      # Replaying the same request id returns the receipt; it never types again.
-      REQ=$(printf '%s' "$RECEIPT" | jq -r '[.. | objects | .requestId? // empty][0] // empty')
-      [ -z "$REQ" ] || { send_pointer --retry-request "$REQ" | submitted && PROVEN=1; }
-    fi
-  fi
   # The record is rewritten, but keeps the seat's first launch in this worktree: a relaunched planner's
   # planning still starts there (dashboard.sh plan_seats).
   FIRST=; [ "$(sed -n 's/^worktree=//p' "$REC" 2>/dev/null | tail -1)" != "$WTN" ] || FIRST=$(sed -n 's/^first=//p; s/^launched=//p' "$REC" | sort -n | head -1)
   printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
+  echo "phase=launching" >> "$REC"
   seat_codex_home
   # The silent-pane relaunch below starts this seat again from its record.
   [ "${#LOPTS[@]}" -eq 0 ] || echo "opts=${LOPTS[*]}" >> "$REC"
   # A seat the origin placed here is the origin's to hear: main-watch on this
   # host skips a record that says so. A later local launch rewrites the record.
   [ -z "${COMMANDECK_ORIGIN_RUN:-}" ] || echo "origin=$COMMANDECK_ORIGIN_RUN" >> "$REC"
-  # The pane's Claude session id ties collect to this seat's log after the pane closes.
-  SID=$(bash "$PP_SCRIPTS/read-verdict.sh" --session "$H" 2>/dev/null || true)
-  [ -z "$SID" ] || [ "$(printf '%s\n' "$SID" | wc -l)" -ne 1 ] || echo "session=$SID" >> "$REC"
-  # seat.sh wait counts the marker against what was typed, which is now this
-  # pointer rather than the spec; a re-prompt that repoints spec= drops it.
-  printf '%s\n' "$SPEC_TEXT" > "$REC.prompt"
-  printf 'prompt=%s\n' "$REC.prompt" >> "$REC"
-  # The record above is what main-watch.sh reads to wake main when this seat
-  # finishes; collect completing task $T is what stops it.
-  # PROVE THE TURN STARTED from the seat's session log, for up to the settle
-  # window. Input acceptance and a painted prompt are not proof.
-  SETTLE=${COMMANDECK_SEAT_SETTLE_SECONDS:-20} waited=0
-  while [ "$PROVEN" = 0 ]; do
-    ST=$(worker_state_kv --launched "$LAUNCH_EPOCH")
-    case "$(kv state)" in running|complete) PROVEN=1; break ;; esac
-    [ "$waited" -lt "$SETTLE" ] || break
-    timeout 2 tail -f /dev/null || true; waited=$((waited + 2))
-  done
-  # Recover only a POSITIVELY unsubmitted composer: the agent's session exists
-  # with no turn and the pane still shows the pointer. Anything less could be a
-  # slow start, and a second prompt then runs the spec twice.
-  if [ "$PROVEN" = 0 ] && [ "$DIRECT" = 0 ] && [ "$(kv reason)" = "no turn" ]; then
-    screen=$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null || true)
-    if grep -qF "$SPEC_ABS" <<<"$screen" && ! grep -qE 'esc to interrupt|· Working' <<<"$screen"; then
-      # ponytail: Ctrl-U clears the composer line in the Claude and Codex TUIs; not
-      # proven on a live pane, so an unrecovered launch still says UNPROVEN below.
-      orca-ide terminal send --terminal "$H" --text $'\x15' --json >/dev/null 2>&1 || true
-      send_pointer | submitted && PROVEN=1
+  # Issue 233: the launch returns once the pane, its task and its record exist. The waits below (tui-idle up to
+  # 120 s, the dispatch retries up to 60 s) outlasted callers' timeouts, and a retry then opened a second pane.
+  # This part runs in the background, its output in $REC.log; it ends the record phase=dispatched or phase=failed.
+  launch_rest() {
+    orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 120000 --json >/dev/null || true
+    # Orca detects the agent in a fresh pane seconds after tui-idle, and until then
+    # refuses inject with "no recognized agent". Retrying that refusal is
+    # fewer lines than polling the pane's agent state; --keep-task leaves the task
+    # open for the next try. Any other refusal falls through at once.
+    dispatch_when_detected() {
+      local err
+      for _ in $(seq 30); do
+        err=$("$PP_SCRIPTS/dispatch-task.sh" "$T" "terminal:$H" --keep-task 2>&1) \
+          && { [ -z "$err" ] || printf '%s\n' "$err" >&2; return 0; }
+        case $err in *"no recognized agent"*) sleep 2 ;; *) break ;; esac
+      done
+      printf '%s\n' "$err" >&2; return 1
+    }
+    PROVEN=0 DIRECT=0
+    if ! dispatch_when_detected; then
+      # Load-bearing: a pane Orca still does not see as an agent after the retry
+      # window, or one refusing for another reason, gets the pointer typed, and
+      # collect (not a worker_done) is what closes that seat. Say it loudly.
+      echo "NO-WAKE: task $T was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
+      DIRECT=1
+      # No Orca preamble names the task in a typed pane: the id ties its session to the task (read-verdict.sh --task).
+      SPEC_TEXT+=" Task id $T."
+      # dispatch-task.sh's busy refusal lands here too; typing would bypass it.
+      rc=0; pane_is_busy "$H" || rc=$?
+      [ "$rc" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read; the pointer was not typed" >&2; exit 1; }
+      RECEIPT=$(send_pointer || true)
+      printf '%s' "$RECEIPT" | jq -e '.ok' >/dev/null 2>&1 || { echo "send failed to $H" >&2; exit 1; }
+      if printf '%s' "$RECEIPT" | submitted; then PROVEN=1
+      else
+        # Replaying the same request id returns the receipt; it never types again.
+        REQ=$(printf '%s' "$RECEIPT" | jq -r '[.. | objects | .requestId? // empty][0] // empty')
+        [ -z "$REQ" ] || { send_pointer --retry-request "$REQ" | submitted && PROVEN=1; }
+      fi
     fi
-  fi
-  # An unproven prompt may still sit in the composer, where `go` would join it.
-  if [ "$PROVEN" = 1 ]; then bash "$PP_SCRIPTS/seat-go.sh" "$H" "$CMD"
-  else echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
-  fi
-  # The seat is launched: a failed read only leaves its state unknown, never fails the launch (builder-launch.sh undoes those).
-  state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true
-  echo "seat=$ROLE unit=$UNIT handle=$H task=$T state=${state:-unknown} record=$REC"
+    # The pane's Claude session id ties collect to this seat's log after the pane closes.
+    SID=$(bash "$PP_SCRIPTS/read-verdict.sh" --session "$H" 2>/dev/null || true)
+    [ -z "$SID" ] || [ "$(printf '%s\n' "$SID" | wc -l)" -ne 1 ] || echo "session=$SID" >> "$REC"
+    # seat.sh wait counts the marker against what was typed, which is now this
+    # pointer rather than the spec; a re-prompt that repoints spec= drops it.
+    printf '%s\n' "$SPEC_TEXT" > "$REC.prompt"
+    printf 'prompt=%s\n' "$REC.prompt" >> "$REC"
+    # The record above is what main-watch.sh reads to wake main when this seat
+    # finishes; collect completing task $T is what stops it.
+    # PROVE THE TURN STARTED from the seat's session log, for up to the settle
+    # window. Input acceptance and a painted prompt are not proof.
+    SETTLE=${COMMANDECK_SEAT_SETTLE_SECONDS:-20} waited=0
+    while [ "$PROVEN" = 0 ]; do
+      ST=$(worker_state_kv --launched "$LAUNCH_EPOCH")
+      case "$(kv state)" in running|complete) PROVEN=1; break ;; esac
+      [ "$waited" -lt "$SETTLE" ] || break
+      timeout 2 tail -f /dev/null || true; waited=$((waited + 2))
+    done
+    # Recover only a POSITIVELY unsubmitted composer: the agent's session exists
+    # with no turn and the pane still shows the pointer. Anything less could be a
+    # slow start, and a second prompt then runs the spec twice.
+    if [ "$PROVEN" = 0 ] && [ "$DIRECT" = 0 ] && [ "$(kv reason)" = "no turn" ]; then
+      screen=$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null || true)
+      if grep -qF "$SPEC_ABS" <<<"$screen" && ! grep -qE 'esc to interrupt|· Working' <<<"$screen"; then
+        # ponytail: Ctrl-U clears the composer line in the Claude and Codex TUIs; not
+        # proven on a live pane, so an unrecovered launch still says UNPROVEN below.
+        orca-ide terminal send --terminal "$H" --text $'\x15' --json >/dev/null 2>&1 || true
+        send_pointer | submitted && PROVEN=1
+      fi
+    fi
+    # An unproven prompt may still sit in the composer, where `go` would join it.
+    if [ "$PROVEN" = 1 ]; then bash "$PP_SCRIPTS/seat-go.sh" "$H" "$CMD"
+    else echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
+    fi
+    # The seat is launched: a failed read only leaves its state unknown, never fails the launch (builder-launch.sh undoes those).
+    state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true
+    echo "seat=$ROLE unit=$UNIT handle=$H task=$T state=${state:-unknown} record=$REC"
+    echo "phase=dispatched" >> "$REC"
+  }
+  ( trap 'rc=$?; [ "$rc" = 0 ] || echo "phase=failed" >> "$REC"' EXIT; trap '' HUP; launch_rest ) > "$REC.log" 2>&1 < /dev/null &
+  echo "pid=$!" >> "$REC"
+  echo "seat=$ROLE unit=$UNIT handle=$H task=$T phase=launching record=$REC log=$REC.log (seat.sh status $ROLE $UNIT)"
   ;;
 collect)
   # A detached driver is a fresh process with no run bound, so the task close
@@ -412,6 +442,8 @@ collect)
   [ -n "$DONE_MARKER" ] || DONE_MARKER=$(sed -n 's/^marker=//p' "$REC" | tail -1)
   # An absolute --report (the usage example's form) is used as given; only a relative one lives in the worktree.
   case $REPORT in ''|/*) ;; *) REPORT=$WT/$REPORT ;; esac
+  # With none given the report still outlives the pane collect closes, at a path read-verdict.sh --seat finds.
+  [ -n "$REPORT" ] || { mkdir -p "$SCRATCH/reports"; REPORT=$SCRATCH/reports/$UNIT-$ROLE-${LAUNCHED:-0}.md; }
   H=$(grep '^handle=' "$REC" | cut -d= -f2); T=$(grep '^task=' "$REC" | cut -d= -f2)
   OUT=$(bash "$PP_SCRIPTS/read-verdict.sh" "$H" 400 "" "" "" "" "" "${LAUNCHED:-0}" 2>/dev/null || true)
   # read-verdict.sh prints its one canonical verdict line ahead of the report
@@ -428,7 +460,8 @@ collect)
     # A report with no `# ` heading would transcribe as an empty file and the pane
     # is closed right after, so fall back to the whole pane text.
     BODY=$(printf '%s\n' "$OUT" | sed -n '/^# /,$p'); [ -n "$BODY" ] || BODY=$OUT
-    printf '%s\n' "$BODY" > "$REPORT"; echo "report transcribed: $REPORT ($(wc -l < "$REPORT") lines)"
+    printf '%s\n' "$BODY" > "$REPORT"; echo "report: $REPORT ($(wc -l < "$REPORT" | tr -d ' ') lines)"
+    echo "report=$REPORT" >> "$REC"
   fi
   # The 240-char bound keeps a pane's findings out of main's context.
   # grep finds nothing on a marker-only seat; under pipefail that ended collect silently.
@@ -459,6 +492,7 @@ collect)
   SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$REC" | tail -1) \
     "$(dirname "$0")/seat-event.sh" "$UNIT" "$ROLE" "$T" "$LAUNCHED" || echo "seat: no seat event recorded for $ROLE $UNIT" >&2
   pp_task_close "$T" completed "{\"verdict\":\"${V#VERDICT: }\"}" || true
+  pp_close_items "$H"
   orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true
   echo "verdict=$V" >> "$REC"
   echo "closed seat=$ROLE unit=$UNIT $V"
@@ -571,7 +605,7 @@ wait)
         pp_task_close "$T" failed '{"done":"silent, relaunched"}' || true
         orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true
         read -ra LOPTS <<<"$(grep '^opts=' "$REC" | cut -d= -f2- || true)"
-        COMMANDECK_DRIVER=1 bash "$0" launch "$ROLE" "$UNIT" "$SPEC" ${LOPTS[@]+"${LOPTS[@]}"} || { echo "seat $ROLE $UNIT: relaunch failed" >&2; exit 1; }
+        { COMMANDECK_DRIVER=1 bash "$0" launch "$ROLE" "$UNIT" "$SPEC" ${LOPTS[@]+"${LOPTS[@]}"} && settled; } || { echo "seat $ROLE $UNIT: relaunch failed: $(seat_status)" >&2; exit 1; }
         echo 'relaunched=1' >> "$REC"
         H=$(grep '^handle=' "$REC" | cut -d= -f2); T=$(grep '^task=' "$REC" | cut -d= -f2)
         rm -f "$WAITF"; WAITF=$SCRATCH/waiting-$H; pp_wait_mark > "$WAITF"

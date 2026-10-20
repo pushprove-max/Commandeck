@@ -11,6 +11,7 @@
 # --start: read-only; prints, per agentType, the runs and the median and p90 of
 # each run's first request input (input + cache creation + cache read): what a
 # helper costs before it does anything.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(dirname "${BASH_SOURCE[0]}")
 . "$HERE/paths.sh" || exit 1

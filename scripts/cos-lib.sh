@@ -10,11 +10,20 @@ COS_DATA=${COMMANDECK_DASHBOARD_DIR:-$HOME/.commandeck/dashboard}/data.js
 # exit 0, which wakes the pane. COMMANDECK_WATCH_ONCE=1 polls once (self-tests).
 # Its pid goes to <state>.<watcher>.pid: the pane's Stop hook
 # (cos-inbox-waiter-stop.sh) reads it to tell this project's watcher from another's.
+# A find goes to its own <state>.<watcher>-wake-<time>.txt. Up to 600 bytes print whole (the relay reads the last
+# 600 characters of a watcher's output); a longer one prints one line (issue 229): what woke, the count, the file.
+# shortcut: the wake files are never pruned; prune by age if the folder grows.
 cos_wait() {
-  local s=$1 n=${0##*/}; shift
-  echo $$ > "$COS_KEY.${n%.sh}.pid"
+  local s=$1 n=${0##*/} f; shift
+  n=${n%.sh}; echo $$ > "$COS_KEY.$n.pid"
   while :; do
-    "$@" && exit 0
+    f=$COS_KEY.$n-wake-$(date +%s).txt
+    if "$@" > "$f"; then
+      if [ "$(wc -c < "$f")" -le 600 ]; then cat "$f"
+      else echo "$n woke: $(grep -c . "$f") records, $(wc -c < "$f" | tr -d ' ') bytes; whole text: $f"; fi
+      exit 0
+    fi
+    rm -f "$f"
     [ -z "${COMMANDECK_WATCH_ONCE-}" ] || exit 1
     sleep "$s"
   done

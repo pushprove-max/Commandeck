@@ -7,6 +7,7 @@
 # scripts, and both per turn. Batched looks show as toolsPerTurn above 1.
 # overBudget=true marks a session whose turns (model calls) exceed the
 # configured review-limits.calls: Codex has no hard stop, so this is the check.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"

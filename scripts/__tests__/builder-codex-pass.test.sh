@@ -261,5 +261,50 @@ check "a diff over the input limit goes as a file list with the read instruction
 # The Claude reviewer's git wrapper refuses -C before the subcommand (exit 2), and both reviewers run in the worktree.
 check "the read instruction has no git -C, which the reviewer's git wrapper refuses" 0 "$(input 11 | grep -cF 'git -C')"
 
+# Issue 243: with fullSuiteBeforeFinal on in main's config, the closing pass runs the merge check's own command whole
+# (--changed taken off) on its tip first. Its line is in the prompt and the round file; a red run is the pass's NO-GO,
+# naming what failed; and --verify takes a closing GO only with a green line for the commit it read.
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
+cfg() { jq "$1" "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"; }
+verify() { (cd "$REPO" && PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --verify "$W" "$U" "$(git -C "$W" rev-parse HEAD)" >"$TMP/vout" 2>"$TMP/verr"); echo $?; }
+printf '#!/usr/bin/env bash\necho "args:$*"\necho "3 passed, 0 failed"\n' > "$TMP/suite-ok.sh"
+printf '#!/usr/bin/env bash\necho "FAIL red-probe.test.sh"\necho "2 passed, 1 failed"\nexit 1\n' > "$TMP/suite-red.sh"
+printf 'echo twelve\n' > "$W/a.sh"
+pass 12 final
+check "the setting off: no suite runs, no Suite line, and a closing GO verifies" "0 0 0" \
+  "$(grep -c '^Suite: ' "$B/$U-r12-reports.md") $(input 12 | grep -c '^Suite: ') $(verify)"
+cfg '.fullSuiteBeforeFinal = true'
+check "the setting on, a closing GO with no Suite line is refused by --verify" "2 1" "$(verify) $(grep -c 'no green full-suite line' "$TMP/verr")"
+cfg 'del(.testCommand)'; printf 'echo thirteen\n' > "$W/a.sh"; HEAD13=$(git -C "$W" rev-parse HEAD)
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-13 bash "$PASS_SH" "$U" 13 final >"$TMP/out" 2>"$TMP/err"); RC=$?
+check "the setting on with no test command: the closing pass refuses, naming the setting, and commits nothing" "2 1 $HEAD13" \
+  "$RC $(grep -c 'fullSuiteBeforeFinal is on' "$TMP/err") $(git -C "$W" rev-parse HEAD)"
+cfg ".testCommand = \"bash $TMP/suite-ok.sh --changed\""
+pass 13 final; SHA13=$(git -C "$W" rev-parse HEAD)
+check "a green suite: its line is in the round file and first in the prompt, the run had no --changed" "1 1 1 0" \
+  "$(grep -c "^Suite: $SHA13 pass 3 passed, 0 failed [0-9]*s $TMP/scratch/$U-suite-${SHA13:0:8}.log\$" "$B/$U-r13-reports.md") \
+$(input 13 | sed -n 2p | grep -c "^Suite: $SHA13 pass ") $(grep -cx 'args:' "$TMP/scratch/$U-suite-${SHA13:0:8}.log") $(grep -c -- '--changed' "$TMP/scratch/$U-suite-${SHA13:0:8}.log")"
+check "and the closing GO with its green line verifies" 0 "$(verify)"
+cfg ".testCommand = \"bash $TMP/suite-red.sh\""; printf 'echo fourteen\n' > "$W/a.sh"
+pass 14 final
+check "a red suite: the round file ends NO-GO and names the failing test, though the reviewer said GO" "1 1 1" \
+  "$(tail -1 "$B/$U-r14-reports.md" | grep -cx 'VERDICT: NO-GO') $(grep -c 'red-probe.test.sh' "$B/$U-r14-reports.md") $(grep -c '^Suite: [0-9a-f]* fail ' "$B/$U-r14-reports.md")"
+check "and --verify refuses the reviewer's GO on that red run" 2 "$(verify)"
+cfg 'del(.fullSuiteBeforeFinal)'
+
+# Issue 225: each finding carries a class tag, and main's "Cleared findings" names a finding by its title and place
+# alone: a tagged P1 main cleared blocks nothing, so the closing pass's P2 tail still merges.
+check "the pass prompt asks for each finding's class" 1 "$(grep -c '\[P<0-3>\] (class: <tag>) <title>' "$B/$U-r14-prompt-1.md")"
+printf '## Cleared findings\n- [P1] CLEAR-PROBE -- a.sh:1\n' >> "$REPO/.claude/briefs/$U-main-rulings.md"; printf 'echo fifteen\n' > "$W/a.sh"
+(cd "$W" && COMMANDECK_MAIN=$REPO bash "$PASS_SH" --ack-rulings "$U" >/dev/null)
+STUB_REPLY=$'- [P1] (class: lost-reply) CLEAR-PROBE -- a.sh:1 -- it breaks -- bash a.sh\nVERDICT: NO-GO' pass 15 final
+check "a class-tagged P1 main cleared does not block the closing pass's merge" 0 "$(verify)"
+
+# Issue 250: a change to a hook is checked by running it; the pass prompt names the probe script only then.
+mkdir -p "$W/hooks" && printf 'exit 0\n' > "$W/hooks/h.sh"
+pass 16 review
+check "a pass over a change to hooks/ asks for an executed probe; one with no hook change does not" "1 0" \
+  "$(grep -c 'hook-probe.sh <hook>' "$B/$U-r16-prompt-1.md") $(grep -c 'hook-probe.sh' "$B/$U-r15-prompt-1.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

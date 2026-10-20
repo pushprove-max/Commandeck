@@ -12,6 +12,7 @@
 # through its closing "ℹ duration_ms", followed only by its failing-tests
 # listing and npm's error lines.
 # Self-test: bash scripts/__tests__/wait-test-run.test.sh
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 USAGE="usage: wait-test-run.sh <runner-pid> <output-file> [max-seconds]"
 PID=${1:-} OUT=${2:-} MAX=${3:-270}

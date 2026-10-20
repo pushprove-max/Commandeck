@@ -37,6 +37,7 @@
 # State lives in $PP_SCRATCH/main-watch, beside the seat records it reads, so a
 # restart neither loses an item nor re-posts one inside the 5 minutes.
 # Test seams: COMMANDECK_NOW (epoch), COMMANDECK_MAIN_WATCH_TICK_S, --once.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/paths.sh" || exit 1
@@ -381,6 +382,11 @@ resolve_main() {
 main_now() { # main as Orca sees it at this moment, not at the start of the tick
   resolve_main "$(listing worktree ps || echo '{}')" "$(listing terminal list || echo '{}')"
 }
+state_now() { # <handle> -- the pane's Orca agent state at this moment, joined as STATES is; empty when unlisted
+  jq -rn --argjson ps "$(listing worktree ps || echo '{}')" --argjson ts "$(listing terminal list || echo '{}')" --arg h "$1" '
+    ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
+    | first(($ts.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h) | $a["\(.tabId):\(.leafId)"]) // empty' 2>/dev/null
+}
 
 # listing <orca-ide subcommand...> -- a pane listing, printed only when Orca
 # answered one: Orca can exit 0 with an RPC error body, which holds no panes and
@@ -432,6 +438,24 @@ tell_relay() {
     --body "$(wc -w <<<"$tasks" | tr -d ' ') item(s) wait unread in main's inbox for run $RUN: $1. Fix: $2." --json \
     && printf '%s\n' "$tasks" > "$ST/wake-told"
 }
+# relay_picker <terminal list json> -- an open picker blocks the relay pane itself, and its mail waits behind it
+# (issue 232). While the relay's screen shows a prompt and messages to it wait unread, $ST/relay-picker.json holds
+# {since, waiting}; the dashboard raises "picker open N min" from it at 30 minutes. Nothing is sent to the pane.
+relay_picker() {
+  local h screen n f=$ST/relay-picker.json
+  h=$(jq -r --arg p "$PP_WORKSPACES/Chief-of-Staff" "$PP_PNORM"'($p | pnorm) as $p | first((.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select((wtp | pnorm) == $p) | .handle) // empty' <<<"$1" 2>/dev/null)
+  if [ -n "$h" ] && screen=$(orca-ide terminal read --terminal "$h" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null) \
+     && grep -qiE "$PROMPT_BLOCKED" <<<"$screen" \
+     && n=$(orca-ide orchestration inbox --terminal "$h" --limit 500 --json 2>/dev/null | jq -er --arg h "$h" \
+       '.result.messages | if type == "array" then [.[] | select(.read == 0 and (.to_handle // $h) == $h)] | length else error end' 2>/dev/null) \
+     && [ "$n" -gt 0 ]; then
+    local since; since=$(jq -r '.since // empty' "$f" 2>/dev/null); [[ $since =~ ^[0-9]+$ ]] || since=$NOW
+    printf '{"since":%s,"waiting":%s}\n' "$since" "$n" > "$f"
+  else
+    rm -f "$f"
+  fi
+}
 wake() {
   [ -e "$ST/wake" ] || return 0
   local tries tasks t open=0 screen r diag text
@@ -455,6 +479,13 @@ wake() {
     open=0; [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
   fi
   if [ "${tries:-0}" -ge "$WAKE_TRIES" ] 2>/dev/null; then
+    # Main's session log written since the first try is a main at work again (a new session, a restart): the
+    # relay is not told to restart a pane that healed itself (issue 238).
+    local at; at=$(pp_session_log_at "$PP_MAIN")
+    if [ "$at" != null ] && [ "$at" -gt "$(cat "$ST/wake-first" 2>/dev/null || echo "$NOW")" ]; then
+      echo "main-watch: wake not proven, but main's session log moved since the first try; nothing told" >&2
+      rm -f "$ST/wake"; return 0
+    fi
     echo "main-watch: wake not proven after $WAKE_TRIES tries; the items re-post in 5 minutes" >&2
     tell_relay "main did not wake after $WAKE_TRIES typed wakes" "restart main"
     rm -f "$ST/wake"; return 0
@@ -479,6 +510,7 @@ wake() {
   if jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' <<<"$r" >/dev/null 2>&1; then
     rm -f "$ST/wake" "$ST/wake-told"
   else
+    [ "${tries:-0}" != 0 ] || echo "$NOW" > "$ST/wake-first"
     printf '%s\n%s\n%s\n%s\n' "$((tries + 1))" "$tasks" "$RUN" "$diag" > "$ST/wake"
     echo "main-watch: wake not proven for $MAIN_H (try $((tries + 1)) of $WAKE_TRIES): $(jq -r '.error.message // "no turn_started in the receipt"' <<<"$r" 2>/dev/null || echo "no receipt")" >&2
   fi
@@ -805,6 +837,12 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     post "$item" "$task" "main-watch: seat $4 on $u finished ($h)" \
       "Seat $4 on $u stopped. Read it: $HERE/read-verdict.sh $h, then collect it."
   else
+    # One more reading first: a seat Orca read idle for one tick while still at work, or whose session log was
+    # written after this tick read it, is not stopped (issue 238). Its finish is forgotten, so the next is read afresh.
+    at=$(pp_session_log_at "$w")
+    if [ "$(state_now "$h")" = working ] || { [ "$at" != null ] && [ "$at" -gt "$NOW" ]; }; then
+      rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key"; return 0
+    fi
     post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
       "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}. This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h"
   fi
@@ -1097,6 +1135,7 @@ tick() {
   arm_diag
   mail_wake
   wake
+  if [ -d "$PP_WORKSPACES/Chief-of-Staff" ]; then relay_picker "$terms"; else rm -f "$ST/relay-picker.json"; fi
   # Heads-up notes are their own batch, after the typed wake and its diagnostic:
   # inbox only, success or refusal.
   DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() RELAY=1

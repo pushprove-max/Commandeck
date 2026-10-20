@@ -5,6 +5,7 @@
 # silent, exit 0. --dry-run closes and removes nothing.
 # --adopt: builder-launch.sh's way into the unit's planning worktree. The same checks and pane close, then the mark
 # goes and the worktree stays for the Builder. Exit 0 adopted; exit 1 kept, with one "kept:" line saying why.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"

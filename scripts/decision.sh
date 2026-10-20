@@ -9,7 +9,7 @@
 # the ledger's lock, so a duplicate id or a double answer cannot race in.
 #
 # A question the owner still has open, or answered in the last 24 hours, is never put
-# to him again: add and check exit 3 naming the earlier decision and its
+# to them again: add and check exit 3 naming the earlier decision and its
 # answer, and append nothing. Two exceptions (main's ruling): a retry
 # after the ruling log voided the owner's last pick of that question as the decoy
 # (exit 0, the open row is reused), and --reask with the new facts, logged in
@@ -22,6 +22,7 @@
 # Owner card lists it as waiting on main, never as the owner's; it is never a
 # repeat of an owner's question, only of its own id.
 # Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "$0")/paths.sh" || exit 1
 L=$PP_MAIN/.claude/metrics/decisions.jsonl

@@ -44,12 +44,14 @@ for h in $STRICT; do
   done
 done
 
-# A planner seat hears the batching advice in the default tier; any other seat stays silent (threshold 1: one look speaks).
+# A planner seat and a Builder (COMMANDECK_BUILDER=1) hear the batching advice in the default tier; any other seat
+# stays silent (threshold 1: one look speaks).
 LOOK=$(jq -cn --arg s "tier-$$" '{tool_name:"Read", session_id:$s, tool_input:{file_path:"/x"}}')
-for seat in plan-author builder; do
+for seat in plan-author:0:yes builder:0:no builder:1:yes; do
+  IFS=: read -r seat b want <<<"$seat"
   rm -f "/tmp/claude-batch-tier-$$"
-  out=$(cd "$TMP" && COMMANDECK_SEAT=$seat BATCH_STREAK_THRESHOLD=1 COMMANDECK_HOOK_TIER=default bash "$HOOKS/batch-independent-looks.sh" 2>/dev/null <<<"$LOOK")
-  check "default: a $seat seat's lone look is advised only for a planner" "$([ $seat = builder ] && echo no || echo yes)" "$([ -n "$out" ] && echo yes || echo no)"
+  out=$(cd "$TMP" && COMMANDECK_SEAT=$seat COMMANDECK_BUILDER=$b BATCH_STREAK_THRESHOLD=1 COMMANDECK_HOOK_TIER=default bash "$HOOKS/batch-independent-looks.sh" 2>/dev/null <<<"$LOOK")
+  check "default: a $seat seat's lone look (COMMANDECK_BUILDER=$b) is advised only for a planner or a Builder" "$want" "$([ -n "$out" ] && echo yes || echo no)"
 done
 rm -f "/tmp/claude-batch-tier-$$"
 

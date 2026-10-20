@@ -20,6 +20,7 @@
 # several open and none named, none is closed: one answer is not every answer.
 #
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/codex-helpers.sh"
@@ -95,7 +96,7 @@ fi
 LEFT=$WAIT
 while :; do
   log_state
-  [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { close_asks; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; exit 0; }
+  [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; exit 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
   # inbox: the answer is typed in then, once, and waited for afresh.
   if [ "$WAY" = "sent to the pane's inbox" ]; then

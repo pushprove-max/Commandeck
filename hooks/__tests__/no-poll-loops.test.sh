@@ -351,6 +351,22 @@ done
 check "worker: a bare \"\"\"orca\" check blocks" rc=2 "$(rc_wt '"""orca" orchestration check')"
 check "worker: an escaped quote before \"\"sleep is the word \"sleep, passes" rc=0 "$(rc_wt '\"""sleep 400')"
 
+# Issues 216 and 215: a shell string runs too. The script of `bash -c`, `eval` and `env -S` is read by the same rules,
+# and `$'...'` and `$"..."` quote as bash reads them, so `$'sleep'` is the word sleep.
+for c in "bash -c 'sleep 400'" 'sh -c "sleep 400"' "zsh -c 'sleep 300'" "eval 'sleep 400'" "env -S 'sleep 400'" \
+  "\$'sleep' 400" '$"sleep" 400' "bash -lc 'sleep 400'" "timeout 900 bash -c 'sleep 400'" "bash -c \"bash -c 'sleep 400'\"" \
+  "sleep 200; bash -c 'sleep 100'" "env -u X -S 'sleep 400'"; do
+  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+done
+check "worker: a sleep loop inside bash -c is refused as a loop" 1 \
+  "$(run_wt "$(bg "bash -c 'for i in 1 2; do sleep 1; done'" false)" | grep -c 'inside a loop')"
+check "worker: bash -c inside a loop is refused as a loop" rc=2 "$(rc_wt "for i in 1 2; do bash -c 'sleep 1'; done")"
+for c in "bash -c 'sleep 100'" "bash -c 'echo hi'" "eval 'echo sleep 400'" "bash scripts/x.sh 'sleep 400'"; do
+  check "worker: $c passes" rc=0 "$(rc_wt "$c")"
+done
+check "worker: a shell string the hook cannot read is refused, and says why" 1 \
+  "$(run_wt "$(bg "bash -c 'sleep \"400'" false)" | grep -c 'cannot read')"
+
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.
 echo "$PASS passed, $FAIL failed"

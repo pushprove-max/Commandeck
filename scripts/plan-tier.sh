@@ -6,6 +6,7 @@
 # tier and the trigger that picked it, then each seat with the model it runs on among the models setup allows
 # (pp_plan_seat says any model or seat used instead, on stderr). For Panel the owner is still asked which model
 # writes the second plan.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"

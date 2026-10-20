@@ -11,6 +11,7 @@
 # Default output is ~/.claude/checkpoints/<session>.md, where <session> is
 # $CLAUDE_SESSION_ID or the newest transcript under the project's projects dir.
 # Refuses to clobber an existing checkpoint without --force.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 OUT=""; FORCE=0

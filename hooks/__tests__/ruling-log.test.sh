@@ -46,6 +46,19 @@ check "a prompt naming an ask by its id without the day closes that one only" "r
 prompt "retry-cap no, and u1-msg_1 the new one"
 check "a Builder's question waiting on main stays open whatever the owner types" "u1-msg_1" "$(open)"
 
+# Issue 232: a picker answer that came back empty read as a ruling of nothing, and main went on. The hook says to
+# ask once more as a single question, logs no ruling, and leaves the decision open; so does the decoy's label.
+DAY=$(date +%Y-%m-%d)
+dec add "pick-fixture-$DAY" "Which seed file?" new AskUserQuestion
+ask() { (cd "$T/p" && jq -n --arg a "$1" '{hook_event_name: "PostToolUse", session_id: "s2", cwd: ".",
+  tool_input: {questions: [{header: "Pick fixture", question: "Which seed file?", options: [{label: "old"}, {label: "new"}]}]},
+  tool_response: {answers: {"Which seed file?": $a}}}' | bash "$HOOK" 2>&1); }
+OUT=$(ask "")
+check "an empty answer prints the retry text, is no ruling, and leaves the decision open" "1 true pick-fixture-$DAY" \
+  "$(grep -ci 'the answer came back empty; ask it once more as a single question' <<<"$OUT") $(tail -1 "$COMMANDECK_RULING_LOG" | jq .void) $(open | tr ' ' '\n' | grep -x "pick-fixture-$DAY")"
+. "${HOOK%/*}/lib/ask-decoy.sh"
+check "the decoy's label prints it too" 1 "$(ask "$ASK_DECOY" | grep -c 'ask it once more as a single question')"
+
 # A row can be hundreds of KB, and an append that size is not one write: two hooks at once interleaved into one
 # damaged line. The append holds a lock on the log, so a writer that holds it makes the hook wait.
 export COMMANDECK_RULING_LOG=$T/lock/log.jsonl; mkdir -p "$T/lock"; : > "$COMMANDECK_RULING_LOG"

@@ -15,6 +15,7 @@
 # checkpoints (~/.claude/checkpoints/*.md) are the owner's work and are never
 # touched. Removing the plugin itself is Claude Code's:
 # `claude plugin uninstall commandeck`.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/paths.sh"

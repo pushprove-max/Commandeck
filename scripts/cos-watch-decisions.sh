@@ -6,6 +6,7 @@
 # decision's printed `seen` value the moment it fires it (the pane's own later
 # append is a harmless duplicate). The mark is the id and when it was asked,
 # so a reopened decision is put to the owner again.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 SEEN=$COS_KEY.decisions-seen

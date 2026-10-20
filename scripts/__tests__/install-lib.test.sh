@@ -162,6 +162,22 @@ for bad in '--worker-plugins-off nomarket' '--worker-skills-off a@b' '--keep-wor
   check "setup refuses $bad and writes nothing" refused "$(cuts "$OWNER" $bad 2>/dev/null || echo refused)"
 done
 
+# --- issue 244: the full suite before the final review, saved as fullSuiteBeforeFinal for builder-codex-pass.sh ---
+# setup.sh's own read line, its no-test-command rule and its config write, as cuts runs them; the second arg is the
+# --full-suite answer as its case arm saves it (true, false, or '' for none given). No setup run.
+full() {
+  echo "$1" > "$T/full.json"
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={}
+    eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^PROFILE=\$(old .profile)" <<<"$S")"; eval "$(grep "^FULL=\$(old " <<<"$S")"
+    [ -z "$2" ] || FULL=$2
+    eval "$(grep "^\[ -n \"\$TEST\" \] || FULL=false" <<<"$S")"
+    { eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"; } | jq -c .fullSuiteBeforeFinal' "$T/full.json" "$2"
+}
+check "--full-suite on is saved as true" true "$(full '{"version":1,"testCommand":"t"}' true)"
+check "a re-run with no answer keeps on as saved" true "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":true}' '')"
+check "a re-run with no answer keeps off as saved, not dropped" false "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":false}' '')"
+check "with no test command it records off, whatever the answer: the closing pass would have no suite to run" false "$(full '{"version":1}' true)"
+
 # --- a routing file of the owner's own gains the plan seats it lacks, and uninstall takes back only those ---
 # A COMMANDECK_ROUTING file kept from before the plan seats had none, so no plan run could start. Setup adds each
 # role the plugin's defaults have and the file lacks; a role the file has, or the owner changes later, is theirs.

@@ -49,6 +49,7 @@
 # end would need main's own hook.
 # The pane's Stop hook (cos-inbox-waiter-stop.sh) matches this script by its
 # file name: do not rename it.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 ME=${1:-${ORCA_TERMINAL_HANDLE:-$(bash "$PP_SCRIPTS/cos-tell.sh" --handle 2>/dev/null)}}

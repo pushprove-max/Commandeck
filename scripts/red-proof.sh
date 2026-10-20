@@ -1,27 +1,45 @@
 #!/usr/bin/env bash
-# red-proof.sh <file> <line> <replacement> -- <test command...>
+# red-proof.sh <file> <line> <replacement> -- <test command...>  |  red-proof.sh --batch <list>
 # Proves that ONE named test catches ONE named break: each run gets a fresh scratch worktree of this checkout
 # (HEAD plus the working tree's changes, tracked and untracked). It runs the test as is, then with line <line>
 # of <file> replaced by <replacement> ("" blanks it), then as is once more. Never edits this checkout.
+# --batch takes lines of <file> TAB <line> TAB <replacement> TAB <test command, run by bash -c> and runs them all in
+# ONE scratch worktree, the file restored after each break; it exits with the worst result of its proofs.
+# A test file that reads a <NAME>_TEST_CASE variable runs one case; a whole run of it is refused (issue 246).
 #   exit 0  RED: green as is, red with the break
 #   exit 1  NOT RED: the test still passes with the break, so it does not catch it
-#   exit 2  no proof: bad arguments, a file outside the scratch copy, or the test red without the break
+#   exit 2  no proof: bad arguments, a file outside the scratch copy, a whole case-aware run, or the test red
+#           without the break
 # Not mutation testing: one break, named by the caller, one test.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
-usage() { echo "usage: red-proof.sh <file> <line> <replacement> -- <test command...>" >&2; exit 2; }
-[ $# -ge 5 ] && [ "$4" = -- ] || usage
-FILE=$1 LINE=$2 NEW=$3; shift 4
-case $LINE in ''|*[!0-9]*|0) usage ;; esac
+usage() { echo "usage: red-proof.sh <file> <line> <replacement> -- <test command...> | --batch <list>" >&2; exit 2; }
+if [ "${1-}" = --batch ]; then [ $# = 2 ] && [ -r "$2" ] || usage
+else [ $# -ge 5 ] && [ "$4" = -- ] || usage; fi
 ROOT=$(git rev-parse --show-toplevel) || exit 2
-REL=${FILE#"$ROOT"/}
-case $REL in /*|../*|*/../*) echo "red-proof: name $FILE from the checkout's root" >&2; exit 2 ;; esac
-[ -f "$ROOT/$REL" ] || { echo "red-proof: no file $REL" >&2; exit 2; }
-# Only a file the scratch copy holds itself: an ignored dependency is a link to this checkout's, and a tracked link
-# points out of the copy, so writing the break through either would change the original.
-[ -n "$(git -C "$ROOT" ls-files --cached --others --exclude-standard -- "$REL")" ] && [ ! -L "$ROOT/$REL" ] \
-  || { echo "red-proof: $REL is not a plain file of this checkout (ignored, a link, or behind one); the break would land outside the scratch copy" >&2; exit 2; }
-[ "$LINE" -le "$(wc -l < "$ROOT/$REL")" ] || { echo "red-proof: $REL has no line $LINE" >&2; exit 2; }
-[ "$(sed -n "${LINE}p" "$ROOT/$REL")" != "$NEW" ] || { echo "red-proof: line $LINE of $REL already reads that; nothing breaks" >&2; exit 2; }
+# valid <file> <line> <replacement> <test command words...> -- 0 when the break can be proved; sets REL, LINE, NEW.
+valid() {
+  local FILE=$1 W V WS; LINE=$2 NEW=$3; shift 3
+  case $LINE in ''|*[!0-9]*|0) echo "red-proof: $LINE is no line number" >&2; return 2 ;; esac
+  REL=${FILE#"$ROOT"/}
+  case $REL in /*|../*|*/../*) echo "red-proof: name $FILE from the checkout's root" >&2; return 2 ;; esac
+  [ -f "$ROOT/$REL" ] || { echo "red-proof: no file $REL" >&2; return 2; }
+  # Only a file the scratch copy holds itself: an ignored dependency is a link to this checkout's, and a tracked link
+  # points out of the copy, so writing the break through either would change the original.
+  [ -n "$(git -C "$ROOT" ls-files --cached --others --exclude-standard -- "$REL")" ] && [ ! -L "$ROOT/$REL" ] \
+    || { echo "red-proof: $REL is not a plain file of this checkout (ignored, a link, or behind one); the break would land outside the scratch copy" >&2; return 2; }
+  [ "$LINE" -le "$(wc -l < "$ROOT/$REL")" ] || { echo "red-proof: $REL has no line $LINE" >&2; return 2; }
+  [ "$(sed -n "${LINE}p" "$ROOT/$REL")" != "$NEW" ] || { echo "red-proof: line $LINE of $REL already reads that; nothing breaks" >&2; return 2; }
+  # A case-aware test file named by the command needs its variable set, in this environment or in the command.
+  read -ra WS <<<"$*"
+  for W in "${WS[@]}"; do
+    [ -f "$ROOT/$W" ] || continue
+    V=$(grep -oE '[A-Z][A-Z0-9_]*_TEST_CASE' "$ROOT/$W" | head -1)
+    [ -n "$V" ] && [ -z "${!V+x}" ] && [[ " $* " != *" $V="* ]] || continue
+    echo "red-proof: $W runs one case with $V=<text in the case name>; a whole run of it repeats every case three times. Set it: $V='<case>' bash $W" >&2
+    return 2
+  done
+}
 
 BOX=$(mktemp -d "${TMPDIR:-/tmp}/red-proof.XXXXXX") || exit 2
 ( cd "$ROOT" && git diff --binary HEAD ) > "$BOX/changes.diff"
@@ -47,14 +65,40 @@ scratch() {
 
 run_test() { (cd "$WT" && "$@") > "$BOX/out" 2>&1; }
 show() { tail -n 15 "$BOX/out" | sed 's/^/  | /'; }
+# break_line -- write the break into the scratch copy's file.
+# Through ENVIRON, not -v: awk -v rewrites backslash escapes, so a replacement holding a regex would change.
+break_line() { RP_NEW=$NEW awk -v n="$LINE" 'NR == n { print ENVIRON["RP_NEW"]; next } { print }' "$WT/$REL" > "$BOX/broken" \
+  && cat "$BOX/broken" > "$WT/$REL"; }
+
+if [ "$1" = --batch ]; then
+  # One copy for every proof: the file is put back from the copy's own text after each break.
+  scratch batch; WORST=0
+  while IFS=$'\t' read -r F L N C || [ -n "$F" ]; do
+    [ -n "$F" ] || continue
+    valid "$F" "$L" "$N" "$C" 2>&1 || { WORST=2; continue; }
+    cp "$WT/$REL" "$BOX/keep"
+    if ! run_test bash -c "$C"; then echo "red-proof: $REL:$LINE: NO PROOF: the test already fails without the break"; show; WORST=2; continue; fi
+    break_line || exit 2
+    if run_test bash -c "$C"; then
+      cp "$BOX/keep" "$WT/$REL"; echo "red-proof: $REL:$LINE: NOT RED: the test passes with the break"; show
+      [ "$WORST" = 2 ] || WORST=1; continue
+    fi
+    cp "$BOX/out" "$BOX/out-broken"; cp "$BOX/keep" "$WT/$REL"
+    if ! run_test bash -c "$C"; then echo "red-proof: $REL:$LINE: NO PROOF: the test fails without the break when run again"; show; WORST=2; continue; fi
+    cp "$BOX/out-broken" "$BOX/out"
+    echo "red-proof: RED: the test passes as is and fails with $REL:$LINE replaced by: $NEW"; show
+  done < "$2"
+  exit "$WORST"
+fi
+
+FILE=$1; L=$2; N=$3; shift 4
+valid "$FILE" "$L" "$N" "$@" || exit 2
 scratch as-is
 if ! run_test "$@"; then
   echo "red-proof: NO PROOF: the test already fails in the scratch copy without the break"; show; exit 2
 fi
 scratch broken
-# Through ENVIRON, not -v: awk -v rewrites backslash escapes, so a replacement holding a regex would change.
-RP_NEW=$NEW awk -v n="$LINE" 'NR == n { print ENVIRON["RP_NEW"]; next } { print }' "$WT/$REL" > "$BOX/broken" \
-  && cat "$BOX/broken" > "$WT/$REL" || exit 2
+break_line || exit 2
 if run_test "$@"; then
   echo "red-proof: NOT RED: the test passes with $REL:$LINE replaced, so it does not catch that break"; show; exit 1
 fi

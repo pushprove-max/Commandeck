@@ -27,7 +27,7 @@ INPUT=$(cat)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
 
 # ONE PARSE. Every rule below reads some slice of the payload -- the path, the
 # text going in, the text coming out, or all three per edit -- and each slice
@@ -45,7 +45,7 @@ if [ "$(grep -c . <<<"$_paths")" -gt 1 ]; then
     _one=$(jq -c --arg p "$(printf '%s' "$_p64" | base64 -d 2>/dev/null)" '.tool_input |= (. as $t
       | (if ($t.file_path // "") == $p then . else del(.content, .new_string, .old_string) end)
       | .edits = [($t.edits // [])[] | select((.file_path // $t.file_path // "") == $p)] | .file_path = $p)' <<<"$INPUT") \
-      || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not split a batch over several files, so it cannot screen this write." >&2; exit 2; }
+      || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not split a batch over several files, so it cannot screen this write. Send one \`Edit\` call per file." >&2; exit 2; }
     printf '%s' "$_one" | bash "${BASH_SOURCE[0]}" || exit $?
   done <<<"$_paths"
   exit 0
@@ -135,7 +135,7 @@ if bad:
     print("; ".join(bad))
     sys.exit(2)') || {
   [ $? -ne 2 ] || {
-    echo "BLOCKED: after this edit $PARSE. A hook that does not parse refuses every call it is registered for, its own repair included." >&2
+    echo "BLOCKED: after this edit $PARSE. A hook that does not parse refuses every call it is registered for, its own repair included. Fix the text; \`bash -n <file>\` reads it the same way." >&2
     exit 2
   }
 }

@@ -5,7 +5,12 @@
       Claude's own usage reading (the statusline's source) as JSON on stdout;
       exit 1 with no output when there is no login token or the read fails, and
       the cause as one stderr line (dashboard.sh shows it and honours its
-      `retry after <n> s`).
+      `retry after <n> s`). The login is CLAUDE_CONFIG_DIR's when set: main's
+      config folder, which Orca may set per pane.
+  dashboard_limit.py account <cache-dir>
+      The signed-in account ({account, label}). When it is not the one the
+      cached reading was taken for, that reading and its retry note are
+      removed, and limit-history.jsonl moves aside to limit-history.<old>.jsonl.
   dashboard_limit.py build <status> <usage-file> <now-epoch> <cache-dir> <projects-dir> [<codex-sessions-dir> [<day-projects-json>]]
       The panel's JSON. <status> is dashboard.sh's record for the usage file.
       With the Codex sessions folder it adds `codex`: Codex's own 7-day
@@ -56,8 +61,65 @@ def epoch(s):
         return None
 
 
+def config_dir():
+    """The Claude config folder main last started under (CLAUDE_CONFIG_DIR, dashboard.sh passes it on), or None for the default."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR") or ""
+    return None if not d or os.path.realpath(d) == os.path.realpath(os.path.expanduser("~/.claude")) else d
+
+
+def account():
+    """{account, label} of the signed-in login: a hash of its uuid and a masked email; each None when unreadable."""
+    d = config_dir()
+    try:
+        with open(os.path.join(d, ".claude.json") if d else os.path.expanduser("~/.claude.json")) as f:
+            a = json.load(f).get("oauthAccount") or {}
+    except (OSError, ValueError, AttributeError):
+        a = {}
+    uuid, email = a.get("accountUuid"), a.get("emailAddress")
+    # The dashboard is reachable from the home network: the first letter and the domain only.
+    label = f"{email[0]}…@{email.split('@', 1)[1]}" if isinstance(email, str) and "@" in email[1:] else None
+    return {"account": hashlib.sha256(uuid.encode()).hexdigest()[:12] if isinstance(uuid, str) and uuid else None, "label": label}
+
+
+def switch_account(cache_dir):
+    """A reading cached for another account is that account's: drop it and its retry note, and move its history aside."""
+    now = account()
+    path = os.path.join(cache_dir, "claude-account.json")
+    try:
+        with open(path) as f:
+            old = json.load(f).get("account")
+    except (OSError, ValueError, AttributeError):
+        old = None
+    # No record yet (the release before this one) is the same account: nothing is dropped on the update.
+    if old and now["account"] != old:
+        for f in ("claude-usage", "claude-usage.retry"):
+            try:
+                os.remove(os.path.join(cache_dir, f))
+            except OSError:
+                pass
+        hist = os.path.join(cache_dir, "limit-history.jsonl")
+        if os.path.exists(hist):
+            os.replace(hist, os.path.join(cache_dir, f"limit-history.{old}.jsonl"))
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(now, f)
+    os.replace(tmp, path)
+    return now
+
+
 def token():
     # The same stores the statusline reads: the Mac keychain, else the credentials file.
+    d = config_dir()
+    if d:
+        # shortcut: a non-default folder's keychain item name is not documented, so a Mac reads it as not measured;
+        # upgrade when Claude Code documents it.
+        if (os.environ.get("COMMANDECK_HOST_OS") or platform.system()) == "Darwin":
+            return None
+        try:
+            with open(os.path.join(d, ".credentials.json")) as f:
+                return json.load(f)["claudeAiOauth"]["accessToken"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
     if (os.environ.get("COMMANDECK_HOST_OS") or platform.system()) == "Darwin":
         r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
                            capture_output=True, text=True)
@@ -77,7 +139,9 @@ def token():
 def fetch():
     t = token()
     if not t:
-        print("no login token", file=sys.stderr)
+        mac = (os.environ.get("COMMANDECK_HOST_OS") or platform.system()) == "Darwin"
+        print("no login token" if not (config_dir() and mac) else
+              f"not measured: the keychain item of the Claude config folder {config_dir()} is not known", file=sys.stderr)
         return 1
     req = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {t}", "anthropic-beta": "oauth-2025-04-20"})
     try:
@@ -837,6 +901,7 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
         "cost": cost(reqs, used, start, now) if reqs is not None else None,
         "cacheWritePct24h": cache_write_pct(loaded, now),
         "codex": codex(sessions, now),
+        "accountLabel": account()["label"],
     })
     out["codex"]["history"] = codex_history(cache_dir, out["codex"], now)
     # The subscription keys above are the same in both modes; API mode adds its own block beside them.
@@ -978,6 +1043,10 @@ def unit_costs(units, now, cache_dir, projects, sessions):
         mine = lambda w: sorted([(r, f, p, a) for a, src in (("claude", got[w]), ("codex", cx)) for r, f, p in src
                                  if under(f, [w]) and r[0] <= now], key=lambda t: t[0][0])
         build, planned = mine(wt) if wt != pwt else [], mine(pwt) if plan else []
+        if wt == pwt and u["stages"]:
+            # The Builder took over its plan's worktree (issue 242): the build's requests are the ones from its first stage on.
+            t1 = epoch(u["stages"][0]["from"])
+            build, planned = [t for t in planned if t[0][0] >= t1], [t for t in planned if t[0][0] < t1]
         rows = [t[0] for t in build]
         bounds = [(epoch(s["from"]), epoch(s["to"]) if s.get("to") else now) for s in u["stages"]]
         stages = []
@@ -999,6 +1068,9 @@ def unit_costs(units, now, cache_dir, projects, sessions):
 def main(argv):
     if argv[1:] == ["fetch"]:
         return fetch()
+    if len(argv) == 3 and argv[1] == "account":
+        json.dump(switch_account(argv[2]), sys.stdout)
+        return 0
     if len(argv) == 6 and argv[1] == "units":
         # units <now> <cache dir> <Claude projects folder> <Codex sessions folder>; the units on stdin.
         json.dump(unit_costs(json.load(sys.stdin), float(argv[2]), argv[3], argv[4], argv[5] or None), sys.stdout)

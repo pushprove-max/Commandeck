@@ -276,5 +276,14 @@ check "with no told record, a key whose newest seen stamp is a day old is told a
 alert host-swap-1792000600
 check "another key is told" 1 "$(alertwatch | grep -c '"host-swap-1792000600"')"
 
+# Issue 229: a wake printed every queued message, and each wake replays the relay's whole context. A long wake is one
+# line under 1,500 characters: what woke it, the count, and the file that holds the rest.
+watch >/dev/null
+for i in $(seq 1 30); do row term_main run:run_1 status "cos: report number $i about the unit that merged and what it changed"; done
+OUT=$(watch); F=$(sed -n 's/.*whole text: \([^ ]*\)$/\1/p' <<<"$OUT")
+check "a wake with 30 queued messages prints one line under 1,500 characters, naming the count and the file" "1 yes 1" \
+  "$(grep -c . <<<"$OUT") $([ "${#OUT}" -lt 1500 ] && echo yes) $(grep -c 'cos-watch-inbox woke: 30 records' <<<"$OUT")"
+check "and the file holds all thirty" 30 "$(grep -c 'cos: report number' "$F" 2>/dev/null)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

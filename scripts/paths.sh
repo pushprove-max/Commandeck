@@ -219,6 +219,35 @@ pp_waited_on() {
   printf '%s\n%s\n' "$at" "$4" > "$u"
 }
 
+# pp_main_foreground -- true in main's own foreground: the main checkout, a terminal or a Claude session, and not a
+# child of pp_detach or of run-shell-tests.sh (COMMANDECK_FOREGROUND). pp_detach <log> <label> <cmd>... runs the
+# command detached with its output in <log>, prints the pid and the log, and sends main the result as a status
+# message (issue 230): a merge or a full suite takes minutes, and main's turn waited on it.
+pp_main_foreground() {
+  [ -z "${COMMANDECK_FOREGROUND:-}" ] && { [ -t 0 ] || [ -n "${CLAUDECODE:-}" ]; } \
+    && [ "$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" = "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]
+}
+pp_detach() {
+  local log=$1 label=$2; shift 2
+  mkdir -p "${log%/*}" || return 1
+  COMMANDECK_FOREGROUND=1 nohup bash -c 'log=$1 label=$2; shift 2; "$@" > "$log" 2>&1; rc=$?
+    bash "$0" status "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
+  echo "$label: running detached, pid $!; log $log. Its result comes to main as a status message."
+}
+# pp_close_items <handle>... -- complete main-watch's open item task of each of these seats (issue 227): the
+# script that handled the item (a merge, an answer, a collect) closes it, as main did by hand. A close that fails
+# is said and costs nothing else.
+pp_close_items() {
+  local h f t
+  for h in "$@"; do
+    for f in "$PP_SCRATCH/main-watch"/item-*seat-"$h"-*; do
+      [ -f "$f" ] && ! grep -qx handled "$f" || continue
+      t=$(sed -n 's/^task=//p' "$f"); [ -n "$t" ] && [ "$t" != none ] || continue
+      ! pp_task_close "$t" completed || echo "closed main-watch item task $t"
+    done
+  done
+  return 0
+}
 # Close an Orca task whose work has SETTLED. While the task's supervised
 # dispatch is active Orca refuses (task_not_startable), and a warm pane with an
 # active dispatch refuses the next one, so the dispatch is settled with

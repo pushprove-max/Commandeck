@@ -155,7 +155,7 @@ if [ "$TOOL" = "Bash" ]; then
       CI_DIRS=$(printf '%s\n' "${NPM_DIRS[@]}")
       if [[ $SEG =~ (--prefix|-C)[=[:space:]]+($WORD) ]]; then
         CI_DIRS=$(folders "${BASH_REMATCH[2]}") \
-          || { echo "BLOCKED: npm ci into ${BASH_REMATCH[2]}, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. Name the folder in full." >&2; exit 2; }
+          || { echo "BLOCKED: npm ci into ${BASH_REMATCH[2]}, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. Name the folder in full: \`npm --prefix <folder> ci\`." >&2; exit 2; }
       fi
       while IFS= read -r CI_DIR; do
         [ -L "$CI_DIR/node_modules" ] || continue
@@ -257,7 +257,7 @@ block_manifest() {
 # the `git checkout` that restores the helper. The Bash branch has already
 # returned by this point, so it never depends on the helper.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
 CONTENT=$(hook_new_text "$INPUT")
 [ -z "$CONTENT" ] && exit 0
 APPROVED=",${COMMANDECK_DEP_APPROVED:-},"

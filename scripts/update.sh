@@ -9,6 +9,7 @@
 # put back as it was before the update and this exits 1.
 # A config whose version this plugin does not know is refused: there is no
 # migration code.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/paths.sh"

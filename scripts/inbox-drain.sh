@@ -9,6 +9,7 @@
 # printed: a drain killed part way (the startup hook gives it 30 s) shows it
 # again next time. A queued message that does not fit is moved to a held file
 # that nothing overwrites, and the output says how to read it.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" 2>/dev/null || exit 0
 # The startup cut is in bytes: so is every length here.

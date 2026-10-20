@@ -8,6 +8,7 @@
 # waited. A short send arrives TYPED, so this line is the user's own
 # word. On a pane already working it lands as a queued note and costs nothing.
 # Codex panes never refused, so they get nothing typed.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 H=${1:?usage: seat-go.sh <handle> <agent-command>}
 case " ${2:-} " in *" claude "*) ;; *) exit 0 ;; esac

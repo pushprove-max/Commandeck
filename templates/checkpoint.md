@@ -7,8 +7,11 @@ not here is lost at /clear; the Orca task list and the unit ledger survive.
 <one line: the batch, the standing rulings that bind it>
 
 ## Live units (one line each)
-| unit | stage | panes (role=handle) | task ids | loop log / systemd unit | next |
-|---|---|---|---|---|---|
+Task ids, pane handles, paths and live jobs are not written by hand here
+(`state-snapshot.sh` fills its own columns for them): `board.sh`, which the
+resume block carries, prints them current.
+| unit | stage | next |
+|---|---|---|
 
 ## Waiting on
 - <marker or verdict> from <pane> -> <the exact command main runs when it lands>

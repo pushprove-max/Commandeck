@@ -5,6 +5,7 @@
 # is never committed, so neither checkout gets dirty and the merge's step 1
 # still passes; the merge archives the file with the unit's other papers.
 # Refused in a linked worktree: a Builder does not raise its own limit.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 . "$(dirname "$0")/paths.sh"
 USAGE="usage: review-cap.sh <unit> <rounds>"

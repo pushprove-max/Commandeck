@@ -49,9 +49,10 @@ check "a 1.2 MB batch drains: exit 0, all twelve bodies saved whole" "0 12" \
 # merge check passes the tip under the P2-tail rule: that merge is the owner's call. A GO that passes still merges.
 PL=$T/plug; mkdir -p "$PL"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$PL/"
 U=$WS/u212; git init -q -b main "$U"; mkdir -p "$U/.claude/briefs"; echo brief > "$U/.claude/briefs/u212.md"
-wake() {  # wake <last verdict> <--verify exit code>
-  printf 'Pass: review\n[P2] could wipe a reply\nVERDICT: %s\n' "$1" > "$U/.claude/briefs/u212-r5-reports.md"
-  printf 'VERDICT: GO\n' > "$U/.claude/briefs/u212-r4-reports.md"
+wake() {  # wake <last verdict> <--verify exit code> [a finding class r4 and r5 both end NO-GO on]
+  printf 'Pass: review\n[P2] %scould wipe a reply\nVERDICT: %s\n' "${3:+(class: $3) }" "$1" > "$U/.claude/briefs/u212-r5-reports.md"
+  if [ -n "${3:-}" ]; then cp "$U/.claude/briefs/u212-r5-reports.md" "$U/.claude/briefs/u212-r4-reports.md"
+  else printf 'VERDICT: GO\n' > "$U/.claude/briefs/u212-r4-reports.md"; fi
   git -C "$U" add -A && git -C "$U" -c user.name=t -c user.email=t@t commit -qm r5
   printf '#!/usr/bin/env bash\necho "refused: a P1 is open" >&2\nexit %s\n' "$2" > "$PL/scripts/builder-codex-pass.sh"
   msg w1 term_u status "pass done (u212)" "r5 is in" | jq -sc '{ok: true, result: {deliveryId: "d3", messages: .}}' > "$T/batch.json"
@@ -65,7 +66,29 @@ check "a NO-GO the merge check refuses: next is a fix round, never merge it" "1 
 OUT=$(wake NO-GO 0)
 check "a NO-GO the merge check passes (P2 tail): a fix round, the owner's word named, never merge it" "1 1 0" \
   "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c "merge only on the owner's word; ask them first" <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
+# Issue 225: a second NO-GO in a row on one finding class is a loop, not progress: main makes a class-level call.
+OUT=$(wake NO-GO 1 lost-reply)
+check "two NO-GOs on one class: next asks a class-level question or a merge with one issue, not a third fix round" "1 0" \
+  "$(grep -c 'next: ask the owner one class-level question, or merge and file the rest as one issue (two NO-GOs on lost-reply)' <<<"$OUT") $(grep -c 'next: fix round' <<<"$OUT")"
 OUT=$(wake GO 0)
 check "a GO the merge check passes still prints merge it" "1 0" "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c 'fix round' <<<"$OUT")"
+# Issue 223: a heads-up printed its whole body and other messages up to 60 lines, so one wake could fill main's
+# context. The default wake is cut at 3,000 bytes, a heads-up is one line and a path, and next: lines are never cut.
+HU=$(for i in $(seq 1 400); do printf 'claim line %03d of a long heads-up note, words words words\n' "$i"; done)
+drain() { rm -rf "$T/sc"; (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" \
+  COMMANDECK_WORKSPACES="$WS" COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$PL/scripts/orca-wait.sh" "$@" 2>&1); }
+msg h1 term_w status "heads-up: a long claim" "$HU" | jq -sc '{ok: true, result: {deliveryId: "d4", messages: .}}' > "$T/batch.json"
+OUT=$(drain)
+check "a 20 KB heads-up prints its subject line and the file that holds it, under 3,000 bytes" "1 1 yes" \
+  "$(grep -c '| heads-up: a long claim |' <<<"$OUT") $(grep -cF "$T/sc/main-watch/messages/h1.md" <<<"$OUT") $([ "$(printf '%s' "$OUT" | wc -c)" -lt 3000 ] && echo yes)"
+check "the file holds the whole body" "$HU" "$(cat "$T/sc/main-watch/messages/h1.md")"
+OUT=$(drain --full)
+check "--full prints the heads-up whole" 400 "$(grep -c '^claim line' <<<"$OUT")"
+{ msg h1 term_w status "heads-up: a long claim" "$HU"
+  for i in $(seq 1 12); do msg "n$i" term_w question "q$i" "$(printf 'word %.0s' $(seq 1 120))"; done
+  msg w1 term_u status "pass done (u212)" "r5 is in"; } | jq -sc '{ok: true, result: {deliveryId: "d5", messages: .}}' > "$T/batch.json"
+OUT=$(drain); REST=$(sed -n 's/.*whole wake: \([^ ]*\)).*/\1/p' <<<"$OUT" | tail -1)
+check "a long wake is cut, keeps its next: line, and names the file that holds the rest" "1 1 1" \
+  "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c '^orca-wait: cut at 3,000 bytes' <<<"$OUT") $(grep -c '| pass done (u212) |' "$REST" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

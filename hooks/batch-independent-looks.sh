@@ -36,7 +36,9 @@ INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # Strict tier: off unless the project turned it on (lib/project.sh). A planner seat (seat.sh exports
 # COMMANDECK_SEAT=<role>) hears it either way: it is almost all reads, and it never ran under the default tier.
-case "${COMMANDECK_SEAT-}" in plan-*) ;; *) { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0 ;; esac
+# So does a Builder (COMMANDECK_BUILDER=1), from its second lone look: it pays for every one across a whole build.
+case "${COMMANDECK_SEAT-}" in plan-*) ;; *) [ "${COMMANDECK_BUILDER-}" = 1 ] \
+  || { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0 ;; esac
 
 # A FAILED call is still a turn -- the context was replayed either way -- so
 # unlike script-over-reads.sh this does not skip errors.
@@ -46,6 +48,7 @@ STATE="/tmp/claude-batch-${SID:-$PPID}"
 # Both overridable so the self-test does not have to sleep through real gaps.
 SIBLING_MS=${BATCH_SIBLING_MS:-1500}
 THRESHOLD=${BATCH_STREAK_THRESHOLD:-3}
+[ -n "${BATCH_STREAK_THRESHOLD-}" ] || [ "${COMMANDECK_BUILDER-}" != 1 ] || THRESHOLD=2
 
 NOW=$(date +%s%3N 2>/dev/null) || exit 0
 case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
@@ -138,16 +141,19 @@ printf '%s %s\n' "$NOW" "$STREAK" > "$STATE" 2>/dev/null || exit 0
 
 [ "$STREAK" -ge "$THRESHOLD" ] || exit 0
 # The FIRST call of a parallel block can finish before its siblings are even
-# written, so it cannot see them. Only on the call that would nudge, wait one
-# sibling window and count again; a sibling by then means a batched turn.
+# written, so it cannot see them. Only on the call that would nudge, look again
+# every 100 ms for up to one sibling window; a sibling by then means a batched
+# turn, and it ends the wait at once (a fixed sleep cost 1.5 s a nudge, issue 249).
 # ponytail: a block whose next call streams for longer than the window still
 # nudges; key on a message-complete marker if the transcript ever grows one.
 if [ -n "$TUID" ] && [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ]; then
-  sleep "$((SIBLING_MS / 1000)).$(printf '%03d' $((SIBLING_MS % 1000)))"
-  if [ "$(count_calls)" -ge 2 ]; then
-    printf '%s 0\n' "$NOW" > "$STATE" 2>/dev/null || true
-    exit 0
-  fi
+  for ((W = 0; W < SIBLING_MS; W += 100)); do
+    sleep 0.1
+    if [ "$(count_calls)" -ge 2 ]; then
+      printf '%s 0\n' "$NOW" > "$STATE" 2>/dev/null || true
+      exit 0
+    fi
+  done
 fi
 # Reset either way: a session that has been told once should get its next
 # streak counted afresh rather than firing on every call past the threshold.

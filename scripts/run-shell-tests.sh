@@ -27,6 +27,7 @@
 # HEAD) touches: a test it adds or edits, and the same-name test of a script or
 # hook it adds or edits (scripts/seat.sh -> scripts/__tests__/seat.test.sh). It is
 # the merge check: the whole suite took 12 minutes a merge (ruling 2026-10-17).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
 . "$(dirname "$0")/requirements.sh"
@@ -37,6 +38,13 @@ TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
 CALLER_PWD=$PWD
+# In main's own foreground a run restarts itself detached (issue 230). A subshell: paths.sh exports what the
+# tests must not inherit. No test this runs is main's foreground.
+if [ "${1:-}" != --list ]; then
+  ( COMMANDECK_MAIN=$ROOT . "$(dirname "$0")/paths.sh" && pp_main_foreground || exit 1
+    pp_detach "$PP_SCRATCH/shell-tests.log" run-shell-tests.sh bash "$0" "$@" ) && exit 0
+fi
+export COMMANDECK_FOREGROUND=1
 cd "$ROOT" || exit 2
 # macOS TMPDIR (/var/folders/...) is a symlink into /private. Tests compare
 # mktemp paths with git's and pwd -P's physical ones, so hand them the physical path.

@@ -10,8 +10,8 @@
 # worth a turn; an unread message is also what keeps Orca nudging.
 #
 # Prints one line per message: <from> | <subject> | first 200 chars of body
-# (a `heads-up:` relay instead prints its whole body, newlines kept, and is
-# never filtered as noise). Under that line, indented: the message text
+# (a `heads-up:` relay is never filtered as noise; under --full it prints its
+# whole body, newlines kept). Under that line, indented: the message text
 # when the line did not carry all of it (past 60 lines: the file's path with the
 # first and last lines), a unit pane's `unit <name>: ...` state and `next: ...`
 # step, and for each ruling id the message cites its answer and void state from
@@ -21,6 +21,8 @@
 # --full prints the older wake instead: every open task, each message's
 # findings, each stopped driver's log tail. --close <task_id>... completes those
 # tasks, one line each, and drains nothing.
+# The default wake is cut at 3,000 bytes; `next:` and NEEDS-MAIN lines always
+# print, and the last line names the file that holds the whole wake.
 # Exit 0 when at least one message was printed, 1 when nothing was queued, 3
 # when a message body could not be saved (that delivery is left unacknowledged),
 # 4 when Orca refused a check it could not repair (the error is printed).
@@ -28,9 +30,10 @@
 # Each batch is printed BEFORE its acknowledgement, so a kill between the two
 # replays the batch to the next drain rather than losing it. Handling is main
 # closing the item's task, never this read.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 
-RUN="" FULL=0 CLOSE=()
+RUN="" FULL=0 CLOSE=() ARGS=("$@")
 USAGE="usage: $0 [--run <id>] [--full | --close <task_id>...]"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +53,17 @@ if [ "$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" != "$(git r
   exit 2
 fi
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
+# Issue 223: one wake filled main's context with a whole heads-up and up to 60 lines of each message.
+# shortcut: one wake-<pid>.txt per cut wake, never pruned; prune by age if the folder grows.
+if [ "$FULL" = 0 ] && [ ${#CLOSE[@]} = 0 ] && [ -z "${ORCA_WAIT_UNCUT:-}" ]; then
+  mkdir -p "$PP_SCRATCH/main-watch" || exit 3
+  W=$PP_SCRATCH/main-watch/wake-$$.txt
+  ORCA_WAIT_UNCUT=1 bash "${BASH_SOURCE[0]}" ${ARGS[@]+"${ARGS[@]}"} > "$W"; rc=$?
+  awk -v f="$W" '!cut && n + length($0) < 2800 { print; n += length($0) + 1; next }
+    /^ *next: |NEEDS-MAIN/ { print; next } { cut = 1 }
+    END { if (cut) print "orca-wait: cut at 3,000 bytes (whole wake: " f ")"; exit !cut }' "$W" || rm -f "$W"
+  exit $rc
+fi
 # board.sh records the project's run here; --run overrides it. With neither, the run
 # this pane is bound to is asked for, because the printed-id record below is
 # keyed by run and a read with no run has no record.
@@ -264,9 +278,9 @@ KEEP='
   def own: ($me != "") and (.type == "status") and ((.from_handle // "") == $me)
            and (((.payload // "") | tostring | contains("_orcaLifecycleRejection")) | not);
   .result.messages[]? | select(.type != "heartbeat") | select(relay or owner or ((noisy | not) and (harness | not) and (own | not)))'
-# A heads-up relay (main-watch.sh) is printed whole, newlines kept: its
+# A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
-RENDER='if ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
+RENDER='if $full == 1 and ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
         else [ (.from_handle // .from // "?"),
           (.subject // "(no subject)"),
           ((.body // "") | gsub("[\r\n]+"; " ") | .[0:200]),
@@ -293,10 +307,10 @@ bounded() {  # bounded <file> <lines allowed> -- the file indented; past the all
   SHOWN=$((2 * k + 1))
 }
 serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
-  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2
+  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2 rep
   id=$(jq -r '(.id // "") | gsub("[^A-Za-z0-9._-]"; "_")' <<<"$m"); file=$MSGDIR/$id.md
   from=$(jq -r '.from_handle // ""' <<<"$m"); type=$(jq -r '.type // ""' <<<"$m"); subject=$(jq -r '.subject // ""' <<<"$m")
-  # The text, unless the first line already carried all of it (a heads-up relay prints its own whole).
+  # The text, unless the first line already carried all of it (a heads-up relay: its line and file, whole under --full).
   if [[ "$subject" != heads-up:* ]] && { [ "$(wc -c < "$file")" -gt 200 ] || [ "$(awk 'END { print NR }' "$file")" -gt 1 ]; }; then
     bounded "$file" "$left"; left=$((left - SHOWN))
   fi
@@ -324,7 +338,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" --waits-on main >/dev/null 2>&1 \
         || echo "  (not recorded in the decisions ledger: it is there already, or the ledger refused it)"
     else
-      why="" nogo="" p2=""
+      why="" nogo="" p2="" rep=""
       if [ "$(jq -r --arg u "$unit" 'index($u) != null' <<<"$3")" = true ]; then why="its driver acts on this; see the driver line below"
       elif [ "$dirty" != 0 ]; then why="$dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, which no Codex pass read"
       # The pass writes its own verdict line last. After a NO-GO the next step is a fix round even when the merge
@@ -336,7 +350,11 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
         why=$(printf '%s\n' "$why" | grep . | tail -1 | cut -c1-300); why=${why:-the merge check refused it and gave no reason}
       else why=""
       fi
-      if [ -n "$nogo" ]; then echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"
+      # Two NO-GOs in a row on one finding class: a third fix round finds the next variant (issue 225).
+      [ -z "$nogo" ] || rep=$(bash "$PP_SCRIPTS/read-verdict.sh" --repeat-class "$round" 2>/dev/null | sed -n 's/^REPEAT CLASS: \(.*\) (r[0-9]*, r[0-9]*)$/\1/p')
+      if [ -n "$nogo" ]; then
+        if [ -n "$rep" ]; then echo "  next: ask the owner one class-level question, or merge and file the rest as one issue (two NO-GOs on $rep)"
+        else echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"; fi
         [ -z "$p2" ] || echo "  the P2-tail rule lets this tip merge with its P2/P3 open: merge only on the owner's word; ask them first"
       elif [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
       else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit"
@@ -531,7 +549,7 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
         return 1
       fi
       while IFS= read -r m; do
-        jq -r --arg mdir "$MSGDIR" "$RENDER" <<<"$m"
+        jq -r --arg mdir "$MSGDIR" --argjson full "$FULL" "$RENDER" <<<"$m"
         serve "$m" "$hunits" "$dunits"
       done < <(printf '%s' "$kept" | jq -c '.[]')
       warn_codex_budget "{\"result\":{\"messages\":$kept}}"

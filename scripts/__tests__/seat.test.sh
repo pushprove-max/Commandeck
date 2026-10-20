@@ -15,8 +15,13 @@ git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t c
 echo '{"version": 1, "profile": "claude"}' > "$CFG"
 # A Codex seat's model is read from Codex's own model list.
 mkdir -p "$HOME/.codex" && jq -n --arg f "$(jq -r '.roles["codex-reviewer"].model' "$REAL/config/routing.json")" '{models: [{slug: "gpt-9.1-\($f)"}]}' > "$HOME/.codex/models_cache.json"
-run() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING -u CODEX_HOME \
-  PATH="$BIN:$PATH" bash "$REAL/scripts/seat.sh" "$@" </dev/null); }
+seat_sh() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING -u CODEX_HOME \
+  PATH="$BIN:$PATH" timeout 120 bash "$REAL/scripts/seat.sh" "$@" </dev/null); }
+# settle <unit> <role> -- wait out a launch's background part (issue 233), by the pid its record names.
+settle() { local p; p=$(sed -n 's/^pid=//p' "$HOME/.commandeck/scratch/"*/"seat-$1-$2.txt" 2>/dev/null | tail -1)
+  while [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do sleep 0.1; done; }
+# run -- seat.sh, and a launch is waited out, so each case reads the launch whole.
+run() { seat_sh "$@"; local rc=$?; [ "$1" != launch ] || settle "$3" "$2"; return $rc; }
 # The Orca stand-in has one pane: the first launch makes it, and it stays live.
 SWT=$HOME/orca/workspaces/proj/seat-builder; mkdir -p "$HOME/orca/workspaces/proj/seat-unit"; git -C "$PROJ" worktree add -q "$SWT"
 cat > "$BIN/orca-ide" <<EOF
@@ -28,9 +33,12 @@ case "\$*" in
   "terminal read"*) [ ! -e "$T/read-fails" ] || exit 1; [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
     jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
   "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
+  "terminal wait"*) while [ -e "$T/slow-idle" ]; do sleep 0.1; done; echo '{"ok":true,"result":{}}' ;;
+  "orchestration task-update"*) echo "\$*" >> "$T/updates"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
   "orchestration worker-start"*) [ -e "$T/no-dispatch" ] && { echo '{"ok":false,"error":{"message":"refused for the test"}}'; exit; }; echo '{"ok":true,"result":{}}' ;;
-  "terminal send"*) [ -e "$T/no-dispatch" ] || { echo '{"ok":true,"result":{}}'; exit; }
+  "terminal send"*) [ ! -e "$T/send-fails" ] || { echo '{"ok":false,"error":{"message":"SEND-PROBE"}}'; exit; }
+    [ -e "$T/no-dispatch" ] || { echo '{"ok":true,"result":{}}'; exit; }
     while [ \$# -gt 0 ]; do [ "\$1" != --text ] || printf '%s\n' "\$2" >> "$T/sent"; shift; done; echo '{"ok":true,"result":{"stages":["turn_started"]}}' ;;
   "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
   *) echo '{"ok":true,"result":{}}' ;;
@@ -64,7 +72,7 @@ check "a raised Builder's pane opens with --effort high" '0:1' "$?:$(grep -cE --
 # undid the files the running Builder had opened on.
 rm -f "$T/pane-up"; touch "$T/read-fails"
 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" --effort high >"$T/out" 2>&1
-check "a launched seat whose last screen read fails exits 0, its state unknown" '0:1' "$?:$(grep -c 'state=unknown' "$T/out")"
+check "a launched seat whose last screen read fails exits 0, its state unknown" '0:1' "$?:$(grep -c 'state=unknown' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt.log)"
 rm "$T/read-fails"
 run launch builder seat-builder "$T/spec.md" --effort max >"$T/out" 2>&1
 check "--effort max is refused before any pane opens" '2:1' "$?:$(grep -c 'REFUSED: --effort takes medium or high' "$T/out")"
@@ -87,14 +95,32 @@ UWT=$HOME/orca/workspaces/proj/pv; git -C "$PROJ" worktree add -q "$UWT"; : > "$
 srun launch plan-author pv "$T/plan-spec.md" >"$T/out" 2>&1
 check "a plan seat for a unit whose unmarked worktree exists is refused before any pane opens" '2:1:0' \
   "$?:$(grep -c "REFUSED: $UWT is not pv's planning worktree" "$T/out"):$(grep -c . "$T/creates")"
+# Issue 234: a plan seat's first launch opens the unit, so its spec must carry the order's Launch line for it.
+: > "$T/creates"; srun launch plan-author pn "$T/plan-spec.md" >"$T/out" 2>&1
+check "a plan seat that would open a new unit with no Launch line in its spec is refused, no worktree made" '2:1:0:no' \
+  "$?:$(grep -c "REFUSED: $T/plan-spec.md has no 'Launch: new unit pn' line" "$T/out"):$(grep -c . "$T/creates"):$([ -e "$HOME/orca/workspaces/proj/pn" ] && echo yes || echo no)"
+printf 'Launch: new unit pn\nOrder: plan it\n' | cat - "$T/plan-spec.md" > "$T/plan-spec-pn.md"
+srun launch plan-author pn "$T/plan-spec-pn.md" >"$T/out" 2>&1
+check "with the line the check lets it through" 0 "$(grep -c "has no 'Launch: new unit" "$T/out")"
 # The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?
 check "which is the unit's own worktree, and its record names it" '1:1' \
   "$(grep -c -- "path:$PWT " "$T/creates"):$(grep -cx 'worktree=pu' "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt)"
 for m in PLAN-DONE REVISED PLAN-DONE; do echo "$m" > "$T/screen"; srun wait plan-author pu --marker "$m" --timeout-s 10 >"$T/out" 2>&1 || echo "wait $m: $(tail -2 "$T/out")"; done
+MW=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1)main-watch; mkdir -p "$MW"; : > "$T/updates"
+printf 'posted=1\ntask=task_item_s\n' > "$MW/item-seat-h1-task_1"; printf 'posted=1\ntask=task_item_o\n' > "$MW/item-seat-h9-task_9"
 srun collect plan-author pu >"$T/out" 2>&1
 check "collect with no --marker closes on the marker the last wait saw" '0:1' "$?:$(grep -c 'closed seat=plan-author unit=pu PLAN-DONE' "$T/out")"
+# Issue 227: main closed a collected seat's main-watch item task by hand; collect does it.
+check "collect completes the seat's main-watch item task, and not another pane's" "1:0" \
+  "$(grep -c -- '--id task_item_s --status completed' "$T/updates"):$(grep -c task_item_o "$T/updates")"
+# Issue 236: with no --report a seat's findings lived only in the pane, and collect closes the pane.
+RP=$(sed -n 's/^report=//p' "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt | tail -1)
+check "collect with no --report keeps the report under the scratch folder's reports/, prints and records its path" '1:1:1' \
+  "$(grep -cxF "report: $RP ($(wc -l < "$RP" 2>/dev/null | tr -d ' ') lines)" "$T/out"):$(grep -c PLAN-DONE "$RP" 2>/dev/null):$(case $RP in "$HOME"/.commandeck/scratch/*/reports/pu-plan-author-[0-9]*.md) echo 1 ;; esac)"
+check "read-verdict.sh --seat prints the verdict collect closed on, then that report" "PLAN-DONE:$(cat "$RP" 2>/dev/null)" \
+  "$(cd "$PROJ" && env -u COMMANDECK_SCRATCH -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR bash "$REAL/scripts/read-verdict.sh" --seat pu plan-author 2>&1 | { read -r v; printf '%s:%s' "$v" "$(cat)"; })"
 # A silent read-only seat is relaunched from its record, which the relaunch writes again: the marker must survive it.
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches" 0 $?
@@ -187,6 +213,25 @@ rm -f "$T/pane-up" "$T/sent"; touch "$T/no-dispatch"; jq 'del(.planModels)' "$CF
 COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a typed pointer ends with its task id" 'Task id task_1.' "$(grep -m1 'Your task spec' "$T/sent" 2>&1 | grep -o 'Task id task_1\.$')"
 rm -f "$T/no-dispatch"
+
+# Issue 233: launch wrote its record only after the tui-idle wait (up to 120 s) and the dispatch retries (60 s); a
+# caller that timed out first left a live pane with no record, and its retry opened a second pane.
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt); touch "$T/slow-idle"; rm -f "$T/pane-up"; : > "$T/creates"
+# The pane's tui-idle wait lasts until the test removes slow-idle: a launch that waited on it would hit its timeout.
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
+check "launch returns while the pane's tui-idle wait still holds, naming the task and phase" "0:1" \
+  "$RC:$(grep -c 'handle=h1 task=task_1 phase=launching' "$T/out")"
+check "status shows launching meanwhile" "phase=launching handle=h1 task=task_1" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1-3)"
+COMMANDECK_SEAT_FORCE=1 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a second launch while the first is still launching is refused with its status, and opens no pane" "2:1:1" \
+  "$?:$(grep -c 'REFUSED: plan-judge-claude for pu is still launching: phase=launching handle=h1' "$T/out"):$(grep -c . "$T/creates")"
+rm -f "$T/slow-idle"; settle pu plan-judge-claude
+check "then status shows dispatched" "phase=dispatched" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1)"
+rm -f "$T/pane-up"; touch "$T/no-dispatch" "$T/send-fails"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a launch whose pointer cannot be sent ends phase=failed, and its log names the cause" "phase=failed:1" \
+  "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1):$(grep -c 'send failed to h1' "$JREC.log")"
+rm -f "$T/no-dispatch" "$T/send-fails"
 
 # dispatch-task.sh types its own pointer to a Codex pane Orca will not bind. The seat's log is found by the tag in the
 # spec, and read-verdict.sh searches typed prompts only, so the typed pointer carries the spec's own tag sentence.

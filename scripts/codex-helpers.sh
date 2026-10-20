@@ -8,6 +8,7 @@
 # the worktree goes: nine pairs outlived their worktrees by 2 to 16 hours on
 # 2026-09-18. merge-unit-local.sh and ship-unit.sh call `stop` after the
 # worktree is removed; agent-awareness.sh calls `orphans`.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 
 # "<pid> <cwd>", one line per broker.

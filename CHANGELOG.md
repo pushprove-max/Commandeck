@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.21.0 -- 2026-10-20
+
+- Issues #203-#214 shipped in 0.20.0, and #251 was already met. #224, #240 and #245 are not in this release.
+- With no Chief of Staff, main may ask the same question again: the repeat guard applies only where a relay holds
+  the question (#241).
+- `main-watch-helper-hold.test.sh` is split in three (hold, claim, wake), and finished seats are dropped between
+  sections, so each file runs well under the per-file cap (#218).
+- The limit panel follows the signed-in account: main records its Claude config folder, a reading of another
+  account is dropped with its retry note and history, and the panel names the account (#226).
+- A worktree used for both plan and build splits its cost by time, each request on its own stage (#242).
+- Two dashboard pages folding at once keep both folds (#217).
+- A worker's wait budget reads inside shell strings: `bash -c 'sleep 400'` counts against the cache budget (#216),
+  and `$'sleep'` and `$"sleep"` read as the word sleep (#215).
+- No restart or stopped alert for a pane that has already healed: main-watch reads the session log and a second
+  reading before it posts (#238).
+- The merge checks its own commit message for home paths and the project's leak words (#221), and closes the
+  unit's issues, naming the merge commit; a dry run says which it would close (#239).
+- The full suite runs before the final review where it is turned on, and a red run makes the round NO-GO and
+  refuses `--verify` (#243); setup asks whether to turn it on, On recommended (#244).
+- Each finding carries a class tag, and two NO-GOs on the same class stop the review loop with a class-level
+  question (#225).
+- `seat.sh collect` keeps the full report at a stable path and records it; `read-verdict.sh --seat` prints it (#236).
+- Main checks the merge gate (`builder-codex-pass.sh --verify`) before it offers a merge (#237).
+- `seat.sh launch` returns once the pane exists and finishes in the background; `status` shows the phase (#233).
+- A new unit opens only on a batch whose Launch line names it (#234).
+- Every script prints its usage on `--help` and does nothing else (#222).
+- `orca-wait.sh` and `board.sh` print a compact form under 3 KB by default, with `--full` for the whole (#223).
+- A relay watcher's wake prints one summary line and keeps the whole text in a file (#229).
+- `relay-order.sh` answers a decision with the owner's words and their ruling id, tells main and marks it seen, in
+  one step (#231).
+- An empty picker answer is no ruling: it prints a retry and leaves the decision open; the relay checks the rulings
+  log before a picker, and main-watch raises a picker left open 30 minutes (#232).
+- Main's startup print is held under 10,240 bytes in the hook, a part that does not fit becomes one pointer line,
+  and rules main does not use every turn moved to Details; checkpoints no longer ask for task ids and paths by
+  hand (#228).
+- Main's rules open with a five-line do-not list, a merge or test run in main's foreground detaches itself,
+  `board.sh --unit <u> --seats` lists a unit's seats, and every BLOCKED message names a command to run (#230).
+- Main ends each turn with one status line (#235).
+- The merge, a delivered answer and `seat.sh collect` close their own main-watch item task (#227).
+- Builders hear the batching advice at the second lone look; a Builder's unranged Read of a file over 400 lines is
+  refused with a range; a search for one bare identifier gets a symbol-lookup note; an inline script that writes a
+  tracked file is refused toward Edit (#247).
+- The batching hook polls for siblings every 100 ms instead of sleeping 1.5 s on a nudging call (#249).
+- `BASH_GUARDRAILS_TEST_CASE=<text>` runs only the matching `bash-guardrails.test.sh` cases (#248).
+- `red-proof.sh` refuses a whole run of a case-aware test file, and `--batch` runs many proofs in one scratch
+  worktree (#246).
+- `hook-probe.sh` runs one hook on a built payload with its state in a scratch folder, and a review pass over a
+  change to `hooks/` asks for an executed probe (#250).
+
 ## 0.20.0 -- 2026-10-19
 
 - Issues #191-#202 and #205 shipped in 0.18.0 and 0.19.0.

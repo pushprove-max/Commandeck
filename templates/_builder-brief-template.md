@@ -19,6 +19,11 @@ merges with `merge-unit-local.sh {unit}`.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
+- Find a line with `grep -n <pattern> <file>` first, then Read that range (`offset` and `limit`); look a symbol
+  up by name (a symbol tool such as `find_symbol`) before a grep and a read. Edit a tracked file with Edit,
+  never with an inline `python3 -c` or `perl -e` write.
+- A fix round on a finding's class (its `(class: <tag>)`) fixes every variant of that class this build has, not
+  only the one cited: a second NO-GO on the same class stops the review loop.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
@@ -47,7 +52,8 @@ merges with `merge-unit-local.sh {unit}`.
   command's time limit. To show a test catches a break without editing your
   tree, run `bash {scripts}/red-proof.sh <file> <line> <replacement> -- <test
   command>`: it breaks that line in a scratch copy of your work and says RED
-  or NOT RED.
+  or NOT RED. `red-proof.sh --batch <list>` runs many proofs in one copy (one tab-separated
+  `<file> <line> <replacement> <test command>` per line); a case-aware test file runs with its case variable set.
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
   next line. The dashboard counts an item built only from that heading and line.
@@ -73,7 +79,7 @@ merges with `merge-unit-local.sh {unit}`.
   Start a pass and the tests it needs in the same turn, the tests in the
   background; never wait for green before a pass.
   A fix round re-runs only the test files that round touched, and only the
-  touched cases where the runner can select them.
+  touched cases where the runner can select them (`BASH_GUARDRAILS_TEST_CASE=<text>`, `INSTALL_LIB_TEST_CASE=<text>`).
   ONE run of every test file this build touched whose inputs changed since its
   last green run starts in the background beside the closing pass, and never
   before an earlier pass; a touched file already green on the current tree is

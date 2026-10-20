@@ -61,6 +61,9 @@ strip_quoted() {
     CHAR=${TEXT:I:1}; NEXT=${TEXT:I+1:1}
     case "$MODE" in
       sq) if [ "$CHAR" = "'" ]; then MODE=code; _strip_keep_span "$PREV"; else SPAN+=$CHAR; fi ;;
+      # $'...': a backslash escapes the next character, a quote among them (issue 215).
+      ansi) if [ "$CHAR" = '\' ]; then SPAN+=$NEXT; I=$((I+1))
+            elif [ "$CHAR" = "'" ]; then MODE=code; _strip_keep_span "$PREV"; else SPAN+=$CHAR; fi ;;
       dq)
         if [ "$CHAR" = '\' ]; then SPAN+=$NEXT; I=$((I+1))
         elif [ "$CHAR" = '"' ]; then MODE=code; _strip_keep_span "$PREV"
@@ -91,6 +94,8 @@ strip_quoted() {
           '\') [ "$NEXT" = $'\n' ] || { SPAN=$NEXT; _strip_keep_span; }; I=$((I+1)) ;;
           "'") MODE=sq ;;
           '"') MODE=dq ;;
+          # `$'...'` and `$"..."` are quoted spans as bash reads them, so `$'sleep'` is the word sleep (issue 215).
+          '$') case "$NEXT" in "'") MODE=ansi; I=$((I+1)); CHAR=$NEXT ;; '"') MODE=dq; I=$((I+1)); CHAR=$NEXT ;; *) OUT+=$CHAR ;; esac ;;
           '#') case "$PREV" in ''|' '|$'\t'|$'\n'|';'|'&'|'|'|'(') MODE=comment ;; *) OUT+=$CHAR ;; esac ;;
           # `<<<` is a here-string: its word is on this line and no body follows.
           '<') if [ "$NEXT" = '<' ] && [ "${TEXT:I+2:1}" = '<' ]; then OUT+='<<<'; I=$((I+2))

@@ -31,7 +31,7 @@ if [ "$GITDIR" = "$COMMON" ] || [ "${TOP##*/}" = Chief-of-Staff ]; then
   if [ "$GITDIR" = "$COMMON" ] && [[ $ASKING =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - ASKING )) -lt 3600 ]; then :
   elif ! ask_decoy_first "$INPUT"; then
     printf '%s\n' \
-      "BLOCKED: every question's FIRST option must be the decoy, label exactly: $ASK_DECOY" \
+      "BLOCKED: every question's FIRST option must be the decoy, label exactly: \`$ASK_DECOY\`" \
       "An Orca alert typed into an open picker picks the first option; the decoy makes that pick void. Put it first (description: \"Stray keypress guard, never pick this\") and ask again." >&2
     exit 2
   fi

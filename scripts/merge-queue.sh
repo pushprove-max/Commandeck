@@ -5,6 +5,7 @@
 # issue for a finding left open.
 # Logs: <scratch>/merge-<unit>.log (paths.sh PP_SCRATCH)
 # Self-test: none; merge-unit-local.test.sh was cut for its run time (2026-10-17).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ $# -gt 0 ] || { echo "usage: merge-queue.sh <unit> ..." >&2; exit 2; }

@@ -6,6 +6,7 @@
 # files, what the hooks put into a session, the project's config and install
 # manifest, that Orca answers, the dashboard and the watcher, and for the
 # claude-openai profile the review pass and Codex's hooks, trust and notify.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
@@ -54,6 +55,7 @@ else
   # The merge check runs on a copy that links main's node_modules (merge-unit-local.sh).
   ! jq -r '.testCommand // empty' "$IL_CONFIG" | grep -qE '(^|[^[:alnum:]_-])(npm (ci|install)|pnpm install|yarn install)([^[:alnum:]_-]|$)' \
     || warn "check command: it installs packages, and the merge check shares the main checkout's node_modules, so each merge rewrites main's packages; install in the project's setup, not in the check"
+  ok "full suite before the final review: $(jq -r 'if .fullSuiteBeforeFinal then "on" else "off" end' "$IL_CONFIG") (setup.sh --full-suite on|off)"
   if [ -s "$IL_PROJECT" ]; then ok "install manifest: $IL_PROJECT"
   else bad "install manifest: none for this project, so uninstall cannot put it back; run: bash $(printf '%q' "$HERE")/setup.sh"; fi
   [ "$(jq -r '.root // empty' "$IL_PROJECT" 2>/dev/null)" = "$IL_ROOT" ] || [ ! -s "$IL_PROJECT" ] \

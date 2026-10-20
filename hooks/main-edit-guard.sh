@@ -15,7 +15,7 @@ INPUT=$(cat)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
 
 # A linked worktree is a worker; only the main checkout is governed.
 COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)

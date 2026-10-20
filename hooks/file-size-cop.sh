@@ -39,7 +39,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/edit-payload.sh
 . "$HERE/lib/edit-payload.sh" 2>/dev/null
 hook_payload_loaded 2>/dev/null || {
-  echo "BLOCKED: hooks/lib/edit-payload.sh did not load, so the file-size cap screened nothing. Reinstall the plugin and retry." >&2
+  echo "BLOCKED: hooks/lib/edit-payload.sh did not load, so the file-size cap screened nothing. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2
   exit 2
 }
 

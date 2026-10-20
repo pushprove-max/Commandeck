@@ -5,6 +5,7 @@
 # Seen ids live in <state>/<project>.alerts-seen; the pane appends an id once
 # the owner has been told. <state>/<project>.alerts-told holds "<fingerprint>
 # <epoch>" for each time this watcher printed one.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 SEEN=$COS_KEY.alerts-seen

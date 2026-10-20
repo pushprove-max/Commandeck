@@ -15,6 +15,7 @@
 # failed and exits 1: an unproven spec sends no worker_done and main idles (12
 # minutes, 2026-09-23). --keep-task leaves the task open for a caller that
 # delivers it another way (seat.sh).
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 TK=${1:?task}; TO=${2:?to}; KEEP=${3:-}
 . "$(dirname "$0")/codex-helpers.sh"

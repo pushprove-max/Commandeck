@@ -10,6 +10,7 @@
 # relay: marked in $PP_SCRATCH/cos-owed until main sends one (cos-tell.sh --note)
 # or the relay's watcher flags main's turn ending without it (cos-watch-inbox.sh);
 # main's Stop hook (ask-stop-records-decision.sh) holds such a turn once.
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 KEY=main WT=$PP_MAIN WHO=main

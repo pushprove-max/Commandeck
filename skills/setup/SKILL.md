@@ -150,6 +150,10 @@ Ask them in this order, up to four questions per call.
    - The one command that must pass before a merge, e.g. the project's test script. `--test-command '<cmd>'`
    - None: merges wait for review only. `--test-command ''`
    Detect it first (package.json `test` script, a Makefile `test` target), and offer it first. With none detected, None is the one marked "(recommended)".
+   Then, with a merge check set (with None, skip this: setup records Off and says so):
+   Ask "Full suite before the final review": On (recommended) | Off
+   - On: one full run of <testCommand> per build; catches failures a static review misses. The closing review pass runs it on the build's tip, and a red run is a NO-GO. Recommended when the whole suite takes under about 10 minutes. `--full-suite on`
+   - Off: the closing pass runs no tests; the merge check still runs. `--full-suite off`
 10. Strict hooks?
     Ask "Strict hooks": Off (recommended) | On
     - Off: only the safety hooks (lost work, wrong commits). `--no-strict`

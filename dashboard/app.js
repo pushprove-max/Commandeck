@@ -1185,6 +1185,7 @@
 
   function renderLimit(l, now, updatedAt) {
     l = l || {};
+    byId('limit-who').textContent = l.accountLabel ? `Claude (${l.accountLabel}) and Codex` : 'Claude and Codex';
     byId('limit').classList.toggle('api', l.billing === 'api' && !!l.api);
     if (l.billing === 'api' && l.api) { renderLimitApi(l.api, updatedAt); return; }
     const start = parseTime(l.windowStart), reset = parseTime(l.resetsAt);
@@ -1694,6 +1695,10 @@
       if (k === 'closed') {
         const both = [...new Set([].concat(Array.isArray(theirs) ? theirs : [], closedBuilds()))];
         v = both.length ? both : null;
+      } else if ((k === 'collapsed' || k === 'hidden') && !same(own, was)) {
+        // A set of ids (issue 217): the host's, plus what this page added, less what it took out.
+        const ids = (x) => (Array.isArray(x) ? x : []), mineNow = ids(own), mineWas = ids(was);
+        v = [...new Set(ids(theirs).filter((id) => mineNow.includes(id) || !mineWas.includes(id)).concat(mineNow.filter((id) => !mineWas.includes(id))))];
       } else if (plain(own) === own) {
         const changed = Object.entries(own).filter(([id, x]) => !same(x, field(plain(was), id) ?? (UNSET[k] ? UNSET[k](id) : null)));
         if (changed.length) v = { ...plain(theirs), ...Object.fromEntries(changed) };

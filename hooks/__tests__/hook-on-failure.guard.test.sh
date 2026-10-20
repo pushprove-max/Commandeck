@@ -19,7 +19,7 @@ check_settings() {
 import json, os, re, sys
 settings, root = sys.argv[1:]
 # Refusing scripts deliberately left open, one reason each.
-OPEN = {}
+OPEN = {"read-range-guard.sh": "a cost guard: a crash must not stop a Builder reading"}
 IGNORED = {"Stop", "SubagentStop", "TaskCompleted", "TeammateIdle"}
 MIN_TIMEOUT = 30
 REFUSES = re.compile(r'\bexit 2\b|permissionDecision[^\n]*deny')

@@ -59,7 +59,8 @@ else
   { printf '%s\n' "$cp" > "$ANC.$$" && mv "$ANC.$$" "$ANC"; } 2>/dev/null || { rm -f "$ANC.$$"; setup_failed "could not record ancestry at $ANC"; }
 fi
 
-BOARD_CMD=${COMMANDECK_BOARD_CMD:-bash $(printf '%q' "$HERE")/../scripts/board.sh}
+# --full: this block streams the board under its own timeout and cap (a cut board prints nothing until it ends).
+BOARD_CMD=${COMMANDECK_BOARD_CMD:-bash $(printf '%q' "$HERE")/../scripts/board.sh --full}
 RUN_FILE=$(. "$HERE/lib/project.sh" && pp_run_file)
 RUN=$( { tr -d '[:space:]' < "$RUN_FILE"; } 2>/dev/null || true)
 capped() { # max-bytes source -- stdin, cut at the cap with a pointer to the rest
