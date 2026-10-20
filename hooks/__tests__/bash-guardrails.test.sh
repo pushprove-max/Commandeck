@@ -179,6 +179,10 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   $'node -e "const {copyFileSync: c}=require(\'fs\') // copy.\nc(\'/etc/hosts\',\'scripts/x.sh\')"' \
   $'python3 -c "from shutil import copy as c; x = 1.\nc(\'/etc/hosts\',\'scripts/x.sh\')"' \
   "node -e \"const {copyFileSync: c}=require('fs'); Math.max(...c('/etc/hosts','scripts/x.sh'))\"" \
+  $'node -e "const {readFileSync: unlink}=require(\'fs\'); require(\'fs\').\nunlink(\'scripts/x.sh\',()=>{})"' \
+  $'node -e "const {readFileSync: unlink}=require(\'fs\'); require(\'fs\')\n  .unlink(\'scripts/x.sh\',()=>{})"' \
+  $'python3 -c "from io import open as copy; import shutil; shutil.\\\ncopy(\'/tmp/a\', \'scripts/x.sh\')"' \
+  $'python3 -c "from io import open as copy; import shutil; (shutil\n .copy(\'/tmp/a\', \'scripts/x.sh\'))"' \
   "python3 -c \"from os import *; from io import open as remove; remove('scripts/x.sh')\"" \
   "python3 -c \"import io; from pathlib import Path; io, other = Path('scripts/x.sh'), None; io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \

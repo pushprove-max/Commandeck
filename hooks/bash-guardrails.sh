@@ -94,8 +94,10 @@ def screen(name, a, recv):
 for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
     # r7: an alias rebinds a bare name only, never shutil.copy. r8: a receiver is a name, ) ] or a string on the
     # same line, so neither a comment's closing dot (# Copy.\nc(...)), 1.\nc(...) nor a spread (...c()) is one
+    # r9: a dot across a line break (a.\nb, a\n.b, a.\\\nb) may be either, so the call is read as the API and as each alias
     recv = re.search(r"[\w$)\]'\"`][ \t]*\??\.[ \t]*\Z", s[:m.start()])
-    names = ({m[1]} & set(NAMES.split("|")) if recv or itself(m[1]) else set()) | (set() if recv else alias.get(m[1], set()))
+    near = re.search(r"[\w$)\]'\"`](?:\s|\\\n)*\??\.(?:\s|\\\n)*\Z", s[:m.start()])
+    names = ({m[1]} & set(NAMES.split("|")) if near or itself(m[1]) else set()) | (set() if recv else alias.get(m[1], set()))
     for name in names:
         if not (name in ("open", "openSync") and m.start() in seen): screen(name, args(m.end() - 1)[0], recv)  # Path(...).open: read above
 # r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
