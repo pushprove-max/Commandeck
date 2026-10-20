@@ -5,7 +5,7 @@
 # of <file> replaced by <replacement> ("" blanks it), then as is once more. Never edits this checkout.
 # --batch takes lines of <file> TAB <line> TAB <replacement> TAB <test command, run by bash -c> and runs them all in
 # ONE scratch worktree, the file restored after each break; it exits with the worst result of its proofs.
-# A test file that reads a <NAME>_TEST_CASE variable runs one case; a whole run of it is refused (issue 246).
+# A test file whose header comment names a <NAME>_TEST_CASE variable runs one case; a whole run of it is refused (issue 246).
 #   exit 0  RED: green as is, red with the break
 #   exit 1  NOT RED: the test still passes with the break, so it does not catch it
 #   exit 2  no proof: bad arguments, a file outside the scratch copy, a whole case-aware run, or the test red
@@ -31,10 +31,11 @@ valid() {
   [ "$LINE" -le "$(wc -l < "$ROOT/$REL")" ] || { echo "red-proof: $REL has no line $LINE" >&2; return 2; }
   [ "$(sed -n "${LINE}p" "$ROOT/$REL")" != "$NEW" ] || { echo "red-proof: line $LINE of $REL already reads that; nothing breaks" >&2; return 2; }
   # A case-aware test file named by the command needs its variable set, in this environment or in the command.
+  # Its header says so (the convention); a name in the body may be a fixture's text, not a selector.
   read -ra WS <<<"$*"
   for W in "${WS[@]}"; do
     [ -f "$ROOT/$W" ] || continue
-    V=$(grep -oE '[A-Z][A-Z0-9_]*_TEST_CASE' "$ROOT/$W" | head -1)
+    V=$(sed -n '/^#/!q;p' "$ROOT/$W" | grep -oE '[A-Z][A-Z0-9_]*_TEST_CASE' | head -1)
     [ -n "$V" ] && [ -z "${!V+x}" ] && [[ " $* " != *" $V="* ]] || continue
     echo "red-proof: $W runs one case with $V=<text in the case name>; a whole run of it repeats every case three times. Set it: $V='<case>' bash $W" >&2
     return 2

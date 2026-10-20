@@ -53,12 +53,16 @@ out=$(run link.txt 1 PROBE -- bash -c '! grep -qx PROBE link.txt'); rc=$?
 check "a tracked link out of the copy is refused and its target left as it was" "2 outside" "$rc $(cat "$BOX/outside.txt")"
 # Issue 246: a whole run of a test file that can run one case reruns every case three times for one proof. A file
 # that reads a *_TEST_CASE variable is refused unless the call sets it, and the refusal names it.
-printf '. ./lib.sh\n: "${CA_TEST_CASE-}"\n[ "$(limit)" = 5 ]\n' > ca.test.sh
+printf '# CA_TEST_CASE=<text> runs one case.\n. ./lib.sh\n: "${CA_TEST_CASE-}"\n[ "$(limit)" = 5 ]\n' > ca.test.sh
 out=$(run lib.sh 2 'limit() { echo 6; }' -- bash ca.test.sh); rc=$?
 check "a whole run of a case-aware test file is refused, naming its variable" "2 1" "$rc $(grep -c 'CA_TEST_CASE' <<<"$out")"
 out=$(CA_TEST_CASE=limit run lib.sh 2 'limit() { echo 6; }' -- bash ca.test.sh); rc=$?
 out2=$(run lib.sh 2 'limit() { echo 6; }' -- env CA_TEST_CASE=limit bash ca.test.sh); rc2=$?
 check "with the variable set, in the environment or the command, the proof runs" "0 0" "$rc $rc2"
+# Only the header says a file is case-aware: a variable named in its body (this file's own fixtures) is not a selector.
+printf '#!/usr/bin/env bash\n# A plain test.\n. ./lib.sh\n: CB_TEST_CASE\n[ "$(limit)" = 5 ]\n' > body.test.sh
+out=$(run lib.sh 2 'limit() { echo 6; }' -- bash body.test.sh); rc=$?
+check "a *_TEST_CASE name in a test's body, not its header, does not refuse the whole run" 0 "$rc"
 # --batch runs many proofs in one scratch worktree; each test records how many worktrees it sees (this one and the copy).
 printf '%s\t%s\t%s\t%s\n' lib.sh 2 'limit() { echo 6; }' "git worktree list | wc -l >> '$BOX/wts'; bash t.sh" \
   lib.sh 2 'limit() { echo 7; }' "git worktree list | wc -l >> '$BOX/wts'; bash t.sh" > "$BOX/batch.tsv"
