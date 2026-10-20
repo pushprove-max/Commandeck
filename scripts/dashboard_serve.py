@@ -32,7 +32,8 @@ One answer (issue 240): a `POST /answer` ({project, id, askedAt, answer}) answer
 one out: only a loopback client, under a loopback Host name, with this page's own Origin, may answer. The answer
 goes through `decision.sh answer --asked-at`, so the first answer wins and a second is refused (409); it is logged
 as a ruling the way ruling-log.sh logs one, and sent to main (to-main.sh) and, with a relay configured, to the relay
-(cos-tell.sh --note). A send that fails is kept in <directory>/answer-retry.json and sent again after the next
+(cos-tell.sh --note). The sends are kept in <directory>/answer-retry.json before the answer is recorded, and an
+answer whose sends cannot be kept there is refused (503): main is never left untold. A send that fails stays kept and is sent again after the next
 refresh, the page's next read of data.js, by a batch that refresh does not wait on; the collector lists what is still
 kept on the card. An answer delivered while main's own picker was open is kept in <directory>/answer-picker.json,
 which the collector shows too: main reads it only after that picker is answered in its pane. The project's
@@ -220,20 +221,29 @@ def settle(directory, taken, tried, slow=()):
             pass
 
 
+def keep(directory, msgs, drop=()):
+    """msgs written to the file, each in place of the kept send with its key or else at its end, and the keys in
+    `drop` taken out. Raises OSError when the file cannot be written."""
+    with SENDS:
+        new = {m['key']: m for m in msgs}
+        held = [new.pop(m['key'], m) for m in kept(directory) if m['key'] not in drop]
+        write(directory, 'answer-retry.json', held + list(new.values()))
+
+
 def send(directory, msgs):
     """Each message sent with its script, kept in the file until it is delivered. The number that failed, and
     whether main's own picker was open."""
     # Kept before the first try: the ledger row is already closed, so a send that hangs, or a server stopped
     # mid-send, must leave it for the next refresh. A send that timed out may have gone: twice beats never. A file
-    # that cannot be written does not stop the sends.
+    # that cannot be written does not stop the sends: an answer's sends were kept before its row closed.
     with SENDS:
         for m in msgs:
-            m['key'] = secrets.token_hex(8)
+            m.setdefault('key', secrets.token_hex(8))
         FLYING.update(m['key'] for m in msgs)
-        try:
-            write(directory, 'answer-retry.json', kept(directory) + msgs)
-        except OSError:
-            pass
+    try:
+        keep(directory, msgs)
+    except OSError:
+        pass
     tried, slow = [], set()
     for m in msgs:
         ok, late, picker = deliver(directory, m)
@@ -371,26 +381,51 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         main = project_path(self.directory, a.get('project'))
         if not main:
             return self.send_error(404, "no such project on this dashboard")
-        try:
-            r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
-                               env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            return self.send_error(504, "the ledger took no answer in 60 s; refresh: a question gone from the list was answered, and main was not told")
-        if r.returncode != 0:
-            why = r.stderr.strip().splitlines()[-1:] or ['the answer was not recorded']
-            code = 409 if re.search(r'already answered|reopened after', why[0]) else 404 if 'unknown decision' in why[0] else 500
-            return self.send_error(code, why[0])
-        row = json.loads(r.stdout.strip().splitlines()[-1])
-        rid = log_ruling(main, row, a['answer'])
-        body = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
-        msgs = [{'main': main, 'id': a['id'], 'to': 'main', 'args': ['question', a['id'], body]}]
+        msgs = [{'main': main, 'id': a['id'], 'to': 'main', 'args': ['question', a['id']]}]
         try:
             with open(os.path.join(main, '.claude', 'commandeck.json')) as f:
                 relay = json.load(f).get('chiefOfStaff', {}).get('name')
         except (OSError, ValueError, AttributeError):
             relay = None
         if relay:
-            msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id'], body]})
+            msgs.append({'main': main, 'id': a['id'], 'to': 'relay', 'args': ['--note', 'answered on the dashboard: %s' % a['id']]})
+        # The sends are kept, in flight so no retry batch tries them, before the row closes: once it closes a second
+        # answer is refused, so sends that could not be kept and then failed would be lost for good.
+        for m in msgs:
+            m['key'] = secrets.token_hex(8)
+            m['args'].append('%s (no ruling id: the dashboard host stopped before logging it)' % a['answer'])
+        with SENDS:
+            FLYING.update(m['key'] for m in msgs)
+        try:
+            keep(self.directory, msgs)
+        except OSError as e:
+            with SENDS:
+                FLYING.difference_update(m['key'] for m in msgs)
+            return self.send_error(503, "not answered: main could not be told for sure, %s cannot be written (%s)"
+                                   % (os.path.join(self.directory, 'answer-retry.json'), e.strerror or e))
+        try:
+            r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
+                               env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            r = None
+        if r is None or r.returncode != 0:
+            # shortcut: a drop that cannot be written leaves the sends in flight, unsent by this host, but a restarted
+            # host sends them; keep a state per send if a disk that fills between two writes proves real.
+            try:
+                keep(self.directory, [], {m['key'] for m in msgs})
+                with SENDS:
+                    FLYING.difference_update(m['key'] for m in msgs)
+            except OSError:
+                pass
+            if r is None:
+                return self.send_error(504, "the ledger took no answer in 60 s; refresh: a question gone from the list was answered, and main was not told")
+            why = r.stderr.strip().splitlines()[-1:] or ['the answer was not recorded']
+            code = 409 if re.search(r'already answered|reopened after', why[0]) else 404 if 'unknown decision' in why[0] else 500
+            return self.send_error(code, why[0])
+        row = json.loads(r.stdout.strip().splitlines()[-1])
+        rid = log_ruling(main, row, a['answer'])
+        for m in msgs:
+            m['args'][-1] = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
         unsent, picker = send(self.directory, msgs)
         out = json.dumps({'ruling': rid, 'unsent': unsent, 'picker': picker}).encode()
         self.send_response(200)

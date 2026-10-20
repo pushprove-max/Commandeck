@@ -312,6 +312,46 @@ check "main's open picker is named in the reply and kept for the collector; a de
 False []" "$(sed -n 6,7p <<<"$OUT")"
 check "a resent answer that finds main's picker open is kept for the collector" "[] ['again-1999-01-01']" "$(sed -n 8p <<<"$OUT")"
 
+# The sends are kept before the ledger row closes: an answer whose sends cannot be kept (a full disk) and then fail
+# would be lost, and the closed row refuses the next answer with 409. So that answer is refused and the row stays
+# open; once the disk takes writes again the same answer is taken and its failed sends kept. An answer the ledger
+# refuses leaves nothing kept: main is never told an answer that was not taken.
+D add full-1999-01-01 'Full disk?' yes main --options 'yes|no' >/dev/null
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W" "$(at full-1999-01-01)" "$T" "$M" <<'PY'
+import errno, functools, http.client, http.server, json, os, subprocess, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def req(body):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=30)
+    c.request("POST", "/answer", json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    r = c.getresponse()
+    return r.status, r.read()
+held = lambda: [m["id"] for m in json.load(open(sys.argv[2] + "/answer-retry.json"))]
+write = d.write
+def full(directory, name, value):
+    raise OSError(errno.ENOSPC, "No space left on device")
+open(os.path.join(sys.argv[4], "no-send"), "w").close()
+a = {"project": "proj", "id": "full-1999-01-01", "askedAt": sys.argv[3], "answer": "no"}
+d.write = full
+print(req(a)[0], held())
+d.write = write
+rows = subprocess.run(["bash", os.path.join(sys.argv[1], "decision.sh"), "list"], cwd=sys.argv[5], capture_output=True, text=True,
+                      env=dict(os.environ, COMMANDECK_MAIN=sys.argv[5])).stdout
+print(json.dumps([r.get("answer") for r in json.loads(rows) if r["id"] == "full-1999-01-01"]))
+st, body = req(a)
+print(st, json.loads(body).get("unsent"), held().count("full-1999-01-01"))
+print(req(dict(a, answer="yes"))[0], held().count("full-1999-01-01"))
+PY
+)
+rm -f "$T/no-send"
+check "an answer whose sends cannot be kept is refused, and nothing is kept" "503 []" "$(sed -n 1p <<<"$OUT")"
+check "its ledger row stays open" "[null]" "$(sed -n 2p <<<"$OUT")"
+check "with the disk back, the same answer is taken and its failed sends kept" "200 2 2" "$(sed -n 3p <<<"$OUT")"
+check "a second answer the ledger refuses keeps nothing more" "409 2" "$(sed -n 4p <<<"$OUT")"
+
 # Pass 2 kept sends without a key, and their ledger rows are already closed: an upgrade that drops them on its next
 # write loses those answers for good. And a send that always times out must not starve the ones behind it: each
 # batch stops at its first timeout, so the timed-out send goes to the back of the file.
