@@ -172,6 +172,9 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   "node -e \"const {writeFileSync: w}=require('fs'); w('scripts/x.sh','new')\"" \
   "node -e \"const {openSync: o}=require('fs'); o('scripts/x.sh','w')\"" \
   "python3 -c \"from shutil import copy as c; c('/tmp/a', 'scripts/x.sh')\"" \
+  "python3 -c \"from shutil import copy as f; f('/tmp/a', 'scripts/x.sh'); from io import open as f\"" \
+  "python3 -c \"from io import open as copy; import shutil; shutil.copy('/tmp/a', 'scripts/x.sh')\"" \
+  "python3 -c \"from io import open as copy; copy('/tmp/a', 'scripts/x.sh')\"" \
   "python3 -c \"import io; from pathlib import Path; io, other = Path('scripts/x.sh'), None; io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; (io := Path('scripts/x.sh')).open('w')\"" \
@@ -194,7 +197,8 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   "node -e \"const fs=require('fs'); let flags; fs.readSync(fs.openSync('scripts/x.sh', flags='r'), Buffer.alloc(9))\"" \
   "python3 -c \"import io; print(io.open('scripts/x.sh').read())\"" \
   "node -e \"const {open}=require('fs'); open('scripts/x.sh','r',()=>{})\"" \
-  "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\""; do
+  "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\"" \
+  "python3 -c \"from shutil import copy as w; import io; print(io.w('/tmp/z', 'scripts/x.sh'))\""; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done
 

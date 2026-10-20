@@ -65,12 +65,11 @@ AT = ("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|outpu
       "|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|rmtree|removedirs|chmod|chmodSync")
 NAMES = "open|openSync|" + TO + "|" + AT
 # r6: a call by another name (const {writeFileSync: w} = require('fs'); from shutil import copy as c) is read as the call
-alias = {m[2]: m[1] for m in re.finditer(r"(?<![\w$.])(" + NAMES + r")(?:\s*:\s*|\s+as\s+)([\w$]+)", s)}
-for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
-    name, (a, _) = alias.get(m.group(1), m.group(1)), args(m.end() - 1)
+# r7: the text's order is not run order, so a name bound twice is read as each binding, and as itself
+alias = {}
+for m in re.finditer(r"(?<![\w$.])(" + NAMES + r")(?:\s*:\s*|\s+as\s+)([\w$]+)", s): alias.setdefault(m[2], set()).add(m[1])
+def screen(name, a, recv):
     if name in ("open", "openSync"):
-        if m.start() in seen: continue  # Path(...).open: read above
-        recv = re.search(r"\.\s*$", s[:m.start()])
         # r5: perl's open has no receiver; a bare uppercase name is a perl handle only in a perl command
         if name == "open" and not recv and len(a) >= 2 and (re.match(r"\s*(my\s|\$)", a[0]) or "perl" in LANG and re.match(r"\s*[A-Z]\w*\s*$", a[0])):
             v = lit(a[1])  # perl: open(F, '>x') or open(my $f, '>', 'x')
@@ -78,13 +77,18 @@ for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in 
                 if v is None: dests.append(None)
                 elif re.match(r"\s*(\+<|>)", v): dests.append(re.sub(r"^\s*[+<>]+\s*", "", v))
             elif v is None or re.search(r"[>+]", v): dests.append(lit(a[2]))
-            if not (PY or JS): continue  # else it is read as their open as well
+            if not (PY or JS): return  # else it is read as their open as well
         js = name == "openSync" or JS  # r6: a bare open in a node script is fs's (const {open} = require('fs'))
         if may_write(a, 1, name == "open" and (PY or not JS), js): dests.append(lit(a[0]))
     elif re.fullmatch(TO, name):
         dests.append(lit(a[1]) if len(a) > 1 else None)
         if name in ("move", "rename", "renameSync", "replace"): dests.append(lit(a[0]))
     else: dests.append(lit(a[0]))
+for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in alias]) + r")\s*\(", s):
+    recv = re.search(r"\.\s*$", s[:m.start()])  # r7: an alias rebinds a bare name only, never shutil.copy
+    names = {m[1]} & set(NAMES.split("|")) | (set() if recv else alias.get(m[1], set()))
+    for name in names:
+        if not (name in ("open", "openSync") and m.start() in seen): screen(name, args(m.end() - 1)[0], recv)  # Path(...).open: read above
 # r2: a Path method on any other receiver (p = Path('x'); p.write_bytes(...)) writes where the text does not say.
 for m in re.finditer(r"\.\s*(write_text|write_bytes|touch|symlink_to|hardlink_to|open)\s*\(", s):
     if m.start(1) in seen: continue
