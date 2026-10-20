@@ -183,6 +183,7 @@ for W in "python3 -c \"from pathlib import Path; Path('scripts/x.sh').write_byte
   $'node -e "const {readFileSync: unlink}=require(\'fs\'); require(\'fs\')\n  .unlink(\'scripts/x.sh\',()=>{})"' \
   $'python3 -c "from io import open as copy; import shutil; shutil.\\\ncopy(\'/tmp/a\', \'scripts/x.sh\')"' \
   $'python3 -c "from io import open as copy; import shutil; (shutil\n .copy(\'/tmp/a\', \'scripts/x.sh\'))"' \
+  $'python3 -c "from io import open as copy; import shutil; ((\'#\', shutil)[1].\ncopy(\'/tmp/a\', \'scripts/x.sh\'))"' \
   "python3 -c \"from os import *; from io import open as remove; remove('scripts/x.sh')\"" \
   "python3 -c \"import io; from pathlib import Path; io, other = Path('scripts/x.sh'), None; io.open('w').write('new')\"" \
   "python3 -c \"import io; from pathlib import Path; io: Path = Path('scripts/x.sh'); io.open('w').write('new')\"" \
@@ -209,7 +210,11 @@ for W in "python3 -c \"data=open('scripts/x.sh').read(); open('/tmp/commandeck-c
   "python3 -c \"import io, os; print(io.open('scripts/x.sh').read(), os.sep)\"" \
   "python3 -c \"from shutil import copy as w; import io; print(io.w('/tmp/z', 'scripts/x.sh'))\"" \
   "python3 -c \"from io import open as remove; print(remove('scripts/x.sh').read())\"" \
-  "node -e \"const {readFileSync: unlink}=require('fs'); console.log(unlink('scripts/x.sh','utf8'))\""; do
+  "node -e \"const {readFileSync: unlink}=require('fs'); console.log(unlink('scripts/x.sh','utf8'))\"" \
+  $'python3 -c "from io import open as remove\n# Read.\nremove(\'scripts/x.sh\').read()"' \
+  $'node -e "const {readFileSync: unlink}=require(\'fs\') // read.\nunlink(\'scripts/x.sh\',\'utf8\')"' \
+  $'python3 -c "from io import open as remove; x = 1.\nremove(\'scripts/x.sh\').read()"' \
+  $'python3 -c "from io import open as remove; x = 1# Read.\nremove(\'scripts/x.sh\').read()"'; do
   sel "a Builder's read of a tracked file with a scratch write passes: $W" && check "a Builder's read of a tracked file with a scratch write passes: $W" 0 "$(bld "$W")"
 done
 

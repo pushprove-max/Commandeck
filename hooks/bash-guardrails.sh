@@ -97,6 +97,11 @@ for m in re.finditer(r"(?<![\w$])(" + "|".join([NAMES] + [re.escape(x) for x in 
     # r9: a dot across a line break (a.\nb, a\n.b, a.\\\nb) may be either, so the call is read as the API and as each alias
     recv = re.search(r"[\w$)\]'\"`][ \t]*\??\.[ \t]*\Z", s[:m.start()])
     near = re.search(r"[\w$)\]'\"`](?:\s|\\\n)*\??\.(?:\s|\\\n)*\Z", s[:m.start()])
+    # r10: but not a dot that ends a comment (# Read.\nc(...), // read.) or a number (1.\nc(...)): the dot's line,
+    # its quoted strings dropped, has # or // in it, or ends in digits and the dot
+    d = near and near.start() + near[0].index(".")
+    if near and re.search(r"#|//|(?<![\w$.])\d+\.\Z", re.sub(r"(['\"`]).*?\1", "", s[s.rfind("\n", 0, d) + 1:d + 1])):
+        near = None
     names = ({m[1]} & set(NAMES.split("|")) if near or itself(m[1]) else set()) | (set() if recv else alias.get(m[1], set()))
     for name in names:
         if not (name in ("open", "openSync") and m.start() in seen): screen(name, args(m.end() - 1)[0], recv)  # Path(...).open: read above
