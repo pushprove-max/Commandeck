@@ -169,6 +169,17 @@ check "--adopt on a clean marked worktree: its pane closes, the mark goes, the w
 fresh; echo x > "$WT/stray"; close --adopt
 check "--adopt on a dirty one keeps all of it, exit 1, one kept line naming the file" "1:1:0:u" \
   "$RC:$(grep -c '^kept: .* holds stray (untracked), not identical on local main' "$T/err"):$(calls 'terminal close'):$(mark)"
+# Issue 256: builder-launch.sh --from-plan adopts with --plan <its checked copy>: the plan that is that copy, and the
+# briefs folder (ignored here) holding only the batch, are not refused; a plan that differs, or another brief, is.
+fp_wt() { fresh; mkdir -p "$WT/.claude/plans" "$WT/.claude/briefs"; echo judged > "$WT/.claude/plans/u.md"; echo judged > "$T/frozen"; echo b > "$WT/.claude/briefs/u-batch.md"; }
+fp_wt; close --adopt --dry-run --plan "$T/frozen"
+check "--plan: the checked plan and the batch beside it are taken over" "0:would close 1 panes and adopt $WT" "$RC:$(cat "$T/out")"
+fp_wt; echo edited > "$WT/.claude/plans/u.md"; close --adopt --dry-run --plan "$T/frozen"
+check "--plan: a plan that is not the checked copy is kept, named" "1:1" "$RC:$(grep -c '^kept: .* holds .claude/plans/u.md (untracked)' "$T/err")"
+fp_wt; echo x > "$WT/.claude/briefs/other.md"; close --adopt --dry-run --plan "$T/frozen"
+check "--plan: a briefs folder holding more than the batch is kept" "1:1" "$RC:$(grep -c '^kept: .* holds .claude/briefs/ (ignored)' "$T/err")"
+fp_wt; close --adopt --dry-run
+check "without --plan the same worktree is kept, as before" 1 "$RC"
 fresh; rm "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; close --adopt
 check "--adopt on an unmarked worktree (a Builder unit's): kept, exit 1, saying why, nothing closed" "1:1:0" \
   "$RC:$(grep -c "^kept: .*: not u's planning worktree" "$T/err"):$(calls 'terminal close')"

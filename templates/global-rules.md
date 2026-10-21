@@ -39,6 +39,9 @@
   code changed since the last full pass, or when a push or merge guard requires
   it. A fix to tooling tests, a scanner allow-list, or a timeout re-runs only
   those tests.
+- An exception, allowlist or exemption entry in a guard or its test stands
+  only when the same test proves the alternative it claims, or the entry cites
+  an owner ruling id. A comment is not proof.
 - Name a drift guard for what it guards: it fails when two copies of one fact
   disagree, and its name says which two.
 - Plan by size: a one-line fix needs no plan; a change across a few files

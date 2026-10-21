@@ -5,7 +5,7 @@
 - **Do not -> instead** (what the guards block):
   - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
   - a long job in main's foreground -> its own pane, or `run_in_background` and `wait-test-run.sh <pid> <file>`
-  - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`
+  - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
   - an edit to project code -> a batch brief, then `builder-launch.sh <unit> <brief>`
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every
@@ -19,7 +19,9 @@
   (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for
   word: "If the mattpocock-skills plugin is installed and one of its skills fits this unit (for example TDD for new
   logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what the plan names." A plan is never a
-  build order: with no build word from the owner, STOP at the plan file.
+  build order: with no build word from the owner, STOP at the plan file. A build order is the owner's yes that names
+  this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one,
+  nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
 - **Every question for the owner goes to the relay pane** (the worktree ending in
   `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
   record each ask with `decision.sh add` in the same turn.
@@ -67,10 +69,9 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   Panel: `plan-author` and `plan-author-second` write a plan each in
   parallel, `plan-judge-astra` and `plan-judge-sol` read both, and
   `plan-author` merges them into one plan; always ask which model writes the
-  second plan (default Fable when allowed). Then ask "Which model and
-  effort?" for each seat, offering only the models setup allows
+  second plan (default Fable when allowed). Then ask "Which model and effort?" for each seat, offering only the models setup allows
   (`planModels`, which `plan-tier.sh` prints per seat), default that seat's printed model, high effort
-  (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`).
+  (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`, or `seat.sh run` with the same options: one call, one line back).
   A size target in a planner's spec is soft: the planner exceeds it when the
   content needs it and says why in the plan, never trimming needed content to
   fit. One judge round and one revision, never a judging loop. A seat whose
@@ -85,12 +86,14 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   installed and one of its skills fits this unit (for example TDD for new
   logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what
   the plan names." It also carries the batch's `Launch:` and `Order:` lines: a
-  plan seat that would open a new unit is refused without them. When the
+  plan seat that would open a new unit is refused without them. The `Order:` line quotes the owner's yes, with
+  its ruling id, and the batch's scope lists only the issues it names. When the
   owner already gave the build word, launch once the judge round is done,
   unless the judge found a real gap, which goes to the owner. Without it,
   every answer ends at the plan file: STOP until the owner's own go after
   reading the plan. Commit the plan from `<unit>` on main and name it in the batch's `## Plan`
-  section, or the launch is refused. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected
+  section, or the launch is refused; `builder-launch.sh --from-plan <unit>` does both in one call, with the batch at
+  `<unit>/.claude/briefs/<unit>-batch.md`, and installs only the plan the judge read: a judge's spec has the line `Plan: .claude/plans/<unit>.md`, or its GO certifies no plan. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected
   plan run `bash scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build order: a plan
   that exists, is approved or is committed starts no build. A `--risky`
   design pane runs after the plan.
@@ -98,10 +101,13 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   `effort override: <role> <pinned/default> -> <used>: <reason>`.
 - Work added mid-build goes in that rulings file first; then
   `builder-add-work.sh <unit>` stops the Builder, and a fresh session of its
-  pane takes the work from a hand-off that stands alone.
+  pane takes the work from a hand-off that stands alone. Added scope after the first review pass is a follow-up
+  unit; file it, or pass `--small --reason '<one line>'` for a change under about 50 lines.
 - Two NO-GOs in a row on one finding class (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next line names
   it): no third fix round. Ask the owner one class-level question, or merge and file the rest of the class as one
-  issue. A fix-round brief lists every variant of the class it fixes.
+  issue. A fix-round brief lists every variant of the class it fixes. The class fix has one retry path that does
+  not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and
+  shows the retry still happens.
 - Pickers: before a picker, search the rulings log (`~/.claude/rulings/<project>.jsonl`) for its topic and answer
   from a ruling that covers it. One question per picker, the decoy first (`hooks/lib/ask-decoy.sh`); an answer that
   comes back empty is void, and the hook says to ask it again on its own.

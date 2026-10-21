@@ -71,6 +71,22 @@ STAMP=$(mktemp) || fail "cannot make a temp file; nothing typed"
 trap 'rm -f "$STAMP"' EXIT
 send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing typed"
 idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
+# Issue 289: /clear keeps the model the pane opened with; from fix round 2 on, a Builder not on Opus steps up.
+N=$(sed -n 's/.*-fix-r\([0-9][0-9]*\)\.md$/\1/p' <<<"${HAND##*/}")
+if [ "${N:-0}" -ge 2 ] && [ -n "$REC" ] && [ -f "$REC" ]; then
+  M=$(sed -n 's/^model=//p' "$REC" | tail -1)
+  [ -n "$M" ] || M=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
+  if [[ $M != *opus* ]]; then
+    send "/model opus" || fail "typed /clear but typing /model opus into $H failed (${SENT:-no answer})"
+    idle 120000 || fail "typed /model opus but $H was not idle within 120s; the hand-off pointer was not typed"
+    echo model=opus >> "$REC"
+  fi
+fi
+# Issue 278: the new session retitles its pane; give it back its role and unit.
+U=$(sed -n 's/^unit=//p' "$REC" 2>/dev/null | tail -1)
+[[ -n $U || $HAND != */.claude/briefs/* ]] || U=$(basename "${HAND%/.claude/briefs/*}")
+. "$(dirname "${BASH_SOURCE[0]}")/codex-helpers.sh"
+[ -z "$U" ] || timeout 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title builder "$U")" >/dev/null 2>&1 || true
 send "Your task spec is the file $HAND. Read all of it now and do what it says." \
   || fail "typed /clear but typing the hand-off pointer into $H failed (${SENT:-no answer})"
 echo "builder-fresh-round: $H cleared and handed $HAND"

@@ -73,6 +73,12 @@ check "the relay reads at most the last 600 characters of a watcher, and hands a
 check "the relay's decision line passes an order with relay-order.sh" 1 "$(grep -c "scripts/relay-order.sh <id> '<the owner's words verbatim>'" <<<"$REL")"
 check "the relay searches the rulings log before a picker, and asks one question per picker" 1 \
   "$(grep -c 'Before a picker, search the rulings log .* for its topic.*One question per picker' <<<"$REL")"
+# Issue 287: an old yes, a filed issue or an approved lesson opened new units; only the owner's yes naming the unit is an order.
+ORDER="A build order is the owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one, nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner."
+check "main and the relay hold a build order to the owner's yes naming the unit or its issues" "1:1" \
+  "$(tr '\n' ' ' < "$T/ctx" | sed -E 's/ +/ /g' | grep -cF -- "$ORDER"):$(grep -cF -- "$ORDER" <<<"$REL")"
+check "main's launch rule: the Order line quotes that yes with its ruling id, and the scope lists only the issues it names" 1 \
+  "$(tr '\n' ' ' < "$REAL/templates/main-session.md" | sed -E 's/ +/ /g' | grep -cF 'The `Order:` line quotes the owner'"'"'s yes, with its ruling id, and the batch'"'"'s scope lists only the issues it names.')"
 check "main sends a denied self-modification step to the relay" 1 "$(grep -c 'Denied a self-modification step' "$T/ctx")"
 # Issue 212: the merge check passes a NO-GO's P2/P3 tail, so main is told that merge is the owner's call.
 check "main merges a NO-GO build only on the owner's word" 1 "$(grep -c "NO-GO merges only on the owner's word" "$T/ctx")"

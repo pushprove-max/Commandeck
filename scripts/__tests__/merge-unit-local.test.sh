@@ -13,7 +13,9 @@ TMP=$(cd "$TMP" && pwd -P)
 export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
 # Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.
 export COMMANDECK_FOREGROUND=1
-unset COMMANDECK_MAIN COMMANDECK_ROUTING
+# Run as a real merge's check, the file inherits that merge's lock flag, which would skip its own merges' detach
+# and lock.
+unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK
 REPO=$TMP/proj
 mkdir -p "$HOME" "$TMP/ws" "$TMP/bin"; : > "$TMP/orca-calls"
 git init -q -b main "$REPO"
@@ -160,5 +162,40 @@ check "in main's foreground the merge queue returns 0 at once, naming its log" "
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "the detached queue stopped at the first unit that did not merge, and never says all merged" "1 0" \
   "$(grep -c 'STOPPED at no-such-a (not merged)' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null) $(grep -c 'all 2 unit' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null)"
+
+# Issue 265: a behaviour the owner has an open question on is theirs to settle: while a question naming the unit is
+# open, or the ledger cannot be read, the merge (a dry run too) is refused; once it is answered the unit merges.
+# Another unit's name that only contains this one's does not hold it.
+mk hu; go hu; LED=$REPO/.claude/metrics/decisions.jsonl; mkdir -p "${LED%/*}"; H0=$(git -C "$REPO" rev-parse HEAD)
+row() { jq -nc --arg id "$1" --arg a "$2" '{id: $id, askedAt: "1999-01-01T00:00:00Z", question: "Keep the old path for hu?", proposedDefault: "keep",
+  source: "builder hu", answeredAt: (if $a == "" then null else "1999-01-02T00:00:00Z" end), answer: (if $a == "" then null else $a end)}'; }
+row q-1999-01-01-a "" > "$LED"; jq -c '.id = "q-1999-01-01-b" | .question = "Rename hux?" | .source = "builder hux"' <<<"$(row x "")" >> "$LED"
+check "an open question naming the unit refuses the merge and a dry run, naming its id, and main is unchanged" "1 1 1 $H0" \
+  "$(merge hu --dry-run) $(merge hu) $(grep -c '^FAILED step 1 preconditions: an open question to the owner names hu.*q-1999-01-01-a' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+check "the other unit's open question is not named" 0 "$(grep -c 'q-1999-01-01-b' "$TMP/out")"
+cp "$LED" "$TMP/led"; echo '{"id":' >> "$LED"
+check "a ledger that cannot be read refuses the merge, saying so" "1 1" "$(merge hu) $(grep -c 'decisions ledger could not be read' "$TMP/out")"
+cp "$TMP/led" "$LED"; row q-1999-01-01-a keep >> "$LED"; jq -c '.question = "Rename hux?" | .source = "builder hux" | .id = "q-1999-01-01-b"' <<<"$(row x "")" >> "$LED"
+# Issue 301: the merge's lock went to every child of the merge, so a test command that left a process behind held
+# it after the merge ended, and every later merge waited on it.
+jq --arg c "sleep 30 >/dev/null 2>&1 & echo \$! > $TMP/left" '.testCommand = $c' <<<'{}' > "$REPO/.claude/commandeck.json"
+check "answered, the unit merges" 0 "$(merge hu)"
+check "a process the merge's test command left behind does not hold the merge lock" 0 \
+  "$([ -s "$TMP/left" ] && kill -0 "$(cat "$TMP/left")" && flock -n "$REPO/.git/merge-unit-local.lock" true; echo $?)"
+kill "$(cat "$TMP/left" 2>/dev/null)" 2>/dev/null; rm -f "$REPO/.claude/commandeck.json"
+# A question the owner is asked while the merge runs its check holds the unit too: the ledger is read again just
+# before the commit, so it merges only once that one is answered.
+mk hw; go hw; H0=$(git -C "$REPO" rev-parse HEAD)
+jq --arg c "jq -nc '{id: \"q-1999-01-01-w\", askedAt: \"1999-01-01T00:00:00Z\", question: \"Keep the old path for hw?\", proposedDefault: \"keep\", source: \"builder hw\", answeredAt: null, answer: null}' >> $LED" \
+  '.testCommand = $c' <<<'{}' > "$REPO/.claude/commandeck.json"
+check "a question opened during the check refuses the merge, naming it, and main is unchanged" "1 1 $H0" \
+  "$(merge hw) $(grep -c '^FAILED step 4 merge: an open question to the owner names hw.*q-1999-01-01-w' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+rm -f "$REPO/.claude/commandeck.json"
+# With no ledger yet the lock still holds through the commit: decision.sh add starts the file and takes it exclusive,
+# so a lock on anything else let a question be asked between the last read and the commit. The hook tries that lock.
+mk hz; go hz; rm -f "$LED"; mkdir -p "$TMP/hooks"; git -C "$REPO" config core.hooksPath "$TMP/hooks"
+printf '#!/bin/sh\nflock -n -x %s true; echo $? > %s\n' "$LED" "$TMP/hooklock" > "$TMP/hooks/pre-commit"; chmod +x "$TMP/hooks/pre-commit"
+check "with no ledger, the merge commits while a question cannot be added" "0 1" "$(merge hz) $(cat "$TMP/hooklock" 2>/dev/null)"
+git -C "$REPO" config core.hooksPath /dev/null
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

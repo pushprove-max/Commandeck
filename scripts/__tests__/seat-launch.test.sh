@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# seat-launch.test.sh -- seat.sh launch, on the hand-written commandeck.json of fixtures/seat-setup.sh. What this
+# pins: a typed pointer names its task; launch returns before the pane's tui-idle wait and a second launch meanwhile
+# is refused; a unit planned in <unit>-plan opens there; and the maxBuilders cap counts other units' live Builders.
+set -uo pipefail
+. "$(dirname "$0")/fixtures/seat-setup.sh"
+# The state these cases had from the ones now in seat-plan-marker.test.sh, by the same setup lines: the project's
+# Builder default effort, pu's planning worktree with its plan, and the judge spec.
+jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+echo PLAN-DONE > "$T/screen"; mkdir -p "$PWT/.claude/plans"; echo 'the plan' > "$PWT/.claude/plans/pu.md"
+printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
+
+# A seat Orca would not dispatch gets its pointer typed, and no preamble then names its task: the typed text
+# carries the task id, so the seat's session can be tied to its task (read-verdict.sh --task).
+rm -f "$T/pane-up" "$T/sent"; touch "$T/no-dispatch"; jq 'del(.planModels)' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a typed pointer ends with its task id" 'Task id task_1.' "$(grep -m1 'Your task spec' "$T/sent" 2>&1 | grep -o 'Task id task_1\.$')"
+rm -f "$T/no-dispatch"
+
+# Issue 233: launch wrote its record only after the tui-idle wait (up to 120 s) and the dispatch retries (60 s); a
+# caller that timed out first left a live pane with no record, and its retry opened a second pane.
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt); touch "$T/slow-idle"; rm -f "$T/pane-up" "$T/titles"; : > "$T/creates"
+# The pane's tui-idle wait lasts until the test removes slow-idle: a launch that waited on it would hit its timeout.
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
+check "launch returns while the pane's tui-idle wait still holds, naming the task and phase" "0:1" \
+  "$RC:$(grep -c 'handle=h1 task=task_1 phase=launching' "$T/out")"
+check "status shows launching meanwhile" "phase=launching handle=h1 task=task_1" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1-3)"
+COMMANDECK_SEAT_FORCE=1 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a second launch while the first is still launching is refused with its status, and opens no pane" "2:1:1" \
+  "$?:$(grep -c 'REFUSED: plan-judge-claude for pu is still launching: phase=launching handle=h1' "$T/out"):$(grep -c . "$T/creates")"
+BEFORE=$(cat "$T/titles" 2>/dev/null | grep -c .)
+rm -f "$T/slow-idle"; settle pu plan-judge-claude
+check "then status shows dispatched" "phase=dispatched" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1)"
+# Issue 278: the agent retitles its pane as it starts, so the role and unit title is set once it is up.
+check "the pane is titled with its role and unit only after the tui-idle wait" "0:Plan judge claude — pu" \
+  "$BEFORE:$(cat "$T/titles" 2>/dev/null)"
+rm -f "$T/pane-up"; : > "$T/creates"; touch "$T/no-title"
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "an Orca without set-pane-title still launches, in one pane" "0:1:phase=dispatched" \
+  "$?:$(grep -c . "$T/creates"):$(seat_sh status plan-judge-claude pu | cut -d' ' -f1)"
+rm -f "$T/no-title"
+rm -f "$T/pane-up"; touch "$T/no-dispatch" "$T/send-fails"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "a launch whose pointer cannot be sent ends phase=failed, and its log names the cause" "phase=failed:1" \
+  "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1):$(grep -c 'send failed to h1' "$JREC.log")"
+rm -f "$T/no-dispatch" "$T/send-fails"
+
+# A unit planned before 0.18.0 plans in its marked <unit>-plan, its plan not yet committed: a seat launched in a new
+# <unit> cut from main read no plan.
+LWT=$HOME/orca/workspaces/proj/pl-plan; git -C "$PROJ" worktree add -q "$LWT" && echo pl > "$(git -C "$LWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+mkdir -p "$LWT/.claude/plans" && echo draft > "$LWT/.claude/plans/pl.md"; : > "$T/creates"
+srun launch plan-judge-claude pl "$T/judge-spec.md" >"$T/out" 2>&1
+check "a plan seat of a unit planned in <unit>-plan opens there, its record names it, and no <unit> is made" '0:1:1:no' \
+  "$?:$(grep -c -- "path:$LWT " "$T/creates"):$(grep -cx 'worktree=pl-plan' "$HOME/.commandeck/scratch/"*/seat-pl-plan-judge-claude.txt):$([ -e "$HOME/orca/workspaces/proj/pl" ] && echo yes || echo no)"
+
+# Issue 256: the owner caps how many Builders run at once (maxBuilders in /config), over all units. A Builder of
+# another unit whose pane is connected counts; a launch at the cap opens no pane; with no cap nothing is counted.
+cap() { jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {options: $o}}}' > "$HOME/.claude/settings.json"; }
+for u in b2 b3; do git -C "$PROJ" worktree add -q "$HOME/orca/workspaces/proj/seat-$u"; done
+bl() { COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder "seat-$1" "$T/spec.md" 2>&1; }
+SCR=$(dirname "$JREC"); rm -f "$T/pane-up" "$T/screen" "$T/titles"; mkdir -p "$HOME/.claude"
+printf 'path:/elsewhere/other\tBuilder — other\th9\t1\n' >> "$SCR/pane-titles.tsv"; echo '{"handle":"h9","agentIdentity":"claude"}' > "$T/extra"
+cap '{}'; : > "$T/creates"; OUT=$(bl b2); RC=$?
+check "with no cap a Builder launches beside another unit's, and no admission lock is taken" "0:1:no" \
+  "$RC:$(grep -c . "$T/creates"):$([ -e "$SCR/builder-admission.lock" ] && echo yes || echo no)"
+rm -f "$T/pane-up"; cap '{"maxBuilders": 1}'; : > "$T/creates"; OUT=$(bl b2); RC=$?
+check "cap 1 with another unit's Builder live: refused, the count and its handle named, no pane opened" "2:1:0" \
+  "$RC:$(grep -cx 'REFUSED: 1 Builders are running (h9), the maxBuilders cap in /config; close one or raise the cap' <<<"$OUT"):$(grep -c . "$T/creates")"
+cap '{"maxBuilders": 2}'; OUT=$(bl b2); RC=$?
+check "cap 2 with the same Builder live: it launches" "0:1" "$RC:$(grep -c . "$T/creates")"
+rm -f "$T/pane-up"; : > "$T/creates"; for v in 0 '"two"'; do cap "{\"maxBuilders\": $v}"; OUT=$(bl b2); RC=$?
+  check "a cap of $v refuses the launch and says to change it in /config" "2:1:0" "$RC:$(grep -c 'not a whole number of 1 or more; change it in /config' <<<"$OUT"):$(grep -c . "$T/creates")"; done
+cap '{"maxBuilders": 2}'; touch "$T/list-fails"; OUT=$(bl b2); RC=$?; rm -f "$T/list-fails"
+check "a pane list that cannot be read refuses under a cap, and says so" "1:1:0" "$RC:$(grep -c 'pane list could not be read' <<<"$OUT"):$(grep -c . "$T/creates")"
+# A Builder whose agent exited back to its shell (agentIdentity null, past the start grace) holds no seat under the cap.
+echo '{"handle":"h9","agentIdentity":null}' > "$T/extra"; cap '{"maxBuilders": 1}'; OUT=$(bl b2); RC=$?
+check "cap 1 beside another unit's pane whose Builder exited: it launches" "0:1" "$RC:$(grep -c . "$T/creates")"
+# The title registry lost: a Builder still counts by the title Orca lists for its pane.
+rm -f "$T/pane-up"; : > "$T/creates"; mv "$SCR/pane-titles.tsv" "$T/titles.tsv"
+echo '{"handle":"h8","title":"Builder — other","agentIdentity":"claude"}' > "$T/extra"; OUT=$(bl b2); RC=$?
+check "cap 1 with no title registry and another Builder listed by title: refused, naming it" "2:1:0" \
+  "$RC:$(grep -c 'REFUSED: 1 Builders are running (h8)' <<<"$OUT"):$(grep -c . "$T/creates")"
+mkdir "$SCR/pane-titles.tsv"
+OUT=$(bl b2); RC=$?
+check "cap 1 with a title registry that cannot be read: refused, saying so" "1:1:0" "$RC:$(grep -c 'title registry' <<<"$OUT"):$(grep -c . "$T/creates")"
+rmdir "$SCR/pane-titles.tsv"; mv "$T/titles.tsv" "$SCR/pane-titles.tsv"
+# Two launches started together under cap 1, with no other Builder: the admission lock lets one count and open its
+# pane before the other counts, so one pane opens and one launch is refused.
+rm -f "$T/extra"; cap '{"maxBuilders": 1}'; : > "$T/creates"
+bl b2 > "$T/o2" & bl b3 > "$T/o3" & wait
+check "two launches together under cap 1 open one pane, and one is refused" "1:1" \
+  "$(grep -c . "$T/creates"):$(cat "$T/o2" "$T/o3" | grep -c '^REFUSED: 1 Builders are running')"
+rm -f "$T/pane-up"
+
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" = 0 ]

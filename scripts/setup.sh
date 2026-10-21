@@ -110,6 +110,8 @@ OWN=(AGENT_STARTUP.md .claude/main-session.md)
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
 BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
+# The builder keys setup asks nothing about (maxBuilders, issue 256) are carried over as saved.
+BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clearLine) else {} end' "$IL_CONFIG" 2>/dev/null || true); [ -n "$BUILDER" ] || BUILDER='{}'
 PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
 FULL=$(old .fullSuiteBeforeFinal)
@@ -375,14 +377,14 @@ EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 # After every refusal above, so a refused run leaves the owner's routing file as it was.
 il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could not add the plugin's missing seats to $(pp_routing)"
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
   --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
    codexFast: ($fast == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $gen == null then {} else {generatedFiles: $gen} end)
-  + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != "")) | if . == {} then {} else {builder: .} end)
+  + ($ob + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != ""))) | if . == {} then {} else {builder: .} end)
   + (if $sz == "" then {} else {issueSizing: $sz} end)
   + (if $pm == "" then {} else {planModels: ($pm | split(",") | map(select(. != "")))} end)
   + (if $pf == "" then {} else {planFast: ($pf | split(",") | map(select(. != "")))} end)

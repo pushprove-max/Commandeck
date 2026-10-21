@@ -5,13 +5,16 @@
 # silent, exit 0. --dry-run closes and removes nothing.
 # --adopt: builder-launch.sh's way into the unit's planning worktree. The same checks and pane close, then the mark
 # goes and the worktree stays for the Builder. Exit 0 adopted; exit 1 kept, with one "kept:" line saying why.
+# --plan <copy>: builder-launch.sh --from-plan's checked copy of the plan. The worktree's .claude/plans/<unit>.md is
+# accepted when it is that copy byte for byte, and its briefs folder when it holds only the batch, <unit>-batch.md.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
-UNIT=${1:?usage: plan-worktree-close.sh <unit> [--adopt] [--dry-run]}
-DRY=0 ADOPT=0
-for a in "${@:2}"; do case $a in --dry-run) DRY=1 ;; --adopt) ADOPT=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac; done
+UNIT=${1:?usage: plan-worktree-close.sh <unit> [--adopt] [--dry-run] [--plan <copy>]}
+DRY=0 ADOPT=0 FROZEN=
+set -- "${@:2}"
+while [ $# -gt 0 ]; do case $1 in --dry-run) DRY=1 ;; --adopt) ADOPT=1 ;; --plan) FROZEN=${2:-}; shift ;; *) echo "unknown argument: $1" >&2; exit 2 ;; esac; shift; done
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 # Every git below reads $WT's own index and objects, never a routed one (GIT_INDEX_FILE, GIT_DIR, ...).
 unset $(git rev-parse --local-env-vars) GIT_CEILING_DIRECTORIES
@@ -52,12 +55,23 @@ setup_made() {
     *) return 1 ;;
   esac
 }
+# What builder-launch.sh --from-plan installs or keeps: the checked plan, and the briefs folder with only the batch.
+from_plan() {
+  [ -n "$FROZEN" ] || return 1
+  case $1 in
+    ".claude/plans/$UNIT.md") [ -f "$WT/$1" ] && [ ! -L "$WT/$1" ] && cmp -s "$WT/$1" "$FROZEN" ;;
+    # Ignored (as this repo's .gitignore has it) the folder is listed; untracked, the file.
+    .claude/briefs/) [ ! -L "$WT/.claude/briefs" ] && [ "$(ls -A "$WT/.claude/briefs")" = "$UNIT-batch.md" ] ;;
+    ".claude/briefs/$UNIT-batch.md") [ -f "$WT/$1" ] && [ ! -L "$WT/$1" ] ;;
+    *) return 1 ;;
+  esac
+}
 # scan <layer> <reader> <git args> -- every path git lists must read the same as on main; HIT names the first that does not.
 scan() {
   local layer=$1 reader=$2 p; shift 2
   git -C "$WT" "$@" > "$LIST" || { HIT="(git $1 failed) ($layer)"; return 0; }
   while IFS= read -r -d '' p; do
-    case $layer in untracked|ignored) ! setup_made "$p" || continue ;; esac
+    case $layer in untracked|ignored) if setup_made "$p" || from_plan "$p"; then continue; fi ;; esac
     [ "$layer" != ignored ] || { HIT="$p ($layer)"; return 0; }
     [ "$($reader "$p")" = "$(main_of "$p")" ] || { HIT="$p ($layer)"; return 0; }
   done < "$LIST"

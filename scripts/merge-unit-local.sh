@@ -33,7 +33,8 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! pri
   pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@"; exit
 fi
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
-  exec env MERGE_UNIT_LOCAL_LOCK=1 flock \
+  # -o: a child the merge leaves running (a test command's) must not keep the lock after the merge ends (issue 301).
+  exec env MERGE_UNIT_LOCAL_LOCK=1 flock -o \
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
 fi
 UNIT=$1; shift
@@ -91,6 +92,16 @@ while IFS= read -r path; do
 done < <(git diff --no-relative --name-only)   # --no-relative here and below: from a subdirectory, diff.relative hides every path outside it
 # A build's papers (.claude/briefs) are never committed: a branch with no commit has nothing to merge.
 [ -n "$(git rev-list -1 "main..$BRANCH")" ] || fail "step 1 preconditions" "$BRANCH has no commit of its own; a unit's brief files are archived, never committed, so there is nothing to merge"
+# Issue 265: a behaviour the owner has an open question on is theirs to settle, so the unit waits for the answer.
+# Read here and again just before the commit (step 4): a question asked while the merge tests is one too.
+no_holds() { # <step>
+  local holds open
+  holds=$(COMMANDECK_MAIN=$ROOT bash "$HERE/decision.sh" holds "$UNIT" 2>&1) \
+    || fail "$1" "the owner's decisions ledger could not be read, so an open question naming $UNIT cannot be ruled out: $holds"
+  open=$(grep '^Open question to the owner ' <<<"$holds" || true)
+  [ -z "$open" ] || fail "$1" "an open question to the owner names $UNIT; merge once it is answered: $(paste -sd';' - <<<"$open")"
+}
+no_holds "step 1 preconditions"
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
 echo "STEP 2 rebase: git -C $WT rebase main"
@@ -387,10 +398,19 @@ if [ "$DRY_RUN" = 0 ]; then
     KEPT=$((KEPT + 1))
     MAIN_FILES+=("$f")
   done < <(pp_unit_briefs "$ROOT/.claude/briefs" "$UNIT")
-  if ! git commit -q -m "$TITLE"; then
+  # The ledger's shared lock, held from this read through the commit, keeps a question from being added between them
+  # (decision.sh add takes it exclusive). The commit's hooks get no copy of it (issue 301: a process one leaves
+  # behind would hold it), and it is let go once the commit is made.
+  LEDGER=$ROOT/.claude/metrics/decisions.jsonl
+  # An absent ledger is started here, as decision.sh add does: a lock on nothing would let that add start the file and ask.
+  { [ -e "$LEDGER" ] || { mkdir -p "${LEDGER%/*}" && : >> "$LEDGER"; }; } && exec {LEDGER_FD}<"$LEDGER" && flock -s -w 60 "$LEDGER_FD" \
+    || fail "step 4 merge" "could not lock $LEDGER to read the owner's open questions once more"
+  no_holds "step 4 merge"
+  if ! git commit -q -m "$TITLE" {LEDGER_FD}<&-; then
     git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
   fi
+  exec {LEDGER_FD}<&-
   # A commit hook that passed may still have edited and staged files: the
   # commit then holds a tree nobody reviewed or checked, and is taken back.
   if [ "$(git rev-parse 'HEAD^{tree}')" != "$TREE" ]; then

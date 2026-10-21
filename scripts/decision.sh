@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
-#           | reopen <id> | list
+#           | reopen <id> | list | holds <unit>
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
 # append-only, one complete snapshot per line, the latest line per id wins.
 # The dashboard's Needs Owner card shows the unanswered ones with their default;
@@ -29,7 +29,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit>"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -242,5 +242,16 @@ case "${1:-}" in
     [ $# -eq 1 ] || usage
     lock -s
     fold ;;
+  holds)
+    # holds <unit>: issue 265. One line per decision whose id, question or source names <unit>, the open ones
+    # first. No ledger prints nothing; one that cannot be read exits 1, never reads as none.
+    [ $# -eq 2 ] || usage
+    [ -e "$L" ] || exit 0
+    lock -s
+    cur=$(fold) || exit 1
+    jq -r --arg u "$2" '($u | gsub("\\."; "\\.")) as $re
+      | [.[] | select((.id + " " + .question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])"))]
+      | (.[] | select(.answeredAt == null) | "Open question to the owner \(.id): \(.question)"),
+        (.[] | select(.answeredAt != null) | "The owner answered \(.id) (\(.question)): \(.answer)")' <<<"$cur" ;;
   *) usage ;;
 esac

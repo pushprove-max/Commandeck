@@ -51,8 +51,8 @@ SHARE_FLOOR = 600  # seconds of tests and idle waits below which no share flags 
 OUT_ROOT = '/tmp/commandeck/worktreereview'
 DECISIONS = None  # decisions.jsonl; None is the main checkout's own
 # What a call that went to the background answers at once: a Bash job's id, or a helper's. The harness
-# runs a helper in the background without the flag, so the answer is the only sign of it.
-STARTED = re.compile(r'running in background with ID: (\w+)|Async agent launched[\s\S]{0,400}?agentId: (\w+)')
+# runs a helper in the background without the flag, so the answer is the only sign of it. A Monitor is a job too (issue 262).
+STARTED = re.compile(r'running in background with ID: (\w+)|Async agent launched[\s\S]{0,400}?agentId: (\w+)|Monitor started \(task (\w+)')
 # What the job tools answer once a job is over; "running" or a partial output is not an end.
 # The tool's own status tag, with nothing ahead of it but the tool's other one-line tags.
 ENDED = re.compile(r'\s*(?:<(?!status>)(\w+)>[^<>\n]*</\1>\s*)*<status>(?:completed|failed|killed)</status>')
@@ -178,7 +178,7 @@ def read_session(path):
                     tool, started = s['tools'].get(b.get('tool_use_id')), STARTED.search(body[:800])
                     if tool and started:
                         tool['bg'] = True
-                        tasks[started.group(1) or started.group(2)] = b.get('tool_use_id')
+                        tasks[next(g for g in started.groups() if g)] = b.get('tool_use_id')
                     elif tool and b.get('is_error'):
                         # Refused by a hook, or failed before it started: no job runs, so none is waited on.
                         tool['bg'] = False
@@ -230,7 +230,7 @@ def call_kind(t, test_re):
         return 'codex'
     if t['name'] in ('Agent', 'Task'):
         return 'helper'
-    if t['name'] == 'Bash':
+    if t['name'] in ('Bash', 'Monitor'):
         return 'tests' if test_re.search(text) else 'commands'
     return 'files' if t['name'] in FILE_TOOLS else 'tools'
 

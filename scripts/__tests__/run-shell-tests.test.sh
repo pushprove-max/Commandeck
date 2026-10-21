@@ -68,5 +68,22 @@ check "the detached run ran the test outside main's foreground, and main heard i
   "$(cat "$RAN") $(cat "$TMP/scratch"/queue/*.jsonl 2>/dev/null | grep -c 'run-shell-tests.sh: exit 0')"
 git -C "$R" checkout -q -- .
 
+# Issue 268: the report showed a red file's last 12 lines, so a case that failed early went unnamed.
+printf '#!/usr/bin/env bash\necho "FAIL EARLY-PROBE case"\nfor i in $(seq 30); do echo "ok   case $i"; done\nexit 1\n' > "$R/scripts/__tests__/touched.test.sh"
+OUT=$(cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh 2>&1)
+check "a red file's report names a case that failed before its last 12 lines" 1 "$(grep -c 'FAIL EARLY-PROBE case' <<<"$OUT")"
+git -C "$R" checkout -q -- .
+
+# Issue 282: a parked or own-lane file is skipped only on its marker in the first five lines; one further down runs.
+printf '#!/usr/bin/env bash\n# parked: waits on a fix\necho parked >> "$RAN"\nexit 1\n' > "$R/scripts/__tests__/touched.test.sh"
+printf '#!/usr/bin/env bash\n# own-lane: slow by design\necho lane >> "$RAN"\n' > "$R/scripts/__tests__/untouched.test.sh"
+printf '#!/usr/bin/env bash\n#\n#\n#\n#\n# parked: too late to count\necho late >> "$RAN"\n' > "$R/scripts/__tests__/seat.test.sh"
+: > "$RAN"; OUT=$(cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh scripts/__tests__/untouched.test.sh scripts/__tests__/seat.test.sh 2>&1); RC=$?
+check "a parked file and an own-lane file are skipped with their reasons, and a marker past line 5 runs its file" "0 late 1 1" \
+  "$RC $(sort "$RAN" | paste -sd' ' -) $(grep -c '^skip touched.test.sh *waits on a fix' <<<"$OUT") $(grep -c '^skip untouched.test.sh *own lane: slow by design' <<<"$OUT")"
+: > "$RAN"; (cd "$R" && timeout 30 bash "$RUNNER" --own-lane scripts/__tests__/untouched.test.sh scripts/__tests__/seat.test.sh >/dev/null 2>&1)
+check "--own-lane runs only the own-lane file" lane "$(cat "$RAN")"
+git -C "$R" checkout -q -- .
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

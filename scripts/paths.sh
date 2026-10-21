@@ -627,7 +627,7 @@ pp_config_option() {
 pp_option() {
   local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config
   case $1 in
-    builderModel) p=.builder.model ;; builderEffort) p=.builder.effort ;;
+    builderModel) p=.builder.model ;; builderEffort) p=.builder.effort ;; maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=false ;;
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;

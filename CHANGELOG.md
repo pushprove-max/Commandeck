@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.23.0 -- 2026-10-21
+
+- An exception, allowlist or exemption entry in a guard or its test stands only when its test proves it; the rule is
+  in every worker's rules and the Builder's brief (#282).
+- Only the owner's yes that names the unit or each issue in its scope is a build order. A launch's `Order:` line
+  quotes it, and filing an issue or approving a lesson is never one (#287).
+- Every seat verdict and every lone exit notice reaches main (#288).
+- From the second fix round on, the Builder's fresh session runs on Opus (#289).
+- `seat.sh run` launches a seat, waits, collects and prints one line back (#257).
+- A fix round never changes a behaviour the owner has an open question on: the fix hand-off lists the open decisions
+  that name the unit, and `merge-unit-local.sh` refuses to merge while one is open, read again just before the commit (#265).
+- `builder-launch.sh --from-plan <unit>` takes a judged plan to a live Builder in one call. It installs on main only
+  the plan the judge read, or the plan author's revision collected PLAN-DONE after a NO-GO, and refuses a GO beside
+  another judge's NO-GO on the same plan. The new `maxBuilders` option in `/config` caps how many Builders run at
+  once over all units, counted under one admission lock; an exited Builder does not count (#256).
+- Tests run under the merge lock no longer hold it after the merge ends (#301).
+- The test runner names every failing case (#268, first part).
+- A `review` pass whose GO could not merge runs as the closing pass, and says so (#260, #266).
+- A second NO-GO on the same finding class asks the Builder for an approach that fixes the whole class (#261).
+- Each finding in a fix hand-off names its test file, its case filter and the command that runs it (#264).
+- Seat and Builder panes carry their role and unit as the pane title (#278).
+- A Builder that stopped without a DONE line or a verdict is nudged once before main is told, and at most twice per
+  pane; a Monitor wait counts as test time in the worktree review (#258, #262).
+- A pass that ran long and ended GO hands the Builder to a fresh session, as added work does (#302).
+- A class-stop fix uses one retry path, and its test removes each piece of state between two runs (#303).
+- Scope added after the first review pass is a follow-up unit, unless main passes `--small --reason` for a change
+  under about 50 lines (#304).
+- Issues 216, 225, 229, 230, 234, 236, 238, 241 and 246-250 shipped in 0.21.0, and the CI half of issue 268 in 0.22.0.
+
 ## 0.22.0 -- 2026-10-20
 
 - The dashboard has a card for the main session and one for the Chief of Staff session: context, today's tokens and

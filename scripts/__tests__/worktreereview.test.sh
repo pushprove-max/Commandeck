@@ -121,6 +121,14 @@ check('13 minutes of tests in a 30-minute build is flagged and names its largest
 box = re.search(r'<div class="box flag">.*?</div>', rendered('long', r))
 check("and the flagged page's flag box names it", True, bool(box) and '&quot;run the tests (whole suite)&quot;, 13:00' in box.group())
 
+# --- issue 262: a Monitor call is a background job like a Bash one: a wait on one that runs the tests is test time. ---
+for label, cmd, want in (('runs the shell tests', 'bash scripts/run-shell-tests.sh --changed', 'idle_tests'), ('names no test', 'tail -f /tmp/x.log', 'idle_job')):
+    mon = [user(0), reply(10, {'type': 'tool_use', 'id': 'toolu_m1', 'name': 'Monitor', 'input': {'command': cmd, 'description': 'watch it'}}),
+           result(11, 'toolu_m1', 'Monitor started (task m1, timeout 600000ms). You will be notified on each event.'), turn_end(13),
+           user(900), say(910, 'Done.'), turn_end(912)]
+    r = collected('monitor', mon)
+    check(f'a wait on a Monitor whose command {label} is {want}', (True, 0), (round(r['clock'].get(want, 0)) > 800, round(r['clock'].get('idle', 0))))
+
 # --- #87: with the review flags off, the build that trips the share flag above is flagged for nothing. ---
 os.makedirs(f'{TMP}/main-off/.claude', exist_ok=True)
 subprocess.run(['git', 'init', '-q', f'{TMP}/main-off'], check=True)

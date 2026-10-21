@@ -108,5 +108,25 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
   COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 4 bash "$PL/scripts/orca-wait.sh" 2>&1)
 check "a wake killed while a later ack is pending has printed every message acknowledged so far" "1 1" \
   "$(grep -c '| first delivered |' <<<"$OUT") $(grep -c '| second delivered |' <<<"$OUT")"
+# Issue 288: the plugin starts no driver, so a stray loop-u1 service hid the one copy of a seat verdict; and a merge's
+# or a suite's detached exit note is sent from main's own handle, where the own-status rule hid it as main's note.
+cat > "$T/bin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"orchestration check"*"--ack"*) echo '{"ok":true,"result":{"messages":[]}}' ;;
+  *"orchestration check"*) cat "$T/batch.json" ;;
+  *) echo '{"ok":true,"result":{"terminals":[]}}' ;;
+esac
+EOF
+printf '#!/usr/bin/env bash\nprintf "123\\t0\\tcom.commandeck.loop-u1\\n"\n' > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
+{ msg v1 term_drv status "seat certifier u1: GO" "report"
+  msg x1 term_main status "merge-unit-local.sh u1: exit 1" "tail of the log"
+  msg x2 term_main status "a note main sent by hand" "plain"; } | jq -sc '{ok: true, result: {deliveryId: "d8", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_HOST_OS=Darwin COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_main timeout 30 bash "$PL/scripts/orca-wait.sh" 2>&1)
+check "a seat verdict is shown while a live driver service names its unit" 1 "$(grep -c '| seat certifier u1: GO |' <<<"$OUT")"
+check "a lone exit notice from main's own handle is shown; main's hand-sent status note is still hidden" "1 0" \
+  "$(grep -c '| merge-unit-local.sh u1: exit 1 |' <<<"$OUT") $(grep -c 'a note main sent by hand' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

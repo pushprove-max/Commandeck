@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -25,6 +25,12 @@
       "type": "number",
       "title": "Review rounds",
       "description": "The most review passes a build may run. Empty: no cap.",
+      "min": 1
+    },
+    "maxBuilders": {
+      "type": "number",
+      "title": "Builder cap",
+      "description": "The most Builders that may run at once, over all units. Empty: no cap.",
       "min": 1
     },
     "closingPass": {

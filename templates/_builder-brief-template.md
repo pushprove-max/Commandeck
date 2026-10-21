@@ -22,8 +22,12 @@ merges with `merge-unit-local.sh {unit}`.
 - Find a line with `grep -n <pattern> <file>` first, then Read that range (`offset` and `limit`); look a symbol
   up by name (a symbol tool such as `find_symbol`) before a grep and a read. Edit a tracked file with Edit,
   never with an inline `python3 -c` or `perl -e` write.
+- An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the
+  alternative it claims, or the entry cites an owner ruling id. A comment is not proof.
 - A fix round on a finding's class (its `(class: <tag>)`) fixes every variant of that class this build has, not
-  only the one cited: a second NO-GO on the same class stops the review loop.
+  only the one cited: a second NO-GO on the same class stops the review loop. The class fix has one retry path
+  that does not depend on where the state came from, and its test removes each piece of state between two runs
+  (ticks) and shows the retry still happens.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
@@ -127,10 +131,12 @@ merge refuses a round file the script did not write, or one older than the tip.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
    when main changed this brief or its rulings since the last pass. Fix and repeat until one
-   ends `VERDICT: GO` (nothing at P0-P2).
+   ends `VERDICT: GO` (nothing at P0-P2). A `review` that prints `final in place of review` (after a
+   closing pass that found a P0 or P1 or named nothing, or after a commit on a closing GO) is the closing
+   pass: its GO merges, and no separate final follows.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
    branch once more. Its GO is the one the merge takes. A P0 or P1 there goes
-   back to step 2 and then to another closing pass. If it leaves P2/P3 only:
+   back to step 2, whose next `review` runs as the closing pass. If it leaves P2/P3 only:
    fix the ones that change what a user or main sees, red first, take ONE
    narrowed pass (`review`), and report DONE with every open P2 and P3 listed.
    No second closing pass: the merge takes that tip when the narrowed pass

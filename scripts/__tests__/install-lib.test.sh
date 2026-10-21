@@ -149,7 +149,7 @@ echo '{}' > "$T/replay-cc/settings.json"
 # each later arg is a flag and its answer, through il_cuts as setup's case arms pass them. No setup run.
 cuts() {
   if [ "$1" = none ]; then rm -f "$T/cuts.json"; else echo "$1" > "$T/cuts.json"; fi; shift
-  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; shift; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={}
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; shift; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} BUILDER={}
     eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^CUTS=" <<<"$S")"
     while [ $# -gt 0 ]; do CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2; done
     eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"' "$T/cuts.json" "$@"
@@ -173,7 +173,7 @@ done
 # --full-suite answer as its case arm saves it (true, false, or '' for none given). No setup run.
 full() {
   echo "$1" > "$T/full.json"
-  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={}
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={} BUILDER={}
     eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^PROFILE=\$(old .profile)" <<<"$S")"; eval "$(grep "^FULL=\$(old " <<<"$S")"
     [ -z "$2" ] || FULL=$2
     eval "$(grep "^\[ -n \"\$TEST\" \] || FULL=false" <<<"$S")"
@@ -183,6 +183,19 @@ check "--full-suite on is saved as true" true "$(full '{"version":1,"testCommand
 check "a re-run with no answer keeps on as saved" true "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":true}' '')"
 check "a re-run with no answer keeps off as saved, not dropped" false "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":false}' '')"
 check "with no test command it records off, whatever the answer: the closing pass would have no suite to run" false "$(full '{"version":1}' true)"
+
+# Issue 256: setup rebuilds .builder from its answers; a key it asks nothing about (the hand-written maxBuilders cap)
+# must survive, or an update lifts the cap. The second arg is the --builder-effort answer ('' clears it). No setup run.
+builder() {
+  echo "$1" > "$T/builder.json"
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={}
+    eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^BMODEL=\$(old " <<<"$S")"; eval "$(grep "^BUILDER=" <<<"$S")"; [ "$2" = keep ] || BEFFORT=$2
+    { eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"; } | jq -c .builder' "$T/builder.json" "$2"
+}
+check "a re-run keeps the project's Builder cap and its other builder answers" '{"maxBuilders":1,"model":"opus","effort":"high"}' \
+  "$(builder '{"version":1,"builder":{"model":"opus","effort":"high","maxBuilders":1}}' keep)"
+check "an answer cleared to the default is dropped, the cap kept" '{"maxBuilders":1}' \
+  "$(builder '{"version":1,"builder":{"effort":"high","maxBuilders":1}}' '')"
 
 # --- a routing file of the owner's own gains the plan seats it lacks, and uninstall takes back only those ---
 # A COMMANDECK_ROUTING file kept from before the plan seats had none, so no plan run could start. Setup adds each

@@ -9,7 +9,8 @@ set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
-T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
+# Issue 301: a process left running from this file outlives it; the exit kills any that still names its folder.
+T=$(cd "$(mktemp -d)" && pwd -P); trap 'pkill -f "$T/" 2>/dev/null; rm -rf "$T"' EXIT
 SC=$T/scratch; mkdir -p "$T/bin" "$SC"
 git init -q -b main "$T/p"
 # Orca: a wait times out while $T/busy holds a count above 0; one --timeout-ms 120000 wait holds until $T/release
@@ -29,7 +30,9 @@ case "\$*" in
     case "\$*" in *"--timeout-ms 120000"*) ! rm "$T/hold" 2>/dev/null || until [ -e "$T/release" ]; do sleep 0.05; done ;; esac
     [ ! -e "$T/gone" ] || exit 1 ;;
   *"terminal list"*) [ -e "$T/gone" ] && echo '{"result":{"terminals":[]}}' || echo '{"result":{"terminals":[{"handle":"term_x","worktreePath":"/elsewhere"}]}}' ;;
-  *"terminal send"*) printf '%s\n' "\$*" | grep -oE -- '--text (/clear|Your task spec)' >> "$T/sends" ;;
+  *"terminal send"*) printf '%s\n' "\$*" | grep -oE -- '--text (/clear|/model opus|Your task spec)' >> "$T/sends" ;;
+  *"terminal set-pane-title"*) [ ! -e "$T/no-title" ] || { echo "unknown command" >&2; exit 1; }
+    printf '%s\n' "\$*" | sed -n 's/.*--title \(.*\)/--text title:\1/p' >> "$T/sends" ;;
 esac
 exit 0
 EOF
@@ -69,6 +72,35 @@ for f in down werr werr2; do
   check "Orca failing ($f): exit 1 before the timeout, nothing typed, the reason said, main sent the re-run" "1 0 1 1" \
     "$R $(cat "$T/sends" 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'Orca failed 5 times in a row' "$T/$f.out") $(jq -r .body "$SC/queue/main.jsonl" 2>/dev/null | grep -c '^re-run: ')"
 done
+
+# Issue 289: a fix round is /clear in the same pane, which keeps the model it opened with, so a Sonnet Builder ran
+# its hard later rounds on Sonnet. From fix round 2 on, a Builder not on Opus steps up; fix round 1 and added work
+# keep the Builder's model. Issue 278: the new session retitles its pane, so the role and unit title is set again.
+BR=$T/ws/u9/.claude/briefs; mkdir -p "$BR"
+LOGS=$T/home/.claude/projects/$(printf '%s' "$T/ws/u9" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$LOGS"
+# fr <hand-off name> <model in the record's cmd> -- one hand-off of the Builder of u9 with that seat record; the new
+# session's log is there before the hand-off looks for it.
+fr() { rm -f "$T/sends"; printf 'handle=term_x\nunit=u9\nrole=builder\ncmd=export COMMANDECK_SEAT=builder; claude --model %s --effort medium\n' "$2" > "$T/rec"
+  (sleep 1; echo "$BR/$1" > "$LOGS/s-$1.jsonl") &
+  (cd "$T/p" && env HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$SC" COMMANDECK_WORKSPACES="$T/ws" \
+    COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 timeout 10 bash "$REAL/scripts/builder-fresh-round.sh" term_x "$BR/$1" "$T/rec" > "$T/fr.out" 2>&1); R=$?
+  SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); }
+fr u9-fix-r1.md sonnet
+check "a Sonnet Builder's fix round 1 keeps its model, and its pane gets its title back before the pointer" "/clear,title:Builder — u9,Your task spec 0" \
+  "$SEQ $(grep -c '^model=' "$T/rec")"
+for n in 2 3; do
+  fr "u9-fix-r$n.md" sonnet
+  check "a Sonnet Builder's fix round $n types /model opus after /clear, the title after it, then the pointer; the record says opus" \
+    "/clear,/model opus,title:Builder — u9,Your task spec model=opus" "$SEQ $(grep '^model=' "$T/rec")"
+done
+fr u9-fix-r2.md opus
+check "an Opus Builder's fix round 2 gets no /model" "/clear,title:Builder — u9,Your task spec" "$SEQ"
+fr u9-added-19990101-000000.md sonnet
+check "work added mid-build keeps the Builder's model" "/clear,title:Builder — u9,Your task spec" "$SEQ"
+touch "$T/no-title"; fr u9-fix-r1.md opus; rm -f "$T/no-title"
+check "an Orca without set-pane-title: the hand-off still goes through" "0 /clear,Your task spec" "$R $SEQ"
+wait
+check "no hand-off of this file is left running" 0 "$(pgrep -f "$T/" | wc -l | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

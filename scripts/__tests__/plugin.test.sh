@@ -42,7 +42,9 @@ for k in $(jq -r '.userConfig | keys[]' "$M"); do
   check "option $k has a reader" 1 "$(grep -cx "$k" <<<"$READ")"
 done
 # <key> <default> <setup's recommended answer, as SKILL.md asks it>; none: no default, as the recommended answer saves none.
+# -: setup asks nothing for it, so only the default is checked.
 while IFS='|' read -r k d a; do
+  [ "$a" != - ] || { check "option $k, which setup does not ask, has no default" "$d" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M")"; continue; }
   check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
 done <<'EOF'
 builderModel|"opus"|Ask "Builder model": Opus
@@ -55,8 +57,9 @@ promptCacheTtl|"5m"|Ask "Prompt cache": 5m for main and workers
 relayPromptCacheTtl|"1h"|Ask "Relay prompt cache": 1h
 dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
 dashboardPort|"none"|Ask "Dashboard": On, this machine only
+maxBuilders|"none"|-
 EOF
-check "the set is the ten options of the plan's question 9" 10 "$(jq '.userConfig | length' "$M")"
+check "the set is the ten options of the plan's question 9 and the Builder cap (issue 256)" 11 "$(jq '.userConfig | length' "$M")"
 check "every picker's labels are 1 to 64 characters and hold its default" true \
   "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and ($o.default == null or any($o.options[]; . == $o.default))] | all' "$M")"
 # An instruction file over 200 lines loads in every session and is followed less well (Claude Code's memory guide).

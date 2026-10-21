@@ -73,6 +73,22 @@ check "a bare TODO blocks"                       2 "$(run_hook "$(t_edit "$SRC" 
 check "@ts-nocheck in src blocks"                2 "$(run_hook "$(t_edit "$ROOT/src/services/s.ts" '// @ts-nocheck')")"
 check "outside src/ a suppression passes"        0 "$(run_hook "$(t_edit "$ROOT/scripts/tool.ts" '// @ts-ignore')")"
 
+# --- issue 282: each exempt path passes, and the same text one path over still blocks ---
+check "a suppression in a test file under src/ passes (a type test uses @ts-expect-error)" 0 \
+  "$(run_hook "$(t_edit "$ROOT/src/services/s.test.ts" '// @ts-expect-error')")"
+SH_FETCH="RE=\"fetch('http://localhost:3000/health')\""
+check "a localhost fetch in the plugin's own hooks/*.sh passes (the hook quotes the form)" 0 \
+  "$(run_hook "$(t_edit "$ROOT/hooks/probe.sh" "$SH_FETCH")")"
+check "a localhost fetch in a project's src/hooks/*.ts still blocks" 2 \
+  "$(run_hook "$(t_edit "$ROOT/src/hooks/useHealth.ts" "$BAD_FETCH")")"
+CREDIT='Co-Authored''-By: Claude <noreply''@anthropic.com>'
+check "a contributor credit in .claude/ passes (its rules quote the banned form)" 0 \
+  "$(run_hook "$(t_edit "$ROOT/.claude/rules/credits.md" "$CREDIT")")"
+check "the same credit in a doc outside .claude/ and .githooks/ blocks" 2 \
+  "$(run_hook "$(t_edit "$ROOT/docs/credits.md" "$CREDIT")")"
+check "a reviewer name in a test file passes (a test names the finding it pins)" 0 \
+  "$(run_hook "$(json "$ROOT/src/services/__tests__/s.test.ts" '// Codex P1: guard the concurrent operator case')")"
+
 # --- memory index cap ----------------------------------------------------------
 # MEMORY.md loads into every session and is re-sent on every call, so a write
 # that leaves it over 18,000 bytes is refused. Shrinking an over-cap index must

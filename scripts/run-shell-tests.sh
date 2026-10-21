@@ -145,7 +145,8 @@ for i in "${!TESTS[@]}"; do
   case $line in
     ok*) PASS=$((PASS + 1)) ;;
     *) FAIL=$((FAIL + 1)); FAILED+=("$t")
-       [ -e "$RES/$i.companion" ] || tail -12 "$RES/$i.out" | sed 's/^/       /' ;;
+       # Every failed case by name first: one that failed early is above the tail (issue 268).
+       [ -e "$RES/$i.companion" ] || { grep '^FAIL ' "$RES/$i.out" | head -20; tail -12 "$RES/$i.out"; } | sed 's/^/       /' ;;
   esac
 done
 

@@ -45,17 +45,24 @@
 # line. A risky launch's second call is not checked again, so one begun before this rule still opens its Builder.
 # A new unit opens only on an order that names it: the batch's "## Launch" section has "Launch: new unit <unit>" and
 # "Order: <the owner's words>". A batch that adds work to a unit (Launch: add to <unit>) goes to builder-add-work.sh.
+# --from-plan <unit> [<batch>] (issue 256): from a judged plan to a live Builder in one call. The batch defaults to
+# <wt>/.claude/briefs/<unit>-batch.md. The plan <wt>/.claude/plans/<unit>.md must be the one the plan judge's record
+# hashed at launch (a GO), or the plan author's revision collected PLAN-DONE after the judge's NO-GO; it is committed
+# alone to main as "plan(<unit>): plan", then the launch runs as above. A GO with another judge's NO-GO on the same
+# plan bytes is refused. A judge records a plan only when its spec names it (seat.sh). --dry-run checks the same and
+# installs nothing.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief>"
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief> | --from-plan <unit> [<batch-brief>]"
 KEEP=
-RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0
+RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0 FROM=0
 while :; do
   case ${1:-} in
     --risky) RISKY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --small) SMALL=1; shift ;;
     --skip-plan) SKIP=1; shift ;;
+    --from-plan) FROM=1; shift ;;
     --keep) KEEP=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --model) PICK=1 BMODEL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --effort) RAISE=1 EFFORT=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
@@ -66,9 +73,11 @@ done
 # A reason with no --effort or --skip-plan is the model pick's, checked as it always was.
 [ -z "$REASON" ] || [ "$RAISE" = 1 ] || [ "$SKIP" = 1 ] || PICK=1
 UNIT=${1:?$USAGE}
-BATCH=${2:?$USAGE}
+BATCH=${2-}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
+[ "$FROM" = 0 ] || BATCH=${BATCH:-$PP_WORKSPACES/$UNIT/.claude/briefs/$UNIT-batch.md}
+: "${BATCH:?$USAGE}"
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
@@ -83,14 +92,16 @@ RESUME=0
 LAUNCH=$(sed -n 's/^Launch:[[:space:]]*//p' "$BATCH" | head -1 | sed 's/[[:space:]]*$//')
 [ "$RESUME" = 1 ] || case $LAUNCH in
   "new unit $UNIT") ;;
-  '') echo "REFUSED: $BATCH has no Launch line (a '## Launch' section with 'Launch: new unit $UNIT' and 'Order: <the owner's words>'): a new unit opens only on an order that names it" >&2; exit 2 ;;
+  '') echo "REFUSED: $BATCH has no Launch line (a '## Launch' section with 'Launch: new unit $UNIT' and 'Order: <the owner's words>'): a new unit opens only on an order that names it; the Order line must quote the owner's yes naming this unit or its issues" >&2; exit 2 ;;
   "add to "*) echo "REFUSED: $BATCH adds work to ${LAUNCH#add to }: run builder-add-work.sh ${LAUNCH#add to } instead; nothing was opened" >&2; exit 2 ;;
   *) echo "REFUSED: $BATCH's Launch line names ${LAUNCH#new unit }, not $UNIT ('$LAUNCH'); nothing was opened" >&2; exit 2 ;;
 esac
 # The plan is read where the worktree is cut from, local main (pp_worktree_new): a nonempty regular file there.
-PLAN=$(awk '/^#+[[:space:]]/ { on = $0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/ } on' "$BATCH" | grep -oE '\.claude/plans/[A-Za-z0-9._-]+\.md' | head -1) || PLAN=
+PLANS=$(awk '/^#+[[:space:]]/ { on = $0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/ } on' "$BATCH" | grep -oE '\.claude/plans/[A-Za-z0-9._-]+\.md' | awk '!seen[$0]++' | paste -sd' ' -) || PLANS=
+PLAN=${PLANS%% *}
 plan_ok() {
-  [ -n "$SKIPPED" ] || [ "$RESUME" = 1 ] || [[ $PLAN && $(git -C "$PP_MAIN" ls-tree -l refs/heads/main -- "$PLAN" 2>/dev/null) =~ ^100(644|755)\ blob\ [0-9a-f]+\ +[1-9][0-9]*$'\t'"$PLAN"$ ]] \
+  # A --from-plan dry run checked the plan against the judge above and installs nothing.
+  [ -n "$SKIPPED" ] || [ "$RESUME" = 1 ] || [ "$FROM$DRY" = 11 ] || [[ $PLAN && $(git -C "$PP_MAIN" ls-tree -l refs/heads/main -- "$PLAN" 2>/dev/null) =~ ^100(644|755)\ blob\ [0-9a-f]+\ +[1-9][0-9]*$'\t'"$PLAN"$ ]] \
     || { echo "REFUSED: $BATCH names no plan committed on main in $PP_MAIN (a '## Plan' section naming .claude/plans/<file>.md${PLAN:+; $PLAN is not a nonempty file in the last commit of main}): write and commit the plan the owner reads before the build, or launch with --skip-plan --reason '<one line>'" >&2; exit 2; }
 }
 SKIPPED=
@@ -99,6 +110,57 @@ if [ "$SKIP" = 1 ]; then
   [[ -n $REASON && $REASON != *[=$'\n']* ]] || { echo "REFUSED: --skip-plan needs --reason '<one line, no = sign>'; the brief, the evidence and the routing log record why the build has no plan" >&2; exit 2; }
   SKIPPED="plan skipped: $REASON"
 fi
+# Issue 256: --from-plan installs the plan in the unit's planning worktree on main, then launches as below. Only the
+# plan the judge's record hashed at launch (a GO), or the plan author's revision collected after that judge's NO-GO,
+# is installed: a frozen copy, this call's own, is checked and committed, so an edit made meanwhile cannot slip in.
+FROZEN=
+if [ "$FROM" = 1 ]; then
+  nope() { echo "REFUSED: $1; nothing was installed on main and no Builder was launched" >&2; exit 2; }
+  rv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1 || true; }
+  # The batch reaches the Builder as it is, so its Plan section names this unit's plan and no other.
+  [ "$PLANS" = ".claude/plans/$UNIT.md" ] || nope "$BATCH names ${PLANS:-no plan} in its Plan section, not .claude/plans/$UNIT.md alone"
+  PLAN=.claude/plans/$UNIT.md WP=$WT/.claude/plans/$UNIT.md J= JAT=-1 WANT= AT=-1 A=
+  for r in "$PP_SCRATCH/seat-$UNIT-plan-judge-"*.txt; do
+    c=$(rv "$r" collected); c=${c:-0}
+    [ "$(rv "$r" plan)" = "$WP" ] && [ -n "$(rv "$r" verdict)" ] && [ "$c" -gt "$JAT" ] || continue
+    J=$r JAT=$c
+  done
+  [ -n "$J" ] || nope "no plan judge's verdict on $WP in $PP_SCRATCH; run the plan judge on it first"
+  # A copy per call: a shared one could be replaced by another call between this one's check and its commit.
+  FROZEN=$(mktemp "$PP_SCRATCH/$UNIT-plan-frozen.XXXXXX") || nope "cannot make a copy of $WP in $PP_SCRATCH"
+  trap 'rm -f "$FROZEN"' EXIT
+  cp "$WP" "$FROZEN" 2>/dev/null || nope "cannot read $WP"
+  if [[ $(rv "$J" verdict) == "VERDICT: GO"* ]]; then
+    WANT=$(rv "$J" planhash)
+    # A Panel's other judge said NO-GO on these same bytes: its findings stand until a revision answers them.
+    for r in "$PP_SCRATCH/seat-$UNIT-plan-judge-"*.txt; do
+      [ "$(rv "$r" plan)" = "$WP" ] && [ "$(rv "$r" planhash)" = "$WANT" ] && [[ $(rv "$r" verdict) != "VERDICT: GO"* ]] \
+        && nope "$r judged this same plan $(rv "$r" verdict) and $J judged it GO; revise the plan with the NO-GO's findings and judge it again, or launch with --skip-plan --reason '<main's ruling>'"
+    done
+  else
+    # The newest author record after the NO-GO is the revision: a PLAN-BLOCKED one left a plan not finished.
+    for r in "$PP_SCRATCH/seat-$UNIT-plan-author"*.txt; do
+      c=$(rv "$r" collected); c=${c:-0}
+      [ "$(rv "$r" plan)" = "$WP" ] && [ "$c" -gt "$JAT" ] && [ "$c" -gt "$AT" ] || continue
+      A=$r AT=$c
+    done
+    [ -z "$A" ] || [[ $(rv "$A" verdict) != PLAN-DONE* ]] || WANT=$(rv "$A" planhash)
+  fi
+  [ -n "$WANT" ] && [ "$(sha256sum < "$FROZEN" | cut -d' ' -f1)" = "$WANT" ] \
+    || nope "$WP is not the plan the judge read ($(rv "$J" verdict) in $J), nor the plan author's revision collected PLAN-DONE after a NO-GO${A:+ ($(rv "$A" verdict) in $A)}; judge this plan again"
+  if [ "$DRY" = 0 ]; then
+    pp_sync_main "$PP_MAIN" || exit 1
+    # A retry after a later failure finds the plan on main byte for byte and goes on.
+    if ! git -C "$PP_MAIN" show "refs/heads/main:$PLAN" 2>/dev/null | cmp -s - "$FROZEN"; then
+      [ "$(git -C "$PP_MAIN" branch --show-current)" = main ] || nope "$PP_MAIN is not on main, where the plan is committed"
+      # mkdir -p and cp go through a link, so one here would overwrite a file outside the plan, even a clean tracked one.
+      for x in .claude .claude/plans "$PLAN"; do [ ! -L "$PP_MAIN/$x" ] || nope "$PP_MAIN/$x is a symbolic link; the plan is written on main only as a plain file"; done
+      [ -z "$(git -C "$PP_MAIN" status --porcelain -- "$PLAN")" ] || cmp -s "$PP_MAIN/$PLAN" "$FROZEN" || nope "$PP_MAIN/$PLAN has changes of its own"
+      mkdir -p "$PP_MAIN/.claude/plans" && cp "$FROZEN" "$PP_MAIN/$PLAN" && git -C "$PP_MAIN" add -- "$PLAN" \
+        && git -C "$PP_MAIN" commit -q -m "plan($UNIT): plan" -- "$PLAN" >&2 || { echo "could not commit $PLAN on main; no Builder was launched" >&2; exit 1; }
+    fi
+  fi
+fi
 # A risky launch's second call is not asked again: its first call checked the plan, or ran before the rule, and the
 # brief it wrote, which the Builder opens with, must match this call's (checked below).
 plan_ok
@@ -106,7 +168,7 @@ plan_ok
 # worktree, made by its first call, is one exception; the unit's planning worktree, adopted below, is the other.
 ADOPT=0
 if [ -e "$WT" ] && [ "$RESUME" = 0 ]; then
-  KEPT=$(bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt --dry-run 2>&1 >/dev/null) \
+  KEPT=$(bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt --dry-run ${FROZEN:+--plan "$FROZEN"} 2>&1 >/dev/null) \
     || { echo "REFUSED: $WT already exists and is not $UNIT's planning worktree to take over (${KEPT:-no reason given}); a Builder starts in a new worktree" >&2; exit 2; }
   ADOPT=1
 fi
@@ -225,7 +287,7 @@ if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
 [ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
   || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
-if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run >&2 || true; exit 0; fi
+if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run ${FROZEN:+--plan "$FROZEN"} >&2 || true; exit 0; fi
 
 # The second call of a risky launch: the first made the worktree and opened the
 # design pane. The Builder opens only once the note is written; nothing waits.
@@ -270,7 +332,7 @@ plan_ok
 if [ "$ADOPT" = 1 ]; then
   # After every other check, so a launch refused earlier leaves the planner and its mark as they were. Adoption
   # proved nothing in it differs from local main, so the reset to main, as pp_worktree_new bases a new one, loses nothing.
-  bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt >&2 || { echo "the Builder was not launched: $WT was not taken over (above)" >&2; exit 1; }
+  bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt ${FROZEN:+--plan "$FROZEN"} >&2 || { echo "the Builder was not launched: $WT was not taken over (above)" >&2; exit 1; }
   # Adoption took the mark, and the launch writes the Builder's settings and brief into the planner's worktree: a
   # launch that fails from here on gives the mark back, takes back the briefs it writes and puts the planner's
   # settings back as they were, or every later launch refused the unmarked worktree or the files it found there.
@@ -289,7 +351,7 @@ if [ "$ADOPT" = 1 ]; then
     if [ -f "$SAVED" ]; then mv -f "$SAVED" "$SET"; else rm -f "$SET"; fi
     echo "$UNIT" > "$GD/commandeck-plan-of"
   }
-  trap '[ $? = 0 ] && rm -f "$SAVED" || undo' EXIT
+  trap '[ $? = 0 ] && rm -f "$SAVED" || undo; rm -f "$FROZEN"' EXIT
   git -C "$WT" reset --hard "$(git -C "$PP_MAIN" rev-parse refs/heads/main)" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
 else
   pp_worktree_new "$UNIT" || exit 1

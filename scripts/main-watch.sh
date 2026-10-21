@@ -208,6 +208,28 @@ helper_out() {
       or (.kind == "codex" and ($now - (.since | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $hold)))' >/dev/null 2>&1
 }
 
+# stopped_nudge <unit> <handle> <item> -- issue 258: a Builder that ended its turn with no DONE line or verdict is
+# typed one line before main is asked, at most twice per pane (builder_watch's history file), and never while an
+# open decision names its unit (a ledger that cannot be read holds too). 0: nudged, or nudged within REPOST, so hold
+# the post; 1: post, with NUDGED set when this stop was nudged.
+stopped_nudge() {
+  local hist=$ST/builder-$1-$2 at holds
+  NUDGED=""
+  at=$(awk -v i="$3" '$1 == "STOPPED" && $2 == i { print $3 }' "$hist" 2>/dev/null | tail -1)
+  if [ -n "$at" ]; then
+    [ $((NOW - at)) -ge "$REPOST" ] || return 0
+    NUDGED=" Nudged $(( (NOW - at) / 60 )) min ago, and still stopped."; return 1
+  fi
+  [ "$(cat "$hist" 2>/dev/null | grep -c '^STOPPED ')" -lt 2 ] || return 1
+  holds=$(COMMANDECK_MAIN=$PP_MAIN bash "$HERE/decision.sh" holds "$1" 2>/dev/null) || return 1
+  ! grep -q '^Open question to the owner ' <<<"$holds" || return 1
+  # Recorded before the send, as builder_watch's nudges are: a send that fails is not retried.
+  echo "STOPPED $3 $NOW" >> "$hist"
+  orca-ide terminal send --terminal "$2" --text "Signal STOPPED: you ended your turn with no DONE line or verdict. If you are waiting on an answer, say what in one line and end your turn; this is not an answer. Otherwise continue the batch." --enter >/dev/null 2>&1 \
+    || echo "main-watch: nudge to $2 for $1 failed" >&2
+  return 0
+}
+
 # builder_watch -- each working Builder seat's event log through
 # dashboard_builders.jq. The first sighting of a signal episode ({kind, since})
 # types one line into that pane and records the episode under $ST, so it never
@@ -737,7 +759,9 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   [ "$kind" != finished ] || RV_OUT=$(cat "$ST/rv-$key" 2>/dev/null)
   ep=$(cat "$ST/episode-$key" 2>/dev/null)
   item=$key${ep:+-$ep}; [ -z "$ep" ] || task=
-  case $state in
+  # Issue 258: Orca reads a Builder at its prompt as idle as well as done; both are a stop.
+  local cs=$state; [ "$4:$state" != builder:idle ] || cs=done
+  case $cs in
     working)
       # A hold ends when the Builder works again, settled or not: its next helper wait starts a fresh clock.
       : > "$ST/working-$key"; rm -f "$ST/held-$key"
@@ -843,8 +867,11 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     if [ "$(state_now "$h")" = working ] || { [ "$at" != null ] && [ "$at" -gt "$NOW" ]; }; then
       rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key"; return 0
     fi
+    # A live Builder pane is nudged first (issue 258); a gone one has no one to type to.
+    NUDGED=""
+    if [ "$4" = builder ] && [ -n "$state" ] && [ "$state" != none ]; then stopped_nudge "$u" "$h" "$item" && return 0; fi
     post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
-      "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}. This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h"
+      "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}.$NUDGED This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h"
   fi
 }
 

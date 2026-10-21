@@ -48,5 +48,19 @@ check "a note that fails to send hands nothing over" "1 0 0" \
 # A Builder relaunched after a session start recorded its old pane: the dead record must not hide the new one.
 printf 'term_old\n' > "$SC/handles/unit-$U"
 check "a dead handle from an earlier session does not hide the pane the launch names" 0 "$(add)"
+# Issue 304: scope that changes behaviour, added after the first review pass, made every later pass review a moving
+# target. Once the unit has a round file it is a follow-up unit, unless main marks it small with a reason.
+addx() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$SC" COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 AW_CALLS="$T/calls" AW_WT="$W" AW_PROJ="$PROJ" \
+  bash "$REAL/scripts/builder-add-work.sh" "$U" "$@" >"$T/out" 2>"$T/err"); echo $?; }
+# The last case's helper may still be typing, so a note to the pane is what counts as sent.
+sends() { cat "$T/calls" 2>/dev/null | grep -c 'orchestration send'; }
+rm -f "$T/calls" "$W/.claude/briefs/$U-added-"*.md; : > "$W/.claude/briefs/$U-r1-reports.md"
+check "after the first pass, added work is refused as a follow-up unit, and nothing is sent" "2 1 0 0" \
+  "$(addx) $(grep -c 'added scope after the first review pass is a follow-up unit; file it, or pass --small for a change under about 50 lines' "$T/err") $(sends) $(ls "$W/.claude/briefs/$U-added-"*.md 2>/dev/null | wc -l | tr -d ' ')"
+check "--small with no reason is refused too" "2 0" "$(addx --small) $(sends)"
+check "--small with a reason hands it over, the reason in the hand-off" "0 1" \
+  "$(addx --small --reason 'REASON-PROBE one field') $(cat "$W/.claude/briefs/$U-added-"*.md | grep -c 'REASON-PROBE one field')"
+wait
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -213,7 +213,7 @@ driver_units() {  # units whose driver is alive, as a JSON array
     | jq -R . | jq -sc . 2>/dev/null || echo '[]'
 }
 
-# WHICH MESSAGES ARE WORTH A TURN. Three rules, all about not waking main twice
+# WHICH MESSAGES ARE WORTH A TURN. Six rules, all about not waking main twice
 # for one event.
 #  1. A pane's "turn complete" echo with no marker in its body is noise; this
 #     woke main about 250 times in two days (ruling 2026-09-12, token cuts).
@@ -228,33 +228,26 @@ driver_units() {  # units whose driver is alive, as a JSON array
 #     nothing to do with it and hears the outcome again at the driver's next
 #     judgment point. The unit comes from the SENDER's worktree, because a
 #     worker_done subject is the worker's own prose and names no unit.
-#  4. `seat <role> <unit>: <verdict>` is seat.sh narrating each seat's result,
-#     and it is sent from the DRIVER's handle, so rule 3 cannot see it -- the
-#     sender sits in the checkout, not a worktree. It dates from before
-#     unit-drive.sh existed, when main really did hear nothing between dispatch
-#     and the driver's exit. A driver now wakes main at every judgment point of
-#     its own, so while one is alive this is the same outcome a second time.
-#     With no driver it is again the only signal there is. Unit from the subject.
-#  5. `<kind> <unit> exit rc=N` is loop-run.sh's wrapper saying the driver
-#     process ended. The driver has already sent the wake that says WHY, and
-#     this one carries only the tail of the same log, so it lands as a duplicate
-#     of the message right before it. A driver that dies sending nothing is
-#     main-watch.sh's post of the done file loop-run.sh writes, which is kept.
-#  6. Self-test traffic never wakes main, driven or not. The harness runs a
+#  A seat's verdict (`seat <role> <unit>: <verdict>`) and an exit notice are
+#     never hidden (issue 288): the plugin starts no driver, so a driver rule
+#     could only hide the one copy under a stray service's unit.
+#  4. Self-test traffic never wakes main, driven or not. The harness runs a
 #     fake unit named exactly `u` from two recorded panes, and its wakes reached
 #     main all through 2026-09-16. Matched by sender (those panes, or a pane in
 #     the `u` worktree) or by `u` as a whole token in each emitter's subject
 #     form, so u1209-... stays a real unit and a pane that has since left the
 #     listing is still caught.
-#  7. A driver FYI (`drive <unit>: FYI ...`: round started, class raised, fixes
+#  5. A driver FYI (`drive <unit>: FYI ...`: round started, class raised, fixes
 #     needed) asks nothing of main, driven or not; its driver log keeps the line
 #     (owner ruling 2026-10-01). main-watch.sh never relays one, so this is the
 #     only filter that needs the rule.
-#  8. A `status` note main itself sent is not news to main. A send to a
-#     pane with no dispatch of its own (the the relay pane pane) is addressed to the
+#  6. A `status` note main itself sent is not news to main. A send to a
+#     pane with no dispatch of its own (the relay pane) is addressed to the
 #     whole run, so it comes back here. The drivers and main-watch.sh send from
 #     main's handle too, but never as `status`, so only main's hand-sent notes
 #     match. Orca's refusal of such a send carries its own payload and is kept.
+#     A detached merge's or suite's `<label>: exit <rc>` (pp_detach) also comes
+#     from main's handle, and is kept: it is the only word of that result.
 #     With no pane handle in the environment nothing is dropped on a guess.
 # None of these rules hides an owner answer: a message citing a ruling id, or from the relay's pane (the one in
 # $PP_WORKSPACES/Chief-of-Staff, as to-main.sh finds it), always passes. What they hide goes to hidden.jsonl.
@@ -263,23 +256,21 @@ driver_units() {  # units whose driver is alive, as a JSON array
 RID_RE='r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}'
 KEEP='
   def echo_unit: (.subject // "") | ((capture("\\((?<u>[^)]+)\\)") // {u:""}) | .u);
-  def seat_unit: (.subject // "") | ((capture("^seat [a-z-]+ (?<u>[^:]+):") // {u:""}) | .u);
   def sender_unit: ($hunits[(.from_handle // "")] // "");
   def driven($u): ($u != "") and (($dunits | index($u)) != null);
   def noisy: ( ((.subject // "") | test("turn complete"))
                and ( (((.body // "") | test("-DONE|VERDICT:|PLANFIX")) | not)
                      or driven(echo_unit) ) )
              or ((.type == "worker_done") and driven(sender_unit))
-             or driven(seat_unit)
-             or ((.subject // "") | test("^drive [^:]+: FYI "))
-             or ((.subject // "") | test(" exit rc=[0-9]+$") and (startswith("main-watch:") | not));
+             or ((.subject // "") | test("^drive [^:]+: FYI "));
   def harness: ((.from_handle // "") | test("^term_(3d8255b5|1c94009f)(-|$)"))
                or (sender_unit == "u") or (echo_unit == "u")
                or ((.subject // "") | test("^(seat [a-z-]+ (on )?|drive )?u([: ]|$)|(^| )unit=u( |$)"));
   def relay: (.subject // "") | startswith("heads-up:");
   def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or (sender_unit == "Chief-of-Staff");
   def own: ($me != "") and (.type == "status") and ((.from_handle // "") == $me)
-           and (((.payload // "") | tostring | contains("_orcaLifecycleRejection")) | not);
+           and (((.payload // "") | tostring | contains("_orcaLifecycleRejection")) | not)
+           and (((.subject // "") | test(": exit [0-9]+$")) | not);
   .result.messages[]? | select(.type != "heartbeat") | select(relay or owner or ((noisy | not) and (harness | not) and (own | not)))'
 # A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.

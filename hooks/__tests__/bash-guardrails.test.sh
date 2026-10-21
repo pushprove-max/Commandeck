@@ -45,6 +45,10 @@ done
 sel "and a capped node\"\" --test passes" && check "and a capped node\"\" --test passes" 0 "$(run_hook "$(json 'node"" --max-old-space-size=4096 --test a.js')")"
 sel "capped segment does not vouch for an uncapped one" && check "capped segment does not vouch for an uncapped one" 2 \
   "$(run_hook "$(json 'node --max-old-space-size=4096 --test a.test.ts && node --test b.test.ts')")"
+# Issue 282: the cap's allowance is 4096 or lower; a larger heap flag, in either spelling, beside it or alone blocks.
+for c in 'node --max-old-space-size=8192 --test a.js' 'node --max-old-space-size=4096 --max_old_space_size=8192 --test a.js'; do
+  sel "a heap flag over 4096 blocks: $c" && check "a heap flag over 4096 blocks: $c" 2 "$(run_hook "$(json "$c")")"
+done
 sel "npm test passes" && check "npm test passes" 0 \
   "$(run_hook "$(json 'npm test')")"
 sel "capped node --test passes" && check "capped node --test passes" 0 \

@@ -23,6 +23,11 @@
 #     enough; same rule as unit-loop.sh wait_worker). For a driver, never main:
 #     main waits on the Orca inbox. A wait that sees the marker end a finished
 #     turn keeps it in the record for collect.
+# seat.sh run <role> <unit> <spec-file> [--marker <text>] [launch options] -- launch, wait on the marker (default VERDICT: GO; any
+#     VERDICT line ends the wait too), collect, and print one line: seat=<role> unit=<unit> <verdict> report=<path>.
+#     Exit 0 on GO, 1 on NO-GO, 3 with no verdict, the launch's own code when it is refused. Never a Builder. In
+#     main's own foreground it restarts itself detached and prints its pid and log. Each outcome is one wake for
+#     main: collect's verdict wake, or this script's own line when there is no verdict.
 #
 # Roles: any `roles.<name>.cmd` in config/routing.json. Main still writes the spec
 # (the judgment); this script is the plumbing that cost six to ten main turns
@@ -36,6 +41,7 @@ usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 rerun
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
        seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed)
+       seat.sh run     <role> <unit> <spec-file> [--marker <text>] [launch options]   (launch, wait, collect; one line back; not for a Builder)
        seat.sh effort  <role> <unit> <handle> <level>
 Open one routing.json seat in the unit's worktree, collect its verdict, or wait for its marker.
 effort sends /effort <level> to the pane only while it is an idle Claude pane, and
@@ -49,7 +55,7 @@ never below routing's effort-stages.reviewer-floor to a read-only role.
 example: scripts/seat.sh collect certifier my-unit --report /tmp/commandeck/my-unit-r1.md
 EOF
 }
-case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status) ;; *) usage >&2; exit 2 ;; esac
+case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status|run) ;; *) usage >&2; exit 2 ;; esac
 [ $# -ge 3 ] || { usage >&2; exit 2; }
 CMDNAME=$1; shift
 ROLE=$1; UNIT=$2; shift 2
@@ -78,6 +84,8 @@ if [ "$CMDNAME" = launch ]; then WTN=$UNIT
   [[ $ROLE != plan-* || -d $WS/$UNIT ]] || [ "$(cat "$(git -C "$WS/$UNIT-plan" rev-parse --absolute-git-dir 2>/dev/null)/$PLAN_OF" 2>/dev/null)" != "$UNIT" ] || WTN=$UNIT-plan
 else WTN=$(grep '^worktree=' "$REC" 2>/dev/null | tail -1 | cut -d= -f2- || true); WTN=${WTN:-$UNIT}; fi
 WT=$WS/$WTN
+# Issue 256: the plan a plan seat reads or leaves, with its hash; builder-launch.sh --from-plan installs only that one.
+plan_lines() { local p=$WT/.claude/plans/$UNIT.md; [ ! -f "$p" ] || printf 'plan=%s\nplanhash=%s\n' "$p" "$(sha256sum < "$p" | cut -d' ' -f1)"; }
 # The Panel's planners launch in parallel: the check here and the make and mark below are one step under this lock,
 # or the second saw <unit> made and not yet marked, and refused it (Sol r4). Released once the worktree is marked.
 if [[ $CMDNAME == launch && $ROLE == plan-* ]]; then
@@ -98,7 +106,7 @@ seat_codex_home() {
   export COMMANDECK_SEAT_CODEX_HOME=${h/#\~/$HOME}
 }
 seat_codex_home
-[ -d "$WT" ] || [[ $CMDNAME == launch && $ROLE == plan-* && -z $SEAT_REPO ]] || { echo "no worktree at $WT" >&2; exit 2; }
+[ -d "$WT" ] || [[ $CMDNAME =~ ^(launch|run)$ && $ROLE == plan-* && -z $SEAT_REPO ]] || { echo "no worktree at $WT" >&2; exit 2; }
 # The role whose routing the seat runs on. A plan seat put on another (pp_plan_seat: a Codex judge with no Codex
 # runs as plan-judge-claude) keeps its own name, pane and record, so the Panel's two judges stay two.
 RROLE=$ROLE
@@ -148,6 +156,35 @@ unfenced() {
 }
 
 case "$CMDNAME" in
+run)
+  # Issue 257: launch, wait and collect were three calls of main's per seat.
+  [ "$ROLE" != builder ] || { echo "REFUSED: seat.sh run does not run a Builder: builder-launch.sh launches it, and its passes are the pass script's" >&2; exit 2; }
+  SPEC=${1:?spec file}; shift; MARKER='VERDICT: GO'
+  [ "${1:-}" != --marker ] || { MARKER=${2:?marker}; shift 2; }
+  SPEC=$(realpath "$SPEC") || exit 2   # what is left is the launch's own options (a plan seat's --model, --effort)
+  # Main never blocks on a seat: in its own foreground the run goes on detached. Plain nohup, not pp_detach,
+  # whose exit note would be a second wake for the outcome collect already sends.
+  if pp_main_foreground; then
+    LOG=$SCRATCH/run-${SEAT_REPO:+$SEAT_REPO@}$UNIT-$ROLE.log; mkdir -p "$SCRATCH"
+    COMMANDECK_FOREGROUND=1 nohup bash "$0" run "$ROLE" "$UNIT" "$SPEC" --marker "$MARKER" "$@" > "$LOG" 2>&1 < /dev/null &
+    echo "seat.sh run $ROLE $UNIT: running detached, pid $!; log $LOG. Its verdict comes to main as a wake."; exit 0
+  fi
+  # No verdict sends nothing from collect, so this one line is that outcome's wake. A question, as collect's own:
+  # orca-wait.sh drops a status sent from main's handle, which a run started by main sends from.
+  none() { bash "$PP_SCRIPTS/to-main.sh" question "seat $ROLE $UNIT: $1" "$2" >/dev/null 2>&1 || true; }
+  # stdout carries the one result line; the launch's and wait's progress go to stderr.
+  rc=0; bash "$0" launch "$ROLE" "$UNIT" "$SPEC" "$@" >&2 || rc=$?
+  [ "$rc" = 0 ] || { none "launch refused (exit $rc)" "seat.sh run $ROLE $UNIT $SPEC"; exit "$rc"; }
+  settled || { none "no verdict: the launch failed" "$(seat_status)"; echo "seat=$ROLE unit=$UNIT no verdict report=none"; exit 3; }
+  bash "$0" wait "$ROLE" "$UNIT" --marker "$MARKER" >&2 || true   # a pane gone or silent: collect then finds no verdict
+  rc=0; bash "$0" collect "$ROLE" "$UNIT" >&2 || rc=$?
+  V=$(sed -n 's/^verdict=//p' "$REC" | tail -1); RP=$(sed -n 's/^report=//p' "$REC" | tail -1)
+  if [ "$rc" != 0 ] || [ -z "$V" ]; then
+    none "no verdict (exit 3)" "$(seat_status)"; echo "seat=$ROLE unit=$UNIT no verdict report=${RP:-none}"; exit 3
+  fi
+  echo "seat=$ROLE unit=$UNIT $V report=${RP:-none}"
+  case $V in "VERDICT: GO"*|"$MARKER") exit 0 ;; *) exit 1 ;; esac
+  ;;
 status)
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
   seat_status
@@ -265,7 +302,7 @@ launch)
   if [ ! -d "$WT" ]; then
     # A new unit opens only on an order that names it (issue 234), as builder-launch.sh holds a batch to.
     sed -n 's/^Launch:[[:space:]]*//p' "$SPEC" | sed 's/[[:space:]]*$//' | grep -qxF "new unit $UNIT" \
-      || { echo "REFUSED: $SPEC has no 'Launch: new unit $UNIT' line, and this launch would open the unit $UNIT: copy the batch's Launch and Order lines into the spec. Nothing was opened." >&2; exit 2; }
+      || { echo "REFUSED: $SPEC has no 'Launch: new unit $UNIT' line, and this launch would open the unit $UNIT: copy the batch's Launch and Order lines into the spec. Nothing was opened; the Order line must quote the owner's yes naming this unit or its issues." >&2; exit 2; }
     pp_worktree_new "$WTN" && echo "$UNIT" > "$(git -C "$WT" rev-parse --absolute-git-dir)/$PLAN_OF" || exit 1
   fi
   [ -z "${PLAN_LOCK_FD:-}" ] || exec {PLAN_LOCK_FD}>&-
@@ -282,10 +319,35 @@ launch)
   # partial rendered-screen path (three drivers stalled on 2026-09-13).
   # A Builder opened here by hand waits out a risky launch's second call (builder-launch.sh), which rewrites its records.
   [ "$ROLE" != builder ] || pp_builder_lock "$UNIT" || exit 1
-  LAUNCH_EPOCH=$(date +%s)
   . "$PP_SCRIPTS/codex-helpers.sh"
+  # Issue 256: under the owner's Builder cap (maxBuilders in /config), one launch at a time counts the live Builder
+  # panes of other units and opens its own before the next counts. The unit lock above is always taken first, so two
+  # launches never wait on each other. With no cap nothing is locked or counted. A pane is a Builder by the title it
+  # was opened under (the registry), else by the title Orca lists; live as live_pane_with_title reads it: an agent
+  # in it, or opened in the last 120 s.
+  CAP=; [ "$ROLE" != builder ] || CAP=$(pp_option maxBuilders)
+  if [ -n "$CAP" ]; then
+    [[ $CAP =~ ^[1-9][0-9]*$ ]] || { echo "REFUSED: maxBuilders is \"$CAP\", not a whole number of 1 or more; change it in /config. The Builder was not launched." >&2; exit 2; }
+    exec {ADMIT_FD}>>"$PP_SCRATCH/builder-admission.lock" && flock -w 600 "$ADMIT_FD" \
+      || { echo "cannot lock $PP_SCRATCH/builder-admission.lock; the Builder was not launched" >&2; exit 1; }
+    OWN=$(pane_title builder "$UNIT") REG=
+    [ ! -e "$PANE_TITLES" ] || REG=$(cat -- "$PANE_TITLES") \
+      || { echo "REFUSED: the pane title registry $PANE_TITLES could not be read, so the Builders running cannot be counted against the maxBuilders cap in /config; the Builder was not launched" >&2; exit 1; }
+    LIVE=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -er --arg reg "$REG" --arg o "$OWN" --argjson now "$(date +%s)" '
+      (reduce ($reg | split("\n")[] | split("\t") | select(length >= 4)) as $r ({}; .[$r[2]] = {title: $r[1], at: ($r[3] | tonumber? // 0)})) as $m
+      | [.result | if type == "array" then . else .terminals end | .[]
+        | select(.connected != false and .orphaned != true) | . as $t | ($m[$t.handle] // {}) as $r
+        | select(($r.title // $t.title // "") | startswith("Builder — ") and . != $o)
+        | select($t.agentIdentity != null or $now - ($r.at // 0) < 120) | .handle] | unique | join(" ")') \
+      || { echo "REFUSED: the pane list could not be read, so the Builders running cannot be counted against the maxBuilders cap in /config; the Builder was not launched" >&2; exit 1; }
+    N=$(wc -w <<<"$LIVE" | tr -d ' ')
+    [ "$N" -lt "$CAP" ] || { echo "REFUSED: $N Builders are running ($LIVE), the maxBuilders cap in /config; close one or raise the cap" >&2; exit 2; }
+  fi
+  LAUNCH_EPOCH=$(date +%s)
   REUSED=0
   H=$(open_pane "path:$WT" "$(pane_title "$ROLE" "$UNIT")" "$CMD") || REUSED=$?
+  # The pane is listed and recorded now; the launch's background part must not hold the next launch's count.
+  [ -z "${ADMIT_FD:-}" ] || exec {ADMIT_FD}>&-
   [ -n "$H" ] || { echo "terminal create returned no handle" >&2; exit 1; }
   # A reused pane this record names holds its task: prompt nothing, and refuse
   # a changed spec rather than drop it.
@@ -300,6 +362,17 @@ launch)
       || { echo "REFUSED: live $ROLE seat $H for $UNIT was opened with other launch settings (model, effort or advisor; $REC); close it, then launch again." >&2; exit 2; }
     echo "seat=$ROLE unit=$UNIT handle=$H task=$(sed -n 's/^task=//p' "$REC" | tail -1) state=reused record=$REC"
     exit 0
+  fi
+  # Main's ruling 2: a judge certifies the unit's plan only when a whole line of its spec sends it there ("do not
+  # judge .claude/plans/u.md" or u.md.bak binds nothing), and it reads a read-only copy taken now, through a copy of
+  # its spec whose Plan: line names that copy: an edit to the live plan while it reads is never what its GO certifies.
+  PTR=$(realpath "$SPEC") PLAN_REC=
+  if [[ $ROLE == plan-judge-* ]] && grep -qxF "Plan: .claude/plans/$UNIT.md" "$SPEC" && [ -f "$WT/.claude/plans/$UNIT.md" ]; then
+    SNAP=$SCRATCH/seat-$UNIT-$ROLE-$LAUNCH_EPOCH-$$-plan.md PTR=$SCRATCH/seat-$UNIT-$ROLE-$LAUNCH_EPOCH-$$-spec.md
+    { cp "$WT/.claude/plans/$UNIT.md" "$SNAP" && chmod 444 "$SNAP" \
+      && sed "s#^Plan: \.claude/plans/$UNIT\.md\$#Plan: $SNAP (a read-only copy of .claude/plans/$UNIT.md taken at launch: judge this file, never the live one)#" "$SPEC" > "$PTR"; } \
+      || { echo "cannot copy the plan for $ROLE $UNIT to $SCRATCH; closing pane $H" >&2; orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true; exit 1; }
+    PLAN_REC=$(printf 'plan=%s\nplanhash=%s' "$WT/.claude/plans/$UNIT.md" "$(sha256sum < "$SNAP" | cut -d' ' -f1)")
   fi
   # orca-task-create.sh retries a missing id once and prints Orca's reason;
   # a launch it fails closes the pane rather than leave a stale seat record.
@@ -316,7 +389,7 @@ launch)
   # size: an 8,332-character paste sat unsubmitted and a >9 KB one killed the
   # launch (u1219). The gate above already checked the full file.
   SPEC_ABS=$(realpath "$SPEC")
-  SPEC_TEXT="Your task spec is the file $SPEC_ABS. Read all of it now and do what it says. Send no heartbeats, whatever the preamble above asks: main never reads one and each costs you a turn."
+  SPEC_TEXT="Your task spec is the file $PTR. Read all of it now and do what it says. Send no heartbeats, whatever the preamble above asks: main never reads one and each costs you a turn."
   # Two reviewer seats of one unit are handed the same spec, so the spec cannot
   # say whose session a log is; this tag, unique to the launch, does.
   TAG=seat-$ROLE-$LAUNCH_EPOCH-$$
@@ -335,6 +408,7 @@ launch)
   FIRST=; [ "$(sed -n 's/^worktree=//p' "$REC" 2>/dev/null | tail -1)" != "$WTN" ] || FIRST=$(sed -n 's/^first=//p; s/^launched=//p' "$REC" | sort -n | head -1)
   printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
   echo "phase=launching" >> "$REC"
+  [ -z "$PLAN_REC" ] || echo "$PLAN_REC" >> "$REC"
   seat_codex_home
   # The silent-pane relaunch below starts this seat again from its record.
   [ "${#LOPTS[@]}" -eq 0 ] || echo "opts=${LOPTS[*]}" >> "$REC"
@@ -346,6 +420,8 @@ launch)
   # This part runs in the background, its output in $REC.log; it ends the record phase=dispatched or phase=failed.
   launch_rest() {
     orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 120000 --json >/dev/null || true
+    # Issue 278: the agent retitles its pane as it starts, so the title given at create is lost; an older Orca has no such command.
+    timeout 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title "$ROLE" "$UNIT")" >/dev/null 2>&1 || true
     # Orca detects the agent in a fresh pane seconds after tui-idle, and until then
     # refuses inject with "no recognized agent". Retrying that refusal is
     # fewer lines than polling the pane's agent state; --keep-task leaves the task
@@ -403,7 +479,7 @@ launch)
     # slow start, and a second prompt then runs the spec twice.
     if [ "$PROVEN" = 0 ] && [ "$DIRECT" = 0 ] && [ "$(kv reason)" = "no turn" ]; then
       screen=$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null || true)
-      if grep -qF "$SPEC_ABS" <<<"$screen" && ! grep -qE 'esc to interrupt|· Working' <<<"$screen"; then
+      if grep -qF "$PTR" <<<"$screen" && ! grep -qE 'esc to interrupt|· Working' <<<"$screen"; then
         # ponytail: Ctrl-U clears the composer line in the Claude and Codex TUIs; not
         # proven on a live pane, so an unrecovered launch still says UNPROVEN below.
         orca-ide terminal send --terminal "$H" --text $'\x15' --json >/dev/null 2>&1 || true
@@ -497,6 +573,8 @@ collect)
   pp_close_items "$H"
   orca-ide terminal close --terminal "$H" --json >/dev/null 2>&1 || true
   echo "verdict=$V" >> "$REC"
+  echo "collected=$(date +%s)" >> "$REC"
+  [[ $ROLE != plan-author* ]] || plan_lines >> "$REC"
   echo "closed seat=$ROLE unit=$UNIT $V"
   case "$V" in
     "VERDICT: GO"*)    [ -z "$ON_GO" ]   || { echo "on-go: $ON_GO";     (cd "$ROOT" && eval "$ON_GO"); } ;;

@@ -130,6 +130,10 @@ MADE_FROM = {
     # 0.21.0 startup trim (issue 228): reworded, or split with a part moved below Details; step 0 a pointer
     "918c136f": ("1cf4ae22",), "57db6b3a": ("4fd3af2e",), "f36e6d57": ("5bde6db4",), "8265905f": ("6398c17f",),
     "1b13979f": ("d96617b8",), "5a0821ee": ("d96617b8",), "f4e12488": ("77c5016d",),
+    # 0.23.0 main-session.md: seat.sh run (issue 257); the owner's yes that names the unit (issue 287); below
+    # Details, the planning rule (issues 256, 257, 287), added work (issue 304) and the class stop (issue 303)
+    "8e991ec1": ("93e2b611",), "31119f58": ("c3227972",), "3e6a70f8": ("57db6b3a",), "b1a45843": ("5f729572",),
+    "45c2952e": ("deb6fc19",),
 }
 
 

@@ -115,7 +115,9 @@ SETTINGS='A change that adds or changes a required setting (a config key, an env
 CALLERS='When the change alters a function'"'"'s signature or behaviour, or a data shape (a type, a stored record, an API payload), open the callers and readers the diff did not touch and check that each still holds.'
 # Right today is not enough: some code costs more, or breaks, as time and data grow.
 LATER='Cost over time is a finding class: code that is right today but grows in cost or breaks later. Examples: retries stacked across layers, or with no backoff or cap; a full-table scan or an unindexed query on a hot path; local time where UTC is needed, a day boundary or DST.'
-FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER"
+# Issue 282: an exception a comment justified hid a real gap for months.
+EXCEPTION='An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the alternative it claims, or the entry cites an owner ruling id. A comment is not proof. Report an entry that has neither as P1.'
+FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $EXCEPTION"
 # Asked in every pass and by every reviewer, after its focus.
 LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -131,7 +133,7 @@ $CLOSE
 # The first pass is these reviewers at once, one angle each; on a small build
 # it is one reviewer handed all of them (SMALL_BUILD).
 ANGLES=(
-  'Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts.'
+  "Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts. $EXCEPTION"
   "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER"
   'Angle 3 of 3, tests and words: a changed behaviour with no test, a test that cannot fail, and comments, rule text or docs the change leaves untrue.'
 )
@@ -149,6 +151,12 @@ HEAD_FINAL='Review input: the closing pass, the whole branch diff against main (
 # either line, or a line inside the block, since each starts with its own mark.
 EARLIER_HEAD='Findings of the earlier passes on this branch, already with the author. Report one again only if it is still there, and ask what else in the diff is like these:'
 EARLIER_END='End of the earlier passes.'
+# Issue 261: a variant of an earlier finding under a new tag hid that one class came back.
+SAME_CLASS='A finding of the same kind of input in the same function as an earlier one keeps that finding'"'"'s class tag.'
+# Issue 265: a fix round changed a behaviour the owner still had an open question on.
+HOLD_HEAD='The owner'"'"'s decisions that name this unit. A finding on a behaviour an open question below covers ends its title with [HOLD <id>]: the author sends it to main and does not fix it:'
+# A finding line, and a blocker's, in a reviewer's reply.
+FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
 LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is reported as P3 "inside a stated limit", never P0 to P2:'
 DEFERRED_HEAD='Known and deferred to main: each item below needs main'"'"'s own hands (a settings file entry, a file only main edits), and main has it. Do not report a listed item again. Report anything else, a new defect in the same file included, and report a listed item that this branch could fix itself, since that is not main-only:'
 # The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
@@ -522,7 +530,6 @@ if [ "${1:-}" = --verify ]; then
   # No commit subject is exempt: a commit after the review is unreviewed whatever it is called.
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
   SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
-  FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
   # A finding main ruled out is named under "Cleared findings" in main's rulings file by its own first two parts,
   # "<title> -- <file>:<line>" (a finding's class tag is not part of it): it then blocks nothing and is not open at merge, and the proof prints it as cleared.
   # Read from main's checkout only, as the limits are: the Builder can write the worktree's copy.
@@ -804,6 +811,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 echo $$ > "$LOCK/pid"
 trap unlock EXIT
+PASS_T0=$SECONDS
 # The passes before this one. The last round file's reviewed commit bounds a
 # narrowed pass. What they found goes to this pass's reviewers, each finding
 # once, from the reviewer's records and not from the round files.
@@ -822,6 +830,23 @@ SCOPE=$(cat ${RULINGS[@]+"${RULINGS[@]}"} "$MAIN_OF_WT/.claude/briefs/$UNIT-buil
 if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCOPE_REC")" ]; }; then
   KIND=final
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
+fi
+# Issues 260 and 266: a narrowed GO after a closing pass that found a P0 or P1 or named nothing, or after commits on a
+# closing GO, merged nothing, and the final after it read the same tip again. That review is the closing pass.
+# shortcut: a P0 or P1 main cleared still makes the review a closing pass; it only reads more.
+if [ "$KIND" = review ]; then
+  read -r C_ENDED C_TID C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $11 }' <<<"$PASSES" | sort | tail -1)"
+  WHY=""
+  if [ -n "${C_TID:-}" ]; then
+    while read -r P_TID P_SAID; do
+      [ -n "$P_TID" ] || continue
+      FOUND=$(awk -v t="$P_TID" '$1 == "@" { on = ($2 == t); next } on' <<<"$PASSES")
+      if grep -qE "$BLOCKER" <<<"$FOUND"; then WHY="pass $P_TID found a P0 or P1"
+      elif [ "$P_SAID" != GO ] && [ -z "$FOUND" ]; then WHY="pass $P_TID ended NO-GO naming no finding"; fi
+    done <<<"$(awk -v c="$C_ENDED" '$1 == "@" && $8 >= c { print $2, $11 }' <<<"$PASSES")"
+    [ -n "$WHY" ] || [ "$C_SAID" != GO ] || WHY="commits came after the closing GO of $C_TID"
+  fi
+  [ -z "$WHY" ] || { KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"; }
 fi
 # Stages what the pass will commit and refuses on the evidence-file checks; sets NOTES for the commit message.
 # --check runs it in a copy of the index, so the Builder learns of a refusal before a launch costs a retry.
@@ -961,7 +986,11 @@ AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/brief
 DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 SUITE_TEXT=""
 [ -z "$SUITE" ] || SUITE_TEXT="$SUITE"$'\n'"The project's full test command ran on this tip before this pass; the line above is its result. GO only when that run is green for this exact tip."${SUITE_RED:+$'\n'"Failing: $SUITE_RED"}
-REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
+# The owner's decisions that name this unit, from main's ledger; the fix hand-off reads them again as it is written.
+holds() { COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" holds "$UNIT" 2>/dev/null \
+  || echo "The owner's decisions ledger ($MAIN_OF_WT/.claude/metrics/decisions.jsonl) could not be read, so an open question naming $UNIT cannot be ruled out: end the title of a finding that changes a behaviour the owner may have asked about with [HOLD unknown]."; }
+HOLDS=$(holds)
+REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
@@ -1143,24 +1172,56 @@ echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
 # Only the Builder's own pane (its seat record's handle) running its own pass from its own worktree hands over.
 # The hand-off stands alone: main's rulings are inlined, since a worker cannot read main's checkout.
 SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
-[ "$VERDICT" = "VERDICT: NO-GO" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] \
+# Issue 302: a pass that ran long ends GO in a context grown through it, so the next round starts fresh too.
+{ [ "$VERDICT" = "VERDICT: NO-GO" ] || [ $((SECONDS - PASS_T0)) -gt "${COMMANDECK_LONG_PASS_SECONDS:-600}" ]; } && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] \
   && [ "$(sed -n 's/^handle=//p' "$SEAT" 2>/dev/null | head -1)" = "$ORCA_TERMINAL_HANDLE" ] \
   && [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$WT" rev-parse --show-toplevel)" ] || exit 0
-HAND=$WT/.claude/briefs/$UNIT-fix-r$N.md
 TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
-{
-  printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
+where() { # <what the brief is opened for> -- the lines both hand-offs open with
   printf 'You are the Builder of %s, in a fresh session of the same pane: the session that ran pass %s was cleared, so this file and the files it names are all you have.\n\n' "$UNIT" "$N"
   printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$ORCA_TERMINAL_HANDLE" "${TASK:-not in $SEAT; ask main}" "$ORCA_TERMINAL_HANDLE"
-  printf -- '- The brief still binds you, but do not read it at start: the findings say what to fix. Open it only when a finding needs it: %s\n' "$WT/.claude/briefs/$UNIT.md"
+  printf -- '- The brief still binds you, but do not read it at start: %s: %s\n' "$1" "$WT/.claude/briefs/$UNIT.md"
+}
+if [ "$VERDICT" = "VERDICT: GO" ]; then
+  HAND=$WT/.claude/briefs/$UNIT-after-r$N.md
+  { printf '# %s: after pass %s\n\n' "$UNIT" "$N"; where "the evidence file says where you are. Open it for the next step"
+    printf -- '- Pass %s ended GO; continue from the evidence file, which says what is built, verified and left: %s\n' "$N" "$WT/.claude/briefs/$UNIT-evidence.md"
+  } > "$HAND"
+  mkdir -p "$PP_SCRATCH"
+  bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-after-r$N.log" 2>&1 &
+  echo "FRESH SESSION after pass $N: end your turn now and start nothing new in this session. The pass took over $(( ${COMMANDECK_LONG_PASS_SECONDS:-600} / 60 )) minutes, so a fresh session goes on from ${HAND##*/} once this pane is idle; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-after-r$N.log says why, main is told, and the work stays here."
+  exit 0
+fi
+HAND=$WT/.claude/briefs/$UNIT-fix-r$N.md
+# Open decisions naming the unit, read again now: one opened during the pass binds this round too.
+OPEN=$(holds | grep -v '^The owner answered ' || true)
+REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n 's/^REPEAT CLASS: //p' || true)
+{
+  printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
+  where "the findings say what to fix. Open it only when a finding needs it"
   printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n\n' "$N" "$((N + 1))"
   printf '## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
+  [ -z "$OPEN" ] || printf '\n## Open decisions (HOLD)\n\n%s\n\nDo not fix a finding tagged [HOLD <id>] or one that touches these questions: send it to main as a question with the id, and fix the rest.\n' "$OPEN"
+  # Issues 261 and 303: a class back in two passes in a row is fixed as a class, once, not input by input.
+  [ -z "$REPEAT" ] || printf '\n## The same class again\n\nFindings of class %s came back in two passes in a row (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser), fix the other findings first, then send main that approach as a question. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. If the approach touches an open decision, ask main first.\n' \
+    "${REPEAT% (*}" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
+  # Issue 264: each finding's test, by the rule run-shell-tests.sh --changed uses for a same-name test.
+  TPF=$({ grep -E "$FINDING" "$OUT" || true; } | sed -nE 's/.* -- ([^ :]+):([0-9]+) -- .*/\1 \2/p' | awk '!seen[$0]++' | while read -r p l; do
+    # Leading-paren patterns: bash 3.2 cannot parse a bare `pat)` case inside $( ).
+    case $p in (*.test.*) t=$p ;; (hooks/*|scripts/*) t=${p%%/*}/__tests__/$(basename "${p%.*}").test.sh ;; (*) t="" ;; esac
+    if [ -n "$t" ] && [ -f "$WT/$t" ]; then
+      v=$(sed -n '/^#/!q;p' "$WT/$t" | grep -oE '[A-Z][A-Z0-9_]*_TEST_CASE' | head -1 || true)
+      printf -- "- %s:%s: test %s%s; run: bash %s %s; red proof: %sbash %s %s %s '<replacement>' -- bash %s %s\n" "$p" "$l" "$t" "${v:+, one case with $v=<case label>}" \
+        "$HERE/run-shell-tests.sh" "$t" "${v:+$v='<case label>' }" "$HERE/red-proof.sh" "$p" "$l" "$HERE/run-shell-tests.sh" "$t"
+    else echo "- $p:$l: no same-name test: name the test file in the evidence before the fix."; fi
+  done)
+  [ -z "$TPF" ] || printf '\n## Tests per finding\n\n%s\n' "$TPF"
   printf '\n## Main'"'"'s rulings\n\n'
   if [ "${#RULINGS[@]}" -gt 0 ]; then for f in "${RULINGS[@]}"; do printf 'From %s:\n\n' "$f"; cat "$f"; echo; done
   else echo 'None for this unit.'; fi
   printf '\n## Test files this build touched\n\nA fix round re-runs only the files it touches.\n\n'
-  { git -C "$WT" diff --name-only main...HEAD | grep -E '(__tests__/|\.test\.)' || true; } | sed 's/^/- /'
+  { git -C "$WT" diff --name-only main...HEAD | grep -E '\.test\.' || true; } | sed 's/^/- /'
 } > "$HAND"
 mkdir -p "$PP_SCRATCH"
 bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &

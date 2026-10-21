@@ -49,6 +49,12 @@ OUT=$(L 'pp_review_loop maxRounds "" "^[1-9][0-9]*$"; echo "rc=$?"')
 check "a /config number the review loop does not take is refused, and says where it is" "rc=1 1" "$(tail -1 <<<"$OUT") $(grep -c 'maxReviewRounds = "0" in /config' <<<"$OUT")"
 conf '{"promptCacheTtl": "leave"}'; jq '. + {cacheTtl: "5m"}' "$P" > "$T/x" && mv "$T/x" "$P"
 check "a /config 'leave' is an answer, though the project saved 5m" "leave|/config" "$(O promptCacheTtl)"
+# Issue 256: the Builder cap has no setup question; an owner sets it in /config, or by hand in the project's file.
+check "the Builder cap: none anywhere is no cap" "|default" "$(O maxBuilders)"
+jq '.builder.maxBuilders = 4' "$P" > "$T/x" && mv "$T/x" "$P"
+check "the Builder cap: the project's hand-written one, with no /config answer" "4|$P" "$(O maxBuilders)"
+check "the Builder cap: /config's beats the project's" "2|/config" "$(conf '{"maxBuilders": 2}'; O maxBuilders)"
+conf '{"promptCacheTtl": "leave"}'
 # A worker pane's settings: worktree-setup.sh writes the 5m only when the answer that runs is 5m.
 git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first && git -C "$T/p" worktree add -q --detach "$T/w"
 ttl() { (cd "$T/w" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u CLAUDE_CONFIG_DIR HOME="$T/home" bash "$REAL/scripts/worktree-setup.sh" "$T/w" --builder --print-settings 2>/dev/null) | jq -r '.env.CLAUDE_CODE_PROMPT_CACHE_TTL // "none"'; }

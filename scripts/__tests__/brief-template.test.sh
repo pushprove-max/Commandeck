@@ -34,6 +34,21 @@ check "the evidence lists each touched test file as run or cited" "The evidence 
 # The leak check searches an image's text chunks only: its pixels are a human check.
 check "a new or changed image needs the owner's review line in the evidence" "A new or changed image needs the owner's review: the evidence file carries \`image reviewed by the owner: <file>\` for each"
 check "no Builder writes a new end-to-end test" "Builders never write new end-to-end tests: no test installs or uninstalls the plugin, or runs setup.sh or uninstall.sh whole."
+# Issue 282: an exception a comment justified hid a real gap for months; the Builder template and the global rules carry the rule.
+EXC='An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the alternative it claims, or the entry cites an owner ruling id. A comment is not proof.'
+check "the Builder template: an exception entry stands only on a proof in its test or a ruling id" "$EXC"
+SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/global-rules.md" | sed -E 's/ +/ /g')
+check "the global rules: an exception entry stands only on a proof in its test or a ruling id" "$EXC"
+BODY=$SAVED
+# Issue 303: a class-stop fix kept a second retry path that only one source of state reached.
+RETRY='The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens.'
+check "the Builder template: a class fix has one retry path, tested state by state" "$RETRY"
+# Issues 260 and 266: a review run as the closing pass is the last one; a separate final after it reviewed the same tip again.
+check "the Builder template: final in place of review means no separate final follows" 'A `review` that prints `final in place of review`'
+check "and that review is the closing pass whose GO merges" 'is the closing pass: its GO merges, and no separate final follows.'
+SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
+check "main's class rule: one retry path, tested state by state" "$RETRY"
+BODY=$SAVED
 # main's rulings file: the pass reads stated limits from one heading only, so the template must carry it.
 BODY=$(cat "${T%/*}/main-rulings.md")
 check "the rulings template has the heading the pass reads limits from" "## Stated limits"
