@@ -75,7 +75,7 @@ check "no auth.json but a live Codex 7-day reading: unknown, so the tile shows" 
 # The Codex limit alert follows how Codex is billed (codexBilling), not Claude's: a machine can pay Claude by API and Codex
 # by subscription, or the other way round.
 limit_ids() { jq -nc -f "$ROOT/scripts/dashboard_alerts.jq" --argjson now "$(date +%s)" --arg s7 2026-10-08 --argjson hasSe false \
-  --argjson se '[]' --argjson parts "[{\"limit\": $1}]" --argjson srcs '[]' --argjson prev '{}' | jq -c '[.alerts[].id | sub("-[0-9]+$"; "")]'; }
+  --argjson se '[]' --argjson parts "[{\"limit\": $1}]" --argjson srcs '[]' --argjson preva '[{}]' | jq -c '[.alerts[].id | sub("-[0-9]+$"; "")]'; }
 check "Claude on API, Codex on a subscription and over its pace: the Codex alert is raised" '["limit-codex"]' \
   "$(limit_ids '{"billing": "api", "codexBilling": "subscription", "codex": {"usedPct": 95, "goalPct": 50}}')"
 check "Claude on a subscription, Codex on API and over its pace: no Codex alert" '[]' \

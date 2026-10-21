@@ -96,5 +96,10 @@ check "the first and later passes' prompts ask the paved-road question, citing t
   "$(grep -c 'hand-build something .claude/paved-road.md or a published standard already covers' "$B/$U-r1-prompt-1.md") $(grep -c 'cites the registry row' "$B/$U-r1-prompt-1.md") $(grep -c 'hand-build something .claude/paved-road.md' "$B/$U-r4-prompt-1.md") $(grep -c 'cites the registry row' "$B/$U-r4-prompt-1.md")"
 
 
+# Issue 291: a companion installed only in the selected Claude profile is the one a pass runs, not one under HOME.
+mkdir -p "$TMP/profile/plugins/cache/openai-codex/codex" "$TMP/nohome"; cp -R "$PLUG" "$TMP/profile/plugins/cache/openai-codex/codex/"
+check "issue 291: the Codex companion is found under CLAUDE_CONFIG_DIR alone" 0 \
+  "$(cd "$REPO" && HOME=$TMP/nohome CLAUDE_CONFIG_DIR=$TMP/profile COMMANDECK_MAIN=$REPO bash "$PASS_SH" --waits >/dev/null 2>&1; echo $?)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

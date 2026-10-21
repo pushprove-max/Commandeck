@@ -446,6 +446,20 @@ if [ "$DRY_RUN" = 0 ]; then
   [ ! -f "$SEAT" ] || SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(pp_route builder 2>/dev/null && printf '%s' "$RT_AGENT" || true) SEAT_EVENT_STOP=done \
     SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$SEAT" | tail -1) SEAT_EVENT_SESSIONS=$(sed -n 's/^session=//p' "$SEAT" | tr '\n' ' ') bash "$HERE/seat-event.sh" "$UNIT" builder "$(sed -n 's/^task=//p' "$SEAT")" "$(sed -n 's/^launched=//p' "$SEAT")" \
     || echo "no token ledger row written for $UNIT's Builder (ignored)" >&2
+  # The unit ledger (issue 271): how the review loop ended, from the round files the proof read, each one's last
+  # line its verdict. A round with no verdict line leaves both counts unknown, never 0. Never blocks a merge.
+  REPORTS=("$WT/.claude/briefs/$UNIT"-r[0-9]*-reports.md); [ -f "${REPORTS[0]}" ] || REPORTS=()
+  ENDS=$(for f in ${REPORTS[@]+"${REPORTS[@]}"}; do tail -n 1 "$f"; done)
+  GO_ROUNDS=$(grep -cx 'VERDICT: GO' <<<"$ENDS" || true) NO_GO_ROUNDS=$(grep -cx 'VERDICT: NO-GO' <<<"$ENDS" || true)
+  [ $((GO_ROUNDS + NO_GO_ROUNDS)) = "${#REPORTS[@]}" ] || GO_ROUNDS="" NO_GO_ROUNDS=""
+  # The outcome is the rule the proof verified: a P2 tail merged on a closing NO-GO, never a converged GO.
+  RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
+  COMMANDECK_MAIN=$ROOT UNIT_LEDGER_MERGE_SHA=$MERGE_SHA \
+    UNIT_LEDGER_VERDICT=$(if [ "${#REPORTS[@]}" = 0 ]; then echo NO-ROUNDS; elif [ "$RULE" = "P2 tail" ]; then echo P2-TAIL; else echo CONVERGED-GO; fi) \
+    UNIT_LEDGER_ROUNDS=${#REPORTS[@]} UNIT_LEDGER_GO_ROUNDS=$GO_ROUNDS UNIT_LEDGER_NO_GO_ROUNDS=$NO_GO_ROUNDS \
+    UNIT_LEDGER_MERGE_RULE=$RULE UNIT_LEDGER_MERGE_OPEN=$MERGE_OPEN \
+    UNIT_LEDGER_MERGE_ISSUES=$MERGE_ISSUES bash "$HERE/unit-ledger.sh" "$UNIT" local --append \
+    || echo "no unit ledger row written for $UNIT (ignored)" >&2
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"

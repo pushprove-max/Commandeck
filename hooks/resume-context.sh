@@ -103,7 +103,7 @@ TODO_RULE='TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` i
 # The old session's transcript sits beside the new one, named by its id; with
 # no transcript_path, the project folder comes from paths.sh, never a newest-file guess.
 if [ -n "$transcript" ]; then tdir=$(dirname "$transcript")
-elif . "$HERE/../scripts/paths.sh" 2>/dev/null; then tdir=$HOME/.claude/projects/$PP_MAIN_SLUG
+elif . "$HERE/../scripts/paths.sh" 2>/dev/null; then tdir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$PP_MAIN_SLUG
 else tdir=""; fi
 tpath=${tdir:+$tdir/$(basename "$cp" .md).jsonl}
 

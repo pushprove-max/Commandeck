@@ -2,7 +2,7 @@
 # only what it already collected, so the tests run these rules without a
 # collect. Inputs: $parts (the snapshot's top-level parts: projects, host,
 # limit), $srcs (the machine's source records), $hasSe/$se (7 days of every
-# project's seat-events rows), $prev ({key: since epoch} from the last collect),
+# project's seat-events rows), $preva ([{key: since epoch}] from the last collect, a file: issue 280),
 # $now, $s7 (the 7-day window start).
 # Output {alerts, since, missing}. An id is <key>-<since epoch>: stable while
 # the condition lasts, new once it clears and comes back (the Chief of Staff's
@@ -56,6 +56,10 @@ def builder_warmup_input: 3300000;
             + {since: (.stageSince | ts)}),
         ($v.needsOwner.decisions // [] | .[] | (.askedAt | ts) as $at | select($at != null and $now - $at > 3600)
           | a("question-\($p)-\(.id)"; "warn"; "\($p): question waiting on \(if .waitsOn == "main" then "main (a Builder's)" else "the owner" end) over 1 h: \(.question)"; "\(if .waitsOn == "main" then "main answers it" else "the owner answers it" end)") + {since: $at}),
+        # Issue 295: an answer main never got is the owner's order lost: one the host gave up on, or one failing for 10 min.
+        ($v.needsOwner.unsent // [] | .[] | (.firstAt | ts) as $at | select(.state == "gave-up" or ($at != null and $now - $at >= 600))
+          | a("answer-\($p)-\(.id)-\(.to)"; "crit"; "\($p): the answer to \(.id) is not sent to \(if .to == "relay" then "the relay" else "main" end)\(if .state == "gave-up" then " and the host gave up" else "" end): \(.reason // .lastError // "no reason recorded")"; "retry it, mark it delivered or drop it on this machine's dashboard")
+            + {since: $at}),
         # An open picker blocks the relay pane itself, and its mail waits behind it (main-watch.sh records it, issue 232).
         ($v.chiefOfStaff.picker? // null | select(type == "object" and (.since | type) == "number" and $now - .since >= 1800)
           | a("relay-picker-\($p)"; "warn"; "\($p): relay picker open \(($now - .since) / 60 | floor) min; \(.waiting) messages waiting behind it"; "answer or close the picker in the relay's pane")
@@ -75,9 +79,12 @@ def builder_warmup_input: 3300000;
     ($src | to_entries[] | select(.value.status == "stale")
       | a("stale-\(.key)"; "warn"; "Collector input \(.key) is stale: \(.value.error // "its last read failed")"; "fix the collector input named here") + {since: (.value.staleSince | ts)})
   ]
-| map(. + {since: (.since // $prev[.key] // $now)}) as $act
+| ($preva[0] | map_values(if type == "object" then . else {since: .} end)) as $held
+| map(. + {since: (.since // $held[.key].since // $now)}) as $act
 | {alerts: [$act[] | {id: "\(.key)-\(.since)", severity, text, since: (.since | todate)} + (if .project == null then {} else {project} end)],
-   since: (reduce $act[] as $x ({}; .[$x.key] = $x.since)),
+   since: (reduce $act[] as $x ({}; .[$x.key] = ($x | {since, severity, text} + (if .project == null then {} else {project} end)))),
+   resolved: [$held | to_entries[] | select(.key as $k | all($act[]; .key != $k))
+     | {key, since: (.value.since | todate), resolvedAt: ($now | todate), severity: .value.severity, text: .value.text} + (if .value.project == null then {} else {project: .value.project} end)],
    missing: [
      (if $se == null then "seat-events (cache hit rate)" elif $hit == null then "24 h cache hit rate (no measured seat)" else empty end),
      (if $d.limit.billing == "api" then empty elif $d.limit.usedPct == null or $d.limit.goalPct == null then "7-day limit" else empty end),

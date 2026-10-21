@@ -193,5 +193,24 @@ check "the ponytail skill says never to write its name in a comment" '1:0' \
 # A worker pane prints this in place of the plugin's whole ponytail text: a startup print is paid for in every pane.
 check "the ponytail summary a worker pane prints is at most 1,200 bytes" ok "$([ "$(wc -c < "$REAL/templates/ponytail/SUMMARY.md")" -le 1200 ] && echo ok || echo long)"
 
+# Issue 291: under an account profile Claude Code keeps these in CLAUDE_CONFIG_DIR, and a read of ~/.claude found
+# nothing there. The plugin's own folders (checkpoints, rulings, hook-fire-log) stay under ~/.claude. proof-run.sh
+# builds a fake HOME with CLAUDE_CONFIG_DIR unset.
+RE291='\$(HOME|\{HOME\})"?/\.claude/(projects|sessions|plugins|skills|commands|settings\.json)|\$(HOME|\{HOME\})"?/\.claude\.json|expanduser\(.~/\.claude/(projects|sessions|\.credentials)'
+check "issue 291: no script or hook reads Claude Code's own files from HOME past CLAUDE_CONFIG_DIR" "" \
+  "$(cd "$REAL" && grep -rnE "$RE291" \
+    scripts hooks skills --include='*.sh' --include='*.py' --include='*.mjs' | grep -v -e '/__tests__/' -e '^scripts/proof-run\.sh:')"
+# The proof-run.sh exemption holds only while its every HOME/.claude read is of the fake HOME: HOME is set once,
+# to a mktemp folder, after CLAUDE_CONFIG_DIR is unset and before the first such read.
+check "issue 291: proof-run.sh sets HOME once, to a temp folder with CLAUDE_CONFIG_DIR unset, before it reads HOME/.claude" ok \
+  "$(P=$REAL/scripts/proof-run.sh
+     t=$(grep -nm1 '^T=$(cd "$(mktemp -d)"' "$P" | cut -d: -f1) u=$(grep -nm1 '^unset .*CLAUDE_CONFIG_DIR' "$P" | cut -d: -f1)
+     h=$(grep -nE '(^|[^A-Za-z_])HOME=' "$P") f=$(grep -nE -m1 "$RE291" "$P" | cut -d: -f1)
+     [ "$(wc -l <<<"$h")" -eq 1 ] && [[ $h =~ ^([0-9]+):export\ HOME=\$T/ ]] && [ -n "$t" ] && [ -n "$u" ] && [ -n "$f" ] &&
+       [ "$t" -lt "${BASH_REMATCH[1]}" ] && [ "$u" -lt "${BASH_REMATCH[1]}" ] && [ "${BASH_REMATCH[1]}" -lt "$f" ] && echo ok || echo "not isolated: $h")"
+# Every ledger setup hides from git under .claude/metrics is one uninstall --delete-data removes.
+check "every .claude/metrics ledger in IL_STATE is deleted by uninstall --delete-data" "" \
+  "$(cd "$REAL" && for f in $(grep -o '\.claude/metrics/[a-z-]*\.jsonl' scripts/install-lib.sh | sort -u); do n=${f##*/}; n=${n%.jsonl}
+     grep -qE "metrics/\"?\{([a-z-]+,)*$n(,[a-z-]+)*\}\.jsonl" scripts/uninstall.sh || echo "$f"; done)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

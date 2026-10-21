@@ -211,6 +211,28 @@ PY
 )
 check "a save on one project refuses no save on another; a stale one on the same project still is" "204 204 409 204" "$OUT"
 
+# dashboard.sh --import replaces layout.js under the lock file beside it: a save waits for it, or one of the two
+# writes is lost. While another process holds the lock the save has not landed; once it is let go, it does.
+OUT=$(python3 - "$ROOT/scripts" "$T/rev" <<'PY'
+import fcntl, functools, http.client, http.server, json, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+codes = []
+def put():
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])
+    c.request("PUT", "/layout", json.dumps({"rev": 1, "project": "b", "hidden": ["late"]}), {"Content-Type": "application/json"})
+    codes.append(c.getresponse().status)
+with open(sys.argv[2] + "/layout.js.lock", "a") as l:
+    fcntl.flock(l, fcntl.LOCK_EX)
+    t = threading.Thread(target=put); t.start(); time.sleep(0.5)
+    print(codes, d.held(sys.argv[2] + "/layout.js")[2]["b"]["hidden"])
+t.join(); print(codes, d.held(sys.argv[2] + "/layout.js")[2]["b"]["hidden"])
+PY
+)
+check "a save waits while --import holds the layout lock, then lands" "$(printf "[] ['b']\n[204] ['late']")" "$OUT"
+
 # Issue 240: the owner answers a decision from the "Needs me" panel, from this machine only (a token in the page
 # would be readable by anyone on the network who loads it). A POST from another address, or with another site's
 # Origin, is refused. A loopback answer closes the ledger row, logs a ruling and tells main and the relay (stubs
@@ -490,15 +512,15 @@ sys.path.insert(0, sys.argv[1])
 import dashboard_serve as d
 D = sys.argv[2]
 held = lambda: [m["id"] for m in json.load(open(D + "/answer-retry.json"))]
-json.dump([{"main": "/project", "id": "old-1999-01-01", "to": "main", "args": ["question", "old-1999-01-01", "yes"]}], open(D + "/answer-retry.json", "w"))
+json.dump([{"main": D, "id": "old-1999-01-01", "to": "main", "args": ["question", "old-1999-01-01", "yes"]}], open(D + "/answer-retry.json", "w"))
 print([m["id"] for m in d.kept(D)])
 d.deliver = lambda directory, m: (False, False, False)
-d.send(D, [{"main": "/project", "id": "new-1999-01-01", "to": "main", "args": ["question", "new-1999-01-01", "yes"]}])
+d.send(D, [{"main": D, "id": "new-1999-01-01", "to": "main", "args": ["question", "new-1999-01-01", "yes"]}])
 print(held())
 d.deliver = lambda directory, m: (True, False, False)
 d.RETRYING.acquire(); d.retry(D)
 print(held())
-json.dump([{"main": "/project", "id": i, "to": "main", "args": [i], "key": i} for i in ("A", "B")], open(D + "/answer-retry.json", "w"))
+json.dump([{"main": D, "id": i, "to": "main", "args": [i], "key": i} for i in ("A", "B")], open(D + "/answer-retry.json", "w"))
 tried = []
 def deliver(directory, m):
     tried.append(m["id"])
@@ -559,6 +581,169 @@ check "an outbox that cannot be read refuses a new send" "refused" "$(sed -n 1p 
 check "and a settle keeps what it holds" "['old']" "$(sed -n 2p <<<"$OUT")"
 check "picker marks that cannot be read are not replaced, and the outbox keeps the send" "['old'] ['mark']" "$(sed -n 3p <<<"$OUT")"
 check "a picker mark that cannot be saved keeps its delivered send in the outbox" "['old'] ['mark']" "$(sed -n 4p <<<"$OUT")"
+
+# Issue 295: a send that keeps failing must say why, stop, and wait for the owner. Before, a kept send was tried again
+# on every refresh forever and the page said only "sent again on each refresh": an answer main never got was the
+# owner's order lost in silence. Each kept send carries its count, first try, exit and stderr line; past an hour, or
+# with its main folder gone or no longer a project here, it gives up and no refresh sends it again; the owner retries
+# it, marks it delivered another way, or drops it, from this machine's page only, each action logged.
+cat > "$P/scripts/to-main.sh" <<EOF
+#!/usr/bin/env bash
+printf "%s|" "\${0##*/}" "\$@" >> "$T/tried"; echo >> "$T/tried"
+[ ! -e "$T/send-fails" ] || { echo "to-main: main's inbox cannot be written" >&2; exit 1; }
+[ ! -e "$T/send-three" ] || exit 3
+EOF
+mkdir -p "$T/other"; : > "$T/tried"
+OUT=$(python3 - "$P/scripts" "$W" "$M" "$T" <<'PY'
+import functools, http.client, http.server, json, os, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+W, M, T = sys.argv[2], sys.argv[3], sys.argv[4]
+msg = lambda k, main=M: {"main": main, "id": k + "-1999-01-01", "to": "main", "args": ["question", k], "key": k}
+file = lambda: {m["key"]: m for m in json.load(open(W + "/answer-retry.json"))}
+tries = lambda k: sum(("|question|%s|" % k) in l for l in open(T + "/tried"))
+def batch():
+    d.RETRYING.acquire(); d.retry(W)
+flag = lambda k: open(os.path.join(T, k), "w").close()
+flag("send-fails")
+json.dump([msg("a"), msg("gone", T + "/dead-no-more"), msg("stray", T + "/other")], open(W + "/answer-retry.json", "w"))
+batch(); batch()
+a = file()["a"]
+print(a["tries"], a["lastExit"], a["lastError"], bool(d.STAMP.match(a["firstAt"])), a.get("state"))
+print(file()["gone"]["state"], file()["gone"]["reason"].endswith("/dead-no-more is gone"), tries("gone"))
+print(file()["stray"]["state"], file()["stray"]["reason"].endswith("/other is not a project on this dashboard"), tries("stray"))
+ms = list(file().values()); ms[0]["firstAt"] = "1999-01-01T00:00:00Z"; json.dump(ms, open(W + "/answer-retry.json", "w"))
+before = tries("a"); batch(); batch()
+a = file()["a"]
+print(a["state"], a["reason"], a["tries"], tries("a") - before)
+# The owner's word, through the server: loopback only, one log line each.
+class Far(d.Handler):
+    def setup(self):
+        super().setup()
+        self.client_address = ("192.0.2.7", 40000)
+def serve(h):
+    s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(h, directory=W))
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    return s.server_address[1]
+near, far = serve(d.Handler), serve(Far)
+def post(port, body):
+    c = http.client.HTTPConnection("127.0.0.1", port)
+    own = "127.0.0.1:%d" % port
+    c.request("POST", "/unsent", json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    return c.getresponse().status
+print(post(far, {"key": "a", "action": "drop"}), post(near, {"key": "a", "action": "explode"}), post(near, {"key": "nope", "action": "drop"}), sorted(file()))
+os.remove(T + "/send-fails")
+before = tries("a")
+st = post(near, {"key": "a", "action": "retry"})
+for _ in range(600):
+    if not d.RETRYING.locked():
+        break
+    time.sleep(0.05)
+print(st, tries("a") - before, sorted(file()))
+print(post(near, {"key": "gone", "action": "delivered"}), post(near, {"key": "stray", "action": "drop"}), sorted(file()))
+print("|".join(l.split("\t")[2] + "," + l.split("\t")[3] + "," + l.split("\t")[4].strip() for l in open(W + "/answer-retry.log")))
+# Exits 0 and 3 still clear a send (3: main has no pane, the message is queued for its start).
+flag("send-three")
+json.dump([msg("q")], open(W + "/answer-retry.json", "w"))
+batch()
+print(sorted(file()))
+# A gave-up send stays the owner's even once its cause has passed: no refresh sends it.
+json.dump([dict(msg("z"), state="gave-up", reason="gave up earlier", firstAt=d.utc())], open(W + "/answer-retry.json", "w"))
+batch()
+print(tries("z"), file()["z"]["state"])
+PY
+)
+rm -f "$T/send-three"
+check "issue 295: a gave-up send is not sent by a refresh, even with its cause gone" "0 gave-up" "$(sed -n 10p <<<"$OUT")"
+check "issue 295: a failing send keeps its count, exit, stderr line and first try" \
+  "2 1 to-main: main's inbox cannot be written True None" "$(sed -n 1p <<<"$OUT")"
+check "issue 295: a send whose main folder is gone gives up at its first try, sending nothing" "gave-up True 0" "$(sed -n 2p <<<"$OUT")"
+check "issue 295: a send whose main is no longer a project here gives up, sending nothing" "gave-up True 0" "$(sed -n 3p <<<"$OUT")"
+check "issue 295: past an hour it gives up with its last error, and no refresh sends it again" \
+  "gave-up not delivered in 1 h, last: to-main: main's inbox cannot be written 2 0" "$(sed -n 4p <<<"$OUT")"
+check "issue 295: another machine's /unsent is refused, a bad action and an unknown key too, and nothing changes" \
+  "403 400 404 ['a', 'gone', 'stray']" "$(sed -n 5p <<<"$OUT")"
+check "issue 295: retry sends a gave-up send again at once, and delivered it leaves the file" "200 1 ['gone', 'stray']" "$(sed -n 6p <<<"$OUT")"
+check "issue 295: delivered another way and drop each remove theirs" "200 200 []" "$(sed -n 7p <<<"$OUT")"
+check "issue 295: each action is one log line with its decision id, action and client" \
+  "a-1999-01-01,retry,127.0.0.1|gone-1999-01-01,delivered,127.0.0.1|stray-1999-01-01,drop,127.0.0.1" "$(sed -n 8p <<<"$OUT")"
+check "issue 295: exit 3 still clears a send (pin)" "[]" "$(sed -n 9p <<<"$OUT")"
+
+# Issue 277: the collector writes a project named __proto__ under a computed key, which is not JSON. Read as JSON,
+# that one project made every other project's answer a 404. Both reads of data.js put the plain key back first; an
+# answer for the __proto__ project itself is still refused by its name (400), with no error on the server.
+W2=$T/www-proto; mkdir -p "$W2"
+D add proto-1999-01-01 'Proto?' yes main --options 'yes|no' >/dev/null
+printf 'window.DASH = {"home":"demo","projects":{["__proto__"]:{"path":"%s"},"demo":{"path":"%s"}}};\n' "$T/other" "$M" > "$W2/data.js"
+cat > "$P/scripts/to-main.sh" <<'EOF'
+#!/usr/bin/env bash
+EOF
+cp "$P/scripts/to-main.sh" "$P/scripts/cos-tell.sh"
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" python3 - "$P/scripts" "$W2" "$(at proto-1999-01-01)" 2>"$T/proto-err" <<'PY'
+import functools, http.client, http.server, json, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def post(body):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1])
+    c.request("POST", "/answer", json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    return c.getresponse().status
+print(post({"project": "demo", "id": "proto-1999-01-01", "askedAt": sys.argv[3], "answer": "yes"}),
+      post({"project": "__proto__", "id": "proto-1999-01-01", "askedAt": sys.argv[3], "answer": "yes"}))
+PY
+)
+check "issue 277: a __proto__ project breaks no other project's answer; its own is refused by name" "200 400" "$OUT"
+check "issue 277: and the server writes no error" "" "$(cat "$T/proto-err")"
+
+# Issue 294: the page's Restart collector runs dashboard.sh --restart, once a minute at most, for this machine's own
+# page only. A stub dashboard.sh counts its runs.
+W3=$T/www-restart; mkdir -p "$W3"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/restarts"\n' "$T" > "$P/scripts/dashboard.sh"
+OUT=$(env HOME="$T/home" python3 - "$P/scripts" "$W3" 2>"$T/restart-err" <<'PY'
+import functools, http.client, http.server, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def post(host):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1])
+    c.request("POST", "/restart", "{}", {"Content-Type": "application/json", "Host": host, "Origin": "http://" + host})
+    r = c.getresponse(); r.read(); c.close()
+    return r.status
+print(post(own), post(own), post("dash.example:80"))
+PY
+)
+sleep 0.5
+check "issue 294: a restart from the page runs --restart once; a second within a minute gets 429; another page's gets 403" \
+  "202 429 403|--restart" "$OUT|$(paste -sd' ' "$T/restarts" 2>&1)"
+check "issue 294: the server logs who asked" 1 "$(grep -c 'restart requested from 127.0.0.1' "$T/restart-err")"
+# Requests at once each found no stamp and each restarted: the stamp's check and write are one step. A slowed stamp
+# write holds every request inside that gap.
+W4=$T/www-restart-race; mkdir -p "$W4"
+OUT=$(env HOME="$T/home" python3 - "$P/scripts" "$W4" 2>/dev/null <<'PY'
+import builtins, functools, http.client, http.server, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+d.open = lambda p, *a, **k: (time.sleep(0.3) if str(p).endswith('restart-at') else None, builtins.open(p, *a, **k))[1]
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+got = []
+def post():
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1])
+    c.request("POST", "/restart", "{}", {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    r = c.getresponse(); r.read(); c.close()
+    got.append(r.status)
+ts = [threading.Thread(target=post) for _ in range(4)]
+[t.start() for t in ts]; [t.join() for t in ts]
+print(*sorted(got))
+PY
+)
+sleep 0.5
+check "issue 294: four restarts at once run --restart once; the rest get 429" "202 429 429 429|2" "$OUT|$(wc -l < "$T/restarts" | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

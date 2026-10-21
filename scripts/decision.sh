@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]']
+# decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
 #           | reopen <id> | list | holds <unit>
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
@@ -29,7 +29,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit>"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit>"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -163,7 +163,15 @@ case "${1:-}" in
   add)
     reask="" waits="" opts=""
     # --options: the 2 to 4 answers the picker offered (issue 240), the dashboard's buttons; last on the line.
-    if [ $# -ge 7 ] && [ "${*: -2:1}" = --options ]; then
+    # A value that is a JSON array is the host project's form, under the host's rules (issue 292); `[auto]|manual`
+    # is not one, and stays the picker hook's a|b form.
+    if [ $# -ge 7 ] && [ "${*: -2:1}" = --options ] && jq -e 'type == "array"' <<<"${*: -1}" >/dev/null 2>&1; then
+      . "$(dirname "$0")/../hooks/lib/ask-decoy.sh" || exit 1
+      opts=$(jq -cse --arg d "$ASK_DECOY" 'select(length == 1) | .[0] | select(type == "array" and length >= 2 and length <= 4
+          and all(.[]; type == "string" and length >= 1 and length <= 500 and test("^(?:[^\\p{C}\\p{Z}]| )+$") and . != $d))' <<<"${*: -1}" 2>/dev/null) \
+        || die "--options takes a JSON array of 2 to 4 answers, each 1 to 500 printable characters, none the picker decoy"
+      set -- "${@:1:$#-2}"
+    elif [ $# -ge 7 ] && [ "${*: -2:1}" = --options ]; then
       opts=$(jq -cne --arg o "${*: -1}" '$o | split("|") | select(length >= 2 and length <= 4 and all(length > 0))') \
         || die "--options takes 2 to 4 answers, none empty, split by |"
       set -- "${@:1:$#-2}"

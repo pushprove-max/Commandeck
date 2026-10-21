@@ -94,14 +94,14 @@ if [ -n "$PROFILE" ]; then
   fi
   # The add-on servers the hooks can use. Reported only: the owner installs them (setup prints the commands).
   for s in serena codebase-memory; do
-    if jq -e --arg s "$s" --arg p "$PP_MAIN" '.mcpServers[$s] // .projects[$p].mcpServers[$s]' "$HOME/.claude.json" >/dev/null 2>&1 \
+    if jq -e --arg s "$s" --arg p "$PP_MAIN" '.mcpServers[$s] // .projects[$p].mcpServers[$s]' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" >/dev/null 2>&1 \
       || jq -e --arg s "$s" '.mcpServers[$s]' "$PP_MAIN/.mcp.json" >/dev/null 2>&1; then ok "add-on server $s: present"
     else ok "add-on server $s: not installed (optional; setup.sh --addons $s installs it)"; fi
   done
   L=$(il_tool_search_report)
   if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi
   # A pointer only: turning skills off is the owner's call.
-  ok "skills: $(jq '[.enabledPlugins // {} | to_entries[] | select(.value == true)] | length' "$HOME/.claude/settings.json" 2>/dev/null || echo 0) plugins enabled; each model-invocable skill's description loads in every session; run /skill-doctor to see each one's cost and use"
+  ok "skills: $(jq '[.enabledPlugins // {} | to_entries[] | select(.value == true)] | length' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || echo 0) plugins enabled; each model-invocable skill's description loads in every session; run /skill-doctor to see each one's cost and use"
   # The value the hooks read, the one setup reported.
   ok "serena hooks (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG" 2>/dev/null)"
   if MW=$(bash "$HERE/main-watch.sh" --status 2>&1); then ok "main-watch"

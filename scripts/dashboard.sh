@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dashboard.sh [--install|--uninstall|--status|--job-file|--loop|--register <repo>|--unregister <repo>]
+# dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--register <repo>|--unregister <repo>|--import <folder>]
 # -- one dashboard per machine. Collects everything we measure into one
 # snapshot, $HOME/.commandeck/dashboard/data.js (`window.DASH = {...};`), from
 # ledgers, event logs and CLI reads. The static view in dashboard/, copied
@@ -43,6 +43,16 @@ CACHE=$OUT/cache
 REG=$OUT/projects
 TTL=300  # slow reads: a 60 s collection would otherwise repeat them every cycle
 METRICS=$PP_MAIN/.claude/metrics
+# Claude Code's own folder (transcripts, task lists) is the config folder main last started under, as
+# agent-startup-context.sh records it: the service runs with no pane's CLAUDE_CONFIG_DIR (issue 291).
+# Set for every helper and child script too (paths.sh's session reads), in place of the caller's own.
+# shortcut: one config folder per collect (main's); read each seat's own when seats run under mixed profiles.
+# Read again each render: main may start under another profile while --loop runs.
+claude_dir() {
+  CLAUDE_DIR=$(cat "$PP_SCRATCH/claude-config-dir" 2>/dev/null)
+  if [ -n "$CLAUDE_DIR" ]; then export CLAUDE_CONFIG_DIR=$CLAUDE_DIR; else unset CLAUDE_CONFIG_DIR; CLAUDE_DIR=$HOME/.claude; fi
+}
+claude_dir
 VIEW=(index.html app.css app.js)
 ws_listable() { [ -d "$PP_WORKSPACES" ] && [ -r "$PP_WORKSPACES" ] && [ -x "$PP_WORKSPACES" ]; }
 BIND=${COMMANDECK_DASHBOARD_BIND:-127.0.0.1}
@@ -206,7 +216,7 @@ builder_progress() {
   # A table with Issue and Status columns, under "## Per issue" or anywhere, rules for each issue a row starts with:
   # a status starting "built" is built, any other ("partly built", "blocked") is not, a heading naming it or not.
   [ ! -f "$d/$u-evidence.md" ] || bu=false
-  [ ! -f "$d/$u-evidence.md" ] || [ ! -r "$d/$u-evidence.md" ] || tb=$(awk -F'|' '/^\|/ { a = $2; s = $3; gsub(/^[ \t]+|[ \t]+$/, "", a); gsub(/^[ \t]+|[ \t]+$/, "", s)
+  [ -f "$d/$u-evidence.md" ] && [ -r "$d/$u-evidence.md" ] && tb=$(awk -F'|' '/^\|/ { a = $2; s = $3; gsub(/^[ \t]+|[ \t]+$/, "", a); gsub(/^[ \t]+|[ \t]+$/, "", s)
       if (tolower(a) == "issue" && tolower(s) == "status") { on = 1; next }
       if (on && match(a, /^#[0-9]+/)) print (tolower(s) ~ /^built([^a-z]|$)/ ? "+" : "-") substr(a, RSTART, RLENGTH); next } { on = 0 }' "$d/$u-evidence.md") \
     && bu=$({ awk '/^#+ /{ l = length($1); for (k in h) if (k + 0 >= l) delete h[k]; h[l] = $0; next }
@@ -227,6 +237,18 @@ builder_progress() {
   jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" --arg ra "$t" \
     '{issues: $is, built: $bu, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null)}'
 }
+# terminal_list -- Orca's terminal list, read once per collect into $DASH_TERMS for every project's units() and
+# chief_of_staff() (issue 299); fails, for all of them, when the read or its shape does (the failure is kept too, so a
+# down Orca is asked once, not once a reader).
+terminal_list() {
+  local f=$DASH_TERMS t
+  if [ ! -e "$f" ] && [ ! -e "$f.bad" ]; then
+    t=$f.$BASHPID
+    if timeout 8 orca-ide terminal list --json > "$t" 2>/dev/null && jq -e 'has("result")' "$t" >/dev/null 2>&1; then mv -f "$t" "$f"
+    else rm -f "$t"; : > "$f.bad"; fi
+  fi
+  [ -e "$f" ] && cat "$f"
+}
 # One projection for the board: every worktree of this project. Orca lists the
 # whole machine's worktrees, so every lookup is by path, never by name: two
 # projects may each have a unit of one name.
@@ -239,7 +261,7 @@ units() {
   local ts pl='{}'
   if [ -z "$ps" ]; then nm orca-terminals "no worktree list to join the panes to"
   else
-    if ts=$(timeout 8 orca-ide terminal list --json 2>/dev/null) && jq -e 'has("result")' >/dev/null 2>&1 <<<"$ts"; then ok orca-terminals
+    if ts=$(terminal_list); then ok orca-terminals
     else ts=null; nm orca-terminals "orca-ide terminal list failed"; fi
     pl=$(jq -cn --slurpfile ps <(printf '%s' "$ps") --slurpfile ts <(printf '%s' "$ts") --argjson w "$(lane_words)" \
       --rawfile rec <(cat "$PANE_TITLES" 2>/dev/null) "$TITLE_LANE_JQ"'
@@ -308,8 +330,11 @@ units() {
       st=null age=null sr=null b='{}'
       bj='{"steps":null,"signals":null,"verdict":null,"verdictRound":null}'
       bl=$wt/.claude/builder-events.jsonl
+      # The Builder's newest session record, read once (issue 299): its mtime and open background jobs serve the stage
+      # below, its path the cache rate further down.
+      pp_session_summary "$wt"
       if [ ! -e "$bl" ]; then st='"building"' bj='{"steps":[],"signals":[],"verdict":null,"verdictRound":null}'
-      elif rows=$(jq -cR 'fromjson? | objects' "$bl" 2>/dev/null) && b=$(jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$wt")" --argjson bgOpen "$(pp_session_bg_open "$wt")" -f "$HERE/dashboard_builders.jq" <<<"$rows" 2>/dev/null); then
+      elif rows=$(jq -cR 'fromjson? | objects' "$bl" 2>/dev/null) && b=$(jq -cs --argjson now "$NOW" --argjson sessionAt "$PP_SESSION_AT" --argjson bgOpen "$PP_SESSION_BG" -f "$HERE/dashboard_builders.jq" <<<"$rows" 2>/dev/null); then
         st=$(jq -c '.stage' <<<"$b"); rd=$(jq -c '.round' <<<"$b")
         age=$(jq -c --argjson now "$NOW" '.lastAt | if . == null then null else [$now - fromdateiso8601, 0] | max end' <<<"$b")
         bj=$(jq -c '{steps, signals, verdict: null, verdictRound: null}' <<<"$b")
@@ -338,7 +363,7 @@ units() {
       [ "$(jq -c '.steps' <<<"$bj")" = null ] || bj=$(jq -c --argjson p "$(builder_progress "$wt" "$u")" --argjson rt "$(bash "$HERE/reviewed-tree.sh" "$wt" "${u##*/}" 2>/dev/null || echo null)" '. + $p + {reviewedTree: $rt}' <<<"$bj")
       # cache24h: a Builder writes no seat rows, so its 24 h cache hit rate is its own session's usage. With no
       # session log or no turn in 24 h there is no rate to judge and no key; null is a log that failed to read.
-      if [ "$(jq -c '.steps' <<<"$bj")" != null ] && f=$(pp_session_log "$wt") && [ -n "$f" ]; then
+      if [ "$(jq -c '.steps' <<<"$bj")" != null ] && f=$PP_SESSION_LOG && [ -n "$f" ]; then
         cu=$(bash "$HERE/seat-event.sh" --usage claude "$f" $((NOW - 86400)) 2>/dev/null) && jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$cu" || cu='{"tokens":null}'
         [ "$cu" = null ] || bj=$(jq -c --argjson c "$cu" '. + {cache24h: $c.tokens}' <<<"$bj")
         # Its live context, against the clear line past which it hands off (the hook context-line.sh).
@@ -360,7 +385,7 @@ units() {
   # unreadable unit list leaves the record as it was.
   local stages=$CACHE/unit-stages.json old known=true
   old=$(jq -ce 'objects' "$stages" 2>/dev/null) || old='{}'
-  jq -cs --argjson o "$old" --argjson now "$NOW" 'map(. as $u | $o[$u.unit] as $p
+  jq -cs --slurpfile oa <(printf '%s' "$old") --argjson now "$NOW" '$oa[0] as $o | map(. as $u | $o[$u.unit] as $p
       | (if ($p | type) == "object" and ($p.since | type) == "number" and $p.stage == $u.stage and $p.round == $u.round then $p
          else {stage: $u.stage, round: $u.round, since: $now, exact: ($p != null)} end) as $r
       | $u + {stageSince: ($r.since | todate), stageExact: $r.exact, rec: $r})' "$RUN/in-flight.jsonl" > "$RUN/in-flight.json" || return 1
@@ -374,7 +399,7 @@ units() {
   local costs kept=$CACHE/unit-cost.json had
   if costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select((.builder.stageHistory | type == "array" and length > 0) or .plan != null)
         | {unit, worktree: "\($ws)/\(.unit)", stages: (.builder.stageHistory | arrays // []), plan}]' "$RUN/in-flight.json" \
-      | python3 "$HERE/dashboard_limit.py" units "$NOW" "$CACHE" "$HOME/.claude/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
+      | python3 "$HERE/dashboard_limit.py" units "$NOW" "$REQS" "$CLAUDE_DIR/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
       && jq -e 'objects' >/dev/null 2>&1 <<<"$costs"; then
     ok unit-cost
     # A kept file there but unreadable (or a directory) is left as it is: read as empty, the write would lose every
@@ -382,17 +407,25 @@ units() {
     if [ ! -e "$kept" ]; then had='{}'
     elif had=$(cat "$kept" 2>/dev/null); then had=$(jq -ce 'objects' <<<"$had" 2>/dev/null) || had='{}'
     else had=; fi
-    [ -z "$had" ] || { jq -cn --argjson o "$had" --argjson c "$costs" '$o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"; }
+    # Files, not --argjson: the kept costs grow by one unit a build, and past the 1 MB argument limit (ARG_MAX) jq
+    # would fail every collect (issue 280).
+    [ -z "$had" ] || { jq -cn --slurpfile oa <(printf '%s' "$had") --slurpfile ca <(printf '%s' "$costs") '$oa[0] as $o | $ca[0] as $c
+      | $o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"; }
   else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
-  jq -c --argjson k "$known" --argjson fin "$(finished_builds)" --argjson c "$costs" --argjson kept "$(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}')" \
-    '{inFlight: (if $k then map(del(.rec) | ($c[.unit]? // null) as $x
+  jq -c --argjson k "$known" --slurpfile fina <(finished_builds) --slurpfile ca <(printf '%s' "$costs") \
+    --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" \
+    '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {inFlight: (if $k then map(del(.rec) | ($c[.unit]? // null) as $x
         # A planning stage in the cost is drawn first on the Builder clock, which then starts with it.
         | if .builder then .builder.cost = $x
             | if $x.stages[0].stage? == "planning" and (.builder.stageHistory | type == "array")
               then .builder.stageHistory = [$x.stages[0] | {stage, from, to}] + .builder.stageHistory | .builder.startedAt = $x.stages[0].from
               else . end
           elif .plan then .plan.cost = $x else . end) else null end),
-      finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end)}' "$RUN/in-flight.json"
+      finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end),
+      # Issue 270: each unit in flight or finished in the last 7 days, by the cost its card shows, most costly first.
+      costPerUnit: ([($c // {} | keys[] | {unit: ., inFlight: true}), ($fin // [] | .[] | select((.at // "") >= $s7) | {unit, inFlight: false, at})]
+        | unique_by(.unit) | map(. + (($c // {})[.unit] // $kept[.unit] // {} | {total, stages}) | select(.total != null))
+        | sort_by(-(.total.usd // 0)))}' "$RUN/in-flight.json"
 }
 
 # Finished builds: the lines this checkout's own merges appended (merge-unit-local.sh), one per unit name with the
@@ -423,12 +456,14 @@ needs_owner() {
     ok decisions; dec=$(jq -c 'map(select(.answeredAt == null))' <<<"$dec")
   else dec=null; nm decisions "$(head -1 "$RUN/err-decisions")"; fi
   # Issue 240: this project's answers from the page whose send failed; dashboard_serve.py keeps them and sends them
-  # again on each refresh.
-  unsent=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | {id, to}]' "$OUT/answer-retry.json" 2>/dev/null) || unsent='[]'
+  # again on each refresh. Issue 295: each with its key (what the page's buttons send back), whether the host gave up
+  # on it and why, its tries since its first, and its last error.
+  unsent=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | {id, to, key: (.key // null), state: (.state // "pending"), reason: (.reason // null),
+      tries: (.tries // 0), firstAt: (.firstAt // null), lastError: (.lastError // null)}]' "$OUT/answer-retry.json" 2>/dev/null) || unsent='[]'
   # And the ones delivered while main's own picker was open: main reads them only once that picker is answered.
   picker=$(jq -c --arg m "$PP_MAIN" '[.[]? | select(.main == $m) | .id | strings]' "$OUT/answer-picker.json" 2>/dev/null) || picker='[]'
-  jq -cn --argjson dec "$dec" --arg name "$name" --argjson u "${unsent:-[]}" --argjson pk "${picker:-[]}" \
-    '{decisions: $dec, unsent: $u, picker: $pk, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
+  jq -cn --slurpfile deca <(printf '%s' "$dec") --arg name "$name" --slurpfile ua <(printf '%s' "${unsent:-[]}") --slurpfile pka <(printf '%s' "${picker:-[]}") \
+    '$deca[0] as $dec | $ua[0] as $u | $pka[0] as $pk | {decisions: $dec, unsent: $u, picker: $pk, name: ($name | gsub("[[:cntrl:]]+"; " ") | gsub("^ +| +$"; "") | .[:80] | if . == "" then null else . end)}'
 }
 
 # owner/name of the checkout's GitHub origin, or nothing. Every gh read names it as GH_REPO, so a gh default set
@@ -487,6 +522,8 @@ gh_issues() {
 gh_milestones() {
   gh_read api 'repos/{owner}/{repo}/milestones?state=open&per_page=100' | jq -c 'map({title, due: .due_on, open: .open_issues, closed: .closed_issues})'
 }
+# Issue 273: the issues created (or closed) in the last 7 days, 1000 at most.
+gh_flow() { gh_read issue list --state "$1" --search "$2:>=$(date -u -d "@$((NOW - 7 * 86400))" +%F)" --json number,createdAt,closedAt --limit 1000; }
 # The newest CI run on the branch main pushes to.
 gh_runs() { gh_read run list --branch "$1" --limit 1 --json conclusion,status,createdAt,workflowName | jq -c 'map({conclusion, status, createdAt, workflow: .workflowName})'; }
 
@@ -496,20 +533,31 @@ gh_runs() { gh_read run list --branch "$1" --limit 1 --json conclusion,status,cr
 # marked stale. A read never had is null with its reason (no GitHub origin, gh missing or not signed in, no
 # answer), and only its pane says so.
 github_panes() {
-  local repo up k prs='' issues='' miles='' runs=''
+  local repo up k prs='' issues='' miles='' runs='' opened='' closed=''
   repo=$(origin_repo); PANE_REPO=$repo
   if [ -z "$repo" ]; then
-    for k in github-prs github-issues github-milestones github-runs; do nm "$k" "no GitHub origin"; done
+    for k in github-prs github-issues github-milestones github-runs github-opened github-closed; do nm "$k" "no GitHub origin"; done
   else
     prs=$(cached github-prs gh_prs)
     issues=$(cached github-issues gh_issues)
     miles=$(cached github-milestones gh_milestones)
+    opened=$(cached github-opened gh_flow all created)
+    closed=$(cached github-closed gh_flow closed closed)
     if up=$(git -C "$PP_MAIN" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null); then runs=$(cached github-runs gh_runs "${up#*/}")
     else nm github-runs "main has no upstream branch"; fi
   fi
   jq -cn --arg repo "$repo" --argjson prs "${prs:-null}" --argjson issues "${issues:-null}" \
-    --argjson milestones "${miles:-null}" --argjson runs "${runs:-null}" \
-    '{repo: (if $repo == "" then null else "https://github.com/" + $repo end), prs: $prs, issues: $issues, milestones: $milestones, runs: $runs}'
+    --argjson milestones "${miles:-null}" --argjson runs "${runs:-null}" --slurpfile o <(printf '%s' "${opened:-null}") \
+    --slurpfile c <(printf '%s' "${closed:-null}") --argjson now "$NOW" \
+    'def at($k): [.[][$k] | strings | fromdateiso8601];
+     def day: strflocaltime("%Y-%m-%d");
+     {repo: (if $repo == "" then null else "https://github.com/" + $repo end), prs: $prs, issues: $issues, milestones: $milestones, runs: $runs,
+      # Opened and closed in the last 24 h, and per local day over 7 days, oldest first; at the 1000 limit a count is a floor.
+      flow: (if $o[0] == null or $c[0] == null then null else ($o[0] | at("createdAt")) as $op | ($c[0] | at("closedAt")) as $cl
+        | {opened24h: [$op[] | select(. >= $now - 86400)] | length, closed24h: [$cl[] | select(. >= $now - 86400)] | length,
+           # Calendar days back from today, not 86400 s steps: a DST change makes one local day 23 or 25 hours.
+           daily: [($now | localtime) as $t | range(6; -1; -1) as $i | ($t | .[2] -= $i | .[3] = 12 | mktime | strftime("%Y-%m-%d")) as $d | {day: $d, opened: [$op[] | select(day == $d)] | length, closed: [$cl[] | select(day == $d)] | length}],
+           incomplete: (($o[0] | length) >= 1000 or ($c[0] | length) >= 1000)} end)}'
 }
 
 # What a push of main would send: the commits its upstream lacks, newest first (100 at most), each with the issue
@@ -540,6 +588,21 @@ main_chain() {
 }
 
 since7() { iso $((NOW - 7 * 86400)); }
+
+# Issues 271 and 272: the merge's unit ledger (unit-ledger.sh). A merged row per unit, and escape rows of their own
+# (no mergedAt, so the 7-day window leaves them out of reviewLoop).
+review_loop() {
+  [ -s "$METRICS/unit-ledger.jsonl" ] || { nm unit-ledger "no unit ledger: no unit was merged since it was added"; echo null; return 0; }
+  ok unit-ledger
+  jq -Rnc --arg s "$(since7)" '[inputs | fromjson? // empty | select((.mergedAt // "") >= $s)
+    | {unit, mergedAt, rounds, goRounds, noGoRounds, fixRounds, verdict, findings, expensivePasses, gaps}] | sort_by(-(.rounds // -1))' \
+    "$METRICS/unit-ledger.jsonl"
+}
+escapes() {
+  [ -s "$METRICS/unit-ledger.jsonl" ] || { echo null; return 0; }
+  jq -Rnc '[inputs | fromjson? // empty | select(.escaped | type == "array")] | group_by(.unit)
+    | map({unit: .[0].unit, escaped: (map(.escaped[]) | unique)})' "$METRICS/unit-ledger.jsonl"
+}
 
 cost_role() {
   [ -s "$METRICS/seat-events.jsonl" ] || { nm seat-events "no seat-events ledger"; echo null; return 0; }
@@ -588,20 +651,52 @@ guard_blocks() {
   [ -n "${files[0]}" ] || files=("$HOME"/.claude/hook-fire-log/"$PP_PROJECT".????-??-??.jsonl)
   if [ ! -e "${files[0]}" ]; then nm hook-fire-log "no hook fire log at ${files[0]}"; echo '{"blocks":0,"items":[],"byAgent":{"claude":0,"codex":0}}'; return 0; fi
   local rc=0
-  python3 - "${files[@]}" <<'PY' || rc=$?
-import json, re, sys, time
+  python3 - "$CACHE/guard-blocks.json" "${files[@]}" <<'PY' || rc=$?
+import json, os, re, sys, time
 from datetime import datetime, timezone
-sessions, blocks, unread, blocked = {}, [], False, set()
-for path in sys.argv[1:]:
+state_path, files = sys.argv[1], sys.argv[2:]
+# Each cycle reads only the bytes appended since the last (issue 299). The state is every file read with the offset
+# it stopped at, plus what a cold read holds after them: calls per session (a block's retry can land in the next
+# day's file), the block rows and the sessions that blocked. It is used only when the day files are the stored ones,
+# in order, with the last one alone still growing; anything else (retention, truncation, an earlier file written to,
+# a state that does not parse or is another version) is read cold, which gives the same answer. Only block rows are
+# kept, and only the fields the page shows.
+VERSION, KEEP = 1, ("timestamp", "hook", "event", "tool", "agent", "worktree", "summary")
+sessions, blocks, blocked, unread, offsets = {}, [], set(), False, {}
+try:
+    with open(state_path) as f:
+        st = json.load(f)
+    if st["version"] != VERSION or not all(isinstance(o, int) and isinstance(p, str) for p, o in st["files"]):
+        raise ValueError("another version")
+    stored = [(p, o) for p, o in st["files"]]
+    ok = [p for p, _ in stored] == files[:len(stored)]
+    for i, (p, o) in enumerate(stored):
+        size = os.stat(p).st_size if ok else 0
+        ok = ok and size >= o and (i == len(stored) - 1 or size == o)
+    if ok:
+        held = ({k or None: [tuple(c) for c in v] for k, v in st["sessions"].items()},
+                [(r, k or None, a) for r, k, a in st["blocks"]], set(st["blocked"]))
+        offsets = dict(stored)
+        sessions, blocks, blocked = held
+except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    pass
+done = []
+for path in files:
     try:
-        f = open(path, encoding="utf-8", errors="replace")
+        f = open(path, "rb")
     except FileNotFoundError:
         continue  # deleted by retention between the listing and the read
     except OSError:
         unread = True  # the count would be short; exit 3 marks it not measured
         continue
+    off = offsets.get(path, 0)
     with f:
-      for line in f:
+      f.seek(off)
+      for raw in f:
+        if not raw.endswith(b"\n"):
+            break  # a half-written last line waits for the next cycle
+        off += len(raw)
+        line = raw.decode("utf-8", errors="replace")
         # Eight days is millions of rows, read every 60 s: only block rows and
         # the later rows of a session that blocked are parsed. The writer's
         # compact JSON makes both substring tests exact.
@@ -616,17 +711,31 @@ for path in sys.argv[1:]:
             continue  # a row cut short by a full disk or a crash
         if not isinstance(row, dict) or not isinstance(hook, str) or not isinstance(at, str):
             continue
-        calls = sessions.setdefault(row.get("session_id") or None, [])
+        sid = row.get("session_id") or None
+        calls = sessions.setdefault(sid, [])
         if row.get("use"):
             calls.append((row["use"], row.get("call")))
         # A block with no session id is a hook self-test run by hand, not an agent's: Claude and
         # Codex both name the session in every hook payload, a self-test's payload does not.
-        if row.get("decision") == "block" and not row.get("session_id"):
+        if row.get("decision") == "block" and not sid:
             continue
-        if row.get("decision") == "block" and row.get("session_id"):
-            blocked.add(row["session_id"])
+        if row.get("decision") == "block" and sid:
+            blocked.add(sid)
         if row.get("decision") == "block":
-            blocks.append((row, calls, len(calls) - 1 if row.get("use") and row.get("session_id") else None))
+            blocks.append(({k: row.get(k) for k in KEEP}, sid, len(calls) - 1 if row.get("use") and sid else None))
+    done.append([path, off])
+try:
+    # The held rows are global, not per file: a state missing an unread file would keep its blocks and reread them.
+    if unread:
+        raise OSError("partial cycle: keep the last whole state")
+    tmp = f"{state_path}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump({"version": VERSION, "files": done, "sessions": {k or "": v for k, v in sessions.items()},
+                   "blocks": [[r, k or "", a] for r, k, a in blocks], "blocked": sorted(blocked)}, f)
+    os.replace(tmp, state_path)
+except OSError:
+    pass  # no state: the next cycle reads cold
+blocks = [(r, sessions[k], a) for r, k, a in blocks]
 
 def retry(calls, at):
     if at is None:
@@ -652,7 +761,7 @@ stamps = [t for t in (stamp(r["timestamp"]) for r, _, _ in blocks) if t is not N
 # The spike alert compares the last hour with the retained days' hourly mean: the
 # span is the oldest retained day file's start (block-free hours count), else the first block.
 starts = []
-for p in sys.argv[1:]:
+for p in files:
     m = re.search(r"\.(\d{4}-\d{2}-\d{2})\.jsonl$", p)
     if m:
         starts.append(datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
@@ -676,11 +785,11 @@ PY
 # transcript sits under the main checkout's project directory counts (Claude
 # Code names it after the path, every non-alphanumeric a '-'); the newest wins.
 todos() {
-  local proj=$HOME/.claude/projects/${PP_MAIN//[^a-zA-Z0-9]/-} d dir='' out files
+  local proj=$CLAUDE_DIR/projects/${PP_MAIN//[^a-zA-Z0-9]/-} d dir='' out files
   while IFS= read -r d; do
     [ -e "$proj/$(basename "$d").jsonl" ] && { dir=$d; break; }
-  done < <(ls -td "$HOME"/.claude/tasks/*/ 2>/dev/null)
-  [ -n "$dir" ] || { nm todos "no main session task list under $HOME/.claude/tasks"; echo null; return 0; }
+  done < <(ls -td "$CLAUDE_DIR"/tasks/*/ 2>/dev/null)
+  [ -n "$dir" ] || { nm todos "no main session task list under $CLAUDE_DIR/tasks"; echo null; return 0; }
   # Every item deleted leaves no file: a measured empty list, not a failed read.
   files=("$dir"*.json); [ -e "${files[0]}" ] || files=()
   if out=$(jq -cs --arg s "$(basename "$dir")" \
@@ -696,7 +805,7 @@ todos() {
 # a tool call pending, or a tool result came after it. Only the ten newest
 # links (a link's own mtime is its launch) are read.
 bg_agents() {
-  local proj=$HOME/.claude/projects/$PP_MAIN_SLUG d dir='' s f t m ts
+  local proj=$CLAUDE_DIR/projects/$PP_MAIN_SLUG d dir='' s f t m ts
   while IFS= read -r d; do
     s=${d%/tasks/}; s=${s##*/}
     [ -e "$proj/$s.jsonl" ] && { dir=$d; break; }
@@ -744,19 +853,18 @@ host() {
 # The 7-day limit panel. The usage read is Claude's own quota reading, the
 # statusline's source, never a model call; dashboard_limit.py owns the math.
 limit() {
-  local st ccd
-  # The login is the one main last started under (agent-startup-context.sh records its config folder); a
+  local st
+  # The login is the one main last started under, read once this render with the transcripts (claude_dir); a
   # reading cached for another account is dropped first (issue 226).
-  ccd=CLAUDE_CONFIG_DIR=$(cat "$PP_SCRATCH/claude-config-dir" 2>/dev/null)
-  env "$ccd" python3 "$HERE/dashboard_limit.py" account "$CACHE" > /dev/null
-  cached claude-usage env "$ccd" python3 "$HERE/dashboard_limit.py" fetch > /dev/null
+  python3 "$HERE/dashboard_limit.py" account "$CACHE" > /dev/null
+  cached claude-usage python3 "$HERE/dashboard_limit.py" fetch > /dev/null
   st=$(jq -r '.[].status' "$RUN/src/claude-usage.json")
-  if [ -d "$HOME/.claude/projects" ]; then ok claude-logs; else nm claude-logs "no Claude Code transcripts"; fi
+  if [ -d "$CLAUDE_DIR/projects" ]; then ok claude-logs; else nm claude-logs "no Claude Code transcripts"; fi
   # Codex's own 7-day reading comes from its session files (the folder builder-codex-pass.sh uses).
   local cx=${CODEX_HOME:-$HOME/.codex}/sessions
   if [ -d "$cx" ]; then ok codex-usage; else nm codex-usage "no Codex sessions at $cx"; fi
   # The day's cost is each project's own: its sessions are the ones run in its main checkout or its worktrees.
-  env "$ccd" python3 "$HERE/dashboard_limit.py" build "$st" "$CACHE/claude-usage" "$NOW" "$CACHE" "$HOME/.claude/projects" "$cx" \
+  python3 "$HERE/dashboard_limit.py" build "$st" "$CACHE/claude-usage" "$NOW" "$CACHE" "$CLAUDE_DIR/projects" "$cx" \
     "$(jq -c '.projects | map_values([.path, .workspaces])' "$RUN/parts/projects.json")"
 }
 
@@ -765,7 +873,7 @@ limit() {
 # that marks messages read, so a collect never acks its mail.
 chief_of_staff() {
   local ts h out pk
-  if ! ts=$(timeout 8 orca-ide terminal list --json 2>/dev/null) || ! jq -e 'has("result")' >/dev/null 2>&1 <<<"$ts"; then
+  if ! ts=$(terminal_list); then
     nm chief-of-staff "orca-ide terminal list failed"; echo null; return 0
   fi
   h=$(jq -r --arg p "$PP_WORKSPACES/Chief-of-Staff" '.result | if type == "array" then . else (.terminals // []) end
@@ -787,7 +895,7 @@ chief_of_staff() {
 seats() {
   local relay='' out
   [ -z "$(jq -r '.chiefOfStaff.name // empty' "$PP_PROJECT_DIR/.claude/commandeck.json" 2>/dev/null)" ] || relay=$PP_WORKSPACES/Chief-of-Staff
-  if out=$(python3 "$HERE/dashboard_limit.py" seats "$NOW" "$CACHE" "$HOME/.claude/projects" "$HOME/.claude/checkpoints/clear-hook.log" \
+  if out=$(python3 "$HERE/dashboard_limit.py" seats "$NOW" "$REQS" "$CLAUDE_DIR/projects" "$HOME/.claude/checkpoints/clear-hook.log" \
       "$PP_MAIN" ${relay:+"$relay"} 2>"$RUN/err-seats") && jq -e 'objects' >/dev/null 2>&1 <<<"$out"; then ok seats
   else nm seats "main's and the relay's figures could not be read: $(head -1 "$RUN/err-seats" 2>/dev/null)"; echo null; return 0; fi
   jq -c --arg mc "$(context_size "$(pp_session_log "$PP_MAIN")")" --arg ml "$(pp_clear_line)" \
@@ -808,11 +916,17 @@ alerts() {
   prev=$(jq -c 'objects' "$f" 2>/dev/null) && [ -n "$prev" ] || prev='{}'
   out=$(jq -nc -f "$HERE/dashboard_alerts.jq" --argjson now "$NOW" --arg s7 "$(since7)" --argjson hasSe "$([ ${#se[@]} -gt 0 ] && echo true || echo false)" \
     --slurpfile se <([ ${#se[@]} -eq 0 ] || jq -c --arg s "$(since7)" 'select((.completedAt // "") >= $s) | {role, completedAt, tokens}' "${se[@]}") \
-    --slurpfile parts <(cat "$RUN"/parts/*.json) --slurpfile srcs <(cat "$RUN"/src/*.json) --argjson prev "$prev") || return 1
+    --slurpfile parts <(cat "$RUN"/parts/*.json) --slurpfile srcs <(cat "$RUN"/src/*.json) --slurpfile preva <(printf '%s' "$prev")) || return 1
   jq -c .since <<<"$out" > "$f"
+  # Issue 274: each alert that cleared is kept 24 h for the page's folded list.
+  jq -c --argjson now "$NOW" --slurpfile r <(jq -c 'arrays' "$CACHE/alerts-resolved.json" 2>/dev/null) \
+    '[($r[0] // [])[] | select((.resolvedAt | fromdateiso8601) > $now - 86400)] + .resolved' <<<"$out" > "$CACHE/alerts-resolved.json.$$" \
+    && mv -f "$CACHE/alerts-resolved.json.$$" "$CACHE/alerts-resolved.json"
   if jq -e '.missing == []' <<<"$out" >/dev/null; then ok alerts; else nm alerts "$(jq -r '.missing | join(", ")' <<<"$out")"; fi
   jq -c .alerts <<<"$out"
 }
+
+alerts_resolved() { jq -c 'arrays' "$CACHE/alerts-resolved.json" 2>/dev/null || echo '[]'; }
 
 # part <key> <fn> -- one top-level group; a group that is not JSON stops the
 # publication, so a collector bug never ships as an empty card.
@@ -830,6 +944,11 @@ project() {
   trap - EXIT
   RUN=$1 NOW=${DASH_NOW:?} CACHE=$CACHE/$PP_PROJECT
   mkdir -p "$CACHE" "$RUN/src" "$RUN/parts" || return 1
+  # A project collected alone (no render around it) is its own collect: its own stamp and terminal list.
+  [ -n "${DASH_CYCLE:-}" ] || { export DASH_CYCLE=$NOW.$$ DASH_TERMS=$RUN/terminals.json; rm -f "$DASH_TERMS" "$DASH_TERMS.bad"; }
+  # The units, the seats and the limit card read the transcripts once a collect (issue 299), through the top-level
+  # request caches, unless this project's sessions sit under another config folder than the collect's.
+  REQS=$OUT/cache; [ "$CLAUDE_DIR" = "${DASH_CLAUDE_DIR:-$CLAUDE_DIR}" ] || REQS=$CACHE
   cd "$PP_MAIN" || return 1
   # A session records its folder as the OS gives it. On a Mac a workspace path typed in another letter case finds
   # the same folder on disk but matches none of its sessions: no Builder's cost, no worktree in the day's cost.
@@ -837,7 +956,7 @@ project() {
   local ws
   ws=$(cd "$PP_WORKSPACES" 2>/dev/null && env pwd -P) && PP_WORKSPACES=$ws
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
-    && part mainChain main_chain && part costPerRole cost_role \
+    && part mainChain main_chain && part costPerRole cost_role && part reviewLoop review_loop && part escapes escapes \
     && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \
     && part chiefOfStaff chief_of_staff && part seats seats || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
@@ -883,10 +1002,14 @@ projects() {
 # one rename. Any failure keeps the last good data.js and exits nonzero.
 render() {
   NOW=$(date +%s)
+  claude_dir
   mkdir -p "$CACHE" || return 1
   RUN=$(mktemp -d "$OUT/.run.XXXXXX") || return 1
+  # What every project's collect and the limit card share this collect (issue 299): see project().
+  export DASH_CYCLE=$NOW.$$ DASH_TERMS=$RUN/terminals.json DASH_CLAUDE_DIR=$CLAUDE_DIR
   mkdir -p "$RUN/src" "$RUN/parts"
-  part projects projects && part host host && part limit limit && part alerts alerts || return 1
+  part projects projects && part host host && part limit limit && part alerts alerts \
+    && part alertsResolved alerts_resolved || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
   PUB=$(mktemp "$OUT/.data.js.XXXXXX") || return 1
   { printf 'window.DASH = '
@@ -910,10 +1033,17 @@ render() {
 # once, by its real path. Two checkouts of one directory name would share a
 # project name, and every log under ~/.claude is keyed by it: the second is refused.
 register() {
-  local p q n m
+  local p q n m h
   p=$(cd "$1" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && p=${p%/.git} && [ -e "$p/.git" ] \
     || { echo "dashboard: $1 is not a git checkout" >&2; return 1; }
   mkdir -p "$OUT" || return 1
+  # A registry that does not list the home project turns it off, so the first registration, which creates the
+  # registry, puts home in first: registering another project keeps home collected (issue 292). An explicit
+  # --unregister of home still turns it off.
+  if [ ! -e "$REG" ]; then
+    h=$(cd "$PP_MAIN" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && h=${h%/.git}
+    [ -z "$h" ] || [ "$h" = "$p" ] || printf '%s\n' "$h" > "$REG" || return 1
+  fi
   while IFS= read -r q; do
     [ "$q" != "$p" ] || { echo "dashboard: $p is already registered"; return 0; }
     # The name as pp_project cleans it: `a b` and `a-b` are one key.
@@ -928,6 +1058,99 @@ unregister() {
   # Read as empty, an unreadable registry (or a directory) would be rewritten without every project in it.
   [ ! -e "$REG" ] || { [ -f "$REG" ] && [ -r "$REG" ]; } || { echo "dashboard: cannot read $REG; nothing unregistered" >&2; return 1; }
   registered | grep -vxF -- "$p" > "$REG.new.$$"; mv -f "$REG.new.$$" "$REG" && echo "dashboard: unregistered $p"
+}
+
+# import_from <folder> -- issue 292: a one-time carry-over at a switch from another collector. <folder> is laid out as
+# $OUT is: cache/limit-history.jsonl and cache/codex-limit-history.jsonl, layout.js (and the host project's
+# p/<project>/layout.js), closed.log. Merged in, never over what is here: a history row whose time is held here, and a
+# layout slot that exists here, are kept. A history row of another Claude account (its `folder`) is left out, and a
+# build's fold written "open"/"shut" is the plugin's false/true. Prints what it took. Each file is read and replaced
+# under the lock the collector and the server hold for theirs (dashboard_limit.locked).
+import_from() {
+  [ -d "$1" ] || { echo "dashboard: --import needs a folder; $1 is none" >&2; return 1; }
+  mkdir -p "$CACHE" || return 1
+  python3 - "$1" "$OUT" "$HERE" "$CLAUDE_DIR" <<'PY'
+import glob, json, os, sys
+src, out, here, folder = sys.argv[1:5]
+sys.path.insert(0, here)
+import dashboard_limit as lim
+import dashboard_serve as d
+took = []
+# The rows taken are this account's: with no record of whose the history is, the collector's next check would move it aside.
+lim.switch_account(os.path.join(out, 'cache'))
+for name in ('limit-history.jsonl', 'codex-limit-history.jsonl'):
+    mine = os.path.join(out, 'cache', name)
+    with lim.locked(mine):
+        have = lim.read_history(mine)
+        if have is None:
+            sys.exit('dashboard: cannot read %s; nothing imported over it' % mine)
+        have = dict(have)
+        new = {}
+        try:
+            for line in open(os.path.join(src, 'cache', name)):
+                try:
+                    r = json.loads(line)
+                    a, p = lim.epoch(r['at']), r['pct']
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if a is not None and isinstance(p, (int, float)) and r.get('folder') in (None, folder) and a not in have:
+                    new[a] = p
+        except OSError:
+            pass
+        if new:
+            tmp = '%s.%d' % (mine, os.getpid())
+            with open(tmp, 'w') as f:
+                f.writelines(json.dumps({'at': lim.iso(a), 'pct': p}) + '\n' for a, p in sorted({**have, **new}.items()))
+            os.replace(tmp, mine)
+    took.append('%d %s rows' % (len(new), name))
+def read(path):
+    try:
+        v = json.loads(open(path).read().partition('=')[2].strip().rstrip(';'))
+    except (OSError, ValueError):
+        return {}
+    return v if isinstance(v, dict) else {}
+def clean(v):
+    v = dict(v) if isinstance(v, dict) else {}
+    if isinstance(v.get('builds'), dict):
+        v['builds'] = {k: b == 'shut' if isinstance(b, str) else b for k, b in v['builds'].items()}
+    return {k: x for k, x in v.items() if k in d.HELD and k not in ('rev', 'project') and d.HELD[k](x)}
+theirs = read(os.path.join(src, 'layout.js'))
+slots_in = dict(theirs.get('projects') or {}) if isinstance(theirs.get('projects'), dict) else {}
+for p in glob.glob(os.path.join(src, 'p', '*', 'layout.js')):
+    slots_in.setdefault(os.path.basename(os.path.dirname(p)), read(p))
+path = os.path.join(out, 'layout.js')
+# closed.log too: the server reads it and appends to it in the same save.
+with lim.locked(path):
+    rev, home, slots = d.held(path)  # one that cannot be read raises: nothing here is replaced blind
+    added = []
+    if not home and clean(theirs):
+        home, rev = clean(theirs), rev + 1
+        added.append('home')
+    for k, v in slots_in.items():
+        if d.CHECKS['project'](k) and k not in slots and clean(v):
+            slots[k] = dict(clean(v), rev=1)
+            added.append(k)
+    if added:
+        tmp = '%s.%d.tmp' % (path, os.getpid())
+        with open(tmp, 'w') as f:
+            f.write('window.DASH_LAYOUT = %s;\n' % json.dumps(dict(home, rev=rev, **({'projects': slots} if slots else {})), sort_keys=True))
+        os.replace(tmp, path)
+    took.append('layout slots: %s' % (', '.join(added) or 'none'))
+    log = os.path.join(out, 'closed.log')
+    try:
+        have = set(open(log).read().splitlines())
+    except FileNotFoundError:
+        have = set()
+    try:
+        new = [l for l in dict.fromkeys(open(os.path.join(src, 'closed.log')).read().splitlines()) if '\t' in l and l not in have]
+    except OSError:
+        new = []
+    if new:
+        with open(log, 'a') as f:
+            f.write(''.join(l + '\n' for l in new))
+took.append('%d cleared builds' % len(new))
+print('dashboard: --import from %s took %s' % (src, '; '.join(took)))
+PY
 }
 
 # free_port -- the first port from 8791 the server can take on $BIND: a port
@@ -960,7 +1183,10 @@ install() {
   export COMMANDECK_DASHBOARD_PORT=$PORT COMMANDECK_DASHBOARD_BIND=$BIND COMMANDECK_MAIN=$PP_MAIN
   mkdir -p "$OUT" || return 1
   for f in "${VIEW[@]}"; do view_put "$f" || { echo "dashboard: could not copy $src/$f into $OUT" >&2; return 1; }; done
-  local -a keep=(PATH HOME COMMANDECK_MAIN COMMANDECK_DASHBOARD_PORT COMMANDECK_DASHBOARD_BIND COMMANDECK_DASHBOARD_HOSTS COMMANDECK_DASHBOARD_NAME COMMANDECK_DASHBOARD_DIR CODEX_HOME COMMANDECK_CODEX_REVIEW_HOME)
+  # The scratch and workspace overrides set at install are the home project's (issue 292); projects() unsets them
+  # for a registered project, which derives its own.
+  local -a keep=(PATH HOME COMMANDECK_MAIN COMMANDECK_DASHBOARD_PORT COMMANDECK_DASHBOARD_BIND COMMANDECK_DASHBOARD_HOSTS COMMANDECK_DASHBOARD_NAME COMMANDECK_DASHBOARD_DIR CODEX_HOME COMMANDECK_CODEX_REVIEW_HOME
+    COMMANDECK_SCRATCH COMMANDECK_WORKSPACES)
   if [ "$(hs_os)" = Darwin ]; then
     local plist=$HOME/Library/LaunchAgents/$HS_PREFIX$NAME.plist
     mkdir -p "${plist%/*}" || return 1
@@ -1056,6 +1282,11 @@ case "${1:-}" in
   --job-file) [ "$(hs_os)" = Darwin ] && echo "$HOME/Library/LaunchAgents/$HS_PREFIX$NAME.plist" || echo "$HOME/.config/systemd/user/$UNIT"; exit 0 ;;
   --register) register "${2:?--register <repo>}"; exit ;;
   --unregister) unregister "${2:?--unregister <repo>}"; exit ;;
+  --import) import_from "${2:?--import <folder>}"; exit ;;
+  # The job's own manager restarts it (issue 294), by the label and unit install wrote.
+  --restart) if [ "$(hs_os)" = Darwin ]; then launchctl kickstart -k "gui/$(id -u)/$HS_PREFIX$NAME"
+             else systemctl --user --no-block restart "$UNIT"; fi
+             exit $? ;;
   --project) project "${2:?}" || { echo "dashboard: collecting $PP_MAIN FAILED" >&2; exit 1; } ;;
   --loop) mkdir -p "$OUT" || exit 1
           rm -f "$OUT/.cycle"
@@ -1073,7 +1304,8 @@ case "${1:-}" in
             render || echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; pp_rm_rf "${RUN:-}" "${PUB:-}"
             last=$(( $(date +%s) - t0 )); cycle "$t0" "$last"
             [ "$last" -le 60 ] || echo "dashboard: cycle took $last s" >&2
-            sleep 60 & wait $!; done ;;  # a foreground sleep would hold off the TERM trap that stops the server
+            # COMMANDECK_DASHBOARD_CYCLE_S, for the self-test. A foreground sleep would hold off the TERM trap that stops the server.
+            sleep "${COMMANDECK_DASHBOARD_CYCLE_S:-60}" & wait $!; done ;;
   "") render || { echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; exit 1; } ;;
-  *) echo "usage: dashboard.sh [--install|--uninstall|--status|--job-file|--loop|--register <repo>|--unregister <repo>]" >&2; exit 2 ;;
+  *) echo "usage: dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--register <repo>|--unregister <repo>|--import <folder>]" >&2; exit 2 ;;
 esac

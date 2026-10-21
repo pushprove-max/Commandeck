@@ -22,8 +22,18 @@ wait_for() { local n=$(( $1 * 10 )); shift; while [ "$n" -gt 0 ]; do "$@" && ret
 same() { cmp -s "$T/plugin/dashboard/$1" "$T/out/$1"; }
 
 mkdir -p "$T/out"; for f in index.html app.css app.js; do cp "$T/plugin/dashboard/$f" "$T/out/$f"; done
-(cd "$T/proj" && exec bash "$T/plugin/scripts/dashboard.sh" --loop >/dev/null 2>"$T/loop.err") & LOOP=$!
+# Main last started under profile A, which has transcripts (agent-startup-context.sh records it); B has none.
+SCR=$(. "$T/plugin/scripts/paths.sh" && echo "$PP_SCRATCH"); mkdir -p "$SCR" "$T/prof-a/projects" "$T/prof-b"
+echo "$T/prof-a" > "$SCR/claude-config-dir"
+(cd "$T/proj" && COMMANDECK_DASHBOARD_CYCLE_S=1 exec bash "$T/plugin/scripts/dashboard.sh" --loop >/dev/null 2>"$T/loop.err") & LOOP=$!
 wait_for 20 test -s "$T/out/alive.js"; check "the loop is up" 0 $?
+# logs <status>: the newest data.js says Claude Code's transcripts are <status>.
+logs() { grep -o '"claude-logs":{[^}]*}' "$T/out/data.js" 2>/dev/null | grep -q "\"status\":\"$1\""; }
+wait_for 60 logs fresh; check "the loop reads the profile main started under" 0 $?
+# The loop runs for days: main starting under another profile must move the next collect there, or the quota
+# would be B's and the transcripts and spend A's.
+echo "$T/prof-b" > "$SCR/claude-config-dir"
+wait_for 60 logs not-measured; check "the running loop follows main to another profile" 0 $?
 
 # A view file that did not change is not written again: same file, same old time.
 touch -t 200001010000 "$T/out/index.html"; touch -t 200001010001 "$T/old"; INO=$(ls -i "$T/out/index.html" | awk '{print $1}')
@@ -36,5 +46,18 @@ chmod a-w "$T/out"; printf '// another\n' >> "$T/plugin/dashboard/app.js"
 wait_for 10 grep -q 'could not refresh' "$T/loop.err"; check "a copy it cannot make says so" 0 $?
 check "and the old file stays" 1 "$([ -s "$T/out/app.js" ] && ! same app.js && echo 1)"
 chmod u+w "$T/out"
+
+# Issue 292: the job file left out COMMANDECK_SCRATCH, so a home project with its scratch moved lost its state at
+# the first restart. A stub launchctl, so no job is loaded.
+printf '#!/usr/bin/env bash\necho "${0##*/} $*" >> "%s/managed"\n[ "$1" != print ]\n' "$T" > "$T/bin/launchctl"; cp "$T/bin/launchctl" "$T/bin/systemctl"; chmod +x "$T/bin/launchctl" "$T/bin/systemctl"
+COMMANDECK_HOST_OS=Darwin COMMANDECK_SCRATCH=$T/scr COMMANDECK_DASHBOARD_DIR=$T/inst bash "$T/plugin/scripts/dashboard.sh" --install >/dev/null 2>&1
+check "issue 292: the job file keeps COMMANDECK_SCRATCH when it is set" "0 1" \
+  "$? $(grep -c "<key>COMMANDECK_SCRATCH</key><string>$T/scr</string>" "$(COMMANDECK_HOST_OS=Darwin bash "$T/plugin/scripts/dashboard.sh" --job-file)")"
+# Issue 294: the page's Restart collector runs --restart, which asks the job's own manager by the name install wrote.
+: > "$T/managed"
+for os in Darwin Linux; do COMMANDECK_HOST_OS=$os bash "$T/plugin/scripts/dashboard.sh" --restart; done
+check "issue 294: --restart kicks the job by its label on macOS and restarts its unit on Linux" \
+  "launchctl kickstart -k gui/$(id -u)/com.commandeck.dashboard|systemctl --user --no-block restart commandeck-dashboard.service" \
+  "$(paste -sd'|' "$T/managed")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

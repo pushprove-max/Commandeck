@@ -140,7 +140,7 @@ req_check() {
   REQ_NAMES= REQ_CMD=() REQ_LINK=() REQ_YOURS=() REQ_NOTES=()
   # Set and empty is still set: has, not the text, says whether there is one.
   # A script in a session gets the same Mac fix as here, so the session's PATH is read with it.
-  if sp=$(jq -er '.env.PATH | strings' "$HOME/.claude/settings.json" 2>/dev/null); then
+  if sp=$(jq -er '.env.PATH | strings' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null); then
     has=1 where="the PATH a session gets"; sp=$(PATH=$sp; req_path; printf '%s' "$PATH")
   fi
   while IFS=$'\t' read -r name need check brew apt step; do
@@ -208,7 +208,7 @@ LIST
     else REQ_YOURS+=("${names#, }: there is no apt-get on this machine. Install them with its own package manager, then run setup again"); names=; fi
   fi
   REQ_NAMES=${names#, }${REQ_NAMES:+${names:+, }$REQ_NAMES}
-  t="the PATH a session gets (env.PATH in $HOME/.claude/settings.json)"
+  t="the PATH a session gets (env.PATH in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json)"
   [ -z "$on1" ] || REQ_NOTES+=("on this shell's PATH but not on $t: ${on1#, }")
   [ -z "$on2" ] || REQ_NOTES+=("on $t but not on this shell's PATH: ${on2#, }")
   [ -z "$REQ_NAMES" ] && [ ${#REQ_YOURS[@]} = 0 ] && [ ${#REQ_NOTES[@]} = 0 ]

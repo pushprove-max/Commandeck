@@ -78,7 +78,7 @@ CLAIMED=$(awk 'FNR == 1 { if (!v) printf "%s", h; h = ""; v = 0 }
   END { if (!v) printf "%s", h }' "$SCRATCH"/seat-*.txt 2>/dev/null || true)
 NOW=$(( $(date +%s) * 1000 ))
 rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$WT_JSON" \
-  --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --arg prot "$PROTECT" --arg claim "$CLAIMED" \
+  --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --rawfile prot <(printf '%s' "$PROTECT") --rawfile claim <(printf '%s' "$CLAIMED") \
   --argjson now "$NOW" --argjson cutoff "$(( NOW - QUIET_SECONDS * 1000 ))" \
   --argjson orphan "$(( NOW - ORPHAN_SECONDS * 1000 ))" "$PP_PNORM"'
   ($prot | split("\n")) as $prot | ($ws | pnorm) as $ws | ($main | pnorm) as $main

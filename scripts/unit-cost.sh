@@ -19,7 +19,7 @@ set -uo pipefail
 UNIT=${1:?unit}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 SINCE=${2:-$(date -d '2 days ago' '+%Y-%m-%d %H:%M')}   # after paths.sh: a Mac's own date has no -d
-D="$HOME/.claude/projects/$PP_WORKSPACES_SLUG-$UNIT"
+D="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$PP_WORKSPACES_SLUG-$UNIT"
 # No Claude transcript is not the end: a unit Codex panes worked on is billed below.
 files=; [ ! -d "$D" ] || files=$(find "$D" -maxdepth 1 -name '*.jsonl' -newermt "$SINCE" | sort)
 [ -n "$files" ] || echo "CLAUDE     no sessions for $UNIT since $SINCE in $D" >&2

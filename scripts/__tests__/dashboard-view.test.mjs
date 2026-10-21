@@ -293,6 +293,24 @@ test('Who holds what: issues by milestone, most urgent first, with the Builder h
   assert.equal(text(miles[1].querySelector('.holder')), 'Free');
 });
 
+// Issue 273: how fast issues come and go, without opening GitHub.
+test("issue 273: the Issues card's 24-hour line and the 7-day opened and closed sparkline", () => {
+  const w = fresh();
+  const daily = [0, 1, 2, 3, 4, 5, 6].map((i) => ({ day: `2026-10-${String(15 + i)}`, opened: i, closed: 6 - i }));
+  show(w, { github: { ...GH, flow: { opened24h: 3, closed24h: 2, daily, incomplete: false } } });
+  assert.equal(text(w.document.getElementById('held-flow')), '3 opened, 2 closed in 24 h');
+  const lines = [...w.document.querySelectorAll('#held-spark svg polyline')];
+  assert.deepEqual(lines.map((l) => [l.getAttribute('class'), l.getAttribute('points').split(' ').length]), [['spark-opened', 7], ['spark-closed', 7]]);
+  for (const l of lines) assert.match(l.getAttribute('points'), /^[-0-9., ]*$/, 'only numbers reach the drawing');
+  const full = fresh();
+  show(full, { github: { ...GH, flow: { opened24h: 1000, closed24h: 0, daily, incomplete: true } } });
+  assert.match(text(full.document.getElementById('held-flow')), /^1000 opened, 0 closed in 24 h\. A read hit its 1000-issue limit/);
+  const none = fresh();
+  show(none, { github: { ...GH, flow: null } });
+  assert.equal(text(none.document.getElementById('held-flow')), 'Issues opened and closed not measured');
+  assert.equal(none.document.querySelector('#held-spark svg'), null, 'no drawing from nothing');
+});
+
 test('Who holds what: a long Builder name never squeezes the issue number and title', () => {
   const w = fresh();
   show(w, { units: { inFlight: [builder({ unit: 'help-email-batch-2026-10-16' })] }, github: GH });
@@ -651,7 +669,7 @@ test('issue 211: More lists every other panel not hidden, shows the one picked a
   tabBtn(w, 'more').click();
   assert.equal(sheet.hidden, false);
   assert.ok(sheet.contains(w.document.activeElement), 'the sheet takes focus');
-  assert.deepEqual(tiles().map((b) => b.dataset.card), ['main-chain', 'merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'guard-blocks',
+  assert.deepEqual(tiles().map((b) => b.dataset.card), ['main-chain', 'merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'cost-unit', 'review', 'guard-blocks',
     'chief-of-staff', 'main-seat', 'agents'], 'every panel on no tab, less the one the owner hid and the relay seat this project has not');
   assert.equal(tiles()[0].textContent, 'Main', 'a tile is its panel\'s title');
   w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -816,7 +834,7 @@ test('issue 240: answer buttons, the default marked, and an Other box show on a 
   const buttons = [...w.document.querySelectorAll('#decisions .answer button')].map((b) => `${b.className}:${text(b)}`);
   assert.deepEqual(buttons, ['opt default-opt:yes (default)', 'opt:no', 'opt:Send'], 'one button per option, the default marked');
   assert.ok(w.document.querySelector('#decisions .answer input.other'), 'and an Other box');
-  assert.match(text(w.document.getElementById('decisions')), /The answer to keys-1999-01-01 is not sent to the relay yet/, 'a failed send is shown');
+  assert.match(text(w.document.getElementById('decisions')), /The answer to keys-1999-01-01 is not sent to the relay/, 'a failed send is shown');
   // This test host has no data.js, so it takes no answer: the page says so and the question stays answerable.
   w.document.querySelector('#decisions .answer button').click();
   await settled(w);
@@ -872,4 +890,137 @@ test("issue 240: the snapshot's answers waiting on main's picker are named", asy
   w.refresh();
   show(w, { needsOwner: { decisions: [], picker: ['keys-1999-01-01'] } });
   assert.equal((text(w.document.getElementById('decisions')).match(/keys-1999-01-01/g) || []).length, 1, 'named once');
+});
+
+// Issue 295: an answer the host could not send must say why and how long it has failed, not "sent again on each
+// refresh" forever, and on this machine's page the owner settles it: retry, main got it another way (confirmed), or
+// drop (confirmed). Another host's page, the phone's, shows the note with no buttons.
+test('issue 295: an unsent answer shows its reason, tries and first try; the buttons show on a loopback page only', async () => {
+  const unsent = [{ id: 'ship-1999-01-01', to: 'main', key: 'k1', state: 'gave-up', reason: 'its main folder /gone is gone', tries: 0, firstAt: iso(NOW - 3600000), lastError: null },
+    { id: 'keys-1999-01-01', to: 'relay', key: 'k2', state: 'pending', reason: null, tries: 3, firstAt: iso(NOW - 600000), lastError: 'cos-tell: no relay pane' }];
+  const w = fresh();
+  const sent = [];
+  w.fetch = (url, opt) => { sent.push([url, JSON.parse(opt.body)]); return Promise.resolve({ ok: true, status: 200 }); };
+  let asked = 0;
+  w.confirm = () => { asked += 1; return asked > 1; };
+  show(w, { needsOwner: { decisions: [], unsent } });
+  const rows = [...w.document.querySelectorAll('#decisions li.unsent')];
+  assert.match(text(rows[0]), /^The answer to ship-1999-01-01 is not sent to main: its main folder \/gone is gone, 0 tries since .*The host gave up on it\./);
+  assert.match(text(rows[1]), /^The answer to keys-1999-01-01 is not sent to the relay: cos-tell: no relay pane, 3 tries since .*The host tries again on each refresh\./);
+  assert.deepEqual([...rows[0].querySelectorAll('button')].map(text), ['Retry', 'Main got it', 'Drop']);
+  const [retry, got, drop] = rows[0].querySelectorAll('button');
+  retry.click();
+  got.click(); // the owner says no to the confirm: nothing is sent
+  drop.click();
+  await sleep(50);
+  assert.deepEqual(sent, [['unsent', { key: 'k1', action: 'retry' }], ['unsent', { key: 'k1', action: 'drop' }]], 'retry at once; delivered and drop only once confirmed');
+  assert.equal(asked, 2, 'delivered and drop each asked the owner first');
+  const far = boot({}, 'demo', Date, '192.0.2.7');
+  show(far, { needsOwner: { decisions: [], unsent } });
+  assert.equal(far.document.querySelectorAll('#decisions li.unsent').length, 2, 'another host: the notes show');
+  assert.equal(far.document.querySelectorAll('#decisions li.unsent button').length, 0, 'and no buttons');
+});
+
+// Issue 294: a stuck or dead collector meant a terminal and a launchctl line. The page's own button restarts it, and
+// says where the restart is by the host's own stamps: "restarting..." until a new cycle starts, then "waiting for first
+// cycle" until new data lands.
+test('issue 294: Restart collector asks first, shows its progress by the host stamps and the last cycle; a LAN page has none', async () => {
+  const w = fresh();
+  const sent = [];
+  w.fetch = (url, opt) => { sent.push([url, opt.method]); return Promise.resolve({ ok: true, status: 202 }); };
+  const beat = (cycle) => { w.refresh(); w.DASH_ALIVE = { at: iso(Date.now()), cycleStartedAt: cycle, lastCycleSec: 12 }; w.document.querySelector('script[src^="alive.js"]').dispatchEvent(new w.Event('load')); };
+  const data = (at) => { w.refresh(); w.DASH = { updatedAt: at, home: 'demo', sources: {}, projects: { demo: {} } }; w.document.querySelector('script[src^="data.js"]').dispatchEvent(new w.Event('load')); };
+  data(iso(NOW - 5000)); beat(iso(NOW - 9000));
+  const btn = w.document.getElementById('restart');
+  assert.equal(text(w.document.getElementById('last-cycle')), 'last cycle 12 s');
+  assert.equal(btn.hidden, false, 'a loopback page has the button');
+  w.confirm = () => false; btn.click();
+  assert.deepEqual(sent, [], 'a restart the owner does not confirm sends nothing');
+  w.confirm = () => true; btn.click();
+  await sleep(20);
+  assert.deepEqual(sent, [['restart', 'POST']]);
+  assert.deepEqual([text(btn), btn.disabled], ['restarting...', true]);
+  beat(iso(NOW - 9000));
+  assert.equal(text(btn), 'restarting...', 'the old cycle is no restart');
+  beat(iso(NOW - 1000));
+  assert.equal(text(btn), 'waiting for first cycle');
+  data(iso(NOW - 4000));
+  assert.deepEqual([text(btn), btn.disabled], ['Restart collector', false], 'new data ends the progress');
+  const far = boot({}, 'demo', Date, '192.0.2.7');
+  assert.equal(far.document.getElementById('restart').hidden, true, 'another host: no button');
+});
+
+// Issue 270: which units cost the most this week, Claude and Codex apart, each one's stages a click away.
+test('issue 270: Tokens per unit ranks the units by cost, splits Claude and Codex, and folds each one\'s stages', () => {
+  const w = fresh();
+  const t = (usd, claude) => ({ usd, input: 1000, cached: 500, output: 200, partial: false, unpriced: [], byAgent: { claude, codex: usd - claude } });
+  show(w, { units: { inFlight: [], costPerUnit: [
+    { unit: 'big-1999-01-01', inFlight: false, total: t(3, 2), stages: [{ stage: 'building', ...t(2, 2) }, { stage: 'review', ...t(1, 0) }] },
+    { unit: 'small-1999-01-01', inFlight: true, total: t(1, 1), stages: [] }] } });
+  const rows = [...w.document.querySelectorAll('#cost-unit-list > li')];
+  assert.deepEqual(rows.map((r) => [...r.querySelector('.uline').children].map(text)),
+    [['big-1999-01-01', '$3.00 (Claude $2.00, Codex $1.00) · 1.2k tokens'], ['small-1999-01-01 (in flight)', '$1.00 (Claude $1.00, Codex $0.00) · 1.2k tokens']]);
+  const fold = rows[0].querySelector('details');
+  assert.equal(fold.open, false, 'stages folded');
+  assert.deepEqual([...fold.querySelectorAll('li')].map(text), ['building: $2.00', 'review: $1.00']);
+  assert.equal(rows[1].querySelector('details'), null, 'no stages: no fold');
+});
+
+// Issues 271 and 272: which units' review loops ran long this week, and which merged units let a defect through.
+test('issues 271 and 272: the review card lists the unit with repeated NO-GOs first, and its escapes', () => {
+  const w = fresh();
+  const row = (unit, rounds, noGo) => ({ unit, rounds, goRounds: 1, noGoRounds: noGo, fixRounds: null, verdict: 'CONVERGED-GO', gaps: ['fixRounds', 'findings'] });
+  show(w, { reviewLoop: [row('quick-1999-01-01', 1, 0), row('loopy-1999-01-01', 5, 4)], escapes: [{ unit: 'loopy-1999-01-01', escaped: [41, 43] }] });
+  assert.deepEqual([...w.document.querySelectorAll('#review-list > li .uline')].map((u) => [...u.children].map(text)),
+    [['loopy-1999-01-01', '5 rounds, 4 NO-GO · not measured: fixRounds, findings'], ['quick-1999-01-01', '1 round, 0 NO-GO · not measured: fixRounds, findings']]);
+  assert.deepEqual([...w.document.querySelectorAll('#escapes-list > li')].map(text), ['loopy-1999-01-01 escaped #41, #43']);
+  const none = fresh();
+  show(none, { reviewLoop: [], escapes: [] });
+  assert.equal(text(none.document.querySelector('#review .card-note')), 'No unit merged in the last 7 days');
+  assert.deepEqual([...none.document.querySelectorAll('#escapes-list > li')].map(text), ['No escaped issue tagged']);
+  const nothing = fresh();
+  show(nothing, { reviewLoop: null, escapes: null });
+  assert.equal(text(nothing.document.querySelector('#review .card-note')), 'Unit ledger not measured');
+  assert.deepEqual([...nothing.document.querySelectorAll('#escapes-list > li')].map(text), []);
+});
+
+// Issue 274: an alert that cleared left no trace on the card. The last 24 h of them sit in a closed list under it.
+test("issue 274: a resolved alert shows in a folded list with its start and clear times; another project's does not", () => {
+  const w = fresh();
+  const s = w.document.querySelector('script[src^="data.js"]');
+  w.DASH = { updatedAt: iso(NOW), home: 'demo', sources: {}, projects: { demo: {}, other: {} }, alerts: [],
+    alertsResolved: [{ key: 'host-swap', since: iso(NOW - 7200000), resolvedAt: iso(NOW - 3600000), severity: 'warn', text: 'Host swap 90% used. Action: hold launches' },
+      { key: 'x', since: iso(NOW - 7200000), resolvedAt: iso(NOW - 60000), severity: 'warn', text: 'Theirs. Action: none', project: 'other' }] };
+  s.dispatchEvent(new w.Event('load'));
+  const fold = w.document.getElementById('alerts-resolved');
+  assert.deepEqual([fold.hidden, fold.open, text(fold.querySelector('summary'))], [false, false, 'Resolved in the last 24 h (1)']);
+  const row = text(fold.querySelector('li'));
+  assert.match(row, /^Host swap 90% used\. Action: hold launches from \d+:\d\d [AP]M to \d+:\d\d [AP]M$/);
+  w.DASH = { ...w.DASH, alertsResolved: [] };
+  w.refresh(); w.document.querySelector('script[src^="data.js"]').dispatchEvent(new w.Event('load'));
+  assert.equal(fold.hidden, true, 'none resolved: no list');
+});
+
+// Issue 276: while the owner typed in one answer box, a refresh skipped the whole list, so a new decision, an unsent
+// note or a picker note stayed hidden until the box lost focus. Now the list is rebuilt around the row being typed in,
+// which is kept as the same node: the typing and the focus stay, and everything new shows.
+test('issue 276: a focused answer box keeps its text and focus while a refresh adds a decision and an unsent note', async () => {
+  const dec = (id, q) => ({ id, question: q, proposedDefault: 'yes', options: ['yes', 'no'], source: 'AskUserQuestion', askedAt: iso(NOW - 60000), answeredAt: null, answer: null });
+  const a = dec('a-1999-01-01', 'First?'), b = dec('b-1999-01-01', 'Second?');
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [a] } });
+  const box = w.document.querySelector('#decisions .answer input.other');
+  box.focus();
+  box.value = 'half typed';
+  w.refresh();
+  show(w, { needsOwner: { decisions: [a, b], unsent: [{ id: 'old-1999-01-01', to: 'main', key: 'k', state: 'pending', tries: 1, firstAt: iso(NOW), lastError: 'x' }] } });
+  const all = text(w.document.getElementById('decisions'));
+  assert.match(all, /Second\?/, 'the new decision shows');
+  assert.match(all, /The answer to old-1999-01-01 is not sent to main/, 'and the unsent note');
+  assert.equal(w.document.querySelector('#decisions .answer input.other'), box, 'the box is the same node');
+  assert.equal(box.value, 'half typed', 'its text stays');
+  assert.equal(w.document.activeElement, box, 'and its focus');
+  w.refresh();
+  show(w, { needsOwner: { decisions: [b] } });
+  assert.doesNotMatch(text(w.document.getElementById('decisions')), /First\?/, 'its decision gone from the open list, the row goes too');
 });

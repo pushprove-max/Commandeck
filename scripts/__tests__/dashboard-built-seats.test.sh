@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # dashboard-built-seats.test.sh -- main's and the relay's own cards, and the answers from the page that wait on
-# a failed send or main's picker. The fixture is dashboard-built.test.sh's.
+# a failed send or main's picker; the collector reading the profile main recorded (issue 291) and only what grew
+# since the last collect (issue 299). The fixture is dashboard-built.test.sh's.
 set -uo pipefail
 . "$(dirname "$0")/fixtures/dashboard-built-setup.sh"
 NOW=$(date +%s); iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
@@ -34,9 +35,12 @@ check "the relay's card: its own session today, no line, no restarts" '[100000,n
   "$(jq -c 'first(.[]) | .seats.relay | [.context, .line, .today.tokens, .today.usd, .restarts, .restartGapSec]' "$T/out/run/project.json" 2>&1)"
 echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
 # Issue 240: an answer from the page whose send failed is kept by the host, and listed on this project's card only.
-jq -cn --arg m "$MAIN" '[{main: $m, id: "ship-1999-01-01", to: "relay", args: []}, {main: "/elsewhere", id: "x-1999-01-01", to: "main", args: []}]' > "$T/out/answer-retry.json"
+# Issue 295: each with its key, state, reason, tries, first try and last error, as the host keeps them.
+jq -cn --arg m "$MAIN" '[{main: $m, id: "ship-1999-01-01", to: "relay", args: [], key: "k1", state: "gave-up", reason: "its main folder /x is gone",
+    tries: 2, firstAt: "1999-01-01T00:00:00Z", lastExit: 1, lastError: "boom"}, {main: "/elsewhere", id: "x-1999-01-01", to: "main", args: []}]' > "$T/out/answer-retry.json"
 dash
-check "an answer whose send failed is listed on its own project's card" '[{"id":"ship-1999-01-01","to":"relay"}]' \
+check "an answer whose send failed is listed on its own project's card, with why and how often it failed" \
+  '[{"id":"ship-1999-01-01","to":"relay","key":"k1","state":"gave-up","reason":"its main folder /x is gone","tries":2,"firstAt":"1999-01-01T00:00:00Z","lastError":"boom"}]' \
   "$(jq -c 'first(.[]) | .needsOwner.unsent' "$T/out/run/project.json" 2>&1)"
 check "and none is said to wait on main's picker with no record" '[]' "$(jq -c 'first(.[]) | .needsOwner.picker' "$T/out/run/project.json" 2>&1)"
 # An answer delivered while main's own picker was open waits on that picker: the host records it, and this
@@ -47,6 +51,36 @@ check "an answer waiting on main's open picker is named on its own project's car
   "$(jq -c 'first(.[]) | .needsOwner.picker' "$T/out/run/project.json" 2>&1)"
 check "with no relay configured there is no relay card" '[true,false]' \
   "$(jq -c 'first(.[]) | [(.seats.main | type == "object"), (.seats | has("relay"))]' "$T/out/run/project.json" 2>&1)"
+
+# Issue 291: a main run under another Claude config folder records it, and the collector reads that folder's
+# transcripts and task lists, never the home folder's.
+SCR=$(cd "$MAIN" && env -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$MAIN" bash -c '. "$0" && echo "$PP_SCRATCH"' "$SOURCE/scripts/paths.sh"); mkdir -p "$SCR"
+mkdir -p "$T/profile"; echo "$T/profile" > "$SCR/claude-config-dir"
+dash
+check "issue 291: the collector reads the config folder main recorded" "not-measured no main session task list under $T/profile/tasks" \
+  "$(jq -r 'first(.[]).sources.todos | "\(.status) \(.error)"' "$T/out/run/project.json" 2>&1)"
+rm -f "$SCR/claude-config-dir"
+
+# Issue 299: a collect reads only what changed since the last one, and shows what a collect with no reading state
+# shows. Between two collects a minute apart, a Builder's session, main's transcript and the hook fire log grow; the
+# second collect equals one run on the same files at the same time from the first's cache without that state.
+HL=$HOME/.claude/hook-fire-log; mkdir -p "$HL"
+blk() { jq -cn --arg t "$(iso "$1")" --arg s "$2" '{timestamp: $t, hook: "h", decision: "block", session_id: "s1", agent: "claude", event: "PreToolUse", use: "u\($s)", call: "c\($s)", summary: $s}'; }
+blk $((NOW - 300)) 1 > "$HL/demo.$(date -u +%F).jsonl"
+BS=$(seatf "$WS/u-verdicts")/s.jsonl
+W=$(date +%s); DNOW=$W dash; cp -a "$T/out/cache" "$T/cache-1"
+blk $((NOW - 200)) 2 >> "$HL/demo.$(date -u +%F).jsonl"
+hrow m2 $((NOW - 20)) >> "$(seatf "$MAIN")/m1.jsonl"
+printf '%s\n' '{"type":"user","toolUseResult":{"backgroundTaskId":"b1"}}' \
+  '{"type":"assistant","message":{"id":"m9","usage":{"cache_read_input_tokens":160000,"input_tokens":20,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":5}}}}' >> "$BS"
+# The blocks' hourly mean is over the hours since the day file's start by the wall clock: a sample time.
+DNOW=$((W + 60)) dash; warm=$(jq -S 'first(.[]) | del(.guardBlocks.perHour)' "$T/out/run/project.json" 2>&1)
+rm -rf "$T/out/cache"; mv "$T/cache-1" "$T/out/cache"
+rm -f "$T/out/cache"/{limit-requests,codex-requests,codex-requests-review}.json "$T/out/cache/demo"/{guard-blocks,session-summary}.json
+DNOW=$((W + 60)) dash; cold=$(jq -S 'first(.[]) | del(.guardBlocks.perHour)' "$T/out/run/project.json" 2>&1)
+check "issue 299: the warm collect read what grew: two blocks, main's new request, the Builder's new context" '[2,200000,160025]' \
+  "$(jq -c '[.guardBlocks.blocks, .seats.main.today.tokens, (.units.inFlight[] | select(.unit == "u-verdicts") | .builder.context)]' <<<"$warm")"
+check "issue 299: a warm collect shows what one with no reading state shows" "$cold" "$warm"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

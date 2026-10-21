@@ -67,7 +67,7 @@ rules_cut() {
   [ "${1#"$PLUGIN"/}" = "$1" ] || tpl=1
   [ -n "$tpl" ] || ! grep -qxF '<!-- commandeck:merge:begin -->' <<<"$t" || a=(--block)
   if [ ${#a[@]} -gt 0 ] || { [ -n "$tpl" ] && [ "$(jq -r '.rules // empty' "$CONFIG" 2>/dev/null)" = merge ]; }; then
-    while IFS= read -r d; do [ -z "$d" ] || a+=(--exclude "$d"); done < <(for f in "$REPO_ROOT/.claude/settings.local.json" "$REPO_ROOT/.claude/settings.json" "$HOME/.claude/settings.json"; do jq -r '.claudeMdExcludes[]? | strings' "$f" 2>/dev/null; done)
+    while IFS= read -r d; do [ -z "$d" ] || a+=(--exclude "$d"); done < <(for f in "$REPO_ROOT/.claude/settings.local.json" "$REPO_ROOT/.claude/settings.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do jq -r '.claudeMdExcludes[]? | strings' "$f" 2>/dev/null; done)
     for f in "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT"/.claude/rules/*.md; do [ ! -f "$f" ] || a+=(--against "$f"); done
   fi
   [ -z "$tpl" ] && [ ${#a[@]} = 0 ] || while IFS= read -r d; do a+=("$d"); done < <(jq -r '.mergeDecisions // {} | to_entries[] | select(.value == "keep-mine" or .value == "keep-both") | (if .value == "keep-mine" then "--drop" else "--keep" end), .key' "$CONFIG" 2>/dev/null)

@@ -213,6 +213,32 @@
     return box;
   }
 
+  // Issue 295: an answer the host could not send says why, how often it tried and since when, and whether the host gave
+  // up; on this machine's page the owner retries it, says main got it another way, or drops it.
+  function unsentRow(u) {
+    const t = parseTime(u.firstAt), tries = Number.isInteger(u.tries) ? u.tries : 0;
+    const why = u.state === 'gave-up' ? u.reason || 'reason not recorded' : u.lastError || (tries ? 'no error line' : 'not tried yet');
+    const li = h('li', 'decision crit unsent', `The answer to ${u.id} is not sent to ${u.to === 'relay' ? 'the relay' : 'main'}: ${why}, ${tries} ${tries === 1 ? 'try' : 'tries'}${Number.isFinite(t) ? ` since ${when(t)}` : ''}. ${u.state === 'gave-up' ? 'The host gave up on it.' : 'The host tries again on each refresh.'}`);
+    if (!LOCAL || typeof u.key !== 'string') return li;
+    const said = h('span', 'meta');
+    for (const [action, label, ask] of [['retry', 'Retry', null], ['delivered', 'Main got it', 'Did main get this answer another way? It is removed and not sent.'],
+      ['drop', 'Drop', 'Drop this answer? Main is not told it.']]) {
+      const b = h('button', 'opt', label);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        if (ask && !window.confirm(ask)) return;
+        b.disabled = true;
+        window.fetch('unsent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: u.key, action }) })
+          .then((r) => (r.ok ? `${label}: done, the list follows on the next refresh` : `${label}: the host said ${r.status}`))
+          .catch(() => `${label}: the host could not be reached`)
+          .then((s) => { said.textContent = s; b.disabled = false; });
+      });
+      li.append(' ', b);
+    }
+    li.append(' ', said);
+    return li;
+  }
+
   function renderNeeds(n, now, units, githubP1) {
     n = n || {};
     const who = ownerName(n);
@@ -244,22 +270,34 @@
       li.append(h('p', 'question', d.question), h('p', 'meta', asked(d).meta));
       return li;
     })) : [];
-    // A refresh while the owner types an answer leaves the list as it is: rebuilt, it would drop the typing.
+    // Issue 276: a refresh while the owner types an answer rebuilds the list around that one row, which stays the same
+    // node, so its typing and focus stay and new decisions and notes still show. A row whose decision left the open
+    // list goes with the rest.
     const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#decisions .answer');
-    if (!typing) put(byId('decisions'), open === null ? [h('li', 'empty', 'Decisions ledger not measured')]
+    const keep = typing && typing.closest('li[data-asking]');
+    const items = (open === null ? [h('li', 'empty', 'Decisions ledger not measured')]
       : (open.length === 0 ? [h('li', 'empty', 'No open decisions')]
         : open.map((d) => {
+          if (keep && keep.dataset.asking === asking(d)) return keep;
           const { wait, meta } = asked(d);
           const li = h('li', wait !== null && wait > DECISION_LATE_SEC ? 'decision crit' : 'decision');
+          li.dataset.asking = asking(d);
           const dflt = h('p', 'default');
           dflt.append(h('span', 'default-label', 'If no answer: '), h('span', null, d.proposedDefault));
           li.append(h('p', 'question', d.question), dflt, h('p', 'meta', meta));
           if (LOCAL) li.append(answerBox(d));
           return li;
-        })).concat(mainItems, (Array.isArray(n.unsent) ? n.unsent : []).map((u) =>
-          h('li', 'decision crit', `The answer to ${u.id} is not sent to ${u.to === 'relay' ? 'the relay' : 'main'} yet; the host sends it again on each refresh.`)),
+        })).concat(mainItems, (Array.isArray(n.unsent) ? n.unsent : []).map(unsentRow),
         [...new Set([...pickerOpen, ...(Array.isArray(n.picker) ? n.picker : [])])].map((id) =>
           h('li', 'decision crit', `The answer to ${id} is recorded and sent, but main's picker for it was open: pick or press Esc in main's pane.`))));
+    const list = byId('decisions'), at = keep ? items.indexOf(keep) : -1;
+    if (at < 0) put(list, items);
+    else {
+      // Taken out of the page even for a moment, the focused box would lose its focus.
+      for (const c of [...list.childNodes]) if (c !== keep) c.remove();
+      keep.before(...items.slice(0, at));
+      keep.after(...items.slice(at + 1));
+    }
     // An open decision is the owner's to act on here, and so is a P1 a finished build left open: clearing the build
     // from the list is tidying, not an answer, so a cleared build's P1 still counts. So is an open P1 issue.
     flag('needs', Boolean(open && open.length) || p1 > 0 || issues > 0);
@@ -312,6 +350,37 @@
   // a missing one "not measured".
   const part = (v) => (v === null ? 'not priced' : num(v) === null ? 'not measured' : money(v));
   const splitOf = (t) => (!t ? costOf(t) : `${costOf(t)} (Claude ${part((t.byAgent || {}).claude)}, Codex ${part((t.byAgent || {}).codex)})`);
+  // Issue 270: each unit in flight or finished in the last 7 days, most costly first, its stages folded under it.
+  function renderCostUnit(list) {
+    note('cost-unit', !Array.isArray(list) ? 'Unit costs not measured' : list.length ? '' : 'No unit ran in the last 7 days');
+    put(byId('cost-unit-list'), (Array.isArray(list) ? list : []).map((u) => {
+      const t = u.total || {};
+      const li = h('li');
+      li.append(uline(`${u.unit}${u.inFlight ? ' (in flight)' : ''}`, `${splitOf(u.total)} · ${tokens((num(t.input) ?? 0) + (num(t.output) ?? 0))} tokens`));
+      if (Array.isArray(u.stages) && u.stages.length) {
+        const fold = h('details');
+        const ul = h('ul', 'list');
+        fold.append(h('summary', null, 'Stages'), ul);
+        put(ul, u.stages.map((s) => h('li', null, `${s.stage}: ${costOf(s)}`)));
+        li.append(fold);
+      }
+      return li;
+    }));
+  }
+  // Issues 271 and 272: each merged unit's review rounds, from the unit ledger, and the issues tagged as escapes.
+  function renderReview(rows, escapes) {
+    note('review', !Array.isArray(rows) ? 'Unit ledger not measured' : rows.length ? '' : 'No unit merged in the last 7 days');
+    const n = (v, one) => (num(v) === null ? `${one}s not measured` : `${v} ${one}${v === 1 ? '' : 's'}`);
+    put(byId('review-list'), (Array.isArray(rows) ? rows : []).slice().sort((a, b) => (num(b.rounds) ?? -1) - (num(a.rounds) ?? -1)).map((r) => {
+      const li = h('li');
+      const gaps = Array.isArray(r.gaps) && r.gaps.length ? ` · not measured: ${r.gaps.join(', ')}` : '';
+      li.append(uline(r.unit, `${n(r.rounds, 'round')}, ${num(r.noGoRounds) ?? '?'} NO-GO${gaps}`));
+      return li;
+    }));
+    put(byId('escapes-list'), !Array.isArray(escapes) ? []
+      : escapes.length ? escapes.map((e) => h('li', null, `${e.unit} escaped ${(Array.isArray(e.escaped) ? e.escaped : []).map((i) => `#${i}`).join(', ')}`))
+        : [h('li', 'empty', 'No escaped issue tagged')]);
+  }
   // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
   const STAGE_MIN_PCT = 12;
   function unitCard(u, now) {
@@ -836,6 +905,7 @@
   // Who holds what: open issues by milestone, most urgent first, each with the Builder whose brief lists it.
   // An urgent issue (P0 or P1) that nobody holds is called out at the top.
   function renderHeld(g, units, sources) {
+    renderFlow(g && g.flow);
     const issues = g && Array.isArray(g.issues) ? g.issues.filter((i) => i && Number.isInteger(i.number)) : null;
     const alarm = byId('held-alarm');
     if (!issues) { ghMissing('held', sources, ['github-issues'], 'Issues'); sub('held-sub', ''); alarm.hidden = true; put(byId('held-list'), []); return; }
@@ -887,6 +957,27 @@
     alarm.textContent = `${free} urgent issue${free === 1 ? '' : 's'} nobody holds`;
     put(byId('held-list'), kids.length ? kids : [h('p', 'empty', 'No open issues')]);
     flag('held', free > 0);
+  }
+
+  // Issue 273: issues opened and closed in 24 h, and per local day over 7 days as two lines.
+  function renderFlow(f) {
+    const o = f && num(f.opened24h), c = f && num(f.closed24h);
+    byId('held-flow').textContent = o === null || c === null || !f ? 'Issues opened and closed not measured'
+      : `${o} opened, ${c} closed in 24 h${f.incomplete ? '. A read hit its 1000-issue limit, so counts are at least these.' : ''}`;
+    const days = f && Array.isArray(f.daily) ? f.daily : null;
+    if (!days) { put(byId('held-spark'), []); return; }
+    const W = 280, H = 64, P = 6;
+    const max = Math.max(1, ...days.flatMap((d) => [num(d && d.opened) || 0, num(d && d.closed) || 0]));
+    const x = (i) => (P + (i * (W - 2 * P)) / Math.max(1, days.length - 1)).toFixed(1);
+    const y = (v) => (H - P - (v / max) * (H - 2 * P)).toFixed(1);
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img' }, 'spark-svg');
+    svg.append(svgEl('title', {}, null, 'Issues opened (solid) and closed (dashed) per day, last 7 days'),
+      svgEl('line', { x1: P, x2: W - P, y1: H - P, y2: H - P }, 'spark-base'));
+    for (const key of ['opened', 'closed']) {
+      const pts = days.flatMap((d, i) => { const v = num(d && d[key]); return v === null ? [] : [`${x(i)},${y(v)}`]; });
+      svg.append(svgEl('polyline', { points: pts.join(' ') }, `spark-${key}`));
+    }
+    put(byId('held-spark'), [svg]);
   }
 
   // Next push: the commits local main would push, under the issue each names, and what should stop the push first.
@@ -1157,6 +1248,16 @@
       if (panel) { li.append(' ', jump(panel, 'open panel')); flag(panel, true); }
       return li;
     })));
+  }
+
+  // Issue 274: the alerts that cleared in the last 24 h (the collector keeps them), folded under the open ones.
+  function renderResolved(items) {
+    const fold = byId('alerts-resolved');
+    const list = Array.isArray(items) ? items : [];
+    fold.hidden = list.length === 0;
+    fold.querySelector('summary').textContent = `Resolved in the last 24 h (${list.length})`;
+    const at = (t) => (Number.isFinite(parseTime(t)) ? hm(new Date(parseTime(t))) : 'unknown');
+    put(fold.querySelector('ul'), list.map((i) => h('li', null, `${i.text} from ${at(i.since)} to ${at(i.resolvedAt)}`)));
   }
 
   // The 7-day limit panel. The collector computes every figure at its sample
@@ -1486,6 +1587,8 @@
     if (typeof d.name === 'string' && d.name) { byId('title').textContent = d.name; document.title = d.name; }
     renderNeeds(d.needsOwner, now, d.units, d.githubP1);
     renderUnits(d.units, now);
+    renderCostUnit(d.units && d.units.costPerUnit);
+    renderReview(d.reviewLoop, d.escapes);
     renderBuilds(d.units, now, d.github);
     renderMergeLine(d.github, d.units, d.sources);
     renderHeld(d.github, d.units, d.sources);
@@ -1499,6 +1602,7 @@
     renderTodos(d.todos);
     renderAgents(d.agents);
     renderAlerts(d.alerts, d.sources && d.sources.alerts, now);
+    renderResolved(d.alertsResolved);
     renderGuardBlocks(d.guardBlocks, now);
     const at = parseTime(d.updatedAt);
     renderLimit(d.limit, now, at);
@@ -1558,7 +1662,35 @@
     banner.hidden = !alert;
     banner.textContent = alert;
     banner.dataset.state = state;
+    const took = alive ? num(alive.lastCycleSec) : null;
+    byId('last-cycle').hidden = took === null;
+    byId('last-cycle').textContent = took === null ? '' : `last cycle ${took} s`;
+    restartProgress();
   }
+
+  // Issue 294: Restart collector, on this machine's own page only (the host takes it from loopback alone). Progress
+  // compares the host's own stamps with the ones held at the click, never this page's clock with the host's.
+  const RESTART_IDLE = 'Restart collector';
+  const restartBtn = byId('restart');
+  let restartWatch = null;
+  function restartSay(t) { restartBtn.textContent = t; restartBtn.disabled = t !== RESTART_IDLE; }
+  function restartFailed(t) { restartWatch = null; restartSay(t); setTimeout(() => restartSay(RESTART_IDLE), 5000); }
+  function restartProgress() {
+    if (!restartWatch) return;
+    if (!restartWatch.waiting && alive && alive.cycleStartedAt && alive.cycleStartedAt !== restartWatch.cycle) {
+      restartWatch.waiting = true; restartSay('waiting for first cycle');
+    }
+    if (restartWatch.waiting && data && data.updatedAt !== restartWatch.updated) { restartWatch = null; restartSay(RESTART_IDLE); }
+  }
+  restartBtn.hidden = !LOCAL;
+  restartBtn.addEventListener('click', () => {
+    if (restartWatch || !window.confirm('Restart the collector? This page reconnects by itself.')) return;
+    restartWatch = { cycle: alive ? alive.cycleStartedAt : null, updated: data ? data.updatedAt : null, waiting: false };
+    restartSay('restarting...');
+    window.fetch('restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then((r) => (r.ok ? null : r.json().then((t) => restartFailed(String(t)), () => restartFailed(`the host answered ${r.status}`))),
+        () => restartFailed('the host did not answer'));
+  });
 
   // alive.js is the --loop heartbeat (dashboard.sh). A failed load keeps the
   // last one: its own time ages it out.
@@ -1662,8 +1794,8 @@
     if (!listed && !stray && asked !== null) { listed = true; if (store((s) => s.getItem(UNSAVED_KEY)) !== null) sendLayout(); }
     const p = (project !== null && all[project]) || {};
     // An alert a project raised is that project's; one with no project is the machine's and shows on every page.
-    const alerts = Array.isArray(d.alerts) ? d.alerts.filter((a) => !a || a.project === undefined || a.project === null || a.project === project) : d.alerts;
-    return { ...p, ...d, alerts, sources: { ...(d.sources || {}), ...(p.sources || {}) } };
+    const mine = (list) => (Array.isArray(list) ? list.filter((a) => !a || a.project === undefined || a.project === null || a.project === project) : list);
+    return { ...p, ...d, alerts: mine(d.alerts), alertsResolved: mine(d.alertsResolved), sources: { ...(d.sources || {}), ...(p.sources || {}) } };
   }
   // The layout follows the owner to every PC: layout.js, served by the dashboard's host, is the copy that
   // wins at load, and every change sends the whole layout back to that host (dashboard_serve.py checks and writes it).

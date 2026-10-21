@@ -5,15 +5,17 @@
 # Seen ids live in <state>/<project>.alerts-seen; the pane appends an id once
 # the owner has been told. <state>/<project>.alerts-told holds "<fingerprint>
 # <epoch>" for each time this watcher printed one.
+# --seed: every alert id open now goes into the seen file, told now, and the script exits: run once at a switch from
+# another watcher, so the alerts the owner already knows of raise nothing (issue 292).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 SEEN=$COS_KEY.alerts-seen
 touch "$SEEN"
 poll() {
-  python3 - "$COS_DATA" "$SEEN" "$PP_PROJECT" "$COS_KEY.alerts-told" <<'EOF'
+  python3 - "$COS_DATA" "$SEEN" "$PP_PROJECT" "$COS_KEY.alerts-told" "${1:-}" <<'EOF'
 import json, re, sys, time
-data, seen_path, project, told_path = sys.argv[1:5]
+data, seen_path, project, told_path, mode = sys.argv[1:6]
 try:
     s = open(data).read()
     # A project named __proto__ sits under a computed key (dashboard.sh): JSON again here.
@@ -47,6 +49,14 @@ try:
 except OSError:
     pass
 now = int(time.time())
+if mode == '--seed':
+    # Told now too: seen alone, an alert whose stamp is a day old would be told again at the next poll.
+    with open(seen_path, 'a') as f:
+        f.write(''.join(a['id'] + '\n' for a in alerts if a['id'] not in seen))
+    with open(told_path, 'a') as f:
+        f.write(''.join(f"{split(a['id'])[0]} {now}\n" for a in alerts))
+    print('cos-watch-alerts: seeded %d open alert ids into %s' % (len(alerts), seen_path))
+    sys.exit(0)
 def is_new(i):
     k, t = split(i)
     if i not in seen and k not in newest:
@@ -66,4 +76,5 @@ for a in new:
     print(json.dumps(a))
 EOF
 }
+if [ "${1-}" = --seed ]; then poll --seed || { echo "cos-watch-alerts: cannot read $COS_DATA; nothing seeded" >&2; exit 1; }; exit 0; fi
 cos_wait 60 poll

@@ -78,5 +78,16 @@ L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/de
 check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"ponytail":false}|{"fullSuiteBeforeFinal":false}' \
   "$(jq -cS '.pluginConfigs["commandeck@commandeck"].options, .pluginConfigs["commandeck@a-old"].options' "$S" | paste -sd'|' -)"
 
+# Uninstall takes out only what pre-fill added, while it still holds setup's value: the owner's /config answers stay.
+mkdir -p "${M%/*}" && echo '{"version": 1, "entries": {}}' > "$M"
+echo '{"theme":"dark","pluginConfigs":{"commandeck@commandeck":{"options":{"builderEffort":"low"}}}}' > "$S"
+L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\", \"ponytail\": true, \"dashboardPort\": 8791}"' >/dev/null
+jq '.pluginConfigs["commandeck@commandeck"].options.dashboardPort = 9000' "$S" > "$T/x" && mv "$T/x" "$S"
+L 'il_plugin_options_out "$IL_MACHINE" "$HOME/.claude/settings.json"'
+check "uninstall takes out the option pre-fill added, keeps the owner's own and the one they changed since" \
+  '{"pluginConfigs":{"commandeck@commandeck":{"options":{"builderEffort":"low","dashboardPort":9000}}},"theme":"dark"}' "$(jq -cS . "$S")"
+echo '{"theme":"dark"}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": true}" && il_plugin_options_out "$IL_MACHINE" "$HOME/.claude/settings.json"' >/dev/null
+check "a pluginConfigs pre-fill made goes with it, and the record too" '{"theme":"dark"}:null' "$(jq -c . "$S"):$(jq -c '.entries[] | .options' "$M")"
+
 echo "plugin-option: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

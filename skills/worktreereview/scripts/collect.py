@@ -585,7 +585,7 @@ def main():
             ap.error(f'--exclude {spec}: END is not after START')
         cuts.append({'start': start, 'end': end, 'reason': 'by hand'})
 
-    proj =os.path.expanduser('~/.claude/projects/') + re.sub(r'[^A-Za-z0-9]', '-', wt)
+    proj = os.path.join(os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude'), 'projects', '') + re.sub(r'[^A-Za-z0-9]', '-', wt)
     files = sorted(f for f in glob.glob(proj + '/*.jsonl') if not a.session or os.path.basename(f).startswith(a.session))
     sessions = sorted((read_session(f) | {'id': os.path.basename(f)[:8], 'name': os.path.basename(f)[:-6], 'ledger': session_ledger(f)} for f in files), key=lambda s: s['first'])
     passes = []

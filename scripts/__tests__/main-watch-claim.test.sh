@@ -83,4 +83,50 @@ tick $((D + 400))
 sed -i 's/^task_wt-x2 .*/task_wt-x2 completed/' "$F/tasks"; tick $((D + 800))
 [ "$(posts 'wt-x2 builder stopped')" = 1 ] || fail "an item main closed was re-posted"
 
+# Issue 280: the heads-up ledger and the handled list grow for good, and both went on jq's command line: past the
+# argument limit (ARG_MAX) every tick failed with "Argument list too long" and no new note was captured again.
+python3 - "$S/main-watch" <<'PY'
+import json, sys
+d = sys.argv[1]
+led = json.load(open(d + "/heads-up.json"))
+led["pairs"].update({"old-%05d@%d" % (i, 1000 + i): "heads-up-old-%05d" % i for i in range(30000)})
+json.dump(led, open(d + "/heads-up.json", "w"))
+with open(d + "/heads-up-handled", "a") as f:
+    f.writelines("done-%05d-%s@%d\n" % (i, "x" * 30, 1000 + i) for i in range(30000))
+PY
+[ "$(wc -c < "$S/main-watch/heads-up.json")" -gt 1048576 ] && [ "$(wc -c < "$S/main-watch/heads-up-handled")" -gt 1048576 ] \
+  || fail "setup: the ledger and the handled list are not each over 1 MB"
+N=$((D + 900)); offer big $N; tick $N
+jq -e --arg p "sess-big@$((N * 1000))" '.pairs[$p] != null' "$S/main-watch/heads-up.json" >/dev/null \
+  || fail "a new heads-up was not captured with a ledger and a handled list over 1 MB"
+[ "$(posts LINE-big)" = 1 ] || fail "a new heads-up was not posted with a ledger and a handled list over 1 MB"
+
+# Issue 291: with a profile set, an offer's session is found among the profile's transcripts, not HOME's.
+mkdir -p "$T/profile/projects/-repo"; echo '{"cwd":"/repo"}' > "$T/profile/projects/-repo/s1.jsonl"
+eval "$(sed -n '/^hu_cwd() {/,/^}/p' "$SOURCE/scripts/main-watch.sh")"
+[ "$(CLAUDE_CONFIG_DIR=$T/profile hu_cwd s1)" = /repo ] || fail "issue 291: an offer's session was not found in CLAUDE_CONFIG_DIR's transcripts"
+# The installed job runs with no pane's CLAUDE_CONFIG_DIR: it reads the profile main last started under (recorded by
+# agent-startup-context.sh), or the offers and transcripts only that profile has are never seen.
+mkdir -p "$T/profile/plugins/store" "$T/profile/projects/p"; N=$((N + 60))
+jq -nc --argjson at $N '{sessions: [{id: "sess-prof", view: {kind: "offer", shownAt: ($at * 1000), line: "LINE-prof", explanation: "why"}}]}' \
+  > "$T/profile/plugins/store/cc-plugin-you-should-know_builtin-t.json"
+jq -nc --arg c "$REPO" '{cwd: $c}' > "$T/profile/projects/p/sess-prof.jsonl"
+echo "$T/profile" > "$S/claude-config-dir"
+tick $N
+[ "$(posts LINE-prof)" = 1 ] || fail "issue 291: the job, with no CLAUDE_CONFIG_DIR, did not post an offer only the recorded profile has"
+# The job runs for days: main starting under another profile while it runs must move it there, or it reads the
+# first profile's store and transcripts for good and never sees an offer only the new one has.
+mkdir -p "$T/prof-b/plugins/store" "$T/prof-b/projects/p"; N=$((N + 60))
+jq -nc --argjson at $N '{sessions: [{id: "sess-b", view: {kind: "offer", shownAt: ($at * 1000), line: "LINE-switch", explanation: "why"}}]}' \
+  > "$T/prof-b/plugins/store/cc-plugin-you-should-know_builtin-t.json"
+jq -nc --arg c "$REPO" '{cwd: $c}' > "$T/prof-b/projects/p/sess-b.jsonl"
+# mw's own environment, run so that $! is the job itself and the kill below ends it.
+(cd "$REPO" && unset CLAUDE_CONFIG_DIR && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws COMMANDECK_NOW=$N \
+  COMMANDECK_MAIN_WATCH_TICK_S=1 exec bash scripts/main-watch.sh 2>>"$T/stderr") & LOOP=$!
+sleep 2; [ "$(posts LINE-switch)" = 0 ] || fail "an offer in a profile main has not started under was posted"
+echo "$T/prof-b" > "$S/claude-config-dir"
+for _ in $(seq 100); do [ "$(posts LINE-switch)" = 0 ] || break; sleep 0.1; done
+kill "$LOOP"; wait "$LOOP" 2>/dev/null || true  # 143, the TERM it was sent
+[ "$(posts LINE-switch)" = 1 ] || fail "the running job did not follow main to another profile"
+
 echo "PASS main-watch-claim.test.sh"

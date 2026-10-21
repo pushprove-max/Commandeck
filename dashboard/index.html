@@ -15,6 +15,8 @@
   <div class="clocks">
     <span id="status" class="status" data-state="unavailable">Unavailable</span>
     <span class="clock-pair">Updated <time id="updated">never</time></span>
+    <span class="clock-pair" id="last-cycle" hidden></span>
+    <button type="button" id="restart" hidden>Restart collector</button>
     <span class="clock-pair">Now <time id="clock">--:--:-- --</time></span>
     <label class="look"><input type="checkbox" id="needs-look"> Needs a look</label>
     <button type="button" id="unhide" hidden></button>
@@ -33,6 +35,7 @@
     <p class="sub"><span id="alerts-sub"></span><span class="age"></span></p>
     <p class="card-note" hidden></p>
     <ul id="alerts-list" class="list"></ul>
+    <details id="alerts-resolved" hidden><summary></summary><ul class="list"></ul></details>
   </section>
 
   <section id="builds" class="card" data-size="2" data-sources="worktrees builder-logs orca unit-cost" data-max-age="120">
@@ -106,6 +109,8 @@
     <p class="sub"><span id="held-sub"></span><span class="age"></span></p>
     <p class="card-note" hidden></p>
     <p id="held-alarm" class="alarm" hidden></p>
+    <p id="held-flow" class="prog-note"></p>
+    <div id="held-spark"></div>
     <div id="held-list" class="miles"></div>
     <p class="legend more">P0 to P3 come from the priority labels. A Builder holds an issue its brief lists.</p>
   </section>
@@ -181,6 +186,22 @@
         </table></div>
       </details>
     </div>
+  </section>
+
+  <section id="cost-unit" class="card" data-size="1" data-sources="unit-cost">
+    <header class="card-head"><h2>Tokens per unit, 7 days</h2></header>
+    <p class="sub"><span>most costly first</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <ul id="cost-unit-list" class="list"></ul>
+  </section>
+
+  <section id="review" class="card" data-size="1" data-sources="unit-ledger">
+    <header class="card-head"><h2>Review loop, 7 days</h2></header>
+    <p class="sub"><span>most rounds first</span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <ul id="review-list" class="list"></ul>
+    <h3>Review escapes</h3>
+    <ul id="escapes-list" class="list"></ul>
   </section>
 
   <section id="guard-blocks" class="card" data-size="2" data-sources="hook-fire-log">

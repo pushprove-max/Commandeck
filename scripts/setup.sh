@@ -134,7 +134,7 @@ HOSTS=$(jq -r '.dashboard.hosts // empty' "$IL_MACHINE" 2>/dev/null || true)
 WAS=$SCOPE DASHBOARD=1 STATUS= NWRAP= GCLAUDE= GRULES= SERENA_AUTO=
 [ "$(jq -r '.dashboard' "$IL_PROJECT" 2>/dev/null)" != false ] || DASHBOARD=
 # No answer and no earlier one: on when the owner already has the serena server.
-[ -n "$SERENA" ] || ! jq -e --arg p "$PP_MAIN" '.mcpServers.serena // .projects[$p].mcpServers.serena' "$HOME/.claude.json" >/dev/null 2>&1 || { SERENA=true SERENA_AUTO=1; }
+[ -n "$SERENA" ] || ! jq -e --arg p "$PP_MAIN" '.mcpServers.serena // .projects[$p].mcpServers.serena' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" >/dev/null 2>&1 || { SERENA=true SERENA_AUTO=1; }
 if [ "$QUESTIONS" = begin ]; then
   # What the skill needs to know before its first question: what is here already, and what each answer could not do.
   echo "setup: requirements met. Found in $PP_MAIN:"
@@ -161,7 +161,7 @@ if [ "$QUESTIONS" = begin ]; then
     else echo "  Codex model: not found, so ask for its id (--codex-model codex-reviewer=<id>): $M"; fi
   fi
   # The context window: a model setting that names a 1M model ends in [1m] (the nearest settings file wins).
-  CM=${ANTHROPIC_MODEL:-$(for f in "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json"; do jq -r '.model // empty' "$f" 2>/dev/null; done | head -1)}
+  CM=${ANTHROPIC_MODEL:-$(for f in "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do jq -r '.model // empty' "$f" 2>/dev/null; done | head -1)}
   case $CM in
     *'[1m]') echo "  context window: 1M (the model setting is $CM): preselect Larger" ;;
     '') echo "  context window: no model setting here; a model id that ends in [1m] (yours, or what /model shows) is a 1M window, else 200K" ;;
@@ -320,14 +320,14 @@ fi
 COMMANDECK_ROUTING=$RT COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
 [ "$PROFILE" != claude-openai ] || echo "setup: $(pp_codex_route)"
 [ -L "$IL_LINK" ] || [ ! -e "$IL_LINK" ] || die "$IL_LINK is not a link; setup keeps a link to the plugin there. Move it aside. Nothing was changed"
-for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "$HOME/.claude/settings.json" "$IL_CODEX/hooks.json"; do
+for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$IL_CODEX/hooks.json"; do
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
 done
 
 # --- the manifest, before the first change ---
 # At project scope the rules go where git never looks (IL_STATE): they name this machine's plugin folder.
 SETTINGS=$PP_MAIN/.claude/settings.local.json SM=$IL_PROJECT
-[ "$SCOPE" = project ] || { SETTINGS=$HOME/.claude/settings.json; SM=$IL_MACHINE; }
+[ "$SCOPE" = project ] || { SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json; SM=$IL_MACHINE; }
 WATCH_JOB=$(bash "$HERE/main-watch.sh" --job-file) DASH_JOB=$(bash "$HERE/dashboard.sh" --job-file)
 il_record "$IL_PROJECT" own "$IL_CONFIG" "$WATCH_JOB"
 # A link setup made and no manifest records (one left by a lost manifest) is made again, and recorded as new.
@@ -347,23 +347,21 @@ fi
 case $GCLAUDE$GRULES in *install*|*block*|*merge*) il_record "$IL_MACHINE" merge "$IL_GLOBAL" ;; esac
 # The ponytail skill, unless the owner said no. A skill of that name the owner has, or the whole
 # add-on, is the owner's: only a copy an earlier setup made is written again, or taken out on no.
-PONY=$HOME/.claude/skills/ponytail PONY_OURS=
+PONY=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/ponytail PONY_OURS=
 if il_has "$IL_MACHINE" "$PONY/SKILL.md" || { [ ! -e "$PONY" ] && [ ! -L "$PONY" ] \
-  && ! jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1; }; then
+  && ! jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; }; then
   PONY_OURS=1; [ "$PONYTAIL" = false ] || il_record "$IL_MACHINE" own "$PONY/SKILL.md" "$PONY/LICENSE"
 fi
 # No --addons answer: every add-on, each run, so each is updated to its latest. The ponytail plugin only when the
 # owner has it on and wants ponytail: beside a ponytail skill it would load the same rules twice.
 if [ -z "$ADDONS_SET" ]; then
-  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != false ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "$HOME/.claude/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
+  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != false ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
   # Installing serena turns its hooks on, as --addons serena does, unless an earlier or given answer says otherwise.
   SERENA=${SERENA:-true}
 fi
 if [ -n "$STATUS" ]; then
-  il_record "$IL_MACHINE" merge "$HOME/.claude/settings.json"
-  # The first status line setup replaces is the owner's; a second answer must not take the first for it.
-  jq -e 'has("statusLine")' "$IL_MACHINE" >/dev/null \
-    || il_set "$IL_MACHINE" --argjson was "$(jq -c '.statusLine // null' "$HOME/.claude/settings.json" 2>/dev/null || echo null)" '.statusLine = {was: $was}'
+  il_record "$IL_MACHINE" merge "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  il_status_was "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 fi
 il_set "$IL_PROJECT" --arg p "$PP_MAIN" --arg s "$SCOPE" --arg r "$IL_ROOT" --arg d "${DASHBOARD:-0}" '. + {project: $p, scope: $s, root: $r, dashboard: ($d == "1")}'
 
@@ -407,7 +405,7 @@ allow_out() { ! jq -e --arg p "$2" '(.entries[$p].added // []) != []' "$1" >/dev
 # machine's file keeps them while another project is set up at machine scope.
 for f in "$PSET" "$PP_MAIN/.claude/settings.local.json"; do [ "$f" = "$SETTINGS" ] || allow_out "$IL_PROJECT" "$f"; done
 OTHERS=$(il_projects | while IFS= read -r m; do [ "$m" = "$IL_PROJECT" ] || jq -r 'select(.scope == "machine") | .project' "$m" 2>/dev/null; done || true)
-[ "$SCOPE" = machine ] || [ -n "$OTHERS" ] || allow_out "$IL_MACHINE" "$HOME/.claude/settings.json"
+[ "$SCOPE" = machine ] || [ -n "$OTHERS" ] || while IFS= read -r f; do [ ! -e "$f" ] || allow_out "$IL_MACHINE" "$f"; done < <(il_profile_files "$IL_MACHINE")
 il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || echo "permissions: moved from $WAS scope to $SCOPE scope ($SETTINGS)"
 il_workflows "$IL_PROJECT" "$PSET"
@@ -415,7 +413,7 @@ il_workflows "$IL_PROJECT" "$PSET"
 # Issue 245: an option the owner set in /config beats this setup's answer, here and in every reader (pp_option).
 CACHE_ON=$(pp_config_option promptCacheTtl || echo "$CACHE") RCACHE_ON=$(pp_config_option relayPromptCacheTtl || echo "$RCACHE")
 [ "$CACHE_ON" != 5m ] || il_cache_ttl "$IL_PROJECT" "$PSET"
-il_auto_mode "$IL_MACHINE" "$HOME/.claude/settings.json" "$AUTO_DO"
+il_auto_mode "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
 il_lines "$IL_PROJECT" "$IL_EXCLUDE" "${IL_STATE[@]}"
@@ -470,11 +468,7 @@ il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc 
    closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony != "false"),
    promptCacheTtl: $cache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
   | with_entries(select(.value != ""))')"
-if [ -n "$STATUS" ]; then
-  ST=$(il_cat "$HOME/.claude/settings.json" 2>/dev/null) || ST=; [ -n "${ST//[[:space:]]/}" ] || ST='{}'
-  ST=$(jq --arg c "$STATUS" '.statusLine = {type: "command", command: $c}' <<<"$ST") && il_write "$HOME/.claude/settings.json" <<<"$ST"
-  il_set "$IL_MACHINE" --argjson set "$(jq -c .statusLine <<<"$ST")" '.statusLine.set = $set'
-fi
+[ -z "$STATUS" ] || il_status_set "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$STATUS"
 
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
@@ -630,7 +624,7 @@ while IFS=$'\t' read -r name cmd cost; do
   case $INSTALLED in *" $name "*) continue ;; esac
   printf '  %-17s %s\n  %-17s   cost: %s\n' "$name" "$cmd" '' "$cost"
 done < "$IL_ROOT/config/addons.tsv"
-ST=$(jq -c '.statusLine // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+ST=$(jq -c '.statusLine // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)
 if [ -n "$STATUS" ]; then echo "Status line: set to ${ST}; the one before it comes back at uninstall."
 else echo "Status line: left as it is (${ST:-none set}). To set one: bash $(printf '%q' "$HERE")/setup.sh --status-line '<command>'; the one before it is recorded and comes back at uninstall."; fi
 echo

@@ -15,7 +15,7 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 set -uo pipefail
 HERE=$(dirname "${BASH_SOURCE[0]}")
 . "$HERE/paths.sh" || exit 1
-PROJECTS=${COMMANDECK_CLAUDE_PROJECTS:-$HOME/.claude/projects}
+PROJECTS=${COMMANDECK_CLAUDE_PROJECTS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects}
 FILE=$PP_MAIN/.claude/metrics/subagent-usage.jsonl
 # Every transcript of the main checkout and its worktrees, "mtime<TAB>path". A pattern that matched nothing is no
 # file, and stat skips it.

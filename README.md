@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.23.0-111111?style=flat-square" alt="Version 0.23.0">
+  <img src="https://img.shields.io/badge/version-0.24.0-111111?style=flat-square" alt="Version 0.24.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -835,29 +835,41 @@ bash "$PLUGIN/scripts/dashboard.sh" --job-file
 bash "$PLUGIN/scripts/dashboard.sh" --status
 ```
 
+The restart command restarts the collector service, as the page's "Restart collector" button does. The import
+command takes the limit history, panel layout and cleared builds from another collector's dashboard folder, when a
+project moves to this one:
+
+```bash
+bash "$PLUGIN/scripts/dashboard.sh" --restart
+bash "$PLUGIN/scripts/dashboard.sh" --import <folder>
+```
+
 | Panel | Shows |
 |---|---|
-| Alerts | Current project and machine warnings, with source freshness. |
+| Alerts | Current project and machine warnings, with source freshness; the last 24 hours' cleared alerts, folded. |
 | Builds in progress | Active builds and their progress. |
 | Needs the owner | Open decisions, questions and high-priority findings. |
 | Main | Branch state against its remote and recent commits. |
 | Units | Planning, Building, In review, Fixing and Waiting on main, with seat activity and cost. |
 | Merge line | Open GitHub pull requests and their checks. |
-| Who holds what | GitHub issues grouped by milestone and the unit holding each. |
+| Who holds what | GitHub issues grouped by milestone and the unit holding each; issues opened and closed in 24 hours, and a 7-day sparkline. |
 | Next push | Local main commits ahead of origin/main and related checks. |
 | 7-day limit | Account usage windows where available, history and list-price spend; API billing uses a spend view. |
 | Main's to-do list | The project's `todo/main-todo.md`. |
 | Host | Machine load and swap readings. |
 | Tokens per role, 7 days | Input/output totals across roles and models. |
+| Tokens per unit, 7 days | Each unit's cost, Claude and Codex apart, with its stages. |
+| Review loop, 7 days | Merged units' review rounds, most first, and the issues tagged as review escapes. |
 | Recent guard blocks | Recent blocking hook events and counts. |
 | Chief of Staff's inbox | Relay messages for the project. |
 | Main's background agents | Main's running helper agents. |
 
 Panels can be reordered, resized, folded and hidden. Needs a look filters for
 warnings and pending work. Layouts are kept per project in browser storage
-and saved on the dashboard host, so another browser can pick them up. These
-layout writes are the page's supported server mutation; it does not merge
-branches or answer decisions.
+and saved on the dashboard host, so another browser can pick them up. Besides
+these layout writes, only a page on the dashboard's own machine can change
+anything: answer a decision, clear an unsent answer, or restart the collector.
+It does not merge branches.
 
 At phone width, panels use one column with bottom navigation and stage chips.
 To reach the page from another device, choose network access in setup, or
@@ -1026,7 +1038,7 @@ Local records can contain code, prompts, paths and your decisions:
 | Location | Stored data |
 |---|---|
 | `.claude/briefs/` | Batch briefs, rendered Builder instructions, evidence and review rounds. |
-| `.claude/metrics/` | Decisions, seat events and helper usage. |
+| `.claude/metrics/` | Decisions, seat events, the unit ledger and helper usage. |
 | `~/.commandeck/scratch/` | Per-project orchestration and temporary state. |
 | `~/.commandeck/builds/`, `~/.commandeck/reviews/` | Finished-build records and HTML reviews. |
 | `~/.commandeck/dashboard/` | Collected snapshots, usage caches/history, project registrations and saved layouts. |

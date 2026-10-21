@@ -56,10 +56,21 @@ MAIL_S=${COMMANDECK_MAIN_WATCH_MAIL_S:-120}
 SCRATCH=$PP_SCRATCH
 ST=$SCRATCH/main-watch
 WS=$PP_WORKSPACES
+# Claude Code's folder (heads-up offers, transcripts) is the one main last started under, as agent-startup-context.sh
+# records it (issue 291, as dashboard.sh reads it): the job runs with no pane's CLAUDE_CONFIG_DIR. With no record yet,
+# the one the install ran under (KEEP_ENV). Read again each tick: main may start under another profile while this job runs.
+claude_dir() {
+  local d
+  if d=$(cat "$SCRATCH/claude-config-dir" 2>/dev/null); then
+    if [ -n "$d" ]; then export CLAUDE_CONFIG_DIR=$d; else unset CLAUDE_CONFIG_DIR; fi
+  fi
+  HU_STORE=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/store
+}
+claude_dir
 
 # The job has no shell of its own: where the install was told the records are
 # (paths.sh reads these) goes into the job, or it watches the default folders.
-KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME)
+KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME CLAUDE_CONFIG_DIR)
 # others_job -- the job is named after the checkout's folder alone. Prints the
 # other checkout, still on disk, that the job file of this name watches; its
 # job is neither replaced nor removed from here.
@@ -193,9 +204,11 @@ post() {
 
 # builder_card <unit> <launched> -- the Builder's card from the rows of its event log since that launch.
 builder_card() {
+  # One read of the session record from where the last tick stopped (issue 299); its state is in $PP_SCRATCH.
+  pp_session_summary "$WS/$1"
   jq -cR --argjson la "$2" 'fromjson? | objects | select((try (.ts | sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) as $t | $t == null or $t >= $la)' "$WS/$1/.claude/builder-events.jsonl" 2>/dev/null \
-    | jq -cs --argjson now "$NOW" --argjson sessionAt "$(pp_session_log_at "$WS/$1")" --argjson bgOpen "$(pp_session_bg_open "$WS/$1")" \
-      --argjson cache "$(pp_session_cache "$WS/$1")" --argjson tick "$TICK" -f "$HERE/dashboard_builders.jq" 2>/dev/null
+    | jq -cs --argjson now "$NOW" --argjson sessionAt "$PP_SESSION_AT" --argjson bgOpen "$PP_SESSION_BG" \
+      --argjson cache "$PP_SESSION_CACHE" --argjson tick "$TICK" -f "$HERE/dashboard_builders.jq" 2>/dev/null
 }
 # helper_out <unit> <launched> -- a helper or a review pass the Builder started has not finished: a helper
 # that logged a row within STALL_S, or a pass started within HOLD_S. A Builder that ended its turn to wait on
@@ -565,7 +578,7 @@ grew_at() {
   # An unanswered read keeps the old cursor, so it never reads as growth.
   cur=$(pane_cursor "$2" "${old:-0}")
   cur=${cur:-$old}
-  log=$HOME/.claude/projects/$(printf '%s' "$3" | sed 's#/#-#g')/$6.jsonl
+  log=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$3" | sed 's#/#-#g')/$6.jsonl
   if [ -z "$6" ] || [ ! -f "$log" ]; then
     # The read-verdict lookup is the costly read: once per seat, then again only
     # for a stall candidate, in case the seat moved to a new session.
@@ -883,7 +896,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
 # offer overwrites `view`, so capture comes first and is never conditional on a
 # run, a sender or a send. Offers with the same line within HU_WINDOW_MS of the
 # group's first one are one note naming every session.
-HU_STORE=$HOME/.claude/plugins/store
+# HU_STORE is the store under the config folder claude_dir() read this tick.
 HU_LEDGER=$ST/heads-up.json
 # The archive is this project's own: another project's watcher on the same
 # machine keeps its own, so neither takes the other's archived offers as new.
@@ -899,7 +912,7 @@ HU_WINDOW_MS=300000
 # reversed. Empty when not exactly one transcript names one.
 hu_cwd() {
   local t
-  t=$(ls "$HOME"/.claude/projects/*/"$1".jsonl 2>/dev/null)
+  t=$(ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null)
   [ -n "$t" ] && [ "$(wc -l <<<"$t")" = 1 ] || return 0
   head -200 "$t" | jq -rR 'fromjson? | select(type == "object" and (.cwd | type) == "string" and .cwd != "") | .cwd' 2>/dev/null | head -1
 }
@@ -918,8 +931,10 @@ heads_up_capture() {
   # since the store may have replaced it by now.
   # ponytail: reads the whole archive every tick; keep an offset if it grows large.
   # A handled note never comes back from the archive, ledger or no ledger.
-  offers=$(jq -cR --argjson led "$led" --arg done "$(cat "$HU_DONE" 2>/dev/null)" '
-    ($done | split("\n") | map({(.): 1}) | add // {}) as $d
+  # Files, not --arg/--argjson: the ledger and the done list grow without a bound, and past the 1 MB argument limit
+  # (ARG_MAX) jq would fail every tick (issue 280).
+  offers=$(jq -cR --slurpfile leda <(printf '%s' "$led") --rawfile done <(cat "$HU_DONE" 2>/dev/null) '
+    $leda[0] as $led | ($done | split("\n") | map({(.): 1}) | add // {}) as $d
     | fromjson? | select(type == "object" and (.id | type) == "string")
     | select($led.pairs["\(.id)@\(.shownAt)"] == null and $d["\(.id)@\(.shownAt)"] == null) | {id, at: .shownAt, line, explanation, cwd, archived: true}' "$HU_LOG" 2>/dev/null)
   hu_take "$offers" || return 0
@@ -945,7 +960,7 @@ hu_take() {
     | jq -Rsc 'split("\n") | map(select(. != ""))')
   # What main already handled, by (session, line, explanation), from the archive:
   # the ledger that would have matched a repeat of it may be gone with the temp folder.
-  htext=$(jq -cRn --arg done "$(cat "$HU_DONE" 2>/dev/null)" '
+  htext=$(jq -cRn --rawfile done <(cat "$HU_DONE" 2>/dev/null) '
     ($done | split("\n") | map({(.): 1}) | add // {}) as $d
     | [inputs | fromjson? | select(type == "object" and $d["\(.id)@\(.shownAt)"] != null) | {([.id, .line, .explanation] | tojson): 1}] | add // {}' "$HU_LOG" 2>/dev/null); [ -n "$htext" ] || htext='{}'
   while IFS= read -r o; do
@@ -958,7 +973,7 @@ hu_take() {
     # Still shown in the store after the temp folder lost the ledger.
     grep -qxF -- "$p" "$HU_DONE" 2>/dev/null && continue
     # The same session showing the same text again is handled with it.
-    if jq -e --argjson h "$htext" '$h[[.id, .line, .explanation] | tojson] != null' >/dev/null 2>&1 <<<"$o"; then
+    if jq -e --slurpfile ha <(printf '%s' "$htext") '$ha[0][[.id, .line, .explanation] | tojson] != null' >/dev/null 2>&1 <<<"$o"; then
       echo "$p" >> "$HU_DONE"; continue
     fi
     # An archived record keeps the checkout it was captured with; only a missing
@@ -976,8 +991,8 @@ hu_take() {
     # A session with no known checkout shares a note with nobody: a group waits
     # for every member's checkout, so one unplaced session held the others' note
     # back, for good when it never resolved.
-    next=$(jq -c --argjson r "$rec" --argjson w "$HU_WINDOW_MS" --argjson sent "${sent:-[]}" '
-      (first(.groups | to_entries[] | select(.key as $k | .value.line == $r.line
+    next=$(jq -c --argjson r "$rec" --argjson w "$HU_WINDOW_MS" --slurpfile senta <(printf '%s' "${sent:-[]}") '
+      $senta[0] as $sent | (first(.groups | to_entries[] | select(.key as $k | .value.line == $r.line
           and (any(.value.members[]; .id == $r.id and .explanation == $r.explanation)
                or ((any($sent[]; . == $k) | not) and $r.cwd != null and all(.value.members[]; .cwd != null)
                  and (((.value.first - $r.shownAt) | if . < 0 then -. else . end) < $w)))) | .key)
@@ -1101,6 +1116,7 @@ heads_up_post() {
 }
 
 tick() {
+  claude_dir
   # Before the run lookup: a leak is reaped whether or not main can be told.
   reap_brokers
   heads_up_capture

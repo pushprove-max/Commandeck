@@ -40,10 +40,10 @@ if [ "$EVENT" = UserPromptSubmit ] && [ -n "$CMD" ]; then
     *:*|add-dir|agents|bug|clear|compact|config|context|cost|doctor|effort|exit|export|fast|help|hooks|ide|init|login|logout|loop|mcp|memory|model|permissions|plan|plugin|resume|review|rewind|status|statusline|usage|vim) exit 0 ;;
   esac
   P=${CLAUDE_PROJECT_DIR:-$PWD}
-  for d in "$(dirname "${BASH_SOURCE[0]}")/../skills/$CMD" "$HOME/.claude/skills/$CMD" "$HOME/.claude/commands/$CMD.md" "$P/.claude/skills/$CMD" "$P/.claude/commands/$CMD.md"; do
+  for d in "$(dirname "${BASH_SOURCE[0]}")/../skills/$CMD" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/$CMD" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/commands/$CMD.md" "$P/.claude/skills/$CMD" "$P/.claude/commands/$CMD.md"; do
     [ ! -e "$d" ] || exit 0
   done
-  ! compgen -G "$HOME/.claude/plugins/cache/*/*/*/skills/$CMD" >/dev/null && ! compgen -G "$HOME/.claude/plugins/cache/*/*/*/commands/$CMD.md" >/dev/null || exit 0
+  ! compgen -G "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/*/*/*/skills/$CMD" >/dev/null && ! compgen -G "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/*/*/*/commands/$CMD.md" >/dev/null || exit 0
 fi
 
 # The event's arrival time, read before anything that can wait on the ledger

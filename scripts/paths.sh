@@ -135,7 +135,7 @@ print(names[0])') && rc=0 || rc=$?
 # pp_session_log <worktree> -- the worktree's newest Claude session record, or nothing.
 # pp_session_log_at <worktree> -- the epoch that record was last written, or null: a seat in one long model
 # turn writes it while its event log shows nothing, so the dashboard and main-watch.sh both read it.
-pp_session_log() { ls -t "$HOME/.claude/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$1")"/*.jsonl 2>/dev/null | head -1; }
+pp_session_log() { ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$1")"/*.jsonl 2>/dev/null | head -1; }
 pp_session_log_at() {
   local f
   f=$(pp_session_log "$1")
@@ -186,6 +186,113 @@ pp_session_cache() {
          at: ([$rows[:$i][] | select(.type == "user" and .timestamp != null)] | last | .timestamp | if . then ep else null end),
          ended: ($rows | last | .type == "assistant" and .message.stop_reason == "end_turn")}
       end' 2>/dev/null || echo null
+}
+
+# pp_session_summary <worktree> -- what pp_session_log, pp_session_log_at, pp_session_bg_open and pp_session_cache give,
+# in one read, for a reader that asks every cycle (issue 299): sets PP_SESSION_LOG (the record, or empty), PP_SESSION_AT,
+# PP_SESSION_BG and PP_SESSION_CACHE (each null with no record). The record is read from the offset the last call
+# stopped at; the jobs started and ended and the cache's running values are kept per record path in
+# ${CACHE:-$PP_SCRATCH}/session-summary.json, so a job opened hours ago still counts. A record that shrank is read from
+# its start, a path no longer there drops, a state that does not parse is a cold start, and a half-written last line
+# waits for the next call. Sets globals: call it in the current shell.
+# shortcut: the cache values come from the whole record, not pp_session_cache's last 400 lines, so a cache write or a
+# request start more than 400 lines back has its value here and null there; drop the window there if the two must agree.
+pp_session_summary() {
+  PP_SESSION_LOG=$(pp_session_log "$1") PP_SESSION_AT=null PP_SESSION_BG=null PP_SESSION_CACHE=null
+  [ -n "$PP_SESSION_LOG" ] || return 0
+  local out
+  out=$(python3 - "${CACHE:-$PP_SCRATCH}/session-summary.json" "$PP_SESSION_LOG" <<'PY'
+import calendar, json, os, re, sys, time
+state_path, path = sys.argv[1:3]
+try:
+    with open(state_path) as f:
+        held = json.load(f)
+    if held["version"] != 1 or not isinstance(held["records"], dict):
+        raise ValueError("another version")
+except (OSError, ValueError, KeyError, TypeError):
+    held = {"version": 1, "records": {}}
+records = {p: e for p, e in held["records"].items() if os.path.exists(p)}
+# c: the cache's running values, as pp_session_cache reads them: ttl of the newest reply that wrote cache; the newest
+# reply with usage (ctx, at); the newest assistant row's key and the user row before its first block; the newest
+# user row's time; whether the newest assistant or user row is an end_turn reply.
+COLD = {"ttl": None, "ctx": None, "at": None, "ak": None, "aat": None, "uat": None, "ended": False}
+try:
+    e = records[path]
+    off, started, ended, c = e["off"], set(e["started"]), set(e["ended"]), dict(COLD, **e["cache"])
+    if not isinstance(off, int):
+        raise TypeError("offset")
+except (KeyError, TypeError, ValueError, AttributeError):
+    off, started, ended, c = 0, set(), set(), dict(COLD)
+alt = lambda *v: next((x for x in v if x is not None and x is not False), None)  # jq's //
+def ep(s):
+    return calendar.timegm(time.strptime(re.sub(r"\.[0-9]+", "", s, count=1), "%Y-%m-%dT%H:%M:%SZ"))
+try:
+    st = os.stat(path)
+    if st.st_size < off:
+        off, started, ended, c = 0, set(), set(), dict(COLD)
+    with open(path, "rb") as f:
+        f.seek(off)
+        for line in f:
+            if not line.endswith(b"\n"):
+                break
+            off += len(line)
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(r, dict):
+                continue
+            m = r.get("message") if isinstance(r.get("message"), dict) else {}
+            t = r.get("toolUseResult") if isinstance(r.get("toolUseResult"), dict) else {}
+            if b"backgroundTaskId" in line and isinstance(t.get("backgroundTaskId"), str):
+                started.add(t["backgroundTaskId"])
+            if b"<task-notification>" in line:
+                ended.update(x.decode() for x in re.findall(rb"<task-id>([A-Za-z0-9_-]*)</task-id>", line))
+            # A TaskStop sends no notification: its successful result ends the job, as read-verdict.sh reads it.
+            if b"Successfully stopped" in line and isinstance(t.get("task_id"), str):
+                body = m.get("content")
+                if "Successfully stopped" in (body if isinstance(body, str) else json.dumps(body)):
+                    ended.add(t["task_id"])
+            if r.get("isSidechain") is True or r.get("type") not in ("assistant", "user"):
+                continue
+            if r["type"] == "user":
+                c["ended"] = False
+                if r.get("timestamp") is not None:
+                    c["uat"] = r["timestamp"]
+                continue
+            k = alt(m.get("id"), r.get("uuid"), r.get("timestamp"))
+            if k != c["ak"]:
+                c["ak"], c["aat"] = k, c["uat"]
+            c["ended"] = m.get("stop_reason") == "end_turn"
+            u = m.get("usage")
+            if u is None:
+                continue
+            u = u if isinstance(u, dict) else {}
+            if (u.get("cache_creation_input_tokens") or 0) > 0:
+                w = u.get("cache_creation") if isinstance(u.get("cache_creation"), dict) else {}
+                c["ttl"] = 3600 if (w.get("ephemeral_1h_input_tokens") or 0) > 0 else 300 if (w.get("ephemeral_5m_input_tokens") or 0) > 0 else None
+            c["at"] = c["aat"]
+            c["ctx"] = (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0)
+except OSError:
+    print("null null null")
+    sys.exit(0)
+records[path] = {"off": off, "started": sorted(started), "ended": sorted(ended), "cache": c}
+try:
+    tmp = f"{state_path}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump({"version": 1, "records": records}, f)
+    os.replace(tmp, state_path)
+except OSError:
+    pass
+try:
+    at = None if c["at"] is None else ep(c["at"])
+    cache = None if c["ttl"] is None or c["ctx"] is None else {"ttl": c["ttl"], "ctx": c["ctx"], "at": at, "ended": c["ended"]}
+except (ValueError, TypeError):
+    cache = None
+print(int(st.st_mtime), len(started - ended), json.dumps(cache, separators=(",", ":")))
+PY
+  ) || out='null null null'
+  read -r PP_SESSION_AT PP_SESSION_BG PP_SESSION_CACHE <<<"$out"
 }
 
 # pp_waited_on <handle> [now] [turn text] -- a `seat.sh wait` watches this pane:

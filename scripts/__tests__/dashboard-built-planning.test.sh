@@ -109,6 +109,15 @@ m = []
 d.codex_requests(sys.argv[1], sys.argv[2], 0, 2**40, m)
 print(bool(m) and "true")' "$T/locked/home/sessions" "$T/seat-cache/x.json" 2>&1)"
 chmod 755 "$T/locked"
+# A request cache is its transcript root's: after a profile switch, the other profile's rows never count.
+mkdir -p "$T/prof-a/x" "$T/prof-b" "$T/cx-a/2026/10/17" "$T/cx-b" "$T/prof-cache"
+crow r-a $((NOW - 100)) > "$T/prof-a/x/s.jsonl"; xrow x-a $((NOW - 100)) > "$T/cx-a/2026/10/17/a.jsonl"
+check "a request cache another transcript root wrote holds none of its rows for this one" '[1,0,1,0]' "$(cd "$SOURCE/scripts" && python3 -c '
+import json, sys, dashboard_limit as d
+t, c, now = sys.argv[1], sys.argv[2], int(sys.argv[3])
+print(json.dumps([len(d.requests(t + "/prof-a", c + "/r.json", 0, now)), len(d.requests(t + "/prof-b", c + "/r.json", 0, now)),
+                  len(d.codex_requests(t + "/cx-a", c + "/x.json", 0, now)), len(d.codex_requests(t + "/cx-b", c + "/x.json", 0, now))]).replace(" ", ""))' \
+  "$T" "$T/prof-cache" "$NOW" 2>&1)"
 # Issue 242: the Builder took over the worktree its plan seat cut (plan-worktree-close.sh --adopt), so the plan's and the
 # build's worktree are one. Every request landed in planning; each now goes to the stage it was made in.
 OW=$WS/one-wt OP=$T/one-projects OC=$T/one-codex/2026/10/17; mkdir -p "$OP/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$OW")" "$OC"

@@ -242,7 +242,7 @@ worker_state() {
   local candidates=()
   if [ -n "$wt" ] && { [ "$agent" = claude ] || [ -z "$agent" ]; }; then
     # Claude Code's own folder name: every non-alphanumeric byte becomes "-" (pp_slug; paths.sh is not sourced yet).
-    for f in "$HOME/.claude/projects/$(printf '%s' "$wt" | tr -c 'A-Za-z0-9' '-')"/*.jsonl; do
+    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$wt" | tr -c 'A-Za-z0-9' '-')"/*.jsonl; do
       [ -f "$f" ] && candidates+=("claude $f")
     done
   fi
@@ -334,7 +334,7 @@ worker_state() {
 
 # The session id of each top-level Claude process in a pane. Orca exports the
 # pane's handle into its shell, so the process carries it, and Claude names its
-# log after the id in ~/.claude/sessions/<pid>.json. A claude started by that
+# log after the id in <config folder>/sessions/<pid>.json (CLAUDE_CONFIG_DIR, else ~/.claude). A claude started by that
 # claude inherits the handle too, so only top-level processes count.
 pane_sessions() { # handle
   local p penv
@@ -344,7 +344,7 @@ pane_sessions() { # handle
     else penv=$(ps -Eww -o command= -p "$p" 2>/dev/null | tr ' ' '\n'); fi
     grep -qxF "ORCA_TERMINAL_HANDLE=$1" <<<"$penv" || continue
     claude_ancestor "$p" && continue
-    jq -r '.sessionId // empty' "$HOME/.claude/sessions/$p.json" 2>/dev/null
+    jq -r '.sessionId // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$p.json" 2>/dev/null
   done | sort -u
 }
 
@@ -665,7 +665,7 @@ if [ -n "$WTP" ] && { [ "$AGENT" = codex ] || [ -z "$AGENT" ]; }; then
   fi
 fi
 if [ -n "$WTP" ] && { [ "$AGENT" = claude ] || [ -z "$AGENT" ]; } && [ "$LOG_FOUND" -eq 0 ]; then
-  PROJ=$HOME/.claude/projects/$(pp_slug "$WTP")
+  PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "$WTP")
   # TIE THE HANDLE TO ITS OWN SESSION: the pane's live Claude process
   # first, then the seat record. Newest-log-in-the-worktree handed a sibling
   # pane's verdict to main on 2026-09-23.

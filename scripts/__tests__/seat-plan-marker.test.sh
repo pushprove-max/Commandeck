@@ -56,7 +56,13 @@ check "read-verdict.sh --seat prints the verdict collect closed on, then that re
   "$(cd "$PROJ" && env -u COMMANDECK_SCRATCH -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR bash "$REAL/scripts/read-verdict.sh" --seat pu plan-author 2>&1 | { read -r v; printf '%s:%s' "$v" "$(cat)"; })"
 # A silent read-only seat is relaunched from its record, which the relaunch writes again: the marker must survive it.
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
-srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches" 0 $?
+# Issue 291: under an account profile (CLAUDE_CONFIG_DIR) Claude Code keeps .claude.json in that folder, not in HOME.
+mkdir -p "$T/prof-off" "$T/prof-on"
+jq -n --arg p "$PROJ" '{projects: {($p): {disabledMcpServers: ["serena"]}}}' | tee "$T/prof-off/.claude.json" > "$HOME/.claude.json"
+PROFILE=$T/prof-off srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "issue 291: a profile's .claude.json that disables a needed server refuses the launch" "2:1" "$?:$(grep -c 'BLOCKED: serena disabled' "$T/out")"
+PROFILE=$T/prof-on srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches; under a profile HOME's .claude.json is not read" 0 $?
+rm "$HOME/.claude.json"
 JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt)
 printf 'Reading the plan.\nesc to interrupt\n' > "$T/screen"; echo PLAN-DONE > "$T/on-create"
 COMMANDECK_SEAT_SILENT_SECONDS=1 srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 20 >"$T/out" 2>&1

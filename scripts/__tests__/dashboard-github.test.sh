@@ -36,7 +36,8 @@ case "\$1 \$2" in
       {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"},
       {"__typename":"CheckRun","name":"e2e","status":"IN_PROGRESS","conclusion":""},
       {"__typename":"StatusContext","context":"deploy","state":"PENDING"}]}]' ;;
-  "issue list") echo '[{"number":12,"title":"Export times out","url":"https://github.com/example/demo/issues/12","createdAt":"2026-10-01T00:00:00Z",
+  "issue list") case "\$*" in *created:*) cat "$T/gh-created.json"; exit ;; *closed:*) cat "$T/gh-closed.json"; exit ;; esac
+    echo '[{"number":12,"title":"Export times out","url":"https://github.com/example/demo/issues/12","createdAt":"2026-10-01T00:00:00Z",
     "labels":[{"name":"bug"},{"name":"P2"},{"name":"P1"}],"milestone":{"title":"2.4 Exports"}}]' ;;
   "api repos/{owner}/{repo}/milestones?state=open&per_page=100") echo '[{"title":"2.4 Exports","due_on":"2026-10-17T07:00:00Z","open_issues":5,"closed_issues":7}]' ;;
   "run list") echo '[{"conclusion":"success","status":"completed","createdAt":"2026-10-14T10:00:00Z","workflowName":"ci"}]' ;;
@@ -45,12 +46,15 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/orca-ide"
 chmod +x "$BIN"/*
+# Issue 273's reads: issues opened 2 h, 30 h and 3 days ago, one closed an hour ago.
+jq -cn '[2, 30, 72] | map({number: ., createdAt: (now - . * 3600 | todate), closedAt: null})' > "$T/gh-created.json"
+jq -cn '[{number: 9, createdAt: "1999-01-01T00:00:00Z", closedAt: (now - 3600 | todate)}]' > "$T/gh-closed.json"
 
 # collect <out dir> -- one project's collect, as dashboard.sh --project runs it; prints its exit code. $WS, when
 # set, is the project's workspace folder.
 collect() {
   env -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_HOOK_FIRE_LOG -u CODEX_HOME PATH="$BIN:$PATH" ${WS:+COMMANDECK_WORKSPACES=$WS} \
-    COMMANDECK_DASHBOARD_DIR="$1" COMMANDECK_MAIN="$MAIN" DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" --project "$1/run" >"$1.log" 2>&1
+    COMMANDECK_DASHBOARD_DIR="$1" COMMANDECK_MAIN="$MAIN" DASH_NOW="${DNOW:-$(date +%s)}" bash "$SOURCE/scripts/dashboard.sh" --project "$1/run" >"$1.log" 2>&1
   echo $?
 }
 j() { jq -c "first(.[]) | $2" "$1/run/project.json" 2>&1; }
@@ -68,6 +72,17 @@ check "the last CI run is read for the branch main pushes to" 1 "$(grep -c -- '^
 check "the next push is the two commits the upstream lacks, newest first, with the issues each names" \
   '{"upstream":"origin/main","behind":0,"ahead":2,"subjects":["Bump the lint config","Stream the export"],"refs":[[],[12]],"lines":[[0,1],[2,0]]}' \
   "$(j "$T/one" '.nextPush | {upstream, behind, ahead, subjects: [.commits[].subject], refs: [.commits[].refs], lines: [.commits[] | [.added, .deleted]]}')"
+# Issue 273: the Issues card's 24-hour line and 7-day sparkline, from issues created and closed in the last 7 days.
+check "issue 273: opened and closed in 24 h, and per local day over 7 days" '[1,1,7,3,1,false]' \
+  "$(j "$T/one" '.github.flow | [.opened24h, .closed24h, (.daily | length), (.daily | map(.opened) | add), (.daily | map(.closed) | add), .incomplete]')"
+check "issue 273: each read asks for 7 days, at most 1000" 2 "$(grep -cE '^issue list --state (all|closed) --search (created|closed):>=[0-9-]{10} --json number,createdAt,closedAt --limit 1000$' "$T/gh.calls")"
+cp "$T/gh-created.json" "$T/gh-created.bak"; jq -cn '[range(1000) | {number: ., createdAt: (now | todate), closedAt: null}]' > "$T/gh-created.json"
+check "issue 273: a read that hits the limit is marked incomplete" true "$(collect "$T/many" >/dev/null; j "$T/many" .github.flow.incomplete)"
+mv "$T/gh-created.bak" "$T/gh-created.json"
+# A 7-day span over the autumn DST change (New York, 2026-11-01 23:30) is still seven calendar days, one bucket each.
+check "issue 273: the 7 local days run on across a DST change, one bucket a day" \
+  '["2026-10-26","2026-10-27","2026-10-28","2026-10-29","2026-10-30","2026-10-31","2026-11-01"]' \
+  "$(DNOW=1793593800 TZ=America/New_York collect "$T/dst" >/dev/null; j "$T/dst" '[.github.flow.daily[].day]')"
 check "every gh call is a read" "" "$(grep -vE '^(pr list|issue list|run list|api repos/\{owner\}/\{repo\}/milestones\?state=open&per_page=100)( |$)' "$T/gh.calls")"
 
 # gh not signed in exits 4. No copy was cached in this dashboard folder, so each pane is null with the reason.

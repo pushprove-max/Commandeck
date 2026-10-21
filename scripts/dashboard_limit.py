@@ -32,6 +32,8 @@ usage would cost on the pay-as-you-go API. The reading carries no
 history, so each new sample is appended to <cache-dir>/limit-history.jsonl and
 the chart draws from that file.
 """
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -50,6 +52,14 @@ WEEK = 7 * 86400
 FIVE_HOURS = 5 * 3600
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 HISTORY_KEEP = 14 * 86400
+
+
+@contextlib.contextmanager
+def locked(path):
+    """Held across one read-then-replace of path: the collector's, the server's layout save and --import each take it."""
+    with open(path + ".lock", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def iso(t):
@@ -100,8 +110,9 @@ def switch_account(cache_dir):
             except OSError:
                 pass
         hist = os.path.join(cache_dir, "limit-history.jsonl")
-        if os.path.exists(hist):
-            os.replace(hist, os.path.join(cache_dir, f"limit-history.{old or 'unknown'}.jsonl"))
+        with locked(hist):
+            if os.path.exists(hist):
+                os.replace(hist, os.path.join(cache_dir, f"limit-history.{old or 'unknown'}.jsonl"))
     tmp = f"{path}.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(now, f)
@@ -128,7 +139,7 @@ def token():
         raw = r.stdout if r.returncode == 0 else ""
     else:
         try:
-            with open(os.path.expanduser("~/.claude/.credentials.json")) as f:
+            with open(os.path.join(config_dir() or os.path.expanduser("~/.claude"), ".credentials.json")) as f:
                 raw = f.read()
         except OSError:
             raw = ""
@@ -195,18 +206,23 @@ def pace(used, reset, now):
 
 def record(history_path, at, pct, now):
     """Append one sample unless the newest row already holds it; drop rows past HISTORY_KEEP."""
-    rows = read_history(history_path)
-    if rows and rows[-1][0] >= at:
-        return rows
-    rows = [r for r in rows if r[0] >= now - HISTORY_KEEP] + [(at, pct)]
-    tmp = f"{history_path}.{os.getpid()}"
-    with open(tmp, "w") as f:
-        f.writelines(json.dumps({"at": iso(a), "pct": p}) + "\n" for a, p in rows)
-    os.replace(tmp, history_path)
+    with locked(history_path):
+        rows = read_history(history_path)
+        if rows is None:
+            return []  # unreadable: left as it is, not rewritten with this one sample
+        if rows and rows[-1][0] >= at:
+            return rows
+        rows = [r for r in rows if r[0] >= now - HISTORY_KEEP] + [(at, pct)]
+        tmp = f"{history_path}.{os.getpid()}"
+        with open(tmp, "w") as f:
+            f.writelines(json.dumps({"at": iso(a), "pct": p}) + "\n" for a, p in rows)
+        os.replace(tmp, history_path)
     return rows
 
 
 def read_history(path):
+    """The history's rows, oldest first; [] with no file, None for one that is there and cannot be read, which
+    no writer may replace as if it were empty."""
     rows = []
     try:
         with open(path) as f:
@@ -218,8 +234,10 @@ def read_history(path):
                     continue
                 if a is not None and isinstance(p, (int, float)):
                     rows.append((a, p))
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError:
+        return None
     return sorted(rows)
 
 
@@ -412,6 +430,19 @@ def gone(path):
     return not os.path.isdir(path)
 
 
+# One collect's stamp (dashboard.sh sets it per collect), so the readers of one collect share one read of the files.
+CYCLE = os.environ.get("DASH_CYCLE") or None
+
+
+def reuses(cache, since):
+    """Whether a request cache an earlier call of this same collect wrote already holds every request from `since`
+    on: whole, and read back that far. The units, the seats and the limit card each call from their own process,
+    so only the first call of a collect reads the files (issue 299)."""
+    held = cache.get("covered")
+    return CYCLE is not None and cache.get("cycle") == CYCLE and cache.get("complete") is True \
+        and isinstance(held, (int, float)) and held <= since
+
+
 def requests(projects, cache_path, since, now, folders=False):
     """Each distinct API request's row from Claude Code's transcripts (subagents included) since `since`.
 
@@ -431,6 +462,10 @@ def requests(projects, cache_path, since, now, folders=False):
         if cache.get("version") != 7 or not all(isinstance(v, list) for v in seen.values()) or not isinstance(where, dict) \
                 or not isinstance(alias, dict) or not isinstance(file, dict):
             raise ValueError("cache from before a request kept its transcript")
+        if cache.get("root") != projects:
+            raise ValueError("another profile's transcripts: none of its rows are this root's")
+        if reuses(cache, since):
+            return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         offsets, seen, where, alias, file = {}, {}, {}, {}, {}
     live, unread, unlisted = {}, False, []
@@ -454,6 +489,9 @@ def requests(projects, cache_path, since, now, folders=False):
                     live[path] = offsets[path]
                 continue
             off = offsets.get(path, 0)
+            if st.st_size == off:
+                live[path] = off  # nothing appended since the last read: not opened
+                continue
             if st.st_size < off:
                 off = 0  # rewritten in place: request ids are keys, so a re-read never double counts
             # Line by line: the Linux service caps the collector at 256 MB.
@@ -493,12 +531,14 @@ def requests(projects, cache_path, since, now, folders=False):
                     file[keys[0]] = path
             live[path] = off
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
+    whole = not unread and all(isinstance(e, FileNotFoundError) for e in unlisted)
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump({"version": 7, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
-                   "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen}}, f)
+                   "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen},
+                   "cycle": CYCLE, "complete": whole, "covered": since, "root": projects}, f)
     os.replace(tmp, cache_path)
-    if unread or any(not isinstance(e, FileNotFoundError) for e in unlisted):
+    if not whole:
         return None
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
 
@@ -600,7 +640,7 @@ def codex_history(cache_dir, cx, now):
     start, at = epoch(cx.get("windowStart")), epoch(cx.get("readAt"))
     if cx.get("usedPct") is None or start is None:
         return None
-    rows = record(path, int(at), cx["usedPct"], now) if at is not None else read_history(path)
+    rows = record(path, int(at), cx["usedPct"], now) if at is not None else read_history(path) or []
     return [{"at": iso(a), "pct": p} for a, p in rows if start <= a <= now]
 
 
@@ -736,9 +776,13 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
         if cache.get("version") != 4 or not isinstance(files, dict) or not isinstance(seen, dict) or not isinstance(where, dict) \
                 or not isinstance(file, dict):
             raise ValueError("not this reader's cache")
+        if cache.get("root") != sessions_dir:
+            raise ValueError("another Codex home's sessions: none of its rows are this home's")
+        if reuses(cache, since):
+            return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
     except (OSError, ValueError, KeyError, TypeError):
         files, seen, where, file = {}, {}, {}, {}
-    live = {}
+    live, n = {}, len(missed)
     for root, _, names in os.walk(sessions_dir, onerror=lost):
         for name in names:
             if not name.endswith(".jsonl"):
@@ -749,6 +793,9 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
                 if st.st_mtime < since:
                     if path in files:
                         live[path] = files[path]  # its place is kept, as in requests()
+                    continue
+                if isinstance(files.get(path), list) and files[path][:1] == [st.st_size]:
+                    live[path] = files[path]  # nothing appended since the last read: not opened
                     continue
                 f = open(path, "rb")
             except OSError as e:
@@ -795,7 +842,8 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 4, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen}}, f)
+        json.dump({"version": 4, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen},
+                   "cycle": CYCLE, "complete": len(missed) == n, "covered": since, "root": sessions_dir}, f)
     os.replace(tmp, cache_path)
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
 
@@ -886,7 +934,7 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
         # Whole seconds: the row stores whole-second ISO, and the duplicate check compares against it.
         rows = record(hist_path, min(int(os.stat(usage_path).st_mtime), now), used, now)
     else:
-        rows = read_history(hist_path)
+        rows = read_history(hist_path) or []
     # The cache write share is a rolling 24 h, so the first day after a reset reads back before the window start.
     since = min(start, now - 86400) if live else None
     loaded = requests(projects, os.path.join(cache_dir, "limit-requests.json"), since, now) if live else None
@@ -1006,7 +1054,9 @@ def unit_costs(units, now, cache_dir, projects, sessions):
     A `plan` ({worktree, from, seats}: dashboard.sh plan_seats) adds its planning worktree's requests as a first
     stage, "planning", into the total, and split by seat (seat_costs) as `seats`. A planning worktree's own
     card is a unit whose worktree is its plan's, with no other stage.
-    None for a unit whose requests cannot all be read: a short total would read as the whole.
+    None for a unit whose requests cannot all be read: a short total would read as the whole. The transcripts are
+    one read of the whole tree, shared with the seats and the limit card (issue 299), so any transcript that cannot
+    be read makes every unit None.
     """
     start = lambda u: epoch(u["plan"]["from"]) if u.get("plan") else epoch(u["stages"][0]["from"]) if u.get("stages") else None
     starts = {u["unit"]: start(u) for u in units}
@@ -1015,7 +1065,7 @@ def unit_costs(units, now, cache_dir, projects, sessions):
         return {}
     missed = []
     # No sessions folder is an install without Codex: no Codex review ran, so it adds nothing rather than unknown.
-    cx = codex_all(sessions, cache_dir, "unit-codex", since - 600, now, missed, True) or []
+    cx = codex_all(sessions, cache_dir, "codex-requests", since - 600, now, missed, True) or []
     # A collected Codex seat may have run in another Codex home (routing's per-role codexHome): that home's whole
     # sessions tree is read too, as its earlier launches log in other date folders (<home>/sessions/YYYY/MM/DD).
     # Each home's cache is keyed by a hash of its path: a punctuation-folded key gave two homes one cache.
@@ -1031,14 +1081,15 @@ def unit_costs(units, now, cache_dir, projects, sessions):
             cx = None if more is None else cx + more
     # Claude Code's folder for a session run in a worktree: every byte that is not a letter or digit becomes "-".
     folder = lambda wt: os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
+    every = [] if gone(projects) else requests(projects, os.path.join(cache_dir, "limit-requests.json"), since - 600, now, True)
     out = {}
     for u in units:
         t0, wt, plan = starts.get(u["unit"]), u["worktree"], u.get("plan")
         if t0 is None:
             continue
         pwt = plan["worktree"] if plan else None
-        got = {w: requests(folder(w), os.path.join(cache_dir, f"unit-requests-{os.path.basename(w)}.json"), t0 - 600, now, True)
-               if not gone(folder(w)) else [] for w in {wt, pwt} - {None}}
+        got = {w: None if every is None else [t for t in every if t[0][0] >= t0 - 600 and (t[2] or "").startswith(folder(w) + os.sep)]
+               for w in {wt, pwt} - {None}}
         if None in got.values() or cx is None or missed:
             out[u["unit"]] = None
             continue
@@ -1074,7 +1125,8 @@ def seats(now, cache_dir, projects, log, main, relay=None):
     out), the relay's the Chief-of-Staff worktree's. Today runs from host-local midnight; the 7-day average is the
     last 7 x 24 h over 7. A restart is a clear-hook.log line of a completed one (context-clear-restart.sh) whose
     checkpoint, <session id>.md, is one of the seat's sessions; its `.restarted` stamp keeps only a checkpoint's
-    last restart, so the log is the one source. None for a seat whose sessions cannot all be read.
+    last restart, so the log is the one source. None for a seat whose sessions cannot all be read: with the whole
+    tree read once, any transcript that cannot be read.
     """
     midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week = now - 7 * 86400
@@ -1092,11 +1144,13 @@ def seats(now, cache_dir, projects, log, main, relay=None):
         pass
     figures = lambda rs: (lambda t: {"tokens": t["input"] + t["output"], "usd": t["usd"], "partial": t["partial"]})(tally(rs, 0))
     out = {}
+    # One read of the whole transcript tree, shared with the units and the limit card (issue 299).
+    every = [] if gone(projects) else requests(projects, os.path.join(cache_dir, "limit-requests.json"), min(week, midnight), now, True)
     for name, wt in (("main", main), ("relay", relay)):
         if not wt:
             continue
         folder = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
-        rows = [] if gone(folder) else requests(folder, os.path.join(cache_dir, f"seat-requests-{name}.json"), min(week, midnight), now)
+        rows = [] if gone(folder) else None if every is None else [r for r, _, f in every if (f or "").startswith(folder + os.sep)]
         if rows is None:
             out[name] = None
             continue

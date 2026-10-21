@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.24.0 -- 2026-10-21
+
+- #217, #224, #240 and #242 shipped in 0.21.0 and 0.22.0. #263 (the dashboard behind a login) and #269 (tests
+  running now) follow in the next release.
+- An answer the dashboard could not send says why, gives up after its tries, and can be cleared from the card; it is
+  no longer sent again on each refresh forever (#295).
+- A project can move from another collector to the plugin's: `dashboard.sh --import <folder>` takes its limit
+  history, panel layout and cleared builds, a fresh install keeps the scratch and workspace settings, and the first
+  project registered becomes the home project (#292).
+- Ledgers and caches reach jq as files, so a long ledger no longer fails with "argument list too long" (#280).
+- Claude's files are read from `CLAUDE_CONFIG_DIR` when it is set: transcripts, sessions, settings and
+  `.claude.json`, in the scripts, the hooks and the collector (#291). Uninstall takes the plugin's rules, /config
+  options and status line out of every profile setup wrote to, and gives each profile its own status line back; a
+  move to project scope takes the rules out of every profile.
+- Typing in a decision's answer box no longer hides new decisions and notes: the list is redrawn around the box
+  (#276).
+- A project named `__proto__` no longer breaks the other projects' answers (#277).
+- A "Restart collector" button on a page on this machine restarts the collector service, at most once a minute, and
+  the page shows the last cycle's time (#294).
+- New card "Tokens per unit, 7 days": each unit in flight or finished this week by cost, Claude and Codex apart,
+  its stages behind a toggle (#270).
+- A merge writes one row per unit to `.claude/metrics/unit-ledger.jsonl` (`unit-ledger.sh`): rounds, verdicts,
+  seats and tokens. New card "Review loop, 7 days" lists the merged units, most rounds first (#271).
+- `unit-ledger.sh --escaped <unit> <issue>` tags an issue a unit's review let through; the review card lists the
+  escapes (#272).
+- The Issues card shows the issues opened and closed in the last 24 hours and a 7-day sparkline of both (#273).
+- Alerts that cleared in the last 24 hours are listed, folded, under the alerts card with their start and clear
+  times (#274).
+- The collector reads only what changed since its last cycle: transcripts, guard-block logs and Builder sessions
+  from stored offsets, and one terminal list per cycle (#299).
+
 ## 0.23.0 -- 2026-10-21
 
 - An exception, allowlist or exemption entry in a guard or its test stands only when its test proves it; the rule is

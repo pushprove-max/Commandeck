@@ -84,8 +84,8 @@ pass_waits() {
   if [ "$BY" = claude ]; then
     COMPANION=$(command -v claude) || die "no claude on PATH; the Claude-only review pass runs it headless"
   else
-    COMPANION=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
-    [ -n "$COMPANION" ] || die "no Codex plugin companion under $HOME/.claude/plugins/cache/openai-codex/codex"
+    COMPANION=$(ls -d "$CLAUDE_DIR"/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
+    [ -n "$COMPANION" ] || die "no Codex plugin companion under $CLAUDE_DIR/plugins/cache/openai-codex/codex"
   fi
   RECORD_WAIT=30 HELPER_STEP=0.2
   [ -e "${COMPANION%/*}/commandeck-test-waits" ] || return 0

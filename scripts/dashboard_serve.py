@@ -37,9 +37,12 @@ answer whose sends cannot be kept there is refused (503): main is never left unt
 its sends keep the ask they answer, and one the host did not finish (stopped, or the ledger slow) is sent only once the
 ledger shows that answer taken: main is never told one it refused. A send that fails stays kept and is sent again after the next
 refresh, the page's next read of data.js, by a batch that refresh does not wait on; the collector lists what is still
-kept on the card. An answer delivered while main's own picker was open is kept in <directory>/answer-picker.json,
+kept on the card, with each send's tries, first try and last error (issue 295). A send whose main folder is gone or is
+no longer a project here, or that has failed for an hour, gives up and is not sent again until the owner says so with
+a `POST /unsent` ({key, action}: retry, delivered or drop), taken from the same clients as an answer. An answer delivered while main's own picker was open is kept in <directory>/answer-picker.json,
 which the collector shows too: main reads it only after that picker is answered in its pane. The project's
 folder is read from the collector's own data.js, never from the request.
+A `POST /restart` from the same clients runs `dashboard.sh --restart`, once a minute at most (issue 294).
 """
 import fcntl
 import functools
@@ -53,6 +56,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -135,13 +139,25 @@ SENDS = threading.Lock()
 STAMP = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
 
 
+def snapshot(directory):
+    """The collector's data.js as a dict, or None. A project named __proto__ sits under a computed key there
+    (dashboard.sh), which is not JSON: the plain key goes back first, as the relay watchers do, or one such project
+    would make every other project's answer unreadable (issue 277)."""
+    try:
+        with open(os.path.join(directory, 'data.js')) as f:
+            s = f.read().partition('=')[2].strip().rstrip(';')
+        dash = json.loads(re.sub(r'([{,])\["__proto__"\]:', r'\1"__proto__":', s))
+    except (OSError, ValueError):
+        return None
+    return dash if isinstance(dash, dict) else None
+
+
 def project_path(directory, name):
     """The main checkout of the dashboard's project `name` (None: the home project), from the collector's data.js."""
     try:
-        with open(os.path.join(directory, 'data.js')) as f:
-            dash = json.loads(f.read().partition('=')[2].strip().rstrip(';'))
+        dash = snapshot(directory)
         path = dash['projects'][name if name is not None else dash['home']]['path']
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return None
     return path if isinstance(path, str) and os.path.isabs(path) else None
 
@@ -150,6 +166,7 @@ SCRIPT = {'main': 'to-main.sh', 'relay': 'cos-tell.sh'}
 # SENDS guards the two files below and FLYING, the keys of the kept sends being tried now; no send runs under it.
 FLYING = set()
 RETRYING = threading.Lock()  # one retry batch at a time
+RESTARTING = threading.Lock()
 
 
 def kept(directory, strict=False):
@@ -200,17 +217,45 @@ SEND_TIMEOUT = 60
 PICKER = 'but its pane shows an open question or permission prompt'
 
 
+def utc():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+# Issue 295: a send still failing an hour after its first try gives up, the same hour as the question alert
+# (dashboard_alerts.jq), and waits for the owner: retried, marked delivered another way, or dropped (POST /unsent).
+GIVE_UP = 3600
+
+
 def deliver(directory, m):
-    """One send with its script: (delivered, timed out, main's own picker open)."""
+    """One send with its script: (delivered, timed out, main's own picker open). The script's exit code and its last
+    stderr line are left on m as lastExit and lastError, for settle()."""
     # to-main.sh exits 3 when main has no pane: the message is queued and shown first when main starts again.
     try:
         r = subprocess.run(['bash', os.path.join(HERE, SCRIPT[m['to']])] + m['args'], cwd=directory, env=dict(os.environ, COMMANDECK_MAIN=m['main']),
                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=SEND_TIMEOUT)
     except subprocess.TimeoutExpired:
+        m['lastExit'], m['lastError'] = None, 'no answer in %d s' % SEND_TIMEOUT
         return False, True, False
-    except OSError:
+    except OSError as e:
+        m['lastExit'], m['lastError'] = None, str(e)[:200]
         return False, False, False
+    m['lastExit'], m['lastError'] = r.returncode, (r.stderr.strip().splitlines() or [''])[-1][:200]
     return r.returncode in ((0, 3) if m['to'] == 'main' else (0,)), False, m['to'] == 'main' and PICKER in r.stdout
+
+
+def attempt(directory, m):
+    """deliver(), unless the send can never go: then m['giveUp'] names why and nothing is sent. Its main folder is
+    gone, or no longer a project in data.js (a data.js that cannot be read says nothing), or it has failed for an hour."""
+    dash = snapshot(directory)
+    paths = {p.get('path') for p in (dash.get('projects') or {}).values() if isinstance(p, dict)} if dash and isinstance(dash.get('projects'), dict) else None
+    try:
+        late = (datetime.now(timezone.utc) - datetime.strptime(m['firstAt'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds() >= GIVE_UP
+    except (KeyError, TypeError, ValueError):
+        late = False
+    m['giveUp'] = ('its main folder %s is gone' % m['main'] if not os.path.isdir(m['main'])
+                   else '%s is not a project on this dashboard' % m['main'] if paths is not None and m['main'] not in paths
+                   else 'not delivered in 1 h, last: %s' % (m.get('lastError') or 'exit %s' % m.get('lastExit')) if late else None)
+    return (False, False, False) if m['giveUp'] else deliver(directory, m)
 
 
 def settle(directory, taken, tried, slow=(), drop=()):
@@ -219,10 +264,13 @@ def settle(directory, taken, tried, slow=(), drop=()):
     delivery to main updates the picker marks: a picker open marks its answer, none open drops that main's marks.
     shortcut: a mark stays until a later delivery to that main finds no picker; read main's pane if that proves stale.
     A file that cannot be read or written keeps what it had: a delivered send may then go twice, which beats never.
-    The marks are saved first: a delivered send is the only way to rebuild its mark."""
+    The marks are saved first: a delivered send is the only way to rebuild its mark.
+    A send that failed keeps its count (`tries`), its first try (`firstAt`) and its last exit and stderr line; one
+    attempt() gave up on is `state: "gave-up"` with its `reason`, and no refresh tries it again."""
     with SENDS:
         FLYING.difference_update(m['key'] for m in taken)
         gone = {m['key'] for m, ok, _ in tried if ok} | set(drop)
+        failed = {m['key']: m for m, ok, _ in tried if not ok}
         try:
             held = marks(directory)
             for m, ok, picker in tried:
@@ -232,6 +280,15 @@ def settle(directory, taken, tried, slow=(), drop=()):
                     elif {'main': m['main'], 'id': m['id']} not in held:
                         held.append({'main': m['main'], 'id': m['id']})
             left = [m for m in kept(directory, True) if m['key'] not in gone]
+            for m in left:
+                f = failed.get(m['key'])
+                if f is None:
+                    continue
+                m.setdefault('firstAt', utc())
+                if f.get('giveUp'):
+                    m.update(state='gave-up', reason=f['giveUp'])
+                else:
+                    m.update(tries=m.get('tries', 0) + 1, lastExit=f.get('lastExit'), lastError=f.get('lastError'))
             write(directory, 'answer-picker.json', held)
             write(directory, 'answer-retry.json', [m for m in left if m['key'] not in slow] + [m for m in left if m['key'] in slow])
         except OSError:
@@ -263,7 +320,7 @@ def send(directory, msgs):
         pass
     tried, slow = [], set()
     for m in msgs:
-        ok, late, picker = deliver(directory, m)
+        ok, late, picker = attempt(directory, m)
         tried.append((m, ok, picker))
         if late:
             slow.add(m['key'])
@@ -304,7 +361,7 @@ def retry(directory):
     rest so it cannot starve them."""
     try:
         with SENDS:
-            todo = [m for m in kept(directory) if m['key'] not in FLYING]
+            todo = [m for m in kept(directory) if m['key'] not in FLYING and m.get('state') != 'gave-up']
             FLYING.update(m['key'] for m in todo)
         tried, slow, drop = [], set(), set()
         for m in todo:
@@ -314,7 +371,7 @@ def retry(directory):
                     drop.add(m['key'])
                 if not took:
                     continue
-            ok, late, picker = deliver(directory, m)
+            ok, late, picker = attempt(directory, m)
             tried.append((m, ok, picker))
             if late:
                 slow.add(m['key'])
@@ -405,7 +462,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 resend(self.directory)
             super().do_GET()
 
-    def do_POST(self):
+    def own_page(self):
+        """A loopback client, under a loopback Host name, from this page's own Origin, with a JSON body."""
         host = self.headers.get('Host', '')
         try:
             name = urlsplit('//' + host).hostname or ''
@@ -413,8 +471,47 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             near = ip.is_loopback or bool(getattr(ip, 'ipv4_mapped', None) and ip.ipv4_mapped.is_loopback)
         except ValueError:
             near = False
-        if (self.path != '/answer' or not near or name not in LOOPBACK or self.foreign()
-                or self.headers.get('Origin') != 'http://' + host or self.headers.get('Content-Type') != 'application/json'):
+        return (near and name in LOOPBACK and not self.foreign()
+                and self.headers.get('Origin') == 'http://' + host and self.headers.get('Content-Type') == 'application/json')
+
+    def reply(self, code, value):
+        out = json.dumps(value).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def restart(self):
+        """POST /restart (issue 294): dashboard.sh --restart, which kills this server too, so the once-a-minute stamp
+        is a file. No body is read and the command is fixed. The reply goes out first, so a failure is logged here."""
+        stamp = os.path.join(self.directory, 'restart-at')
+        with RESTARTING:  # the check and the stamp are one step: two requests at once restart once
+            try:
+                if time.time() - os.stat(stamp).st_mtime < 60:
+                    return self.reply(429, 'restarted under a minute ago')
+            except OSError:
+                pass  # no stamp yet
+            try:
+                open(stamp, 'w').close()
+            except OSError:
+                return self.reply(500, 'could not write the restart stamp; not restarting')
+        print('dashboard: restart requested from %s at %s' % (self.client_address[0], utc()), file=sys.stderr, flush=True)
+        self.reply(202, 'restarting')
+        self.wfile.flush()
+        try:
+            r = subprocess.run(['bash', os.path.join(HERE, 'dashboard.sh'), '--restart'], capture_output=True, text=True, timeout=30)
+            if r.returncode:
+                print('dashboard: restart FAILED (exit %d): %s' % (r.returncode, (r.stderr.strip().splitlines() or ['no message'])[0]), file=sys.stderr, flush=True)
+        except subprocess.TimeoutExpired:
+            print('dashboard: restart FAILED: dashboard.sh --restart did not finish in 30 s', file=sys.stderr, flush=True)
+        except OSError as e:
+            print('dashboard: restart FAILED: could not start dashboard.sh: %s' % e, file=sys.stderr, flush=True)
+
+    def do_POST(self):
+        if self.path == '/restart' and self.own_page():
+            return self.restart()
+        if self.path not in ('/answer', '/unsent') or not self.own_page():
             return self.send_error(403, "an answer is taken from this machine's own page only")
         length = self.headers.get('Content-Length', '')
         if not length.isdigit() or int(length) > MAX_BODY:
@@ -423,6 +520,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             a = json.loads(self.rfile.read(int(length)))
         except ValueError:
             return self.send_error(400)
+        if self.path == '/unsent':
+            return self.unsent(a)
         text = lambda k, ok: isinstance(a.get(k), str) and ok(a[k])
         if not (isinstance(a, dict) and set(a) <= {'project', 'id', 'askedAt', 'answer'} and text('id', ID.match) and text('askedAt', STAMP.match)
                 and text('answer', lambda s: s.strip() and len(s) <= 2000 and not re.search(r'[\x00-\x1f\x7f]', s))
@@ -480,12 +579,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for m in msgs:
             m['args'][-1] = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
         unsent, picker = send(self.directory, msgs)
-        out = json.dumps({'ruling': rid, 'unsent': unsent, 'picker': picker}).encode()
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        self.reply(200, {'ruling': rid, 'unsent': unsent, 'picker': picker})
+
+    def unsent(self, a):
+        """Issue 295: the owner's word on one kept send ({key, action}): `retry` puts it back to pending with its count
+        and first try cleared and starts a retry batch; `delivered` (main got it another way) and `drop` remove it.
+        Each action is one line in <directory>/answer-retry.log: time, key, decision id, action, client."""
+        if not (isinstance(a, dict) and set(a) == {'key', 'action'} and isinstance(a['key'], str) and a['action'] in ('retry', 'delivered', 'drop')):
+            return self.send_error(400)
+        with SENDS:
+            if a['key'] in FLYING:
+                return self.send_error(409, 'that send is being tried now; refresh and try again')
+            try:
+                ms = kept(self.directory, True)
+                m = next((m for m in ms if m['key'] == a['key']), None)
+                if m is None:
+                    return self.send_error(404, 'no such unsent answer')
+                if a['action'] == 'retry':
+                    for k in ('state', 'reason', 'tries', 'firstAt', 'lastExit', 'lastError'):
+                        m.pop(k, None)
+                else:
+                    ms.remove(m)
+                write(self.directory, 'answer-retry.json', ms)
+            except OSError as e:
+                return self.send_error(503, 'not changed: %s' % (e.strerror or e))
+            try:
+                with open(os.path.join(self.directory, 'answer-retry.log'), 'a') as f:
+                    f.write('\t'.join((utc(), a['key'], str(m.get('id')), a['action'], self.client_address[0])) + '\n')
+            except OSError:
+                pass
+        if a['action'] == 'retry':
+            resend(self.directory)
+        self.reply(200, {'action': a['action']})
 
     def do_HEAD(self):
         if self.foreign():
@@ -513,7 +638,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # One save at a time: every request thread shares the temporary file, and the number read is the number
         # written over. The number saved is the host's own next one, never a caller's.
         name = layout.pop('project', None)
-        with SAVING:
+        # The lock file is shared with dashboard.sh --import, another process writing the same layout.
+        with SAVING, open(path + '.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
             rev, home, slots = held(path)
             if name is not None and name not in slots and len(slots) >= MAX_PROJECTS:
                 return self.send_error(400)

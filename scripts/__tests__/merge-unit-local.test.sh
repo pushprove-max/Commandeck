@@ -14,8 +14,8 @@ export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMAN
 # Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.
 export COMMANDECK_FOREGROUND=1
 # Run as a real merge's check, the file inherits that merge's lock flag, which would skip its own merges' detach
-# and lock.
-unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK
+# and lock. Claude's folder is the empty HOME's: the caller's own profile is never read.
+unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK CLAUDE_CONFIG_DIR "${!UNIT_LEDGER_@}"
 REPO=$TMP/proj
 mkdir -p "$HOME" "$TMP/ws" "$TMP/bin"; : > "$TMP/orca-calls"
 git init -q -b main "$REPO"
@@ -93,6 +93,13 @@ go u
 check "a GO merge of u ends 0" 0 "$(merge u)"
 check "the Builder's ledger row names the Builder's own session, not its sibling's" "$PROJ/builder.jsonl" \
   "$(jq -r 'select(.unit == "u" and .role == "builder") | .session' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
+# Issue 271: the merge adds the unit's row to the unit ledger, its outcome read from the round files and the proof.
+UL=$REPO/.claude/metrics/unit-ledger.jsonl
+check "a merge appends one unit ledger row for the unit, with its sha, round counts and the proof's rule" \
+  "1|$(git -C "$REPO" rev-parse HEAD)|1|1|0|CONVERGED-GO|$(sed -n 's/^Builder proof: .*; rule: //p' "$TMP/out")" \
+  "$(jq -sr 'map(select(.unit == "u")) | "\(length)|\(.[0] | "\(.mergeSha)|\(.rounds)|\(.goRounds)|\(.noGoRounds)|\(.verdict)|\(.mergeRule)")"' "$UL" 2>/dev/null)"
+# A ledger the writer cannot write refuses the row: the writer says why, and the merge stands.
+mv "$UL" "$TMP/ul.kept"; mkdir "$UL"
 # A Builder that went on in a fresh session (builder-fresh-round.sh) has a record with one session= line per session;
 # its ledger row counts them all, or the tokens of every later phase vanish from the unit's cost.
 mk v; PV=$HOME/.claude/projects/$(printf '%s' "$COMMANDECK_WORKSPACES/v" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PV"
@@ -102,8 +109,17 @@ use() { jq -nc --arg t "$(date -u -d "@$2" +%FT%TZ)" --argjson i "$3" '{type: "a
 use x $((LA + 40)) 200 > "$PV/second.jsonl"
 go v
 check "a GO merge of v ends 0" 0 "$(merge v)"
+check "a refused ledger writer prints its line, and the merge of v still ends 0" "1 1 1" \
+  "$(grep -c '^DONE unit=v merged=local' "$TMP/out") $(grep -c "^unit-ledger: cannot write $UL" "$TMP/out") $(grep -c "no unit ledger row written for v (ignored)" "$TMP/out")"
+rmdir "$UL"; mv "$TMP/ul.kept" "$UL"
 check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
   "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
+# A closing pass that leaves P2s only merges under the P2 tail rule: its row says so, never CONVERGED-GO.
+mk t; go t; STUB_REPLY=$'- [P2] A small thing -- t.txt:1 -- say it plainly\nVERDICT: NO-GO' pass t 2 final
+# (It exits 4: with no gh here, its open P2 cannot be filed.)
+check "a P2-tail merge of t merges" 1 "$(merge t >/dev/null; grep -c '^DONE unit=t merged=local' "$TMP/out")"
+check "its unit ledger row records the P2 tail, not a converged GO" "P2-TAIL|P2 tail|1|1" \
+  "$(jq -sr 'map(select(.unit == "t")) | .[0] | "\(.verdict)|\(.mergeRule)|\(.goRounds)|\(.noGoRounds)"' "$UL" 2>/dev/null)"
 
 # Issue 239: the merge closes each issue the brief lists that its commit names, with the commit and the version; one
 # the commit does not name stays open and is named. Issue 227: main-watch's item task about the unit's seat is

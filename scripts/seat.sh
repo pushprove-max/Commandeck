@@ -290,9 +290,9 @@ launch)
   if [ "$(seat_agent)" = claude ]; then
     MAIN_REPO=$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)")
     OFF=$(jq -r --arg p "$MAIN_REPO" '.projects[$p].disabledMcpServers // [] | .[] | select(. == "serena" or . == "codebase-memory")' \
-      "$HOME/.claude.json" 2>/dev/null | tr '\n' ' ' || true)
+      "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null | tr '\n' ' ' || true)
     [ -z "$OFF" ] || {
-      echo "BLOCKED: ${OFF% } disabled in ~/.claude.json projects[\"$MAIN_REPO\"].disabledMcpServers; a Claude seat would run without it." >&2
+      echo "BLOCKED: ${OFF% } disabled in ${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json projects[\"$MAIN_REPO\"].disabledMcpServers; a Claude seat would run without it." >&2
       echo "Fix: re-enable it in /mcp from $MAIN_REPO, or remove it from that disabledMcpServers list, then launch again." >&2
       exit 2
     }

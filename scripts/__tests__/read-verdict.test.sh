@@ -25,7 +25,7 @@ chmod +x "$T/bin/orca-ide"
 # verdict <screen>: the canonical VERDICT line read-verdict.sh prints, or "none" when it reads no verdict (exit 3;
 # its "last lines" dump then still shows the screen's verdict-shaped line)
 verdict() { local out rc; printf '%b' "$1" > "$T/screen"
-  out=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$T/sc" \
+  out=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR ${PROFILE:+CLAUDE_CONFIG_DIR="$PROFILE"} HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$T/sc" \
     COMMANDECK_WORKSPACES="$T/ws" timeout 20 bash "$REAL/scripts/read-verdict.sh" term_r 2>/dev/null); rc=$?
   [ "$rc" = 3 ] && echo none || grep -m1 '^VERDICT:' <<<"$out"; }
 check "prose, a bare fence, then VERDICT: GO: no verdict" none "$(verdict 'Reviewing.\n```\nVERDICT: GO\n')"
@@ -42,6 +42,21 @@ printf 'handle=term_r\ntask=task_r\nrole=plan-author\nlaunched=%s\nsession=%s\n'
 jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type: "assistant", timestamp: $t, message: {content: [{type: "text", text: "Done.\nVERDICT: NO-GO"}]}},
   {type: "system", subtype: "turn_duration", timestamp: $t}' > "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl"
 check "a record's bound Codex log path is not read as a Claude session id" "VERDICT: NO-GO" "$(verdict 'Working.\n')"
+# Issue 291: under an account profile (CLAUDE_CONFIG_DIR) Claude Code writes its transcripts and session files in that
+# folder, and ~/.claude holds none: every seat read there was "not measured".
+mkdir -p "$T/prof"; mv "$T/home/.claude/projects" "$T/prof/"
+check "issue 291: a seat's transcript is read from CLAUDE_CONFIG_DIR" "VERDICT: NO-GO" "$(PROFILE=$T/prof verdict 'Working.\n')"
+# A stand-in claude: a copy of sleep under that name, carrying a pane's handle, started from a subshell that exits so
+# it has no claude ancestor even when this test runs in a Claude pane.
+cp "$(command -v sleep)" "$T/bin/claude"
+( ORCA_TERMINAL_HANDLE=term_s$$ "$T/bin/claude" 30 </dev/null >/dev/null 2>&1 & echo $! > "$T/pid" ); CP=$(cat "$T/pid")
+trap 'kill "$CP" 2>/dev/null; rm -rf "$T"' EXIT
+mkdir -p "$T/home/.claude/sessions" "$T/prof/sessions"
+echo '{"sessionId":"s-home"}' > "$T/home/.claude/sessions/$CP.json"; echo '{"sessionId":"s-prof"}' > "$T/prof/sessions/$CP.json"
+sleep 0.3
+sess() { env -u CLAUDE_CONFIG_DIR ${PROFILE:+CLAUDE_CONFIG_DIR="$PROFILE"} HOME="$T/home" bash "$REAL/scripts/read-verdict.sh" --session term_s$$ 2>/dev/null; }
+check "issue 291: a pane's session is read from CLAUDE_CONFIG_DIR when it is set, from ~/.claude when not" "s-prof s-home" \
+  "$(PROFILE=$T/prof sess) $(sess)"
 # Issue 225: two NO-GOs in a row on one finding class are a loop, not progress: --repeat-class names the class.
 # rf <round> <verdict> <finding line> -- a round file as builder-codex-pass.sh writes it.
 B=$T/briefs; mkdir -p "$B"

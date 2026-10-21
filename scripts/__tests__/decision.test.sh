@@ -26,6 +26,19 @@ D add plain-1999-01-01 'Move the nightly job?' none main >/dev/null
 check "a row added without --options has none, and the ledger still reads" 'null' "$(opts plain-1999-01-01)"
 D add u1-msg_q1 'question (u1): which lock?' none 'u1 asks' --waits-on main --options 'flock|lockf' >/dev/null
 check "--options goes beside --waits-on" '["flock","lockf"]' "$(opts u1-msg_q1)"
+# Issue 292: the host project's form, a JSON array, under its rules: it stores the same row as the a|b form, and five
+# answers, a non-printable one or the picker's decoy are refused.
+D add json-1999-01-01 'Ship the hotfix now?' yes main --options '["yes","no"]' >/dev/null
+check "issue 292: a JSON array stores the same options as a|b" '["yes","no"]' "$(opts json-1999-01-01)"
+D add jfive-1999-01-01 'Which retry count?' 1 main --options '["1","2","3","4","5"]' 2>/dev/null
+check "issue 292: a 5-item array is refused, and nothing is written" '1 "none"' "$? $(opts jfive-1999-01-01)"
+D add jdecoy-1999-01-01 'Merge the branch?' yes main --options "$(. "$REAL/hooks/lib/ask-decoy.sh" && jq -cn --arg d "$ASK_DECOY" '[$d, "yes"]')" 2>/dev/null
+check "issue 292: the picker decoy is refused" '1 "none"' "$? $(opts jdecoy-1999-01-01)"
+D add jctl-1999-01-01 'Close the incident?' yes main --options '["yes","no\u0007"]' 2>/dev/null
+check "issue 292: a non-printable answer is refused" '1 "none"' "$? $(opts jctl-1999-01-01)"
+# The picker hook joins labels with |: a first label that starts with [ is still that form, not a JSON array.
+D add jpipe-1999-01-01 'Choose a mode?' '[auto]' main --options '[auto]|manual' >/dev/null
+check "issue 292: a|b whose first label starts with [ is still split by |" '["[auto]","manual"]' "$(opts jpipe-1999-01-01)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -10,7 +10,7 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 set -euo pipefail
 WT=${1:?usage: builder-cache-check.sh <worktree> [session-id]}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
-PROJ=$HOME/.claude/projects/$(pp_slug "$(cd "$WT" && pwd -P)")
+PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "$(cd "$WT" && pwd -P)")
 if [ -n "${2:-}" ]; then MAIN=$PROJ/$2.jsonl
 else MAIN=$(ls -t "$PROJ"/*.jsonl 2>/dev/null | awk 'NR == 1' || true); fi
 [ -f "${MAIN:-}" ] || { echo "no Builder transcript under $PROJ" >&2; exit 1; }

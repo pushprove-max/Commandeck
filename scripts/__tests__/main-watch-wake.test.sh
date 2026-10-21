@@ -126,7 +126,7 @@ for i in 1 2; do jq -nc '{to_handle: "term_cos", from_handle: "term_x", read: 0,
 tick $P; tick $((P + 60))
 [ "$(jq -c . "$PK" 2>/dev/null)" = "{\"since\":$P,\"waiting\":2}" ] || fail "picker: the record is $(cat "$PK" 2>/dev/null), not since $P with 2 waiting"
 pk() { jq -nc -f "$SOURCE/scripts/dashboard_alerts.jq" --argjson now "$1" --arg s7 2026-10-08 --argjson hasSe false --argjson se '[]' \
-  --argjson parts "[{\"projects\": {\"p\": {\"chiefOfStaff\": {\"picker\": $(cat "$PK")}}}}]" --argjson srcs '[]' --argjson prev '{}' \
+  --argjson parts "[{\"projects\": {\"p\": {\"chiefOfStaff\": {\"picker\": $(cat "$PK")}}}}]" --argjson srcs '[]' --argjson preva '[{}]' \
   | jq -r '.alerts[] | select(.id | startswith("relay-picker-p-")) | .text'; }
 [ -z "$(pk $((P + 29 * 60)))" ] || fail "picker: raised at 29 minutes"
 pk $((P + 31 * 60)) | grep -q 'relay picker open 31 min; 2 messages waiting' || fail "picker: not raised at 31 minutes: $(pk $((P + 31 * 60)))"

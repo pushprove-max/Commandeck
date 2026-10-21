@@ -70,15 +70,8 @@ if [ -n "$LAST" ] && [ -s "$IL_MACHINE" ]; then
     [ -z "$W" ] || ! il_notify_hooks "$W" | grep -qxF "$IL_LINK/hooks/codex-notify.sh" \
       || echo "codex notify: the wrapper $W still calls $IL_LINK/hooks/codex-notify.sh, which uninstall has removed; take this line out of it: $(grep -v '^[[:space:]]*#' "$W" | grep -F "$IL_LINK/hooks/codex-notify.sh" | head -1)"
   done < <(jq -r '.entries | keys[] | select(endswith("/hooks.json"))' "$IL_MACHINE")
-  S=$HOME/.claude/settings.json
-  ! il_has "$IL_MACHINE" "$S" || [ ! -e "$S" ] || { il_auto_mode "$IL_MACHINE" "$S" remove; il_allow_set "$IL_MACHINE" "$S" '[]'; }
   ! il_has "$IL_MACHINE" "$IL_GLOBAL" || [ ! -e "$IL_GLOBAL" ] || il_global_out
-  # The status line setup set goes back to the one before it; one the owner set since is the owner's.
-  if jq -e '.statusLine.set' "$IL_MACHINE" >/dev/null 2>&1 && [ -e "$S" ]; then
-    if [ "$(jq -c '.statusLine' "$S")" = "$(jq -c '.statusLine.set' "$IL_MACHINE")" ]; then
-      J=$(jq --argjson was "$(jq -c '.statusLine.was' "$IL_MACHINE")" 'if $was == null then del(.statusLine) else .statusLine = $was end' "$S") && il_write "$S" <<<"$J"
-    else echo "the status line changed since setup, left as it is: $S"; fi
-  fi
+  il_profiles_out "$IL_MACHINE"
   il_restore "$IL_MACHINE"
   pp_rm_rf "$IL_DIR/blobs"; rmdir "$IL_DIR" 2>/dev/null || true
   echo "commandeck is out of this machine: Codex's hooks, the dashboard job and the permission rules"
@@ -89,7 +82,7 @@ fi
 if [ -n "$DELETE" ]; then
   # Only the plugin's own ledgers (and their locks): the folder may hold the
   # owner's or another tool's files, which setup never recorded.
-  pp_rm_rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,subagent-usage}.jsonl* "$PP_SCRATCH"
+  pp_rm_rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,unit-ledger,subagent-usage}.jsonl* "$PP_SCRATCH"
   rmdir "$PP_MAIN/.claude/metrics" 2>/dev/null || true
   # These three are kept by folder name. A project set up at another path
   # under the same name (this checkout moved) writes them now: they are its.

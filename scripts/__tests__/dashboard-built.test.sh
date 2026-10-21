@@ -11,6 +11,8 @@
 set -uo pipefail
 . "$(dirname "$0")/fixtures/dashboard-built-setup.sh"
 dash
+check "a Builder with no evidence file has nothing built yet, and its card is read without a shell error" '[null] 0' \
+  "$(built u-verdicts) $(grep -c 'unbound variable\|cannot open file' "$T/out.log")"
 
 check "every issue the Per issue table marks built counts as built" \
   '[[12639,12640,12641,12642,12643,12644,12645,12646,12647,12648,12649,12650,12651,12652,12653,12654,12655,12656]]' "$(built help-email-batch-2026-10-16)"
@@ -99,6 +101,13 @@ check "session_cache: a newer isSidechain row is skipped" "[95010,$E1,false]" "$
 check "session_cache: no reply that wrote cache is null" null "$(pp pp_session_cache)"
 rm -rf "$CL"
 check "bg_open and session_cache: no session record is null" "null null" "$(pp pp_session_bg_open) $(pp pp_session_cache)"
+
+# Issue 299: one collect asks Orca for its terminal list once, for every project's units and relay card.
+git init -q -b main "$T/second" && git -C "$T/second" remote add origin https://github.com/example/second.git
+printf '#!/usr/bin/env bash\necho "$*" >> %q\ncase "$*" in "worktree ps"*) echo %s ;; "terminal list"*) echo %s ;; *) exit 1 ;; esac\n' \
+  "$T/orca.log" "'{\"result\":{\"worktrees\":[]}}'" "'{\"result\":{\"terminals\":[]}}'" > "$BIN/orca-ide"
+check "issue 299: a collect of two projects" '["demo","second"]' "$(off "$MAIN"$'\n'"$T/second")"
+check "issue 299: asks for the terminal list once" 1 "$(grep -c '^terminal list' "$T/orca.log")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

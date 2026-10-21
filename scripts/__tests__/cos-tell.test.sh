@@ -275,6 +275,14 @@ rm -f "$TOLD"; alert limit-claude-1792000600
 check "with no told record, a key whose newest seen stamp is a day old is told again" 1 "$(alertwatch | grep -c '"limit-claude-1792000600"')"
 alert host-swap-1792000600
 check "another key is told" 1 "$(alertwatch | grep -c '"host-swap-1792000600"')"
+# Issue 292: at a switch from another watcher every alert open then is one the owner already knows of. --seed takes
+# them all as seen and told, once, so the next poll raises none of them, a day-old one included; a new one still is.
+printf 'window.DASH = {"alerts": [{"id": "cache-hit-1791000000", "severity": "warn", "text": "t"}, {"id": "stale-gh-1792000700", "severity": "warn", "text": "t"}]};\n' \
+  > "$T/home/.commandeck/dashboard/data.js"
+check "issue 292: --seed seeds every open alert and exits" 1 "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/cos-watch-alerts.sh" --seed 2>&1 | grep -c 'seeded 2 open alert ids')"
+check "issue 292: and a poll then prints nothing for them" "" "$(alertwatch)"
+alert host-load-1792000800
+check "issue 292: an alert raised after the seed is still told" 1 "$(alertwatch | grep -c '"host-load-1792000800"')"
 
 # Issue 229: a wake printed every queued message, and each wake replays the relay's whole context. A long wake is one
 # line under 1,500 characters: what woke it, the count, and the file that holds the rest.

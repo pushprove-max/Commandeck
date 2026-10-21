@@ -93,7 +93,7 @@ echo "builder-fresh-round: $H cleared and handed $HAND"
 [ -n "$REC" ] && [ -f "$REC" ] || exit 0
 # The new session is the log written since /clear that carries the pointer, other than the one the record names.
 OLD=$(sed -n 's/^session=//p' "$REC" | tail -1)
-PROJ=$HOME/.claude/projects/$(pp_slug "${HAND%/.claude/briefs/*}")
+PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "${HAND%/.claude/briefs/*}")
 NEW=
 for _ in $(seq 30); do
   NEW=$(find "$PROJ" -maxdepth 1 -name '*.jsonl' -newer "$STAMP" ! -name "${OLD:-none}.jsonl" -exec grep -lF -- "$HAND" {} + 2>/dev/null | head -1)

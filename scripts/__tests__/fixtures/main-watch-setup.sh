@@ -56,7 +56,7 @@ esac
 ORCA
 chmod +x "$T/bin/orca-ide" "$T/bin/ps"
 
-mw() { (cd "$REPO" && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws bash scripts/main-watch.sh "$@"); }
+mw() { (cd "$REPO" && unset CLAUDE_CONFIG_DIR && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws bash scripts/main-watch.sh "$@"); }
 tick() { COMMANDECK_NOW=$1 mw --once 2>>"$T/stderr" || fail "main-watch exited non-zero at $1"; }
 state() { sed -i "/^$1 /d" "$F/agents"; echo "$1 $2" >> "$F/agents"; }
 posts() { grep -c -- "$1" "$T/sends" || true; }

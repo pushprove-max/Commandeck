@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
-PROJECTS=$HOME/.claude/projects/$PP_MAIN_SLUG
+PROJECTS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$PP_MAIN_SLUG
 if [ -z "$OUT" ]; then
   SID=${CLAUDE_SESSION_ID:-$(ls -t "$PROJECTS"/*.jsonl 2>/dev/null | head -1 | xargs -r basename | sed 's/\.jsonl$//')}
   [ -n "$SID" ] || { echo "no session id: pass --out <path>" >&2; exit 2; }

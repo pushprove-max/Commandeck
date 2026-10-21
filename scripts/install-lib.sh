@@ -49,7 +49,7 @@ IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin a
 # running. The one list: setup hides these from git, the doctor reports one
 # git tracks, and uninstall takes out the lines setup's manifest recorded.
 IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
-  .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock .claude/briefs/ .claude/routing-log todo/main-todo.md
+  .claude/metrics/unit-ledger.jsonl .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock .claude/briefs/ .claude/routing-log todo/main-todo.md
   .claude/workflows/test-audit.js)   # setup's copy holds this machine's paths (il_test_audit)
 
 il_sha() { sha256sum < "$1" | cut -d' ' -f1; }
@@ -66,6 +66,12 @@ il_cat() {
   [ ! -L "$p" ] || p=$(readlink -f "$p")
   s=$(il_shadow "$p")
   if [ -n "${IL_PLAN:-}" ] && [ -n "${IL_WROTE:-}" ] && [ -e "$s" ]; then cat "$s"; else cat "$p"; fi
+}
+# il_read <path> -- il_cat for a step that writes what it read back: no file is nothing, but one that is there and
+# cannot be read fails, with a line. Read as empty, the owner's whole file was written over with setup's few keys.
+il_read() {
+  il_cat "$1" 2>/dev/null && return 0
+  [ ! -e "$1" ] || { echo "commandeck: $1 is there but cannot be read; fix its permissions and run this again" >&2; return 1; }
 }
 # il_write <path> -- stdin becomes the file, whole or not at all. A link is
 # written through, and an existing file keeps its mode. Every write of the
@@ -143,7 +149,7 @@ il_allow() {
 il_allow_set() {
   local m=$1 f=$2 new=$3 old j added doc
   # No file, or an empty one, is an empty object: jq prints nothing for no input.
-  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   old=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -c --arg p "$f" '.entries[$p].added // []') || return 1
   # Only what the owner did not already have is the plugin's to take back out.
   added=$(jq -c --argjson old "$old" --argjson new "$new" '$new - ((.permissions.allow // []) - $old)' <<<"$doc" 2>/dev/null) || added=$new
@@ -234,7 +240,7 @@ il_routing_seats() {
 # takes out only a true that setup put there.
 il_workflows() {
   local m=$1 f=$2 doc
-  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     jq -e --arg p "$f" '.entries[$p].workflows == true' "$m" >/dev/null 2>&1 && jq -e '.enableWorkflows == true' <<<"$doc" >/dev/null 2>&1 || return 0
     doc=$(jq 'del(.enableWorkflows)' <<<"$doc") && il_write "$f" <<<"$doc"
@@ -250,7 +256,7 @@ il_workflows() {
 # the switch to its worktrees too, where a seat that names an advisor would lose it; none does by default.
 il_advisor_off() {
   local m=$1 f=$2 doc
-  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     jq -e --arg p "$f" '.entries[$p].advisorOff == true' "$m" >/dev/null 2>&1 || return 0
     doc=$(jq 'del(.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL) | if .env == {} then del(.env) else . end' <<<"$doc") && il_write "$f" <<<"$doc"
@@ -264,7 +270,7 @@ il_advisor_off() {
 # of 0.14) is replaced; off takes out only a value setup wrote and nobody changed since.
 il_cache_ttl() {
   local m=$1 f=$2 doc s r
-  doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   if [ "${3:-}" = off ]; then
     s=$(jq -c --arg p "$f" '.entries[$p].cacheTtl // {}' "$m" 2>/dev/null) || s='{}'
     [ "$s" != '{}' ] || return 0
@@ -308,7 +314,7 @@ il_auto_mode() {
   case $3 in
     leave) return 0 ;;
     add)
-      doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+      doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
       new=$(jq -cn --arg h "$(jq -r '.homepage // empty' "$IL_ROOT/.claude-plugin/plugin.json")" --arg l "$IL_LINK" '[
         "Trusted repo: \($h) (the Commandeck workflow plugin). Its scripts and hooks under \($l) are this workflow'"'"'s own tools, run by every pane.",
         "Key internal services: Orca panes on this machine. The relay pane (the worktree ending in /Chief-of-Staff) passes the owner'"'"'s answers to main word for word; main checks each against the owner'"'"'s ruling log before acting."]')
@@ -325,7 +331,7 @@ il_auto_mode() {
         && il_set "$m" --arg p "$f" --argjson n "$new" --arg how "$how" '.entries[$p].autoMode = {created: ((.entries[$p].autoMode.created // false) or $how == "new"), added: ((.entries[$p].autoMode.added // []) + $n)}' ;;
     remove)
       rec=$(jq -c --arg p "$f" '.entries[$p].autoMode // empty' "$m" 2>/dev/null); [ -n "$rec" ] || return 0
-      doc=$(il_cat "$f" 2>/dev/null) || doc=; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+      doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
       doc=$(jq --argjson r "$rec" 'if (.autoMode.environment | type) == "array" then
           .autoMode.environment -= $r.added
           | (if $r.created and .autoMode.environment == ["$defaults"] then del(.autoMode.environment) else . end)
@@ -337,14 +343,14 @@ il_auto_mode() {
 # wrong and the fix>". A list in ~/.claude/settings.json without "$defaults" replaced Claude Code's built-in one;
 # the classifier ignores autoMode in a project's settings files.
 il_auto_mode_report() {
-  local f=$HOME/.claude/settings.json k n=0 where="see what it uses: claude auto-mode config, claude auto-mode critique, and /permissions \"Recently denied\""
+  local f=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json k n=0 where="see what it uses: claude auto-mode config, claude auto-mode critique, and /permissions \"Recently denied\""
   for k in environment allow soft_deny hard_deny; do
     jq -e --arg k "$k" '.autoMode[$k] | type == "array" and all(.[]; . != "$defaults")' "$f" >/dev/null 2>&1 || continue
     n=$((n+1)); echo "warn auto mode: the $k list in $f has no \"\$defaults\", so it replaces Claude Code's built-in $k rules; add \"\$defaults\" to keep them ($where)"
   done
   for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json"; do
     jq -e 'has("autoMode")' "$f" >/dev/null 2>&1 || continue
-    n=$((n+1)); echo "warn auto mode: $f has autoMode, which the classifier ignores there; move it to $HOME/.claude/settings.json ($where)"
+    n=$((n+1)); echo "warn auto mode: $f has autoMode, which the classifier ignores there; move it to ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json ($where)"
   done
   [ "$n" != 0 ] || echo "ok auto mode: no list of yours replaces the built-in rules, and no project file carries autoMode"
 }
@@ -365,7 +371,7 @@ il_shadow_report() {
   while IFS=$'\t' read -r k mv wv; do
     n=$((n+1))
     if [ "$k" = env.CLAUDE_CODE_PROMPT_CACHE_TTL ]; then
-      echo "warn prompt cache: $ml sets CLAUDE_CODE_PROMPT_CACHE_TTL=$mv, and Claude Code applies that file over every worktree's own settings, so the relay and worker panes run $mv; move the key to $HOME/.claude/settings.json"
+      echo "warn prompt cache: $ml sets CLAUDE_CODE_PROMPT_CACHE_TTL=$mv, and Claude Code applies that file over every worktree's own settings, so the relay and worker panes run $mv; move the key to ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
     else
       echo "warn settings: $ml sets $k=$mv, and Claude Code applies that file over every worktree's own settings, so a worker pane runs $mv where setup writes $wv; remove the key from that file"
     fi
@@ -392,10 +398,10 @@ il_cache_ttl_report() {
   if [ -z "$v" ] && [ "$mt" = 5m ]; then
     # an env key beats the promptCacheTtl keys, so main's answer is the last env key of the user and project files;
     # with none, it is the last promptCacheTtl key of the user, project and local files (the order Claude Code reads them)
-    for f in "$HOME/.claude/settings.json" "$PP_MAIN/.claude/settings.json"; do [ ! -f "$f" ] || fs+=("$f"); done
+    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$PP_MAIN/.claude/settings.json"; do [ ! -f "$f" ] || fs+=("$f"); done
     v=$([ ${#fs[@]} = 0 ] || jq -rs --arg k $k 'map(.env[$k] // empty) | last // empty' "${fs[@]}" 2>/dev/null)
     if [ -n "$v" ]; then
-      [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: an env $k=$v in $HOME/.claude/settings.json or $PP_MAIN/.claude/settings.json beats the promptCacheTtl setup wrote; remove that key"; }
+      [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: an env $k=$v in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json or $PP_MAIN/.claude/settings.json beats the promptCacheTtl setup wrote; remove that key"; }
     else
       [ ! -f "$ml" ] || fs+=("$ml")
       for s in promptCacheTtl subagentPromptCacheTtl; do
@@ -406,7 +412,7 @@ il_cache_ttl_report() {
     fs=()
   fi
   if [ "$rt" = 1h ] && [ -d "$rw" ]; then
-    for f in "$HOME/.claude/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
+    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
     v=$(jq -rs --arg k $k 'map(.env[$k] // empty) | last // "unset"' "${fs[@]}" 2>/dev/null)
     [ "$v" = 1h ] || { n=1; echo "warn prompt cache: the relay pane runs $v, not the 1h you chose; run setup again, or see the line above"; }
   fi
@@ -423,13 +429,71 @@ il_options_report() {
 }
 # il_plugin_options <user settings> <answers> -- setup's answers into /config's options (issue 245), each only where
 # /config has none, under the key the plugin is enabled by. The owner's /config answer beats every project's, so one
-# that differs from this setup's is named.
+# that differs from this setup's is named. What it adds is recorded in the machine's manifest, by file and key, for
+# il_plugin_options_out.
 il_plugin_options() {
+  local add
   [ -f "$1" ] || return 0
   jq -r --argjson a "$2" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != .value)
     | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' "$1"
   [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none ($1)"; return 0; }
-  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))'
+  add=$(jq -c --argjson a "$2" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a | with_entries(select($o[.key] == null)))}' "$1") || return 1
+  # Recorded before it is written: update's rollback deletes a recorded file with no prior as one setup made.
+  il_record "$IL_MACHINE" merge "$1" || return 1
+  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))' || return 1
+  il_set "$IL_MACHINE" --arg f "$1" --argjson n "$add" '.entries[$f].options = ((.entries[$f].options // {}) * $n)'
+}
+# il_profile_files <manifest> -- every Claude Code user settings file setup wrote to, one a line, by the manifest:
+# CLAUDE_CONFIG_DIR today may not be the profile it was then.
+il_profile_files() { [ ! -s "$1" ] || jq -r '.entries | keys[] | select(endswith("/settings.json"))' "$1"; }
+# il_status_was <manifest> <user settings> -- the status line in that file now, before setup sets its own. The first
+# one setup replaces in each profile's file is the owner's; a second answer must not take the first for it.
+il_status_was() {
+  local d w
+  ! jq -e --arg p "$2" '.entries[$p] | has("statusLine")' "$1" >/dev/null 2>&1 || return 0
+  d=$(il_read "$2") || return 1; w=$(jq -c '.statusLine // null' <<<"$d" 2>/dev/null) || w=
+  il_set "$1" --arg p "$2" --argjson was "${w:-null}" '.entries[$p].statusLine = {was: $was}'
+}
+# il_status_set <manifest> <user settings> <command> -- setup's status line into the file, and recorded as set.
+il_status_set() {
+  local st
+  st=$(il_read "$2") || return 1; [ -n "${st//[[:space:]]/}" ] || st='{}'
+  st=$(jq --arg c "$3" '.statusLine = {type: "command", command: $c}' <<<"$st") && il_write "$2" <<<"$st" \
+    && il_set "$1" --arg p "$2" --argjson set "$(jq -c .statusLine <<<"$st")" '.entries[$p].statusLine.set = $set'
+}
+# il_status_out <manifest> <user settings> -- the status line setup set goes back to the one before it; one the owner
+# set since is the owner's. A manifest from before status lines were kept per file has one top-level record: today's
+# profile's, as that setup read it.
+il_status_out() {
+  local sl j
+  sl=$(jq -c --arg p "$2" --arg s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" \
+    '.entries[$p].statusLine // (if $p == $s then .statusLine else null end) | select(.set) // empty' "$1" 2>/dev/null)
+  [ -n "$sl" ] && [ -e "$2" ] || return 0
+  if [ "$(jq -c '.statusLine' "$2")" = "$(jq -c .set <<<"$sl")" ]; then
+    j=$(jq --argjson was "$(jq -c .was <<<"$sl")" 'if $was == null then del(.statusLine) else .statusLine = $was end' "$2") && il_write "$2" <<<"$j"
+  else echo "the status line changed since setup, left as it is: $2"; fi
+}
+# il_profiles_out <manifest> -- the plugin's parts out of every profile's settings file setup wrote to: the auto-mode
+# lines, the permission rules, /config's pre-filled options and the status line.
+il_profiles_out() {
+  local f
+  while IFS= read -r f; do
+    [ ! -e "$f" ] || { il_auto_mode "$1" "$f" remove && il_allow_set "$1" "$f" '[]' && il_plugin_options_out "$1" "$f" && il_status_out "$1" "$f"; } || return 1
+  done < <(il_profile_files "$1")
+}
+# il_plugin_options_out <manifest> <user settings> -- the options il_plugin_options added out again, each only while it
+# still holds the value setup wrote: one the owner changed in /config since is the owner's.
+il_plugin_options_out() {
+  local rec doc
+  rec=$(jq -c --arg f "$2" '.entries[$f].options // empty' "$1" 2>/dev/null); [ -n "$rec" ] || return 0
+  doc=$(il_read "$2") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  doc=$(jq --argjson r "$rec" 'reduce ($r | to_entries[]) as $k (.;
+      reduce ($k.value | to_entries[]) as $o (.; if .pluginConfigs[$k.key].options[$o.key] == $o.value then del(.pluginConfigs[$k.key].options[$o.key]) else . end)
+      | if .pluginConfigs[$k.key].options == {} then del(.pluginConfigs[$k.key].options) else . end
+      | if .pluginConfigs[$k.key] == {} then del(.pluginConfigs[$k.key]) else . end)
+    | if .pluginConfigs == {} then del(.pluginConfigs) else . end' <<<"$doc") \
+    || { echo "commandeck: $2 is not JSON; fix it and run this again" >&2; return 1; }
+  il_write "$2" <<<"$doc" && il_set "$1" --arg f "$2" 'del(.entries[$f].options)'
 }
 # il_tool_search_report -- the doctor's line on MCP tool search, "ok <why>" or "warn <what is wrong>". Whether it is on
 # follows Claude Code's docs ("Configure tool search"); each variable is read from the environment, else from `env`
@@ -437,14 +501,14 @@ il_plugin_options() {
 # are not judged: the doctor does not know the session's model.
 il_tool_search_report() {
   local want betas url host n why
-  tsv() { local x=${!1:-}; [ -n "$x" ] || x=$(jq -r --arg k "$1" '.env[$k] // empty' "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "$HOME/.claude/settings.json" 2>/dev/null | head -1); printf '%s' "$x"; }
+  tsv() { local x=${!1:-}; [ -n "$x" ] || x=$(jq -r --arg k "$1" '.env[$k] // empty' "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null | head -1); printf '%s' "$x"; }
   want=$(tsv ENABLE_TOOL_SEARCH) betas=$(tsv CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) url=$(tsv ANTHROPIC_BASE_URL)
   host=${url#*://}; host=${host%%[/:]*}
   if [ -n "$betas" ]; then why="CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS is set"
   elif [ "$want" = false ]; then why="ENABLE_TOOL_SEARCH=false"
   elif [ -z "$want" ] && [ -n "$host" ] && [ "$host" != api.anthropic.com ]; then why="ANTHROPIC_BASE_URL is $host, not api.anthropic.com, and ENABLE_TOOL_SEARCH is unset; ENABLE_TOOL_SEARCH=true turns it on"
   fi
-  n=$( { jq -r --arg p "$PP_MAIN" '(.mcpServers // {}, .projects[$p].mcpServers // {}) | keys[]' "$HOME/.claude.json"; jq -r '(.mcpServers // {}) | keys[]' "$PP_MAIN/.mcp.json"; } 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  n=$( { jq -r --arg p "$PP_MAIN" '(.mcpServers // {}, .projects[$p].mcpServers // {}) | keys[]' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"; jq -r '(.mcpServers // {}) | keys[]' "$PP_MAIN/.mcp.json"; } 2>/dev/null | sort -u | wc -l | tr -d ' ')
   if [ -n "${why:-}" ]; then echo "warn tool search: tool search is off ($why), so every tool of $n MCP servers loads on every turn"
   else echo "ok tool search: on, so $n MCP servers add their tool names to a turn, not every tool"; fi
 }
@@ -464,7 +528,7 @@ il_test_audit() {
 il_codex_hooks() {
   local f=$IL_CODEX/hooks.json j
   # No file yet is an empty object, read as one: a plan has nothing on disk to read back.
-  j=$(il_cat "$f" 2>/dev/null) || j=; [ -n "${j//[[:space:]]/}" ] || { [ -n "$1" ] || return 0; j='{}'; }
+  j=$(il_read "$f") || return 1; [ -n "${j//[[:space:]]/}" ] || { [ -n "$1" ] || return 0; j='{}'; }
   if [ -n "$1" ]; then
     j=$(jq --arg m "$IL_OURS_RE" --arg r "$(il_shq "$1")" --slurpfile t "$IL_ROOT/templates/codex-hooks.json" '
         def ours: (.command // "") | test($m);
@@ -557,7 +621,7 @@ il_notify_repoint() {
 }
 il_notify() {
   local f=$IL_CODEX/config.toml rest cur
-  cur=$(il_cat "$f" 2>/dev/null) || { [ -n "$1" ] || return 0; cur=; }
+  cur=$(il_read "$f") || return 1
   rest=$(grep -vE '^notify = \[".*/hooks/codex-notify\.sh"\]$' <<<"$cur" || true)
   [ -z "$1" ] || grep -qE '^[[:space:]]*notify[[:space:]]*=' <<<"$rest" || rest=$(il_notify_line "$1")${rest:+$'\n'$rest}
   [ "$rest" = "$cur" ] || printf '%s\n' "$rest" | il_write "$f"
@@ -568,14 +632,14 @@ il_notify() {
 il_block() {
   local new
   [ -n "${2:-}" ] || [ -e "$1" ] || return 0
-  new=$(il_block_text "$1" "${2:-}"); [ -e "$1" ] && [ "$new" = "$(il_cat "$1")" ] || printf '%s\n' "$new" | il_write "$1"
+  new=$(il_block_text "$1" "${2:-}") || return 1; [ -e "$1" ] && [ "$new" = "$(il_cat "$1")" ] || printf '%s\n' "$new" | il_write "$1"
 }
 # il_block_text <file> [text file] -- the file's text with that block replaced where it stands (or taken out), the
 # owner's text as it was. A file without the block gets it at the end. In place, as Ansible's blockinfile: replacing
 # by removal and append moved each block below the other and left a blank line on every run (issue 208).
 il_block_text() {
   local body='' cur
-  cur=$(il_cat "$1" 2>/dev/null || true)
+  cur=$(il_read "$1") || return 1
   if [ -n "${2:-}" ] && grep -qxF -- "$IL_BEGIN" <<<"$cur"; then
     IL_TEXT=$2 awk -v b="$IL_BEGIN" -v e="$IL_END" '$0 == b && !done { print; while ((getline l < ENVIRON["IL_TEXT"]) > 0) print l; print e; done = 1 }
       $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' <<<"$cur"
@@ -634,7 +698,7 @@ il_backup() {
 # does. A path-scoped rules file loads only for its paths: merge-rules.py counts it for nothing.
 il_rules_against() {
   local f
-  for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
+  for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do
     jq -r '.claudeMdExcludes[]? | strings | "--exclude", .' "$f" 2>/dev/null || true; done
   for f in "$PP_MAIN/CLAUDE.md" "$PP_MAIN"/.claude/rules/*.md; do [ ! -f "$f" ] || printf -- '--against\n%s\n' "$f"; done
 }
@@ -665,7 +729,7 @@ il_own() {
       # writes this machine's plugin folder into the block as it loads it.
       body=$(python3 "$IL_ROOT/scripts/merge-rules.py" - --against "$f" ${a[@]+"${a[@]}"} <<<"$body") || return 1
       [ -z "${IL_PLAN:-}" ] || echo "plan: $f: main's sessions also drop any plugin rule your rule files already state."
-      rest=$(il_cat "$f" | awk -v b="<!-- commandeck:merge:begin -->" -v e="<!-- commandeck:merge:end -->" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }')
+      rest=$(il_read "$f" | awk -v b="<!-- commandeck:merge:begin -->" -v e="<!-- commandeck:merge:end -->" '$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }') || return 1
       n=$(grep -n -m1 '^## Details (not injected)' <<<"$rest" | cut -d: -f1) || n=
       if [ -n "$n" ]; then
         il_put "$m" "$f" "$(head -n $((n - 1)) <<<"$rest"; printf '%s\n%s\n\n%s\n' "<!-- commandeck:merge:begin -->" "$body" "<!-- commandeck:merge:end -->"; tail -n +"$n" <<<"$rest")"
@@ -686,7 +750,7 @@ il_lines() {
   local m=$1 f=$2 old l body
   shift 2
   old=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -r --arg p "$f" '.entries[$p].added // [] | .[]') || return 1
-  body=$(il_cat "$f" 2>/dev/null || true)
+  body=$(il_read "$f") || return 1
   [ -z "$old" ] || body=$(grep -vxFf <(printf '%s\n' "$old") <<<"$body" || true)
   old='[]'
   for l; do

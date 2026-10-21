@@ -14,7 +14,7 @@ echo '{"version": 1, "profile": "claude"}' > "$CFG"
 # A Codex seat's model is read from Codex's own model list.
 mkdir -p "$HOME/.codex" && jq -n --arg f "$(jq -r '.roles["codex-reviewer"].model' "$REAL/config/routing.json")" '{models: [{slug: "gpt-9.1-\($f)"}]}' > "$HOME/.codex/models_cache.json"
 seat_sh() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING -u CODEX_HOME -u CLAUDE_CONFIG_DIR \
-  PATH="$BIN:$PATH" timeout 120 bash "$REAL/scripts/seat.sh" "$@" </dev/null); }
+  ${PROFILE:+CLAUDE_CONFIG_DIR="$PROFILE"} PATH="$BIN:$PATH" timeout 120 bash "$REAL/scripts/seat.sh" "$@" </dev/null); }
 # settle <unit> <role> -- wait out a launch's background part (issue 233), by the pid its record names.
 settle() { local p; p=$(sed -n 's/^pid=//p' "$HOME/.commandeck/scratch/"*/"seat-$1-$2.txt" 2>/dev/null | tail -1)
   while [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do sleep 0.1; done; }

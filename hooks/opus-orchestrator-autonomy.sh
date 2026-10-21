@@ -41,7 +41,7 @@ model=${COMMANDECK_SEAT_MODEL:-}
 if [ -z "$model" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
   model=$(tail -c 1000000 "$transcript" | grep -o '"model":"[^"]*"' | tail -1 | cut -d'"' -f4)
 fi
-[ -n "$model" ] || model=$(jq -r '.model // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+[ -n "$model" ] || model=$(jq -r '.model // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null)
 [ -n "$model" ] || model=$(ps -o args= -p "$PPID" 2>/dev/null | grep -o -- '--model [^ ]*' | awk '{print $2}')
 printf '%s' "$model" | grep -qi opus || exit 0
 

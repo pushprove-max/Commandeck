@@ -334,6 +334,11 @@ a.t:hover { color: var(--accent-ink); }
 .tile.crit .tile-value { color: var(--crit-ink); }
 .tile.nm .tile-value { color: var(--muted); font-style: italic; font-size: 14px; }
 .limit-note { margin: 0 0 10px; }
+.spark-svg { width: 100%; height: 64px; display: block; margin-bottom: 8px; }
+.spark-base { stroke: var(--line); stroke-width: 1; }
+.spark-opened, .spark-closed { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.spark-opened { stroke: var(--accent); }
+.spark-closed { stroke: var(--ok); stroke-dasharray: 5 3; }
 .limit-svg { width: 100%; height: auto; display: block; }
 .limit-svg text { fill: var(--muted); font-size: 11px; }
 .limit-svg .grid-line { stroke: var(--line); }

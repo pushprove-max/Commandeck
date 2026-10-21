@@ -107,6 +107,63 @@ check "an owner's list without \"\$defaults\" is left byte for byte, and setup s
 check "and nothing is recorded for it, so taking the lines out later removes nothing of the owner's" "$B" "$(sha256sum < "$MM")"
 rm -rf "$H/.commandeck" "$AS"
 
+# --- profiles: each CLAUDE_CONFIG_DIR's settings file is its own (class profile-cleanup) ---
+# Setup's steps at machine scope under profile A, then B; uninstall's under B, or under no profile. Each file comes
+# back as it was: the plugin's rules and options out of every profile setup wrote to, and each profile's own status
+# line back, not the first profile's.
+PA=$T/profiles/A/settings.json PB=$T/profiles/B/settings.json; mkdir -p "${PA%/*}" "${PB%/*}"
+fresh() {
+  rm -rf "$H/.commandeck"
+  echo '{"statusLine": {"type": "command", "command": "owner-A"}, "permissions": {"allow": ["Bash(ls:*)"]}}' > "$PA"
+  echo '{"statusLine": {"type": "command", "command": "owner-B"}, "permissions": {"allow": ["Bash(pwd)"]}}' > "$PB"
+  cp "$PA" "$T/pa.before"; cp "$PB" "$T/pb.before"
+}
+prof_setup() { CLAUDE_CONFIG_DIR=${1%/settings.json} lib 'S=$CLAUDE_CONFIG_DIR/settings.json; il_record "$IL_MACHINE" merge "$S" && il_status_was "$IL_MACHINE" "$S" \
+  && il_allow_set "$IL_MACHINE" "$S" "$(il_allow "$IL_ROOT")" && il_auto_mode "$IL_MACHINE" "$S" add >/dev/null && il_plugin_options "$S" "{\"ponytail\": true}" \
+  && il_status_set "$IL_MACHINE" "$S" plugin-line'; }
+UNDO_PROF='il_profiles_out "$IL_MACHINE" && il_restore "$IL_MACHINE"'
+fresh; prof_setup "$PA"
+check "profiles: setup under A puts its rules, options, auto-mode lines and status line in A's file" 'true:true:true:plugin-line' \
+  "$(jq -c '(.permissions.allow | length > 1), (.pluginConfigs != null), (.autoMode != null), .statusLine.command' "$PA" | paste -sd: - | tr -d '"')"
+OUT=$(lib "unset CLAUDE_CONFIG_DIR; $UNDO_PROF" 2>&1)
+check "profiles: uninstall under no profile puts A's file back byte for byte, and names nothing" same: "$(cmp -s "$PA" "$T/pa.before" && echo same):$OUT"
+# B's setup runs twice: the second must not take setup's own status line for the one B had before.
+fresh; prof_setup "$PA"; prof_setup "$PB"; prof_setup "$PB"
+check "profiles: the scope move and uninstall read both profiles' files from the manifest" "$PA $PB" "$(lib 'il_profile_files "$IL_MACHINE"' | paste -sd' ' -)"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib "$UNDO_PROF" >/dev/null 2>&1
+check "profiles: uninstall under B gives B its own status line back after a second setup there, and A its own" owner-B:owner-A \
+  "$(jq -r .statusLine.command "$PB"):$(jq -r .statusLine.command "$PA")"
+check "profiles: and both files are back byte for byte" same:same "$(cmp -s "$PA" "$T/pa.before" && echo same):$(cmp -s "$PB" "$T/pb.before" && echo same)"
+# The deployed format: a manifest from before has one top-level status-line record, the one its setup's profile read.
+fresh; mkdir -p "${MM%/*}"
+jq -n --arg b "$PB" '{version: 1, entries: {($b): {kind: "merge"}}, statusLine: {was: {type: "command", command: "owner-B"}, set: {type: "command", command: "plugin-line"}}}' > "$MM"
+jq '.statusLine.command = "plugin-line"' "$T/pb.before" > "$PB"
+CLAUDE_CONFIG_DIR=${PA%/settings.json} lib 'il_status_out "$IL_MACHINE" "$1"' "$PB"
+check "profiles: an old manifest's top-level record is not put into another profile's file" plugin-line "$(jq -r .statusLine.command "$PB")"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_status_out "$IL_MACHINE" "$1"' "$PB"
+check "profiles: and still restores the profile uninstall runs under" owner-B "$(jq -r .statusLine.command "$PB")"
+rm -rf "$H/.commandeck"
+# Pre-filled options record the file's bytes first: update's rollback deletes a recorded file with no prior as setup's new one.
+fresh; mkdir -p "${MM%/*}"; echo '{"version": 1, "entries": {}}' > "$MM"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_plugin_options "$1" "{\"ponytail\": true}"' "$PB" >/dev/null
+check "profiles: pre-filled options keep the file's bytes before them, for update's rollback" "sha256:$(sha256sum < "$T/pb.before" | cut -d' ' -f1):same" \
+  "$(jq -r --arg p "$PB" '.entries[$p].prior' "$MM"):$(cmp -s "$H/.commandeck/install/blobs/$(sha256sum < "$T/pb.before" | cut -d' ' -f1)" "$T/pb.before" && echo same)"
+rm -rf "$H/.commandeck"
+# A file that is there but cannot be read is not an empty one (class unreadable-state-loss): taking it for {} wrote
+# setup's few keys over the owner's whole file. Every read-then-write step refuses it and writes nothing.
+fresh; prof_setup "$PB"; cp "$PB" "$T/pb.set"; chmod 000 "$PB"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib "$UNDO_PROF" >/dev/null 2>&1; RC=$?
+chmod 600 "$PB"
+check "unreadable: uninstall refuses a profile file it cannot read, leaves it and keeps the manifest" '1:same:yes' \
+  "$RC:$(cmp -s "$PB" "$T/pb.set" && echo same):$([ -s "$MM" ] && echo yes)"
+fresh; chmod 000 "$PB"
+OUT=$(CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_status_was "$IL_MACHINE" "$1" || echo refused; il_allow_set "$IL_MACHINE" "$1" "[\"x\"]" || echo refused
+  il_status_set "$IL_MACHINE" "$1" plugin-line || echo refused; il_lines "$IL_MACHINE" "$1" x || echo refused; il_block "$1" "$2" || echo refused' "$PB" "$T/pb.before" 2>/dev/null)
+chmod 600 "$PB"
+check "unreadable: setup's steps refuse it too, record no status line and leave the file" '5:null:same' \
+  "$(grep -c refused <<<"$OUT"):$(jq -c --arg p "$PB" '.entries[$p].statusLine' "$MM" 2>/dev/null || echo null):$(cmp -s "$PB" "$T/pb.before" && echo same)"
+rm -rf "$H/.commandeck"
+
 # --- the prompt-cache lifetime: 5m, and setup's own earlier 1h moves while an owner's own value stays ---
 CM=$T/cm.json CS=$T/cs.json
 ttl() { lib 'il_cache_ttl "$1" "$2" '"${1:-}" "$CM" "$CS" 2>&1; }
