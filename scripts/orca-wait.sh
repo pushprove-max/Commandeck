@@ -17,7 +17,7 @@
 # step, and for each ruling id the message cites its answer and void state from
 # the rulings log, with the .md detail file the message names. Messages whose
 # type does not wake main (wakeKinds, issue 318) print last, under
-# "held notes (did not wake you):".
+# "held notes (did not wake you):"; the relay's own never do (issue 324).
 # Then ONE state line and only what main must act on: NEEDS-MAIN lines, pending
 # gates, open main-watch item tasks with their ids, one line per active driver.
 # --full prints the older wake instead: every open task, each message's
@@ -217,8 +217,8 @@ driver_units() {  # units whose driver is alive, as a JSON array
 
 # WHICH MESSAGES ARE WORTH A TURN. Six rules, all about not waking main twice
 # for one event.
-#  1. A pane's "turn complete" echo with no marker in its body is noise; this
-#     woke main about 250 times in two days (ruling 2026-09-12, token cuts).
+#  1. Dropped (issue 321): no hook sends a markerless echo any more, but for a
+#     QUESTION:/BLOCKED: line, which main must see.
 #  2. A pane's "turn complete" echo is ALSO noise while a driver is watching
 #     that unit, marker or not: the driver sends its own wake at every stage, so
 #     main heard the same verdict twice all through 2026-09-15. The unit comes
@@ -246,7 +246,9 @@ driver_units() {  # units whose driver is alive, as a JSON array
 #  6. Issue 318: a message whose type does not wake main (wakeKinds: status
 #     notes, main's own included) did not wake it, and is always shown, after
 #     the wake's own lines under "held notes (did not wake you):". A heartbeat
-#     is a liveness ping, not a note: never shown.
+#     is a liveness ping, not a note: never shown. Issue 324: a message from the
+#     relay's pane wakes main whatever its type or wakeKinds, so it is never a
+#     held note (PP_JQ_WAKES, the test pp_inbox_actionable wakes main by).
 # None of these rules hides an owner answer: a message citing a ruling id, or from the relay's pane (the one in
 # $PP_WORKSPACES/Chief-of-Staff, as to-main.sh finds it), always passes. What they hide goes to hidden.jsonl.
 # Everything else passes, including every driver wake and every escalation: an
@@ -257,17 +259,16 @@ KEEP='
   def echo_unit: (.subject // "") | ((capture("\\((?<u>[^)]+)\\)") // {u:""}) | .u);
   def sender_unit: ($hunits[(.from_handle // "")] // "");
   def driven($u): ($u != "") and (($dunits | index($u)) != null);
-  def noisy: ( ((.subject // "") | test("turn complete"))
-               and ( (((.body // "") | test("-DONE|VERDICT:|PLANFIX")) | not)
-                     or driven(echo_unit) ) )
+  def noisy: ( ((.subject // "") | test("turn complete") and (test("turn complete: (QUESTION|BLOCKED)") | not))
+               and driven(echo_unit) )
              or ((.type == "worker_done") and driven(sender_unit))
              or ((.subject // "") | test("^drive [^:]+: FYI "));
   def harness: ((.from_handle // "") | test("^term_(3d8255b5|1c94009f)(-|$)"))
                or (sender_unit == "u") or (echo_unit == "u")
                or ((.subject // "") | test("^(seat [a-z-]+ (on )?|drive )?u([: ]|$)|(^| )unit=u( |$)"));
   def relay: (.subject // "") | startswith("heads-up:");
-  def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or (sender_unit == "Chief-of-Staff");
-  def held: (.type // "") as $t | any($wake[]; . == $t) | not;
+  def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or ((.from_handle // "") as $f | any($relay[]; . == $f));
+  def held: wakes($wake; $relay) | not;
   .result.messages[]? | select(.type != "heartbeat") | select(held or relay or owner or ((noisy | not) and (harness | not)))'
 # A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
@@ -335,7 +336,8 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     # Whether it merges is the merge's own check, never the round file read here
     # (that only turns a NO-GO into a fix round): only that check knows a GO that covers an older commit from one
     # that covers the tip.
-    if { [ "$type" = question ] || [ "$type" = escalation ]; } && [[ "$subject" != *"turn complete"* ]]; then
+    # A hook's "turn complete: QUESTION|BLOCKED" is a question like any other; its other "turn complete" echoes are finishes.
+    if { [ "$type" = question ] || [ "$type" = escalation ]; } && { [[ "$subject" != *"turn complete"* ]] || [[ "$subject" =~ turn\ complete:\ (QUESTION|BLOCKED) ]]; }; then
       # A question for the owner (it names the owner, or is a repeat-class stop-and-ask) goes on the owner's decision
       # queue at once, where the relay and the dashboard see it, not behind main's read (issue 305). Any other waits on main.
       wo=(--waits-on main)
@@ -510,7 +512,7 @@ checked() {  # checked <rc> <stdout> -- 0: use the output; 1: re-bound, ask agai
 }
 
 drain() {  # print and acknowledge one FIFO chain of deliveries
-  local delivery="" out cnt next dunits hunits kept all
+  local delivery="" out cnt next dunits hunits relay kept all
   while :; do
     if [ -n "$delivery" ]; then
       # An acknowledgement is itself a check: it returns the NEXT batch, which
@@ -527,21 +529,18 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
 
     # Printed BEFORE the acknowledgement below, so a message is never dropped by
     # an ack that succeeded while the print did not happen.
-    # A pane's "turn complete" echo (the Stop hook's rejected worker_done) is
-    # printed only when its body carries a marker main acts on; otherwise it is
-    # noise that woke main about 250 times in two days (ruling 2026-09-12,
-    # token cuts). Acknowledged all the same, so it never replays.
+    # What a rule hides is acknowledged all the same, so it never replays.
     # Both lookups once per batch, not once per jq: each is a process, and the
     # print and the count must classify the same batch the same way. A batch of
     # nothing but heartbeats needs neither.
-    dunits='[]'; hunits='{}'
+    dunits='[]'; hunits='{}'; relay='[]'
     if [ "$(printf '%s' "$out" | jq -r '[.result.messages[]? | select(.type != "heartbeat")] | length' 2>/dev/null)" != 0 ]; then
-      dunits=$(driver_units); hunits=$(handle_units)
+      dunits=$(driver_units); hunits=$(handle_units); relay=$(pp_relay_handles)
     fi
     # One array feeds every output path and the counter.
     # The wake's own lines first, then the held ones (a stable sort keeps Orca's order within each).
-    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --argjson wake "$WAKE" --arg rid "$RID_RE" \
-      "[$KEEP] | sort_by((.type // \"\") as \$t | any(\$wake[]; . == \$t) | not)" 2>/dev/null) || kept='[]'
+    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --argjson wake "$WAKE" --argjson relay "$relay" --arg rid "$RID_RE" \
+      "$PP_JQ_WAKES[$KEEP] | sort_by(wakes(\$wake; \$relay) | not)" 2>/dev/null) || kept='[]'
     # What the rules hid is kept, before the ack as the bodies below are: a hidden owner answer can still be found.
     # Both go in on stdin: as an argument a big batch overflows ARG_MAX (E2BIG) and the drain never acks.
     # shortcut: one append-only file, rotate it per run if it grows past a few MB.
@@ -560,7 +559,7 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
       fi
       local hdr=0
       while IFS= read -r m; do
-        [ "$hdr" = 1 ] || ! jq -e --argjson wake "$WAKE" '(.type // "") as $t | any($wake[]; . == $t) | not' <<<"$m" >/dev/null \
+        [ "$hdr" = 1 ] || ! jq -e --argjson wake "$WAKE" --argjson relay "$relay" "$PP_JQ_WAKES"'wakes($wake; $relay) | not' <<<"$m" >/dev/null \
           || { echo "held notes (did not wake you):"; hdr=1; }
         jq -r --arg mdir "$MSGDIR" --argjson full "$FULL" "$RENDER" <<<"$m"
         serve "$m" "$hunits" "$dunits"
@@ -583,7 +582,7 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
 drain || exit 3
 # Orca's banner counts every queued message, the ones the filter passes over too:
 # without this line "5 messages" beside 2 printed reads as 3 lost.
-[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, plain turn-complete echoes, a live driver's seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
+[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, a live driver's turn-complete echoes and seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
 # Routine items main-watch kept out of the inbox (issue 253): one line with the count of new ones and the file.
 DG=$SCRATCH/main-watch/digest
 DN=$(awk 'END { print NR }' "$DG" 2>/dev/null); DS=$(cat "$DG.seen" 2>/dev/null); [ "${DS:-0}" -le "${DN:-0}" ] 2>/dev/null || DS=0

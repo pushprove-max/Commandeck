@@ -744,6 +744,11 @@ PY
 )
 sleep 0.5
 check "issue 294: four restarts at once run --restart once; the rest get 429" "202 429 429 429|2" "$OUT|$(wc -l < "$T/restarts" | tr -d ' ')"
+# Issue 321: the service has no terminal, so Orca refused its sends for want of a sender. It sends only through
+# to-main.sh and cos-tell.sh (SCRIPT above), whose service-env sends carry --from (to-main.test.sh, cos-tell.test.sh):
+# the dashboard service's answer send (to main and the relay) is accepted only while nothing here calls Orca itself.
+check "the dashboard service's answer send (to main and the relay) goes through to-main.sh and cos-tell.sh alone" "0:0:1" \
+  "$(grep -c 'orca-ide' "$ROOT/scripts/dashboard_serve.py"):$(grep -c 'orca-ide' "$ROOT/scripts/decision.sh"):$(grep -c "^SCRIPT = {'main': 'to-main.sh', 'relay': 'cos-tell.sh'}$" "$ROOT/scripts/dashboard_serve.py")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

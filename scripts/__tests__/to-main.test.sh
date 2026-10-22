@@ -18,7 +18,10 @@ cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "terminal list") cat "$T/list.json" ;;
-  "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }; while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
+  # need-from: a send naming no sender is refused, as Orca refuses one from a process with no terminal.
+  "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }
+    [ ! -e "$T/need-from" ] || [[ " \$* " == *" --from "* ]] || { echo '{"ok":false,"error":{"message":"Could not determine the sender terminal"}}'; exit 1; }
+    while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
     jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" --arg to "\$to" --arg f "\${fr:-}" '{subject: \$s, type: \$t, body: \$b, to_handle: \$to, from_handle: \$f, read: 0, created_at: (now | todate)}' >> "$T/inbox-\$to"; echo '{"ok":true}' ;;
   "orchestration inbox") cat "$T"/inbox-* 2>/dev/null | jq -s '{ok: true, result: {messages: .}}' ;;
   "orchestration check") h=\$4; [ ! -e "$T/fail-\$h" ] || exit 1; [ ! -e "$T/hang" ] && [ ! -e "$T/hang-\$h" ] || sleep 10; jq -s '{ok: true, result: {messages: .}}' "$T/inbox-\$h" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; rm -f "$T/inbox-\$h" ;;
@@ -181,6 +184,11 @@ rm -f "$T"/inbox-*
 for _ in $(seq 1 50); do [ -s "$T/inbox-term_20" ] && break; sleep 0.1; done
 check "a detached merge's exit notice reaches main as a question" "question merge-u1: exit 0" \
   "$(jq -r '"\(.type) \(.subject)"' "$T/inbox-term_20" 2>/dev/null)"
+# Issue 321: a service (the dashboard's) has no terminal, and Orca refused its every send for want of a sender.
+rm -f "$T"/inbox-*; touch "$T/need-from"
+check "to-main.sh question from a service env: sent with --from and accepted" "to-main: sent to main (term_20):term_20" \
+  "$(cd "$T/p" && env -u ORCA_TERMINAL_HANDLE "${E[@]}" bash "$REAL/scripts/to-main.sh" question q1 b 2>&1):$(jq -r .from_handle "$T/inbox-term_20" 2>/dev/null)"
+rm -f "$T/need-from"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

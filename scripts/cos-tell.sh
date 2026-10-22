@@ -15,7 +15,9 @@ if [ "${1:-}" = --note ]; then
   RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "cos-tell: NOT sent: no run recorded in $PP_RUN_FILE, so the relay has no durable mailbox" >&2; exit 1; }
   SENT=$(date +%s)
-  OUT=$(orca-ide orchestration send --run "$RUN" --to "run:$RUN" --type status --subject "$2" --body "$3" --json 2>&1)
+  # A service caller (the dashboard's) has no pane: it sends as main's or the coordinator's (pp_sender, issue 321).
+  FROM=$(pp_sender) || FROM=
+  OUT=$(orca-ide orchestration send --run "$RUN" ${FROM:+--from "$FROM"} --to "run:$RUN" --type status --subject "$2" --body "$3" --json 2>&1)
   jq -e '.ok == true and ([.. | strings | select(test("^msg_"))] | length > 0) and (tostring | test("not durable") | not)' <<<"$OUT" >/dev/null 2>&1 \
     || { echo "cos-tell: NOT sent: Orca did not confirm a stored message to run:$RUN: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
   # The owner's message to main has its reply (to-main.sh), when main sent this: a worker's note is not one,

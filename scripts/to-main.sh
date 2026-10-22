@@ -33,7 +33,9 @@ if [ -z "$H" ]; then
   echo "to-main: $WHO is not running; message queued ($PP_SCRATCH/queue/$KEY.jsonl), shown first when it starts again" >&2
   owed "$2"; exit 3
 fi
-OUT=$(orca-ide orchestration send --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null)
+# A service caller (the dashboard's) has no pane: it sends as main's or the coordinator's (pp_sender, issue 321).
+FROM=$(pp_sender) || FROM=
+OUT=$(orca-ide orchestration send ${FROM:+--from "$FROM"} --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null)
 jq -e '.ok' >/dev/null 2>&1 <<<"$OUT" \
   || { echo "to-main: the send to $WHO ($H) failed: $(jq -r '.error.message // tostring' 2>/dev/null <<<"$OUT" || head -c 300 <<<"$OUT"); the message was not delivered" >&2; exit 1; }
 owed "$2"

@@ -13,7 +13,9 @@
 # Stopped without reporting: a seat that finished with no marker or verdict
 #   after this service saw it `working`, or whose pane is gone (closed or
 #   crashed) after it was seen alive. Never read as success. A seat that sent
-#   worker_done has a completed task, so it is handled and never posted.
+#   worker_done has a completed task, so it is handled and never posted. A seat's
+#   own completion message to the run or main, or a plan author's plan commit, in
+#   the current episode is a finish, never "stopped" (pp_seat_done, issue 320).
 # Stalled: a working seat whose session log and pane screen have not changed
 #   for STALL_S, or an Orca state neither working nor done held for WAITING_S.
 #   Each stall episode is its own item with its own task.
@@ -214,7 +216,7 @@ post() {
   [ -e "$f" ] && task=$(sed -n 's/^task=//p' "$f")
   last=$(sed -n 's/^posted=//p' "$f" 2>/dev/null)
   if [ -z "$task" ] || [ "$task" = none ]; then
-    orca_op '' "$HERE/orca-task-create.sh" --run "$RUN" ${MAIN_H:+--from "$MAIN_H"} \
+    orca_op '' "$HERE/orca-task-create.sh" --run "$RUN" ${FROM:+--from "$FROM"} \
       --spec "main-watch item: $3. Complete this task once main has handled it; until then it is re-posted every 5 minutes." \
       || { echo "main-watch: no task for $1: $OP_ERR" >&2; note "${3#main-watch: }: $OP_ERR" "$1"; return 0; }
     task=$OP_OUT
@@ -354,7 +356,7 @@ flush() {
     subj="main-watch: $n items need you"; [ "$RELAY" = 0 ] || subj="heads-up: $n notes"
     for i in "${!DUE_KEY[@]}"; do body+="$((i + 1)). ${DUE_SUBJ[i]}"$'\n'"${DUE_BODY[i]}"$'\n\n'; done
   fi
-  if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type "$type" \
+  if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type "$type" \
        --subject "$subj" --body "$body" --json; then
     for i in "${!DUE_KEY[@]}"; do printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"; done
     # A heads-up relay is inbox only: nothing is ever typed for it.
@@ -392,7 +394,7 @@ orca_op() {
     OP_ERR=${OP_ERR:-exit $rc with no answer}
     [ "$try" = 1 ] && grep -qiE 'no longer bound|not bound to' <<<"$OP_ERR" && rebind || return 1
     # rebind re-resolved main: a pane that restarted mid-tick is the sender now.
-    for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" != --from ] || args[i+1]=$MAIN_H; done
+    for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" != --from ] || args[i+1]=$FROM; done
   done
 }
 
@@ -434,16 +436,16 @@ arm_diag() {
 # resolve_main <worktree ps JSON> <terminal list JSON> -- sets MAIN_H and
 # MAIN_STATE (Orca's state for that pane, `none` when unknown), COORD (the run's
 # coordinator, `?` when the run list did not answer) and COORD_LIVE (that pane
-# is listed). Main's pane is the sender: a service has no terminal of its own,
-# and Orca refuses a send it cannot attribute. Found every tick, so /clear and a
+# is listed), and FROM, the --from of every send: a service has no terminal of its own, and Orca refuses a send it
+# cannot attribute. FROM is main's pane, else the run's live coordinator, else what pp_sender finds (issue 321: Orca
+# can list main's pane with no agentIdentity); only MAIN_H is ever typed into. Found every tick, so /clear and a
 # restarted pane need nothing re-pinned. Only a claude pane in the main checkout
 # is main, so a worker or shell holding the run is never typed into. The run's
 # coordinator comes first: an old main pane left open after a restart is also a
 # claude pane in the main checkout, and Orca refuses its sends ("no longer
 # bound to Run").
 resolve_main() {
-  COORD=$(orca-ide orchestration run-list --json 2>/dev/null | jq -er --arg r "$RUN" \
-    '.result.runs | if type == "array" then (first(.[] | select(.id == $r) | .coordinator_handle) // "") else error end' 2>/dev/null) || COORD='?'
+  COORD=$(pp_run_coord "$RUN") || COORD='?'
   COORD_LIVE=$(jq -r --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $c)] | length' <<<"$2" 2>/dev/null)
   MAIN_H=$(jq -r --arg m "$PP_MAIN" --arg c "$COORD" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
     | select((.worktreePath | pnorm) == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
@@ -452,6 +454,7 @@ resolve_main() {
     | first(($ts.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h)
       | $a["\(.tabId):\(.leafId)"]) // "none"' 2>/dev/null)
   [ -n "$MAIN_STATE" ] || MAIN_STATE=none
+  FROM=$(pp_sender "$MAIN_H" "$([ "$COORD" = '?' ] || [ "${COORD_LIVE:-0}" = 0 ] || echo "$COORD")") || FROM=
 }
 main_now() { # main as Orca sees it at this moment, not at the start of the tick
   resolve_main "$(listing worktree ps || echo '{}')" "$(listing terminal list || echo '{}')"
@@ -499,7 +502,7 @@ mail_wake() {
 # flush() sends. Only a send Orca took marks the episode told, so a refused one is tried again next tick.
 tell_relay() {
   [ -d "$PP_WORKSPACES/Chief-of-Staff" ] && [ "$(cat "$ST/wake-told" 2>/dev/null)" != "$tasks" ] || return 0
-  orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type status \
+  orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type status \
     --subject "cos: main-watch: main has not read finished work" \
     --body "$(wc -w <<<"$tasks" | tr -d ' ') item(s) wait unread in main's inbox for run $RUN: $1. Fix: $2." --json \
     && printf '%s\n' "$tasks" > "$ST/wake-told"
@@ -872,8 +875,12 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   kind=$(cat "$ST/kind-$key" 2>/dev/null)
   # A Codex pane on the Mac reads `none` at work and at rest, so there its log
   # growing past the settled finish is the only sign of the follow-up.
-  if [ -n "$kind" ] && { [ "$state" = working ] || { { [ "$state" = "done" ] || [ "$state" = none ]; } && pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}"; }; }; then
-    rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key" "$ST/held-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
+  # A finish settled while Orca still read `working` (sw-, a stale snapshot) needs the pane to grow past it too.
+  if [ -n "$kind" ] && case $state in
+      working) [ ! -e "$ST/sw-$key" ] || pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}" ;;
+      done|none) pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}" ;;
+      *) false ;; esac; then
+    rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key" "$ST/held-$key" "$ST/sw-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
   fi
   # A settled finish is not read again; the wait check below still needs the
   # closing line it was settled on.
@@ -886,11 +893,16 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     working)
       # A hold ends when the Builder works again, settled or not: its next helper wait starts a fresh clock.
       : > "$ST/working-$key"; rm -f "$ST/held-$key"
-      at=$(grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}")
-      [ $((NOW - at)) -ge "$STALL_S" ] || return 0
-      post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
-        "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h"
-      return 0 ;;
+      if [ -z "$kind" ]; then
+        at=$(grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}")
+        [ $((NOW - at)) -ge "$STALL_S" ] || return 0
+        # A quiet seat that reported or committed its plan is finished, whatever Orca's snapshot says (issue 320).
+        seat_reported "$h" "$4" || { post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
+          "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h"
+          return 0; }
+        : > "$ST/sw-$key"; echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
+        mark_pane f "$key" "$h" "$w" "$task" "$5" "${6:-}"
+      fi ;;
     done)
       if [ -z "$kind" ]; then
         # A boot `done` with no result is read once, not every tick until closed,
@@ -905,6 +917,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
         # created at launch. Its latest answer is the one after the last prompt.
         if has_result "$h" "${5:-0}"; then kind=finished
         elif [ "$RV_OK" = 0 ] && rv_unanswered "$key"; then return 0
+        elif [ -e "$ST/working-$key" ] && seat_reported "$h" "$4"; then :
         elif [ -e "$ST/working-$key" ]; then kind=silent
         else [ "$RV_OK" = 0 ] || { : > "$ST/booted-$key"; mark_pane b "$key" "$h" "$w" "$task" "$5" "${6:-}"; }; return 0; fi
         # A Builder with no DONE line and a helper out is waiting on it: read again next tick. DONE is its own
@@ -963,7 +976,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
             [ -e "$ST/rvfail-$key" ] || echo "$NOW" > "$ST/rvfail-$key"
             [ $((NOW - $(cat "$ST/rvfail-$key"))) -ge "$STALL_S" ] || return 0
           fi
-          kind=silent
+          seat_reported "$h" "$4" || kind=silent
         fi
         rm -f "$ST/rvf-$key" "$ST/rvfail-$key"
         echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
@@ -976,6 +989,8 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
         "Seat $4 ($h) on $u has been '$state' for $(( (NOW - since) / 60 )) min. It may be waiting for input: $HERE/read-verdict.sh $h"
       return 0 ;;
   esac
+  # The seat's own message reached main: nothing to post.
+  [ "$kind" != reported ] || { echo handled > "$ST/item-$item"; return 0; }
   if [ "$kind" = finished ]; then
     # A seat.sh wait on this pane reports the finish itself.
     pp_waited_on "$h" "$NOW" "${RV_OUT:-}" "watch:$item" && { echo handled > "$ST/item-$item"; return 0; }
@@ -1000,8 +1015,19 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     NUDGED=""
     if [ "$4" = builder ] && [ -n "$state" ] && [ "$state" != none ]; then stopped_nudge "$u" "$h" "$item" && return 0; fi
     post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
-      "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}.$NUDGED This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h"
+      "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}.$NUDGED This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h${RV_OUT:+ Last words: $(tr '\n' ' ' <<<"$RV_OUT" | tail -c 300)}"
   fi
+}
+
+# seat_reported <handle> <role> -- issue 320: the seat's own completion message that reached main (kind reported,
+# nothing posted), or its fresh plan commit or a completion note main has not seen (kind finished, with the PLAN-DONE
+# line a wait that released on it claims)
+# since its episode began (pp_seat_done). Fails, setting nothing, when there is neither, and for any seat but a plan
+# author: a Builder's finish is its DONE line and the merge gate (issue 258), a judge's is its VERDICT line.
+seat_reported() {
+  local r sd
+  [[ $2 == plan-author* ]] && r=$(pp_seat_record "$1") && sd=$(pp_seat_done "$r" "${MAIN_H:-}" "$([ "$COORD" = '?' ] || echo "$COORD")") || return 1
+  if [ "$sd" = message ]; then kind=reported; else kind=finished RV_OUT+=${RV_OUT:+$'\n'}PLAN-DONE; fi
 }
 
 # HEADS-UP RELAY. The built-in "you should know" mod keeps each Claude

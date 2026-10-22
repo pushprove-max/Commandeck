@@ -24,6 +24,15 @@ check "and the helper typed the pointer to it" 1 "$(grep -cF "Your task spec is 
 printf 'echo twenty-three\n' > "$W/a.sh"; fpass "$W" 23 final 'VERDICT: GO' >/dev/null
 printf 'echo twenty-four\n' > "$W/a.sh"
 check "a commit after a closing GO: review runs as final" "0 1" "$(fpass "$W" 24 review 'VERDICT: GO') $(grep -cx 'Pass: final' "$B/$U-r24-reports.md")"
+# Issue 321: Codex's notify hook fires in the Builder's pane, whose seat record names it, at the pass's verdict turn.
+# It sends main nothing (the run file is there and no driver owns the unit, so only the seat rule stops it), because
+# the pass hands the Builder that verdict itself: in its output and its round file.
+echo run_t > "$SC/current-run"; printf '#!/usr/bin/env bash\nexit 0\n' > "$FB/systemctl"; chmod +x "$FB/systemctl"
+printf 'echo twenty-five\n' > "$W/a.sh"; rm -f "$TMP/frs-calls"
+check "a Builder's pass verdict: the notify hook sends nothing, and the pass's output and round file carry the verdict" "0 0 1 1" \
+  "$(fpass "$W" 25 review $'Clean.\nVERDICT: GO' STUB_NOTIFY="$REAL/hooks/codex-notify.sh" ORCA_WORKTREE_ID="id::$W" COMMANDECK_HOOK_FIRE_LOG=/dev/null) \
+$(cat "$TMP/frs-calls" 2>/dev/null | grep -c 'turn complete') $(grep -c "^$U-r25-reports.md: VERDICT: GO " "$TMP/out") $(grep -cx 'VERDICT: GO' "$B/$U-r25-reports.md")"
+rm -f "$SC/current-run"
 wait
 check "no fresh-round helper of this file is left running" 0 "$(pgrep -f "$TMP/" | grep -vx "$$" | wc -l | tr -d ' ')"
 

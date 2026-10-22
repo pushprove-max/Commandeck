@@ -18,7 +18,9 @@ cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 ! grep -qx "\$2" "$T/down" 2>/dev/null || { echo '{"ok":false}'; exit 1; }
 case "\$1 \$2" in
+  # need-from: a send naming no sender is refused, as Orca refuses one from a process with no terminal.
   "orchestration send") [ ! -e "$T/during-send" ] || bash "$T/during-send"
+    [ ! -e "$T/need-from" ] || [[ " \$* " == *" --from "* ]] || { echo '{"ok":false,"error":{"message":"Could not determine the sender terminal"}}'; exit 1; }
     [ ! -e "$T/live-only" ] || { echo '{"ok":true,"result":{"warning":"live terminal-only mailbox, delivery is not durable"}}'; exit 0; }
     while [ \$# -gt 0 ]; do case \$1 in --run) r=\$2 ;; --to) to=\$2 ;; --subject) s=\$2 ;; --body) b=\$2 ;; --type) ty=\$2 ;; esac; shift; done
     n=\$(( \$(cat "$T/store.jsonl" 2>/dev/null | wc -l) + 1 ))
@@ -52,6 +54,11 @@ touch "$T/live-only"
 OUT=$(note "unit u3 merged" "u3"); RC=$?
 check "a send Orca does not confirm as stored exits 1 and says so" "1:1" "$RC:$(grep -c 'NOT sent: Orca did not confirm a stored message' <<<"$OUT")"
 rm -f "$T/live-only"
+# Issue 321: a service (the dashboard's) has no terminal, and Orca refused its every note for want of a sender.
+touch "$T/need-from"
+OUT=$(cd "$T/p" && env -u ORCA_TERMINAL_HANDLE "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "unit u4 merged" "u4" 2>&1); RC=$?
+check "cos-tell.sh --note from a service env: sent with --from and accepted" "0:1" "$RC:$(grep -c '"subject":"unit u4 merged"' "$T/store.jsonl")"
+rm -f "$T/need-from"
 
 # A typed send Orca took no input for (a paired phone holding the pane's keyboard) said "Sent" or a bare "Send failed".
 mkdir -p "$T/ws/Chief-of-Staff"; touch "$T/cos-pane"

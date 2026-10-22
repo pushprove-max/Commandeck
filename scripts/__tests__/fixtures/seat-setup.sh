@@ -45,6 +45,8 @@ case "\$*" in
     [ -e "$T/no-dispatch" ] || { echo '{"ok":true,"result":{}}'; exit; }
     while [ \$# -gt 0 ]; do [ "\$1" != --text ] || printf '%s\n' "\$2" >> "$T/sent"; shift; done; echo '{"ok":true,"result":{"stages":["turn_started"]}}' ;;
   "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
+  # The inbox answers inbox.json (issue 320: a seat's own report), empty without one.
+  "orchestration inbox"*) cat "$T/inbox.json" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
   *) echo '{"ok":true,"result":{}}' ;;
 esac
 EOF

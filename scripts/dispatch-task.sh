@@ -62,7 +62,7 @@ type_pointer() {
   # The seat's log is found by the tag in its spec; read-verdict.sh searches typed prompts only.
   tag=$(grep -om1 'Seat tag [^ ]*: it names this [^.]*\.' <<<"$spec" | sed 's/^/ /' || true)
   mkdir -p "${f%/*}" && printf '%s\n' "$spec" > "$f" && touch "$mark" || fail "$1; cannot write $f"
-  orca-ide terminal send --terminal "$H" --text "Read $f and follow it in full; it is your whole task. Send no heartbeats, whatever the preamble above asks: main never reads one and each costs you a turn.$tag" --enter --json 2>/dev/null \
+  orca-ide terminal send --terminal "$H" --text "Read $f and follow it in full; it is your whole task. Send no heartbeats, whatever the preamble above asks: main never reads one and each costs you a turn. A question or a refusal goes on a line of its own that starts QUESTION: or BLOCKED:.$tag" --enter --json 2>/dev/null \
     | jq -e '.ok' >/dev/null 2>&1 || fail "$1; typing the pointer failed too"
   # Review panes run with CODEX_HOME=~/.codex-review, so their rollouts land there.
   for _ in $(seq 20); do

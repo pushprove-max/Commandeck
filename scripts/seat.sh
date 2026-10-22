@@ -86,6 +86,9 @@ else WTN=$(grep '^worktree=' "$REC" 2>/dev/null | tail -1 | cut -d= -f2- || true
 WT=$WS/$WTN
 # Issue 256: the plan a plan seat reads or leaves, with its hash; builder-launch.sh --from-plan installs only that one.
 plan_lines() { local p=$WT/.claude/plans/$UNIT.md; [ ! -f "$p" ] || printf 'plan=%s\nplanhash=%s\n' "$p" "$(sha256sum < "$p" | cut -d' ' -f1)"; }
+# Issue 320: a plan author's own completion message or fresh plan commit is its finish too (pp_seat_done); a judge's is not.
+# reported [marker] -- it stands in for PLAN-DONE only (no marker is PLAN-DONE): never for a verdict or another marker.
+reported() { [[ $ROLE == plan-author* ]] && [ "${1:-PLAN-DONE}" = PLAN-DONE ] && pp_seat_done "$REC"; }
 # The Panel's planners launch in parallel: the check here and the make and mark below are one step under this lock,
 # or the second saw <unit> made and not yet marked, and refused it (Sol r4). Released once the worktree is marked.
 if [[ $CMDNAME == launch && $ROLE == plan-* ]]; then
@@ -383,6 +386,9 @@ launch)
   # launch (u1219). The gate above already checked the full file.
   SPEC_ABS=$(realpath "$SPEC")
   SPEC_TEXT="Your task spec is the file $PTR. Read all of it now and do what it says. Send no heartbeats, whatever the preamble above asks: main never reads one and each costs you a turn."
+  # Issue 321: the Stop hooks send main a turn's end only for a marker or one of these lines.
+  SPEC_TEXT+=" A question or a refusal goes on a line of its own that starts QUESTION: or BLOCKED:."
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Your last line, alone, is PLAN-DONE: a message saying the plan is done does not replace it."
   # Two reviewer seats of one unit are handed the same spec, so the spec cannot
   # say whose session a log is; this tag, unique to the launch, does.
   TAG=seat-$ROLE-$LAUNCH_EPOCH-$$
@@ -399,7 +405,9 @@ launch)
   # The record is rewritten, but keeps the seat's first launch in this worktree: a relaunched planner's
   # planning still starts there (dashboard.sh plan_seats).
   FIRST=; [ "$(sed -n 's/^worktree=//p' "$REC" 2>/dev/null | tail -1)" != "$WTN" ] || FIRST=$(sed -n 's/^first=//p; s/^launched=//p' "$REC" | sort -n | head -1)
-  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" > "$REC"
+  # planref: the plan committed at launch, so only this seat's own plan commit counts as its finish (pp_plan_committed).
+  PLANREF=$(git -C "$WT" rev-parse -q --verify "HEAD:.claude/plans/$UNIT.md" 2>/dev/null || true)
+  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\nplanref=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" "$PLANREF" > "$REC"
   echo "phase=launching" >> "$REC"
   [ -z "$PLAN_REC" ] || echo "$PLAN_REC" >> "$REC"
   seat_codex_home
@@ -520,6 +528,7 @@ collect)
   # banner there is no verdict: the "NO VERDICT YET" tail it prints instead can hold one.
   V=$(printf '%s\n' "$OUT" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
   if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(unfenced <<<"$OUT" | sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//')"; then V=$DONE_MARKER; fi
+  SD=$(reported "$DONE_MARKER" || true); [ -n "$V" ] || [ -z "$SD" ] || V=PLAN-DONE
   # A read-only seat cannot have written the report itself, so a file already
   # sitting at that path is a PREVIOUS round's and the pane is the only source
   # of truth: overwrite it. Skipping the write served h1c's triage the voided
@@ -549,8 +558,12 @@ collect)
   # follows main to whatever pane it lives in.
   # A DRIVER'S SEAT SENDS NOTHING (COMMANDECK_DRIVER=1): the driver's own wake is
   # the one message for this event, and this send was its duplicate.
+  # ONE REPORT PER FINISH (issue 321): a collect in main's own foreground sends only a finish a seat.sh wait claimed:
+  # one main-watch posted is main's call, and main reads this output. One the seat reported itself already reached main.
+  # A detached run's collect still sends when its wait gave up: nothing else tells main.
   SEND_RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
-  if [ -n "$SEND_RUN" ] && [ -n "$V" ] && [ "${COMMANDECK_DRIVER:-0}" != 1 ]; then
+  if [ -n "$SEND_RUN" ] && [ -n "$V" ] && [ "${COMMANDECK_DRIVER:-0}" != 1 ] && [ "$SD" != message ] \
+     && { ! pp_main_foreground || pp_waited_on "$H" "" "$V"$'\n'"$OUT"; }; then
     orca-ide orchestration send --run "$SEND_RUN" --to "run:$SEND_RUN" --type question \
       --subject "seat $ROLE $UNIT: ${V#VERDICT: }" --body "$V" --json >/dev/null \
       || echo "seat: could not wake main for $ROLE $UNIT" >&2
@@ -595,6 +608,9 @@ wait)
   # and the turn-complete hooks from waking main for the same turn. It names the
   # line the wait actually saw: the marker, or the verdict that released it.
   WAITF=$SCRATCH/waiting-$H; pp_wait_mark > "$WAITF"; SEEN_MARK=$MARKER
+  # stop_or_reported -- a plan author that reported or committed its plan since its latest prompt (pp_seat_since) is
+  # released as PLAN-DONE; else the stop goes on.
+  stop_or_reported() { reported "$MARKER" >/dev/null || return 0; SEEN_MARK=$MARKER; echo "marker $MARKER: $ROLE $UNIT reported its finish ($H)"; exit 0; }
   trap 'if [ $? = 0 ]; then printf "%s\nseen %s %s\n" "$$" "$(date +%s)" "$SEEN_MARK" > "$WAITF"
     [ "$SEEN_MARK" != "$MARKER" ] || echo "marker=$MARKER" >> "$REC"; else rm -f "$WAITF"; fi' EXIT
   # The pointer usually holds no marker; grep's exit 1 must not end the wait under pipefail.
@@ -701,12 +717,14 @@ wait)
     # The driver wakes main with this output and keeps a route=stalled line
     # whole, so the pane's last words ride on it.
     if [ "$(kv first_turn_stall)" = 1 ]; then
+      stop_or_reported
       echo "seat $ROLE $UNIT stalled: first turn ended without starting work"
       echo "STOP unit=$UNIT round=- route=stalled next=phase=seat:$ROLE pane=$H task=$T no tool call yet, last message: $(kv last_message) -- answer the pane, then bash $PP_SCRIPTS_Q/seat.sh wait $ROLE $UNIT --marker $MARKER && bash $PP_SCRIPTS_Q/seat.sh collect $ROLE $UNIT"
       exit 1
     fi
     if [ "$(kv stalled)" = 1 ]; then
-      echo "STOP unit=$UNIT round=- route=stalled next=phase=seat:$ROLE pane=$H task=$T idle=$(kv idle_seconds)s; answer the pane, then bash $PP_SCRIPTS_Q/seat.sh wait $ROLE $UNIT --marker $MARKER && bash $PP_SCRIPTS_Q/seat.sh collect $ROLE $UNIT"
+      stop_or_reported
+      echo "STOP unit=$UNIT round=- route=stalled next=phase=seat:$ROLE pane=$H task=$T idle=$(kv idle_seconds)s, last message: $(kv last_message) -- answer the pane, then bash $PP_SCRIPTS_Q/seat.sh wait $ROLE $UNIT --marker $MARKER && bash $PP_SCRIPTS_Q/seat.sh collect $ROLE $UNIT"
       echo "seat $ROLE $UNIT: pane $H is idle without $MARKER" >&2; exit 1
     fi
     if [ "$(kv state)" = running ] || [ -n "$(kv outstanding)" ]; then sleep "$POLL"; continue; fi
@@ -733,6 +751,7 @@ wait)
           # Waiting the rest of the timeout out cannot change that, and the
           # thing main needs is in $RV: wt775's plan-author ended on
           # PLAN-BLOCKED asking for a ruling and nobody heard it for 75 minutes.
+          stop_or_reported
           printf '%s\n' "$RV"
           echo "seat $ROLE $UNIT: pane $H finished without $MARKER" >&2
           exit 1

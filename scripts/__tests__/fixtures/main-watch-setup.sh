@@ -31,9 +31,13 @@ export COMMANDECK_HOST_OS=Linux
 printf '#!/usr/bin/env bash\ncase "$*" in *lstart=*) exec /bin/ps "$@" ;; esac\nexit 0\n' > "$T/bin/ps"
 cat > "$T/bin/orca-ide" <<ORCA
 #!/usr/bin/env bash
+# With need-from, a task-create or send that names no sender is refused, as Orca refuses one from a process with no terminal.
+case "\$1 \$2" in "orchestration task-create"|"orchestration send")
+  [ ! -e "$F/need-from" ] || [[ " \$* " == *" --from "* ]] || { echo "\$*" >> "$T/refused"; echo '{"ok":false,"error":{"message":"Could not determine the sender terminal"}}'; exit 1; } ;;
+esac
 case "\$1 \$2" in
   "orchestration task-list") jq -Rn '{result:{tasks:[inputs | split(" ") | {id:.[0], status:.[1]}]}}' < "$F/tasks" ;;
-  "orchestration task-create")
+  "orchestration task-create") echo "\$*" >> "$T/creates"
     n=\$(( \$(wc -l < "$F/tasks") + 1 )); echo "task_new\$n pending" >> "$F/tasks"
     echo "{\"ok\":true,\"result\":{\"task\":{\"id\":\"task_new\$n\"}}}" ;;
   # With live-inbox, a send also lands unread in inbox.jsonl (created at COMMANDECK_NOW), which the inbox read answers.
@@ -50,22 +54,25 @@ case "\$1 \$2" in
   "terminal read") if [ -e "$F/screen-\$4" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen-\$4"
     elif [ -e "$F/screen" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen"
     else echo '{"result":{"terminal":{"tail":[],"latestCursor":"0"}}}'; fi ;;
+  # With no-identity, Orca names no pane's agent (agentIdentity null), as it lists main's panes on some hosts.
   "terminal list")
-    jq -Rn --arg main "$REPO" --arg cos "$T/ws/Chief-of-Staff" '{result:{terminals:[inputs | split(" ") | {handle:.[0], tabId:.[0], leafId:"l",
-      worktreePath:(if (.[0] | startswith("term_main")) then \$main elif (.[0] | startswith("term_cos")) then \$cos else "/elsewhere" end), agentIdentity:"claude"}]}}' < "$F/agents" ;;
+    jq -Rn --arg main "$REPO" --arg cos "$T/ws/Chief-of-Staff" --argjson id "\$([ -e "$F/no-identity" ] && echo null || echo '"claude"')" '{result:{terminals:[inputs | split(" ") | {handle:.[0], tabId:.[0], leafId:"l",
+      worktreePath:(if (.[0] | startswith("term_main")) then \$main elif (.[0] | startswith("term_cos")) then \$cos else "/elsewhere" end), agentIdentity:\$id}]}}' < "$F/agents" ;;
   "orchestration inbox") [ ! -e "$F/inbox-\$4" ] || { cat "$F/inbox-\$4"; exit 0; }
     # flip-inbox runs once after the read is taken and before it is answered: what lands meanwhile is not in it.
     [ ! -e "$F/live-inbox" ] || { o=\$(jq -sc '{ok: true, result: {messages: .}}' "$F/inbox.jsonl")
       [ ! -e "$F/flip-inbox" ] || { mv "$F/flip-inbox" "$F/flip-inbox.run"; bash "$F/flip-inbox.run"; }; echo "\$o"; exit 0; }
     cat "$F/inbox" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
-  "orchestration run-list") echo '{"result":{"runs":[{"id":"run_test","coordinator_handle":"term_main"}]}}' ;;
+  # coord names the run's coordinator; term_main without it.
+  "orchestration run-list") jq -nc --arg c "\$(cat "$F/coord" 2>/dev/null || echo term_main)" '{result:{runs:[{id:"run_test",coordinator_handle:\$c}]}}' ;;
   "worktree ps") jq -Rn '{result:{worktrees:[{agents:[inputs | split(" ") | {paneKey:(.[0] + ":l"), state:.[1]}]}]}}' < "$F/agents" ;;
   *) echo '{}' ;;
 esac
 ORCA
 chmod +x "$T/bin/orca-ide" "$T/bin/ps"
 
-mw() { (cd "$REPO" && unset CLAUDE_CONFIG_DIR && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws bash scripts/main-watch.sh "$@"); }
+# A service: no terminal handle of its own.
+mw() { (cd "$REPO" && unset CLAUDE_CONFIG_DIR ORCA_TERMINAL_HANDLE && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws bash scripts/main-watch.sh "$@"); }
 tick() { COMMANDECK_NOW=$1 mw --once 2>>"$T/stderr" || fail "main-watch exited non-zero at $1"; }
 state() { awk -v h="$1" '$1 != h' "$F/agents" > "$F/agents.new"; mv "$F/agents.new" "$F/agents"; echo "$1 $2" >> "$F/agents"; }
 posts() { grep -c -- "$1" "$T/sends" || true; }

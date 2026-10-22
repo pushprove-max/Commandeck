@@ -325,6 +325,115 @@ pp_waited_on() {
   [ "$(sed -n 1p "$u" 2>/dev/null)" != "$at" ] || [ "$(sed -n 2p "$u")" = "$4" ] || return 1
   printf '%s\n%s\n' "$at" "$4" > "$u"
 }
+# Issue 320: a seat's finish has two signs, its marker and its own report; the helpers below read the second.
+# pp_seat_record <handle> -- the path of the seat-*.txt record this host launched (no origin=) naming that pane.
+pp_seat_record() {
+  [ -n "$1" ] && grep -lxF "handle=$1" "$PP_SCRATCH"/seat-*.txt 2>/dev/null | while read -r f; do grep -q '^origin=' "$f" || { echo "$f"; break; }; done | grep .
+}
+# pp_seat_turn <record> -- read-verdict.sh --state on the seat's session log: state= and prompted=, its latest prompt.
+pp_seat_turn() {
+  local w l s
+  w=$(sed -n 's/^unit=//p; s/^worktree=//p' "$1" | tail -1) l=$(sed -n 's/^launched=//p' "$1" | tail -1)
+  s=$(sed -n 's/^spec=//p; s/^tag=//p' "$1" | tail -1)
+  PP_FAIL_RE=$PP_FAIL_RE timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$PP_WORKSPACES/$w" --launched "${l:-0}" ${s:+--spec "$s"} 2>/dev/null || true
+}
+# pp_turn_quiet <pp_seat_turn output> [states] -- the reader answered: the turn's state is one of [states] (an ERE
+# alternation, default complete) and no background command is live. A fixed list, never a deny-list: any other
+# answer, an unknown one or a failed read included, is not finished.
+pp_turn_quiet() { grep -qxE "state=(${2:-complete})" <<<"$1" && grep -qx 'outstanding=' <<<"$1"; }
+# pp_seat_since <record> [prompted] -- the current episode's start: the seat's latest prompt in its session log (one
+# read here when not given), never earlier than its launch. Only with no log read does main-watch's follow-up episode
+# stand in for the prompt: an observer's own start (a wait, a tick) never moves it.
+pp_seat_since() {
+  local h t p; h=$(sed -n 's/^handle=//p' "$1" | tail -1) t=$(sed -n 's/^task=//p' "$1" | tail -1)
+  p=${2-$(pp_seat_turn "$1" | sed -n 's/^prompted=//p')}
+  { sed -n 's/^launched=//p' "$1"; if [ -n "$p" ]; then echo "$p"; else cat "$PP_SCRATCH/main-watch/episode-seat-$h-$t" 2>/dev/null; fi; echo 0; } \
+    | grep -xE '[0-9]+' | sort -n | tail -1
+}
+# pp_plan_committed <record> [since] -- a plan author's plan, committed after the episode began, differs from the one at launch (planref=),
+# and the working plan is that commit: a staged or unstaged edit after it is unfinished work, never certified by it.
+pp_plan_committed() {
+  local u w b at
+  [[ $(sed -n 's/^role=//p' "$1" | tail -1) == plan-author* ]] || return 1
+  u=$(sed -n 's/^unit=//p' "$1" | tail -1) w=$(sed -n 's/^worktree=//p' "$1" | tail -1)
+  w=$PP_WORKSPACES/${w:-$u}
+  b=$(git -C "$w" rev-parse -q --verify "HEAD:.claude/plans/$u.md" 2>/dev/null) && [ "$b" != "$(sed -n 's/^planref=//p' "$1" | tail -1)" ] || return 1
+  # The bytes themselves, staged and on disk: git's own diff trusts index flags, fsmonitor and filters (issue 320).
+  [ "$(git -C "$w" hash-object --no-filters -- ".claude/plans/$u.md" 2>/dev/null)" = "$b" ] \
+    && [ "$(git -C "$w" rev-parse -q --verify ":.claude/plans/$u.md" 2>/dev/null)" = "$b" ] || return 1
+  at=$(git -C "$w" log -1 --format=%ct -- ".claude/plans/$u.md" 2>/dev/null) && [ -n "$at" ] && [ "$at" -gt "${2:-$(pp_seat_since "$1")}" ]
+}
+# pp_seat_done <record> [recipient handle...] -- prints `message` when the seat's own message since its latest prompt,
+# to the run, main's live pane (to-main.sh's address) or a recipient (none named: the run's coordinator), is a finish and
+# has reached main: its type wakes main (wakeKinds) or it is read. A message to any other pane (a helper's) is no finish.
+# `plan-commit` when pp_plan_committed; else `note` for such a finish main has not seen (its delivery is still owed);
+# else nothing, exit 1. Only a turn its session log reads complete, with no background
+# command live, and not ending on a question or refusal (asked=0), has finished (pp_turn_quiet): a committed plan or a
+# 'Plan revised' message is no answer to what the turn asks. A failed read counts as nothing: the caller's alert still fires.
+# A finish is a fixed list, never a parse (issue 320): the raw subject starts `Plan written` or
+# `Plan revised`, or the whole body, outer whitespace trimmed, is one marker of the list; and no `QUESTION:` or
+# `BLOCKED` (PLAN-BLOCKED included) anywhere. The list is a plan author's own markers, PLAN-DONE and <UNIT>-DONE: a
+# verdict line is not one. A marker quoted, fenced, decorated or under other text is not a finish: main gets the alert.
+pp_seat_done() {
+  local r=$1 kv since d; shift
+  kv=$(pp_seat_turn "$r"); pp_turn_quiet "$kv" && grep -qx 'asked=0' <<<"$kv" || return 1
+  since=$(pp_seat_since "$r" "$(sed -n 's/^prompted=//p' <<<"$kv")")
+  d=$(pp_seat_inbox "$r" "$since" "$@")
+  # Uncertain is not finished: an inbox that did not answer, a full page (newest first, no paging) that does not reach back
+  # to the seat's prompt, or a failure the seat reported (a verdict line of any spelling is no plan finish), vetoes every branch below.
+  grep -qx ok <<<"$d" && ! grep -qx fail <<<"$d" || return 1
+  grep -qx true <<<"$d" && { echo message; return 0; }
+  if pp_plan_committed "$r" "$since"; then echo plan-commit; elif grep -qx false <<<"$d"; then echo note; else return 1; fi
+}
+# PP_FAIL_RE / pp_failed_text <text> -- the one test for text that asks or reports a failure: a `QUESTION:`, `BLOCKED`
+# (PLAN-BLOCKED included) anywhere, or a verdict line of any spelling (a plan author's finish never carries one). Used
+# on the seat's final reply (the Stop hook) and on every message it sent (pp_seat_inbox), whoever the message went to.
+PP_FAIL_RE='QUESTION:|BLOCKED|(^|\n)[ \t]*\**VERDICT:'
+pp_failed_text() { jq -Rse --arg re "$PP_FAIL_RE" 'test($re)' <<<"$1" >/dev/null 2>&1; }
+# pp_seat_clear <record> [recipient handle...] -- succeeds when the inbox answered in full and the seat reported no
+# failure since its prompt: the one test pp_seat_done and the Stop hook's PLAN-DONE request share.
+pp_seat_clear() {
+  local r=$1 d; shift
+  d=$(pp_seat_inbox "$r" "$(pp_seat_since "$r" "$(pp_seat_turn "$r" | sed -n 's/^prompted=//p')")" "$@")
+  grep -qx ok <<<"$d" && ! grep -qx fail <<<"$d"
+}
+# pp_seat_inbox <record> <since> [recipient handle...] -- the seat's own inbox lines since <since>: `ok` once the inbox
+# answered in full; `fail` for a message of the seat's that asks or reports a failure, to anyone; else one line per finish
+# sent to the run or a recipient: true when it reached main.
+pp_seat_inbox() {
+  local r=$1 since=$2 h u run k; shift 2
+  h=$(sed -n 's/^handle=//p' "$r" | tail -1) u=$(sed -n 's/^unit=//p' "$r" | tail -1)
+  [ -n "$h" ] || return 1
+  run=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")}
+  [ $# -gt 0 ] || set -- "$(pp_run_coord "$run")"
+  k=$(pp_option wakeKinds) || k=
+  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -r --arg h "$h" --argjson s "$since" --arg k "$k" --arg fre "$PP_FAIL_RE" \
+    --argjson to "$(printf '%s\n' "${run:+run:$run}" "$(pp_seat_pane main "$PP_MAIN")" "$@" | jq -Rsc 'split("\n") | map(select(. != "" and . != "?"))')" \
+    --argjson done "$(jq -nc --arg u "${u^^}-DONE" '["PLAN-DONE", $u]')" "$PP_JQ_WAKES"'
+    def at: (.created_at // "") | sub("\\.[0-9]+"; "") | fromdateiso8601? // 0;
+    (if (.result.messages | type) == "array" and ((.result.messages | length) < 500 or any(.result.messages[]; at <= $s)) then "ok" else empty end),
+    (.result.messages[]? | select(.from_handle == $h and at > $s)
+    | (.subject // "") as $sub | (.body // "" | gsub("^\\s+|\\s+$"; "")) as $b
+    | if "\($sub)\n\($b)" | test($fre) then "fail"
+      elif (.to_handle as $t | any($to[]; . == $t)) and (($sub | test("^plan (written|revised)"; "i")) or any($done[]; . == $b))
+        then (.read // 0) != 0 or wakes($k | split(","); [])
+      else empty end)' 2>/dev/null
+}
+# pp_run_coord <run> -- the run's coordinator handle (empty when the run has none); fails when the run list does not answer.
+pp_run_coord() {
+  orca-ide orchestration run-list --json 2>/dev/null | jq -er --arg r "$1" \
+    '.result.runs | if type == "array" then (first(.[] | select(.id == $r) | .coordinator_handle) // "") else error end' 2>/dev/null
+}
+# pp_sender [handle...] -- the --from a send needs (Orca refuses one it cannot attribute): the first non-empty argument,
+# this pane's own handle, main's live pane, or the run's live coordinator. Nothing, exit 1, when none: a service has no pane.
+pp_sender() {
+  local h
+  for h in "$@" "${ORCA_TERMINAL_HANDLE:-}"; do [ -z "$h" ] || { echo "$h"; return 0; }; done
+  h=$(pp_seat_pane main "$PP_MAIN"); [ -z "$h" ] || { echo "$h"; return 0; }
+  h=$(pp_run_coord "$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")") && [ -n "$h" ] || return 1
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -e --arg h "$h" '[(.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select(.handle == $h and .connected != false and .orphaned != true)] | length > 0' >/dev/null 2>&1 && echo "$h"
+}
 
 # pp_main_foreground -- true in main's own foreground: the main checkout, a terminal or a Claude session, and not a
 # child of pp_detach or of run-shell-tests.sh (COMMANDECK_FOREGROUND). pp_detach <log> <label> <cmd>... runs the
@@ -348,10 +457,22 @@ pp_detach() {
 # full (the inbox is the whole machine's, newest first): the caller then wakes.
 pp_inbox_actionable() {
   local k; k=$(pp_option wakeKinds) || return 1
-  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" '($k | split(",")) as $k
+  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" \
+    --argjson relay "$(pp_relay_handles)" "$PP_JQ_WAKES"'($k | split(",")) as $k
     | .result.messages | if type == "array" and length < 500 then [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h))
-      and (.type as $t | any($k[]; . == $t)))] | sort_by(.created_at // "") else error end' 2>/dev/null
+      and wakes($k; $relay))] | sort_by(.created_at // "") else error end' 2>/dev/null
 }
+# Issue 324: the relay's (Chief-of-Staff's) messages always wake main and always print, whatever their type, with or
+# without a ruling id, and whatever wakeKinds says. The relay is its pane, any pane in $PP_WORKSPACES/Chief-of-Staff,
+# never a sender name. pp_relay_handles -- those panes' handles as a JSON array; [] when Orca does not answer.
+pp_relay_handles() {
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -c --arg p "$PP_WORKSPACES/Chief-of-Staff" "$PP_PNORM"'($p | pnorm) as $p
+    | [(.result | if type == "array" then . else (.terminals // []) end)[]? | select((wtp | pnorm) == $p) | .handle]' 2>/dev/null | grep . || echo '[]'
+}
+# PP_JQ_WAKES -- the one wake test pp_inbox_actionable and orca-wait.sh share: wakes($kinds; $relay) holds for a
+# wakeKinds type, or for a message from a relay pane (pp_relay_handles); never for a heartbeat, which the drain
+# neither prints nor keeps.
+PP_JQ_WAKES='def wakes($k; $relay): (.type // "") as $t | $t != "heartbeat" and (any($k[]; . == $t) or ((.from_handle // "") as $f | any($relay[]; . == $f)));'
 # pp_wake_window_open <pp_inbox_actionable array> <now> -- true while its oldest message is younger than
 # wakeWindowSeconds: what arrives meanwhile wakes main once, when the window closes. A time it cannot read is past.
 pp_wake_window_open() {
@@ -1038,6 +1159,13 @@ PP_AWK_FENCE='
     if (ch == fch && length(run) >= flen && substr(line, RSTART + RLENGTH) ~ /^[[:space:]]*$/) { flen = 0; return 2 }
     return 0
   }'
+# pp_ask_lines <reply text> -- every `QUESTION:` or `BLOCKED:` line outside a fence (decoration stripped), in order, by the
+# one fence rule above: a closed fence quotes an example, a blockquote line never starts with the word, and a fence that
+# never closes quotes nothing (a missed question costs more than a spare one). Both Stop hooks read their asks with it.
+pp_ask_lines() {
+  printf '%s\n' "$1" | awk "$PP_AWK_FENCE"'{ f = fence($0); if (f) { if (f == 2) b = ""; next } if (flen) { b = b $0 "\n"; next } print } END { printf "%s", b }' \
+    | sed -E 's/^[[:space:]*`•]+//' | grep -E '^(QUESTION|BLOCKED):'
+}
 surviving_severity() {  # <reviewer report> [count|standing|pre|unowned|unpatched]
   # Two passes: the first records every verdict line, so a finding can be read
   # against the verdict of its own report.

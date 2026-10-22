@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # orca-wait.sh hides what its noise rules match, and once that was a real owner answer: the relay's "turn complete"
 # echo carrying it had no marker, so main never saw it and nothing kept it. Pinned: a message citing a ruling id, or
-# from the relay's pane (listed by Orca with only a worktreeId), always shows, even when it is "own" traffic; a plain
-# echo is still hidden, but kept in hidden.jsonl, which the summary line names; a heartbeat is not kept.
+# from the relay's pane (listed by Orca with only a worktreeId), always shows, even when it is "own" traffic; a status
+# note is held, not hidden; what is hidden is kept in hidden.jsonl, which the summary line names; a heartbeat is not
+# kept; a driven unit's QUESTION echo is never hidden (issue 321).
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
@@ -15,7 +16,7 @@ msg() { jq -nc --arg id "$1" --arg f "$2" --arg t "$3" --arg s "$4" --arg b "$5"
 { msg m1 term_cos question "turn complete" "Owner says proceed"
   msg m2 term_w question "turn complete" "the owner ruled r-19991017-101010-1-a1b2c3"
   msg m3 term_cos status "relay note" "plain words from the relay"
-  msg m4 term_w question "turn complete" "just chatter"
+  msg m4 term_w status "progress (wt-x)" "just chatter"
   msg m5 term_w heartbeat "alive" ""; } | jq -sc '{ok: true, result: {deliveryId: "d1", messages: .}}' > "$T/batch.json"
 # Orca: the first check answers the batch, an ack answers nothing more; the relay's pane has only a worktreeId.
 cat > "$T/bin/orca-ide" <<EOF
@@ -33,10 +34,28 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
 HID=$T/sc/main-watch/messages/hidden.jsonl
 check "the relay pane's plain 'turn complete' echo, with no ruling id, is shown" 1 "$(grep -c '| Owner says proceed' <<<"$OUT")"
 check "an echo with no marker that cites a ruling id is shown" 1 "$(grep -c '| the owner ruled r-19991017-101010-1-a1b2c3' <<<"$OUT")"
-check "the relay pane's status is shown" 1 "$(grep -c '| plain words from the relay' <<<"$OUT")"
-check "a plain echo is hidden" 0 "$(grep -c 'just chatter' <<<"$OUT")"
-check "the summary names hidden.jsonl, which holds the echo and not the heartbeat" "1 m4" \
-  "$(grep -c "all but heartbeats are kept in $HID" <<<"$OUT") $(jq -r .id "$HID" 2>/dev/null | paste -sd, -)"
+# Issue 324: the relay's status note, no ruling id, woke main: it prints among the wake's lines, not as a held note.
+check "the relay pane's status note prints among the wake's lines, above held notes" "1 0" \
+  "$(sed '/^held notes (did not wake you):/,$d' <<<"$OUT" | grep -c '| plain words from the relay') $(sed -n '/^held notes (did not wake you):/,$p' <<<"$OUT" | grep -c 'plain words from the relay')"
+check "a worker's status note prints under held notes" 1 "$(sed -n '/^held notes (did not wake you):/,$p' <<<"$OUT" | grep -c 'just chatter')"
+check "the summary names hidden.jsonl, which is empty: the note is held and the heartbeat excluded" "1 0" \
+  "$(grep -c "all but heartbeats are kept in $HID" <<<"$OUT") $(grep -c . "$HID" 2>/dev/null || true)"
+check "no heartbeat in hidden.jsonl" 0 "$(grep -c m5 "$HID" 2>/dev/null || true)"
+# Issue 324: wakeKinds turned down to worker_done never silences the relay; the worker's note is still held.
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" COMMANDECK_OPTIONS='{"wakeKinds":"worker_done"}' ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
+check "wakeKinds=worker_done: the relay's status note still woke main, the worker's is held" "1 0 1" \
+  "$(sed '/^held notes (did not wake you):/,$d' <<<"$OUT" | grep -c '| plain words from the relay') $(sed -n '/^held notes (did not wake you):/,$p' <<<"$OUT" | grep -c 'plain words from the relay') $(sed -n '/^held notes (did not wake you):/,$p' <<<"$OUT" | grep -c 'just chatter')"
+# Issue 321: a live driver's unit hides its echoes, but never a question or refusal: main must see those.
+printf '#!/usr/bin/env bash\necho "drive-wt-q-1.service loaded active running drive"\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
+{ msg q1 term_w question "claude turn complete: QUESTION (wt-q)" "QUESTION: Which branch should I use?"
+  msg q2 term_w question "claude turn complete: VERDICT: GO (wt-q)" "VERDICT: GO"; } | jq -sc '{ok: true, result: {deliveryId: "dq", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" COMMANDECK_HOST_OS=Linux ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
+check "a driven unit's turn complete: QUESTION echo is shown, its verdict echo hidden" "1 0" \
+  "$(grep -c 'Which branch should I use' <<<"$OUT") $(grep -c '| VERDICT: GO' <<<"$OUT")"
+rm -f "$T/bin/systemctl"
 # A batch too big for one argument (twelve 100,000-character questions, ~1.2 MB) must still show and be acknowledged:
 # passing it to jq as an argument failed E2BIG, so the drain exited unacked and every retry hit the same batch.
 BIG=$(head -c 100000 /dev/zero | tr '\0' x)
@@ -125,6 +144,15 @@ mkdir -p "$T/p/.claude/metrics"; : > "$T/p/.claude/metrics/decisions.jsonl"
   msg o3 term_u question "question (u212)" "Which helper file should hold the parser?"; } | jq -sc '{ok: true, result: {deliveryId: "d9", messages: .}}' > "$T/batch.json"
 rm -rf "$T/sc" "$T/vcalls"; OUT=$(run)
 check "owner-bound questions carry no waitsOn, an ordinary one waits on main, and each gets main's line" "u212-o1:none u212-o2:none u212-o3:main 3" \
+  "$(jq -r '"\(.id):\(.waitsOn // "none")"' "$T/p/.claude/metrics/decisions.jsonl" | sort | paste -sd' ' -) $(grep -c 'next: it waits for' <<<"$OUT")"
+# Issue 321: the hooks send a question or refusal as a "turn complete: QUESTION|BLOCKED" message; it is a question like any
+# other (the decision queue, main's line), while a marker echo is a finish and records no decision.
+: > "$T/p/.claude/metrics/decisions.jsonl"
+{ msg c1 term_u question "claude turn complete: QUESTION (u212)" "QUESTION: Owner, may I proceed without the required rollback?"
+  msg c2 term_u question "codex turn complete: BLOCKED (u212)" "BLOCKED: access was refused."
+  msg c3 term_u question "claude turn complete: VERDICT: GO (u212)" "VERDICT: GO"; } | jq -sc '{ok: true, result: {deliveryId: "d10", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc" "$T/vcalls"; OUT=$(run)
+check "a hook's QUESTION and BLOCKED messages go on the decision queue, with main's line; its verdict echo does not" "u212-c1:none u212-c2:main 2" \
   "$(jq -r '"\(.id):\(.waitsOn // "none")"' "$T/p/.claude/metrics/decisions.jsonl" | sort | paste -sd' ' -) $(grep -c 'next: it waits for' <<<"$OUT")"
 # r1: the drain prints each message before it acknowledges it; the default wake must hand that print on at once.
 # Two deliveries, the second's ack hangs: a call killed then has already printed both acknowledged messages.

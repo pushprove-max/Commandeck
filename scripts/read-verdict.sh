@@ -58,7 +58,8 @@ command -v jq >/dev/null 2>&1 || { echo "read-verdict: jq is not on PATH." >&2; 
 # Prints key=value lines: state=running|complete|unknown, reason, marker=0|1
 # (the current response's last line is the marker), outstanding=<command ids>,
 # overdue=<id>:<minutes>m,
-# idle_since, idle_seconds, stalled=0|1, session, provider. Always exits 0.
+# idle_since, idle_seconds, stalled=0|1, session, provider, prompted (epoch of the
+# latest real prompt: a typed or pasted one, never a Stop-hook reply). Always exits 0.
 #
 # A turn ends only at Claude's `turn_duration` (a Stop-hook reply after
 # `end_turn` is another turn) or Codex's `task_complete`/`turn_aborted`. A
@@ -72,7 +73,10 @@ command -v jq >/dev/null 2>&1 || { echo "read-verdict: jq is not on PATH." >&2; 
 # first_turn_stall=1 is a Claude session idle with NO tool call since its
 # prompt and no marker or verdict: the seat never started, so waiters
 # wake main now instead of at the stall line. The grace lets the typed `go`
-# (seat-go.sh) start its turn first. last_message is its last words, one line.
+# (seat-go.sh) start its turn first. last_message is its last words, one line. asked=1 when the whole last message
+# is failure text by the pattern in the PP_FAIL_RE environment variable (paths.sh sets it for pp_seat_turn, its only
+# reader: `QUESTION:`, `BLOCKED` (PLAN-BLOCKED included) or a verdict line of any spelling), quoted or not: the turn
+# ended on an ask or a refusal, not a finish. Without the variable asked is 0.
 STALL_IDLE_SECONDS=300
 FIRST_TURN_GRACE_SECONDS=60
 
@@ -83,11 +87,11 @@ def result: (.out | keys) as $o
   | if .bad then {state:"unknown", reason:"partial record"}
     elif (.bound | not) then {state:"unknown", reason:"no assignment in this session"}
     elif .turns == 0 or .start == null then {state:"unknown", reason:"no turn"}
-    elif .done == null then {state:"running", outstanding:$o, out:.out}
+    elif .done == null then {state:"running", outstanding:$o, out:.out, prompted:.prompted}
     else {state:"complete", outstanding:$o, out:.out, marker:.marker, message:.message, tools:.tools,
-          idle_base:([.done, (.retired // 0)] | max)}
+          idle_base:([.done, (.retired // 0)] | max), prompted:.prompted}
     end;
-def init: {bad:false, bound:($task == ""), start:null, done:null, turns:0, out:{}, retired:null, marker:false, message:null, tools:0};
+def init: {bad:false, bound:($task == ""), start:null, done:null, turns:0, out:{}, retired:null, marker:false, message:null, tools:0, prompted:null};
 '
 # ponytail: Codex background sessions are seen only through "Process running with
 # session ID"; a code-mode exec that never prints its session id reads as idle.
@@ -105,7 +109,8 @@ reduce (inputs | (fromjson? // {_bad:true})) as $r (init;
     (($p.item.process_id // "") | tostring) as $id
     | if (.out | has($id)) then del(.out[$id]) | .retired = $at else . end
   elif $r.type == "response_item" and $p.type == "message" and $p.role == "user" then
-    if $task != "" and ([$p.content[]? | .text? // empty] | join("\n") | contains($task))
+    .prompted = $at
+    | if $task != "" and ([$p.content[]? | .text? // empty] | join("\n") | contains($task))
     then .bound = true | .marker = false else . end
   elif $r.type == "response_item" and $p.type == "message" and $p.role == "assistant" then
     ([$p.content[]? | select(.type == "output_text") | .text] | join("\n")) as $t
@@ -130,7 +135,7 @@ reduce (inputs | select(startswith("{\"type\":\"api-request") | not) | (fromjson
     | .start = $at | .done = null | .turns += 1
     # A real prompt starts new work; a Stop-hook reply or a task notification
     # continues the same assignment, so only a real prompt clears the marker.
-    | (if $r.isMeta != true and ($t | startswith("<task-notification>") | not) then .marker = false else . end)
+    | (if $r.isMeta != true and ($t | startswith("<task-notification>") | not) then .marker = false | .prompted = $at else . end)
     | if ($t | test("<status>(completed|failed|killed|stopped)</status>"))
       then reduce ([$t | scan("<task-id>([^<]+)</task-id>") | .[0]][]) as $id (.; del(.out[$id]) | .retired = $at)
       else . end
@@ -151,7 +156,10 @@ reduce (inputs | select(startswith("{\"type\":\"api-request") | not) | (fromjson
   elif $r.type == "assistant" then
     ($r | text) as $t
     | (if .bound then .tools += ([$r.message.content[]? | select(.type? == "tool_use")] | length) else . end)
-    | if .bound and ($t | test("\\S")) then .marker = (($t | lastline) == $marker) | .message = $t else . end
+    # Claude Code writes one record per text block of a reply, under one message id: the blocks are one message.
+    | if .bound and ($t | test("\\S")) then ($r.message.id // $r.uuid) as $k
+        | .marker = (($t | lastline) == $marker) | .message = (if $k != null and $k == .mid then "\(.message)\n\($t)" else $t end) | .mid = $k
+      else . end
   elif $r.type == "system" and $r.subtype == "turn_duration" then
     if .start != null then .done = $at else . end
   else . end) | result'
@@ -317,7 +325,7 @@ worker_state() {
     done < <(jq -r '.out | to_entries[] | [.key, .value.path, .value.at] | @tsv' <<<"$json")
     live=$(jq -nc '$ARGS.positional' --args "${held[@]}")
   fi
-  jq -r --arg session "$f" --arg provider "${best%% *}" --argjson now "$now" --argjson limit "$STALL_IDLE_SECONDS" \
+  jq -r --arg session "$f" --arg provider "${best%% *}" --argjson now "$now" --argjson limit "$STALL_IDLE_SECONDS" --arg fre "${PP_FAIL_RE:-}" \
     --argjson grace "$FIRST_TURN_GRACE_SECONDS" --argjson live "$live" --arg overdue "$(IFS=,; echo "${overdue[*]}")" '
     (if $live == null then . else .outstanding = [(.outstanding // [])[] | select(IN($live[]))] end)
     | .idle_since = (if .state == "complete" and (.outstanding | length) == 0 then .idle_base else null end)
@@ -328,7 +336,8 @@ worker_state() {
       "first_turn_stall=\(if $provider == "claude" and .tools == 0 and $idle != null and $idle >= $grace
           and (.marker | not) and ((.message // "") | test("(^|\n)\\s*VERDICT:") | not) then 1 else 0 end)",
       "last_message=\((.message // "") | gsub("\\s+"; " ") | .[0:400])",
-      "session=\($session)", "provider=\($provider)", "stall_limit=\($limit)"
+      "asked=\(if $fre != "" and ((.message // "") | test($fre)) then 1 else 0 end)",
+      "session=\($session)", "provider=\($provider)", "stall_limit=\($limit)", "prompted=\(.prompted // "")"
   ' <<<"$json"
 }
 

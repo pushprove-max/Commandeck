@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.30.0 -- 2026-10-22
+
+- A plan seat that reported its finish in its own message to the run or main ("Plan revised", a `PLAN-DONE` line),
+  or committed a new plan since its latest prompt, is finished, not "stuck" or "stopped": main-watch, `seat.sh wait`
+  and collect all read it, and collect closes the pane (#320). A report quoted in a fence or under a `QUESTION:` or
+  `BLOCKED:` line, one from before main's follow-up, or one while the turn still runs is not a finish, and it stands
+  in for `PLAN-DONE` only, never a verdict. When the plan is committed and the turn ended without `PLAN-DONE`, the
+  Claude seat's Stop hook asks for the line once.
+- A seat pane's turn end (a Builder's own Codex pass included) sends main no "turn complete" echo, and collect sends a
+  finish only when a wait claimed it and the seat did not report it itself (#321).
+- A `QUESTION:` or `BLOCKED:` line at a turn's end always reaches main, once. A seat that stops silently is still
+  caught by main-watch's and `seat.sh wait`'s own timers, and their alert now shows the pane's last words (#321).
+- main-watch, `to-main.sh` and `cos-tell.sh --note` always send with a sender (main's pane, else the run's live
+  coordinator): Orca refused main-watch's every task and message when it listed main's pane with no agent (#321).
+- A message from the relay's pane (any pane in the Chief-of-Staff worktree) always wakes main and prints among the
+  wake's own lines, whatever its type, with or without a ruling id, and whatever `wakeKinds` says (#324).
+
 ## 0.29.0 -- 2026-10-22
 
 - Every review finding, P0 to P3, blocks the merge and is fixed in the unit (#322). The P2 tail is gone: no

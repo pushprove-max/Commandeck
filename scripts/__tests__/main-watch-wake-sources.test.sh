@@ -39,4 +39,14 @@ rm -f "$S/main-watch/wake"; tick $((E + 120))
 rm -f "$S/main-watch/unread-since"; tick $((E + 121))
 [ "$(typed)" = 2 ] || fail "combined: with the claim gone, the unread question was not typed at the next tick (typed $(typed))"
 
+# Issue 321: Orca lists main's pane with agentIdentity null and the run's coordinator is a live pane in another
+# checkout. main-watch, a service with no terminal, refused on every task-create and send: it now sends as that
+# coordinator, and types nothing into it.
+G=70000; drained; rm -f "$S/main-watch/item-"* "$S/main-watch/wake" "$T/creates" "$T/refused"; : > "$T/typed"; : > "$T/sends"
+touch "$F/no-identity" "$F/need-from"; echo term_coord > "$F/coord"; state term_coord working
+for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/procs"; tick $G; rm -f "$F/procs"
+[ "$(grep -c -- '--from term_coord' "$T/creates" 2>/dev/null)" = 1 ] && [ "$(grep -c -- '--from term_coord' "$T/sends")" = 1 ] && [ ! -s "$T/refused" ] \
+  || fail "main's pane listed with agentIdentity null and the run's coordinator live elsewhere: task-create and send did not carry --from term_coord (refused: $(cat "$T/refused" 2>/dev/null))"
+! grep -q -- '--terminal term_coord' "$T/typed" || fail "the coordinator outside the main checkout was typed into"
+
 echo "PASS main-watch-wake-sources.test.sh"

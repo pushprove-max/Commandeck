@@ -35,6 +35,9 @@ writeFileSync(`${dir}/rollout-2026-10-14T00-00-00-${id}.jsonl`, [
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: readFileSync(promptFile, "utf8") }] } },
   { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", last_agent_message: reply } },
 ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+// STUB_NOTIFY: the program Codex's notify setting runs at the turn's end, handed the turn as Codex hands it.
+if (process.env.STUB_NOTIFY) execFileSync("bash", [process.env.STUB_NOTIFY,
+  JSON.stringify({ type: "agent-turn-complete", "turn-id": id, "last-assistant-message": reply })], { stdio: "ignore" });
 process.stdout.write(JSON.stringify({ threadId: id, status: 0, rawOutput: reply }));
 JS
 printf 'import { writeFileSync } from "node:fs";\nconst a = process.argv.slice(2);\nwriteFileSync(a[a.indexOf("--endpoint") + 1].replace(/^unix:/, ""), "");\nsetInterval(() => {}, 1000);\n' > "$PLUG/scripts/app-server-broker.mjs"

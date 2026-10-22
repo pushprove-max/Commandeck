@@ -205,6 +205,7 @@ above call for.
 Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
 with no finding named.
 Print `{UNIT}-DONE` as your last line and stop. An answer from main that
-arrives after it is still yours: read it and act on it.
+arrives after it is still yours: read it and act on it. A question or a refusal
+goes on a line of its own that starts QUESTION: or BLOCKED:.
 
 ## Post-merge

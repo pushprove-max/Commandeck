@@ -28,6 +28,23 @@ tick $((M + 420))
 [ "$(typed)" = 1 ] || fail "mail unread 2 minutes with main idle did not wake main (typed $(typed))"
 tick $((M + 480))
 [ "$(typed)" = 1 ] || fail "an unanswered main was woken again inside 2 minutes"
+# Issue 324: the relay's pane (in $PP_WORKSPACES/Chief-of-Staff) wakes main with a status note and no ruling id, even
+# with wakeKinds turned down to worker_done; a worker's status note is still held.
+rm -f "$S/main-watch/wake" "$S/main-watch/unread-since"; : > "$T/typed"; state term_cos idle; R=$((M + 1000))
+export COMMANDECK_OPTIONS='{"wakeWindowSeconds":120,"wakeKinds":"worker_done"}'
+msg term_wt-h1 "progress (wt-h1)" status $R | inbox
+tick $R; tick $((R + 200))
+[ "$(typed)" = 0 ] || fail "main was woken for a worker's status note"
+{ msg term_wt-h1 "progress (wt-h1)" status $R; msg term_cos "relay note" status $((R + 300)); } | inbox
+tick $((R + 300)); tick $((R + 420))
+[ "$(typed)" = 1 ] || fail "a relay status note with wakeKinds=worker_done did not wake main (typed $(typed))"
+# A heartbeat is a liveness ping that orca-wait.sh never prints or keeps, the relay's included: waking main for one
+# would spend a turn on a wake that shows nothing.
+rm -f "$S/main-watch/wake" "$S/main-watch/unread-since"; : > "$T/typed"; R=$((R + 2000))
+msg term_cos "alive" heartbeat $R | inbox
+tick $R; tick $((R + 200))
+[ "$(typed)" = 0 ] || fail "a relay heartbeat woke main (typed $(typed))"
+awk '$1 != "term_cos"' "$F/agents" > "$F/agents.new"; mv "$F/agents.new" "$F/agents"
 rm -f "$F/inbox"; unset COMMANDECK_OPTIONS
 
 # Issue 198: main idle with its own question open reads nothing, and main-watch gave up on it without a word. The
