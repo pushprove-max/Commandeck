@@ -143,6 +143,7 @@ POINTER = re.compile(r"(?:see|in|per|moved to|carried (?:in|to))\s+\S+")
 UNRESOLVED = "## Queue (left unresolved at the restart: restate or close each, one line per item, with its own reason)"
 MAX_DEPTH = 10  # generations carry takes from the walk; aged lists the rest
 LOOKUP_S = 10
+LOOKUP_TOTAL_S = 30  # all lookups of one carry together: the Stop hook waits on them
 
 
 def section_kind(line):
@@ -323,15 +324,15 @@ def mask(js):
 def effective(path, depth=MAX_DEPTH, errs=None):
     """Open (raw, identity, generation) items of a checkpoint plus those of every file it carries by reference;
     generation 0 is the checkpoint's own, and only generations below <depth> are returned (aged lists the rest).
-    One walk for every depth, so its cost never depends on the graph's shape (Max ruled this for checkpoint
+    One walk for every depth, so its cost never depends on the graph's shape (by ruling, for checkpoint
     growth): each file is read once, nearest first; each cycle of files is condensed into one node and the
-    condensed graph is folded once, sinks first (Max ruled this for cycles). A file's closures end only what it
+    condensed graph is folded once, sinks first (by ruling, for cycles). A file's closures end only what it
     inherits, never its own open items: an older file's closure must not erase an item a newer checkpoint
     reopened. All files of a cycle share their closures, which end only what the cycle inherits from outside it,
     never a member's own item, since inside a cycle no file is older. A result is one bit per item, freed once
-    every reference to it from outside its cycle has read it. An item's generation is the fewest references from
-    the checkpoint to a file owning it, along files that did not end it, so a cycle that crosses the depth closes
-    as one unit and its members still keep their own distances. With errs, a referenced file within <depth> that
+    every reference to it from outside its cycle has read it. An open item's generation is the fewest references
+    from the checkpoint to a file owning it, so a cycle that crosses the depth closes as one unit and its members
+    still keep their own distances. With errs, a referenced file within <depth> that
     cannot be read adds its error there and nothing else: the readable rest of the chain still counts. Nothing
     recurses: a chain grows a file per restart, and recursion would end in RecursionError past about a thousand."""
     root = os.path.realpath(path)
@@ -381,7 +382,7 @@ def effective(path, depth=MAX_DEPTH, errs=None):
                 order.append(members[::-1])
     need = Counter(comp[w] for v in comp for w in edges[v] if w in comp and comp[w] != comp[v])
     need[comp[root]] += 1
-    done, ends = {}, []
+    done = {}
     for c, members in enumerate(order):
         opened, closures, inherited = [], [], 0
         for v in members:
@@ -396,35 +397,16 @@ def effective(path, depth=MAX_DEPTH, errs=None):
                     need[comp[w]] -= 1
                     if not need[comp[w]]:
                         del done[comp[w]]
-        ended = items.ended(inherited, closures)
-        done[c] = mask(opened) | inherited & ~items.of(ended)
-        # Keys, not masks: a mask is as long as the highest index it holds, whatever its count.
-        ends.append(ended)
-    # An item's generation is the fewest references to a file owning it along files that did not end it: its
-    # owner's distance when no file ends its key. For a key some file ends, one search from the root that does not
-    # leave a cycle ending it; a reference inside that cycle is still followed. No mask per file or per level: one
-    # each was quadratic in the chain.
-    gen = {}
-    for v, f in files.items():
+        done[c] = mask(opened) | inherited & ~items.of(items.ended(inherited, closures))
+    # An item's generation is its nearest owner's distance from the root, for each item still open there (by ruling,
+    # for checkpoint growth): every search along files that did not end a key kept state per file and key, or ran
+    # once per key, and came back quadratic in three passes. Whether an item is open stays the fold's answer.
+    gen, live = {}, done[comp[root]]
+    for v, f in files.items():  # read nearest first, so the first owner found is the nearest
         if dist[v] < depth:
             for j in f[0]:
-                gen.setdefault(j, dist[v])
-    for k in set().union(*ends):
-        want = set(items.keys[k])
-        for j in want:
-            gen.pop(j, None)
-        level, seen, g = [root], {root}, 0
-        while level and want and g < depth:
-            nxt = []
-            for v in level:
-                for j in want.intersection(files[v][0]):
-                    gen[j] = g
-                want.difference_update(files[v][0])
-                for w in edges[v]:
-                    if w in files and w not in seen and (comp[w] == comp[v] or k not in ends[comp[v]]):
-                        seen.add(w)
-                        nxt.append(w)
-            level, g = nxt, g + 1
+                if live >> j & 1:
+                    gen.setdefault(j, dist[v])
     return [(*items.pairs[j], g) for j, g in sorted(gen.items(), key=lambda t: (t[1], t[0]))]
 
 
@@ -439,42 +421,64 @@ def pointed(k, ident, todos):
     return key(todo) == k or (not QKEY.fullmatch(k) and bool(occurs(k, todo)))
 
 
-def run(argv, cwd):
+def run(argv, cwd, until=None):
+    left = LOOKUP_S if until is None else min(LOOKUP_S, until - time.monotonic())
+    if left <= 0:
+        return None
     try:
-        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=LOOKUP_S)
+        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=left)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
 
-def holds(ref, main):
-    """The evidence a done-when ref holds now (issue 283), or None. Read only; each lookup is capped at 10 s."""
+def answered(main, until):
+    """The ids decisions.jsonl has answered (each id's last row), or none: the ledger cannot be read, or <until>
+    passes while it is read."""
+    last = {}
+    try:
+        with open(os.path.join(main, ".claude", "metrics", "decisions.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                if until is not None and time.monotonic() >= until:
+                    return set()
+                row = json.loads(line)
+                last[row.get("id")] = row.get("answer")
+    except (OSError, ValueError, AttributeError):
+        return set()
+    return {i for i, a in last.items() if a not in (None, "")}
+
+
+def holds(ref, main, until=None, seen=None):
+    """The evidence a done-when ref holds now (issue 283), or None. Read only; each lookup is capped at 10 s, and
+    none starts or reads past <until>. decisions.jsonl is read once per <seen>, a carry's answers (key None)."""
+    if until is not None and time.monotonic() >= until:
+        return None
     m = re.fullmatch(r"#(\d+)", ref)
     if m:
-        r = run(["gh", "issue", "view", m.group(1), "--json", "state", "-q", ".state"], main)
+        r = run(["gh", "issue", "view", m.group(1), "--json", "state", "-q", ".state"], main, until)
         return f"{ref} closed" if r and r.returncode == 0 and r.stdout.strip() == "CLOSED" else None
     if ref.startswith("decision:"):
-        last = None
-        try:
-            with open(os.path.join(main, ".claude", "metrics", "decisions.jsonl"), encoding="utf-8") as f:
-                for line in f:
-                    row = json.loads(line)
-                    last = row if row.get("id") == ref[9:] else last
-        except (OSError, ValueError, AttributeError):
-            return None
-        return f"{ref[9:]} answered" if last and last.get("answer") not in (None, "") else None
+        seen = {} if seen is None else seen
+        if None not in seen:
+            seen[None] = answered(main, until)
+        return f"{ref[9:]} answered" if ref[9:] in seen[None] else None
     if re.fullmatch(r"[0-9a-f]{7,40}", ref):
-        r = run(["git", "merge-base", "--is-ancestor", ref, "origin/main"], main)
+        r = run(["git", "merge-base", "--is-ancestor", ref, "origin/main"], main, until)
         return f"{ref} on origin/main" if r and r.returncode == 0 else None
-    r = run(["git", "log", "-F", f"--grep=feat({ref}):", "--format=%h %s", "HEAD"], main)
+    r = run(["git", "log", "-F", f"--grep=feat({ref}):", "--format=%h %s", "HEAD"], main, until)
     hit = [l for l in (r.stdout.splitlines() if r and r.returncode == 0 else []) if l.split(" ", 1)[-1].startswith(f"feat({ref}):")]
     return f"{ref} merged ({hit[0].split()[0]})" if hit else None
 
 
-def done(raw, main):
-    """The evidence for an item whose every "-- done when:" ref holds, else None."""
+def done(raw, main, seen, until):
+    """The evidence for an item whose every "-- done when:" ref holds, else None. <seen> holds each ref's answer for
+    the whole carry: 100 items naming one issue were 100 lookups, ~1,000 s when each timed out; 100 decisions were 100
+    reads of the whole ledger."""
     m = re.search(r" -- done when: (.+)$", raw)
     refs_ = [r.strip() for r in m.group(1).split(",") if r.strip()] if m else []
-    got = [holds(r, main) for r in refs_]
+    for r in refs_:
+        if r not in seen:
+            seen[r] = holds(r, main, until, seen)
+    got = [seen[r] for r in refs_]
     return ", ".join(got) if got and all(got) else None
 
 
@@ -513,12 +517,12 @@ def carry(base, new):
     ended = closing_lines([i for _, i in inherited], closures)
     # Kept means the same subject as one of the new file's own items, not a mention inside another item.
     kept = {key(n) for _, n in still_open}
-    missing = {}
+    missing, seen, until = {}, {}, time.monotonic() + LOOKUP_TOTAL_S
     for raw, ident in inherited:
         k = key(ident)
         if ident in placeholders or k in missing or k in ended or k in kept or pointed(k, ident, todos):
             continue
-        evidence = done(raw, main)
+        evidence = done(raw, main, seen, until)
         if evidence:
             log(f"auto-closed: {raw} -- {evidence}")
             continue

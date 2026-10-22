@@ -135,5 +135,33 @@ check "a worker pane with the marker is never refused" 0 "$(gate "$BOX/lw" Bash 
 check "a reviewer is never refused" 0 "$(COMMANDECK_REVIEWER=1 gate "$BOX/m" Bash '{"command":"git status"}')"
 rm "$H/.claude/checkpoints/msid.past-line"
 check "below the line nothing is refused" 0 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+# The marker outlives a compaction (or a restart that never came): tools stayed blocked while the Stop hook would not
+# restart below the line. The gate reads the context now, so a stale marker, however it got there, is cleared.
+usage() { printf '{"message":{"usage":{"cache_read_input_tokens":%s,"input_tokens":1}}}\n' "$1" > "$BOX/main-log.jsonl"; }
+tgate() { # dir tool input-json -> exit code, with the session's transcript
+  jq -cn --arg tool "$2" --argjson in "$3" --arg t "$BOX/main-log.jsonl" '{session_id:"msid", transcript_path:$t, tool_name:$tool, tool_input:$in}' \
+    | HOME=$H CLAUDE_PROJECT_DIR=$1 COMMANDECK_HOOK_TIER=default "$HOOK" >/dev/null 2>"$BOX/gate.err"; echo $?; }
+usage 40000
+for tick in 1 2; do
+  : > "$H/.claude/checkpoints/msid.past-line"
+  check "tick $tick: a marker left from before a compaction to 40K: git status passes and the marker is cleared" "0 no" \
+    "$(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}') $([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no)"
+done
+: > "$H/.claude/checkpoints/msid.past-line"
+check "a marker with no transcript to read still refuses" 2 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+usage 250000
+check "a marker still past the line still refuses" 2 "$(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}')"
+rm -f "$H/.claude/checkpoints/msid.past-line"
+# A first-run HOME has no checkpoints folder: the marker write failed silently and the gate let everything through.
+prompt_hook() { (cd "$BOX/m" && jq -cn --arg t "$BOX/main-log.jsonl" '{session_id:"msid", transcript_path:$t, prompt:"go"}' \
+  | HOME=$H bash "$ROOT/hooks/context-line.sh" 2>&1); }
+H=$BOX/home2; mkdir -p "$H" "$BOX/m/.claude"; usage 141001; printf '{"standardContext": true}\n' > "$BOX/m/.claude/commandeck.json"
+prompt_hook >/dev/null
+check "no checkpoints folder, standard context at 141001: the marker is written and git status is refused" "yes 2" \
+  "$([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no) $(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}')"
+# A marker that cannot be written at all is said, never silent: the gate cannot hold the session then.
+H=$BOX/home3; mkdir -p "$H/.claude"; : > "$H/.claude/checkpoints"
+check "a marker write that fails says so" 1 "$(prompt_hook | grep -c 'marker NOT written')"
+rm -f "$BOX/m/.claude/commandeck.json"
 
 echo "$PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

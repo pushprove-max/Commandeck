@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.25.1 -- 2026-10-22
+
+- A past-line marker left behind by a compaction or a restart that never came no longer blocks main's tools: the gate
+  reads the current context and clears a marker under the line.
+- On a first run with no checkpoints folder, the past-line marker is still written, and a marker that cannot be
+  written is reported instead of letting every tool through.
+- The restart carry looks up each `done when:` ref once per run, reads the decisions ledger once, and all its lookups
+  together, decisions too, stop after 30 s.
+- The carry walk gives each open item the distance of its nearest owning file, with no search per closed key, so its
+  work and memory grow with the chain, not its square. An item one near branch closes and a longer branch keeps open
+  is now carried at its owner's distance.
+- The relay's "owner quiet" minutes count only prompts typed at the root of main or of the Chief-of-Staff worktree
+  (paths compared after removing `//` and `/./`), not worker prompts such as main-watch's `Signal WARM`, wherever
+  the workspaces folder sits. A prompt from a subfolder of either no longer counts.
+- Comments no longer carry personal names or ruling ids.
+
 ## 0.25.0 -- 2026-10-21
 
 - Issues #218, #221, #222, #227, #231, #232, #235, #237, #239, #243, #244 and #245 shipped in 0.21.0 and 0.22.0.

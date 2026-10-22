@@ -137,6 +137,58 @@ check "every ref holding closes the item; one unanswered decision keeps the othe
 check "the close is one auto-closed line in clear-hook.log, with its evidence" 1 \
   "$(grep -c 'auto-closed: ship the omega fix -- .*#12 closed.*d-19990101-a answered.*unit-omega merged.*on origin/main' "$TMP/home/.claude/checkpoints/clear-hook.log")"
 check "nothing is written to the checkpoint" 0 "$(grep -c auto-closed "$TMP/a2.md")"
+# One Stop runs carry: a ref is looked up once per run however many items name it, and all lookups together stop at
+# a bound. 100 items sharing #12 made 100 lookups, ~1,000 s when each hit its timeout. The timeouts are cut here.
+OUT=$(cd "$M" && HOME=$TMP/home PATH="$TMP/bin:$PATH" timeout 60 python3 - "$REAL/scripts/checkpoint-context.py" "$TMP/slow" <<'EOF'
+import contextlib, importlib.util, io, os, sys, time
+spec = importlib.util.spec_from_file_location("cc", sys.argv[1]); cc = importlib.util.module_from_spec(spec); spec.loader.exec_module(cc)
+cc.LOOKUP_S, cc.LOOKUP_TOTAL_S = 0.2, 1
+d = sys.argv[2]; os.makedirs(f"{d}/bin")
+open(f"{d}/bin/gh", "w").write(f"#!/bin/sh\necho x >> {d}/calls\nexec sleep 5\n"); os.chmod(f"{d}/bin/gh", 0o755)
+os.environ["PATH"] = f"{d}/bin:" + os.environ["PATH"]
+open(f"{d}/new.md", "w").write("## Queue (in order)\n- none\n")
+res = []
+for refs in (["#12"] * 100, [f"#{i}" for i in range(1, 101)]):
+    open(f"{d}/calls", "w").close()
+    open(f"{d}/base.md", "w").write("## Queue (in order)\n" + "".join(f"- Q-{i} ship it -- done when: {r}\n" for i, r in enumerate(refs, 1)))
+    t, out = time.monotonic(), io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = cc.carry(f"{d}/base.md", f"{d}/new.md")
+    calls = len(open(f"{d}/calls").read().split())
+    res.append(f"{rc}:{out.getvalue().count('- Q-')}:{calls if calls == 1 else calls <= 7}:{time.monotonic() - t < 3}")
+print(" ".join(res))
+EOF
+)
+check "one ref shared by 100 items is looked up once; 100 timing-out refs stop at the total bound; all 100 kept open" \
+  "1:100:1:True 1:100:True:True" "$OUT"
+# Decision refs are lookups too: none starts past the bound and none reads on past it, and decisions.jsonl is read
+# once per carry, however many decisions the items name (each one re-read the whole ledger, past the bound too).
+DM=$TMP/dmain; mkdir -p "$DM/.claude/metrics"; git init -q "$DM"
+OUT=$(cd "$DM" && HOME=$TMP/home timeout 60 python3 - "$REAL/scripts/checkpoint-context.py" "$DM" <<'EOF'
+import builtins, contextlib, importlib.util, io, sys, time
+spec = importlib.util.spec_from_file_location("cc", sys.argv[1]); cc = importlib.util.module_from_spec(spec); spec.loader.exec_module(cc)
+d = sys.argv[2]
+open(f"{d}/.claude/metrics/decisions.jsonl", "w").write("".join(f'{{"id":"d-{i}","answer":"yes"}}\n' for i in range(1, 10001)))
+reads, slow = [0], [False]
+def counted(p, *a, **k):
+    if str(p).endswith("decisions.jsonl"):
+        reads[0] += 1
+        if slow[0]:
+            return contextlib.nullcontext(time.sleep(0.01) or f'{{"id":"d-{i}","answer":"yes"}}\n' for i in range(1, 101))
+    return builtins.open(p, *a, **k)
+cc.open = counted
+open(f"{d}/base.md", "w").write("## Queue (in order)\n" + "".join(f"- Q-{i} ship it -- done when: decision:d-{i}\n" for i in range(1, 101)))
+open(f"{d}/new.md", "w").write("## Queue (in order)\n- none\n")
+with contextlib.redirect_stdout(io.StringIO()):
+    rc = cc.carry(f"{d}/base.md", f"{d}/new.md")
+res = [rc, reads[0], cc.holds("decision:d-1", d, time.monotonic() - 1)]
+slow[0], t = True, time.monotonic()
+res += [cc.holds("decision:d-100", d, t + 0.2), time.monotonic() - t < 0.5]
+print(*res)
+EOF
+)
+check "100 decisions answered close with one ledger read; an expired bound reads none; a slow read stops at the bound" \
+  "0 1 None None True" "$OUT"
 
 # Issue 283: dedupe flattens a stacked checkpoint's chain into it, one line per subject, keeps a backup, re-stamps the
 # restart marker, refuses a second run, and a later drop is still caught.
@@ -184,13 +236,15 @@ check "dedupe of an 1100-generation chain exits 0 and keeps the oldest item" "0 
 # Each shape has 20 items per file and is run at N and 2N on both walks: the peak may grow at most 2.5x (quadratic is
 # x4). Shapes: a chain; the chain where each file closes one item of the next (ended keys); Sol's r22 graph (f1 carries
 # every file, each other file the next); a hub (root carries n files that all carry one file); two-next-files, without
-# and with a back-edge to f1. Per owner ruling the growth class is closed at this bound (see the evidence file).
+# and with a back-edge to f1; r22's graph with each file closing the next one's item, and a chain whose items one
+# side file closes (the generation search kept every open key at every file: 3.6 / 13.6 / 52 MiB at 200 / 400 / 800
+# files, pass r1). Per owner ruling the growth class is closed at this bound (see the evidence file).
 OUT=$(timeout 600 python3 - "$REAL/scripts/checkpoint-context.py" "$TMP/shapes" <<'EOF'
 import importlib.util, math, os, sys, tracemalloc
 spec = importlib.util.spec_from_file_location("cc", sys.argv[1]); cc = importlib.util.module_from_spec(spec); spec.loader.exec_module(cc)
-def write(d, g, rs, closes=""):
+def write(d, g, rs, closes=()):
     items = "".join(f"- f{g} item {i}\n" for i in range(20))
-    closed = f"\n## Closed since last checkpoint\n- {closes} -- shipped in round {g}\n" if closes else ""
+    closed = "\n## Closed since last checkpoint\n" + "".join(f"- {c} -- shipped in round {g}.{i}\n" for i, c in enumerate(closes)) if closes else ""
     open(f"{d}/f{g}.md", "w").write(f"## Queue (in order)\n{items}{closed}" + "".join(f"\nCarries open items of: f{r}.md" for r in rs) + "\n")
 # Each shape writes f1..fN and returns (items, farthest generation) on the whole walk and on the ten-generation walk.
 def chain(d, n):
@@ -199,8 +253,20 @@ def chain(d, n):
     return (20 * n, n - 1), (200, 9)
 def closing(d, n):
     for g in range(1, n + 1):
-        write(d, g, [g + 1][:g < n], f"f{g + 1} item 0" if g < n else "")
+        write(d, g, [g + 1][:g < n], [f"f{g + 1} item 0"][:g < n])
     return (20 * n - (n - 1), n - 1), (191, 9)
+# f1 carries every file, each other file the next and closes the next one's item 0: every key ended, all open at f1.
+def fanclosing(d, n):
+    for g in range(1, n + 1):
+        write(d, g, list(range(2, n + 1)) if g == 1 else [g + 1][:g < n], [f"f{g + 1} item 0"][:1 < g < n])
+    return (20 * n, 1), (20 * n, 1)
+# f1 carries a chain f2..f(n-1) and fn, which carries f2 and closes every chain file's item 0: open only along the chain.
+def detour(d, n):
+    for g in range(2, n):
+        write(d, g, [g + 1][:g < n - 1])
+    write(d, n, [2], [f"f{g} item 0" for g in range(2, n)])
+    write(d, 1, [2, n])
+    return (20 * n, n - 2), (220, 9)
 def fan(d, n):
     for g in range(1, n + 1):
         write(d, g, list(range(2, n + 1)) if g == 1 else [g + 1][:g < n])
@@ -219,7 +285,7 @@ def cyclic(d, n):
     return ladder(d, n, True)
 out = []
 for shape, sizes in ((chain, (800, 1600)), (closing, (400, 800)), (fan, (800, 1600)), (hub, (400, 800)),
-                     (ladder, (800, 1600)), (cyclic, (800, 1600))):
+                     (ladder, (800, 1600)), (cyclic, (800, 1600)), (fanclosing, (400, 800)), (detour, (400, 800))):
     for which, depth in ((0, sys.maxsize), (1, cc.MAX_DEPTH)):
         peaks = []
         for n in sizes:
@@ -234,8 +300,79 @@ print(" ".join(out))
 EOF
 )
 check "every shape, 20 items per file, both walks: all items at their generation, peak memory at most 2.5x on doubling" \
-  "linear linear linear linear linear linear linear linear linear linear linear linear" "$OUT"
-# Several reference lines per file are kept (Max r-20261021-180843-1-87da74). A ladder of files each carrying the next
+  "linear linear linear linear linear linear linear linear linear linear linear linear linear linear linear linear" "$OUT"
+# Operations grow with the chain too, not only memory: a search from the root per ended key made 39,800 / 159,600
+# visits at 200 / 400 files where each file closes the next one's only item. Lines run inside the walk are counted, on
+# that chain, on r22's graph with the same closes (every key open at f1 and searched) and on a chain whose items a side
+# file closes (every key searched down the chain).
+OUT=$(timeout 120 python3 - "$REAL/scripts/checkpoint-context.py" "$TMP/ops" <<'EOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("cc", sys.argv[1]); cc = importlib.util.module_from_spec(spec); spec.loader.exec_module(cc)
+def write(d, k, rs, closes=()):
+    closed = "\n## Closed since last checkpoint\n" + "".join(f"- {c} item -- shipped in generation {k}.{i}\n" for i, c in enumerate(closes)) if closes else ""
+    open(f"{d}/f{k}.md", "w").write(f"## Queue (in order)\n- f{k} item\n{closed}" + "".join(f"\nCarries open items of: f{r}.md" for r in rs) + "\n")
+def closing(d, n):
+    for k in range(1, n + 1):
+        write(d, k, [k + 1][:k < n], [f"f{k + 1}"][:k < n])
+    return [("f1 item", 0)]
+def fanclosing(d, n):
+    for k in range(1, n + 1):
+        write(d, k, list(range(2, n + 1)) if k == 1 else [k + 1][:k < n], [f"f{k + 1}"][:1 < k < n])
+    return [("f1 item", 0)] + [(f"f{k} item", 1) for k in range(2, n + 1)]
+def detour(d, n):
+    for k in range(2, n):
+        write(d, k, [k + 1][:k < n - 1])
+    write(d, n, [2], [f"f{k}" for k in range(2, n)])
+    write(d, 1, [2, n])
+    return [("f1 item", 0), ("f2 item", 1), (f"f{n} item", 1)] + [(f"f{k} item", k - 1) for k in range(3, n)]
+out = []
+for shape in (closing, fanclosing, detour):
+    ops = []
+    for n in (200, 400):
+        d = f"{sys.argv[2]}-{shape.__name__}-{n}"; os.makedirs(d)
+        want = shape(d, n)
+        count = [0]
+        def trace(frame, event, arg):
+            if frame.f_code is cc.effective.__code__:
+                count[0] += 1
+                return lambda f, e, a: count.__setitem__(0, count[0] + 1)
+        sys.settrace(trace); got = cc.effective(f"{d}/f1.md", sys.maxsize); sys.settrace(None)
+        assert sorted((i, g) for _, i, g in got) == sorted(want), (shape.__name__, got[:5])
+        ops.append(count[0])
+    out.append("linear" if ops[1] <= 2.5 * ops[0] else f"superlinear {shape.__name__} {ops}")
+print(" ".join(out))
+EOF
+)
+check "each file closing the next one's item, r22's graph with those closes, a side file closing a chain: walk operations at most 2.5x on doubling" \
+  "linear linear linear" "$OUT"
+# Pass r2: R carries B1..BN, each Bi closes item i and carries Ti and L, each Ti carries L, L owns items 1..N. Every
+# key search kept a distinct N-key mask per Ti (N^2/8 bytes: 2.2 MiB more held at 3,200 branches), and its peak hid
+# under the reads' own memory. Measured here: what the closes add to the memory the walk still holds as it returns,
+# against the same graph closing other subjects. All items stay open at the root (each branch keeps the others').
+OUT=$(timeout 300 python3 - "$REAL/scripts/checkpoint-context.py" "$TMP/r2shape" 3200 <<'EOF'
+import importlib.util, os, sys, tracemalloc
+spec = importlib.util.spec_from_file_location("cc", sys.argv[1]); cc = importlib.util.module_from_spec(spec); spec.loader.exec_module(cc)
+n, held, out = int(sys.argv[3]), [0], []
+def trace(frame, event, arg):
+    if frame.f_code is cc.effective.__code__:
+        frame.f_trace_lines = False
+        return lambda f, e, a: held.__setitem__(0, tracemalloc.get_traced_memory()[0]) if e == "return" else None
+for subject in ("other", "item"):
+    d = f"{sys.argv[2]}-{subject}"; os.makedirs(d)
+    w = lambda name, body: open(f"{d}/{name}.md", "w").write(body)
+    w("L", "## Queue (in order)\n" + "".join(f"- item {i}\n" for i in range(1, n + 1)))
+    for i in range(1, n + 1):
+        w(f"T{i}", "Carries open items of: L.md\n")
+        w(f"B{i}", f"## Closed since last checkpoint\n- {subject} {i} -- shipped in branch {i}\n\nCarries open items of: T{i}.md\nCarries open items of: L.md\n")
+    w("R", "".join(f"Carries open items of: B{i}.md\n" for i in range(1, n + 1)))
+    tracemalloc.start(); sys.settrace(trace); got = cc.effective(f"{d}/R.md", sys.maxsize); sys.settrace(None); tracemalloc.stop()
+    assert sorted(g for *_, g in got) == [2] * n, (subject, len(got))
+    out.append(held[0])
+print("linear" if out[1] - out[0] < 64 * (3 * n + 2) else f"superlinear {(out[1] - out[0]) >> 10} KiB")
+EOF
+)
+check "Sol's r2 branches, 3,200 of them: all items open at generation 2, the closes hold under 64 bytes per file" "linear" "$OUT"
+# Several reference lines per file are kept, by ruling. A ladder of files each carrying the next
 # twice is walked once per file: a result forgotten before its last referrer reads it makes the walk 2^40 reads.
 mkdir "$TMP/ladder"
 printf '## Queue (in order)\n- rung 40 item\n' > "$TMP/ladder/r40.md"

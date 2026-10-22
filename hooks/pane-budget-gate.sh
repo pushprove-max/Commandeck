@@ -10,6 +10,12 @@ INPUT=$(cat)
 # turn, so the Stop hook restarts it before auto-compact does. Main only, as context-clear-stop.sh decides it: not a
 # reviewer, not a linked worktree. Ahead of the strict-tier exit, and builtins until the marker is found.
 [[ $INPUT =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]] && PAST=$HOME/.claude/checkpoints/${BASH_REMATCH[1]}.past-line || PAST=
+# The marker outlives a compaction or a restart that never came, and the Stop hook restarts only past the line: the
+# context read now decides, whoever left the marker. No transcript to read keeps it.
+if [ -n "$PAST" ] && [ -e "$PAST" ] && . "${BASH_SOURCE[0]%/*}/lib/project.sh" && . "${BASH_SOURCE[0]%/*}/lib/context-size.sh" \
+  && ctx=$(context_size "$(jq -r '.transcript_path // empty' <<<"$INPUT")") && [ "$ctx" -le "$(pp_clear_line)" ] 2>/dev/null; then
+  rm -f "$PAST"
+fi
 if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
   && D=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --git-dir --git-common-dir 2>/dev/null) \
   && [ "${D%%$'\n'*}" = "${D#*$'\n'}" ]; then

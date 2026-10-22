@@ -43,7 +43,9 @@ ctx=$(context_size "$transcript") || exit 0
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || exit 0
 HOOK_FIRE_ADVISE=1
 # Issue 275: pane-budget-gate.sh lets main past its line write only the checkpoint.
-[[ ! $sid =~ ^[A-Za-z0-9_-]+$ ]] || : > "$HOME/.claude/checkpoints/$sid.past-line" 2>/dev/null
+# A first run has no checkpoints folder; a marker not written lets every tool through, so that is said.
+[[ ! $sid =~ ^[A-Za-z0-9_-]+$ ]] || { mkdir -p "$HOME/.claude/checkpoints" && : > "$HOME/.claude/checkpoints/$sid.past-line"; } 2>/dev/null \
+  || echo "Past-line marker NOT written ($HOME/.claude/checkpoints/$sid.past-line): no tool is held back, so the checkpoint Write is your next tool call."
 # 40K past the line the step is over: a session that kept "finishing the step"
 # reached 320K, so past this point the checkpoint Write is the next tool call.
 # On a 200K window (standardContext) less than 40K is left before auto-compact,

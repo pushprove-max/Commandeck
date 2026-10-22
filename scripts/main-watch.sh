@@ -110,9 +110,9 @@ restart_later() {
   hs_start "$JOB-restart" 64M "${envs[@]}" -- "$BASH" "$HERE/$NAME.sh" --restart
 }
 # restart_due -- the one retry, read every tick: the job file differs from the one last loaded (an --install's restart
-# was lost, or job-sum is gone) and no merge job lives; restart_later skips when its job already runs. Old-install
-# migration is out of scope (Max, r-20261021-170113-1-f7afec): a watcher installed before this code is reinstalled
-# by hand once.
+# was lost, or job-sum is gone) and no merge job lives; restart_later skips when its job already runs. A watcher
+# installed before this code is reinstalled by hand once: that --install rewrites its job file and restarts it
+# (main-watch-auto-merge.test.sh).
 restart_due() {
   local f; f=$(job_file)
   [ -f "$f" ] && [ "$(cksum < "$f")" != "$(cat "$ST/job-sum" 2>/dev/null)" ] && ! others_job >/dev/null && ! merge_live
