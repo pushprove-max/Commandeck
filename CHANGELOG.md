@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.27.0 -- 2026-10-22
+
+- Only actionable messages wake main (#318). A nudge whose unread mail is all status notes or heartbeats is dropped
+  with no turn spent; the notes show under "held notes (did not wake you)" at the next real wake, main's own notes
+  included. Actionable messages that arrive within one window wake main once, counted across Orca's nudges and
+  main-watch's typed wakes. Each wake that passes carries a silent-wake line: a wake with nothing for the owner ends
+  with no text to them.
+- Two new `/plugin` options: `wakeKinds` (default `worker_done,escalation,question,decision_gate,merge_ready`) and
+  `wakeWindowSeconds` (default 60; 0 wakes at once).
+- A merge main-watch lands now tells main once (`main-watch: <unit> merged into local main at <sha>`). A detached
+  merge's or suite's exit notice is a question, and a heads-up relay is a status note.
+
 ## 0.26.0 -- 2026-10-22
 
 - Seven roles are left: orchestrator, plan-author, plan-judge-sol, plan-judge-astra, builder, fixer and

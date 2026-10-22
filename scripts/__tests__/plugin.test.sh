@@ -68,8 +68,18 @@ relayPromptCacheTtl|"1h"|Ask "Relay prompt cache": 1h
 dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
 dashboardPort|"none"|Ask "Dashboard": On, this machine only
 maxBuilders|"none"|-
+wakeKinds|"worker_done,escalation,question,decision_gate,merge_ready"|-
+wakeWindowSeconds|60|-
 EOF
-check "the set is the ten options of the plan's question 9, the Builder cap (issue 256) and 25 role keys (issue 312)" 36 "$(jq '.userConfig | length' "$M")"
+check "the set is the ten options of the plan's question 9, the Builder cap (issue 256), 25 role keys (issue 312) and the two wake options (issue 318)" 38 "$(jq '.userConfig | length' "$M")"
+# Issue 318: a settings file from before 0.27.0 has neither wake key and takes the defaults; a kinds list naming no
+# kind would never wake main, and a window that is not whole seconds cannot be compared, so both take the default.
+wopt() { (cd "$TMP" && CLAUDE_CONFIG_DIR=$TMP/cfg COMMANDECK_MAIN=$TMP COMMANDECK_OPTIONS=$1 bash -c '. "$0/scripts/paths.sh" && echo "$(pp_option wakeKinds) $(pp_option wakeWindowSeconds)"' "$REAL"); }
+D318="worker_done,escalation,question,decision_gate,merge_ready 60"
+check "wake options: no answer (the deployed format) takes the defaults" "$D318" "$(wopt '')"
+check "wake options: an empty or unknown kinds list and a window that is not whole seconds take the defaults" "$D318:$D318" \
+  "$(wopt '{"wakeKinds":"","wakeWindowSeconds":"soon"}'):$(wopt '{"wakeKinds":"bogus","wakeWindowSeconds":-5}')"
+check "wake options: an answer is read, spaces dropped, and a window of 0 kept" "question,status 0" "$(wopt '{"wakeKinds":"question, status","wakeWindowSeconds":0}')"
 # Issue 293: a Sonnet Builder ran at medium because setup recommended Medium whatever the model, and asked it three
 # questions later. The effort is asked right after the model, High recommended on Sonnet; the model and effort
 # options default to "project", no answer, which the /config dialog may save without hiding the project's answer.

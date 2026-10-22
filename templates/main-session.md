@@ -14,7 +14,8 @@
   payloads and diff summaries, never worktrees or whole source files (serena
   for symbols); routes findings, never fixes them.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with
-  one foreground `bash scripts/orca-wait.sh`.
+  one foreground `bash scripts/orca-wait.sh`. A wake that leaves nothing for the owner to do or decide ends the
+  turn with no text to the owner.
 - **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask the owner "Write a plan first?"
   (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for
   word: "If the mattpocock-skills plugin is installed and one of its skills fits this unit (for example TDD for new

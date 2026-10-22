@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ci-watch.sh <sha> -- watch each GitHub Actions run of <sha> to its end, then print one line with each job's result
-# (issue 259). It detaches itself (pp_detach), so that line comes to main as a status message. A failed run's
+# (issue 259). It detaches itself (pp_detach), so that line comes to main as a question. A failed run's
 # failed jobs are rerun once (gh run rerun --failed): the run id goes in $PP_SCRATCH/ci-watch-reruns first, so no
 # run is rerun twice, by this call or a later one. A run whose workflow name or file says deploy is only watched.
 # It waits with gh run watch --exit-status, never a poll loop. Exit 0 every run green, 1 one is not or the listing is cut short, 3 no run listed.

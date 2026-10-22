@@ -10,25 +10,25 @@ set -euo pipefail
 tick 5000
 
 # Mail from another pane that sits unread while main is idle wakes main: two orders once sat
-# 13 minutes with main idle, because only this watcher's own posts ever typed a wake. A heads-up
-# note and main's own send are not news to main.
-msg() { jq -nc --arg f "$1" --arg s "$2" '{to_handle: "run:run_test", from_handle: $f, read: 0, type: "status", subject: $s}'; }
+# 13 minutes with main idle, because only this watcher's own posts ever typed a wake. Issue 318: only an actionable
+# type wakes, once its window closes (120 s here); a status note, a heads-up or main's own, is held.
+msg() { jq -nc --arg f "$1" --arg s "$2" --arg t "${3:-question}" --argjson at "${4:-0}" \
+  '{to_handle: "run:run_test", from_handle: $f, read: 0, type: $t, subject: $s, created_at: ($at | todate)}'; }
 inbox() { jq -sc '{ok: true, result: {messages: .}}' > "$F/inbox"; }
-typed() { grep -c 'items are waiting in your Orca inbox' "$T/typed" 2>/dev/null || true; }
 # The seats above are done with and their tasks closed, so nothing of theirs is pending.
 rm -f "$S"/seat-*.txt "$S/main-watch/wake"; sed -i 's/ .*/ completed/' "$F/tasks"
-M=30000; : > "$T/typed"
-{ msg term_main "main's own note"; msg term_x "heads-up: 2 notes"; } | inbox
+M=30000; : > "$T/typed"; export COMMANDECK_OPTIONS='{"wakeWindowSeconds":120}'
+{ msg term_main "main's own note" status $M; msg term_x "heads-up: 2 notes" status $M; } | inbox
 tick $M; tick $((M + 200))
-[ "$(typed)" = 0 ] || fail "main was woken for a heads-up note or its own send"
-{ msg term_main "main's own note"; msg term_x "heads-up: 2 notes"; msg term_wt-h1 "order from a Builder"; } | inbox
+[ "$(typed)" = 0 ] || fail "main was woken for a heads-up note or its own status note"
+{ msg term_main "main's own note" status $M; msg term_x "heads-up: 2 notes" status $M; msg term_wt-h1 "order from a Builder" question $((M + 300)); } | inbox
 tick $((M + 300)); tick $((M + 360))
 [ "$(typed)" = 0 ] || fail "main was woken for mail unread under 2 minutes"
 tick $((M + 420))
 [ "$(typed)" = 1 ] || fail "mail unread 2 minutes with main idle did not wake main (typed $(typed))"
 tick $((M + 480))
 [ "$(typed)" = 1 ] || fail "an unanswered main was woken again inside 2 minutes"
-rm -f "$F/inbox"
+rm -f "$F/inbox"; unset COMMANDECK_OPTIONS
 
 # Issue 198: main idle with its own question open reads nothing, and main-watch gave up on it without a word. The
 # relay hears once per wake episode, through main's run under main's handle: the service has no pane of its own.
@@ -103,7 +103,7 @@ rm -f "$S"/seat-*.txt; sed -i 's/ .*/ completed/' "$F/tasks"; : > "$T/sends"; : 
 rm -f "$S/main-watch/wake" "$S/main-watch/wake-told" "$S/main-watch/unread-since"; mkdir -p "$T/ws/Chief-of-Staff"; : > "$F/no-turn"
 MLOG=$T/home/.claude/projects/$(printf '%s' "$REPO" | sed 's/[^a-zA-Z0-9]/-/g')/m.jsonl
 gaveup() { # <start> -- unread mail, then three typed wakes that start no turn, then the give-up tick
-  msg term_x "order from the relay" | inbox
+  msg term_x "order from the relay" question "$1" | inbox
   tick "$1"; tick $(($1 + 120)); tick $(($1 + 180)); tick $(($1 + 240))
   [ "$(typed)" = 3 ] || fail "restart: expected 3 typed wakes before the give-up, got $(typed)"
 }
@@ -115,6 +115,12 @@ tick $((G + 300))
 rm -f "$S/main-watch/unread-since" "$MLOG"; : > "$T/typed"; G=110000; gaveup $G
 tick $((G + 300))
 [ "$(posts 'restart main')" = 1 ] || fail "restart: three unproven wakes with main's log unmoved did not tell the relay"
+# Issue 318: a wake that started no turn gives the window's claim back, so its retry comes at the next tick (30 s), not
+# a window later, and no nudge is held for a wake that never happened.
+rm -f "$S/main-watch/wake" "$S/main-watch/wake-told" "$S/main-watch/unread-since"; : > "$T/typed"; H=120000
+msg term_x "order from the relay" question $H | inbox
+tick $((H + 60)); tick $((H + 90))
+[ "$(typed)" = 2 ] || fail "restart: an unproven wake kept its claim, so the next tick did not retry (typed $(typed))"
 rm -f "$F/no-turn" "$F/inbox" "$S/main-watch/wake" "$S/main-watch/wake-told" "$S/main-watch/unread-since"
 
 # Issue 232: a picker open in the relay's own pane hid 9 messages for 38 minutes. While its screen shows a prompt and

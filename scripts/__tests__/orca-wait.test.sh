@@ -11,10 +11,11 @@ T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 WS=$T/ws; mkdir -p "$T/bin" "$T/home" "$WS/Chief-of-Staff"
 git init -q -b main "$T/p"
 msg() { jq -nc --arg id "$1" --arg f "$2" --arg t "$3" --arg s "$4" --arg b "$5" '{id: $id, from_handle: $f, type: $t, subject: $s, body: $b}'; }
-{ msg m1 term_cos status "turn complete" "Owner says proceed"
-  msg m2 term_w status "turn complete" "the owner ruled r-19991017-101010-1-a1b2c3"
+# The echoes are questions, as the notify hooks send them, so the echo rules decide them; a status is held (issue 318).
+{ msg m1 term_cos question "turn complete" "Owner says proceed"
+  msg m2 term_w question "turn complete" "the owner ruled r-19991017-101010-1-a1b2c3"
   msg m3 term_cos status "relay note" "plain words from the relay"
-  msg m4 term_w status "turn complete" "just chatter"
+  msg m4 term_w question "turn complete" "just chatter"
   msg m5 term_w heartbeat "alive" ""; } | jq -sc '{ok: true, result: {deliveryId: "d1", messages: .}}' > "$T/batch.json"
 # Orca: the first check answers the batch, an ack answers nothing more; the relay's pane has only a worktreeId.
 cat > "$T/bin/orca-ide" <<EOF
@@ -32,7 +33,7 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
 HID=$T/sc/main-watch/messages/hidden.jsonl
 check "the relay pane's plain 'turn complete' echo, with no ruling id, is shown" 1 "$(grep -c '| Owner says proceed' <<<"$OUT")"
 check "an echo with no marker that cites a ruling id is shown" 1 "$(grep -c '| the owner ruled r-19991017-101010-1-a1b2c3' <<<"$OUT")"
-check "the relay pane's status, which the own-status rule would drop, is shown" 1 "$(grep -c '| plain words from the relay' <<<"$OUT")"
+check "the relay pane's status is shown" 1 "$(grep -c '| plain words from the relay' <<<"$OUT")"
 check "a plain echo is hidden" 0 "$(grep -c 'just chatter' <<<"$OUT")"
 check "the summary names hidden.jsonl, which holds the echo and not the heartbeat" "1 m4" \
   "$(grep -c "all but heartbeats are kept in $HID" <<<"$OUT") $(jq -r .id "$HID" 2>/dev/null | paste -sd, -)"
@@ -149,6 +150,7 @@ check "a wake killed while a later ack is pending has printed every message ackn
   "$(grep -c '| first delivered |' <<<"$OUT") $(grep -c '| second delivered |' <<<"$OUT")"
 # Issue 288: the plugin starts no driver, so a stray loop-u1 service hid the one copy of a seat verdict; and a merge's
 # or a suite's detached exit note is sent from main's own handle, where the own-status rule hid it as main's note.
+# Issue 318 removed that rule: a status note did not wake main, so it is shown as held, main's own included.
 cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
@@ -159,13 +161,25 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nprintf "123\\t0\\tcom.commandeck.loop-u1\\n"\n' > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
 { msg v1 term_drv status "seat certifier u1: GO" "report"
-  msg x1 term_main status "merge-unit-local.sh u1: exit 1" "tail of the log"
+  msg x1 term_main question "merge-unit-local.sh u1: exit 1" "tail of the log"
   msg x2 term_main status "a note main sent by hand" "plain"; } | jq -sc '{ok: true, result: {deliveryId: "d8", messages: .}}' > "$T/batch.json"
 rm -rf "$T/sc"
-OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
-  COMMANDECK_HOST_OS=Darwin COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_main timeout 30 bash "$PL/scripts/orca-wait.sh" 2>&1)
+mdrain() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_HOST_OS=Darwin COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_main timeout 30 bash "$PL/scripts/orca-wait.sh" 2>&1); }
+OUT=$(mdrain)
 check "a seat verdict is shown while a live driver service names its unit" 1 "$(grep -c '| seat certifier u1: GO |' <<<"$OUT")"
-check "a lone exit notice from main's own handle is shown; main's hand-sent status note is still hidden" "1 0" \
+check "a lone exit notice from main's own handle is shown, and main's hand-sent status note is shown too (held)" "1 1" \
   "$(grep -c '| merge-unit-local.sh u1: exit 1 |' <<<"$OUT") $(grep -c 'a note main sent by hand' <<<"$OUT")"
+# Issue 318: a status note did not wake main, so it is shown after the wake's own lines, under one held-notes line,
+# main's own notes included: otherwise a held note is never seen. A heartbeat is a liveness ping, shown nowhere.
+{ msg y1 term_main status "main's own note" "progress"
+  msg y2 term_w heartbeat "alive" "beat"
+  msg y3 term_x status "merge still running" "progress"
+  msg y4 term_x question "a Builder asks" "which file?"
+  msg y5 term_x status "drive u9: FYI round started" "progress"; } | jq -sc '{ok: true, result: {deliveryId: "d9", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc"; OUT=$(mdrain)
+check "a status note, main's own and a driver FYI included, prints under held notes after the wake's own lines; a heartbeat prints nowhere" \
+  "a Builder asks|held notes (did not wake you):|main's own note|merge still running|drive u9: FYI round started|0" \
+  "$(grep -oE '^(term_[a-z]+ \| [^|]+ \||held notes.*)' <<<"$OUT" | sed -E 's/^term_[a-z]+ \| //; s/ \|$//' | paste -sd'|' -)|$(grep -c 'alive' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

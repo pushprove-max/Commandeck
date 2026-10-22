@@ -90,7 +90,7 @@ check "a leak-test.sh older than --text: the merge goes on and says the word lis
   "$(merge z) $(grep -c 'the project.s word list was not applied' "$TMP/out")"
 rm -rf "$REPO/ci"
 # Issue 230: run in main's foreground (a Claude session), the merge returns at once with its log and pid; the merge
-# then completes detached and its result reaches main as a status message.
+# then completes detached and its result reaches main as a question.
 mk d; go d
 OUT=$(cd "$REPO" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 bash "$MERGE" d </dev/null 2>&1); RC=$?
 PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")

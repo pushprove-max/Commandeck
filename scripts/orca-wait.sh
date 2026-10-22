@@ -15,7 +15,9 @@
 # when the line did not carry all of it (past 60 lines: the file's path with the
 # first and last lines), a unit pane's `unit <name>: ...` state and `next: ...`
 # step, and for each ruling id the message cites its answer and void state from
-# the rulings log, with the .md detail file the message names.
+# the rulings log, with the .md detail file the message names. Messages whose
+# type does not wake main (wakeKinds, issue 318) print last, under
+# "held notes (did not wake you):".
 # Then ONE state line and only what main must act on: NEEDS-MAIN lines, pending
 # gates, open main-watch item tasks with their ids, one line per active driver.
 # --full prints the older wake instead: every open task, each message's
@@ -241,19 +243,16 @@ driver_units() {  # units whose driver is alive, as a JSON array
 #     needed) asks nothing of main, driven or not; its driver log keeps the line
 #     (owner ruling 2026-10-01). main-watch.sh never relays one, so this is the
 #     only filter that needs the rule.
-#  6. A `status` note main itself sent is not news to main. A send to a
-#     pane with no dispatch of its own (the relay pane) is addressed to the
-#     whole run, so it comes back here. The drivers and main-watch.sh send from
-#     main's handle too, but never as `status`, so only main's hand-sent notes
-#     match. Orca's refusal of such a send carries its own payload and is kept.
-#     A detached merge's or suite's `<label>: exit <rc>` (pp_detach) also comes
-#     from main's handle, and is kept: it is the only word of that result.
-#     With no pane handle in the environment nothing is dropped on a guess.
+#  6. Issue 318: a message whose type does not wake main (wakeKinds: status
+#     notes, main's own included) did not wake it, and is always shown, after
+#     the wake's own lines under "held notes (did not wake you):". A heartbeat
+#     is a liveness ping, not a note: never shown.
 # None of these rules hides an owner answer: a message citing a ruling id, or from the relay's pane (the one in
 # $PP_WORKSPACES/Chief-of-Staff, as to-main.sh finds it), always passes. What they hide goes to hidden.jsonl.
 # Everything else passes, including every driver wake and every escalation: an
 # escalation is a seat asking for a decision the driver cannot make.
 RID_RE='r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}'
+WAKE=$(pp_option wakeKinds | jq -Rc 'split(",")') || exit 2
 KEEP='
   def echo_unit: (.subject // "") | ((capture("\\((?<u>[^)]+)\\)") // {u:""}) | .u);
   def sender_unit: ($hunits[(.from_handle // "")] // "");
@@ -268,10 +267,8 @@ KEEP='
                or ((.subject // "") | test("^(seat [a-z-]+ (on )?|drive )?u([: ]|$)|(^| )unit=u( |$)"));
   def relay: (.subject // "") | startswith("heads-up:");
   def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or (sender_unit == "Chief-of-Staff");
-  def own: ($me != "") and (.type == "status") and ((.from_handle // "") == $me)
-           and (((.payload // "") | tostring | contains("_orcaLifecycleRejection")) | not)
-           and (((.subject // "") | test(": exit [0-9]+$")) | not);
-  .result.messages[]? | select(.type != "heartbeat") | select(relay or owner or ((noisy | not) and (harness | not) and (own | not)))'
+  def held: (.type // "") as $t | any($wake[]; . == $t) | not;
+  .result.messages[]? | select(.type != "heartbeat") | select(held or relay or owner or ((noisy | not) and (harness | not)))'
 # A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
 RENDER='if $full == 1 and ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
@@ -544,7 +541,9 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
       dunits=$(driver_units); hunits=$(handle_units)
     fi
     # One array feeds every output path and the counter.
-    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --arg me "${ORCA_TERMINAL_HANDLE:-}" --arg rid "$RID_RE" "[$KEEP]" 2>/dev/null) || kept='[]'
+    # The wake's own lines first, then the held ones (a stable sort keeps Orca's order within each).
+    kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --argjson wake "$WAKE" --arg rid "$RID_RE" \
+      "[$KEEP] | sort_by((.type // \"\") as \$t | any(\$wake[]; . == \$t) | not)" 2>/dev/null) || kept='[]'
     # What the rules hid is kept, before the ack as the bodies below are: a hidden owner answer can still be found.
     # Both go in on stdin: as an argument a big batch overflows ARG_MAX (E2BIG) and the drain never acks.
     # shortcut: one append-only file, rotate it per run if it grows past a few MB.
@@ -561,7 +560,10 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
         echo "orca-wait: could not save message bodies to $MSGDIR; not acknowledged"
         return 1
       fi
+      local hdr=0
       while IFS= read -r m; do
+        [ "$hdr" = 1 ] || ! jq -e --argjson wake "$WAKE" '(.type // "") as $t | any($wake[]; . == $t) | not' <<<"$m" >/dev/null \
+          || { echo "held notes (did not wake you):"; hdr=1; }
         jq -r --arg mdir "$MSGDIR" --argjson full "$FULL" "$RENDER" <<<"$m"
         serve "$m" "$hunits" "$dunits"
       done < <(printf '%s' "$kept" | jq -c '.[]')
@@ -583,7 +585,7 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
 drain || exit 3
 # Orca's banner counts every queued message, the ones the filter passes over too:
 # without this line "5 messages" beside 2 printed reads as 3 lost.
-[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, your own status notes coming back from the run, a live driver's seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
+[ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, plain turn-complete echoes, a live driver's seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
 # Routine items main-watch kept out of the inbox (issue 253): one line with the count of new ones and the file.
 DG=$SCRATCH/main-watch/digest
 DN=$(awk 'END { print NR }' "$DG" 2>/dev/null); DS=$(cat "$DG.seen" 2>/dev/null); [ "${DS:-0}" -le "${DN:-0}" ] 2>/dev/null || DS=0

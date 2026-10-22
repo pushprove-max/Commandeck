@@ -18,8 +18,9 @@ cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "terminal list") cat "$T/list.json" ;;
-  "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }; while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
-    jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" '{subject: \$s, type: \$t, body: \$b}' >> "$T/inbox-\$to"; echo '{"ok":true}' ;;
+  "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }; while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
+    jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" --arg to "\$to" --arg f "\${fr:-}" '{subject: \$s, type: \$t, body: \$b, to_handle: \$to, from_handle: \$f, read: 0, created_at: (now | todate)}' >> "$T/inbox-\$to"; echo '{"ok":true}' ;;
+  "orchestration inbox") cat "$T"/inbox-* 2>/dev/null | jq -s '{ok: true, result: {messages: .}}' ;;
   "orchestration check") h=\$4; [ ! -e "$T/fail-\$h" ] || exit 1; [ ! -e "$T/hang" ] && [ ! -e "$T/hang-\$h" ] || sleep 10; jq -s '{ok: true, result: {messages: .}}' "$T/inbox-\$h" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; rm -f "$T/inbox-\$h" ;;
   "terminal read") jq -Rn --arg h "\$4" '{ok: true, result: {terminal: {handle: \$h, tail: [inputs]}}}' "$T/screen-\$4" 2>/dev/null || exit 1 ;;
   *) echo '{"ok":true}' ;;
@@ -166,6 +167,20 @@ echo '{"ok":false,"error":{"message":"terminal term_12 is not accepting input"}}
 OUT=$(send fifteen); RC=$?
 check "a failed send exits 1 and prints Orca's error" "1:1" "$RC:$(grep -c 'failed: terminal term_12 is not accepting input' <<<"$OUT")"
 rm "$T/send-fail"
+
+# Issue 318: only actionable mail wakes main, read off both forms that reach it. to-main.sh sends to main's terminal
+# handle, not the run: a classifier reading the run alone would never wake main for a question sent this way. And a
+# detached merge's exit notice is the only word of that result, so it must be a type that wakes main.
+rm -f "$T"/inbox-*; main_is term_20; start term_20 >/dev/null
+(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" question "which file?" "a Builder asks" >/dev/null 2>&1)
+act() { (cd "$T/p" && "${E[@]}" CLAUDE_CONFIG_DIR="$T/cfg" bash -c '. "$0/scripts/paths.sh" && pp_inbox_actionable run_x "$1" | jq -r "map(.subject) | join(\",\")"' "$REAL" "$@"); }
+check "a question sent through to-main.sh lands addressed to main's handle and pp_inbox_actionable counts it" "which file?:" \
+  "$(act term_20):$(act '')"
+rm -f "$T"/inbox-*
+(cd "$T/p" && "${E[@]}" bash -c '. "$0/scripts/paths.sh" && pp_detach "$1/d/m.log" merge-u1 true >/dev/null' "$REAL" "$T")
+for _ in $(seq 1 50); do [ -s "$T/inbox-term_20" ] && break; sleep 0.1; done
+check "a detached merge's exit notice reaches main as a question" "question merge-u1: exit 0" \
+  "$(jq -r '"\(.type) \(.subject)"' "$T/inbox-term_20" 2>/dev/null)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -36,9 +36,14 @@ case "\$1 \$2" in
   "orchestration task-create")
     n=\$(( \$(wc -l < "$F/tasks") + 1 )); echo "task_new\$n pending" >> "$F/tasks"
     echo "{\"ok\":true,\"result\":{\"task\":{\"id\":\"task_new\$n\"}}}" ;;
-  "orchestration send") printf '%s' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"; echo '{"ok":true}' ;;
-  # no-turn: the text is typed and submitted, but no turn starts (an unproven wake).
-  "terminal send") printf '%s\n' "\$*" >> "$T/typed"
+  # With live-inbox, a send also lands unread in inbox.jsonl (created at COMMANDECK_NOW), which the inbox read answers.
+  "orchestration send") printf '%s' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"
+    if [ -e "$F/live-inbox" ]; then while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --type) ty=\$2 ;; --subject) su=\$2 ;; esac; shift; done
+      jq -nc --arg to "\$to" --arg f "\${fr:-}" --arg t "\$ty" --arg s "\$su" --argjson at "\${COMMANDECK_NOW:-0}" \
+        '{id: "s\(\$at)", to_handle: \$to, from_handle: \$f, type: \$t, subject: \$s, read: 0, created_at: (\$at | todate)}' >> "$F/inbox.jsonl"; fi
+    echo '{"ok":true}' ;;
+  # no-turn: the text is typed and submitted, but no turn starts (an unproven wake). flip-send runs once while the send waits.
+  "terminal send") printf '%s\n' "\$*" >> "$T/typed"; [ ! -e "$F/flip-send" ] || { bash "$F/flip-send"; rm -f "$F/flip-send"; }
     if [ -e "$F/no-turn" ]; then echo '{"ok":true,"result":{"stages":["typed","submitted"]}}'
     else echo '{"ok":true,"result":{"stages":["typed","submitted","turn_started"]}}'; fi ;;
   # screen-<handle> and inbox-<handle> are one pane's own; screen and inbox are main's.
@@ -48,7 +53,11 @@ case "\$1 \$2" in
   "terminal list")
     jq -Rn --arg main "$REPO" --arg cos "$T/ws/Chief-of-Staff" '{result:{terminals:[inputs | split(" ") | {handle:.[0], tabId:.[0], leafId:"l",
       worktreePath:(if (.[0] | startswith("term_main")) then \$main elif (.[0] | startswith("term_cos")) then \$cos else "/elsewhere" end), agentIdentity:"claude"}]}}' < "$F/agents" ;;
-  "orchestration inbox") [ ! -e "$F/inbox-\$4" ] || { cat "$F/inbox-\$4"; exit 0; }; cat "$F/inbox" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
+  "orchestration inbox") [ ! -e "$F/inbox-\$4" ] || { cat "$F/inbox-\$4"; exit 0; }
+    # flip-inbox runs once after the read is taken and before it is answered: what lands meanwhile is not in it.
+    [ ! -e "$F/live-inbox" ] || { o=\$(jq -sc '{ok: true, result: {messages: .}}' "$F/inbox.jsonl")
+      [ ! -e "$F/flip-inbox" ] || { mv "$F/flip-inbox" "$F/flip-inbox.run"; bash "$F/flip-inbox.run"; }; echo "\$o"; exit 0; }
+    cat "$F/inbox" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
   "orchestration run-list") echo '{"result":{"runs":[{"id":"run_test","coordinator_handle":"term_main"}]}}' ;;
   "worktree ps") jq -Rn '{result:{worktrees:[{agents:[inputs | split(" ") | {paneKey:(.[0] + ":l"), state:.[1]}]}]}}' < "$F/agents" ;;
   *) echo '{}' ;;
@@ -60,6 +69,15 @@ mw() { (cd "$REPO" && unset CLAUDE_CONFIG_DIR && PATH=$T/bin:$PATH HOME=$T/home 
 tick() { COMMANDECK_NOW=$1 mw --once 2>>"$T/stderr" || fail "main-watch exited non-zero at $1"; }
 state() { awk -v h="$1" '$1 != h' "$F/agents" > "$F/agents.new"; mv "$F/agents.new" "$F/agents"; echo "$1 $2" >> "$F/agents"; }
 posts() { grep -c -- "$1" "$T/sends" || true; }
+# Issue 318's wake files (main-watch-wake*.test.sh): main-watch's typed wakes, Orca's nudge, and the live inbox.
+typed() { grep -c 'items are waiting in your Orca inbox' "$T/typed" 2>/dev/null || true; }
+nudge() { # <now> -- Orca nudges main; a nudge the hook passes is a turn, counted in passed
+  local o; o=$(jq -n --arg c "$REPO" '{prompt: "You have 1 orchestration message. Run `orca orchestration check --run run_test`.", cwd: $c}' \
+    | (cd "$REPO" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR PATH="$T/bin:$PATH" HOME="$T/home" COMMANDECK_MAIN="$REPO" COMMANDECK_SCRATCH="$S" \
+      COMMANDECK_NOW="$1" COMMANDECK_MAIN_WATCH_UP=1 ORCA_TERMINAL_HANDLE=term_main bash "$SOURCE/hooks/cos-own-echo.sh" 2>/dev/null))
+  grep -q '"block"' <<<"$o" || echo "$1" >> "$T/passed"; }
+drained() { jq -c '.read = 1' "$F/inbox.jsonl" > "$F/i.new"; mv "$F/i.new" "$F/inbox.jsonl"; }
+ask() { jq -nc --arg to "$2" --argjson at "$1" '{to_handle: $to, from_handle: "term_w", read: 0, type: "question", subject: "a worker asks", created_at: ($at | todate)}' >> "$F/inbox.jsonl"; }
 bseat() { mkdir -p "$T/ws/$1/.claude"; printf 'handle=%s\ntask=%s\nrole=builder\nunit=%s\nlaunched=%s\n' "$2" "$3" "$1" "$4" > "$S/seat-$1-builder.txt"; echo "$3 running" >> "$F/tasks"; }
 hrow() { # <epoch> <event> <agent> -- one helper row as the Builder's hooks log it
   jq -nc --argjson t "$1" --arg e "$2" --arg a "$3" '{ts: ($t | todate), event: $e} + if $e == "tool-start"

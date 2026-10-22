@@ -328,8 +328,9 @@ pp_waited_on() {
 
 # pp_main_foreground -- true in main's own foreground: the main checkout, a terminal or a Claude session, and not a
 # child of pp_detach or of run-shell-tests.sh (COMMANDECK_FOREGROUND). pp_detach <log> <label> <cmd>... runs the
-# command detached with its output in <log>, prints the pid and the log, and sends main the result as a status
-# message (issue 230): a merge or a full suite takes minutes, and main's turn waited on it.
+# command detached with its output in <log>, prints the pid and the log, and sends main the result as a question
+# (issue 230): a merge or a full suite takes minutes, and main's turn waited on it. A question, not a status: it is the
+# only word of that result, and a status is held until the next wake (issue 318).
 pp_main_foreground() {
   [ -z "${COMMANDECK_FOREGROUND:-}" ] && { [ -t 0 ] || [ -n "${CLAUDECODE:-}" ]; } \
     && [ "$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" = "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]
@@ -338,8 +339,43 @@ pp_detach() {
   local log=$1 label=$2; shift 2
   mkdir -p "${log%/*}" || return 1
   COMMANDECK_FOREGROUND=1 nohup bash -c 'log=$1 label=$2; shift 2; "$@" > "$log" 2>&1; rc=$?
-    bash "$0" status "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
-  echo "$label: running detached, pid $!; log $log. Its result comes to main as a status message."
+    bash "$0" question "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
+  echo "$label: running detached, pid $!; log $log. Its result comes to main as a message."
+}
+# pp_inbox_actionable <run> [main's handle] -- issue 318: main's unread messages whose type wakes it (wakeKinds), as one
+# JSON array, oldest first. Both forms that reach main count: the run, and main's terminal handle (to-main.sh's). Any
+# sender: main-watch and pp_detach send from main's own handle. Fails when Orca does not answer in 10 s, or the page is
+# full (the inbox is the whole machine's, newest first): the caller then wakes.
+pp_inbox_actionable() {
+  local k; k=$(pp_option wakeKinds) || return 1
+  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" '($k | split(",")) as $k
+    | .result.messages | if type == "array" and length < 500 then [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h))
+      and (.type as $t | any($k[]; . == $t)))] | sort_by(.created_at // "") else error end' 2>/dev/null
+}
+# pp_wake_window_open <pp_inbox_actionable array> <now> -- true while its oldest message is younger than
+# wakeWindowSeconds: what arrives meanwhile wakes main once, when the window closes. A time it cannot read is past.
+pp_wake_window_open() {
+  local w; w=$(pp_option wakeWindowSeconds) || return 1
+  jq -e --argjson now "$2" --argjson w "$w" 'length > 0 and ($now - (.[0].created_at // "" | sub("\\.[0-9]+"; "")
+    | try fromdateiso8601 catch 0)) < $w' <<<"$1" >/dev/null 2>&1
+}
+# pp_wake_claim <now> -- issue 318: main's one wake per window, taken by Orca's nudge (cos-own-echo.sh) and
+# main-watch's typed wake alike, so the two cannot both start a turn for the same messages: true, and the claim is
+# <now>, unless the last is younger than wakeWindowSeconds. Anything that fails takes the wake. Only this and
+# pp_wake_release change the claim, both under its lock.
+pp_wake_claim() {
+  local w at f=$PP_SCRATCH/main-watch/unread-since
+  w=$(pp_option wakeWindowSeconds) && mkdir -p "${f%/*}" || return 0
+  { flock -w 10 9 || return 0
+    at=$(cat "$f" 2>/dev/null); ! [[ $at =~ ^[0-9]+$ ]] || [ $(($1 - at)) -ge "$w" ] || return 1
+    echo "$1" > "$f"; } 9>>"$f.lock"
+}
+# pp_wake_release <at> -- give back the claim pp_wake_claim took at <at> (a wake that started no turn), only while it
+# is still that one: a nudge may have taken a newer one while the wake waited for its receipt.
+pp_wake_release() {
+  local f=$PP_SCRATCH/main-watch/unread-since
+  { flock -w 10 9 || return 0
+    [ "$(cat "$f" 2>/dev/null)" != "$1" ] || rm -f "$f"; } 9>>"$f.lock"
 }
 # pp_close_items <handle>... -- complete main-watch's open item task of each of these seats (issue 227): the
 # script that handled the item (a merge, an answer, a collect) closes it, as main did by hand. A close that fails
@@ -823,12 +859,19 @@ pp_option() {
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
     dashboardPort) p=.dashboard.port f=$HOME/.commandeck/install/_machine.json ;;
+    wakeKinds) p=.wakeKinds d=worker_done,escalation,question,decision_gate,merge_ready ;;
+    wakeWindowSeconds) p=.wakeWindowSeconds d=60 ;;
     *) echo "pp_option: no option $1" >&2; return 2 ;;
   esac
   if ! v=$(pp_config_option "$1"); then
     src=$f v=$(jq -r "$p | if . == null then empty else tostring end" "$f" 2>/dev/null) || v=
     [ -n "$v" ] || src=default v=$d
   fi
+  # Issue 318: a kinds list that names no kind would never wake main, and a window must be whole seconds.
+  case $1 in
+    wakeKinds) v=${v//[[:space:]]/}; [[ ,$v, =~ ,(worker_done|escalation|question|decision_gate|merge_ready|status|dispatch|handoff), ]] || src=default v=$d ;;
+    wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
+  esac
   if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
 }
 # pp_issue_sizing -- setup's issue sizing line (issueSizing: tokens, or off), default 40000. A saved value it does

@@ -52,7 +52,6 @@ WAITING_S=120   # 2 min in a state that is neither working nor done
 HOLD_S=3600     # 1 h at most that a Builder waiting on its helpers is held unposted (#41)
 TICK=${COMMANDECK_MAIN_WATCH_TICK_S:-60}
 REPOST=${COMMANDECK_MAIN_WATCH_REPOST_S:-300}
-MAIL_S=${COMMANDECK_MAIN_WATCH_MAIL_S:-120}
 SCRATCH=$PP_SCRATCH
 ST=$SCRATCH/main-watch
 WS=$PP_WORKSPACES
@@ -345,15 +344,17 @@ builder_watch() {
 # flush -- every item due this tick goes out as ONE message, since each post is a
 # full context replay for main. Each item keeps its own task and posted time.
 flush() {
-  local n=${#DUE_KEY[@]} i subj body=""
+  local n=${#DUE_KEY[@]} i subj body="" type=question
   [ "$n" -gt 0 ] || return 0
+  # Issue 318: a heads-up is a note to verify, not a wake: as a status it is held for main's next wake.
+  [ "$RELAY" = 0 ] || type=status
   if [ "$n" = 1 ]; then subj=${DUE_SUBJ[0]} body=${DUE_BODY[0]}
   else
     # orca-wait.sh prints a `heads-up:` subject's body whole; keep the prefix.
     subj="main-watch: $n items need you"; [ "$RELAY" = 0 ] || subj="heads-up: $n notes"
     for i in "${!DUE_KEY[@]}"; do body+="$((i + 1)). ${DUE_SUBJ[i]}"$'\n'"${DUE_BODY[i]}"$'\n\n'; done
   fi
-  if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type question \
+  if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${MAIN_H:+--from "$MAIN_H"} --type "$type" \
        --subject "$subj" --body "$body" --json; then
     for i in "${!DUE_KEY[@]}"; do printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"; done
     # A heads-up relay is inbox only: nothing is ever typed for it.
@@ -479,27 +480,19 @@ listing() {
 # A fourth line is arm_diag's diagnostic: what Orca refused, typed whatever
 # became of the tasks, and never called inbox mail.
 WAKE_TRIES=3
-# mail_wake -- mail from any other pane that sat unread for MAIL_S while main was
-# idle arms the same proven wake: two orders once sat 13 minutes with main idle,
-# because only this watcher's own posts ever got a wake. The age is the first
-# tick that saw unread mail; after a wake it restarts, so an unanswered main is
-# typed at most once per MAIL_S. Heads-up notes are inbox only and main's own
-# sends are not news to main. A full page is not read: the inbox is the whole
-# machine's, newest first, as wake() reads it.
+# mail_wake -- actionable mail unread while main is idle arms the same proven wake: two orders once sat 13 minutes with
+# main idle, because only this watcher's own posts ever got a wake. Issue 318: only a wakeKinds type counts, sent to
+# the run or to main's handle, by anyone (main-watch itself sends from main's handle); wake() holds it until its
+# window closes, and takes the window's one wake claim (pp_wake_claim, unread-since) as it types, so an unanswered main
+# is typed at most once per window, by this or Orca's nudge. A full page or no answer is not read.
 mail_wake() {
-  local n
-  n=$(orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -er --arg to "run:$RUN" --arg me "${MAIN_H:-}" \
-    '.result.messages | if type == "array" and length < 500 then [.[] | select(.to_handle == $to and .read == 0 and .type != "heartbeat"
-       and ((.subject // "") | startswith("heads-up:") | not) and ($me == "" or (.from_handle // "") != $me))] | length else error end' 2>/dev/null) \
-    || return 0
-  [ "$n" != 0 ] || { rm -f "$ST/unread-since"; return 0; }
-  [ -e "$ST/unread-since" ] || { echo "$NOW" > "$ST/unread-since"; return 0; }
+  local a
+  a=$(pp_inbox_actionable "$RUN" "${MAIN_H:-}") || return 0
+  [ "$a" != '[]' ] || return 0
   [ ! -e "$ST/wake" ] || return 0
   case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
-  [ $((NOW - $(cat "$ST/unread-since"))) -ge "$MAIL_S" ] || return 0
   # A task id nothing knows reads as open in wake(), which then re-checks the inbox itself.
   printf '0\nmail\n%s\n' "$RUN" > "$ST/wake"
-  echo "$NOW" > "$ST/unread-since"
 }
 # tell_relay <why> <fix> -- wake() gave up on main (a prompt open in its pane, or no wake proven): the relay hears,
 # once per wake episode (the wake's task list, kept in wake-told), through main's run under main's handle, as
@@ -541,15 +534,16 @@ wake() {
     esac
   done
   [ "$open" = 1 ] || [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
-  # Nothing unread, nothing typed: main drained its inbox and only the item's
+  # Nothing actionable unread, nothing typed: main drained its inbox and only the item's
   # task is open, so a typed wake read "nothing was queued". An inbox Orca does
   # not answer keeps the wake, and so does a full page: the inbox is the whole
   # machine's, newest first, and this run's unread mail may be behind it.
+  # Issue 318: while the oldest is younger than the window the wake waits, untried, so what arrives meanwhile wakes
+  # main once, at the close, as Orca's nudges do (cos-own-echo.sh). A diagnostic is typed at once.
   local unread
-  if [ "$open" = 1 ] && unread=$(orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -er --arg to "run:$RUN" \
-       '.result.messages | if type == "array" and length < 500 then [.[] | select(.to_handle == $to and .read == 0)] | length else error end' 2>/dev/null) \
-     && [ "$unread" = 0 ]; then
-    open=0; [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
+  if [ "$open" = 1 ] && unread=$(pp_inbox_actionable "$RUN" "${MAIN_H:-}"); then
+    if [ "$unread" = '[]' ]; then open=0; [ -n "$diag" ] || { rm -f "$ST/wake"; return 0; }
+    elif [ -z "$diag" ] && pp_wake_window_open "$unread" "$NOW"; then return 0; fi
   fi
   if [ "${tries:-0}" -ge "$WAKE_TRIES" ] 2>/dev/null; then
     # Main's session log written since the first try is a main at work again (a new session, a restart): the
@@ -579,10 +573,15 @@ wake() {
   elif [ "$COORD_LIVE" != 0 ] && [ "$COORD" != "$MAIN_H" ]; then fix=" Live pane $COORD holds run $RUN; reconcile first: find out what that pane is before taking the run."
   fi
   [ -z "$diag" ] || text="main-watch: Orca did not take these for run $RUN, so they are NOT in your inbox: $diag. Each retries every tick.$([ "$open" = 0 ] || echo ' Other items are waiting in your Orca inbox.')$fix"
+  # Issue 318: Orca's nudge that started a turn inside the window holds this wake, untried; a diagnostic is typed anyway.
+  local claimed=$NOW
+  pp_wake_claim "$NOW" || { [ -n "$diag" ] || return 0; claimed=; }
   r=$(orca-ide terminal send --terminal "$MAIN_H" --text "$text" --enter --wait-submit 10 --json 2>/dev/null)
   if jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' <<<"$r" >/dev/null 2>&1; then
     rm -f "$ST/wake" "$ST/wake-told"
   else
+    # No turn: the claim is given back for the next try or nudge, unless a nudge took a newer one meanwhile.
+    [ -z "$claimed" ] || pp_wake_release "$claimed"
     [ "${tries:-0}" != 0 ] || echo "$NOW" > "$ST/wake-first"
     printf '%s\n%s\n%s\n%s\n' "$((tries + 1))" "$tasks" "$RUN" "$diag" > "$ST/wake"
     echo "main-watch: wake not proven for $MAIN_H (try $((tries + 1)) of $WAKE_TRIES): $(jq -r '.error.message // "no turn_started in the receipt"' <<<"$r" 2>/dev/null || echo "no receipt")" >&2
@@ -807,12 +806,13 @@ gate() {
 }
 
 # merge_collect -- how each merge job ended, read from its records every tick and not through the unit's seat: a
-# landed merge removes the worktree, and the seat with it. A unit that landed is one digest line. One that did not,
-# that landed with a later step failed or a finding not filed, or whose job died with no exit, is posted to main.
+# landed merge removes the worktree, and the seat with it. A unit that landed is posted to main once (issue 318: a
+# landed merge is actionable), and has one digest line. One that did not, that landed with a
+# later step failed or a finding not filed, or whose job died with no exit, is posted to main.
 merge_collect() {
   local r u tip log rc pid landed
   for r in "$ST"/merge-*; do
-    [ -f "$r" ] && [ "$(sed -n 3p "$r")" != told ] || continue
+    [ -f "$r" ] && ! grep -qx told "$r" || continue
     u=${r#"$ST"/merge-} tip=$(sed -n 1p "$r") log=$(sed -n 2p "$r")
     # A unit's record opens with its sha: an earlier build's job files (merge-<epoch>.log, .rc, .pid) do not.
     [[ $tip =~ ^[0-9a-f]{40}$ ]] || continue
@@ -827,14 +827,18 @@ merge_collect() {
       || grep -q '^[0-9]* finding(s) NOT FILED' <<<"$landed"; then
       post "merge-$u-$tip" "" "main-watch: the merge of $u did not land cleanly (exit $rc); log $log" \
         "$(grep '^merge-queue: ' "$log" | grep -wF -- "$u" | tail -n 3)"$'\n'"Read the log and finish it by hand: $log" once
+    # Told once flush recorded the post: a refused send posts again next tick. The digest line is written once.
+    elif grep -qE '^(posted=.|handled$)' "$ST/item-merge-$u-$tip" 2>/dev/null; then
+      echo told >> "$r"
     else
-      digest "$u merged into local main at ${tip:0:8}; log $log"; echo told >> "$r"
+      grep -qx digested "$r" || { digest "$u merged into local main at ${tip:0:8}; log $log"; echo digested >> "$r"; }
+      post "merge-$u-$tip" "" "main-watch: $u merged into local main at ${tip:0:8}" "merge-queue: $u merged; $landed; log $log" once
     fi
   done
 }
 
 # merge_start -- one detached job for the units that passed the gate this tick: merge-queue.sh merges each by its sha,
-# two or more as one train (issue 307). Not pp_detach, which messages main: a landed merge is routine (issue 253).
+# two or more as one train (issue 307). Not pp_detach: merge_collect tells main how it ended, through flush.
 # The exit goes to a file merge_collect reads; the job's pid to another, so a job that died is told from a slow one.
 # The job's files are mergejob-*, never merge-*: a unit may be named u.rc or u.log.
 merge_start() {

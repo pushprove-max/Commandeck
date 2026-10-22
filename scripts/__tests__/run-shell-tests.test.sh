@@ -71,7 +71,7 @@ check "an edited test module runs its wrapper; one with no wrapper selects nothi
 git -C "$R" checkout -q -- .
 
 # Issue 230: in main's own foreground (a Claude session in the main checkout) a run returns at once with its log,
-# runs detached, and its result reaches main as a status message; the tests it runs are not main's foreground.
+# runs detached, and its result reaches main as a question; the tests it runs are not main's foreground.
 : > "$RAN"; printf '#!/usr/bin/env bash\necho "fg=$COMMANDECK_FOREGROUND" >> "$RAN"\n' > "$R/scripts/__tests__/touched.test.sh"
 OUT=$(cd "$R" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 COMMANDECK_SCRATCH="$TMP/scratch" bash "$RUNNER" scripts/__tests__/touched.test.sh </dev/null 2>&1); RC=$?
 PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
