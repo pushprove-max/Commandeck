@@ -5,30 +5,33 @@
 # last round file must be the pass script's, GO, for the tip being merged. The
 # project's check command (.claude/commandeck.json testCommand) then runs once
 # on a copy of the squashed tree; a red check undoes the squash.
-# Self-test (the Builder's ledger row only; CI's full suite has no merge-path test): bash scripts/__tests__/merge-unit-local.test.sh
+# Self-test: bash scripts/__tests__/merge-unit-local.test.sh; the reuse of a tested tree: bash scripts/__tests__/merge-queue.test.sh
 set -euo pipefail
 # Two Builders finishing minutes apart would rebase and squash onto the same
 # index of the ONE main checkout. Serialise them: the second caller waits, then
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
 # survives.
 usage() { cat <<'EOF'
-usage: merge-unit-local.sh <unit> [--dry-run] [--area <area>] [--milestone <name>]
+usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] [--area <area>] [--milestone <name>]
 Squash-merge a Builder's branch onto local main; run from the main checkout on main.
   --dry-run        run the checks and print the plan; merge and clean up nothing
+  --auto <sha>     merge only while the branch tip is still <sha>, the commit main-watch's gate passed
   --area <area>    area label for the issue filed per finding left open (file-open-findings.sh)
   --milestone <name>  milestone for those issues
+The brief's "## Post-merge" lines run once the merge stands, each as a job of its own, and only these:
+dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>.
 exit: 0 merged; 1 refused or failed, not merged; 2 usage; 3 MERGED, but a step after the
       merge commit failed (archiving the unit's brief files, or closing its panes and removing
       its worktree): finish it by hand, do not merge again; 4 MERGED, but a finding left open
       could not be filed as an issue: the NOT FILED lines are the last printed, with the command
-      that files them
+      that files them; 5 MERGED, but a post-merge line was refused or its step failed
 example: merge-unit-local.sh my-unit --dry-run
 EOF
 }
 # Before the lock: a usage error must not wait behind a running merge.
 case "${1:-}" in --help|-h) usage; exit 0 ;; "") usage >&2; exit 2 ;; esac
 # In main's own foreground the merge restarts itself detached and returns at once (issue 230).
-if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -qx -- --dry-run \
+if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -x -- --dry-run >/dev/null \
    && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" && pp_main_foreground; then
   pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@"; exit
 fi
@@ -38,10 +41,11 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
 fi
 UNIT=$1; shift
-DRY_RUN=0 AREA="" MILESTONE=""
+DRY_RUN=0 AREA="" MILESTONE="" AUTO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
+    --auto) AUTO=${2:-}; [[ $AUTO =~ ^[0-9a-f]{7,40}$ ]] || { usage >&2; exit 2; }; shift 2 ;;
     --area) AREA=${2:-}; [ -n "$AREA" ] || { usage >&2; exit 2; }; shift 2 ;;
     --milestone) MILESTONE=${2:-}; [ -n "$MILESTONE" ] || { usage >&2; exit 2; }; shift 2 ;;
     *) usage >&2; exit 2 ;;
@@ -68,6 +72,12 @@ WTID="path:$WT"
 BRANCH=$(git -C "$WT" branch --show-current)
 [ -n "$BRANCH" ] && [ "$BRANCH" != main ] || fail "step 1 preconditions" "worktree $WT is on '${BRANCH:-no branch}', not on a branch of its own"
 git -C "$WT" diff --quiet && git -C "$WT" diff --cached --quiet || fail "step 1 preconditions" "unit worktree has tracked changes"
+# The tip before the rebase: --auto's gate passed on it, and the closing pass's suite ran on it (issue 307).
+PRE_TIP=$(git -C "$WT" rev-parse HEAD)
+[ -z "$AUTO" ] || [ "$(git -C "$WT" rev-parse --verify -q "$AUTO^{commit}" || true)" = "$PRE_TIP" ] \
+  || fail "step 1 preconditions" "--auto $AUTO: the branch tip is now $(git -C "$WT" rev-parse --short=8 HEAD), not the commit the gate passed; the gate runs again on the new tip"
+# The gate's hold and owner checks again, under the merge lock: either may have changed while this merge waited.
+[ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 1 preconditions" "--auto: held since the gate passed: $HELD"
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in .claude/briefs/*) ;; *) fail "step 1 preconditions" "unit worktree has untracked code: $path" ;; esac
@@ -148,6 +158,9 @@ rm -f "$VERR"
 echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
+# --auto merges a GO only, as main-watch's gate does: a P2 tail, or any rule not named here, is the owner's call (issue 212).
+RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
+[ -z "$AUTO" ] || pp_go_rule "$RULE" || fail "step 3 proof" "--auto merges a GO only, and the proof's rule is $RULE: merging it is the owner's call"
 MERGE_OPEN=$(grep -c '^Open at merge: ' <<<"$BUILDER_PROOF" || true)
 # One issue per finding left open, filed by the merge and not from memory.
 # GitHub failing never fails or undoes the merge: this returns 0 whatever
@@ -188,7 +201,7 @@ file_open_findings() { # <commit> [--dry-run]
 # The unit's issues, closed at its merge (issue 239): each one the brief lists that the commit message names (#N),
 # and each one under the brief's "Close as shipped" heading. One the message does not name stays open and is named.
 # A close GitHub refuses is printed last as NOT CLOSED with its command, and the script ends with code 3.
-NOT_CLOSED=""
+NOT_CLOSED="" POST_FAILED=""
 close_issues() { # [--dry-run]
   local listed shipped named n ver c left=""
   listed=$(bash "$HERE/brief-issues.sh" "$BRIEF" 2>/dev/null | jq -r '.[] | numbers' 2>/dev/null || true)
@@ -197,7 +210,7 @@ close_issues() { # [--dry-run]
   ver=$(jq -r '.version // empty' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null || jq -r '.version // empty' "$ROOT/package.json" 2>/dev/null || true)
   c="Fixed in $(git rev-parse --short=8 HEAD)${ver:+ ($ver)}; ships with the next push."
   for n in $(printf '%s\n' $listed $shipped | awk 'NF && !s[$0]++'); do
-    if ! printf '%s\n' $named $shipped | grep -qx -- "$n"; then left+=" #$n"
+    if ! printf '%s\n' $named $shipped | grep -x -- "$n" >/dev/null; then left+=" #$n"
     elif [ "${1:-}" = --dry-run ]; then echo "step 4 issues: would close #$n"
     elif (cd "$ROOT" && gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
     else NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
@@ -221,6 +234,7 @@ merged_end() {
     echo "MERGED, but GitHub did not close $(grep -c . <<<"$NOT_CLOSED") issue(s); close them by hand:" >&2
     printf '%s' "$NOT_CLOSED" >&2; rc=3
   fi
+  [ "$rc" != 0 ] || [ -z "$POST_FAILED" ] || { echo "MERGED, but a post-merge line was refused or its step failed (step 4 post-merge, above); the merge stands" >&2; rc=5; }
   exit "$rc"
 }
 if [ "$DRY_RUN" = 1 ]; then
@@ -365,7 +379,26 @@ if [ "$DRY_RUN" = 0 ]; then
   # commit, so they are not tested, and nothing the check writes lands in main.
   # shortcut: of main's untracked files the copy has only node_modules, by link; link another here when a check needs it (.env).
   # The link stays (main's ruling): a check that writes under node_modules writes main's. The doctor warns on a check that installs.
-  if [ -n "$CHECK_CMD" ]; then
+  # Issue 307 (the owner's ruling): a green full run is not run again only when it tested the merged tree itself,
+  # the same tree hash: a check reads files no list of names can find (a glob, a path built from parts). One run
+  # counts: the closing pass's "Suite:" line as --verify read it from that pass's own recorded prompt (its "Suite
+  # proof:" line; the round file is the Builder's to edit), on the tip before or after the rebase, and only for the
+  # check this merge would run: its cksum must match. A merge train's run is not one: it tested a tree with later
+  # units in it, and a record a caller hands in proves nothing.
+  REUSED="" STALE="" SUM=$(cksum <<<"$CHECK_CMD" | cut -d' ' -f1)
+  SUITE_LINE=$(sed -n 's/^Suite proof: //p' <<<"$BUILDER_PROOF" | grep -m1 -E '^Suite: [0-9a-f]{40} pass ' || true)
+  if [ -n "$CHECK_CMD" ] && [ -n "$SUITE_LINE" ]; then
+    read -r _ RAN _ <<<"$SUITE_LINE"
+    if [ "${SUITE_LINE##* cmd:}" != "$SUM" ]; then STALE="it ran another check command than this merge's"
+    elif [ "$RAN" != "$PRE_TIP" ] && [ "$RAN" != "$TIP" ]; then STALE="its commit ${RAN:0:8} is not the unit's tip"
+    elif [ "$(git rev-parse -q --verify "$RAN^{tree}")" = "$TREE" ]; then REUSED=$SUITE_LINE
+    else STALE="it tested another tree than the merged one (they differ in $(git diff --name-only --no-renames "$RAN" "$TREE" | head -3 | paste -sd' ' -))"; fi
+  fi
+  [ -z "$STALE" ] || echo "STEP 4 check: the closing pass's green suite is not reused, $STALE; the check runs"
+  if [ -n "$REUSED" ]; then
+    echo "STEP 4 check: reused, not run again: $REUSED"
+    CHECKED="check reused: $REUSED"
+  elif [ -n "$CHECK_CMD" ]; then
     echo "STEP 4 check: $CHECK_CMD"
     COPY=$(mktemp -d) || fail "step 4 check" "could not make a folder for the copy the check runs on"
     { git worktree add -q --detach "$COPY/tree" HEAD >/dev/null 2>&1 && git -C "$COPY/tree" read-tree -u --reset "$TREE"; } \
@@ -406,6 +439,8 @@ if [ "$DRY_RUN" = 0 ]; then
   { [ -e "$LEDGER" ] || { mkdir -p "${LEDGER%/*}" && : >> "$LEDGER"; }; } && exec {LEDGER_FD}<"$LEDGER" && flock -s -w 60 "$LEDGER_FD" \
     || fail "step 4 merge" "could not lock $LEDGER to read the owner's open questions once more"
   no_holds "step 4 merge"
+  # --auto's gate holds too, read again under the same lock: a hold or question added during the check counts.
+  [ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 4 merge" "--auto: held since the gate passed: $HELD"
   if ! git commit -q -m "$TITLE" {LEDGER_FD}<&-; then
     git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
@@ -428,6 +463,37 @@ if [ "$DRY_RUN" = 0 ]; then
   echo "step 4 evidence: merged $UNIT as $(git rev-parse --short=8 "$MERGE_SHA"); tree $TREES"
   file_open_findings "$MERGE_SHA"
   close_issues
+  # Issue 255: the brief's "## Post-merge" lines, each a job of its own once the merge stands. Only the three on
+  # the list run; any other line is refused with exit 5. A refused or failed step undoes nothing and ends the
+  # script with 5. Each step's exit goes into the finished-builds row below.
+  POST_LOG=$PP_SCRATCH/post-merge-$UNIT POST_STEPS=() POST_PIDS=() POST_RCS=()
+  mkdir -p "$PP_SCRATCH"
+  while IFS= read -r line; do
+    line=$(sed -E 's/^[[:space:]]*[-*][[:space:]]+//; s/^`(.*)`$/\1/; s/[[:space:]]+$//' <<<"$line")
+    [ -n "$line" ] || continue
+    i=${#POST_STEPS[@]}; POST_STEPS+=("$line"); POST_PIDS+=(""); POST_RCS+=(5)
+    case $line in
+      "dashboard.sh --install"|"main-watch.sh --install") ;;
+      "run-shell-tests.sh "*) [[ ${line#* } =~ ^(hooks|scripts)/__tests__/[A-Za-z0-9._-]+\.test\.sh$ ]] \
+        || { echo "step 4 post-merge: not on the post-merge list (exit 5): $line" >&2; continue; } ;;
+      *) echo "step 4 post-merge: not on the post-merge list (exit 5): $line" >&2; continue ;;
+    esac
+    # Question 4: a dashboard behind a login (issue 263) starts only once its password is set. A dashboard.sh
+    # with a login answers --login-check (0: login off or password set); one without has nothing to check.
+    if [ "${line%% *}" = dashboard.sh ] && grep -q -- '--login-check' "$HERE/dashboard.sh" \
+       && ! bash "$HERE/dashboard.sh" --login-check > "$POST_LOG-$i.log" 2>&1; then
+      echo "step 4 post-merge: refused (exit 5): $line: $(tail -n 1 "$POST_LOG-$i.log")" >&2; continue
+    fi
+    # shellcheck disable=SC2086 # the line's one argument, split on purpose
+    (cd "$ROOT" && bash "$HERE/${line%% *}" ${line#* }) > "$POST_LOG-$i.log" 2>&1 &
+    POST_PIDS[i]=$!
+  done < <(awk '/^#+[[:space:]]*Post-merge[[:space:]]*$/ { on = 1; next } /^#/ { on = 0 } on && !/^```/' "$BRIEF")
+  for i in "${!POST_STEPS[@]}"; do
+    [ -z "${POST_PIDS[i]}" ] || { wait "${POST_PIDS[i]}" && POST_RCS[i]=0 || POST_RCS[i]=$?; }
+  done
+  POST_JSON=$(for i in "${!POST_STEPS[@]}"; do jq -cn --arg step "${POST_STEPS[i]}" --argjson exit "${POST_RCS[i]}" '{$step, $exit}'; done | jq -cs .)
+  [ "${#POST_STEPS[@]}" = 0 ] || echo "step 4 post-merge: $(for i in "${!POST_STEPS[@]}"; do printf '%s exit %s; ' "${POST_STEPS[i]}" "${POST_RCS[i]}"; done | sed 's/; $//') (logs $POST_LOG-<n>.log)"
+  for i in "${!POST_RCS[@]}"; do [ "${POST_RCS[i]}" = 0 ] || POST_FAILED=1; done
   # The finished-builds record, which the dashboard lists: one line a merge, appended here and nowhere else, once
   # the commit stands. One short write in append mode, under a lock on the home folder: uninstall rewrites this
   # file for a same-named checkout under the same lock, so no line is appended to a file being replaced. The home
@@ -437,8 +503,8 @@ if [ "$DRY_RUN" = 0 ]; then
   BUILDS=$HOME/.commandeck/builds/$PP_PROJECT.jsonl
   open_at() { grep -cE "^Open at merge: ([-*][[:space:]]*)?\[$1\]" <<<"$BUILDER_PROOF" || true; }
   ( exec 8<"$HOME" && flock -w 5 8 && mkdir -p "${BUILDS%/*}" && jq -cn --arg main "$(cd "$ROOT" && pwd -P)" --arg unit "$UNIT" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$MERGE_SHA" \
-      --argjson p1 "$(open_at P1)" --argjson p2 "$(open_at P2)" --argjson p3 "$(open_at P3)" \
-      '{$main, $unit, how: "merged", $at, $sha, open: {P1: $p1, P2: $p2, P3: $p3}}' >> "$BUILDS" ) \
+      --argjson p1 "$(open_at P1)" --argjson p2 "$(open_at P2)" --argjson p3 "$(open_at P3)" --argjson post "$POST_JSON" \
+      '{$main, $unit, how: "merged", $at, $sha, open: {P1: $p1, P2: $p2, P3: $p3}} + (if $post == [] then {} else {$post} end)' >> "$BUILDS" ) \
     || echo "finished-builds record not written to $BUILDS: the dashboard will not list $UNIT (ignored)" >&2
   # The token ledger: a Builder's seat is never collected, it ends with this merge, so its row is written here,
   # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stop hook, Chief-of-Staff pane only: that pane wakes only while its
 # watchers run, so a turn may not end without each one alive: the inbox poller,
-# `scripts/cos-watch-inbox.sh [<handle>]`, and the decisions, alerts and limit
-# watchers. A live `orchestration check --wait` does not count: main's sends
+# `scripts/cos-watch-inbox.sh [<handle>]`, the decisions, alerts and limit
+# watchers, and the timer check `scripts/cos-check.sh`. A live `orchestration check --wait` does not count: main's sends
 # are addressed to the run, so `check --terminal <handle>` never returns them.
 # The block names each missing watcher with its start command, by setup's
 # stable link when it points here: the path the session instructions name, and
@@ -56,10 +56,12 @@ done < <(ps -axo command= 2>/dev/null)
 # from another's: each records its pid per project (cos-lib.sh cos_wait), and
 # counts while that pid still runs that watcher.
 . "${BASH_SOURCE[0]%/*}/lib/project.sh"; pp_cos_key "$ROOT"
-for W in decisions:"open decisions for the owner" alerts:"dashboard alerts" limit:"the 7-day limit"; do
-  N=cos-watch-${W%%:*}
+# The fifth, cos-check.sh, is the 50-minute timer check that names any of them down (issue 290).
+for W in cos-watch-decisions:"open decisions for the owner" cos-watch-alerts:"dashboard alerts" cos-watch-limit:"the 7-day limit" \
+  cos-check:"the 50-minute check that names a watcher down and messages missed"; do
+  N=${W%%:*}
   PID=$(cat "$COS_KEY.$N.pid" 2>/dev/null)
-  runs "$(ps -o command= -p "${PID:-0}" 2>/dev/null)" "$N.sh" || MISSING+=("The ${W%%:*} watcher is not running (${W#*:}): bash $S/$N.sh")
+  runs "$(ps -o command= -p "${PID:-0}" 2>/dev/null)" "$N.sh" || MISSING+=("The ${N#cos-watch-} watcher is not running (${W#*:}): bash $S/$N.sh")
 done
 [ ${#MISSING[@]} -gt 0 ] || exit 0
 

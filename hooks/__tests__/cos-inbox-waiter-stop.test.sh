@@ -51,9 +51,11 @@ check "the relay's saved state and seen marks carry over to the project's own ke
 # up <watcher>... -- those watchers run for this project; the others are down.
 up() {
   : >"$BOX/pids.out"; rm -f "$KEY".*.pid; local w n=100
-  for w in "$@"; do n=$((n + 1)); echo "$n" >"$KEY.cos-watch-$w.pid"; echo "$n bash /x/plugin/scripts/cos-watch-$w.sh" >>"$BOX/pids.out"; done
+  for w in "$@"; do n=$((n + 1)); echo "$n" >"$KEY.$(job "$w").pid"; echo "$n bash /x/plugin/scripts/$(job "$w").sh" >>"$BOX/pids.out"; done
 }
-up decisions alerts limit
+# Issue 290: the relay's 50-minute timer check (cos-check.sh) is the fifth job, recorded the same way.
+job() { [ "$1" = check ] && echo cos-check || echo "cos-watch-$1"; }
+up decisions alerts limit check
 
 H=term_cos-1111
 procs() { printf '%s\n' "$@" >"$BOX/ps.out"; }
@@ -95,23 +97,23 @@ procs "$P $H"
 check "a poller run directly passes" "0 none" "$(run "$COS" false)"
 
 procs "bash $P $H"
-for w in decisions alerts limit; do
-  up $(printf '%s\n' decisions alerts limit | grep -vx "$w")
+for w in decisions alerts limit check; do
+  up $(printf '%s\n' decisions alerts limit check | grep -vx "$w")
   check "the $w watcher down alone blocks" "0 block" "$(run "$COS" false)"
   OUT=$(jq -cn '{stop_hook_active:false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H bash "$HOOK" 2>/dev/null | jq -r .reason)
-  check "and the block names its start command" 1 "$(case $OUT in *"/scripts/cos-watch-$w.sh"*) echo 1;; *) echo 0;; esac)"
+  check "and the block names its start command" 1 "$(case $OUT in *"/scripts/$(job "$w").sh"*) echo 1;; *) echo 0;; esac)"
 done
-up decisions alerts limit; sed -i.bak 's/^101 .*/101 vim \/x\/plugin\/scripts\/other.sh/' "$BOX/pids.out"
+up decisions alerts limit check; sed -i.bak 's/^101 .*/101 vim \/x\/plugin\/scripts\/other.sh/' "$BOX/pids.out"
 check "a recorded pid now running something else blocks" "0 block" "$(run "$COS" false)"
-up decisions alerts limit; sed -i.bak 's/^101 .*/101 tail -f \/x\/plugin\/scripts\/cos-watch-decisions.sh/' "$BOX/pids.out"
+up decisions alerts limit check; sed -i.bak 's/^101 .*/101 tail -f \/x\/plugin\/scripts\/cos-watch-decisions.sh/' "$BOX/pids.out"
 check "a recorded pid only reading the watcher's file blocks" "0 block" "$(run "$COS" false)"
-up decisions alerts limit; mv "$KEY.cos-watch-alerts.pid" "${KEY%/*}/other.cos-watch-alerts.pid"
+up decisions alerts limit check; mv "$KEY.cos-watch-alerts.pid" "${KEY%/*}/other.cos-watch-alerts.pid"
 check "another project's alerts watcher does not count" "0 block" "$(run "$COS" false)"
 # A project in another folder with the same directory name keeps its own records.
-OTHER=$BOX/b/main; git init -q "$OTHER"; up decisions alerts limit
+OTHER=$BOX/b/main; git init -q "$OTHER"; up decisions alerts limit check
 for f in "$KEY".*.pid; do mv "$f" "$(key "$OTHER").${f#"$KEY".}"; done
 check "the same-named project's watchers do not count for this one" "0 block" "$(run "$COS" false)"
-up decisions alerts limit
+up decisions alerts limit check
 ln -s "$SOURCE" "$BOX/home/.commandeck/plugin"; procs ""
 OUT=$(jq -cn '{stop_hook_active:false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H bash "$HOOK" 2>/dev/null | jq -r .reason)
 check "with setup's stable link in place the block names the poller through it" 1 "$(case $OUT in *"bash $BOX/home/.commandeck/plugin/scripts/cos-watch-inbox.sh $H"*) echo 1;; *) echo 0;; esac)"

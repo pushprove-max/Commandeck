@@ -71,7 +71,7 @@ scan() {
   local layer=$1 reader=$2 p; shift 2
   git -C "$WT" "$@" > "$LIST" || { HIT="(git $1 failed) ($layer)"; return 0; }
   while IFS= read -r -d '' p; do
-    case $layer in untracked|ignored) if setup_made "$p" || from_plan "$p"; then continue; fi ;; esac
+    case $layer in untracked|ignored) if setup_made "$p" || from_plan "$p"; then continue; fi; [ "$DRY" = 0 ] || ! moving "$p" || continue ;; esac
     [ "$layer" != ignored ] || { HIT="$p ($layer)"; return 0; }
     [ "$($reader "$p")" = "$(main_of "$p")" ] || { HIT="$p ($layer)"; return 0; }
   done < "$LIST"
@@ -103,6 +103,36 @@ panes() {
       | select((wtp | pnorm) == $wt) | .handle' <<<"$out"
 }
 
+# Issue 284: planning scratch is not the plan. An untracked .claude/briefs/<unit>-* or _<unit>-* file, and a report=
+# path of the unit's seats, moves to $PP_SCRATCH/<unit>-planning/ before the check, so a judge report or a hand-copied
+# spec never blocks the Builder's launch. Anything else still refuses. A path counts only once resolved (.. and
+# symlinked folders) to a plain file inside the worktree that git says is untracked. A dry run moves nothing: it
+# names each move, and its check passes over those files.
+WTP=$(cd "$WT" && pwd -P)
+MOVE=$({ for f in "$WT"/.claude/briefs/"$UNIT"-* "$WT"/.claude/briefs/_"$UNIT"-*; do [ -f "$f" ] && echo "$f"; done
+  grep -lx "unit=$UNIT" "$PP_SCRATCH"/seat-*.txt 2>/dev/null | xargs sed -n 's/^report=//p' 2>/dev/null; } | sort -u |
+  while IFS= read -r f; do
+    d=$(cd "${f%/*}" 2>/dev/null && pwd -P) || continue
+    rel=${d#"$WTP"}/${f##*/} rel=${rel#/}
+    [ "$d" = "$WTP" ] || [ "${d#"$WTP"/}" != "$d" ] || continue
+    # What --plan takes over (the checked plan, the batch beside it) stays where the launch reads it.
+    [ -f "$WTP/$rel" ] && [ ! -L "$WTP/$rel" ] && t=$(git -C "$WT" ls-files -- "$rel") && [ -z "$t" ] && ! from_plan "$rel" && echo "$rel"
+  done)
+moving() { # <path git lists>: planning scratch the real run moves; an ignored folder counts when all it holds is
+  local f
+  [ -n "$MOVE" ] || return 1
+  if [ -d "$WT/$1" ] && [ ! -L "$WT/$1" ]; then
+    while IFS= read -r f; do grep -qxF -- "${f#"$WT"/}" <<<"$MOVE" || return 1; done < <(find "$WT/${1%/}" ! -type d)
+    return 0
+  fi
+  grep -qxF -- "$1" <<<"$MOVE"
+}
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  [ "$DRY" = 0 ] || { echo "would move: $rel -> $PP_SCRATCH/$UNIT-planning/$rel"; continue; }
+  mkdir -p "$(dirname "$PP_SCRATCH/$UNIT-planning/$rel")" && mv -n -- "$WTP/$rel" "$PP_SCRATCH/$UNIT-planning/$rel" && [ ! -e "$WTP/$rel" ] \
+    && { rmdir -p "$(dirname "$WTP/$rel")" 2>/dev/null; echo "moved: $rel -> $PP_SCRATCH/$UNIT-planning/$rel"; }
+done <<<"$MOVE"
 refuse ""
 PL=$(panes) || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
 N=0; [ -z "$PL" ] || N=$(printf '%s\n' "$PL" | wc -l | tr -d ' ')

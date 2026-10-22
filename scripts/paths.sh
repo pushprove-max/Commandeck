@@ -725,12 +725,15 @@ PP_OPTS_KEY='def key: . as $s | first(((.enabledPlugins // {}) | to_entries[] | 
   | select(startswith("commandeck@"))) // "commandeck@commandeck";'
 # pp_config_option <key> -- the /config answer in the form the project's file saves it; fails when there is none.
 pp_config_option() {
-  jq -er --arg k "$1" "$PP_OPTS_KEY"' .pluginConfigs[key].options[$k]? | select(. != null)
+  jq -er --arg k "$1" "$PP_OPTS_KEY"' .pluginConfigs[key].options[$k]? | select(. != null and . != "project")
     | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' \
     "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
 }
 # pp_option <key> [source] -- the value a reader takes: the /config answer, else the project's saved one (the
 # dashboard's: this machine's), else what the reader took before 0.22.0. With "source", where that value is from.
+# This is the one statement of the precedence (issue 293): /config, then the project's saved answer, then routing's
+# default. builderModel's and builderEffort's manifest default is "project", read as no answer: the /config dialog
+# may save a default untouched, and a fixed one would hide the project's answer.
 pp_option() {
   local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config
   case $1 in
@@ -869,6 +872,23 @@ pp_unit_name() {
   echo "unit $1 may not be named like a paper (it has ${BASH_REMATCH[1]:-${BASH_REMATCH[3]}}): a name ending in -evidence, -design, -design-spec, -main-rulings, -review-cap or -r<N>-reports, or holding -cut<N>, is how another unit's brief files are told from its own. Pick another name" >&2
   return 1
 }
+# pp_merge_held <unit> <worktree> -- exit 0, printing why, when the unit may not merge on its own (issues 254, 258):
+# `Merge: hold` in its brief, or an owner decision still open on it. Its questions are recorded as <unit>-<message
+# id>; one that waits on main is not the owner's. main-watch's gate asks, and merge-unit-local.sh --auto under its lock.
+pp_merge_held() {
+  local j
+  grep -qE '^Merge: hold[[:space:]]*$' "$2/.claude/briefs/$1.md" 2>/dev/null && { echo "Merge: hold in its brief"; return 0; }
+  j=$(jq -rRn --arg p "$1-" '[inputs | fromjson? | objects] | group_by(.id) | map(last)
+    | map(select((.id | tostring | startswith($p)) and .answer == null and .waitsOn != "main")) | first | .id // empty' \
+    "$PP_MAIN/.claude/metrics/decisions.jsonl" 2>/dev/null) && [ -n "$j" ] && { echo "open owner decision $j"; return 0; }
+  return 1
+}
+# pp_go_rule <rule> -- the proof rules that merge with no owner's word: a GO, named outright. A P2 tail (issue 212), or
+# any rule not listed, is the owner's call.
+pp_go_rule() { case $1 in "closing GO"|"first-pass GO"|"no closing pass") return 0 ;; esac; return 1; }
+# pp_gate_key <unit> <worktree> -- what a kept merge-gate result stands for: the tip and the unit's round files, so a
+# new pass on an unchanged commit is checked again. main-watch.sh writes it, orca-wait.sh reads it.
+pp_gate_key() { echo "$(git -C "$2" rev-parse HEAD 2>/dev/null) $(cat "$2/.claude/briefs/$1"-r*-reports.md 2>/dev/null | cksum | tr ' ' :)"; }
 # The project's own profile, which setup writes, wins over the plugin's default.
 pp_pass() {
   local p

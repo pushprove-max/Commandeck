@@ -38,6 +38,16 @@ rm "$T/pane-open"; planned u10; touch "$T/list-fails"; build u10
 check "and when the pane list cannot be read, nothing says no pane opened: the launch's files stay too" "1:yes:1:" \
   "$RC:$([ -s "$WS/u10/.claude/briefs/u10.md" ] && echo yes || echo no):$(grep -c 'pane list could not be read' "$T/out"):$(mark u10)"
 rm "$T/seat-opens-fails" "$T/pane-open" "$T/list-fails"
+# Pass 25: a risky launch's batch kept in the planning worktree (.claude/briefs/<unit>-batch.md) is planning scratch
+# adoption moves out, and the design spec then reread the moved path: the design pane opened with no batch, and the
+# second call, the same command, refused the missing file.
+planned u11; batchfor u11; mkdir -p "$WS/u11/.claude/briefs"; mv "$T/batch.md" "$WS/u11/.claude/briefs/u11-batch.md"
+risky11() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky u11 "$WS/u11/.claude/briefs/u11-batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+: > "$T/seats"; risky11
+check "a risky launch with its batch in the adopted planning worktree gives the design pane the batch" "0:1:1" \
+  "$RC:$(grep -cx 'launch design-coauthor u11' "$T/seats"):$(grep -c '^1\. #1: x' "$WS/u11/.claude/briefs/u11-design-spec.md" 2>/dev/null)"
+echo note > "$WS/u11/.claude/briefs/u11-design.md"; risky11
+check "and its second call, the same command, opens the Builder" "0:1" "$RC:$(grep -cx 'launch builder u11' "$T/seats")"
 git -C "$P" worktree add -q "$WS/u4"; : > "$T/seats"; build u4
 check "an existing unmarked worktree (another Builder's) is refused as before" "2:1:0" \
   "$RC:$(grep -c "^REFUSED: $WS/u4 already exists" "$T/out"):$(grep -c . "$T/seats")"

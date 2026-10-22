@@ -27,9 +27,8 @@
   record each ask with `decision.sh add` in the same turn.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
   included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
-- **A build whose last pass ended NO-GO merges only on the owner's word**, even when the merge check passes it under
-  the P2-tail rule. Before offering a merge, run `builder-codex-pass.sh --verify <worktree> <unit> <tip>`, the
-  merge's own gate; when it refuses, offer the pass it names instead.
+- **main-watch merges a unit whose DONE passes its gate**; offer a merge only for one it held or refused. A build
+  whose last pass ended NO-GO merges only on the owner's word, even under the P2-tail rule.
 - **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
   needs the detail.
 - **Also standing (Details)**: heads-up items, stated limits, checklist, announcements, re-asks, helpers, effort, tooling.
@@ -56,47 +55,45 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
   `builder-launch.sh --keep billing`) brings Stripe back for a billing unit, `--keep all` changes none of it.
 
-- Plan before every build (owner order 2026-10-17): before
-  `builder-launch.sh`, ask the owner "Write a plan first?" with five answers.
-  Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan,
-  Plan + judge or Panel from the trigger file (the project's
-  `.claude/plan-triggers.tsv`, else the plugin's `config/plan-triggers.tsv`),
-  one tier up when unsure, and prints the tier, the trigger that picked it
-  and the seats; tell the owner all three. No plan: launch with
-  `--skip-plan --reason '<one line>'`. One planner: a `plan-author` seat
-  writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol`
-  reads it, and the planner revises it once with the judge's findings.
-  Panel: `plan-author` and `plan-author-second` write a plan each in
-  parallel, `plan-judge-astra` and `plan-judge-sol` read both, and
-  `plan-author` merges them into one plan; always ask which model writes the
-  second plan (default Fable when allowed). Then ask "Which model and effort?" for each seat, offering only the models setup allows
-  (`planModels`, which `plan-tier.sh` prints per seat), default that seat's printed model, high effort
-  (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`, or `seat.sh run` with the same options: one call, one line back).
-  A size target in a planner's spec is soft: the planner exceeds it when the
-  content needs it and says why in the plan, never trimming needed content to
-  fit. One judge round and one revision, never a judging loop. A seat whose
-  default model is not allowed runs on an allowed one, and a Codex judge with
-  no Codex allowed runs as `plan-judge-claude`; its launch says which, and
-  you tell the owner. Never refuse an answer for a missing tool. Launch each
-  seat under its own role name and the build's unit name: every plan seat
-  works in the unit's own worktree `<unit>`, which its first launch cuts from
-  main and marks as planning; the Builder's launch takes it over. Planners
-  write the plan file (`.claude/plans/<file>.md`) and nothing else. Each
-  planner's spec carries, word for word: "If the mattpocock-skills plugin is
-  installed and one of its skills fits this unit (for example TDD for new
-  logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what
-  the plan names." It also carries the batch's `Launch:` and `Order:` lines: a
-  plan seat that would open a new unit is refused without them. The `Order:` line quotes the owner's yes, with
-  its ruling id, and the batch's scope lists only the issues it names. When the
-  owner already gave the build word, launch once the judge round is done,
-  unless the judge found a real gap, which goes to the owner. Without it,
-  every answer ends at the plan file: STOP until the owner's own go after
-  reading the plan. Commit the plan from `<unit>` on main and name it in the batch's `## Plan`
-  section, or the launch is refused; `builder-launch.sh --from-plan <unit>` does both in one call, with the batch at
-  `<unit>/.claude/briefs/<unit>-batch.md`, and installs only the plan the judge read: a judge's spec has the line `Plan: .claude/plans/<unit>.md`, or its GO certifies no plan. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected
-  plan run `bash scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build order: a plan
-  that exists, is approved or is committed starts no build. A `--risky`
-  design pane runs after the plan.
+- Plan before every build (owner order 2026-10-17): before `builder-launch.sh`, ask the owner "Write a plan
+  first?" with five answers. Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan, Plan +
+  judge or Panel from the trigger file (the project's `.claude/plan-triggers.tsv`, else the plugin's
+  `config/plan-triggers.tsv`), one tier up when unsure, and prints the tier, the trigger that picked it and the
+  seats; tell the owner all three. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
+  `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
+  planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
+  written. Panel: `plan-author` and `plan-author-second` write a plan each in parallel, `plan-judge-astra` and
+  `plan-judge-sol` read both, and `plan-author` merges them into one plan; always ask which model writes the
+  second plan (default Fable when allowed). Then ask "Which model and effort?" for each seat, offering only the
+  models setup allows (`planModels`, which `plan-tier.sh` prints per seat), default that seat's printed model,
+  high effort (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`, or `seat.sh run` with the
+  same options: one call, one line back). A size target in a planner's spec is soft: the planner exceeds it when
+  the content needs it and says why in the plan, never trimming needed content to fit. One judge round and one
+  revision, never a judging loop. A seat whose default model is not allowed runs on an allowed one, and a Codex
+  judge with no Codex allowed runs as `plan-judge-claude`; its launch says which, and you tell the owner. Never
+  refuse an answer for a missing tool. Launch each seat under its own role name and the build's unit name: every
+  plan seat works in the unit's own worktree `<unit>`, which its first launch cuts from main and marks as
+  planning; the Builder's launch takes it over. Planners write the plan file (`.claude/plans/<file>.md`) and
+  nothing else. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed and one
+  of its skills fits this unit (for example TDD for new logic, diagnosing-bugs for a bug), name it in the plan;
+  the Builder uses what the plan names." It also carries the batch's `Launch:` and `Order:` lines: a plan seat
+  that would open a new unit is refused without them. The `Order:` line quotes the owner's yes, with its ruling
+  id, and the batch's scope lists only the issues it names. When the owner already gave the build word, launch
+  once the judge round is done, unless the judge found a real gap, which goes to the owner. Without it, every
+  answer ends at the plan file: STOP until the owner's own go after reading the plan. Commit the plan from
+  `<unit>` on main and name it in the batch's `## Plan` section, or the launch is refused; `builder-launch.sh
+  --from-plan <unit>` does both in one call, with the batch at `<unit>/.claude/briefs/<unit>-batch.md`, and
+  installs only the plan the judge read: a judge's spec has the line `Plan: .claude/plans/<unit>.md`, or its GO
+  certifies no plan. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected plan run `bash
+  scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build
+  order: a plan that exists, is approved or is committed starts no build. A `--risky` design pane runs after the
+  plan.
+- The merge gate (main-watch, on a Builder's DONE): a closing or first-pass GO on the tip (`--verify`, run once per
+  tip; `orca-wait.sh` reads its kept result), a clean tree, no `Merge: hold` line in the brief, no open owner
+  decision. A pass merges with `merge-queue.sh <unit>@<tip>` (a train for two or more); never a push. Routine
+  items (a merge that landed, a repeated heads-up) go to main-watch's digest, and `orca-wait.sh` prints its count
+  and path: read it only when you need it.
+- No redundant steps: a step added to the build, merge, review or push flow names what only it catches.
 - Main may set a dispatch's effort (cap `max`), logged in the brief as
   `effort override: <role> <pinned/default> -> <used>: <reason>`.
 - Work added mid-build goes in that rulings file first; then
@@ -191,7 +188,7 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   prompt there, and closes the old pane only once that prompt is accepted. The
   resumed main has a NEW session id and a NEW pane handle, and background tasks
   died with the old pane. The restart waits while an in-harness helper agent is
-  still running (until 480K, then it restarts and logs the ids it kills). Nothing needs arming: main-watch.sh and Orca's nudge wake the resumed
+  still running (until the ceiling, 480K or 165K on a 200K window, then it restarts and logs the ids it kills). Nothing needs arming: main-watch.sh and Orca's nudge wake the resumed
   main. If the hook says NOT BOUND, run the `run-use` it names first.
 - Fresh start: an Orca nudge is answered with `orca-wait.sh` instead of
   board.sh; every later call is built on board.sh output, never on a

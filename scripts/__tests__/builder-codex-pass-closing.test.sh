@@ -29,6 +29,14 @@ cfg '.fullSuiteBeforeFinal = true | .testCommand = "exit 1"'; printf 'echo seven
 pass 17 final
 check "a red suite with an empty log: the round file ends NO-GO, though the reviewer said GO" "1 1" \
   "$(tail -1 "$B/$U-r17-reports.md" | grep -cx 'VERDICT: NO-GO') $(grep -c 'The full suite is red on .*exit 1' "$B/$U-r17-reports.md")"
+# r12: a green run that rewrote a tracked file tested a tree the tip does not hold; restoring the file after the
+# pass must not leave a "pass" line the merge would reuse.
+cfg '.testCommand = "printf mutated > a.sh; test \"$(cat a.sh)\" = mutated"'; printf 'echo eighteen\n' > "$W/a.sh"
+pass 18 final
+git -C "$W" checkout -q -- a.sh
+check "a green suite that changed tracked files: no pass line, the round ends NO-GO, and --verify refuses" "0 1 1 2" \
+  "$(grep -c '^Suite: [0-9a-f]* pass ' "$B/$U-r18-reports.md") $(grep -c '^Suite: [0-9a-f]* changed ' "$B/$U-r18-reports.md") \
+$(tail -1 "$B/$U-r18-reports.md" | grep -cx 'VERDICT: NO-GO') $(verify)"
 cfg 'del(.fullSuiteBeforeFinal)'
 check "a pass before any ledger carries no decisions block" 0 "$(input 17 | grep -c 'decisions that name this unit')"
 

@@ -183,6 +183,31 @@ check "without --plan the same worktree is kept, as before" 1 "$RC"
 fresh; rm "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of"; close --adopt
 check "--adopt on an unmarked worktree (a Builder unit's): kept, exit 1, saying why, nothing closed" "1:1:0" \
   "$RC:$(grep -c "^kept: .*: not u's planning worktree" "$T/err"):$(calls 'terminal close')"
+# Issue 284: a judge report written with a relative --report and specs copied in by hand blocked the Builder's launch.
+fresh; mkdir -p "$WT/.claude/briefs" "$T/scratch" "$WT/notes"
+echo r > "$WT/.claude/briefs/u-judge-report.md"; echo s > "$WT/.claude/briefs/_u-spec.md"; echo n > "$WT/notes/judge.md"
+printf 'role=plan-judge\nunit=u\nreport=%s\n' "$WT/notes/judge.md" > "$T/scratch/seat-u-plan-judge.txt"
+echo t > "$WT/top.md"; printf 'role=plan-judge-sol\nunit=u\nreport=%s\n' "$WT/top.md" > "$T/scratch/seat-u-plan-judge-sol.txt"
+close --adopt
+check "--adopt moves the unit's planning scratch (briefs <unit>-*, _<unit>-*, a seat's report= path) to the scratch folder, one moved: line each, and adopts" \
+  "0:4:t:r:s:n:no" "$RC:$(grep -c '^moved: ' "$T/out"):$(cat "$T/scratch/u-planning/top.md"):$(cat "$T/scratch/u-planning/.claude/briefs/u-judge-report.md"):$(cat "$T/scratch/u-planning/.claude/briefs/_u-spec.md"):$(cat "$T/scratch/u-planning/notes/judge.md"):$([ -e "$WT/notes/judge.md" ] && echo yes || echo no)"
+fresh; mkdir -p "$WT/.claude/briefs"; echo r > "$WT/.claude/briefs/u-judge-report.md"; echo o > "$WT/.claude/briefs/other-x.md"; close --adopt
+check "another unit's brief file still refuses --adopt" "1:1" "$RC:$(grep -c '^kept: .* holds .claude/briefs/' "$T/err")"
+fresh; mkdir -p "$WT/scripts"; echo x > "$WT/scripts/x.sh"; close --adopt
+check "an untracked scripts/x.sh still refuses --adopt" "1:1" "$RC:$(grep -c '^kept: .* holds scripts/x.sh (untracked)' "$T/err")"
+# A report= path that resolves outside the worktree, by .. or through a symlinked folder, is not the unit's scratch.
+fresh; echo o > "$WT/../owner-notes.md"; mkdir -p "$T/outside"; echo o > "$T/outside/x.md"; ln -s "$T/outside" "$WT/linked"
+printf 'role=plan-judge\nunit=u\nreport=%s\n' "$WT/../owner-notes.md" > "$T/scratch/seat-u-plan-judge.txt"
+printf 'role=plan-judge-sol\nunit=u\nreport=%s\n' "$WT/linked/x.md" > "$T/scratch/seat-u-plan-judge-sol.txt"
+close --adopt
+check "a report= path outside the worktree, by .. or a symlinked folder, is never moved" "o:o:0" \
+  "$(cat "$WT/../owner-notes.md" 2>/dev/null):$(cat "$T/outside/x.md" 2>/dev/null):$(grep -c '^moved: ' "$T/out")"
+rm -f "$WT/../owner-notes.md" "$T/scratch"/seat-u-plan-judge*.txt
+# builder-launch.sh preflights with --adopt --dry-run, then adopts: the dry run moves nothing and still passes.
+fresh; mkdir -p "$WT/.claude/briefs"; echo r > "$WT/.claude/briefs/u-judge-report.md"; close --adopt --dry-run
+check "--adopt --dry-run moves nothing, names the move, and passes" "0:1:r" \
+  "$RC:$(grep -c '^would move: .claude/briefs/u-judge-report.md -> ' "$T/out"):$(cat "$WT/.claude/briefs/u-judge-report.md" 2>/dev/null)"
+rm -f "$T/scratch"/seat-u-plan-judge*.txt
 rm -rf "$WT"; git -C "$P" worktree prune; close
 check "no planning worktree: silent, exit 0" "0::" "$RC:$(cat "$T/out"):$(cat "$T/err")"
 

@@ -20,7 +20,7 @@ PSLUG=$(printf '%s' "$(git -C "$BOX/repo" rev-parse --show-toplevel)" | tr -c 'A
 
 # A PATH holding only what the hook and helper call, so setsid is absent on
 # every host, the PC included.
-for t in bash sh env jq git date stat dirname basename cat ps grep perl touch printf rm rmdir sleep head tr cut sed awk mkdir ls wc tail sort python3 cksum; do
+for t in bash sh env jq git date stat dirname basename cat ps grep perl touch printf rm rmdir sleep head tr cut sed awk mkdir ls wc tail sort python3 cksum mv paste timeout iconv; do
   p=$(command -v "$t") && ln -s "$p" "$BOX/bin/$t"
 done
 [ ! -e "$BOX/bin/setsid" ] || { echo "FAIL setup: setsid leaked onto the test PATH"; exit 1; }
@@ -116,7 +116,7 @@ T1='rebase delta onto main'
 T2='push after certification'
 carry() { # new checkpoint file [stop_hook_active] [line|handoff] -> blocked | published | neither
   rm -f "$CPD"/sid.* "$CPD/resume-pending.$PSLUG" "$BOX/launched"
-  cp "${BASE:-$BOX/base.md}" "$CPD/old.md"; cp "$1" "$CPD/sid.md"
+  cp "${BASE:-$BOX/base.md}" "$CPD/old.md"; cp "$1" "$CPD/sid.md"; [ -z "${UNREADABLE-}" ] || chmod 000 "$CPD/sid.md"
   [ "${ANC-x}" = none ] || echo "${ANC:-$CPD/old.md}" > "$CPD/sid.resumed-from"
   if [ "${3:-handoff}" = line ]; then
     printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}' > "$BOX/transcript.jsonl"
@@ -141,8 +141,119 @@ check "carrying every item unchanged restarts" published "$(carry "$BOX/base.md"
 wait_for '[ -e "$BOX/launched" ]'
 check "dropping the wrapped ruling blocks the restart" blocked "$(carry "$(grep -v 'auto-tuning bar' "$BOX/base.md" | grep -v 'widget sorting until' > "$BOX/v.md"; echo "$BOX/v.md")")"
 check "and the block names the whole wrapped item" yes "$(names "$R")"
-check "and the baseline it compared against" yes "$(names "$CPD/old.md")"
+check "and the baseline it compared against" yes "$(names "~/.claude/checkpoints/old.md")"
 check "and nothing was launched" no "$([ -e "$BOX/launched" ] && echo yes || echo no)"
+
+# Issue 252: the block names the count, the first item and the command that lists them, never the whole list:
+# a long list added to main's context on every block stranded it. The second stop of the chain copies the missing
+# items into the checkpoint and restarts, and the restarted checkpoint then carries them.
+check "the first stop's reason stays under 400 bytes" yes "$([ "$(jq -r .reason "$BOX/carry.out" | wc -c)" -lt 400 ] && echo yes)"
+check "and names the count and the command that lists them" "1 1" \
+  "$(names '1 inherited open item' | grep -c yes) $(names 'checkpoint-context.py carry' | grep -c yes)"
+# A long first item is cut to the room the paths leave, so the reason still stays under 400 bytes.
+LONG="unit-long $(printf 'word%.0s ' {1..60})end"
+sed "s/^1\. $Q\$/1. $LONG/" "$BOX/base.md" > "$BOX/long.md"
+BASE=$BOX/long.md carry "$(grep -vF "$LONG" "$BOX/long.md" > "$BOX/v3.md"; echo "$BOX/v3.md")" >/dev/null
+check "a 300-character first item still leaves the reason under 400 bytes, naming its start" "yes yes" \
+  "$([ "$(jq -r .reason "$BOX/carry.out" | wc -c)" -lt 400 ] && echo yes) $(names 'unit-long word')"
+V=$(grep -v "unit-gamma" "$BOX/base.md" | grep -v 'push after certification' > "$BOX/v2.md"; echo "$BOX/v2.md")
+check "dropping two items: the first stop blocks naming two" "blocked yes" "$(carry "$V" false) $(names '2 inherited open items')"
+check "the second stop restarts" published "$(carry "$V" true)"
+wait_for '[ -e "$BOX/launched" ]'
+check "with the missing items copied under one unresolved Queue heading" "1 1 1" \
+  "$(grep -c '^## Queue (left unresolved at the restart' "$CPD/sid.md") $(grep -c "^- $Q\$" "$CPD/sid.md") $(grep -c "^- $T2\$" "$CPD/sid.md")"
+check "and logged as carried automatically" 1 "$(grep -c 'carried automatically into the checkpoint' "$CPD/clear-hook.log")"
+check "the restarted checkpoint carries everything the old one had" 0 \
+  "$(python3 "$ROOT/scripts/checkpoint-context.py" carry "$CPD/old.md" "$CPD/sid.md" >/dev/null; echo $?)"
+# Issue 300: a carry the hook made itself heals itself, so nothing alerts on its log line: no watcher or dashboard
+# script reads it, and the relay's alert watcher, polled with that line in the log, prints nothing.
+check "no script outside the hooks reads the carried-automatically line" "" "$(cd "$ROOT" && grep -rl 'carried automatically' scripts dashboard 2>/dev/null)"
+mkdir -p "$BOX/home/.commandeck/dashboard"; printf 'window.DASH = {"alerts": []};\n' > "$BOX/home/.commandeck/dashboard/data.js"
+check "the relay's alert watcher prints nothing for it" "" "$(cd "$BOX/repo" && HOME="$BOX/home" COMMANDECK_MAIN="$BOX/repo" COMMANDECK_SCRATCH="$BOX" COMMANDECK_WATCH_ONCE=1 bash "$ROOT/scripts/cos-watch-alerts.sh" 2>&1)"
+# An unreadable file in the chain is an item of its own: the first stop blocks, the second copies it with the
+# readable items. Only an unreadable base, which shows nothing at all, restarts copying nothing.
+printf '## Queue (in order)\n- ship release\n\nCarries open items of: %s\n' "$BOX/missing.md" > "$BOX/unreadable.md"
+check "an unreadable ancestor blocks the first stop" blocked "$(BASE=$BOX/unreadable.md carry "$V" false)"
+check "the second stop copies the readable item and the carry-chain item" "published 1 1" \
+  "$(BASE=$BOX/unreadable.md carry "$V" true) $(grep -cx -- '- ship release' "$CPD/sid.md") $(grep -c '^- carry chain: cannot read the checkpoint .*missing.md' "$CPD/sid.md")"
+wait_for '[ -e "$BOX/launched" ]'
+# Pass 25: an unreadable base (carry exit 2) restarted copying nothing, so the restart lost the whole inheritance
+# unseen. It is one missing item of its own: the first stop blocks, the second carries the warning.
+check "an unreadable base blocks the first stop, naming one item" "blocked yes" \
+  "$(ANC=$BOX/missing.md carry "$V" false) $(names '1 inherited open item: carry chain: ')"
+check "the second stop carries the unreadable-base warning under the unresolved Queue heading" "published 1 1" \
+  "$(ANC=$BOX/missing.md carry "$V" true) $(grep -c '^## Queue (left unresolved' "$CPD/sid.md") $(grep -c '^- carry chain: cannot read the checkpoint .*missing.md' "$CPD/sid.md")"
+wait_for '[ -e "$BOX/launched" ]'
+# The other exit-2 input: an unreadable new checkpoint blocks the first stop, and the second cannot copy into it, so
+# main is never restarted on it.
+check "an unreadable new checkpoint blocks the first stop and never restarts" "blocked neither" \
+  "$(UNREADABLE=1 carry "$V" false) $(UNREADABLE=1 carry "$V" true)"
+chmod 644 "$CPD/sid.md"
+
+# Issue 281: three restarts, each rewording two inherited items, keep the count flat: no item copied twice, one
+# unresolved Queue heading. A genuinely dropped item is still listed, and copied under that same heading.
+printf '## Queue (in order)\n- alpha export\n- beta cache\n- gamma docs\n- delta notes\n\n## Todo list\n- [ ] beta cache follow-up\n' > "$BOX/r0.md"
+PREV=$BOX/r0.md
+for n in 1 2 3; do
+  sed -E "s/^- alpha export.*/- alpha export -- still open: round $n/; s/^- beta cache\$|^- beta cache = .*/- beta cache = todo #1/" "$PREV" > "$BOX/r$n.md"
+  [ "$n" = 1 ] && sed -i '/^- delta notes/d' "$BOX/r$n.md"
+  [ "$n" = 3 ] && { sed -i '/gamma docs/d' "$BOX/r$n.md"
+    check "round 3 drops gamma: the first stop lists one item" "blocked yes" "$(BASE=$PREV carry "$BOX/r$n.md" false) $(names '1 inherited open item: gamma docs')"; }
+  check "round $n restarts" published "$(BASE=$PREV carry "$BOX/r$n.md" true)"
+  wait_for '[ -e "$BOX/launched" ]'
+  cp "$CPD/sid.md" "$BOX/r$n.out.md"; PREV=$BOX/r$n.out.md
+done
+check "after three restarts: the item count is the first's, no bullet repeated, one unresolved heading" "5 0 1" \
+  "$(grep -c '^- ' "$PREV") $(grep '^- ' "$PREV" | sort | uniq -d | wc -l) $(grep -c '^## Queue (left unresolved' "$PREV")"
+
+# Issue 283: the log line has the checkpoint's size, over=1 past the 10,240-byte resume budget; items the
+# ten-generation walk cuts go to <cp>.aged-out.md, which the resume names in one line instead of loading.
+# Issue 300: the line also has the minutes since this project's last restart.
+for g in $(seq 11 -1 1); do
+  { printf '## Queue (in order)\n- generation %s item\n' "$g"; [ "$g" = 11 ] || printf '\nCarries open items of: %s\n' "$CPD/g$((g + 1)).md"; } > "$CPD/g$g.md"
+done
+{ printf '## Queue (in order)\n- generation 0 item\n'; for i in $(seq 1 300); do printf -- '- filler line %s of a long checkpoint body\n' "$i"; done; printf '\nCarries open items of: %s\n' "$CPD/g1.md"; } > "$BOX/big.md"
+rm -f "$CPD"/*.resumed-from "$BOX/tdir"/*.jsonl
+check "a checkpoint past the budget restarts" published "$(ANC=none carry "$BOX/big.md")"
+wait_for '[ -e "$BOX/launched" ]'
+L=$(grep 'stop-hook: ctx=' "$CPD/clear-hook.log" | tail -1)
+check "the log line has cp_bytes, over=1 and since_restart_min=- with no earlier restart" "1 1 1" \
+  "$(grep -c "cp_bytes=$(wc -c < "$BOX/big.md" | tr -d ' ') " <<<"$L") $(grep -c ' over=1 ' <<<"$L") $(grep -c ' since_restart_min=- ' <<<"$L")"
+check "the item past ten generations is in the aged-out file" 1 "$(grep -c '^- generation 10 item -- carried unseen: 11$' "$CPD/sid.md.aged-out.md")"
+# A missing file past the readable ones: the readable items and the missing file still go to the aged-out file.
+printf '\nCarries open items of: %s\n' "$CPD/g12.md" >> "$CPD/g11.md"
+check "a chain ending in a missing file still restarts" published "$(ANC=none carry "$BOX/big.md")"
+wait_for '[ -e "$BOX/launched" ]'
+check "and its aged-out file has the readable items and the missing file" "1 1" \
+  "$(grep -c '^- generation 11 item -- carried unseen: 12$' "$CPD/sid.md.aged-out.md") $(grep -c '^- carry chain: cannot read the checkpoint .*g12.md' "$CPD/sid.md.aged-out.md")"
+echo '{}' > "$BOX/transcript.jsonl"; echo "$CPD/old.md" > "$CPD/other.resumed-from"; touch "$CPD/other.jsonl"
+ln -sf "$CPD/other.jsonl" "$BOX/other.jsonl"
+touch -d '7 minutes ago' "$CPD/other.resumed-from"
+check "with a restart 7 minutes ago in this project the line says so" published "$(ANC=none carry "$BOX/base.md")"
+wait_for '[ -e "$BOX/launched" ]'
+check "since_restart_min=7, cp_bytes and no over" "1 0" \
+  "$(grep 'stop-hook: ctx=' "$CPD/clear-hook.log" | tail -1 | grep -c ' since_restart_min=7 ') $(grep 'stop-hook: ctx=' "$CPD/clear-hook.log" | tail -1 | grep -c ' over=1')"
+rm -f "$CPD/other.resumed-from" "$BOX/other.jsonl" "$CPD/other.jsonl"
+# The resume names the aged-out file in one line and logs its payload_bytes.
+cp "$BOX/big.md" "$CPD/sid.md"; printf '%s\n' '- generation 10 item -- carried unseen: 11' > "$CPD/sid.md.aged-out.md"
+printf '%s\n' "$CPD/sid.md" > "$CPD/resume-pending.$PSLUG"
+RES=$(cd "$BOX/repo" && printf '{"session_id":"new-sid","transcript_path":"%s"}' "$BOX/transcript.jsonl" \
+  | env -i PATH="$BOX/bin" HOME="$BOX/home" COMMANDECK_BOARD_CMD=true COMMANDECK_SCRATCH="$BOX" bash "$ROOT/hooks/resume-context.sh" 2>&1)
+check "the resume names the aged-out file in one line and loads none of it" "1 0" \
+  "$(grep -c "sid\.md\.aged-out\.md" <<<"$RES") $(grep -c 'carried unseen' <<<"$RES")"
+check "and logs its payload_bytes" "$(printf '%s\n' "$RES" | LC_ALL=C wc -c | tr -d ' ')" \
+  "$(grep -o 'resume: payload_bytes=[0-9]*' "$CPD/clear-hook.log" | tail -1 | cut -d= -f2)"
+rm -f "$CPD/new-sid.resumed-from"
+# Issue 252: a resume cut to fit still shows both Queues, so the carried items are not lost behind a pointer.
+{ printf '## Goal\n- the batch\n\n## Queue (in order)\n- queued omega item\n\n## Gotchas learned this session\n'
+  for i in $(seq 1 300); do printf -- '- gotcha %s of a long checkpoint body\n' "$i"; done
+  printf '\n## Queue (left unresolved at the restart: restate or close each, one line per item, with its own reason)\n- unresolved psi item\n'; } > "$CPD/sid.md"
+rm -f "$CPD/sid.md.aged-out.md"; printf '%s\n' "$CPD/sid.md" > "$CPD/resume-pending.$PSLUG"
+RES=$(cd "$BOX/repo" && printf '{"session_id":"new-sid","transcript_path":"%s"}' "$BOX/transcript.jsonl" \
+  | env -i PATH="$BOX/bin" HOME="$BOX/home" COMMANDECK_BOARD_CMD=true COMMANDECK_SCRATCH="$BOX" bash "$ROOT/hooks/resume-context.sh" 2>&1)
+check "a cut resume keeps both Queues and drops the Gotchas" "1 1 0" \
+  "$(grep -c 'queued omega item' <<<"$RES") $(grep -c 'unresolved psi item' <<<"$RES") $(grep -c 'gotcha 150' <<<"$RES")"
+rm -f "$CPD/new-sid.resumed-from"
 
 # NO FRESH CHECKPOINT: the refusal carries the template's headings, so
 # the agent writes the checkpoint in one Write instead of first Reading the
@@ -176,6 +287,24 @@ echo '{"builder": {"clearLine": "150000"}}' > "$BOX/repo/.claude/commandeck.json
 check "a line set at setup is the one read" 1 "$(builder_line 170000 | grep -c "^CONTEXT 170K is over this Builder's 150K clear line")"
 echo '{"builder": {"clearLine": "lots"}}' > "$BOX/repo/.claude/commandeck.json"
 check "a saved line that is not a token count says so, naming the key" 1 "$(builder_line 190000 | grep -c 'builder.clearLine')"
+rm "$BOX/repo/.claude/commandeck.json"
+
+# Issue 267: on a 200K window (standardContext) the host measured auto-compact at 171K-175K, so the line, the
+# ceiling, a Builder's line and the PAST nudge all sit under it: 140K, a ceiling under 171K, the nudge at the line.
+echo '{"standardContext": true}' > "$BOX/repo/.claude/commandeck.json"
+check "a standard window's ceiling is under 171K" yes \
+  "$(c=$(cd "$BOX/repo" && . "$ROOT/hooks/lib/project.sh" && pp_clear_ceiling) && [ "$c" -lt 171000 ] && [ "$c" -gt 140000 ] && echo yes)"
+check "the 1M window keeps 200K and 480K" "200000 480000" \
+  "$(mkdir -p "$BOX/repo2" && cd "$BOX/repo2" && git init -q && . "$ROOT/hooks/lib/project.sh" && echo "$(pp_clear_line) $(pp_clear_ceiling)")"
+rm -f "$CPD"/sid.*
+printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":141000,"input_tokens":0}}}' > "$BOX/transcript.jsonl"
+(cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","stop_hook_active":false}' "$BOX/transcript.jsonl" \
+  | env -i PATH="$BOX/bin" HOME="$BOX/home" ORCA_TERMINAL_HANDLE=old-pane bash "$ROOT/hooks/lib/run-hook.sh" "$HOOK" > "$BOX/carry.out" 2>/dev/null)
+check "a main at 141K on a standard window is blocked for its checkpoint" block "$(jq -r .decision "$BOX/carry.out" 2>/dev/null)"
+check "a Builder at 141K on a standard window is told at its 140K line" 1 "$(builder_line 141000 | grep -c "^CONTEXT 141K is over this Builder's 140K clear line")"
+check "main's nudge at 141K says PAST the 140K line" 1 \
+  "$(cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","prompt":"hi"}' "$BOX/transcript.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" bash "$ROOT/hooks/lib/run-hook.sh" "$ROOT/hooks/context-line.sh" 2>/dev/null | grep -c 'PAST the 140K line')"
 rm "$BOX/repo/.claude/commandeck.json"
 
 echo "$PASS passed, $FAIL failed"

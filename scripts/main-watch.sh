@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# main-watch.sh [--install|--uninstall|--job-file|--status|--once]
+# main-watch.sh [--install|--uninstall|--job-file|--status|--once|--restart]
 #   -- the ONE thing that wakes main. A persistent user service that,
 #      every tick, computes the set "finished, not handled" and posts each item
 #      to run:<current run>, then proves an idle main woke (wake(): Orca's
@@ -76,11 +76,50 @@ KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME
 # job is neither replaced nor removed from here.
 # shortcut: a path with a character the job file escapes is not recognised, upgrade when the job name carries the path.
 others_job() {
-  local f o
-  [ "$(hs_os)" = Darwin ] && f=$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist || f=$HOME/.config/systemd/user/$UNIT
-  o=$(sed -n -e 's/^Environment="COMMANDECK_MAIN=\(.*\)"$/\1/p' -e 's/.*<key>COMMANDECK_MAIN<\/key><string>\([^<]*\)<.*/\1/p' "$f" 2>/dev/null | head -1)
+  local o
+  o=$(sed -n -e 's/^Environment="COMMANDECK_MAIN=\(.*\)"$/\1/p' -e 's/.*<key>COMMANDECK_MAIN<\/key><string>\([^<]*\)<.*/\1/p' "$(job_file)" 2>/dev/null | head -1)
   [ -n "$o" ] && [ "$(pp_norm "$o")" != "$(pp_norm "$PP_MAIN")" ] && [ -d "$o" ] && printf '%s\n' "$o"
 }
+job_file() { [ "$(hs_os)" = Darwin ] && echo "$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist" || echo "$HOME/.config/systemd/user/$UNIT"; }
+# merge_live -- 0 while a merge job merge_start started has written no exit and its pid lives.
+merge_live() {
+  local p
+  for p in "$ST"/mergejob-*.pid; do [ -f "$p" ] && [ ! -e "${p%.pid}.rc" ] && kill -0 "$(cat "$p")" 2>/dev/null && return 0; done
+  return 1
+}
+# restart_job -- (re)load the job from its file, then keep that file's cksum in job-sum: a job file whose cksum is
+# not there was written by an --install whose restart has not happened yet (restart_due).
+restart_job() {
+  if [ "$(hs_os)" = Darwin ]; then
+    launchctl bootout "gui/$(id -u)/$HS_PREFIX$JOB" 2>/dev/null || true
+    # bootout returns before the job is gone; bootstrapping in that window fails (error 5).
+    for _ in $(seq 50); do launchctl print "gui/$(id -u)/$HS_PREFIX$JOB" >/dev/null 2>&1 || break; sleep 0.1; done
+    launchctl bootstrap "gui/$(id -u)" "$(job_file)" || return 1
+  else
+    # restart, not enable --now: over a running job (an update) that would leave the old process.
+    systemctl --user daemon-reload && systemctl --user enable "$UNIT" && systemctl --user restart "$UNIT" || return 1
+  fi
+  mkdir -p "$ST" && cksum < "$(job_file)" > "$ST/job-sum"
+}
+# restart_later -- the restart as a job of its own (`--restart`, via hs_start: a launchd job, a systemd-run unit), never
+# a child of the watcher's job, so stopping the watcher cannot stop it. It waits until no merge job lives.
+restart_later() {
+  ! hs_active "$JOB-restart.service" || return 0
+  local k envs=("PATH=$PATH" "HOME=$HOME" "COMMANDECK_MAIN=$PP_MAIN")
+  for k in "${KEEP_ENV[@]}"; do [ -z "${!k:-}" ] || envs+=("$k=${!k}"); done
+  hs_start "$JOB-restart" 64M "${envs[@]}" -- "$BASH" "$HERE/$NAME.sh" --restart
+}
+# restart_due -- the one retry, read every tick: the job file differs from the one last loaded (an --install's restart
+# was lost, or job-sum is gone) and no merge job lives; restart_later skips when its job already runs. Old-install
+# migration is out of scope (Max, r-20261021-170113-1-f7afec): a watcher installed before this code is reinstalled
+# by hand once.
+restart_due() {
+  local f; f=$(job_file)
+  [ -f "$f" ] && [ "$(cksum < "$f")" != "$(cat "$ST/job-sum" 2>/dev/null)" ] && ! others_job >/dev/null && ! merge_live
+}
+# A restart never runs inside the watcher's job while a merge it started lives: a merge's own Post-merge
+# `main-watch.sh --install` hands it to restart_later. The job settings (AbandonProcessGroup, KillMode=process) keep a
+# restart of the watcher from stopping any other child of it.
 install() {
   local o
   if o=$(others_job); then
@@ -97,17 +136,13 @@ install() {
 <key>Label</key><string>$HS_PREFIX$JOB</string>
 <key>ProgramArguments</key><array><string>$(hs__xml "$BASH")</string><string>$(hs__xml "$HERE/$NAME.sh")</string></array>
 <key>EnvironmentVariables</key><dict><key>PATH</key><string>$(hs__xml "$PATH")</string><key>HOME</key><string>$(hs__xml "$HOME")</string><key>COMMANDECK_MAIN</key><string>$(hs__xml "$PP_MAIN")</string>$(for k in "${KEEP_ENV[@]}"; do [ -z "${!k:-}" ] || printf '<key>%s</key><string>%s</string>' "$k" "$(hs__xml "${!k}")"; done)</dict>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><true/>
 <key>StandardOutPath</key><string>$(hs__xml "$SCRATCH/scratchpad/$NAME.log")</string>
 <key>StandardErrorPath</key><string>$(hs__xml "$SCRATCH/scratchpad/$NAME.log")</string>
 </dict></plist>
 EOF
     # launchd does not make the log's folder, and will not start a job whose log it cannot open.
     mkdir -p "$SCRATCH/scratchpad" || return 1
-    launchctl bootout "gui/$(id -u)/$HS_PREFIX$JOB" 2>/dev/null || true
-    # bootout returns before the job is gone; bootstrapping in that window fails (error 5).
-    for _ in $(seq 50); do launchctl print "gui/$(id -u)/$HS_PREFIX$JOB" >/dev/null 2>&1 || break; sleep 0.1; done
-    launchctl bootstrap "gui/$(id -u)" "$plist"
   else
     local unit=$HOME/.config/systemd/user/$UNIT
     mkdir -p "${unit%/*}"
@@ -123,14 +158,14 @@ Environment="COMMANDECK_MAIN=$(hs__sd "$PP_MAIN")"
 $(for k in "${KEEP_ENV[@]}"; do [ -z "${!k:-}" ] || printf 'Environment="%s=%s"\n' "$k" "$(hs__sd "${!k}")"; done)
 Restart=always
 RestartSec=10
+KillMode=process
 MemoryMax=512M
 
 [Install]
 WantedBy=default.target
 EOF
-    # restart, not enable --now: over a running job (an update) that would leave the old process.
-    systemctl --user daemon-reload && systemctl --user enable "$UNIT" && systemctl --user restart "$UNIT"
   fi
+  if merge_live; then LATER=1; restart_later; else restart_job; fi
 }
 
 uninstall() {
@@ -147,13 +182,16 @@ uninstall() {
 
 case "${1:-}" in
   --uninstall) uninstall; echo "main-watch uninstalled"; exit 0 ;;
-  --job-file) [ "$(hs_os)" = Darwin ] && echo "$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist" || echo "$HOME/.config/systemd/user/$UNIT"; exit 0 ;;
+  --job-file) job_file; exit 0 ;;
   --install) install || { echo "main-watch: install FAILED; nothing wakes main" >&2; exit 1; }
-             echo "main-watch installed and started"; exit 0 ;;
+             [ -z "${LATER:-}" ] && echo "main-watch installed and started" \
+               || echo "main-watch installed; it restarts once the running merge job ends (job $JOB-restart)"; exit 0 ;;
+  # restart_later's job: an uninstall while it waits leaves nothing to load.
+  --restart) while merge_live; do sleep 1; done; [ ! -f "$(job_file)" ] || restart_job; exit ;;
   --status) if hs_active "$UNIT"; then echo "main-watch: running"; exit 0; fi
             echo "MAIN-WATCH NOT RUNNING -- nothing wakes main; bash $(printf '%q' "$HERE")/main-watch.sh --install"; exit 1 ;;
   --once|"") ;;
-  *) echo "usage: main-watch.sh [--install|--uninstall|--job-file|--status|--once]" >&2; exit 2 ;;
+  *) echo "usage: main-watch.sh [--install|--uninstall|--job-file|--status|--once|--restart]" >&2; exit 2 ;;
 esac
 mkdir -p "$ST" || exit 1
 [ -e "$ST/since" ] || : > "$ST/since"
@@ -740,6 +778,74 @@ proc_warn() {
     "Top command families: $PROC_TOP. At the per-user cap (kern.maxprocperuid) nothing new can start. Find the leak: ps -A -o command= | sort | uniq -c | sort -rn | head"
 }
 
+# digest <line> -- a routine item (issue 253): one line in the digest file orca-wait.sh counts; no message, no wake.
+digest() { printf '%s %s\n' "$NOW" "$1" >> "$ST/digest"; }
+
+# gate <unit> <worktree> -- the merge gate on a Builder's DONE (issues 254, 258). 0: the unit is queued, merging or
+# merged; merge_collect reports how its merge ends. 1: WHY says why it is not merged. A held unit (`Merge: hold` in
+# its brief, or an owner decision open on it) runs no gate, and its why starts "held:".
+# --verify runs once per tip and set of round files (pp_gate_key): its key, exit, rule and line are kept in
+# gate-<unit>, which orca-wait.sh reads (issue 306 R11). The rule has a line of its own: the shown line is cut.
+gate() {
+  local u=$1 w=$2 tip key f=$ST/gate-$1 rc rule out
+  WHY=$(pp_merge_held "$u" "$w") && { WHY="held: $WHY"; return 1; }
+  tip=$(git -C "$w" rev-parse HEAD 2>/dev/null) || { WHY="its worktree has no commit"; return 1; }
+  [ "$(sed -n 1p "$ST/merge-$u" 2>/dev/null)" != "$tip" ] || return 0
+  [ -z "$(git -C "$w" status --porcelain 2>/dev/null)" ] || { WHY="its worktree has uncommitted files, which no pass read"; return 1; }
+  key=$(pp_gate_key "$u" "$w")
+  if [ "$(sed -n 1p "$f" 2>/dev/null)" != "$key" ]; then
+    out=$(bash "$HERE/builder-codex-pass.sh" --verify "$w" "$u" "$tip" 2>&1 </dev/null); rc=$?
+    rule=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$out" | head -1)
+    [ "$rc" = 0 ] && out=$(grep -m1 '^Builder proof' <<<"$out") || out=$(grep . <<<"$out" | tail -1)
+    printf '%s\n%s\n%s\n%s\n' "$key" "$rc" "$rule" "$(cut -c1-300 <<<"$out")" > "$f"
+  fi
+  rc=$(sed -n 2p "$f"); rule=$(sed -n 3p "$f"); out=$(sed -n 4p "$f")
+  [ "$rc" = 0 ] || { WHY=${out:-the merge check refused it and gave no reason}; return 1; }
+  # A GO only, named outright: the P2 tail merges on the owner's word (issue 212), and so does a rule not known here.
+  pp_go_rule "$rule" || { WHY="its proof's rule is ${rule:-not named} (P2/P3 left open, or not a GO): merging it is the owner's call"; return 1; }
+  MERGE+=("$u@$tip")
+}
+
+# merge_collect -- how each merge job ended, read from its records every tick and not through the unit's seat: a
+# landed merge removes the worktree, and the seat with it. A unit that landed is one digest line. One that did not,
+# that landed with a later step failed or a finding not filed, or whose job died with no exit, is posted to main.
+merge_collect() {
+  local r u tip log rc pid landed
+  for r in "$ST"/merge-*; do
+    [ -f "$r" ] && [ "$(sed -n 3p "$r")" != told ] || continue
+    u=${r#"$ST"/merge-} tip=$(sed -n 1p "$r") log=$(sed -n 2p "$r")
+    # A unit's record opens with its sha: an earlier build's job files (merge-<epoch>.log, .rc, .pid) do not.
+    [[ $tip =~ ^[0-9a-f]{40}$ ]] || continue
+    if ! rc=$(cat "${log%.log}.rc" 2>/dev/null); then
+      # shortcut: a pid the system gave to another process since reads as the job still running; rare, and the next
+      # merge of the unit writes a new record.
+      pid=$(cat "${log%.log}.pid" 2>/dev/null) && kill -0 "$pid" 2>/dev/null && continue
+      post "merge-$u-$tip" "" "main-watch: the merge job for $u ended with no exit; it may have merged part way" \
+        "The merge of $u at ${tip:0:8} stopped before it wrote its exit (log $log). Look for $u in main's log first; merge it by hand only if it is not there: $HERE/merge-unit-local.sh $u" once
+    # The unit name is matched as written: in a pattern, a.b would also match axb's line.
+    elif ! landed=$(awk -v p="merge-queue: $u merged; " 'index($0, p) == 1 { print substr($0, length(p) + 1); n++ } END { exit !n }' "$log") \
+      || grep -q '^[0-9]* finding(s) NOT FILED' <<<"$landed"; then
+      post "merge-$u-$tip" "" "main-watch: the merge of $u did not land cleanly (exit $rc); log $log" \
+        "$(grep '^merge-queue: ' "$log" | grep -wF -- "$u" | tail -n 3)"$'\n'"Read the log and finish it by hand: $log" once
+    else
+      digest "$u merged into local main at ${tip:0:8}; log $log"; echo told >> "$r"
+    fi
+  done
+}
+
+# merge_start -- one detached job for the units that passed the gate this tick: merge-queue.sh merges each by its sha,
+# two or more as one train (issue 307). Not pp_detach, which messages main: a landed merge is routine (issue 253).
+# The exit goes to a file merge_collect reads; the job's pid to another, so a job that died is told from a slow one.
+# The job's files are mergejob-*, never merge-*: a unit may be named u.rc or u.log.
+merge_start() {
+  [ "${#MERGE[@]}" -gt 0 ] || return 0
+  local log=$ST/mergejob-$NOW.log m args=("${MERGE[@]}")
+  [ "${#MERGE[@]}" = 1 ] || args=(--train "${MERGE[@]}")
+  for m in "${MERGE[@]}"; do printf '%s\n%s\n' "${m#*@}" "$log" > "$ST/merge-${m%@*}"; done
+  (cd "$PP_MAIN" && COMMANDECK_FOREGROUND=1 nohup bash -c '"$@" > "$0" 2>&1; echo $? > "${0%.log}.rc"' "$log" \
+    bash "$HERE/merge-queue.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & echo $! > "${log%.log}.pid")
+}
+
 seat() { # handle task unit role launched [session id] [seat tag] [worktree name]
   # A planner of a unit planned before 0.18.0 runs in <unit>-plan: the record names where the seat runs.
   local h=$1 task=$2 u=$3 w=$WS/${8:-$3} key="seat-$1-$2" state kind since at ep item
@@ -871,7 +977,15 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   if [ "$kind" = finished ]; then
     # A seat.sh wait on this pane reports the finish itself.
     pp_waited_on "$h" "$NOW" "${RV_OUT:-}" "watch:$item" && { echo handled > "$ST/item-$item"; return 0; }
-    post "$item" "$task" "main-watch: seat $4 on $u finished ($h)" \
+    local why=
+    # A Builder's DONE in a unit worktree (one that holds its own brief) goes through the merge gate every tick
+    # until it lands (issues 254, 258): only a held or refused one reaches main as a finish.
+    if [ "$4" = builder ] && [ -f "$w/.claude/briefs/$u.md" ] && grep -qxF -- "${u^^}-DONE" <<<"$RV_OUT"; then
+      gate "$u" "$w" && return 0; why=$WHY
+      [[ $why != held:* ]] && { post "$item-$(git -C "$w" rev-parse HEAD 2>/dev/null)" "" "main-watch: seat $4 on $u finished ($h); not merged: $why" \
+        "Seat $4 on $u said DONE and its merge gate refused it: $why. Fix or merge it: $HERE/merge-unit-local.sh $u" once; return 0; }
+    fi
+    post "$item" "$task" "main-watch: seat $4 on $u finished ($h)${why:+; not merged, $why}" \
       "Seat $4 on $u stopped. Read it: $HERE/read-verdict.sh $h, then collect it."
   else
     # One more reading first: a seat Orca read idle for one tick while still at work, or whose session log was
@@ -1109,7 +1223,14 @@ heads_up_post() {
       | "This note is another model'"'"'s unverified claim. Main must verify it against code or live state before acting.\nLine: \(.line)\n\n"
         + ([.members[] | "From \(if (.cwd | pnorm) == $m then "main" else (.cwd | split("/") | last) end): session \(.id), shown \(.utc) (shownAt \(.shownAt) ms)\nCheckout: \(.cwd)\nExplanation:\n\(.explanation)"] | join("\n\n"))
         + "\n\nFull text archived in \($log)."' <<<"$led")
+    # A note repeating the line of another note already posted is routine (issue 253): the digest, not a second
+    # message. heads-up-lines keeps <key><TAB><line> per posted note.
+    p=$(jq -r --arg k "$k" '.groups[$k].line | gsub("[\t\n]"; " ")' <<<"$led")
+    if awk -F'\t' -v k="$k" -v l="$p" '$1 != k && $2 == l { f = 1 } END { exit !f }' "$ST/heads-up-lines" 2>/dev/null; then
+      echo handled > "$ST/item-$k"; hu_done "$k" "$led" && digest "heads-up repeated: ${subj#heads-up: }"; continue
+    fi
     post "$k" "" "$subj" "$body" once
+    grep -qF -- "$k"$'\t' "$ST/heads-up-lines" 2>/dev/null || printf '%s\t%s\n' "$k" "$p" >> "$ST/heads-up-lines"
     # In the tick that marks it, not the next: the temp folder may be gone by then.
     hu_done "$k" "$led" || true
   done
@@ -1156,7 +1277,7 @@ tick() {
   resolve_main "$ps" "$terms"
   MAIN_BUSY=0
   [ "$MAIN_STATE" = working ] && MAIN_BUSY=1
-  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=()
+  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() MERGE=()
   proc_warn
   builder_watch
 
@@ -1174,6 +1295,8 @@ tick() {
     /^(handle|task|unit|role|launched|origin|tag|worktree)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
+  merge_collect
+  merge_start
   flush
   arm_diag
   mail_wake
@@ -1197,6 +1320,7 @@ tick() {
 }
 
 while :; do
+  ! restart_due || restart_later
   tick
   [ "${1:-}" = --once ] && break
   sleep "$TICK"

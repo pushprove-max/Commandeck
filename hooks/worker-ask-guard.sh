@@ -41,6 +41,8 @@ if [ "$GITDIR" = "$COMMON" ] || [ "${TOP##*/}" = Chief-of-Staff ]; then
   exit 0
 fi
 
+# 240 s: under the prompt cache's life. Orca's CLI also caps an ask's --timeout-ms at 1,800,000 (30 min) whatever is
+# asked, so a 60-minute ask ends at half its timeout (issue 305); a longer wait is a --resume, never a bigger number.
 # Two steps, not ${X:-$( { ...; } )}: Bash 3.2 cannot parse a brace group there.
 run=${COMMANDECK_RUN:-}
 [ -n "$run" ] || run=$( { tr -d '[:space:]' < "$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_run_file)"; } 2>/dev/null)

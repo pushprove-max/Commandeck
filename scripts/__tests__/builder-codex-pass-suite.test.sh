@@ -40,9 +40,11 @@ check "the setting on with no test command: the closing pass refuses, naming the
 cfg ".testCommand = \"bash $TMP/suite-ok.sh --changed\""
 pass 13 final; SHA13=$(git -C "$W" rev-parse HEAD)
 check "a green suite: its line is in the round file and first in the prompt, the run had no --changed" "1 1 1 0" \
-  "$(grep -c "^Suite: $SHA13 pass 3 passed, 0 failed [0-9]*s $TMP/scratch/$U-suite-${SHA13:0:8}.log\$" "$B/$U-r13-reports.md") \
+  "$(grep -c "^Suite: $SHA13 pass 3 passed, 0 failed [0-9]*s $TMP/scratch/$U-suite-${SHA13:0:8}.log cmd:$(cksum <<<"bash $TMP/suite-ok.sh --changed" | cut -d' ' -f1)\$" "$B/$U-r13-reports.md") \
 $(input 13 | sed -n 2p | grep -c "^Suite: $SHA13 pass ") $(grep -cx 'args:' "$TMP/scratch/$U-suite-${SHA13:0:8}.log") $(grep -c -- '--changed' "$TMP/scratch/$U-suite-${SHA13:0:8}.log")"
 check "and the closing GO with its green line verifies" 0 "$(verify)"
+# Issue 307: --verify prints the line it read from the pass's own recorded prompt; the merge reuses that copy only.
+check "--verify prints that line as its Suite proof" 1 "$(grep -c "^Suite proof: Suite: $SHA13 pass 3 passed" "$TMP/vout")"
 cfg ".testCommand = \"bash $TMP/suite-red.sh\""; printf 'echo fourteen\n' > "$W/a.sh"
 pass 14 final
 check "a red suite: the round file ends NO-GO and names the failing test, though the reviewer said GO" "1 1 1" \

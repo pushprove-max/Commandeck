@@ -300,8 +300,20 @@ bounded() {  # bounded <file> <lines allowed> -- the file indented; past the all
   [ "$k" -le 0 ] || tail -n "$k" "$1" | awk '{ print "    " $0 }'
   SHOWN=$((2 * k + 1))
 }
+# verified <unit> <worktree> -- the merge check on the unit's tip, its exit returned and its line in VOUT. main-watch's
+# gate keeps both per tip and round files (gate-<unit>, pp_gate_key): a kept one is read, never run again (issue 306
+# R11), and sets KEPT and KRULE, the proof's rule.
+verified() {
+  local rec=$SCRATCH/main-watch/gate-$1 rc
+  KEPT= KRULE=
+  if [ "$(sed -n 1p "$rec" 2>/dev/null)" = "$(pp_gate_key "$1" "$2")" ]; then
+    KEPT=1 KRULE=$(sed -n 3p "$rec"); VOUT=$(sed -n 4p "$rec"); rc=$(sed -n 2p "$rec"); [[ $rc =~ ^[0-9]+$ ]] || rc=1; return "$rc"
+  fi
+  VOUT=$(bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$2" "$1" HEAD 2>&1 >/dev/null </dev/null); rc=$?
+  VOUT=$(printf '%s\n' "$VOUT" | grep . | tail -1 | cut -c1-300); return "$rc"
+}
 serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
-  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2 rep
+  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2 rep wo
   id=$(jq -r '(.id // "") | gsub("[^A-Za-z0-9._-]"; "_")' <<<"$m"); file=$MSGDIR/$id.md
   from=$(jq -r '.from_handle // ""' <<<"$m"); type=$(jq -r '.type // ""' <<<"$m"); subject=$(jq -r '.subject // ""' <<<"$m")
   # The text, unless the first line already carried all of it (a heads-up relay: its line and file, whole under --full).
@@ -327,9 +339,14 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     # (that only turns a NO-GO into a fix round): only that check knows a GO that covers an older commit from one
     # that covers the tip, and a NO-GO that is a mergeable P2/P3 tail.
     if { [ "$type" = question ] || [ "$type" = escalation ]; } && [[ "$subject" != *"turn complete"* ]]; then
-      echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
-      # Recorded like an owner's ask, as waiting on main; a replayed message is the same id and adds nothing.
-      bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" --waits-on main >/dev/null 2>&1 \
+      # A question for the owner (it names the owner, or is a repeat-class stop-and-ask) goes on the owner's decision
+      # queue at once, where the relay and the dashboard see it, not behind main's read (issue 305). Any other waits on main.
+      wo=(--waits-on main)
+      if jq -r '[.subject // "", .body // ""] | join(" ")' <<<"$m" | grep -qiE 'owner|repeat.class|stop.and.ask'; then wo=()
+        echo "  next: it waits for the owner's answer, on the decision queue now; send it on: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
+      else echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"; fi
+      # Recorded like an owner's ask; a replayed message is the same id and adds nothing.
+      bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" "${wo[@]}" >/dev/null 2>&1 \
         || echo "  (not recorded in the decisions ledger: it is there already, or the ledger refused it)"
     else
       why="" nogo="" p2="" rep=""
@@ -338,10 +355,12 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       # The pass writes its own verdict line last. After a NO-GO the next step is a fix round even when the merge
       # check passes a P2/P3 tail: that merge is the owner's call (issue 212). This line only advises; the merge checks.
       elif [ -n "$round" ] && [ "$(grep '^VERDICT:' "$round" | tail -1)" = "VERDICT: NO-GO" ]; then nogo=1
-        [ -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$wt" "$unit" HEAD >/dev/null 2>&1 </dev/null && p2=1
-      elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ]; then why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"
-      elif ! why=$(bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$wt" "$unit" HEAD 2>&1 >/dev/null </dev/null); then
-        why=$(printf '%s\n' "$why" | grep . | tail -1 | cut -c1-300); why=${why:-the merge check refused it and gave no reason}
+        verified "$unit" "$wt" && p2=1
+      elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && [ ! -f "$SCRATCH/main-watch/gate-$unit" ]; then
+        why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"
+      elif ! verified "$unit" "$wt"; then why=${VOUT:-the merge check refused it and gave no reason}
+      # main-watch's gate passed this tip and merges it (issue 254): main offers a merge only for one it held or refused.
+      elif [ -n "$KEPT" ] && pp_go_rule "$KRULE"; then why="main-watch merges it: its gate passed on this tip"
       else why=""
       fi
       # Two NO-GOs in a row on one finding class: a third fix round finds the next variant (issue 225).
@@ -565,6 +584,10 @@ drain || exit 3
 # Orca's banner counts every queued message, the ones the filter passes over too:
 # without this line "5 messages" beside 2 printed reads as 3 lost.
 [ "$OVER" -le 0 ] || echo "orca-wait: $OVER more message$([ "$OVER" = 1 ] && echo ' was' || echo 's were') acknowledged and not shown (heartbeats, your own status notes coming back from the run, a live driver's seat reports); Orca's banner counts them; all but heartbeats are kept in $MSGDIR/hidden.jsonl."
+# Routine items main-watch kept out of the inbox (issue 253): one line with the count of new ones and the file.
+DG=$SCRATCH/main-watch/digest
+DN=$(awk 'END { print NR }' "$DG" 2>/dev/null); DS=$(cat "$DG.seen" 2>/dev/null); [ "${DS:-0}" -le "${DN:-0}" ] 2>/dev/null || DS=0
+[ "${DN:-0}" -le "${DS:-0}" ] || { echo "digest: $((DN - ${DS:-0})) routine items since the last wake (landed merges, repeated heads-ups): $DG"; echo "$DN" > "$DG.seen"; }
 [ "$TOTAL" -gt 0 ] && { state_block; exit 0; }
 echo "orca-wait: nothing was queued."
 exit 1

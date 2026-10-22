@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.24.0-111111?style=flat-square" alt="Version 0.24.0">
+  <img src="https://img.shields.io/badge/version-0.25.0-111111?style=flat-square" alt="Version 0.25.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -219,7 +219,7 @@ setup asks, the picker guard's stray-keypress option is off.
 | Your own startup files | asked each time for a project's own `AGENT_STARTUP.md` and `.claude/main-session.md`, which otherwise load instead of the plugin's: merge (the plugin's rules yours lack are added in a marked block), replace (sessions load the plugin's; yours stays on disk) or skip |
 | Global rules, global CLAUDE.md | when `~/.claude/CLAUDE.md` exists: merge (only the rules it lacks), add as block, or skip; when it does not: install or skip. Your own text is never changed; uninstall takes out only the plugin's blocks |
 | Builder model, context | Opus (the default) or Sonnet for less usage; no advisor is added by setup. 200K or a larger window |
-| Builder effort | medium (the default), low, high or max, for every Builder; review seats keep their own |
+| Builder effort | medium (the default; high recommended on Sonnet), low, high or max, for every Builder; review seats keep their own |
 | Builder clear line | 180K tokens of context (the default), another count, or off: past it the Builder writes a handoff and goes on in a fresh session of its pane, and its card on the dashboard shows its context against the line |
 | Issue sizing | 40K tokens (the default), another count, or off: an issue the batch brief sizes as sharing no files and needing more reading than this is proposed as its own unit when the Builder is launched; off keeps today's grouping |
 | Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
@@ -561,7 +561,7 @@ and event checks:
 | `ask-stop-records-decision.sh` | Holds a stop when a plain-text question was not entered in the decision ledger. |
 | `ruling-log.sh` | Records owner answers with ids and flags suspiciously fast picker answers; does not block. |
 | `cos-own-echo.sh` | Acknowledges the relay's own message echoes so they do not cause another turn. |
-| `cos-inbox-waiter-stop.sh` | Holds the relay's stop until all four watchers are alive. |
+| `cos-inbox-waiter-stop.sh` | Holds the relay's stop until all four watchers and `cos-check.sh` are alive. |
 | `opus-orchestrator-autonomy.sh` | Loads main's autonomy instructions and blocks an Opus orchestrator stop asking to continue already authorized work. |
 
 The strict tier is off by default. Setup saves the answer as `strictHooks`
@@ -665,7 +665,7 @@ the orchestrator and never the relay; its start-up text says where the relay
 pane is, or that none exists yet. Without one, the orchestrator asks you
 directly.
 
-The pane keeps four watchers running in the background. Each one prints what
+The pane keeps four watchers and a timer check running in the background. Each one prints what
 it found and exits, which wakes the pane:
 
 | Watcher | Wakes the pane when |
@@ -674,8 +674,9 @@ it found and exits, which wakes the pane:
 | `cos-watch-decisions.sh` | a decision in the ledger is open and you have not been asked yet (every 20 s) |
 | `cos-watch-alerts.sh` | the dashboard raises an alert for this project or the machine (every 60 s) |
 | `cos-watch-limit.sh` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |
+| `cos-check.sh` | 50 minutes pass: it names a watcher that is down, prints held FYI notes, counts messages the inbox watcher missed, and says how long you have been quiet |
 
-A Stop hook keeps the pane from ending a turn unless all four watchers are alive.
+A Stop hook keeps the pane from ending a turn unless all four watchers and `cos-check.sh` are alive.
 To send text from a terminal, including a dictation shortcut:
 
 ```bash
@@ -712,7 +713,7 @@ picker.
 - Startup size. The plugin budgets hook output at 10,240 bytes to avoid
   Claude Code truncating startup context. `scripts/startup-size.sh` measures
   each seat and exits 1 over the limit; it supports `--role` and `--per-prompt`.
-- The clear line. Past 200K tokens of context (150K with
+- The clear line. Past 200K tokens of context (140K with
   `--standard-context`) the orchestrator gets a line on every prompt telling
   it to checkpoint. See [Checkpoints](#checkpoints-resume-and-handoff).
 - The pane budget (strict tier). A worker pane past 450,000 tokens of context
@@ -1009,7 +1010,7 @@ worked.
 | Merge exits 3 or 4 | The commit already exists. Finish cleanup for 3; file the missing issues using the printed command for 4. |
 | Dashboard is missing or stale | Check its status and job file, its registered GitHub origin, GitHub sign-in, and each source's error/freshness. A slow collector adds time to the 60-second sleep. |
 | Dashboard returns 403 | Open its own page at the loopback address, or use a configured network name/IP. Cross-site requests are refused. |
-| Relay is silent | Check the stored relay name, project run and all four watchers. FYI notes wait for a waking message. |
+| Relay is silent | Check the stored relay name, project run, all four watchers and `cos-check.sh`. FYI notes wait for a waking message. |
 | Worker waits on an unseen picker | Workers must send questions through Orca to main; only main and the relay have owner-facing pickers. |
 | Worktree settings have no effect | Read the doctor's shadow warnings and main's settings.local.json. Start a fresh session after fixing precedence. |
 | Handoff leaves the old pane open | Read `~/.claude/checkpoints/clear-hook.log` and the next prompt's HANDOFF NOT DONE line. Fix checkpoint freshness/carry-over or Orca takeover before retrying. |

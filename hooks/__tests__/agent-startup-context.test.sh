@@ -79,11 +79,15 @@ check "main and the relay hold a build order to the owner's yes naming the unit 
   "$(tr '\n' ' ' < "$T/ctx" | sed -E 's/ +/ /g' | grep -cF -- "$ORDER"):$(grep -cF -- "$ORDER" <<<"$REL")"
 check "main's launch rule: the Order line quotes that yes with its ruling id, and the scope lists only the issues it names" 1 \
   "$(tr '\n' ' ' < "$REAL/templates/main-session.md" | sed -E 's/ +/ /g' | grep -cF 'The `Order:` line quotes the owner'"'"'s yes, with its ruling id, and the batch'"'"'s scope lists only the issues it names.')"
+# Issue 290: a picker opened to a quiet owner sat for hours, and a dead watcher went unseen until the owner asked.
+check "the relay opens no picker when the owner has been quiet 30 minutes, and runs the timer check as a fifth job" "1:1:1" \
+  "$(grep -c 'owner quiet for 30 minutes or more, open no picker; leave the question on the decision queue and ask when the owner next types' <<<"$REL"):$(grep -c 'scripts/cos-check.sh' <<<"$REL"):$(grep -c 'without all five running' <<<"$REL")"
 check "main sends a denied self-modification step to the relay" 1 "$(grep -c 'Denied a self-modification step' "$T/ctx")"
 # Issue 212: the merge check passes a NO-GO's P2/P3 tail, so main is told that merge is the owner's call.
 check "main merges a NO-GO build only on the owner's word" 1 "$(grep -c "NO-GO merges only on the owner's word" "$T/ctx")"
-# Issue 237: main offered merges the merge's own gate then refused; it runs that gate first.
-check "main checks the merge gate before offering a merge" 1 "$(grep -c 'Before offering a merge, run .*builder-codex-pass.sh --verify <worktree> <unit> <tip>' "$T/ctx")"
+# Issue 237: main offered merges the merge's own gate then refused. Issues 254 and 306 (R11): main-watch runs that gate
+# on every DONE and merges what passes, so main offers a merge only for a unit it held or refused.
+check "main offers a merge only for a unit the gate held or refused" 1 "$(grep -c 'offer a merge only for one it held or refused' "$T/ctx")"
 # Issue 235: long end-of-turn reports cost the owner a read every turn.
 check "main ends each turn with one status line" 1 "$(grep -c 'End each turn with one status line' "$T/ctx")"
 # Issue 230: main met the same guards turn after turn; its rules open with what to do instead, each with its command.

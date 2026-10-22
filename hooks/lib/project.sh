@@ -48,19 +48,28 @@ pp_strict() {
   pp_flag strictHooks
 }
 # The context size past which main checkpoints and restarts. A project whose
-# model holds 200K ("standardContext": true, a setup answer) is full before a
-# 200K line can fire, so its line is 150K. COMMANDECK_CLEAR_LINE overrides.
+# model holds 200K ("standardContext": true, a setup answer) auto-compacts at
+# 171K-175K (measured), so its line is 140K, 30K under that (issue 267).
+# COMMANDECK_CLEAR_LINE overrides.
 pp_clear_line() {
   if [ -n "${COMMANDECK_CLEAR_LINE-}" ]; then printf '%s' "$COMMANDECK_CLEAR_LINE"
-  elif pp_flag standardContext; then printf 150000
+  elif pp_flag standardContext; then printf 140000
   else printf 200000; fi
 }
+# The size past which a background agent no longer holds main's restart: under
+# the auto-compact point, 165K on a 200K window, 480K on 1M. COMMANDECK_CLEAR_CEILING overrides.
+pp_clear_ceiling() {
+  if [ -n "${COMMANDECK_CLEAR_CEILING-}" ]; then printf '%s' "$COMMANDECK_CLEAR_CEILING"
+  elif pp_flag standardContext; then printf 165000
+  else printf 480000; fi
+}
 # The context size past which a Builder hands off to a fresh session of its pane: setup's
-# builder.clearLine, a token count or off, default 180000. A value it does not take fails, naming the key.
+# builder.clearLine, a token count or off, default 180000, or 140000 on a 200K window (issue 267). A value it does
+# not take fails, naming the key.
 pp_builder_clear_line() { # [<directory in the project>]
   local PP_PROJECT PP_PROJECT_DIR v
   pp_project "${1:-}"
-  v=$(jq -r '.builder.clearLine // empty' "$PP_PROJECT_DIR/.claude/commandeck.json" 2>/dev/null)
+  v=$(jq -r '.builder.clearLine // (if .standardContext == true then 140000 else empty end)' "$PP_PROJECT_DIR/.claude/commandeck.json" 2>/dev/null)
   [[ ${v:=180000} =~ ^(off|[1-9][0-9]*)$ ]] \
     || { echo "$PP_PROJECT_DIR/.claude/commandeck.json has builder.clearLine = \"$v\", which is not a token count or off; answer it again with /commandeck:setup" >&2; return 1; }
   printf '%s' "$v"

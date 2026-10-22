@@ -58,7 +58,7 @@ chmod +x "$T/bin/orca-ide" "$T/bin/ps"
 
 mw() { (cd "$REPO" && unset CLAUDE_CONFIG_DIR && PATH=$T/bin:$PATH HOME=$T/home COMMANDECK_SCRATCH=$S COMMANDECK_WORKSPACES=$T/ws bash scripts/main-watch.sh "$@"); }
 tick() { COMMANDECK_NOW=$1 mw --once 2>>"$T/stderr" || fail "main-watch exited non-zero at $1"; }
-state() { sed -i "/^$1 /d" "$F/agents"; echo "$1 $2" >> "$F/agents"; }
+state() { awk -v h="$1" '$1 != h' "$F/agents" > "$F/agents.new"; mv "$F/agents.new" "$F/agents"; echo "$1 $2" >> "$F/agents"; }
 posts() { grep -c -- "$1" "$T/sends" || true; }
 bseat() { mkdir -p "$T/ws/$1/.claude"; printf 'handle=%s\ntask=%s\nrole=builder\nunit=%s\nlaunched=%s\n' "$2" "$3" "$1" "$4" > "$S/seat-$1-builder.txt"; echo "$3 running" >> "$F/tasks"; }
 hrow() { # <epoch> <event> <agent> -- one helper row as the Builder's hooks log it

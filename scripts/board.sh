@@ -284,28 +284,5 @@ hs_list 'loop-*' 'drive-*' 'chain-*' 'run-*.service' --no-legend --plain \
       esac
       printf '%s\n' "$line"
     done || true
-# The certification host and its state, job or no job: a chain that cannot
-# start (bad switch, no peer, host asleep) must show its reason here, not
-# silence. The last chain's final log line is where an unreachable peer's SSH
-# error lands; the board never opens an SSH session itself.
-if CH=$(hs_chain_host); then
-  [ "$(hs_os)" = Darwin ] && here=mac || here=pc
-  via=local
-  [ "$CH" = "$here" ] || via="ssh $(tr -d '[:space:]' 2>/dev/null < "$HOME/.config/devenv/peer")"
-  last=$(ls -t "$SCRATCH"/scratchpad/chain-"$CH"-*.log 2>/dev/null | grep -E "/chain-$CH-[0-9]+\.log\$" | head -1)
-  if [ "$via" = "ssh " ]; then state="WAITING: no peer named in ~/.config/devenv/peer, so no chain can start"
-  elif grep -q . <<<"$(hs_list --state=active "chain-$CH-*" --no-legend --plain 2>/dev/null)"; then state="running"
-  elif [ -n "$last" ]; then state="idle; last $(basename "$last" .log): $(tail -1 "$last" | cut -c1-160)"
-  else state="idle; no chain has run on $CH"; fi
-  echo "CHAIN HOST: $CH via $via -- $state"
-else
-  echo "CHAIN HOST: INVALID '$CH' in ~/.config/devenv/chain-host -- WAITING: no chain can start until it says mac or pc"
-fi
-# Units placed on the peer, and new units waiting for room (unit-placement.sh).
-for f in "$SCRATCH"/offload-${ONLY:-*}.txt; do [ -e "$f" ] && echo "OFFLOADED: $(tr '\n' ' ' < "$f")"; done
-for f in "$SCRATCH"/offload-${ONLY:-*}.wait; do
-  [ -e "$f" ] || continue
-  u=${f##*/offload-}; echo "PLACEMENT WAIT: ${u%.wait} -- $(head -1 "$f")"
-done
 # main-watch.sh is the one thing that wakes main.
 echo "  $(bash "$PP_SCRIPTS/main-watch.sh" --status)"

@@ -12,7 +12,6 @@ A worktree already removed is placed by --main, the project's main checkout; wit
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -47,24 +46,6 @@ def places(worktree, main=None):
     return f'/tmp/commandeck/worktreereview/{project}/{unit}', f'{project}/{unit}'
 
 
-def rungs(wt, unit):
-    """One row per numbered batch item of the brief, with the rung its evidence line records.
-
-    The brief's own `[rung N]` is the plan, not what was built, so it is never read as the rung:
-    an item with no `Ponytail: item <n>: rung <N>; lazier option: ...` line has rung None.
-    """
-    def text(name):
-        try:
-            return open(os.path.join(wt, '.claude', 'briefs', name), errors='replace').read()
-        except OSError:
-            return ''
-    said = {int(n): (rung, why.strip().rstrip('`').strip())
-            for n, rung, why in re.findall(r'^[-\s`]*Ponytail: item (\d+): rung (\d+); lazier option: (.+)$', text(f'{unit}-evidence.md'), re.M)}
-    items = re.findall(r'^\s*(\d+)\. (?:\[rung \d+\] )?(#\d+)', text(f'{unit}.md'), re.M)
-    return [{'item': int(n), 'issue': issue, 'rung': said.get(int(n), (None, None))[0], 'lazier': said.get(int(n), (None, None))[1]}
-            for n, issue in items]
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('worktree')
@@ -74,14 +55,11 @@ def main():
     ap.add_argument('--main')
     a, passthrough = ap.parse_known_args()
     wt = a.worktree.rstrip('/')
-    unit = os.path.basename(wt)
     work, name = places(wt, a.main)
     done = subprocess.run([sys.executable, f'{HERE}/collect.py', wt, '--out', work, *passthrough, *(['--main', a.main] if a.main else [])])
     if done.returncode:
         return done.returncode
     result = json.load(open(f'{work}/result.json'))
-    result['rungs'] = rungs(wt, unit)
-    json.dump(result, open(f'{work}/result.json', 'w'), indent=1)
     day = os.path.join(a.out_dir, datetime.fromtimestamp(result['end']).strftime('%Y-%m-%d'))
     page = os.path.join(day, f'{name}-review.html')
     os.makedirs(os.path.dirname(page), exist_ok=True)

@@ -24,7 +24,7 @@ is written. List here only what could not be saved yet, and why.
 - <ruling, who, when>
 
 ## Queue (in order)
-<units not started, with their blocker>
+- Q-<n> <unit not started, with its blocker>; n is the next free number, never reused, and Q-<n> is the item's key however it is reworded
 
 ## Todo list (the owner's on-screen checklist; the resumed main rebuilds it first)
 - [x|>| ] <one step each: done, in progress, next; same wording as the live list>
@@ -52,7 +52,8 @@ that file and its own references.
 Every open item (Waiting on, unsaved rulings, Queue, unchecked or > Todo) of
 the checkpoint this session resumed from stays open above, is carried by
 reference, or is closed here; the restart is refused otherwise. A
-carried item that is done is closed here, verbatim, with what closed it.
+carried item that is done is closed here, verbatim, with what closed it: one
+line per item, each with its own reason (`Q-<n> -- <reason>` closes a Queue item).
 - <the prior item, verbatim> -- <what closed it>; or "none"
 
 ## Resume

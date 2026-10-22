@@ -31,6 +31,7 @@
 # shown, then cleared: a batch that could not be shown is shown by the next poll. One
 # poller at a time reads and writes it, under a lock on $COS_KEY.inbox-seq.lock
 # that the kernel drops when its holder dies.
+# Each handled message's id is appended to $COS_KEY.inbox-seen-ids: cos-check.sh counts one never handled as missed.
 # A poll that reads the inbox and finds nothing new (exit 4) also asks whether
 # main went silent: main's turn ended and main sent nothing here since its turn
 # before, so its reply or its own report (a build done, a check failed) is left
@@ -96,7 +97,7 @@ poll_n() { # rows to ask for
 import datetime, fcntl, json, os, re, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
 limit = int(sys.argv[6])
-owedf, sentf = sys.argv[7:9]
+owedf, sentf, seenf = sys.argv[7:10]
 try:
     d = json.load(sys.stdin)
 except ValueError:
@@ -186,6 +187,13 @@ try:
     save(str(max(top, last)) + (" pending" if out else ""), out or held)
 except OSError as e:
     sys.exit(f"cos-watch-inbox: inbox state not saved ({e}); the batch is read again")
+# Each handled id, so cos-check.sh can count a message for this pane that no poll ever handled (issue 290).
+# shortcut: the file is never pruned (cos-check counts only the last 2 hours of messages); prune by age if it grows.
+try:
+    with open(seenf, "a") as f:
+        f.write("".join(str(m["id"]) + "\n" for m in mine if m.get("id")))
+except OSError:
+    pass  # a missed count that is too high, never a lost message
 if not out:
     sys.exit(4)
 try:
@@ -196,6 +204,6 @@ try:
 except OSError as e:
     sys.exit(f"cos-watch-inbox: the batch was not shown or not marked shown ({e}); the next poll shows it")
 sys.exit(0)
-' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent"
+' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent" "$COS_KEY.inbox-seen-ids"
 }
 cos_wait 20 poll

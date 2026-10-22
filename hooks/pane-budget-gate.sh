@@ -6,6 +6,41 @@
 set -uo pipefail
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Issue 275: past its clear line (context-line.sh leaves the marker) main may only write its checkpoint and end the
+# turn, so the Stop hook restarts it before auto-compact does. Main only, as context-clear-stop.sh decides it: not a
+# reviewer, not a linked worktree. Ahead of the strict-tier exit, and builtins until the marker is found.
+[[ $INPUT =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]] && PAST=$HOME/.claude/checkpoints/${BASH_REMATCH[1]}.past-line || PAST=
+if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
+  && D=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --git-dir --git-common-dir 2>/dev/null) \
+  && [ "${D%%$'\n'*}" = "${D#*$'\n'}" ]; then
+  CP=${PAST%.past-line}.md
+  T0=$(jq -r '.tool_name // empty' <<<"$INPUT"); FP=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")
+  CMD=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
+  # One command, read word by word: no chain, substitution, quote, glob or second line; [bash|python3] and the
+  # plugin's own script; then `--out <this checkpoint> [--force]` or `carry <file> <file>`, nothing else.
+  one() {
+    local W i=0 s n
+    [[ $CMD != *$'\n'* && $CMD != *[\;\&\|\`\$\<\>\\\'\"\(\)\*\?\[\{]* ]] && read -ra W <<<"$CMD" || return 1
+    case ${W[0]-} in bash|python3) i=1 ;; esac
+    s=${W[i]-} n=$((${#W[@]} - i))
+    case ${s##*/}:${W[0]-} in state-snapshot.sh:python3|checkpoint-context.py:bash) return 1 ;; esac
+    [ -n "$s" ] && [ "${s/#\~/$HOME}" -ef "${BASH_SOURCE[0]%/*}/../scripts/${s##*/}" ] || return 1
+    case ${s##*/} in
+      state-snapshot.sh) [ "$n" -ge 3 ] && [ "${W[i+1]}" = --out ] && [ "${W[i+2]/#\~/$HOME}" = "$CP" ] && { [ "$n" = 3 ] || { [ "$n" = 4 ] && [ "${W[i+3]}" = --force ]; }; } ;;
+      checkpoint-context.py) [ "$n" = 4 ] && [ "${W[i+1]}" = carry ] && [[ ${W[i+2]} != -* && ${W[i+3]} != -* ]] ;;
+      *) return 1 ;;
+    esac
+  }
+  case $T0 in
+    Write|Edit) [ "$FP" = "$CP" ] && exit 0 ;;
+    Read) { [ "$FP" = "$CP" ] || [ "$FP" = "$(head -1 "${CP%.md}.resumed-from" 2>/dev/null)" ] \
+      || [ "$FP" -ef "${BASH_SOURCE[0]%/*}/../templates/checkpoint.md" ]; } && exit 0 ;;
+    Bash) one && exit 0 ;;
+    TaskCreate|TaskUpdate|TaskList|TaskGet|TodoWrite) exit 0 ;;
+  esac
+  echo "BLOCKED: main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out, checkpoint-context.py carry and the task-list tools also pass), then end the turn; the Stop hook restarts main." >&2
+  exit 2
+fi
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 IFS=$'\t' read -r TOOL SID < <(printf '%s' "$INPUT" | jq -r '[.tool_name // "", .session_id // ""] | @tsv')

@@ -209,6 +209,11 @@ check "the doctor names each option's value and source: /config, the project's f
 check "one line for each option the manifest declares" "$(jq '.userConfig | length' "$REAL/.claude-plugin/plugin.json")" "$(grep -c '^ok option ' <<<"$OUT")"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
 check "the cache report follows the /config answers over the project's" 1 "$(cache | grep -c '^ok prompt cache: setup sets none$')"
+# Issue 293: the Builder line names where each value comes from, so a launch below the expected effort is traced.
+jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
+check "the doctor's Builder line names the model's source and the effort's" 1 \
+  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | grep -cxF "ok   builder: sonnet (from $PROJ/.claude/commandeck.json), effort high (from /config); setup.sh --builder-model, --builder-effort, or /config")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

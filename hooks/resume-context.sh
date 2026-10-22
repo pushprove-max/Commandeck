@@ -11,7 +11,7 @@
 #
 # The whole block stays under 10240 bytes, past which the harness shows only a
 # 2 KB preview. Budget order: persona, RESUMED line and binding, the checkpoint
-# (whole, or its Goal, Live units, Waiting on and Resume sections), board.sh,
+# (whole, or its Goal, Live units, Waiting on, Queue (in order), unresolved Queue and Resume sections), board.sh,
 # then the owner's last prompts verbatim (checkpoint-context.py messages). A part that
 # does not fit becomes one pointer line, named in the RESUMED line. The checkpoint this
 # session resumed from is recorded in <session id>.resumed-from, so that
@@ -110,8 +110,8 @@ tpath=${tdir:+$tdir/$(basename "$cp" .md).jsonl}
 # Each part is measured in bytes as printed, and room for every later part's
 # pointer line is held back before a part is let in whole.
 bytes() { printf '%s\n' "$1" | LC_ALL=C wc -c | tr -d ' '; }
-KEPT='Goal, Live units, Waiting on and Resume'
-KEEP_RE='^## (Goal|Live units|Waiting on|Resume)'
+KEPT='Goal, Live units, Waiting on, both Queues and Resume'
+KEEP_RE='^## (Goal|Live units|Waiting on|Queue [(]in order[)]|Queue [(]left unresolved|Resume)'
 # shellcheck disable=SC2086  # the command is a word list
 board="## board.sh
 $(timeout "${COMMANDECK_BOARD_TIMEOUT:-30}" $BOARD_CMD 2>&1 | capped 4000 "board.sh"
@@ -121,7 +121,10 @@ prompts_ptr=$(( 200 + $(bytes "$tpath") ))  # checkpoint-context.py's pointer li
 ckpt="## checkpoint $cp
 $(cat "$cp")"
 cut=""
-left=$(( 10239 - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
+# Issue 283: what the stop hook's ten-generation carry walk cut is named in one line, never loaded.
+aged=""
+[ ! -s "$cp.aged-out.md" ] || aged="## items past the ten-generation carry walk: $cp.aged-out.md ($(grep -c . "$cp.aged-out.md") lines; not loaded, Read it when one comes up)"
+left=$(( 10239 - $(bytes "$aged") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
 room=$(( left - $(bytes "$board_ptr") - prompts_ptr ))
 if [ "$(bytes "$ckpt")" -gt "$room" ]; then
   cut="the checkpoint past $KEPT"
@@ -144,5 +147,7 @@ prompts=$(python3 "$HERE/../scripts/checkpoint-context.py" messages "$tpath" "$l
   || { prompts="WARNING: The owner's prompts could not be extracted (checkpoint-context.py exit $?)"; HOOK_FIRE_ADVISE=1; }
 grep -qF 'the resume budget' <<<"$prompts" && cut="${cut:+$cut; }the owner's prompts"
 
-resumed "$cut"
-printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" "$prompts"
+# Issue 283: the payload's size, beside the stop hook's cp_bytes, is what a restart costs the new main.
+out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" ${aged:+"$aged"} "$prompts")
+printf '%s\n' "$out"
+echo "$(date +%FT%T) resume: payload_bytes=$(( $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | LC_ALL=C wc -c) + $(printf '%s\n' "$out" | LC_ALL=C wc -c) )) cp=$cp" >> "$HOME/.claude/checkpoints/clear-hook.log" 2>/dev/null

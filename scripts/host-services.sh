@@ -44,17 +44,6 @@ hs_stamp() {
     '{host: $h, load1: (.load[0]? // null), swapUsedMb: (.swap.usedMb? // null), at: $at}'
 }
 
-# hs_chain_host -- the certification host the one switch
-# ~/.config/devenv/chain-host selects: mac or pc, mac when the file is absent.
-# Any other value is printed and returns 1; chain-run.sh and board.sh both read
-# the switch through here, so they cannot disagree about it.
-hs_chain_host() {
-  local v=mac
-  [ ! -e "$HOME/.config/devenv/chain-host" ] || v=$(tr -d '[:space:]' < "$HOME/.config/devenv/chain-host")
-  printf '%s\n' "$v"
-  case $v in mac|pc) ;; *) return 1 ;; esac
-}
-
 # hs_start <name> <box> [VAR=value...] -- <command>...
 # Starts <command> as job <name> with exactly the given environment and
 # returns once the manager accepted it. HS_PRINT=1 prints the launch instead;

@@ -214,16 +214,6 @@ if R.get('closing_pass'):
 
 lessons = ''.join(f'<div class="lesson"><h3>L{i}. {txt(l["title"])}</h3>{ul(l["points"])}</div>' for i, l in enumerate(N.get('lessons', []), 1))
 lessons = f'<h2>What I make of it</h2>{lessons}' if lessons else ''
-# The rung each batch item was built at, as the Builder's evidence file records it (review.py).
-# A missing rung is said, never left blank: a blank cell reads as "none needed".
-NOREC = 'Not recorded'
-rung_rows = [f'<tr><td class="r">{r["item"]}</td><td>{txt(r["issue"])}</td><td class="r">{txt(r["rung"] or NOREC)}</td><td>{txt(r["lazier"] or NOREC)}</td></tr>'
-             for r in R.get('rungs') or []]
-rungs_html = ('<h2>Rung per batch item</h2><p class="tag">The rest of this review measures by stage, not by item, so this is one table for the whole batch. '
-              'The rung is the one the evidence file records for the item, never the one the brief planned.</p>'
-              + (table(['>Item', 'Issue', '>Rung', 'Lazier option'], rung_rows, sortable=False) if rung_rows
-                 else f'<div class="box">{NOREC}: no numbered batch item was found in the brief.</div>'))
-
 # What code can state without judgement: the same findings on every run, from the numbers alone.
 names = {k: name for k, name, _, _ in CLOCK}
 top = sorted(((v, k) for k, v in clock.items()), reverse=True)[:2]
@@ -557,7 +547,6 @@ ul{{margin:6px 0 0 18px;padding:0}} li{{margin:3px 0}} code{{background:#eef2f7;
 <h2>Tokens and cost by model</h2>
 <table><tr><th>Model</th><th class="r">Model calls</th><th class="r">Uncached input</th><th class="r">Cache write</th><th class="r">Cache read</th><th class="r">Output</th><th class="r">All tokens</th><th class="r">List price</th></tr>{''.join(mrows)}
 <tr><td><b>All</b></td><td></td><td></td><td></td><td></td><td></td><td class="r"><b>{n(grand)}</b></td><td class="r"><b>${priced:,.2f}</b></td></tr></table>
-{rungs_html}
 <h2>Codex passes</h2>
 <table><tr><th class="r">Pass</th><th>Kind</th><th class="r">Time</th><th class="r">Input tokens</th><th class="r">From cache</th><th class="r">Output</th><th class="r">Threads</th><th>Verdict, findings</th><th>What it said</th></tr>{''.join(prows)}</table>
 <h2>What the numbers say</h2><div class="box">{ul(says)}</div>

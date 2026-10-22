@@ -47,5 +47,7 @@ OUT=$(bd); WHOLE=$(sed -n 's/.*(whole board: \([^;]*\);.*/\1/p' <<<"$OUT")
 check "thirty worktrees: under 3,000 bytes, every section header kept, the whole board in the named file" "yes 1 30" \
   "$([ "$(printf '%s' "$OUT" | wc -c)" -lt 3000 ] && echo yes) $(grep -c '^== loops and main-watch' <<<"$OUT") $(grep -c '^  w[0-9]* \[' "$WHOLE" 2>/dev/null)"
 check "--full prints every worktree" 30 "$(bd --full | grep -c '^  w[0-9]* \[')"
+# The host project's second-machine chain lines read files no plugin script writes; the plugin has no second machine.
+check "no CHAIN HOST, OFFLOADED or PLACEMENT WAIT line" 0 "$(bd --full | grep -cE '^(CHAIN HOST|OFFLOADED|PLACEMENT WAIT)')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

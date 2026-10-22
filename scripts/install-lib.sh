@@ -434,13 +434,14 @@ il_options_report() {
 il_plugin_options() {
   local add
   [ -f "$1" ] || return 0
-  jq -r --argjson a "$2" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != .value)
+  # A "project" picker answer is none (issue 293): setup's answer replaces it.
+  jq -r --argjson a "$2" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != "project" and $o[.key] != .value)
     | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' "$1"
   [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none ($1)"; return 0; }
-  add=$(jq -c --argjson a "$2" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a | with_entries(select($o[.key] == null)))}' "$1") || return 1
+  add=$(jq -c --argjson a "$2" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a | with_entries(select($o[.key] == null or $o[.key] == "project")))}' "$1") || return 1
   # Recorded before it is written: update's rollback deletes a recorded file with no prior as one setup made.
   il_record "$IL_MACHINE" merge "$1" || return 1
-  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {}))' || return 1
+  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {} | with_entries(select(.value != "project"))))' || return 1
   il_set "$IL_MACHINE" --arg f "$1" --argjson n "$add" '.entries[$f].options = ((.entries[$f].options // {}) * $n)'
 }
 # il_profile_files <manifest> -- every Claude Code user settings file setup wrote to, one a line, by the manifest:

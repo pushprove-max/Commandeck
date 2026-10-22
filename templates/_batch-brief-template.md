@@ -9,6 +9,8 @@
 
 One paragraph per item above, by its number: what is built, and what done
 means. Then the tests to write first, and how the batch will be reviewed.
+An item that adds a step to the build, merge, review or push flow carries a
+`Catches:` line: what the step catches that no existing step does.
 
 ## Launch
 

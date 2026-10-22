@@ -622,9 +622,11 @@ if [ "${1:-}" = --verify ]; then
     }
   # With the full suite on (issue 243), a closing pass merges only on a green run of the commit it read, as its own
   # recorded prompt states it on the line after its head line: the round file is the Builder's to edit.
+  # The line is printed as "Suite proof:", the one copy of it the merge may reuse (issue 307).
+  SUITE_PROOF=""
   if [ "$WHAT" = "closing pass" ] && [ "$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)" = true ]; then
     for TID in $TIDS; do
-      awk 'p { print; exit } / Reviewer [0-9]+ of [0-9]+, round [0-9]+\.$/ { p = 1 }' "$RHOME/builder-pass-prompts/$TID" | grep -qE "^Suite: $WAS_READ pass " \
+      SUITE_PROOF=$(awk 'p { print; exit } / Reviewer [0-9]+ of [0-9]+, round [0-9]+\.$/ { p = 1 }' "$RHOME/builder-pass-prompts/$TID" | grep -E "^Suite: $WAS_READ pass ") \
         || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
     done
   fi
@@ -633,6 +635,7 @@ if [ "${1:-}" = --verify ]; then
     # whole branch, checked above like a closing GO, and every finding it left is printed as open.
     echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $(paste -sd' ' - <<<"$TIDS")) left P2/P3 only and no commit came after it, in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
     sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT"
+    [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
     cleared; exit 0
   fi
   if [ "$RULE" = "P2 tail" ]; then
@@ -693,6 +696,7 @@ if [ "${1:-}" = --verify ]; then
   echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
   # What a passing whole-branch pass still named, once however many of its reviewers named it.
   [ -z "$LEFT" ] || sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" | awk '!seen[$0]++'
+  [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
   cleared; exit 0
 fi
 
@@ -874,7 +878,9 @@ SUITE_ON=$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)
 if [ "$KIND" = final ] && [ "$SUITE_ON" = true ]; then
   TEST_CMD=$(jq -r '.testCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)
   [ -n "$TEST_CMD" ] || die "fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)) and main's .claude/commandeck.json has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off, or in /config"
-  # The merge check's own command, run whole: --changed (and the base it may take) is taken off.
+  # The merge check's own command, run whole: --changed (and the base it may take) is taken off. Its cksum, of the
+  # command as configured, ends the Suite line: the merge reuses the run only for the check it would run itself.
+  CMD_SUM=$(cksum <<<"$TEST_CMD" | cut -d' ' -f1)
   TEST_CMD=$(sed -E 's/[[:space:]]--changed([[:space:]]+[^-&|;[:space:]][^&|;[:space:]]*)?//g' <<<"$TEST_CMD")
 fi
 if [ "$CHECK" = 1 ]; then
@@ -923,11 +929,19 @@ if [ -n "${TEST_CMD:-}" ]; then
   mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the suite's log"
   echo "Full suite before the closing pass: $TEST_CMD (log $SUITE_LOG)"
   T0=$SECONDS RC=0
+  # What the tip's tracked files and index hold, before and after: a suite that rewrote or staged one, or
+  # committed, tested another tree than the tip, and its green must not reach the merge's reuse (issue 307).
+  tracked_state() { git -C "$WT" rev-parse HEAD; git -C "$WT" diff --no-ext-diff --no-textconv --binary HEAD; git -C "$WT" diff --cached --no-ext-diff --no-textconv --binary; }
+  BEFORE=$(tracked_state | cksum)
   # An hour: the whole suite runs about 12 minutes on an idle machine.
   (cd "$WT" && timeout 3600 bash -c "$TEST_CMD") > "$SUITE_LOG" 2>&1 || RC=$?
   case $RC in 0) R=pass ;; 124) R=timeout ;; *) R=fail ;; esac
+  if [ "$(tracked_state | cksum)" != "$BEFORE" ]; then
+    R=changed
+    echo "The suite changed tracked files, the index or HEAD of $WT: $(git -C "$WT" status --porcelain --untracked-files=no | head -5 | paste -sd' ' -)" >> "$SUITE_LOG"
+  fi
   TOTALS=$(grep -E '[0-9]+ (passed|failed)' "$SUITE_LOG" | tail -1 | tr -s ' \t' ' ' | sed 's/^ //; s/ $//' || true)
-  SUITE="Suite: $SHA $R ${TOTALS:-no totals printed} $((SECONDS - T0))s $SUITE_LOG"
+  SUITE="Suite: $SHA $R ${TOTALS:-no totals printed} $((SECONDS - T0))s $SUITE_LOG cmd:$CMD_SUM"
   # Set on the run's exit, never left empty: a red run whose log names nothing still forces the NO-GO below.
   [ "$R" = pass ] || SUITE_RED="$R (exit $RC)${TOTALS:+, $TOTALS}: $(grep -m5 'FAIL' "$SUITE_LOG" || tail -n 1 "$SUITE_LOG")"
   echo "$SUITE"

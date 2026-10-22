@@ -4,6 +4,11 @@ You are the Builder for `{unit}`: one pane in your own worktree. Build the
 whole batch below, review it with {reviewer}, and hand back a branch that main
 merges with `merge-unit-local.sh {unit}`.
 
+main-watch merges the branch itself once you print the done marker on a tip the merge gate passes, unless main
+adds a line `Merge: hold` to this brief. Main lists what runs after the merge under `## Post-merge` at the end, one
+command per line: `dashboard.sh --install`, `main-watch.sh --install` or `run-shell-tests.sh <one test file>`;
+any other line is refused.
+
 ## The batch (issues and done criteria)
 
 {batch}
@@ -46,8 +51,6 @@ merges with `merge-unit-local.sh {unit}`.
   whatever comes back is sent again on every later turn of the build.
 - A `Signal WARM` line keeps your prompt cache alive while you wait: reply
   with one `.` and end the turn.
-- Write one `Ponytail: item <n>: rung <N>; lazier option: <taken, or why none>`
-  line per batch item in the evidence file: the build review reads that shape.
 - Builders never write new end-to-end tests: no test installs or uninstalls
   the plugin, or runs setup.sh or uninstall.sh whole. Check the one function
   or rule a change touches, on a hand-written config.
@@ -195,3 +198,5 @@ Every batch item built with its tests green, and the last round file a GO, or
 the narrowed pass after a P2/P3-only closing pass with every open finding listed.
 Print `{UNIT}-DONE` as your last line and stop. An answer from main that
 arrives after it is still yours: read it and act on it.
+
+## Post-merge

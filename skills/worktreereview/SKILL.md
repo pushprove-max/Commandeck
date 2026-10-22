@@ -19,7 +19,7 @@ The page of computed numbers alone, with no words from you, is one command that 
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/worktreereview/scripts/review.py <worktree path> --no-open
 ```
-It collects, renders, adds the rung per batch item from the evidence file, files the page under
+It collects, renders, files the page under
 `~/.commandeck/reviews/<date>/<project>/<unit>-review.html` and prints that path as its `page:` line.
 The page flags a build past a threshold. Defaults: more than 30 minutes of Codex review in total;
 more than a third of the clock on tests or idle waits when those also come to more than 10 minutes, the

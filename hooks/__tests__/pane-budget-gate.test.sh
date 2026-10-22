@@ -93,4 +93,47 @@ role_run() { local n=$1; shift; env -u PANE_BUDGET_CONFIG -u COMMANDECK_ROUTING 
 check "a pane 300 turns in is not refused" 0 "$(role_run 300)"
 check "a pane 1200 turns in is not refused" 0 "$(role_run 1200)"
 
+# Issue 275: past the clear line main may only write its checkpoint and end the turn, so it restarts instead of
+# compacting. context-line.sh leaves the marker; the gate reads it for main only, before the strict-tier exit.
+H=$BOX/home; mkdir -p "$H/.claude/checkpoints"; CPF=$H/.claude/checkpoints/msid.md
+printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}' > "$BOX/main-log.jsonl"
+line_hook() { (cd "$BOX/m" && jq -cn --arg t "$BOX/main-log.jsonl" '{session_id:"msid", transcript_path:$t, prompt:"go"}' \
+  | HOME=$H COMMANDECK_CLEAR_LINE=$1 bash "$ROOT/hooks/context-line.sh" >/dev/null 2>&1); }
+line_hook 1000
+check "under the line context-line.sh leaves no marker" no "$([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no)"
+line_hook 10
+check "past the line it leaves the marker" yes "$([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no)"
+gate() { # dir tool input-json -> exit code
+  jq -cn --arg tool "$2" --argjson in "$3" '{session_id:"msid", tool_name:$tool, tool_input:$in}' \
+    | HOME=$H CLAUDE_PROJECT_DIR=$1 COMMANDECK_HOOK_TIER=default "$HOOK" >/dev/null 2>"$BOX/gate.err"; echo $?; }
+check "main past the line: a Bash call is refused" 2 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+check "the refusal says write the checkpoint, then end the turn" 1 "$(grep -c "write the checkpoint $CPF.*then end the turn" "$BOX/gate.err")"
+check "an Edit of another file is refused" 2 "$(gate "$BOX/m" Edit '{"file_path":"/x/other.md"}')"
+check "the checkpoint Write is allowed" 0 "$(gate "$BOX/m" Write "$(jq -cn --arg f "$CPF" '{file_path:$f}')")"
+check "a Read of the checkpoint template is allowed" 0 "$(gate "$BOX/m" Read "$(jq -cn --arg f "$ROOT/templates/checkpoint.md" '{file_path:$f}')")"
+check "a Read of the checkpoint it resumed from is allowed" 0 \
+  "$(echo "$H/.claude/checkpoints/old.md" > "$H/.claude/checkpoints/msid.resumed-from"; gate "$BOX/m" Read "$(jq -cn --arg f "$H/.claude/checkpoints/old.md" '{file_path:$f}')")"
+check "state-snapshot.sh --out is allowed" 0 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "bash $ROOT/scripts/state-snapshot.sh --out $CPF --force" '{command:$c}')")"
+check "checkpoint-context.py carry is allowed" 0 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "python3 $ROOT/scripts/checkpoint-context.py carry ~/a.md ~/b.md" '{command:$c}')")"
+check "state-snapshot.sh --out with the checkpoint written ~/... is allowed" 0 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "bash $ROOT/scripts/state-snapshot.sh --out ~/.claude/checkpoints/msid.md" '{command:$c}')")"
+# The allowed command is read word by word, so allowed text elsewhere in a command lets nothing through: another
+# program, another copy of the script, another interpreter, another operation or argument count, another --out
+# file, an env prefix, a quote or a glob.
+for c in "python3 -c print(123) checkpoint-context.py carry a b" "python3 -c 'print(123)' $ROOT/scripts/checkpoint-context.py carry a b" \
+  "python3 /p/scripts/checkpoint-context.py carry a b" "bash $ROOT/scripts/checkpoint-context.py carry a b" \
+  "python3 $ROOT/scripts/checkpoint-context.py dedupe a" "python3 $ROOT/scripts/checkpoint-context.py carry a b c" \
+  "python3 $ROOT/scripts/checkpoint-context.py carry -x b" "bash $ROOT/scripts/state-snapshot.sh --out /tmp/other.md" \
+  "bash $ROOT/scripts/state-snapshot.sh --out $CPF --force x" "env X=1 python3 $ROOT/scripts/checkpoint-context.py carry a b" \
+  "python3 $ROOT/scripts/checkpoint-context.py carry a *" "python3 $ROOT/scripts/checkpoint-context.py carry a {b,c}" \
+  "python3 -X importtime $ROOT/scripts/checkpoint-context.py carry a b" ""; do
+  check "past the line, refused: ${c:-an empty command}" 2 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
+done
+check "an allowed command chained to another is refused" "2 2 2" \
+  "$(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b; rm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b\nrm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a $(rm -rf x)"}')"
+check "the task-list tools are allowed" 0 "$(gate "$BOX/m" TaskUpdate '{"taskId":"1","status":"completed"}')"
+check "a worker pane with the marker is never refused" 0 "$(gate "$BOX/lw" Bash '{"command":"git status"}')"
+check "a reviewer is never refused" 0 "$(COMMANDECK_REVIEWER=1 gate "$BOX/m" Bash '{"command":"git status"}')"
+rm "$H/.claude/checkpoints/msid.past-line"
+check "below the line nothing is refused" 0 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+
 echo "$PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

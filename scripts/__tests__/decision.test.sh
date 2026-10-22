@@ -40,5 +40,25 @@ check "issue 292: a non-printable answer is refused" '1 "none"' "$? $(opts jctl-
 D add jpipe-1999-01-01 'Choose a mode?' '[auto]' main --options '[auto]|manual' >/dev/null
 check "issue 292: a|b whose first label starts with [ is still split by |" '["[auto]","manual"]' "$(opts jpipe-1999-01-01)"
 
+# Issue 259: push-ask prepares the owner's push request and never pushes. It lists main's commits since origin/main,
+# each with its unit and that merge's check from the finished-builds row; nothing to push, or a listed merge whose
+# check is not green, writes no row.
+git init -q --bare "$T/origin.git"; git -C "$T/p" remote add origin "$T/origin.git"
+git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base; git -C "$T/p" push -q origin main
+pushes() { D list | jq '[.[] | select(.id | startswith("push-"))] | length'; }
+D push-ask >/dev/null 2>&1
+check "nothing to push: refused, no row" "1 0" "$? $(pushes)"
+git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m 'feat(u1): one'; S1=$(git -C "$T/p" rev-parse HEAD)
+B=$T/home/.commandeck/builds/p.jsonl; mkdir -p "${B%/*}"
+jq -cn --arg m "$T/p" --arg s "$S1" '{main: $m, unit: "u1", how: "merged", at: "1999-01-01T00:00:00Z", sha: $s}' > "$B"
+OUT=$(D push-ask); RC=$?
+check "one merged unit ahead of origin/main: one open row naming its sha, unit and green check" "0 1 1" \
+  "$RC $(pushes) $(D list | jq '[.[] | select(.id | startswith("push-")) | select(.question | contains("'"${S1:0:8}"' u1 (check green)")) | select(.answeredAt == null)] | length')"
+check "and nothing was pushed" "$(git -C "$T/p" rev-parse HEAD~1)" "$(git -C "$T/origin.git" rev-parse main)"
+git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m 'feat(u2): two'; S2=$(git -C "$T/p" rev-parse HEAD)
+jq -cn --arg m "$T/p" --arg s "$S2" '{main: $m, unit: "u2", how: "merged", at: "1999-01-01T00:00:00Z", sha: $s, check: "red"}' >> "$B"
+D push-ask >/dev/null 2>&1
+check "a listed merge whose check is not green: refused, no new row" "1 1" "$? $(pushes)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

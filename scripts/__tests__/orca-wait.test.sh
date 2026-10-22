@@ -90,6 +90,45 @@ check "--full prints the heads-up whole" 400 "$(grep -c '^claim line' <<<"$OUT")
 OUT=$(drain); REST=$(sed -n 's/.*whole wake: \([^ ]*\)).*/\1/p' <<<"$OUT" | tail -1)
 check "a long wake is cut, keeps its next: line, and names the file that holds the rest" "1 1 1" \
   "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c '^orca-wait: cut at 3,000 bytes' <<<"$OUT") $(grep -c '| pass done (u212) |' "$REST" 2>/dev/null)"
+# Issue 306 R11: main-watch's gate ran --verify on this tip and kept its result; the wake reads it and never runs
+# --verify again (the stub counts calls). A gate that queued the merge tells main it has nothing to do.
+wake GO 0 >/dev/null; printf '#!/usr/bin/env bash\necho call >> "%s/vcalls"\nexit 0\n' "$T" > "$PL/scripts/builder-codex-pass.sh"
+msg w2 term_u status "pass done (u212)" "r5 is in" | jq -sc '{ok: true, result: {deliveryId: "d8", messages: .}}' > "$T/batch.json"
+# main-watch's record: the key (the tip and a checksum of the round files, paths.sh pp_gate_key), exit, rule, line.
+rgate() { mkdir -p "$T/sc/main-watch"; printf '%s %s\n%s\n%s\n%s\n' "$(git -C "$U" rev-parse HEAD)" "$(cat "$U/.claude/briefs/u212"-r*-reports.md 2>/dev/null | cksum | tr ' ' :)" "$1" "$2" "$3" > "$T/sc/main-watch/gate-u212"; }
+run() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$PL/scripts/orca-wait.sh" "$@" 2>&1); }
+rm -rf "$T/sc" "$T/vcalls"; rgate 0 "closing GO" "Builder proof: u212-r5-reports.md: the closing pass; rule: closing GO"; OUT=$(run)
+check "a gate result kept for the tip: --verify is not run again, and main is told main-watch merges it" "0 1" \
+  "$(cat "$T/vcalls" 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'next: nothing for main yet: main-watch merges it' <<<"$OUT")"
+# The kept line is cut at 300 characters, so the rule is read from its own line: a P2 tail whose shown line lost it
+# is still not one main-watch merges.
+rm -rf "$T/sc" "$T/vcalls"; rgate 0 "P2 tail" "Builder proof: u212-r5-reports.md: the closing pass (Codex thread 01a15f3e-...) left P2/P3 only"; OUT=$(run)
+check "a kept P2 tail whose shown line was cut is not told as main-watch merging it" 0 "$(grep -c 'main-watch merges it' <<<"$OUT")"
+# A result kept for the tip but an older set of round files is stale: a new pass on the same commit runs --verify again.
+rm -rf "$T/sc" "$T/vcalls"; rgate 1 "" "no closing pass yet"; echo .claude/briefs/u212-r9-reports.md >> "$U/.git/info/exclude"
+echo "Pass: final" > "$U/.claude/briefs/u212-r9-reports.md"; OUT=$(run)
+rm -f "$U/.claude/briefs/u212-r9-reports.md"
+check "a new round file on the same tip makes the kept result stale: --verify runs once" 1 "$(cat "$T/vcalls" 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$T/sc" "$T/vcalls"; rgate 1 "" "a P1 is open"; OUT=$(run)
+check "a refusal kept for the tip is the reason main reads, with no --verify run" "0 1" \
+  "$(cat "$T/vcalls" 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'next: nothing for main yet: a P1 is open' <<<"$OUT")"
+rm -rf "$T/sc" "$T/vcalls"; OUT=$(run)
+check "with no kept result the wake runs --verify itself, once" 1 "$(cat "$T/vcalls" | wc -l | tr -d ' ')"
+# Issue 253: routine items main-watch put in its digest are one count-and-path line when main next wakes, then not again.
+rm -rf "$T/sc"; mkdir -p "$T/sc/main-watch"; printf '1 u1 merged\n2 heads-up repeated: x\n' > "$T/sc/main-watch/digest"
+OUT=$(run); OUT2=$(run --run run_test)
+check "the digest is one line with its count and path, and only new lines count next time" "1 0" \
+  "$(grep -c "^digest: 2 routine items since the last wake (landed merges, repeated heads-ups): $T/sc/main-watch/digest$" <<<"$OUT") $(grep -c '^digest:' <<<"$OUT2")"
+# Issue 305: a Builder's question that names the owner, or is a repeat-class stop-and-ask, goes on the owner's
+# decision queue at once (no waitsOn); any other still waits on main. Main gets its line for both.
+mkdir -p "$T/p/.claude/metrics"; : > "$T/p/.claude/metrics/decisions.jsonl"
+{ msg o1 term_u question "question (u212)" "Stop and ask the owner: ship the old format or the new one?"
+  msg o2 term_u question "question (u212)" "REPEAT CLASS: lost-reply (r4, r5); a class-level call is needed"
+  msg o3 term_u question "question (u212)" "Which helper file should hold the parser?"; } | jq -sc '{ok: true, result: {deliveryId: "d9", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc" "$T/vcalls"; OUT=$(run)
+check "owner-bound questions carry no waitsOn, an ordinary one waits on main, and each gets main's line" "u212-o1:none u212-o2:none u212-o3:main 3" \
+  "$(jq -r '"\(.id):\(.waitsOn // "none")"' "$T/p/.claude/metrics/decisions.jsonl" | sort | paste -sd' ' -) $(grep -c 'next: it waits for' <<<"$OUT")"
 # r1: the drain prints each message before it acknowledges it; the default wake must hand that print on at once.
 # Two deliveries, the second's ack hangs: a call killed then has already printed both acknowledged messages.
 msg k1 term_w question "first delivered" "one" | jq -sc '{ok: true, result: {deliveryId: "d6", messages: .}}' > "$T/k1.json"

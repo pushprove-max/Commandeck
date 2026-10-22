@@ -38,6 +38,19 @@ ran
 check "a deleted test or script selects nothing" "" "$GOT"
 git -C "$R" reset -q && git -C "$R" checkout -q -- .
 
+# The merge-queue tests were split in four to fit the time cap; the three not named after merge-queue.sh carry
+# `# covers:` so a change to it alone still runs all four. Each fixture test keeps the real file's header comments.
+for t in "$REAL"/scripts/__tests__/merge-queue*.test.sh; do
+  n=$(basename "$t" .test.sh); { sed -n '1,5{/^#/p}' "$t"; echo "echo $n >> \"\$RAN\""; } > "$R/scripts/__tests__/$n.test.sh"
+done
+echo 'echo queue' > "$R/scripts/merge-queue.sh"
+git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm queue
+echo '# edited' >> "$R/scripts/merge-queue.sh"
+ran
+check "an edit to merge-queue.sh alone runs all four merge-queue tests, and no other" \
+  "merge-queue merge-queue-glob merge-queue-listing merge-queue-train" "$GOT"
+git -C "$R" checkout -q -- .
+
 # A base git cannot resolve is an error, never a green run of nothing.
 ran no-such-base
 check "an unknown base fails" 2 "$RC"

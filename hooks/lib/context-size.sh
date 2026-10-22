@@ -14,8 +14,12 @@
 # 170K. Real context grows a few thousand tokens per turn and never doubles,
 # so a value far above the previous DISTINCT one is that transient payload.
 #
-# Dedupe consecutive equal rows first: one request is recorded several times
-# while it streams, so the last five rows can all be copies of one outlier.
+# The last turn's output counts too (issue 267): auto-compact counts it, and
+# a sum without it ran below the point compaction acts on.
+#
+# Dedupe consecutive rows of one input count first, keeping the last one's
+# output: one request is recorded several times while it streams, its output
+# growing, so the last five rows can all be copies of one outlier.
 context_size() {
   local transcript=$1 sums
   [ -n "$transcript" ] && [ -f "$transcript" ] || return 1
@@ -24,22 +28,23 @@ context_size() {
   sums=$(tail -c 3000000 "$transcript" \
     | grep '"cache_read_input_tokens"' \
     | jq -rR 'fromjson? | .message.usage
-             | ((.cache_read_input_tokens // 0)
+             | "\((.cache_read_input_tokens // 0)
                 + (.input_tokens // 0)
-                + (.cache_creation_input_tokens // 0))' 2>/dev/null \
-    | awk 'NF && $1 != prev { print } { prev = $1 }' \
+                + (.cache_creation_input_tokens // 0)) \(.output_tokens // 0)"' 2>/dev/null \
+    | awk 'NF { if (row != "" && $1 != prev) print row; prev = $1; row = $0 } END { if (row != "") print row }' \
     | tail -2)
   [ -n "$sums" ] || return 1
   # 1.4x is the reject line: it catches both observed spikes (1.58x and 2.05x)
   # and tolerates a turn that genuinely reads 40% of the context in one go.
   # A wrongly rejected jump costs ONE turn -- the next row becomes the new
-  # baseline and the one after it is accepted.
+  # baseline and the one after it is accepted. The input counts are compared;
+  # the output is added after.
   printf '%s\n' "$sums" | awk '
-    NR == 1 { prev = $1 }
-    NR == 2 { last = $1 }
+    NR == 1 { prev = $1; pout = $2 }
+    NR == 2 { last = $1; lout = $2 }
     END {
-      if (NR < 2)                   { print prev + 0 }
-      else if (last > prev * 7 / 5) { print prev + 0 }
-      else                          { print last + 0 }
+      if (NR < 2)                   { print prev + pout }
+      else if (last > prev * 7 / 5) { print prev + pout }
+      else                          { print last + lout }
     }'
 }

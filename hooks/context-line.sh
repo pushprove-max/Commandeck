@@ -42,9 +42,14 @@ TPL=$(cd "$(dirname "$0")/../templates" && pwd)
 ctx=$(context_size "$transcript") || exit 0
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || exit 0
 HOOK_FIRE_ADVISE=1
+# Issue 275: pane-budget-gate.sh lets main past its line write only the checkpoint.
+[[ ! $sid =~ ^[A-Za-z0-9_-]+$ ]] || : > "$HOME/.claude/checkpoints/$sid.past-line" 2>/dev/null
 # 40K past the line the step is over: a session that kept "finishing the step"
 # reached 320K, so past this point the checkpoint Write is the next tool call.
-if [ "$ctx" -gt $((LINE + 40000)) ]; then
+# On a 200K window (standardContext) less than 40K is left before auto-compact,
+# so that point is the line itself (issue 267).
+PAST=$((LINE + 40000)); pp_flag standardContext 2>/dev/null && PAST=$LINE
+if [ "$ctx" -gt "$PAST" ]; then
   echo "CONTEXT $((ctx / 1000))K is $(((ctx - LINE) / 1000))K PAST the $((LINE / 1000))K line: the NEXT tool call is the checkpoint Write (~/.claude/checkpoints/<session>.md from $TPL/checkpoint.md), then end the turn; the Stop hook restarts main. Never type /clear. No other look first."
   exit 0
 fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
-#           | reopen <id> | list | holds <unit>
+#           | reopen <id> | list | holds <unit> | push-ask
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
 # append-only, one complete snapshot per line, the latest line per id wins.
 # The dashboard's Needs Owner card shows the unanswered ones with their default;
@@ -29,7 +29,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit>"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -246,6 +246,26 @@ case "${1:-}" in
     ! jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is still open"
     append "$(jq -c --arg at "$(fresh "$(jq -r .askedAt <<<"$prev")")" '.askedAt = $at | .answeredAt = null | .answer = null
       | .source |= (index("; re-ask: ") as $i | if $i then .[:$i] else . end)' <<<"$prev")" ;;
+  push-ask)
+    # push-ask (issue 259): one open row asking the owner to push main, listing each commit since origin/main with
+    # its unit and its merge's check from the finished-builds row (merge-unit-local.sh writes a row only after its
+    # check passed, so a row with no check field is green). Refused, no row, when there is nothing to push or a
+    # listed merge's check is not green. It never pushes.
+    [ $# -eq 1 ] || usage
+    git -C "$PP_MAIN" rev-parse -q --verify refs/remotes/origin/main >/dev/null || die "no origin/main in $PP_MAIN"
+    LOG=$(git -C "$PP_MAIN" log --reverse --format='%H %s' refs/remotes/origin/main..refs/heads/main) || die "git log failed"
+    [ -n "$LOG" ] || die "nothing to push: main is at origin/main"
+    B=$HOME/.commandeck/builds/$PP_PROJECT.jsonl
+    LIST=$(jq -nr --arg log "$LOG" --arg main "$(cd "$PP_MAIN" && pwd -P)" --slurpfile rows <(cat "$B" 2>/dev/null) '
+      [$rows[] | select(.main == $main and .how == "merged")] as $r
+      | $log | split("\n")[] | select(length > 0) | (.[:40]) as $s | (.[41:]) as $t
+      | ([$r[] | select(.sha == $s)] | last) as $m
+      | if $m then "\($s[:8]) \($m.unit) (check \($m.check // "green"))" else "\($s[:8]) (no merge row) \($t[:60])" end') \
+      || die "could not read the finished-builds rows in $B"
+    ! grep -E ' \(check ' <<<"$LIST" | grep -qv ' (check green)$' || die "a listed merge's check is not green, no push request written:"$'\n'"$LIST"
+    N=$(grep -c . <<<"$LIST")
+    exec bash "$0" add "push-$(date -u +%Y-%m-%d)-$(git -C "$PP_MAIN" rev-parse --short=8 refs/heads/main)" \
+      "Push main to origin? $N commit(s) since origin/main: $(paste -sd';' - <<<"$LIST" | sed 's/;/; /g')" push "decision.sh push-ask" ;;
   list)
     [ $# -eq 1 ] || usage
     lock -s

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# timeout: 240
 # A Builder's seat ends with its merge, so merge-unit-local.sh writes its token ledger row. Two seats launched
 # together in one worktree each have a session log after the launch, and only the seat record's tag tells them
 # apart: without it the row could name the sibling's session and count its tokens as the Builder's. Pinned: after a
@@ -7,80 +8,7 @@ set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-TMP=$(cd "$TMP" && pwd -P)
-# An empty HOME: no Codex plugin, no model list, no signed-in CLI.
-export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
-# Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.
-export COMMANDECK_FOREGROUND=1
-# Run as a real merge's check, the file inherits that merge's lock flag, which would skip its own merges' detach
-# and lock. Claude's folder is the empty HOME's: the caller's own profile is never read.
-unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK CLAUDE_CONFIG_DIR "${!UNIT_LEDGER_@}"
-REPO=$TMP/proj
-mkdir -p "$HOME" "$TMP/ws" "$TMP/bin"; : > "$TMP/orca-calls"
-git init -q -b main "$REPO"
-MERGE=$REAL/scripts/merge-unit-local.sh PASS_SH=$REAL/scripts/builder-codex-pass.sh
-git -C "$REPO" config user.name t; git -C "$REPO" config user.email t@t; git -C "$REPO" config core.hooksPath /dev/null
-echo base > "$REPO/a.txt"; git -C "$REPO" add a.txt; git -C "$REPO" commit -qm base
-printf '%s\n' .claude/settings.local.json .claude/builder-events.jsonl >> "$REPO/.git/info/exclude"
-cat > "$TMP/bin/orca-ide" <<STUB
-#!/usr/bin/env bash
-echo "\$*" >> "$TMP/orca-calls"
-case "\$1 \$2" in
-  "terminal list") echo '{"result":{"terminals":[{"handle":"t_'"\$(cat "$TMP/unit")"'","worktreePath":"$TMP/ws/'"\$(cat "$TMP/unit")"'"}]}}' ;;
-  "worktree remove") [ ! -e "$TMP/remove-fails" ] || { echo "orca: the worktree is busy" >&2; exit 1; }
-    git -C "\$(git -C "\${4#path:}" rev-parse --path-format=absolute --git-common-dir)" worktree remove --force "\${4#path:}" ;;
-  *) echo '{"ok":true}' ;;
-esac
-STUB
-# gh is never the real one: it records its calls and answers only `issue close`, and that fails once gh-fails exists.
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/gh-calls"\n[ "$1 $2" = "issue close" ] && [ ! -e "%s/gh-fails" ]\n' "$TMP" "$TMP" > "$TMP/bin/gh"
-chmod +x "$TMP/bin/orca-ide" "$TMP/bin/gh"
-PATH=$TMP/bin:$PATH
-
-# A proven unit is one the pass script itself ran a first pass on: three
-# reviewers ending GO. The pass runs under a home of its own, with a stub of the
-# Codex plugin that leaves the session record Codex would; the merge then runs
-# under the empty home above. STUB_REPLY is what each reviewer answers.
-PH=$TMP/passhome PLUG=$TMP/passhome/.claude/plugins/cache/openai-codex/codex/1.0.0
-mkdir -p "$PLUG/scripts" "$PLUG/prompts" "$CODEX_HOME" "$TMP/cli"
-printf 'Target: {{TARGET_LABEL}}\nUser focus: {{USER_FOCUS}}\nPrefer one strong finding over several weak ones.\n<structured_output_contract>\nReturn only valid JSON matching the provided schema.\n</structured_output_contract>\n{{REVIEW_COLLECTION_GUIDANCE}}\n{{REVIEW_INPUT}}\n' > "$PLUG/prompts/adversarial-review.md"
-cat > "$PLUG/scripts/codex-companion.mjs" <<'JS'
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-const args = process.argv.slice(2);
-const cwd = args[args.indexOf("--cwd") + 1], promptFile = args[args.indexOf("--prompt-file") + 1];
-const id = `${process.env.STUB_THREAD}-${promptFile.match(/-prompt-(\d+)\.md$/)[1]}`;
-const reply = process.env.STUB_REPLY || "Clean.\nVERDICT: GO";
-const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"]).toString().trim();
-const dir = `${process.env.CODEX_HOME}/sessions/2026/10/11`;
-mkdirSync(dir, { recursive: true });
-writeFileSync(`${dir}/rollout-2026-10-11T00-00-00-${id}.jsonl`, [
-  { type: "session_meta", timestamp: new Date().toISOString(), payload: { id, cwd, git: { commit_hash: sha } } },
-  { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: readFileSync(promptFile, "utf8") }] } },
-  { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", last_agent_message: reply } },
-].map((r) => JSON.stringify(r)).join("\n") + "\n");
-process.stdout.write(JSON.stringify({ threadId: id, status: 0, rawOutput: reply }));
-JS
-printf 'import { writeFileSync } from "node:fs";\nconst a = process.argv.slice(2);\nwriteFileSync(a[a.indexOf("--endpoint") + 1].replace(/^unix:/, ""), "");\nsetInterval(() => {}, 1000);\n' > "$PLUG/scripts/app-server-broker.mjs"
-echo 1 > "$PLUG/scripts/commandeck-test-waits"
-printf 'model = "x"\nservice_tier = "fast"\n' > "$CODEX_HOME/config.toml"
-jq '.roles["codex-reviewer"].model = "gpt-9.9-probe"' "$REAL/config/routing.json" > "$TMP/routing.json"
-# Signed in, and answers the pass's one-word sign-in probe (codex exec).
-printf '#!/bin/sh\n[ "$*" = "login status" ] || [ "$1" = exec ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
-mk() { # <unit> [subject]: a Builder worktree with one commit, its brief and its evidence
-  local w=$COMMANDECK_WORKSPACES/$1
-  git -C "$REPO" worktree add -q "$w" -b "builder/$1"
-  mkdir -p "$w/.claude/briefs"; echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$w/.claude/settings.local.json"
-  echo "brief for $1" > "$w/.claude/briefs/$1.md"; echo "evidence for $1" > "$w/.claude/briefs/$1-evidence.md"
-  echo built > "$w/$1.txt"; git -C "$w" add "$1.txt"; git -C "$w" commit -qm "${2:-feat($1): the unit}"
-}
-pass() { # <unit> <N> <kind>: one pass of the real pass script on the unit's worktree
-  (cd "$COMMANDECK_WORKSPACES/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-$2 \
-    bash "$PASS_SH" "$1" "$2" "$3" >/dev/null 2>"$TMP/pass.err") || { echo "FAIL the $3 pass on $1 did not run: $(cat "$TMP/pass.err")"; FAIL=$((FAIL+1)); }
-}
-go() { pass "$1" 1 adversarial; } # <unit>: a first pass that ends GO at the unit's tip
-merge() { echo "$1" > "$TMP/unit"; (cd "$REPO" && bash "$MERGE" "$@") > "$TMP/out" 2>&1; echo $?; }
+. "$(dirname "$0")/fixtures/merge-unit-local-setup.sh"
 
 # Two seats launched together in u's worktree: the sibling's session starts first, the Builder's after it.
 mk u; LA=$(( $(date +%s) - 600 )); mkdir -p "$COMMANDECK_SCRATCH"
@@ -213,5 +141,54 @@ mk hz; go hz; rm -f "$LED"; mkdir -p "$TMP/hooks"; git -C "$REPO" config core.ho
 printf '#!/bin/sh\nflock -n -x %s true; echo $? > %s\n' "$LED" "$TMP/hooklock" > "$TMP/hooks/pre-commit"; chmod +x "$TMP/hooks/pre-commit"
 check "with no ledger, the merge commits while a question cannot be added" "0 1" "$(merge hz) $(cat "$TMP/hooklock" 2>/dev/null)"
 git -C "$REPO" config core.hooksPath /dev/null
+# Issue 254: main-watch merges a unit by the sha its gate passed. A tip that moved since is not what the gate passed.
+mk au; GATED=$(git -C "$COMMANDECK_WORKSPACES/au" rev-parse HEAD); H0=$(git -C "$REPO" rev-parse HEAD)
+echo more > "$COMMANDECK_WORKSPACES/au/au2.txt"; git -C "$COMMANDECK_WORKSPACES/au" add au2.txt; git -C "$COMMANDECK_WORKSPACES/au" commit -qm "feat(au): more"
+check "--auto with a tip that moved since the gate is refused, naming it, and main is unchanged" "1 1 $H0" \
+  "$(merge au --auto "$GATED") $(grep -c "^FAILED step 1 preconditions: --auto $GATED: the branch tip is now" "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+# The gate's other conditions are asked again under the merge lock: a hold or an owner question added while the merge
+# waited, or a proof whose rule is not a GO, refuses --auto with main unchanged.
+tipof() { git -C "$COMMANDECK_WORKSPACES/$1" rev-parse HEAD; }
+mk ah; go ah; echo 'Merge: hold' >> "$COMMANDECK_WORKSPACES/ah/.claude/briefs/ah.md"
+check "--auto on a unit held since its gate passed is refused, and main is unchanged" "1 1 $H0" \
+  "$(merge ah --auto "$(tipof ah)") $(grep -c '^FAILED step 1 preconditions: --auto: held since the gate passed: Merge: hold in its brief' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mk ao; go ao; mkdir -p "$REPO/.claude/metrics"
+# A whole ledger row (the ledger refuses any other) whose text names no unit, so only --auto's gate reads it.
+echo '{"id":"ao-q1","askedAt":"1999-01-01T00:00:00Z","question":"which?","proposedDefault":"a","source":"builder x","answeredAt":null,"answer":null}' >> "$REPO/.claude/metrics/decisions.jsonl"
+check "--auto on a unit with an owner question opened since its gate is refused, and main is unchanged" "1 1 $H0" \
+  "$(merge ao --auto "$(tipof ao)") $(grep -c '^FAILED step 1 preconditions: --auto: held since the gate passed: open owner decision ao-q1' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+# The same holds, added while the merge runs its check, are read again just before the commit: entry alone missed them.
+mk late; go late
+jq --arg c "echo 'Merge: hold' >> '$COMMANDECK_WORKSPACES/late/.claude/briefs/late.md'" '.testCommand = $c' <<<'{}' > "$REPO/.claude/commandeck.json"
+check "--auto on a unit held during its check is refused before the commit, and main is unchanged" "1 1 $H0" \
+  "$(merge late --auto "$(tipof late)") $(grep -c '^FAILED step 4 merge: --auto: held since the gate passed: Merge: hold in its brief' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mk laq; go laq
+jq --arg c "echo '{\"id\":\"laq-q1\",\"askedAt\":\"1999-01-01T00:00:00Z\",\"question\":\"which?\",\"proposedDefault\":\"a\",\"source\":\"builder x\",\"answeredAt\":null,\"answer\":null}' >> '$REPO/.claude/metrics/decisions.jsonl'" \
+  '.testCommand = $c' <<<'{}' > "$REPO/.claude/commandeck.json"
+check "--auto on a unit with an owner question opened during its check is refused before the commit, and main is unchanged" "1 1 $H0" \
+  "$(merge laq --auto "$(tipof laq)") $(grep -c '^FAILED step 4 merge: --auto: held since the gate passed: open owner decision laq-q1' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+rm -f "$REPO/.claude/commandeck.json"
+mk at; go at; STUB_REPLY=$'- [P2] (class: probe) a tail finding -- at.txt:1 -- it reads wrong -- cat at.txt\nVERDICT: NO-GO' pass at 2 final
+check "--auto on a P2 tail is refused as the owner's call, and main is unchanged" "1 1 $H0" \
+  "$(merge at --auto "$(tipof at)") $(grep -c "^FAILED step 3 proof: --auto merges a GO only, and the proof's rule is P2 tail" "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+# Issue 255: the brief's Post-merge lines run once the merge stands, only the ones on the list. The plugin is a copy,
+# so its dashboard.sh and main-watch.sh are stubs; the stub dashboard has a login and answers --login-check.
+PLUG_COPY=$TMP/plugin; mkdir -p "$PLUG_COPY"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$REAL/.claude-plugin" "$PLUG_COPY/"
+printf '#!/usr/bin/env bash\necho "dashboard.sh $*" >> "%s/post-calls"\n[ "$1" != --login-check ] || [ -e "%s/password-set" ] || { echo "the dashboard login is on and no password is set" >&2; exit 1; }\n' "$TMP" "$TMP" > "$PLUG_COPY/scripts/dashboard.sh"
+printf '#!/usr/bin/env bash\necho "main-watch.sh $*" >> "%s/post-calls"\n' "$TMP" > "$PLUG_COPY/scripts/main-watch.sh"
+MERGE=$PLUG_COPY/scripts/merge-unit-local.sh
+post() { printf '# %s\n\n## Post-merge\n\n%s\n' "$1" "$2" > "$COMMANDECK_WORKSPACES/$1/.claude/briefs/$1.md"; }
+row() { jq -c --arg u "$1" 'select(.unit == $u) | .post' "$HOME/.commandeck/builds/proj.jsonl" 2>/dev/null; }
+mk pa; post pa $'- `dashboard.sh --install`\n- rm -rf ~/x'; go pa; : > "$TMP/post-calls"
+check "a dashboard step with a login and no password, and an off-list line: the merge stands and ends 5" "5 1" \
+  "$(merge pa) $(git -C "$REPO" log --format=%s | grep -c '^feat(pa)')"
+check "the refused dashboard step never ran --install, and the off-list line is named" "0 1" \
+  "$(grep -c -- 'dashboard.sh --install' "$TMP/post-calls") $(grep -c 'not on the post-merge list (exit 5): rm -rf ~/x' "$TMP/out")"
+check "the finished-builds row holds each step's exit" '[{"step":"dashboard.sh --install","exit":5},{"step":"rm -rf ~/x","exit":5}]' "$(row pa)"
+mk pb; post pb $'dashboard.sh --install\nmain-watch.sh --install'; go pb; : > "$TMP/post-calls"; : > "$TMP/password-set"
+check "with a password set both steps run, the merge ends 0 and the row shows exit 0 for each" \
+  '0 2 [{"step":"dashboard.sh --install","exit":0},{"step":"main-watch.sh --install","exit":0}]' \
+  "$(merge pb) $(grep -cE '^(dashboard|main-watch).sh --install$' "$TMP/post-calls") $(row pb)"
+check "one line says what each step did" 1 "$(grep -c '^step 4 post-merge: dashboard.sh --install exit 0; main-watch.sh --install exit 0 (logs ' "$TMP/out")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

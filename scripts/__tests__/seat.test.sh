@@ -41,6 +41,14 @@ jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
 run launch builder seat-builder "$T/spec.md" --effort medium >"$T/out" 2>&1
 check "--effort medium under a Builder default of high is refused before any pane opens" '2:1' \
   "$?:$(grep -c "REFUSED: --effort medium is below this project's Builder default high" "$T/out")"
+# Issue 293: the /config effort beats the project's saved one on the launch command itself, not only in the resolver.
+unset CLAUDE_CONFIG_DIR; mkdir -p "$HOME/.claude"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
+jq '.builder = {effort: "medium"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; rm -f "$T/pane-up"
+COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" >"$T/out" 2>&1
+check "a Builder launched with /config's effort high over the project's medium opens with --effort high" '0:1' \
+  "$?:$(grep '^cmd=' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt | tail -1 | grep -cE -- ' --effort high( |$)')"
+rm "$HOME/.claude/settings.json"
 
 # dispatch-task.sh types its own pointer to a Codex pane Orca will not bind. The seat's log is found by the tag in the
 # spec, and read-verdict.sh searches typed prompts only, so the typed pointer carries the spec's own tag sentence.

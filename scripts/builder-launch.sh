@@ -81,6 +81,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
+# Read once: adopting the planning worktree below can move a batch kept there.
+BT=$(cat "$BATCH"; echo .) BT=${BT%.}
 # Every batch says which standard governs it, what library or service already does it, and why we build if we do.
 grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
 WT=$PP_WORKSPACES/$UNIT
@@ -352,6 +354,10 @@ if [ "$ADOPT" = 1 ]; then
     echo "$UNIT" > "$GD/commandeck-plan-of"
   }
   trap '[ $? = 0 ] && rm -f "$SAVED" || undo; rm -f "$FROZEN"' EXIT
+  # A batch kept in the planning worktree is planning scratch adoption moved out; it goes back where it was given, so
+  # a risky launch's second call, the same command, reads it there.
+  [ -e "$BATCH" ] || { mkdir -p "$(dirname "$BATCH")" && printf '%s' "$BT" > "$BATCH"; } \
+    || { echo "could not put the batch back at $BATCH after adoption; the Builder was not launched" >&2; exit 1; }
   git -C "$WT" reset --hard "$(git -C "$PP_MAIN" rev-parse refs/heads/main)" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
 else
   pp_worktree_new "$UNIT" || exit 1
@@ -366,7 +372,7 @@ mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/bri
   || { echo "could not keep main's copy of the brief for $UNIT" >&2; exit 1; }
 if [ "$RISKY" = 1 ]; then
   printf 'Design check for the batch below, before its Builder starts. Read the code the batch touches, then write the design note `.claude/briefs/%s-design.md`: the design to follow, what can break and how each risk is tested. Write that one file and no code. Print DESIGN-DONE on its own line when the note is written.\n\n%s\n' \
-    "$UNIT" "$(cat "$BATCH")" > "$WT/.claude/briefs/$UNIT-design-spec.md"
+    "$UNIT" "$BT" > "$WT/.claude/briefs/$UNIT-design-spec.md"
   bash "$HERE/seat.sh" launch design-coauthor "$UNIT" "$WT/.claude/briefs/$UNIT-design-spec.md" \
     || { echo "the design pane did not open for $UNIT; the Builder was not launched" >&2; exit 1; }
   echo "design pane open for $UNIT; no Builder yet. Once it has written $NOTE, run the same command again to open the Builder."

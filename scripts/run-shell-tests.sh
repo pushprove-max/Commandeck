@@ -27,6 +27,8 @@
 # HEAD) touches: a test it adds or edits, and the same-name test of a script or
 # hook it adds or edits (scripts/seat.sh -> scripts/__tests__/seat.test.sh). It is
 # the merge check: the whole suite took 12 minutes a merge (ruling 2026-10-17).
+# A test named after no script it tests carries `# covers: <path>...` in the
+# same first five lines, and --changed runs it when any of those paths changed.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
@@ -65,7 +67,7 @@ if [ "${1:-}" = --changed ]; then
   # A deleted file selects nothing (--diff-filter=d). A failed git would also select nothing and pass: fail instead.
   CHANGED=$(git diff --name-only --diff-filter=d "$BASE" --) || { echo "run-shell-tests: --changed: git diff $BASE failed" >&2; exit 2; }
   # A shared helper's callers' tests are not run (main's ruling 2026-10-17): CI's full suite on every push covers them.
-  mapfile -t TESTS < <(printf '%s\n' "$CHANGED" | while IFS= read -r f; do
+  mapfile -t TESTS < <({ printf '%s\n' "$CHANGED" | while IFS= read -r f; do
     case $f in
       (hooks/__tests__/*/*|scripts/__tests__/*/*) ;;
       (hooks/__tests__/*.test.sh|scripts/__tests__/*.test.sh) echo "$f" ;;
@@ -74,7 +76,13 @@ if [ "${1:-}" = --changed ]; then
       (hooks/*/*|scripts/*/*) ;;
       (hooks/*|scripts/*) t=${f%%/*}/__tests__/$(basename "${f%.*}").test.sh; [ ! -f "$t" ] || echo "$t" ;;
     esac
-  done | sort -u)
+  done
+  for t in hooks/__tests__/*.test.sh scripts/__tests__/*.test.sh; do
+    [ -f "$t" ] || continue
+    for p in $(sed -n '1,5p' "$t" | sed -n 's/^# covers: *//p'); do
+      grep -qxF -- "$p" <<<"$CHANGED" && { echo "$t"; break; }
+    done
+  done; } | sort -u)
   [ "${#TESTS[@]}" -gt 0 ] || { echo "run-shell-tests: no shell test was touched since $BASE"; exit 0; }
 elif [ $# -gt 0 ] && [ "$1" != --list ]; then
   # Named files are relative to where the caller stood, not to $ROOT.

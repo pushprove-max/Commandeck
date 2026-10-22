@@ -49,6 +49,11 @@ check "and that review is the closing pass whose GO merges" 'is the closing pass
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
 check "main's class rule: one retry path, tested state by state" "$RETRY"
 BODY=$SAVED
+# Issues 254 and 255: the gate merges a unit unless main holds it, and main's post-merge lines go under the last
+# heading, which the merge reads to the end: the template's own section is empty. Issue 306 R10: no rung line.
+check "the template names the hold line the merge gate reads" "unless main adds a line \`Merge: hold\` to this brief"
+[ "$(tail -n 1 "$T")" = "## Post-merge" ] && ! grep -q 'Ponytail: item' "$T" && BODY="post-merge last and empty, no rung line"
+check "the Post-merge section is the template's last line, and no rung line is asked for" "post-merge last and empty, no rung line"
 # main's rulings file: the pass reads stated limits from one heading only, so the template must carry it.
 BODY=$(cat "${T%/*}/main-rulings.md")
 check "the rulings template has the heading the pass reads limits from" "## Stated limits"

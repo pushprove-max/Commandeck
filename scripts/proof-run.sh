@@ -124,12 +124,12 @@ for P in "${PROFILES[@]}"; do
   row "cache hit rate and write share" "$LIVE bash scripts/builder-cache-check.sh <worktree>; the dashboard's cache tiles"
   row "review passes to GO, findings" "$LIVE the unit's round files; bash scripts/builder-${P/claude-openai/codex}-pass.sh --verify <worktree> <unit> <tip>"
 
-  # Standard context: the project's answer alone moves the line to 150K.
+  # Standard context: the project's answer alone moves the line to 140K (issue 267).
   p "$SAMPLE" setup.sh --standard-context >/dev/null 2>&1 || RC=1
   printf '{"message":{"usage":{"cache_read_input_tokens":160000,"input_tokens":0}}}\n' > "$T/transcript.jsonl"
   OUT=$(cd "$SAMPLE" && printf '{"session_id":"proof-run","transcript_path":"%s"}' "$T/transcript.jsonl" | bash "$PLUGIN/hooks/context-line.sh" 2>&1)
-  case $OUT in *"over the 150K line"*) row "standard context, 150K line" "fires at 160K" ;; *) row "standard context, 150K line" "DID NOT FIRE at 160K"; RC=1 ;; esac
-  row "standard context, restart resumes" "$LIVE let the orchestrator cross 150K and watch the unit go on in the new pane"
+  case $OUT in *"the 140K line"*) row "standard context, 140K line" "fires at 160K" ;; *) row "standard context, 140K line" "DID NOT FIRE at 160K"; RC=1 ;; esac
+  row "standard context, restart resumes" "$LIVE let the orchestrator cross 140K and watch the unit go on in the new pane"
 
   if [ "$(foreign)" = "$OTHER" ]; then row "coexistence while installed" "the other tool's hooks, trust, settings, job file and dashboard line are identical (a stand-in: not this machine's real home)"
   else row "coexistence while installed" "DIFFERS"; RC=1; fi

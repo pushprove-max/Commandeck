@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.25.0 -- 2026-10-21
+
+- Issues #218, #221, #222, #227, #231, #232, #235, #237, #239, #243, #244 and #245 shipped in 0.21.0 and 0.22.0.
+- Setup asks the Builder's effort right after its model and recommends High for Sonnet; the doctor names where the
+  Builder's model and effort come from, and those two `/config` options default to `project`, which keeps the
+  project's answer instead of hiding it (#293).
+- A restarted main is blocked once with the count of dropped items and the command that lists them, not the whole
+  list; on the second stop the missing items are copied into the checkpoint and main restarts. One close line closes
+  one item, with its own reason (#252).
+- The second-stop copy keys items by subject and reuses the one unresolved Queue heading, so restarts add no
+  duplicates (#281).
+- The restart checkpoint closes finished items itself (`done when:` an issue closed, a decision answered, a unit
+  merged, a commit pushed), keys Queue items `Q-<n>`, has a `dedupe` command, and moves items past ten generations
+  to an aged-out file; the stop hook logs the checkpoint's size (#283).
+- The stop hook logs the minutes since the last restart; nothing alerts on the "carried automatically" lines (#300).
+- On a 200K window main restarts at 140K, under the ceiling of 165K, and a Builder clears at 140K; the context count
+  includes the last turn's output (#267).
+- Past its line, main may only write its checkpoint: every other tool call is refused until it restarts (#275).
+- A unit that passes the gate (a final GO on its tip, a clean tree, no open owner decision, no `Merge: hold`) now
+  merges itself into local main, and never pushes. A unit left waiting is gated again at the next tick (#254, #258).
+- Routine inbox items (a landed merge, a repeated heads-up) go to a digest instead of waking main (#253).
+- A brief's `## Post-merge` lines run after a green merge when they are on the allow-list; any other line is refused
+  with exit 5 (#255).
+- Redundant steps removed: the rung line, `--verify` run twice per tip, and a plan revision after a GO verdict (#306).
+- `ci-watch.sh` watches a commit's CI runs and reruns a failed run's failed jobs once; `decision.sh push-ask` asks
+  the owner to push, and refuses when nothing is to push or a merge's check is not green (#259).
+- Planning scratch files in the plan worktree are moved aside and no longer block the Builder launch (#284).
+- The relay runs `cos-check.sh`, a 50-minute timer check that names a down watcher, prints held FYI notes and counts
+  missed messages; with the owner quiet for 30 minutes the relay opens no picker (#290).
+- An owner-bound Builder question is recorded for the owner at once, not behind main (#305).
+- A merge reuses the closing pass's green suite when that run tested the merged tree itself (same tree hash), and
+  `merge-queue.sh --train` tests several units' combined tip once and bisects on red (#307).
+- `board.sh` no longer prints the host project's chain-host, offloaded and placement-wait lines.
+
 ## 0.24.0 -- 2026-10-21
 
 - #217, #224, #240 and #242 shipped in 0.21.0 and 0.22.0. #263 (the dashboard behind a login) and #269 (tests

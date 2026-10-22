@@ -110,6 +110,11 @@ Ask them in this order, up to four questions per call.
    Ask "Builder model": Opus (recommended) | Sonnet
    - Opus: best quality, with no advisor. `--builder-model ''`
    - Sonnet: uses less of your plan. `--builder-model sonnet`
+   Then the effort, right after the model: its recommended answer follows the model picked. On Opus:
+   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
+   On Sonnet:
+   Ask "Builder effort": High (recommended) | Low | Medium | Maximum
+   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. `--builder-effort ''`, or `low`, `medium`, `high`; Maximum: `max`. Which answer a launch takes, /config's or this one: `pp_option` in `scripts/paths.sh`.
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
    - Larger: your model holds more (a 1M window). `--no-standard-context`
@@ -119,8 +124,6 @@ Ask them in this order, up to four questions per call.
    sure? /model shows your model: one marked 1M, or an id that ends in [1m], is
    Larger."
    Then, one call:
-   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
-   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. `--builder-effort ''`, or `low`, `high`; Maximum: `max`
    Ask "Builder clear line": 180K (recommended) | 150K | 250K | Off
    - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000`; Off: `--builder-clear-line off`
    Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off

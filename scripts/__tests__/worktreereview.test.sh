@@ -292,11 +292,10 @@ with contextlib.redirect_stdout(io.StringIO()):
     collect.main()
 check('collect with no --out writes under <project>/<unit>, where the skill reads it', True, os.path.exists(f'{TMP}/out-root/proj 2/rv0/result.json'))
 
-# --- The batch brief lists items as `1. #12: title`; the older form carried a rung. ---
-write(f'{TMP}/ws/rg/.claude/briefs/rg.md', ['1. #12: Fix the hook\n2. [rung 3] #13 older\n'])
-write(f'{TMP}/ws/rg/.claude/briefs/rg-evidence.md', ['Ponytail: item 1: rung 5; lazier option: none\n'])
-check('a batch item in the brief template format gets its row and its rung', [(1, '#12', '5'), (2, '#13', None)],
-      [(r_['item'], r_['issue'], r_['rung']) for r_ in review.rungs(f'{TMP}/ws/rg', 'rg')])
+# --- Issue 306 R10: no step reads a rung line any more, so the page has no rung table and review.py no reader. ---
+page = rendered('elsewhere', r)
+check('a page from an evidence file with no rung lines has no rung column', [False, False, False],
+      ['Rung per batch item' in page, '>Rung<' in page, hasattr(review, 'rungs')])
 
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)

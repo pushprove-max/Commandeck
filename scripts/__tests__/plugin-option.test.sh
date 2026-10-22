@@ -37,6 +37,11 @@ check "boolean: a /config false beats the project's true" "false|/config" "$(O p
 check "picker: the /config answer beats the project's" "low|/config" "$(O builderEffort)"
 check "number: the /config port beats the machine's" "8800|/config" "$(O dashboardPort)"
 check "the Builder's launch takes the /config effort" low "$(L 'pp_route_json builder | jq -r .effort')"
+# Issue 293: the model and effort pickers default to "project", which /config's dialog may save untouched; it is no
+# answer, so the project's saved one runs (a fixed "medium" there hid a Sonnet project's "high").
+conf '{"builderEffort": "project"}'
+check "picker: a /config 'project' is no answer, the project's saved one runs" "high|$P" "$(O builderEffort)"
+conf '{"builderEffort": "low", "dashboardPort": 8800}'
 check "a CLAUDE_CONFIG_DIR's settings file is the one read" "8795|machine" \
   "$(mkdir -p "$T/cd" && echo '{}' > "$T/cd/settings.json" && L "export CLAUDE_CONFIG_DIR=$T/cd"'; echo "$(pp_option dashboardPort)|$(pp_option dashboardPort source)"' | sed "s#|$M#|machine#")"
 
@@ -68,6 +73,10 @@ check "pre-fill writes the missing keys and keeps the owner's /config answer" '{
   "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$S")"
 check "and names the /config answer that beats this setup's" 1 "$(grep -c 'builderEffort is low in /config, which beats this answer (high)' <<<"$OUT")"
 check "another plugin's options stay as they were" '{"ponytail":true,"builderEffort":"max"}' "$(jq -c '.pluginConfigs["other@elsewhere"].options' "$S")"
+conf '{"builderEffort": "project", "builderModel": "project"}'
+OUT=$(L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\"}"')
+check "pre-fill writes setup's answer over a /config 'project', drops the other, and names no conflict" '{"builderEffort":"high"} 0' \
+  "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$S") $(grep -c 'in /config, which beats' <<<"$OUT")"
 echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/dev/null
 check "the plugin's key is the one it is enabled under" '{"ponytail":false}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
 check "and that is the one read" "false|/config" "$(O ponytail)"

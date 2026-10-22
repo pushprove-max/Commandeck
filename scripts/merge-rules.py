@@ -134,6 +134,8 @@ MADE_FROM = {
     # Details, the planning rule (issues 256, 257, 287), added work (issue 304) and the class stop (issue 303)
     "8e991ec1": ("93e2b611",), "31119f58": ("c3227972",), "3e6a70f8": ("57db6b3a",), "b1a45843": ("5f729572",),
     "45c2952e": ("deb6fc19",),
+    # 0.25.0 main-session.md: main-watch's merge gate (issue 254), the plan judge's GO (issue 306), the ceiling (issue 267)
+    "2bb3342e": ("f36e6d57",), "e2240999": ("3e6a70f8",), "3e156378": ("c539053c",),
 }
 
 

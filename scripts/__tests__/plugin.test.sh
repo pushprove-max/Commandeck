@@ -47,8 +47,8 @@ while IFS='|' read -r k d a; do
   [ "$a" != - ] || { check "option $k, which setup does not ask, has no default" "$d" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M")"; continue; }
   check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
 done <<'EOF'
-builderModel|"opus"|Ask "Builder model": Opus
-builderEffort|"medium"|Ask "Builder effort": Medium
+builderModel|"project"|Ask "Builder model": Opus
+builderEffort|"project"|Ask "Builder effort": Medium
 maxReviewRounds|"none"|Ask "Review rounds": No cap
 closingPass|true|Ask "Closing pass": Runs
 fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
@@ -60,8 +60,14 @@ dashboardPort|"none"|Ask "Dashboard": On, this machine only
 maxBuilders|"none"|-
 EOF
 check "the set is the ten options of the plan's question 9 and the Builder cap (issue 256)" 11 "$(jq '.userConfig | length' "$M")"
+# Issue 293: a Sonnet Builder ran at medium because setup recommended Medium whatever the model, and asked it three
+# questions later. The effort is asked right after the model, High recommended on Sonnet; the model and effort
+# options default to "project", no answer, which the /config dialog may save without hiding the project's answer.
+check "setup asks the Builder effort right after the model, High recommended on Sonnet" '1:1' \
+  "$(awk '/Ask "Builder model":/ {m = 1; next} m && /^ +Ask / {print ($0 ~ /Ask "Builder effort": Medium \(recommended\)/); exit}' "$REAL/skills/setup/SKILL.md"):$(grep -A1 -x '   On Sonnet:' "$REAL/skills/setup/SKILL.md" | grep -cxF '   Ask "Builder effort": High (recommended) | Low | Medium | Maximum')"
+# claude plugin validate refuses a picker with no default among its options.
 check "every picker's labels are 1 to 64 characters and hold its default" true \
-  "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and ($o.default == null or any($o.options[]; . == $o.default))] | all' "$M")"
+  "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and any($o.options[]; . == $o.default)] | all' "$M")"
 # An instruction file over 200 lines loads in every session and is followed less well (Claude Code's memory guide).
 # startup-size.sh holds the bytes the hooks print; global-claude.md and global-rules.md never pass through a hook.
 for t in AGENT_STARTUP main-session global-claude global-rules; do

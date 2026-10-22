@@ -31,7 +31,12 @@ handoff="$HOME/.claude/checkpoints/$sid.handoff"
 cp="$HOME/.claude/checkpoints/$sid.md"
 fresh=0
 [ -f "$cp" ] && [ "$(( $(date +%s) - $(stat -c %Y "$cp") ))" -lt 1800 ] && fresh=1
-echo "$(date +%FT%T) stop-hook: ctx=$ctx line=$LINE fresh=$fresh cp=$cp orca=$(command -v orca-ide || echo missing)" >> "$HOME/.claude/checkpoints/clear-hook.log"
+# Issue 283: the checkpoint's size against the 10,240-byte resume budget. Issue 300: minutes since this project's last
+# restart, from the newest resumed-from record of a session whose transcript sits beside this one.
+cp_bytes=$(wc -c < "$cp" 2>/dev/null | tr -d ' '); cp_bytes=${cp_bytes:-0}
+since=$(for f in "$HOME"/.claude/checkpoints/*.resumed-from; do s=${f##*/}; [ -e "${transcript%/*}/${s%.resumed-from}.jsonl" ] && stat -c %Y "$f"; done 2>/dev/null | sort -n | tail -1)
+since=${since:+$(( ($(date +%s) - since) / 60 ))}
+echo "$(date +%FT%T) stop-hook: ctx=$ctx line=$LINE fresh=$fresh cp=$cp cp_bytes=$cp_bytes$([ "$cp_bytes" -gt 10240 ] && echo ' over=1') since_restart_min=${since:--} orca=$(command -v orca-ide || echo missing)" >> "$HOME/.claude/checkpoints/clear-hook.log"
 # One restart per checkpoint write: the marker holds the checksum of the
 # checkpoint it restarted for, so a second write of the same path restarts again
 #. Content, not mtime: two writes in one second share an mtime. A pinned
@@ -45,24 +50,71 @@ if [ "$fresh" = 1 ] && [ -f "$cp.restarted" ] && [ "$(cksum < "$cp")" = "$(cat "
 fi
 # A resumed main keeps, or closes with a reason, every open item of the
 # checkpoint it resumed from: a restart that drops one loses that work
-# for good. Refused before anything is published or launched, and on every
-# stop of the chain, so stop_hook_active never lets a drop through.
+# for good. Checked before anything is published or launched. Issue 252: the
+# first stop blocks once, naming the count and the command that lists them (the
+# whole list on every block stranded main); the second stop of the chain copies
+# what is still missing into the checkpoint and restarts. An unreadable file of
+# the chain is a missing item of its own; an unreadable base or new checkpoint
+# (exit 2) is one item naming it, blocked and copied as the others are.
 anc="$HOME/.claude/checkpoints/$sid.resumed-from"
+CC="$(cd "$(dirname "$0")/../scripts" && pwd)/checkpoint-context.py"
 if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
   base=$(head -1 "$anc" 2>/dev/null)
-  if ! miss=$(python3 "$(dirname "$0")/../scripts/checkpoint-context.py" carry "$base" "$cp" 2>&1); then
-    echo "$(date +%FT%T) stop-hook: carry-over check failed for $cp against ${base:-<empty $anc>}" >> "$HOME/.claude/checkpoints/clear-hook.log"
+  miss=$(python3 "$CC" carry "$base" "$cp" 2>&1); rc=$?
+  if [ "$rc" = 2 ]; then
+    echo "$(date +%FT%T) stop-hook: carry-over check could not read the chain of $cp against ${base:-<empty $anc>}: $(head -1 <<<"$miss")" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    miss="- carry chain: $(head -1 <<<"$miss")"
+  fi
+  n=$(grep -c '^- ' <<<"$miss")
+  if [ "$rc" != 0 ] && [ "$active" != true ]; then
+    echo "$(date +%FT%T) stop-hook: carry-over check failed for $cp against ${base:-<empty $anc>}: $n items" >> "$HOME/.claude/checkpoints/clear-hook.log"
     HOOK_FIRE_BLOCK=1
-    jq -n --arg r "CARRY-OVER CHECK FAILED: $cp drops open work this session inherited from ${base:-<empty $anc>}. Keep each item below open in this checkpoint's own text (Waiting on, the unsaved rulings, Queue, or an unchecked or > Todo; a 'Carries open items of:' line keeps none), or add it verbatim under '## Closed since last checkpoint' with what closed it. Fix the checkpoint, then end the turn; main restarts once nothing is missing.
-$miss" '{decision:"block", reason:$r}'
+    first=$(grep -m1 '^- ' <<<"$miss"); first=${first#- }
+    head="CARRY-OVER: $n inherited open item$([ "$n" = 1 ] || echo s): "
+    tail=". List: python3 ${CC/#$HOME/\~} carry ${base/#$HOME/\~} ${cp/#$HOME/\~}. Restate or close each (Closed: one line per item, its own reason); then end the turn."
+    # The first item gets what is left under 400 bytes, at most 150 and at least 20 (a long install path takes the rest).
+    room=$((398 - ${#head} - ${#tail})); [ "$room" -le 150 ] || room=150; [ "$room" -ge 20 ] || room=20
+    jq -n --arg r "$head${first:0:room}$tail" '{decision:"block", reason:$r}'
+    exit 0
+  elif [ "$rc" != 0 ]; then
+    # Issue 281: under the one unresolved Queue heading, which a later restart reuses; awk reads the list from a file.
+    head='## Queue (left unresolved at the restart: restate or close each, one line per item, with its own reason)'
+    if grep '^- ' <<<"$miss" > "$cp.carry.$$" && awk -v list="$cp.carry.$$" -v head="$head" '
+        function dump(l) { while ((getline l < list) > 0) print l; done = 1 }
+        on && /^## / { dump(); on = 0 }
+        { print }
+        $0 == head { on = 1 }
+        END { if (on) dump(); else if (!done) { print ""; print head; dump() } }' "$cp" > "$cp.new.$$" && mv "$cp.new.$$" "$cp"; then
+      echo "$(date +%FT%T) stop-hook: $n items carried automatically into the checkpoint $cp" >> "$HOME/.claude/checkpoints/clear-hook.log"
+      rm -f "$cp.carry.$$"
+    else
+      rm -f "$cp.carry.$$" "$cp.new.$$"
+      echo "$(date +%FT%T) stop-hook: could not copy $n missing items into $cp; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+      echo "context-clear: could not copy $n missing items into $cp; main is not restarted" >&2
+      exit 0
+    fi
+  fi
+fi
+# Issue 283: what the ten-generation carry walk cuts is written beside the checkpoint before the restart, and the
+# resume names that file instead of loading it. Not listed or not written, main is not restarted: the items would be lost.
+if [ "$fresh" = 1 ]; then
+  if ! aged=$(python3 "$CC" aged "$cp"); then
+    echo "$(date +%FT%T) stop-hook: could not list the items $cp carries past ten generations; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    echo "context-clear: could not list the items $cp carries past ten generations; main is not restarted" >&2
+    exit 0
+  fi
+  if [ -n "$aged" ] && ! printf '%s\n' "$aged" > "$cp.aged-out.md"; then
+    echo "$(date +%FT%T) stop-hook: could not write $cp.aged-out.md; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    echo "context-clear: could not write $cp.aged-out.md; main is not restarted" >&2
     exit 0
   fi
 fi
 # In-harness background agents live in this pane and die with it: hold
 # the restart while any async launch has no task-notification yet, and let the
-# stop pass so their notifications wake main. Past the ceiling (under the 500K
-# auto-compact) a hung agent cannot hold main any longer: restart and name it.
-CEILING=${COMMANDECK_CLEAR_CEILING:-480000}
+# stop pass so their notifications wake main. Past the ceiling (under the
+# auto-compact point, lib/project.sh) a hung agent cannot hold main any longer: restart and name it.
+CEILING=$(pp_clear_ceiling 2>/dev/null) || CEILING=
+CEILING=${CEILING:-${COMMANDECK_CLEAR_CEILING:-480000}}   # the helper did not load
 # A launch is this pane's own only when it is the result of a tool call that
 # is not a shell command and its text opens with the launch line: main prints
 # Builders' session logs, and a launch quoted there is another pane's agent,
@@ -144,4 +196,4 @@ HOOK_FIRE_BLOCK=1
 # first cost 3.5 turns a block. Builtins only, read from the template itself.
 heads=""
 while IFS= read -r l; do [[ $l == '## '* ]] && heads+="${heads:+; }$l"; done < "$(dirname "$0")/../templates/checkpoint.md"
-jq -n --arg r "CONTEXT $((ctx / 1000))K is over the $((LINE / 1000))K line (or /handoff was run) and no checkpoint under 30 minutes old exists at $cp. Write it now with these headings, in order: ${heads:-see $(cd "$(dirname "$0")/../templates" && pwd)/checkpoint.md} -- do not Read the template; one Write, then end the turn: this hook restarts main in a fresh pane with the resume prompt itself." '{decision:"block", reason:$r}'
+jq -n --arg r "CONTEXT $((ctx / 1000))K is over the $((LINE / 1000))K line (or /handoff was run) and no checkpoint under 30 minutes old exists at $cp. Write it now with these headings, in order: ${heads:-see $(cd "$(dirname "$0")/../templates" && pwd)/checkpoint.md} Queue items start Q-<n> (the next free number, never reused). -- do not Read the template; one Write, then end the turn: this hook restarts main in a fresh pane with the resume prompt itself." '{decision:"block", reason:$r}'
