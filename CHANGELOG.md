@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.29.0 -- 2026-10-22
+
+- Every review finding, P0 to P3, blocks the merge and is fixed in the unit (#322). The P2 tail is gone: no
+  narrowed-pass acceptance, no "Open at merge:" lines, no issues filed at merge. A finding main cleared is handed to
+  the reviewer as out of scope; it never turns a NO-GO into a merge. A reviewer's GO that names any finding is a
+  NO-GO, and after any closing NO-GO the next `review` runs as the closing pass.
+- One finding rule for every reader: the merge gate, the hand-on to the next reviewer, the tests per finding and the
+  repeat-class stop all count a line with a P0-P3 level in any form, or a `(class:` tag with no level.
+- `merge-unit-local.sh` drops `--area`, `--milestone` and exit code 4, and `merge-queue.sh` no longer goes on past
+  an exit 4. `file-open-findings.sh` is removed.
+- The dashboard no longer shows findings open at a merge: a finished build has no "Open at merge" line or amber
+  Merge step, and the needs card no longer counts open P1s on finished builds.
+
 ## 0.28.0 -- 2026-10-22
 
 - Red proofs are retired (#323). The Builder brief template no longer orders them, `scripts/red-proof.sh` is gone,

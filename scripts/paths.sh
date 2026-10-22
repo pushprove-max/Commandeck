@@ -993,9 +993,6 @@ pp_merge_held() {
     "$PP_MAIN/.claude/metrics/decisions.jsonl" 2>/dev/null) && [ -n "$j" ] && { echo "open owner decision $j"; return 0; }
   return 1
 }
-# pp_go_rule <rule> -- the proof rules that merge with no owner's word: a GO, named outright. A P2 tail (issue 212), or
-# any rule not listed, is the owner's call.
-pp_go_rule() { case $1 in "closing GO"|"first-pass GO"|"no closing pass") return 0 ;; esac; return 1; }
 # pp_gate_key <unit> <worktree> -- what a kept merge-gate result stands for: the tip and the unit's round files, so a
 # new pass on an unchanged commit is checked again. main-watch.sh writes it, orca-wait.sh reads it.
 pp_gate_key() { echo "$(git -C "$2" rev-parse HEAD 2>/dev/null) $(cat "$2/.claude/briefs/$1"-r*-reports.md 2>/dev/null | cksum | tr ' ' :)"; }

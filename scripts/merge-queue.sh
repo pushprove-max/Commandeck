@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # merge-queue.sh [--train] <unit>[@<sha>] ... -- run merge-unit-local.sh for each unit in order,
 # one at a time, stopping at the first failure, merged (a step after its commit
-# failed) or not. Exit 4: every unit merged, and one or more could not file an
-# issue for a finding left open. <unit>@<sha> merges with --auto <sha>: only while
+# failed) or not. <unit>@<sha> merges with --auto <sha>: only while
 # the unit's tip is still the commit its gate passed.
 # --train (issue 307): every unit given as <unit>@<sha>. A unit whose dry run refuses
 # leaves the train. The rest are squashed in order on a scratch copy of main, the
@@ -35,7 +34,7 @@ if pp_main_foreground; then
   pp_detach "$PP_SCRATCH/merge-queue.log" "merge-queue.sh $*" bash "$0" "$@"; exit
 fi
 export COMMANDECK_FOREGROUND=1
-UNFILED=0 LATE=0
+LATE=0
 
 queue() { # <unit>[@<sha>] ...: merge each in order; returns 1 at the first that did not merge cleanly
   local arg unit log rc
@@ -50,17 +49,11 @@ queue() { # <unit>[@<sha>] ...: merge each in order; returns 1 at the first that
       echo "merge-queue: $unit MERGED, but a step after the merge commit failed or was refused (exit $rc); finish it by hand, do not merge it again; the train goes on; log: $log" >&2
       tail -n 3 "$log" >&2; LATE=1; continue
     fi
-    if [ "$rc" != 0 ] && [ "$rc" != 4 ]; then
+    if [ "$rc" != 0 ]; then
       if [ "$rc" = 3 ] || [ "$rc" = 5 ]; then echo "merge-queue: STOPPED at $unit (MERGED, but a step after the merge commit failed or was refused; finish it by hand, do not merge it again); log: $log" >&2
       else echo "merge-queue: STOPPED at $unit (not merged); log: $log" >&2; fi
       tail -n 3 "$log" >&2
       return 1
-    fi
-    # 4 is a unit that merged and could not file an issue for a finding left open: the queue goes on.
-    if [ "$rc" = 4 ]; then
-      UNFILED=4
-      echo "merge-queue: $unit merged; $(grep -c '^NOT FILED: ' "$log") finding(s) NOT FILED as issues, the command that files them is in $log" >&2
-      continue
     fi
     echo "merge-queue: $unit merged; $(tail -n 1 "$log" | cut -c1-160)"
   done
@@ -104,7 +97,7 @@ if [ "$TRAIN" = 1 ]; then
     queue "$@" || exit 1
     echo "merge-queue: all $N unit(s) in the train merged"
     [ "$LATE$DROPPED" = 00 ] || exit 1
-    exit "$UNFILED"
+    exit 0
   fi
   # Red: the first k whose combined tip is red. LO is green (0, main itself), HI red.
   LO=0 HI=$N
@@ -120,4 +113,3 @@ fi
 
 queue "$@" || exit 1
 echo "merge-queue: all $# unit(s) merged"
-exit "$UNFILED"

@@ -7,8 +7,8 @@
 # The dashboard's review panels read what a unit's review loop cost and how it ended long after its worktree, round
 # files and panes are gone; seat-events.jsonl holds what each seat spent, never how the loop ended. The merge passes
 # the outcome, read from the round files it already checks: UNIT_LEDGER_MERGE_SHA, UNIT_LEDGER_VERDICT,
-# UNIT_LEDGER_ROUNDS, UNIT_LEDGER_GO_ROUNDS, UNIT_LEDGER_NO_GO_ROUNDS, UNIT_LEDGER_MERGE_RULE, UNIT_LEDGER_MERGE_OPEN
-# and UNIT_LEDGER_MERGE_ISSUES (issue numbers apart by a blank). Seats are the unit's seat-events.jsonl rows; tokens
+# UNIT_LEDGER_ROUNDS, UNIT_LEDGER_GO_ROUNDS, UNIT_LEDGER_NO_GO_ROUNDS, and
+# UNIT_LEDGER_MERGE_RULE. Seats are the unit's seat-events.jsonl rows; tokens
 # are the unit's Claude transcripts, from its first launch on (seat-event.sh --usage); Codex passes are not in them.
 # A metric with no source is null and named in gaps, never 0. findings and fixRounds always are: the plugin keeps
 # no per-round finding counts, and its Builder fixes its own rounds, with no fixer seat to count.
@@ -68,8 +68,7 @@ done
 MERGED=$([ -z "$SHA" ] || git -C "$PP_MAIN" show -s --format=%ct "$SHA" 2>/dev/null)
 ROW=$(jq -Rnc --arg unit "$UNIT" --arg sha "$SHA" --arg verdict "$VERDICT" --arg merged "$MERGED" --arg first "$FIRST" \
   --arg rounds "${UNIT_LEDGER_ROUNDS:-}" --arg go "${UNIT_LEDGER_GO_ROUNDS:-}" --arg nogo "${UNIT_LEDGER_NO_GO_ROUNDS:-}" \
-  --arg rule "${UNIT_LEDGER_MERGE_RULE:-}" --arg open "${UNIT_LEDGER_MERGE_OPEN:-}" \
-  --arg issues "${UNIT_LEDGER_MERGE_ISSUES-}" --arg issuesSet "${UNIT_LEDGER_MERGE_ISSUES+1}" --argjson tokens "$TOKENS" --arg at "$NOW" '
+  --arg rule "${UNIT_LEDGER_MERGE_RULE:-}" --argjson tokens "$TOKENS" --arg at "$NOW" '
   def n: if test("^[0-9]+$") then tonumber else null end;
   def s: if . == "" then null else . end;
   [inputs | fromjson? // empty | select(.unit == $unit)] as $ev | ($merged | n) as $m | ($first | n) as $f
@@ -77,8 +76,7 @@ ROW=$(jq -Rnc --arg unit "$UNIT" --arg sha "$SHA" --arg verdict "$VERDICT" --arg
      firstDispatchAt: ($f | if . then todate else null end),
      wallHours: (if $m and $f then (($m - $f) / 360 | round) / 10 else null end),
      rounds: ($rounds | n), goRounds: ($go | n), noGoRounds: ($nogo | n), fixRounds: null, verdict: ($verdict | s),
-     mergeRule: ($rule | s), mergeOpen: ($open | n),
-     mergeIssues: (if $issuesSet == "" then null else [$issues | splits(" +") | n | numbers] end),
+     mergeRule: ($rule | s),
      findings: null, expensivePasses: null,
      seats: [$ev[] | {round, role, model, tokens: (if .tokens then (.tokens.input // 0) + (.tokens.output // 0) else null end)}
        + (if .tokensReason then {tokensReason} else {} end)],

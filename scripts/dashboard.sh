@@ -438,8 +438,7 @@ finished_builds() {
   [ -f "$f" ] && [ -r "$f" ] || { echo null; return 0; }
   out=$(jq -cR --arg main "$(cd "$PP_MAIN" && pwd -P)" 'fromjson? | objects | select(.main == $main
         and (.unit | type) == "string" and (.unit | test("^[A-Za-z0-9._-]+$")) and (.sha | type) == "string" and (.sha | test("^[0-9a-f]{40,64}$")))
-      | {unit, how: (.how | strings // null), at: (.at | strings // null), sha,
-         open: (if (.open | type) == "object" then (.open | {P1, P2, P3} | map_values(numbers // null)) else null end)}' \
+      | {unit, how: (.how | strings // null), at: (.at | strings // null), sha}' \
       "$f" 2>/dev/null \
     | jq -cs 'reduce .[] as $r ({}; .[$r.unit] = $r) | [.[]] | sort_by(.at) | reverse | .[:100]' 2>/dev/null) || out=
   echo "${out:-[]}"

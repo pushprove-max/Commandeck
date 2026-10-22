@@ -784,7 +784,8 @@ digest() { printf '%s %s\n' "$NOW" "$1" >> "$ST/digest"; }
 # merged; merge_collect reports how its merge ends. 1: WHY says why it is not merged. A held unit (`Merge: hold` in
 # its brief, or an owner decision open on it) runs no gate, and its why starts "held:".
 # --verify runs once per tip and set of round files (pp_gate_key): its key, exit, rule and line are kept in
-# gate-<unit>, which orca-wait.sh reads (issue 306 R11). The rule has a line of its own: the shown line is cut.
+# gate-<unit>, which orca-wait.sh reads (issue 306 R11). The rule has a line of its own, kept for the file's layout
+# and no longer read: every rule --verify passes is a GO.
 gate() {
   local u=$1 w=$2 tip key f=$ST/gate-$1 rc rule out
   WHY=$(pp_merge_held "$u" "$w") && { WHY="held: $WHY"; return 1; }
@@ -798,17 +799,15 @@ gate() {
     [ "$rc" = 0 ] && out=$(grep -m1 '^Builder proof' <<<"$out") || out=$(grep . <<<"$out" | tail -1)
     printf '%s\n%s\n%s\n%s\n' "$key" "$rc" "$rule" "$(cut -c1-300 <<<"$out")" > "$f"
   fi
-  rc=$(sed -n 2p "$f"); rule=$(sed -n 3p "$f"); out=$(sed -n 4p "$f")
+  rc=$(sed -n 2p "$f"); out=$(sed -n 4p "$f")
   [ "$rc" = 0 ] || { WHY=${out:-the merge check refused it and gave no reason}; return 1; }
-  # A GO only, named outright: the P2 tail merges on the owner's word (issue 212), and so does a rule not known here.
-  pp_go_rule "$rule" || { WHY="its proof's rule is ${rule:-not named} (P2/P3 left open, or not a GO): merging it is the owner's call"; return 1; }
   MERGE+=("$u@$tip")
 }
 
 # merge_collect -- how each merge job ended, read from its records every tick and not through the unit's seat: a
 # landed merge removes the worktree, and the seat with it. A unit that landed is posted to main once (issue 318: a
 # landed merge is actionable), and has one digest line. One that did not, that landed with a
-# later step failed or a finding not filed, or whose job died with no exit, is posted to main.
+# later step failed, or whose job died with no exit, is posted to main.
 merge_collect() {
   local r u tip log rc pid landed
   for r in "$ST"/merge-*; do
@@ -823,8 +822,7 @@ merge_collect() {
       post "merge-$u-$tip" "" "main-watch: the merge job for $u ended with no exit; it may have merged part way" \
         "The merge of $u at ${tip:0:8} stopped before it wrote its exit (log $log). Look for $u in main's log first; merge it by hand only if it is not there: $HERE/merge-unit-local.sh $u" once
     # The unit name is matched as written: in a pattern, a.b would also match axb's line.
-    elif ! landed=$(awk -v p="merge-queue: $u merged; " 'index($0, p) == 1 { print substr($0, length(p) + 1); n++ } END { exit !n }' "$log") \
-      || grep -q '^[0-9]* finding(s) NOT FILED' <<<"$landed"; then
+    elif ! landed=$(awk -v p="merge-queue: $u merged; " 'index($0, p) == 1 { print substr($0, length(p) + 1); n++ } END { exit !n }' "$log"); then
       post "merge-$u-$tip" "" "main-watch: the merge of $u did not land cleanly (exit $rc); log $log" \
         "$(grep '^merge-queue: ' "$log" | grep -wF -- "$u" | tail -n 3)"$'\n'"Read the log and finish it by hand: $log" once
     # Told once flush recorded the post: a refused send posts again next tick. The digest line is written once.

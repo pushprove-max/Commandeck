@@ -52,8 +52,7 @@ check "a red suite: the round file ends NO-GO and names the failing test, though
 check "and --verify refuses the reviewer's GO on that red run" 2 "$(verify)"
 cfg 'del(.fullSuiteBeforeFinal)'
 
-# Issue 225: each finding carries a class tag, and main's "Cleared findings" names a finding by its title and place
-# alone: a tagged P1 main cleared blocks nothing, so the closing pass's P2 tail still merges.
+# Issue 225: each finding carries a class tag, the same tag for the same kind in every pass.
 check "the pass prompt asks for each finding's class" 1 "$(grep -c '\[P<0-3>\] (class: <tag>) <title>' "$B/$U-r14-prompt-1.md")"
 
 

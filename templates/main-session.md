@@ -29,7 +29,7 @@
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
   included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
 - **main-watch merges a unit whose DONE passes its gate**; offer a merge only for one it held or refused. A build
-  whose last pass ended NO-GO merges only on the owner's word, even under the P2-tail rule.
+  whose last pass ended NO-GO never merges: it gets a fix round.
 - **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
   needs the detail.
 - **Also standing (Details)**: heads-up items, stated limits, checklist, announcements, re-asks, helpers, effort, tooling.
@@ -100,8 +100,8 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   pane takes the work from a hand-off that stands alone. Added scope after the first review pass is a follow-up
   unit; file it, or pass `--small --reason '<one line>'` for a change under about 50 lines.
 - Two NO-GOs in a row on one finding class (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next line names
-  it): no third fix round. Ask the owner one class-level question, or merge and file the rest of the class as one
-  issue. A fix-round brief lists every variant of the class it fixes. The class fix has one retry path that does
+  it): no third fix round. Ask the owner one class-level question; the class is fixed in the unit, never merged and
+  filed. A fix-round brief lists every variant of the class it fixes. The class fix has one retry path that does
   not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and
   shows the retry still happens.
 - Pickers: before a picker, search the rulings log (`~/.claude/rulings/<project>.jsonl`) for its topic and answer

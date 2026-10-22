@@ -510,6 +510,19 @@ test("a finished build keeps the cost it had at its merge; one with none kept sa
   assert.equal(b.querySelector('table.costs'), null);
 });
 
+// Issue 322: every finding blocks the merge, so nothing is open at a merge and the merge records no open counts.
+// A finished build names no open findings, not even "not recorded", and an older record's counts are not shown.
+test('a finished build names no findings open at its merge, from a record with counts or without', () => {
+  const w = fresh(Fixed);
+  const fin = (unit, sha, open) => ({ unit, sha, at: iso(ago(5)), how: 'merged', ...(open && { open }), cost: null });
+  show(w, { units: { inFlight: [], finishedBuilds: [fin('done-a', 'aaaaaaaa1'), fin('done-b', 'bbbbbbbb2', { P1: 1, P2: 2, P3: 0 })] } });
+  for (const b of w.document.querySelectorAll('#builds .build')) {
+    assert.doesNotMatch(text(b), /open at merge|open findings|nothing open|P2 2/i, `${b.dataset.unit} names no open findings`);
+    assert.equal(b.querySelector('.warn'), null, `${b.dataset.unit}: its Merge step is not amber`);
+  }
+  assert.doesNotMatch(text(w.document.getElementById('needs-facts')), /on finished builds/, 'no open P1 count from finished builds');
+});
+
 // The helper rows took most of a card. The card keeps its Stage band and the stages'
 // time and cost in view, and a closed Details holds the activity: the last sign, each helper run and the clock.
 test('a unit card keeps Stage and its figures in view and folds the activity rows behind a closed Details', () => {

@@ -35,5 +35,12 @@ echo "$CFG" > "$REPO/.claude/commandeck.json"
 mk rg; closed rg; on_main break.txt x; : > "$TMP/check-calls"
 check "main added a file the check command names: the run is not reused, the check runs and refuses" "1 1" "$(merge rg) $(runs)"
 git -C "$REPO" rm -q break.txt; git -C "$REPO" commit -qm "main: no break.txt"
+# Every finding blocks the merge, so no merge ends "merged with findings left to file": any exit but 0, 3 and 5 is a
+# unit that did not merge, and the queue stops there instead of merging the units after it.
+QP=$TMP/queue-plugin; mkdir -p "$QP"; cp -R "$REAL/scripts" "$REAL/config" "$QP/"
+printf '#!/usr/bin/env bash\necho "$1" >> "%s/queue-log"\n[ "$1" != first ] || exit 4\n' "$TMP" > "$QP/scripts/merge-unit-local.sh"
+OUT=$(cd "$REPO" && bash "$QP/scripts/merge-queue.sh" first second 2>&1); RC=$?
+check "a merge that exits 4 stops the queue, not merged, and the next unit never runs" "1 1 0 0" \
+  "$RC $(grep -c 'STOPPED at first (not merged)' <<<"$OUT") $(grep -c 'NOT FILED' <<<"$OUT") $(grep -cx second "$TMP/queue-log")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

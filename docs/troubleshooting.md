@@ -15,7 +15,7 @@ worked.
 | Claude-only review cannot start | Check that the configured Claude reviewer role is usable and Claude is available. If you changed the Builder to Sonnet, choose a different reviewer family yourself. |
 | Merge refuses proof | Review the current tip again as directed. Missing reviewer sessions or saved prompts cannot be replaced by typing GO into a round file. |
 | Merge check is red | Fix the reported failure in the Builder. The squash is undone; rerun review if the code changes. |
-| Merge exits 3 or 4 | The commit already exists. Finish cleanup for 3; file the missing issues using the printed command for 4. |
+| Merge exits 3 | The commit already exists. Finish cleanup by hand. |
 | Dashboard is missing or stale | Check its status and job file, its registered GitHub origin, GitHub sign-in, and each source's error/freshness. A slow collector adds time to the 60-second sleep. |
 | Dashboard returns 403 | Open its own page at the loopback address, or use a configured network name/IP. Cross-site requests are refused. |
 | Relay is silent | Check the stored relay name, project run, all four watchers and `cos-check.sh`. FYI notes wait for a waking message. |

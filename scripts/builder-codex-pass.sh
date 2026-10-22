@@ -23,11 +23,11 @@
 #     the same commit. A first pass of one reviewer counts only where the size
 #     rule allowed it: the merge counts the commit that pass read itself
 #     (build_size).
-#     One more tip merges, the P2 tail: the last closing pass ended NO-GO on
-#     P2/P3 only and narrowed passes read every commit after it, the last one
-#     named in the round file and bound to <tip>; or no commit came after that
-#     closing pass and it is itself bound to <tip>. The proof's first line ends
-#     with the rule: closing GO, first-pass GO or P2 tail.
+#     Every finding, P0 to P3, blocks the merge: the pass under merge ends GO
+#     and names none. With no closing pass (reviewLoop.closingPass no), a
+#     narrowed pass's GO merges when narrowed passes read every commit after
+#     the last first pass. The proof's first line ends with the rule: closing
+#     GO, first-pass GO or no closing pass.
 #     Each pass lists, in its prompt, every earlier pass the reviewer's session
 #     files held for the worktree at its launch (session, end time, findings);
 #     the merge takes a GO only while that list is still exactly the record, so
@@ -99,7 +99,7 @@ pass_waits() {
 # asks for JSON against a schema only that plugin's own review command
 # attaches; FORMAT replaces that block's content, so the prompt carries one
 # output instruction, and every other block goes out as the plugin wrote it.
-FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. P0-P2 block the merge; P3 is a nit. Your last line must be exactly VERDICT: GO when no finding is P0-P2, otherwise exactly VERDICT: NO-GO.'
+FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. Every finding, P0 to P3, blocks the merge. Your last line must be exactly VERDICT: GO when you list no finding, otherwise exactly VERDICT: NO-GO. A GO reply names no level, P0 to P3, anywhere.'
 # A pass is proved by this prompt, whole. A build whose earlier passes were sent another
 # (the plugin was updated mid-build) is refused, and the refusal ends with the one way on.
 UPDATED='If the plugin was updated during this build, its earlier passes were sent the earlier prompt and count no longer: move the build to a new unit (a new worktree made from this branch) and review that from pass 1'
@@ -156,9 +156,11 @@ EARLIER_END='End of the earlier passes.'
 SAME_CLASS='A finding of the same kind of input in the same function as an earlier one keeps that finding'"'"'s class tag.'
 # Issue 265: a fix round changed a behaviour the owner still had an open question on.
 HOLD_HEAD='The owner'"'"'s decisions that name this unit. A finding on a behaviour an open question below covers ends its title with [HOLD <id>]: the author sends it to main and does not fix it:'
-# A finding line, and a blocker's, in a reviewer's reply.
-FINDING='^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' BLOCKER='^[[:space:]]*([-*][[:space:]]*)?\[P[01]\]'
-LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is reported as P3 "inside a stated limit", never P0 to P2:'
+# A finding line in a reviewer's reply: a level token or a class tag on any line but the verdict. The owner chose
+# a fixed rule over a Markdown parser, since each parser missed a new wrap; one copy, read as ERE and as Python re: the gate,
+# the hand-on to the next reviewer and the tests per finding all count the same lines.
+FINDING='(^|[^A-Za-z0-9])P[0-3]([^0-9]|$)|\(class:'
+LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is not a finding: do not list it:'
 DEFERRED_HEAD='Known and deferred to main: each item below needs main'"'"'s own hands (a settings file entry, a file only main edits), and main has it. Do not report a listed item again. Report anything else, a new defect in the same file included, and report a listed item that this branch could fix itself, since that is not main-only:'
 # The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
 # "Other cases checked r<N>: <which>": a fix other than the one a finding named, and the
@@ -173,15 +175,15 @@ DIFF_HARD=${COMMANDECK_PASS_DIFF_HARD:-900000}
 # names, print the verdict line, then
 # "<full|fix|final> <k> <n> <round> <began> <ended> <read> <since> <said>" (the pass's kind, reviewer
 # k of n, its round, when the record says the turn began and ended, "-" when it does not, and
-# the three parts the P2 tail rule follows), then the final
+# the three parts the no-closing-pass chain follows), then the final
 # reply without its verdict; refuse (exit 2) when the session does not bind them.
 # The pass waits: Codex flushes task_complete about a second after the companion returns.
 # The prompt is checked against this script's own text only: the merge
 # reads no plugin file, so a plugin update after a pass does not undo the pass.
 session_proof() {
-  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
+  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$FINDING" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
 import glob, json, os, re, subprocess, sys, time
-by, tid, wt, sha, wait, home, head_full, head_fix, head_final, block, updated, *fixed = sys.argv[1:]
+by, tid, wt, sha, wait, home, head_full, head_fix, head_final, block, updated, finding, *fixed = sys.argv[1:]
 name, where = ("Claude session", "projects") if by == "claude" else ("Codex thread", "sessions")
 def die(msg):
     print(f"REFUSED: {msg}", file=sys.stderr)
@@ -305,19 +307,23 @@ lines = (reply or "").strip().splitlines()
 if not lines or lines[-1].strip() not in ("VERDICT: GO", "VERDICT: NO-GO"):
     if not earlier:
         die(f"the final reply of {name} {tid} does not end with a VERDICT line")
-    # Its findings still count; only its verdict is missing, and only the P2 tail rule asks an earlier pass for one.
+    # Its findings still count; only its verdict is missing, and only the no-closing-pass chain asks an earlier pass for one.
     lines.append("VERDICT: NO-GO")
     said = "none"
 else:
     said = ""
 verdict = lines[-1].strip()
-# A GO beside a blocking finding is not a GO.
-if any(re.match(r"\s*([-*]\s*)?\[P[0-2]\]", l) for l in lines):
+# Markdown around or inside a severity tag (**[P3]**, `[P2]`, [__P2__]) comes off here, and any list mark (+, *, 1.)
+# reads "- ", so every reader of the report sees "- [P3]". The gate below does not depend on it.
+lines = [re.sub(r"^(\s*)((?:[-*+]|\d+[.)])\s+)?[*_`]*\[[*_`]*(P[0-3])[*_`]*\][*_`]*",
+                lambda m: f"{m[1]}{'- ' if m[2] else ''}[{m[3]}]", l) for l in lines]
+# A GO beside any finding is not a GO: every finding, P0 to P3, blocks the merge.
+if any(re.search(finding, l) for l in lines[:-1]):
     verdict = "VERDICT: NO-GO"
 said = said or verdict[9:]
 print(verdict)
 stamp = lambda t: t if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z", t) else "-"
-# What the P2 tail rule follows: the commit Codex says it read, where a narrowed pass's
+# What the no-closing-pass chain follows: the commit Codex says it read, where a narrowed pass's
 # range began ("whole" for a whole-branch pass), and the verdict as the reply gave it. "?" is
 # a part the record does not hold; only that rule refuses on one.
 sha_of = lambda t: t if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", t or "") else "?"
@@ -510,7 +516,8 @@ earlier_passes() {
     [ "$rc" = 0 ] && [ -n "$line" ] && [[ "$line " != *' - '* ]] \
       || die "the record of an earlier pass of this worktree ($NAME $tid) cannot be read in full, so what it found cannot be handed on or checked. $UPDATED"
     echo "@ $tid $line"
-    sed 1,2d <<<"$proof" | grep -E '^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' || true
+    # A finding line that opens with "@" is escaped, so it never reads as the record of a pass.
+    sed 1,2d <<<"$proof" | { grep -E "$FINDING" || true; } | sed 's/^\([[:space:]]*\)@/\1\\@/'
   done <<<"$tids"
 }
 
@@ -530,46 +537,23 @@ if [ "${1:-}" = --verify ]; then
   [ "$BY" = "$(pp_pass)" ] || die "${LAST##*/} is a $BY pass, and codexReviewerAgent in /plugin config reviews with $(pp_pass)"
   # No commit subject is exempt: a commit after the review is unreviewed whatever it is called.
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
-  SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
-  # A finding main ruled out is named under "Cleared findings" in main's rulings file by its own first two parts,
-  # "<title> -- <file>:<line>" (a finding's class tag is not part of it): it then blocks nothing and is not open at merge, and the proof prints it as cleared.
-  # Read from main's checkout only, as the limits are: the Builder can write the worktree's copy.
+  SEEN="" OF="" WHAT="" RULE="" STEPS=""
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
-  export PP_CLEARED; PP_CLEARED=$(awk 'on && /^#/ { on = 0 } on && NF { sub(/^[[:space:]]*[-*][[:space:]]*/, ""); sub(/^\[P[0-3]\][[:space:]]*/, ""); sub(/^\(class: [^)]*\)[[:space:]]*/, ""); print }
-    /^#+ Cleared findings/ { on = 1 }' "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null || true)
-  CLEARED=$(mktemp) || die "cannot make a temp file"; trap 'rm -f "$CLEARED"' EXIT
-  # uncleared -- the finding lines on stdin less those main's ruling clears, which go to $CLEARED.
-  uncleared() { awk -v out="$CLEARED" 'BEGIN { n = split(ENVIRON["PP_CLEARED"], c, "\n"); for (i = 1; i <= n; i++) want[c[i]] = 1 }
-    { s = $0; sub(/^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\][[:space:]]*/, "", s); sub(/^\(class: [^)]*\)[[:space:]]*/, "", s); split(s, f, " -- ")
-      if ((f[1] " -- " f[2]) in want) { sub(/^[[:space:]]*/, ""); print "Cleared by main'\''s ruling: " $0 >> out } else print }'; }
-  cleared() { [ ! -s "$CLEARED" ] || awk '!seen[$0]++' "$CLEARED"; }
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
     read -r READ K OF_THIS OF_ROUND BEGAN _ WAS_READ SINCE _ <<<"$(sed -n 2p <<<"$PROOF")"
-    # A narrowed pass or the closing pass may end NO-GO and still merge: the P2 tail rule weighs what it found.
-    [ "$READ" = fix ] || [ "$READ" = final ] || [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO"
+    # Every finding, P0 to P3, blocks the merge, and session_proof reads a GO beside any finding as NO-GO.
+    # A finding main cleared is handed to the next reviewer as out of scope; it never turns a NO-GO into a merge.
+    [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: every finding, P0 to P3, blocks the merge, and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
     case $READ in
-      final) NOW="closing pass" RULE="closing GO"
-        # session_proof has just bound this pass to the tip, so nothing was committed after it and
-        # there is no fix for a narrowed pass to read. What it left open is weighed here, as a narrowed pass's is.
-        ALL=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); FOUND=$(uncleared <<<"$ALL")
-        # A passing whole-branch pass may still name a finding; it is open at merge like any other.
-        if [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ]; then LEFT+=${FOUND:+$FOUND$'\n'}
-        else
-          ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}), the closing pass, found a P0 or P1: only a closing pass that left P2 and P3 alone merges without a GO. Fix it, then run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
-          [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}), the closing pass, ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
-          RULE="P2 tail" LEFT+=${FOUND:+$FOUND$'\n'}
-        fi ;;
+      # session_proof has just bound this pass to the tip, so nothing was committed after it.
+      final) NOW="closing pass" RULE="closing GO" ;;
       # session_proof has just bound this GO to the tip, so a closing pass would read the same commit again.
-      full) NOW="first pass" RULE="first-pass GO"
-        FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" | uncleared || true); LEFT+=${FOUND:+$FOUND$'\n'} ;;
-      fix) NOW="narrowed pass" RULE="P2 tail"
-        ALL=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); FOUND=$(uncleared <<<"$ALL")
-        ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}) found a P0 or P1: only a tail of P2 and P3 merges without a closing GO. Fix it, then run the closing pass: builder-codex-pass.sh $UNIT <N> final"
-        [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || NOT_GO=1
-        [ -z "$NOT_GO" ] || [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
-        LEFT+=${FOUND:+$FOUND$'\n'} STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
+      full) NOW="first pass" RULE="first-pass GO" ;;
+      fix) NOW="narrowed pass" RULE="no closing pass"
+        [ "$CLOSING" = no ] || die "${LAST##*/} is a narrowed pass: it read only the changes since the pass before it, and a narrowed pass's GO merges nothing. Run the closing pass: builder-codex-pass.sh $UNIT <N> final"
+        STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
       *) die "$NAME $TID (${LAST##*/}) is not a pass of builder-codex-pass.sh" ;;
     esac
     # The round file is the Builder's to edit: a thread of another round, GO there, proves nothing about this one.
@@ -631,74 +615,36 @@ if [ "${1:-}" = --verify ]; then
         || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
     done
   fi
-  if [ "$RULE" = "P2 tail" ] && [ "$WHAT" = "closing pass" ]; then
-    # The tail with nothing after it: the closing pass under merge is the last word on the
-    # whole branch, checked above like a closing GO, and every finding it left is printed as open.
-    echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $(paste -sd' ' - <<<"$TIDS")) left P2/P3 only and no commit came after it, in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
-    sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT"
-    [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
-    cleared; exit 0
-  fi
-  if [ "$RULE" = "P2 tail" ]; then
-    # The P2 tail rule: the last closing pass ended NO-GO on P2/P3
-    # only, and narrowed passes read every commit after it up to the tip. All of
-    # it is read from the reviewer's records: the commit each pass read, where each
-    # narrowed range began, and the findings in each reply. Any other state
-    # with no closing GO refuses.
-    # shortcut: a P0 or P1 a reviewer states only in prose, with no "[P1]" finding line, is not read; the pass prompt demands the line.
-    AGAIN="Run the closing pass: builder-codex-pass.sh $UNIT <N> final"
-    found_by() { awk -v t="$1" '$1 == "@" { on = ($2 == t); next } on' <<<"$PASSES"; }
-    read -r C_ENDED C_TID COVERED C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $9, $11 }' <<<"$PASSES" | sort | tail -1)"
-    ANCHOR="closing pass" NOCLOSE=""
-    if [ -z "${C_TID:-}" ] && [ "$CLOSING" = no ]; then
-      # The owner chose no closing pass at setup: the last first pass anchors the chain instead, and
-      # the narrowed pass under merge must end GO. It was handed every earlier finding (checked above),
-      # so a P0 or P1 an earlier narrowed pass found is cleared by its GO, as a closing GO clears one.
-      ANCHOR="first pass" NOCLOSE=1 AGAIN="Fix it, then run another narrowed pass: builder-codex-pass.sh $UNIT <N> review"
-      [ -z "$NOT_GO" ] || die "${LAST##*/} ended NO-GO, and this project runs no closing pass (reviewLoop.closingPass): only a narrowed pass that ends GO merges. $AGAIN"
-      read -r C_ENDED C_TID COVERED _ <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9 }' <<<"$PASSES" | sort | tail -1)"
-    else
-      [ -n "${C_TID:-}" ] || die "${LAST##*/} is a narrowed pass with no closing pass before it: it read only the changes since the pass before it, and its GO merges nothing. $AGAIN"
-      [ "$C_SAID" != none ] || die "the reviewer's record of the closing pass (thread $C_TID) holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
-      [ "$C_SAID" = NO-GO ] || die "the closing pass ($NAME $C_TID) ended GO and commits came after it: a narrowed pass over them merges nothing. $AGAIN"
-      ALL=$(found_by "$C_TID"); FOUND=$(uncleared <<<"$ALL")
-      [ -n "$ALL" ] || die "the closing pass ($NAME $C_TID) ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. $AGAIN"
-      ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the closing pass ($NAME $C_TID) found a P0 or P1: only a closing pass that left P2 and P3 alone can be followed by narrowed passes. $AGAIN"
-    fi
-    # Each pass after the closing one, oldest first, then the pass under merge.
+  if [ "$RULE" = "no closing pass" ]; then
+    # The owner chose no closing pass at setup: the last first pass anchors the chain, and
+    # narrowed passes read every commit after it up to the tip, the one under merge ending GO.
+    # It was handed every earlier finding (checked above), so its GO is the last word on them.
+    # All of it is read from the reviewer's records: the commit each pass read and where each narrowed range began.
+    AGAIN="Fix it, then run another narrowed pass: builder-codex-pass.sh $UNIT <N> review"
+    read -r C_ENDED C_TID COVERED _ <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9 }' <<<"$PASSES" | sort | tail -1)"
+    # Each pass after the first one, oldest first, then the pass under merge.
     AFTER=$(awk -v c="$C_ENDED" '$1 == "@" && $8 > c { print $8, $2, $3, $9, $10, $11 }' <<<"$PASSES" | sort)
     while read -r _ TID READ WAS_READ SINCE SAID; do
       [ -n "$TID" ] || continue
-      [ "$READ" = fix ] || die "a whole-branch pass ($NAME $TID) ran after the $ANCHOR $C_TID and is not the pass under merge. $AGAIN"
+      [ "$READ" = fix ] || die "a whole-branch pass ($NAME $TID) ran after the first pass $C_TID and is not the pass under merge. $AGAIN"
       [ "$SAID" != none ] || die "the reviewer's record of the narrowed pass $TID holds no verdict, so what it found cannot be trusted as all of it. $AGAIN"
-      ALL=$(found_by "$TID"); FOUND=$(uncleared <<<"$ALL")
-      [ -n "$NOCLOSE" ] || ! grep -qE "$BLOCKER" <<<"$FOUND" || die "the narrowed pass $TID, after the closing pass $C_TID, found a P0 or P1: a later narrowed GO does not clear it. $AGAIN"
-      [ "$SAID" = GO ] || [ -n "$ALL" ] || die "the narrowed pass $TID ended NO-GO and names no finding with a severity, so what it left open cannot be read. $AGAIN"
+      [ "$SAID" = GO ] || awk -v t="$TID" '$1 == "@" { on = ($2 == t); next } on { found = 1 } END { exit !found }' <<<"$PASSES" \
+        || die "the narrowed pass $TID ended NO-GO and names no finding with a severity, so what it found was not handed on. $AGAIN"
       STEPS="$TID $WAS_READ $SINCE"$'\n'$STEPS
     done <<<"$(sort -r <<<"$AFTER")"
     while read -r TID WAS_READ SINCE; do
       [ -n "$TID" ] || continue
       # A narrowed range may start at or before the last commit read, never after it, and must end at or after it.
       git -C "$WT" merge-base --is-ancestor "$SINCE" "$COVERED" 2>/dev/null && git -C "$WT" merge-base --is-ancestor "$COVERED" "$WAS_READ" 2>/dev/null \
-        || die "no pass read the commits between $COVERED and where the narrowed pass $TID began ($SINCE): every commit after the $ANCHOR $C_TID must be read. $AGAIN"
+        || die "no pass read the commits between $COVERED and where the narrowed pass $TID began ($SINCE): every commit after the first pass $C_TID must be read. $AGAIN"
       COVERED=$WAS_READ
     done <<<"$STEPS"
-    if [ -n "$NOCLOSE" ]; then
-      echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
-      [ -n "$LEFT" ] && sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" || echo "Nothing open at merge: the last narrowed pass ended GO and named no finding"
-      cleared; exit 0
-    fi
-    echo "Builder proof: ${LAST##*/}: the closing pass ($NAME $C_TID) left P2/P3 only and narrowed passes read every commit after it, the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
-    # What merges open, by Codex's record: the merge cannot read the Builder's DONE report.
-    # One "Open at merge:" line per finding and no other line with those words: the merge counts them.
-    [ -n "$LEFT" ] && sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" || echo "Nothing open at merge: the last narrowed pass ended GO and named no finding"
-    cleared; exit 0
+    echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
+    exit 0
   fi
   echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
-  # What a passing whole-branch pass still named, once however many of its reviewers named it.
-  [ -z "$LEFT" ] || sed '/^$/d; s/^[[:space:]]*/Open at merge: /' <<<"$LEFT" | awk '!seen[$0]++'
   [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
-  cleared; exit 0
+  exit 0
 fi
 
 pass_waits
@@ -835,22 +781,14 @@ if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCO
   KIND=final
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
 fi
-# Issues 260 and 266: a narrowed GO after a closing pass that found a P0 or P1 or named nothing, or after commits on a
-# closing GO, merged nothing, and the final after it read the same tip again. That review is the closing pass.
-# shortcut: a P0 or P1 main cleared still makes the review a closing pass; it only reads more.
+# Issues 260 and 266: a narrowed GO after a closing pass merges nothing, and the final after it read the same tip
+# again. Every finding blocks the merge, so after any closing pass the review is the closing pass.
 if [ "$KIND" = review ]; then
-  read -r C_ENDED C_TID C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $11 }' <<<"$PASSES" | sort | tail -1)"
-  WHY=""
+  read -r C_TID C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $11 }' <<<"$PASSES" | sort | tail -1 | cut -d' ' -f2-)"
   if [ -n "${C_TID:-}" ]; then
-    while read -r P_TID P_SAID; do
-      [ -n "$P_TID" ] || continue
-      FOUND=$(awk -v t="$P_TID" '$1 == "@" { on = ($2 == t); next } on' <<<"$PASSES")
-      if grep -qE "$BLOCKER" <<<"$FOUND"; then WHY="pass $P_TID found a P0 or P1"
-      elif [ "$P_SAID" != GO ] && [ -z "$FOUND" ]; then WHY="pass $P_TID ended NO-GO naming no finding"; fi
-    done <<<"$(awk -v c="$C_ENDED" '$1 == "@" && $8 >= c { print $2, $11 }' <<<"$PASSES")"
-    [ -n "$WHY" ] || [ "$C_SAID" != GO ] || WHY="commits came after the closing GO of $C_TID"
+    if [ "$C_SAID" = GO ]; then WHY="commits came after the closing GO of $C_TID"; else WHY="the closing pass $C_TID ended NO-GO"; fi
+    KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"
   fi
-  [ -z "$WHY" ] || { KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"; }
 fi
 # Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
 # so the Builder learns of a refusal before a launch costs a retry.
@@ -983,7 +921,7 @@ fi
 # The limits main stated, from the brief and from its rulings: without them each
 # pass raised the same accepted limit again with a new wrapping case. Read from
 # main's checkout only (the launcher's copy of the brief, main's rulings file):
-# a limit makes a blocker a P3, and the Builder can write the worktree's copies.
+# a limit or a cleared finding takes a finding off the list, and the Builder can write the worktree's copies.
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
   [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ (Stated limits|Cleared findings)/ { on = 1 }' "$f"
 done)
@@ -1213,7 +1151,8 @@ REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n
   [ -z "$REPEAT" ] || printf '\n## The same class again\n\nFindings of class %s came back in two passes in a row (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser), fix the other findings first, then send main that approach as a question. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. If the approach touches an open decision, ask main first.\n' \
     "${REPEAT% (*}" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
   # Issue 264: each finding's test, by the rule run-shell-tests.sh --changed uses for a same-name test.
-  TPF=$({ grep -E "$FINDING" "$OUT" || true; } | sed -nE 's/.* -- ([^ :]+):([0-9]+) -- .*/\1 \2/p' | awk '!seen[$0]++' | while read -r p l; do
+  # A finding's place is the first " -- <path>:<line> -- " on its line: one its text quotes comes later.
+  TPF=$({ grep -E "$FINDING" "$OUT" || true; } | awk 'match($0, / -- [^ :]+:[0-9]+ -- /) { p = substr($0, RSTART + 4, RLENGTH - 8); sub(/:/, " ", p); if (!seen[p]++) print p }' | while read -r p l; do
     # Leading-paren patterns: bash 3.2 cannot parse a bare `pat)` case inside $( ).
     case $p in (*.test.*) t=$p ;; (hooks/*|scripts/*) t=${p%%/*}/__tests__/$(basename "${p%.*}").test.sh ;; (*) t="" ;; esac
     if [ -n "$t" ] && [ -f "$WT/$t" ]; then

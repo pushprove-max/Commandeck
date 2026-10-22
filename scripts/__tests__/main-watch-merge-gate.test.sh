@@ -5,17 +5,15 @@
 set -euo pipefail
 . "$(dirname "$0")/fixtures/main-watch-merge-setup.sh"
 N=5000; tick $N; N=20000; D=$S/main-watch/digest
-# The other refusals: a narrowed GO, a P2 tail (the owner's call) and an open owner question. Held units
+# The other refusals: a narrowed GO and an open owner question. Held units
 # (`Merge: hold`, the open question) never run the gate and are never nudged; a refusal is posted once per tip.
 N=$((N + 1000)); : > "$T/sends"; : > "$T/typed"; : > "$F/verify-calls"
 unit narrow; echo "a narrowed pass with no closing pass before it: its GO merges nothing" > "$F/refuse-narrow"
-unit p2; echo "P2 tail" > "$F/rule-p2"
 unit hold; echo 'Merge: hold' >> "$T/ws/hold/.claude/briefs/hold.md"
 unit owner; echo '{"id":"owner-q1","askedAt":"1999-01-01T00:00:00Z","question":"which?","proposedDefault":"a","source":"owner asks","answeredAt":null,"answer":null}' \
   > "$REPO/.claude/metrics/decisions.jsonl"
-tick $N; for u in narrow p2 hold owner; do said_done $u; done; tick $((N + 60))
+tick $N; for u in narrow hold owner; do said_done $u; done; tick $((N + 60))
 [ "$(posts 'seat builder on narrow finished.*its GO merges nothing')" = 1 ] || fail "a narrowed GO was not refused with its reason"
-[ "$(posts 'seat builder on p2 finished.*P2 tail')" = 1 ] || fail "a P2-tail tip was not refused as the owner's call"
 [ "$(posts 'seat builder on hold finished.*Merge: hold')" = 1 ] || fail "a held unit's finish was not posted to main with the hold"
 [ "$(posts 'seat builder on owner finished.*open owner decision')" = 1 ] || fail "a unit with an open owner question was not posted with it"
 grep -qx 'hold\|owner' "$F/verify-calls" && fail "a held unit ran the gate"
@@ -23,23 +21,14 @@ for t in 120 180 240 400 700; do tick $((N + t)); done
 [ "$(posts 'seat builder on narrow')" = 1 ] || fail "a refusal was posted again for the same tip ($(posts 'seat builder on narrow') posts)"
 [ "$(grep -cx narrow "$F/verify-calls")" = 1 ] || fail "--verify ran again on a tip it already answered ($(grep -cx narrow "$F/verify-calls") runs)"
 grep -q 'terminal term_hold\|terminal term_owner' "$T/typed" && fail "a held unit was nudged: $(cat "$T/typed")"
-[ -s "$F/mq-calls" ] && grep -q 'narrow@\|p2@\|hold@\|owner@' "$F/mq-calls" && fail "a refused or held unit was merged"
+[ -s "$F/mq-calls" ] && grep -q 'narrow@\|hold@\|owner@' "$F/mq-calls" && fail "a refused or held unit was merged"
 
 # Issue 258: the held unit left waiting is gated at the next tick once its hold is gone, and lands.
 T0=$(tip hold); sed -i '/Merge: hold/d' "$T/ws/hold/.claude/briefs/hold.md"; tick $((N + 760)); jobwait hold; tick $((N + 820))
 grep -qx "hold@$T0" "$F/mq-calls" || fail "a unit left waiting to merge was not gated and merged once its hold was gone"
 grep -q 'hold merged' "$D" || fail "the waiting unit's merge has no digest line"
-for u in narrow p2 hold owner; do gone $u; done
+for u in narrow hold owner; do gone $u; done
 
-# The rule decides the merge, so a long proof line cut for display keeps it: a P2 tail past character 300 and a
-# rule the gate does not know are both the owner's call.
-N=$((N + 1000)); unit p2long; printf ' (Codex threads%s)' "$(printf ' 01a15f3e-b7be-7c03-8dbd-c43e126b314c%.0s' 1 2 3 4 5 6 7 8)" > "$F/pad-p2long"
-echo "P2 tail" > "$F/rule-p2long"; unit odd; echo "some later rule" > "$F/rule-odd"
-tick $N; said_done p2long; said_done odd; tick $((N + 60))
-grep -q 'p2long@\|odd@' "$F/mq-calls" && fail "a P2 tail cut out of its proof line, or an unknown rule, was merged: $(cat "$F/mq-calls")"
-[ "$(posts 'seat builder on p2long finished.*P2 tail')" = 1 ] || fail "a P2 tail past character 300 was not refused as the owner's call"
-[ "$(posts 'seat builder on odd finished.*some later rule')" = 1 ] || fail "an unknown rule was not refused, naming it"
-for u in p2long odd; do gone $u; done
 # A kept refusal stands for its tip and round files: a new pass on the same commit (a new round file, nothing
 # committed) runs --verify again, and the unit merges.
 N=$((N + 1000)); unit stale; echo "no closing pass" > "$F/refuse-stale"; tick $N; said_done stale; tick $((N + 60))

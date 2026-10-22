@@ -46,8 +46,8 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
   COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 60 bash "$REAL/scripts/orca-wait.sh" 2>&1); RC=$?
 check "a 1.2 MB batch drains: exit 0, all twelve bodies saved whole" "0 12" \
   "$RC $(for i in $(seq 1 12); do f=$T/sc/main-watch/messages/q$i.md; [ -f "$f" ] && [ "$(wc -c < "$f" | tr -d ' ')" = 100000 ] && echo y; done | wc -l | tr -d ' ')"
-# Issue 212: after a pass that ended NO-GO the next step main reads is a fix round, never "merge it", even when the
-# merge check passes the tip under the P2-tail rule: that merge is the owner's call. A GO that passes still merges.
+# After a pass that ended NO-GO the next step main reads is a fix round, never "merge it", even when the merge check
+# passes the tip: every finding, P0 to P3, blocks the merge. A GO that passes still merges.
 PL=$T/plug; mkdir -p "$PL"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$PL/"
 U=$WS/u212; git init -q -b main "$U"; mkdir -p "$U/.claude/briefs"; echo brief > "$U/.claude/briefs/u212.md"
 wake() {  # wake <last verdict> <--verify exit code> [a finding class r4 and r5 both end NO-GO on]
@@ -65,12 +65,12 @@ OUT=$(wake NO-GO 1)
 check "a NO-GO the merge check refuses: next is a fix round, never merge it" "1 0" \
   "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
 OUT=$(wake NO-GO 0)
-check "a NO-GO the merge check passes (P2 tail): a fix round, the owner's word named, never merge it" "1 1 0" \
-  "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c "merge only on the owner's word; ask them first" <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
+check "a NO-GO the merge check passes: still a fix round, never merge it, no owner's-word line" "1 0 0" \
+  "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c "owner's word" <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
 # Issue 225: a second NO-GO in a row on one finding class is a loop, not progress: main makes a class-level call.
 OUT=$(wake NO-GO 1 lost-reply)
-check "two NO-GOs on one class: next asks a class-level question or a merge with one issue, not a third fix round" "1 0" \
-  "$(grep -c 'next: ask the owner one class-level question, or merge and file the rest as one issue (two NO-GOs on lost-reply)' <<<"$OUT") $(grep -c 'next: fix round' <<<"$OUT")"
+check "two NO-GOs on one class: next asks a class-level question, never merge and file, not a third fix round" "1 0 0" \
+  "$(grep -c 'next: ask the owner one class-level question (two NO-GOs on lost-reply); the class is fixed in the unit' <<<"$OUT") $(grep -c 'merge and file' <<<"$OUT") $(grep -c 'next: fix round' <<<"$OUT")"
 OUT=$(wake GO 0)
 check "a GO the merge check passes still prints merge it" "1 0" "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c 'fix round' <<<"$OUT")"
 # Issue 223: a heads-up printed its whole body and other messages up to 60 lines, so one wake could fill main's
@@ -102,10 +102,6 @@ run() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PAT
 rm -rf "$T/sc" "$T/vcalls"; rgate 0 "closing GO" "Builder proof: u212-r5-reports.md: the closing pass; rule: closing GO"; OUT=$(run)
 check "a gate result kept for the tip: --verify is not run again, and main is told main-watch merges it" "0 1" \
   "$(cat "$T/vcalls" 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'next: nothing for main yet: main-watch merges it' <<<"$OUT")"
-# The kept line is cut at 300 characters, so the rule is read from its own line: a P2 tail whose shown line lost it
-# is still not one main-watch merges.
-rm -rf "$T/sc" "$T/vcalls"; rgate 0 "P2 tail" "Builder proof: u212-r5-reports.md: the closing pass (Codex thread 01a15f3e-...) left P2/P3 only"; OUT=$(run)
-check "a kept P2 tail whose shown line was cut is not told as main-watch merging it" 0 "$(grep -c 'main-watch merges it' <<<"$OUT")"
 # A result kept for the tip but an older set of round files is stale: a new pass on the same commit runs --verify again.
 rm -rf "$T/sc" "$T/vcalls"; rgate 1 "" "no closing pass yet"; echo .claude/briefs/u212-r9-reports.md >> "$U/.git/info/exclude"
 echo "Pass: final" > "$U/.claude/briefs/u212-r9-reports.md"; OUT=$(run)

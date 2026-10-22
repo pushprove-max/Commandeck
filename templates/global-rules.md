@@ -18,7 +18,8 @@
   only the fixes.
 - Every review finding, P0 to P3, blocks the merge and goes back to a fix
   round. Done is a closing pass that ends GO with no finding named; nothing is
-  left open at merge.
+  left open at merge. Only a finding outside the unit's scope becomes a
+  follow-up issue; never merge an in-scope finding to file it later.
 - No redundant steps: before adding a step to the build, merge, review or push
   flow (a check, a test run, a review pass, a record, a wait, a confirmation),
   name what it catches that no existing step does. If you cannot, don't add

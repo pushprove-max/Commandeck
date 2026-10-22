@@ -46,6 +46,15 @@ check "an owner who kept their own planning rule does not get the reworded one" 
 # mine, saved for its 0.17.0 id, still leaves it out.
 check "an owner who kept their own AGENT_STARTUP planning step does not get the 0.18.0 wording" 0 \
   "$(python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/AGENT_STARTUP.md" --drop 1bc6a1b6 | grep -c 'Write a plan first')"
+# Each MADE_FROM line added in 0.26.0-0.29.0 carries a keep mine forward and nothing more: the reworded rule stays
+# out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
+# Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
+ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
+for pair in 953565b7:e2240999 b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb3342e 70e51fcc:45c2952e; do
+  new=${pair%:*} old=${pair#*:}
+  check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
+    "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"
+done
 
 # A duplicate is the same text once case and spacing are set aside, nothing more (main's ruling): a path, a code
 # span, a flag or a sign changes what a rule says, so a near-match keeps the plugin's rule.

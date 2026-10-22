@@ -33,10 +33,11 @@ changed session prompt, or an incompatible change to this script's required
 review text can still refuse it. Follow the refusal; a new unit reviewed
 from pass 1 is the recovery it names.
 
-Findings are graded P0 to P3. A P0 or P1 refuses the merge. A closing pass
-that leaves only P2 or P3 findings still merges: the merge prints each one as
-open and files a GitHub issue for it. If GitHub cannot be reached the merge
-stands, the output lists what was not filed, and the exit code is 4.
+Findings are graded P0 to P3. Every finding, P0 to P3, refuses the merge. The
+Builder fixes it and the next `review` runs as the closing pass, until a
+closing pass ends GO with no finding named. A finding main lists under
+"Cleared findings" in its rulings file is handed to the next reviewer as out
+of scope; it never turns a NO-GO into a merge.
 
 The fix passes after a review run as the fixer role, every one on Opus high
 by default. The `fixer*` keys in `/plugin` config change both, and
@@ -62,4 +63,3 @@ bash "$PLUGIN/scripts/merge-queue.sh" first-unit second-unit
 ```
 
 The queue stops when a unit is refused or cleanup fails after its merge.
-It continues past issue-filing failures and returns 4 after the queue ends.

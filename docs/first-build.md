@@ -88,9 +88,7 @@ bash "$PLUGIN/scripts/merge-unit-local.sh" add-csv-export --dry-run
 
 This dry run does not run the configured test command. A failed real check
 undoes the squash. Exit 3 means the merge committed but archiving or cleanup
-failed: finish that step by hand. Exit 4 means it merged but could not file
-all open findings as GitHub issues: use the printed retry command. Do not
-merge an already merged unit again.
+failed: finish that step by hand. Do not merge an already merged unit again.
 
 The launcher refuses a batch without a nonempty plan committed on `main`,
 unless main explicitly records a skip:

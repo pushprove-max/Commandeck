@@ -68,6 +68,17 @@ check "two NO-GOs in a row sharing a class print REPEAT CLASS" "REPEAT CLASS: ol
 rf 4 NO-GO '- [P1] (class: lost-reply) another case -- b.sh:2 -- why -- input'
 check "two NO-GOs on different classes print nothing" "" "$(repeat)"
 rf 3 GO '- [P3] (class: lost-reply) a nit -- a.sh:1 -- why -- input'
-check "a GO before, or a P3 of the class, is no repeat" "" "$(repeat)"
+check "a GO before is no repeat" "" "$(repeat)"
+# Every finding, P3 too, blocks the merge and gets a fix round, so a P3 class that comes back is a loop as well.
+rf 3 NO-GO '- [P3] (class: lost-reply) a nit -- a.sh:1 -- why -- input'
+check "two NO-GOs on one class at P3 print REPEAT CLASS" "REPEAT CLASS: lost-reply (r3, r4)" "$(repeat)"
+# The gate counts a "(class:" line with no level, and any level form, as a finding, so a class that comes back in
+# those forms is the same loop (class finding-reader-drift, pass 6).
+rf 3 NO-GO '- (class: probe) bug -- a.sh:1 -- wrong -- bash a.sh'
+rf 4 NO-GO '- (class: probe) bug -- a.sh:1 -- wrong -- bash a.sh'
+check "two NO-GOs on one class with no level print REPEAT CLASS" "REPEAT CLASS: probe (r3, r4)" "$(repeat)"
+rf 3 NO-GO 'Finding: (P1) (class:probe) mid-line -- a.sh:1 -- why -- input'
+rf 4 NO-GO '1. [**P2**] (class: probe) numbered -- b.sh:2 -- why -- input'
+check "two NO-GOs on one class in other level forms print REPEAT CLASS" "REPEAT CLASS: probe (r3, r4)" "$(repeat)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

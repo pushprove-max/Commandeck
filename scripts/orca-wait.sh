@@ -299,18 +299,18 @@ bounded() {  # bounded <file> <lines allowed> -- the file indented; past the all
 }
 # verified <unit> <worktree> -- the merge check on the unit's tip, its exit returned and its line in VOUT. main-watch's
 # gate keeps both per tip and round files (gate-<unit>, pp_gate_key): a kept one is read, never run again (issue 306
-# R11), and sets KEPT and KRULE, the proof's rule.
+# R11), and sets KEPT.
 verified() {
   local rec=$SCRATCH/main-watch/gate-$1 rc
-  KEPT= KRULE=
+  KEPT=
   if [ "$(sed -n 1p "$rec" 2>/dev/null)" = "$(pp_gate_key "$1" "$2")" ]; then
-    KEPT=1 KRULE=$(sed -n 3p "$rec"); VOUT=$(sed -n 4p "$rec"); rc=$(sed -n 2p "$rec"); [[ $rc =~ ^[0-9]+$ ]] || rc=1; return "$rc"
+    KEPT=1 VOUT=$(sed -n 4p "$rec"); rc=$(sed -n 2p "$rec"); [[ $rc =~ ^[0-9]+$ ]] || rc=1; return "$rc"
   fi
   VOUT=$(bash "$PP_SCRIPTS/builder-codex-pass.sh" --verify "$2" "$1" HEAD 2>&1 >/dev/null </dev/null); rc=$?
   VOUT=$(printf '%s\n' "$VOUT" | grep . | tail -1 | cut -c1-300); return "$rc"
 }
 serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
-  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo p2 rep wo
+  local m=$1 id from type subject unit file wt left=60 SHOWN=0 ahead dirty round verdict why rid row tok path dir ok root nogo rep wo
   id=$(jq -r '(.id // "") | gsub("[^A-Za-z0-9._-]"; "_")' <<<"$m"); file=$MSGDIR/$id.md
   from=$(jq -r '.from_handle // ""' <<<"$m"); type=$(jq -r '.type // ""' <<<"$m"); subject=$(jq -r '.subject // ""' <<<"$m")
   # The text, unless the first line already carried all of it (a heads-up relay: its line and file, whole under --full).
@@ -334,7 +334,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     # a question waits on an answer; anything else merges or does not.
     # Whether it merges is the merge's own check, never the round file read here
     # (that only turns a NO-GO into a fix round): only that check knows a GO that covers an older commit from one
-    # that covers the tip, and a NO-GO that is a mergeable P2/P3 tail.
+    # that covers the tip.
     if { [ "$type" = question ] || [ "$type" = escalation ]; } && [[ "$subject" != *"turn complete"* ]]; then
       # A question for the owner (it names the owner, or is a repeat-class stop-and-ask) goes on the owner's decision
       # queue at once, where the relay and the dashboard see it, not behind main's read (issue 305). Any other waits on main.
@@ -346,26 +346,24 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" "${wo[@]}" >/dev/null 2>&1 \
         || echo "  (not recorded in the decisions ledger: it is there already, or the ledger refused it)"
     else
-      why="" nogo="" p2="" rep=""
+      why="" nogo="" rep=""
       if [ "$(jq -r --arg u "$unit" 'index($u) != null' <<<"$3")" = true ]; then why="its driver acts on this; see the driver line below"
       elif [ "$dirty" != 0 ]; then why="$dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, which no Codex pass read"
-      # The pass writes its own verdict line last. After a NO-GO the next step is a fix round even when the merge
-      # check passes a P2/P3 tail: that merge is the owner's call (issue 212). This line only advises; the merge checks.
+      # The pass writes its own verdict line last. After a NO-GO the next step is a fix round: every finding, P0 to
+      # P3, blocks the merge. This line only advises; the merge checks.
       elif [ -n "$round" ] && [ "$(grep '^VERDICT:' "$round" | tail -1)" = "VERDICT: NO-GO" ]; then nogo=1
-        verified "$unit" "$wt" && p2=1
       elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && [ ! -f "$SCRATCH/main-watch/gate-$unit" ]; then
         why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"
       elif ! verified "$unit" "$wt"; then why=${VOUT:-the merge check refused it and gave no reason}
       # main-watch's gate passed this tip and merges it (issue 254): main offers a merge only for one it held or refused.
-      elif [ -n "$KEPT" ] && pp_go_rule "$KRULE"; then why="main-watch merges it: its gate passed on this tip"
+      elif [ -n "$KEPT" ]; then why="main-watch merges it: its gate passed on this tip"
       else why=""
       fi
       # Two NO-GOs in a row on one finding class: a third fix round finds the next variant (issue 225).
       [ -z "$nogo" ] || rep=$(bash "$PP_SCRIPTS/read-verdict.sh" --repeat-class "$round" 2>/dev/null | sed -n 's/^REPEAT CLASS: \(.*\) (r[0-9]*, r[0-9]*)$/\1/p')
       if [ -n "$nogo" ]; then
-        if [ -n "$rep" ]; then echo "  next: ask the owner one class-level question, or merge and file the rest as one issue (two NO-GOs on $rep)"
+        if [ -n "$rep" ]; then echo "  next: ask the owner one class-level question (two NO-GOs on $rep); the class is fixed in the unit"
         else echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"; fi
-        [ -z "$p2" ] || echo "  the P2-tail rule lets this tip merge with its P2/P3 open: merge only on the owner's word; ask them first"
       elif [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
       else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit"
       fi

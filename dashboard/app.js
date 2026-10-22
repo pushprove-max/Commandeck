@@ -239,14 +239,10 @@
     return li;
   }
 
-  function renderNeeds(n, now, units, githubP1) {
+  function renderNeeds(n, now, githubP1) {
     n = n || {};
     const who = ownerName(n);
     for (const el of document.querySelectorAll('[data-owner]')) el.textContent = who;
-    const fin = finishedBuilds(units);
-    // A count the record does not hold is unknown, never 0.
-    const known = fin && fin.filter((f) => f.open && num(f.open.P1) !== null);
-    const p1 = known && known.reduce((sum, f) => sum + Math.max(0, f.open.P1), 0);
     // The project's open GitHub issues labelled P1; anything but a whole count is unknown.
     const issues = Number.isInteger(githubP1) && githubP1 >= 0 ? githubP1 : null;
     const rows = Array.isArray(n.decisions) ? n.decisions.filter((d) => d && d.answeredAt == null) : null;
@@ -257,7 +253,6 @@
     const dl = byId('needs-facts');
     dl.replaceChildren();
     fact(dl, `Waiting on ${who}`, open === null ? nm() : [strong(open.length), ' open ', open.length ? null : badge('nothing waiting', 'ok')]);
-    fact(dl, 'Open P1', p1 === null ? nm() : [strong(p1), ' on finished builds', known.length < fin.length ? ` · ${fin.length - known.length} ${NOT_REC}` : null]);
     fact(dl, 'Open P1 on GitHub', issues === null ? nm() : strong(issues));
     q('[data-count="decisions"]').textContent = open ? String(open.length) : 'not measured';
     const asked = (d) => {
@@ -298,9 +293,8 @@
       keep.before(...items.slice(0, at));
       keep.after(...items.slice(at + 1));
     }
-    // An open decision is the owner's to act on here, and so is a P1 a finished build left open: clearing the build
-    // from the list is tidying, not an answer, so a cleared build's P1 still counts. So is an open P1 issue.
-    flag('needs', Boolean(open && open.length) || p1 > 0 || issues > 0);
+    // An open decision is the owner's to act on here, and so is an open P1 issue.
+    flag('needs', Boolean(open && open.length) || issues > 0);
   }
 
   // claude-opus-5-5 reads "Opus 5.5"; any other id is shown as it is.
@@ -774,21 +768,16 @@
     const ended = `${how} ${Number.isFinite(t) ? when(t) : 'at a time not recorded'}`;
     const tags = h('div', 'mdls');
     tags.append(h('span', 'mdl', 'Builder'), h('span', 'mdl', how));
-    // All three counts or none: a count the record does not hold is unknown, never "nothing open".
-    const counted = f.open && typeof f.open === 'object' && ['P1', 'P2', 'P3'].every((k) => num(f.open[k]) !== null && f.open[k] >= 0);
-    const open = counted ? ['P1', 'P2', 'P3'].filter((k) => f.open[k] > 0).map((k) => `${k} ${f.open[k]}`) : null;
-    const left = open === null ? NOT_REC : open.length ? open.join(' · ') : 'nothing open';
     const dl = h('dl', 'facts');
     fact(dl, 'Ended', ended);
-    fact(dl, 'Open at merge', left);
     fact(dl, 'Merge commit', typeof f.sha === 'string' && f.sha ? f.sha.slice(0, 8) : NOT_REC);
     // As the collector last read it before the merge: frozen, never priced again.
     fact(dl, 'Cost', f.cost && f.cost.total ? `${costOf(f.cost.total)} in ${span(f.cost.total.sec)}` : NOT_REC);
     const merged = how === 'merged';
     const el = block(f.unit, `${how} ${Number.isFinite(t) ? `${ago((now - t) / 1000)} ago` : 'at a time not recorded'}`, tags,
-      // Findings open at the merge leave the Merge step amber; a build that ended any other way has a red one.
-      BUILD_STEPS.map((s) => (s !== 'Merge' ? [s, merged ? 'done' : ''] : !merged ? [s, 'crit', 'not merged']
-        : open && open.length ? [s, 'done warn', `${open.join(' · ')} open at merge`] : [s, 'done'])), merged ? 100 : 0, cap(ended, open === null ? `open findings ${NOT_REC}` : left), [dl, costTable(f.cost, NOT_REC)],
+      // A build that ended any way but merged has a red Merge step.
+      BUILD_STEPS.map((s) => (s !== 'Merge' ? [s, merged ? 'done' : ''] : !merged ? [s, 'crit', 'not merged'] : [s, 'done'])),
+      merged ? 100 : 0, cap(ended, ''), [dl, costTable(f.cost, NOT_REC)],
       f.sha, [f.unit, `seat ${NOT_REC}`, how, `issues ${NOT_REC}`, f.cost && f.cost.total ? `cost ${costOf(f.cost.total)}` : `cost ${NOT_REC}`,
         `${how} ${Number.isFinite(t) ? `${ago((now - t) / 1000)} ago` : 'at a time not recorded'}`], true);
     el.classList.add('finished');
@@ -1585,7 +1574,7 @@
     looks = new Set();
     const d = view(snapshot);
     if (typeof d.name === 'string' && d.name) { byId('title').textContent = d.name; document.title = d.name; }
-    renderNeeds(d.needsOwner, now, d.units, d.githubP1);
+    renderNeeds(d.needsOwner, now, d.githubP1);
     renderUnits(d.units, now);
     renderCostUnit(d.units && d.units.costPerUnit);
     renderReview(d.reviewLoop, d.escapes);

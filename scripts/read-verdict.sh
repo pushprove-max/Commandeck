@@ -349,12 +349,14 @@ pane_sessions() { # handle
 }
 
 # --repeat-class <round file>: two NO-GOs in a row on one finding class are a loop, not progress (issue 225).
-# Prints REPEAT CLASS: <class> (r<N-1>, r<N>) when this round and the one before it both end NO-GO with a P0-P2
-# finding of that (class: <tag>); nothing otherwise.
+# Prints REPEAT CLASS: <class> (r<N-1>, r<N>) when this round and the one before it both end NO-GO with a
+# finding of that (class: <tag>), at any level or none; nothing otherwise.
 if [ "${1:-}" = --repeat-class ]; then
   n=$(sed -n 's/.*-r\([0-9]*\)-reports\.md$/\1/p' <<<"${2:-}"); [ -n "$n" ] || exit 0
+  # Every "(class:" tag: the gate's FINDING rule (builder-codex-pass.sh) counts any line holding one as a finding,
+  # whatever level form it has or lacks, so a tag found here is on a line the gate counted.
   classes() { [ "$(grep '^VERDICT:' "$1" 2>/dev/null | tail -1)" = "VERDICT: NO-GO" ] || return 0
-    grep -oE '\[P[0-2]\] \(class: [^)]+\)' "$1" | sed 's/.*(class: //; s/)$//' | sort -u; }
+    grep -oE '\(class:[^)]*\)' "$1" | sed -E 's/^\(class:[[:space:]]*//; s/[[:space:]]*\)$//' | grep . | sort -u; }
   c=$(comm -12 <(classes "${2%-r"$n"-reports.md}-r$((n - 1))-reports.md") <(classes "$2") | head -1)
   [ -z "$c" ] || echo "REPEAT CLASS: $c (r$((n - 1)), r$n)"
   exit 0

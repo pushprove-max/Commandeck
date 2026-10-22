@@ -140,7 +140,8 @@ merge refuses a round file the script did not write, or one older than the tip.
    N: it reads only your changes since the last pass, or the whole branch
    when main changed this brief or its rulings since the last pass. Every finding, P0 to P3, blocks the
    merge: fix it, red first, and repeat until one ends `VERDICT: GO` with no finding named. A `review`
-   that prints `final in place of review` is the closing pass: its GO merges, and no separate final follows.
+   that prints `final in place of review` (after any closing pass that ended NO-GO, or after a commit on a
+   closing GO) is the closing pass: its GO merges, and no separate final follows.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
    branch once more. Its GO, naming no finding, is the one the merge takes. Any finding there, P0 to P3,
    goes back to step 2 as a fix round, whose next `review` runs as the closing pass. There is no

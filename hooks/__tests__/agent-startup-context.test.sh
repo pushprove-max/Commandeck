@@ -83,8 +83,9 @@ check "main's launch rule: the Order line quotes that yes with its ruling id, an
 check "the relay opens no picker when the owner has been quiet 30 minutes, and runs the timer check as a fifth job" "1:1:1" \
   "$(grep -c 'owner quiet for 30 minutes or more, open no picker; leave the question on the decision queue and ask when the owner next types' <<<"$REL"):$(grep -c 'scripts/cos-check.sh' <<<"$REL"):$(grep -c 'without all five running' <<<"$REL")"
 check "main sends a denied self-modification step to the relay" 1 "$(grep -c 'Denied a self-modification step' "$T/ctx")"
-# Issue 212: the merge check passes a NO-GO's P2/P3 tail, so main is told that merge is the owner's call.
-check "main merges a NO-GO build only on the owner's word" 1 "$(grep -c "NO-GO merges only on the owner's word" "$T/ctx")"
+# Every finding, P0 to P3, blocks the merge: main never merges a NO-GO build, it gets a fix round.
+check "main never merges a NO-GO build: it gets a fix round" "1 0" \
+  "$(grep -c 'NO-GO never merges: it gets a fix round' "$T/ctx") $(grep -c "owner's word, even under the P2-tail rule" "$T/ctx")"
 # Issue 237: main offered merges the merge's own gate then refused. Issues 254 and 306 (R11): main-watch runs that gate
 # on every DONE and merges what passes, so main offers a merge only for a unit it held or refused.
 check "main offers a merge only for a unit the gate held or refused" 1 "$(grep -c 'offer a merge only for one it held or refused' "$T/ctx")"

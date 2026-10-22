@@ -108,7 +108,8 @@ def rid(lines):
 
 # A reworded rule gets a new id, and an owner's saved --drop names the old one. Each new id here is left
 # out when every id it was made from is (a duplicate rule beats a lost one), unless the owner kept it by its
-# own id: that answer is newer. Add a line per reworded rule.
+# own id: that answer is newer. Add a line per reworded rule. A line carries the owner's keep mine to the
+# reworded rule and is not an exemption: the owner's own wording stays loaded from their file.
 MADE_FROM = {
     # 0.7.2 main-session.md
     "607f18a2": ("18cd2c62", "8fc96d58"), "06c5d1a6": ("58d81ff4", "8fc96d58"), "1cf7c669": ("1f85d44e",),
@@ -136,6 +137,12 @@ MADE_FROM = {
     "45c2952e": ("deb6fc19",),
     # 0.25.0 main-session.md: main-watch's merge gate (issue 254), the plan judge's GO (issue 306), the ceiling (issue 267)
     "2bb3342e": ("f36e6d57",), "e2240999": ("3e6a70f8",), "3e156378": ("c539053c",),
+    # 0.26.0 main-session.md: the seven-role cut reworded the planning and helper-agent rules
+    "953565b7": ("e2240999",), "b2577b20": ("ae5d50a4",),
+    # 0.27.0 main-session.md: only actionable messages wake main (issue 318)
+    "7c87d0bb": ("42145c44",),
+    # 0.29.0 main-session.md: every review finding blocks the merge (issue 322)
+    "e6963680": ("2bb3342e",), "70e51fcc": ("45c2952e",),
 }
 
 

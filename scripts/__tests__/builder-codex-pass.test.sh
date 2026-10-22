@@ -55,7 +55,8 @@ check "its prompt is the whole branch against main" "1 1" \
 check "the prompt carries this round's different-fix and other-cases lines, and not another round's" "1 1 0" \
   "$(input 3 | grep -cx 'Different fix r3: the named fix broke the caller in b.sh.') $(input 3 | grep -cx 'Other cases checked r3: a.sh and c.sh read the same input.') $(input 3 | grep -c 'r2: an older note')"
 
-# The brief unchanged since: the next review pass is narrowed again.
+# The brief unchanged since, but r3 was a closing pass that ended NO-GO: every finding blocks the merge, so the next
+# review pass is the closing pass again.
 printf 'echo three\n' > "$W/a.sh"
 # The pass lock sits in the worktree's git folder, which pp_rm_rf refuses: released through it, it stayed, and every
 # later pass of the worktree was refused. A live holder still refuses a pass; a dead one's lock is taken over.
@@ -67,11 +68,11 @@ check "a pass while another holds the lock is refused, and the holder's lock sta
 echo "$(sh -c 'echo $$')" > "$L/pid"
 pass 4 review
 check "a dead holder's lock is taken over, and the pass releases it" "1 0" \
-  "$(grep -cx 'Pass: review' "$B/$U-r4-reports.md") $(ls -d "$L" 2>/dev/null | wc -l | tr -d ' ')"
+  "$(grep -cx 'Pass: final' "$B/$U-r4-reports.md") $(ls -d "$L" 2>/dev/null | wc -l | tr -d ' ')"
 check "every later pass is handed the evidence file's main-only list as known, and nothing under the next heading" "1 1 1 0" \
   "$(input 3 | grep -c '^Known and deferred to main') $(input 3 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -c 'not deferred')"
-check "with the brief unchanged since the last pass, a review pass stays narrowed" "1 0" \
-  "$(grep -cx 'Pass: review' "$B/$U-r4-reports.md") $(input 4 | grep -c '^-echo base$')"
+check "after a P2-only closing NO-GO, a review pass runs as the closing pass over the whole branch" "1 1" \
+  "$(grep -cx 'Pass: final' "$B/$U-r4-reports.md") $(input 4 | grep -c '^-echo base$')"
 check "a pass with no notes for its round carries none" 0 "$(input 4 | grep -cE '^(Different fix|Other cases checked) ')"
 
 # The record of what the brief held is gone after an earlier pass: the pass cannot tell, so it reads the whole branch.

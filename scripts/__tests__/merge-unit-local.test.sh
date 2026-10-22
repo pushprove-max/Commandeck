@@ -42,12 +42,22 @@ check "a refused ledger writer prints its line, and the merge of v still ends 0"
 rmdir "$UL"; mv "$TMP/ul.kept" "$UL"
 check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
   "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
-# A closing pass that leaves P2s only merges under the P2 tail rule: its row says so, never CONVERGED-GO.
-mk t; go t; STUB_REPLY=$'- [P2] A small thing -- t.txt:1 -- say it plainly\nVERDICT: NO-GO' pass t 2 final
-# (It exits 4: with no gh here, its open P2 cannot be filed.)
-check "a P2-tail merge of t merges" 1 "$(merge t >/dev/null; grep -c '^DONE unit=t merged=local' "$TMP/out")"
-check "its unit ledger row records the P2 tail, not a converged GO" "P2-TAIL|P2 tail|1|1" \
-  "$(jq -sr 'map(select(.unit == "t")) | .[0] | "\(.verdict)|\(.mergeRule)|\(.goRounds)|\(.noGoRounds)"' "$UL" 2>/dev/null)"
+# Every finding, P0 to P3, blocks the merge: a closing NO-GO of any severity never merges with its findings open.
+H0=$(git -C "$REPO" rev-parse HEAD)
+mk t; go t; STUB_REPLY=$'- [P2] (class: probe) A small thing -- t.txt:1 -- say it plainly -- cat t.txt\nVERDICT: NO-GO' pass t 2 final
+check "a closing NO-GO with P2s only does not merge, and main is unchanged" "1 1 0 $H0" \
+  "$(merge t) $(grep -c '^FAILED step 3 proof' "$TMP/out") $(grep -c '^DONE unit=t' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mk t3; go t3; STUB_REPLY=$'- [P3] (class: probe) A nit -- t3.txt:1 -- say it plainly -- cat t3.txt\nVERDICT: NO-GO' pass t3 2 final
+check "a closing NO-GO with a P3 only does not merge, and main is unchanged" "1 0 $H0" \
+  "$(merge t3) $(grep -c '^DONE unit=t3' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mk p1; go p1; STUB_REPLY=$'- [P1] (class: probe) blocker -- p1.txt:1 -- wrong -- cat p1.txt\nVERDICT: NO-GO' pass p1 2 final
+check "a closing NO-GO with a P1 does not merge, and main is unchanged" "1 0 $H0" \
+  "$(merge p1) $(grep -c '^DONE unit=p1' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+mk cg; go cg; STUB_REPLY='VERDICT: GO' pass cg 2 final
+check "a closing reply of only VERDICT: GO merges under the closing GO rule" "0 1 1" \
+  "$(merge cg) $(grep -c '^DONE unit=cg merged=local' "$TMP/out") $(grep -c '^Builder proof: .*; rule: closing GO$' "$TMP/out")"
+check "its unit ledger row is a converged GO under the closing GO rule" "CONVERGED-GO|closing GO" \
+  "$(jq -sr 'map(select(.unit == "cg")) | .[0] | "\(.verdict)|\(.mergeRule)"' "$UL" 2>/dev/null)"
 
 # Issue 239: the merge closes each issue the brief lists that its commit names, with the commit and the version; one
 # the commit does not name stays open and is named. Issue 227: main-watch's item task about the unit's seat is
@@ -152,7 +162,7 @@ echo more > "$COMMANDECK_WORKSPACES/au/au2.txt"; git -C "$COMMANDECK_WORKSPACES/
 check "--auto with a tip that moved since the gate is refused, naming it, and main is unchanged" "1 1 $H0" \
   "$(merge au --auto "$GATED") $(grep -c "^FAILED step 1 preconditions: --auto $GATED: the branch tip is now" "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
 # The gate's other conditions are asked again under the merge lock: a hold or an owner question added while the merge
-# waited, or a proof whose rule is not a GO, refuses --auto with main unchanged.
+# waited refuses --auto with main unchanged.
 tipof() { git -C "$COMMANDECK_WORKSPACES/$1" rev-parse HEAD; }
 mk ah; go ah; echo 'Merge: hold' >> "$COMMANDECK_WORKSPACES/ah/.claude/briefs/ah.md"
 check "--auto on a unit held since its gate passed is refused, and main is unchanged" "1 1 $H0" \
@@ -173,9 +183,6 @@ jq --arg c "echo '{\"id\":\"laq-q1\",\"askedAt\":\"1999-01-01T00:00:00Z\",\"ques
 check "--auto on a unit with an owner question opened during its check is refused before the commit, and main is unchanged" "1 1 $H0" \
   "$(merge laq --auto "$(tipof laq)") $(grep -c '^FAILED step 4 merge: --auto: held since the gate passed: open owner decision laq-q1' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
 rm -f "$REPO/.claude/commandeck.json"
-mk at; go at; STUB_REPLY=$'- [P2] (class: probe) a tail finding -- at.txt:1 -- it reads wrong -- cat at.txt\nVERDICT: NO-GO' pass at 2 final
-check "--auto on a P2 tail is refused as the owner's call, and main is unchanged" "1 1 $H0" \
-  "$(merge at --auto "$(tipof at)") $(grep -c "^FAILED step 3 proof: --auto merges a GO only, and the proof's rule is P2 tail" "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
 # Issue 255: the brief's Post-merge lines run once the merge stands, only the ones on the list. The plugin is a copy,
 # so its dashboard.sh and main-watch.sh are stubs; the stub dashboard has a login and answers --login-check.
 PLUG_COPY=$TMP/plugin; mkdir -p "$PLUG_COPY"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$REAL/.claude-plugin" "$PLUG_COPY/"

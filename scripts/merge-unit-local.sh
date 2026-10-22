@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# merge-unit-local.sh <unit> [--dry-run] [--area <area>] [--milestone <name>]
+# merge-unit-local.sh <unit> [--dry-run]
 # Squash-merge a Builder's branch onto local main, without a PR and without a
 # push. The one gate is the Builder proof (builder-codex-pass.sh --verify): the
 # last round file must be the pass script's, GO, for the tip being merged. The
@@ -12,19 +12,15 @@ set -euo pipefail
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
 # survives.
 usage() { cat <<'EOF'
-usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] [--area <area>] [--milestone <name>]
+usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>]
 Squash-merge a Builder's branch onto local main; run from the main checkout on main.
   --dry-run        run the checks and print the plan; merge and clean up nothing
   --auto <sha>     merge only while the branch tip is still <sha>, the commit main-watch's gate passed
-  --area <area>    area label for the issue filed per finding left open (file-open-findings.sh)
-  --milestone <name>  milestone for those issues
 The brief's "## Post-merge" lines run once the merge stands, each as a job of its own, and only these:
 dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>.
 exit: 0 merged; 1 refused or failed, not merged; 2 usage; 3 MERGED, but a step after the
       merge commit failed (archiving the unit's brief files, or closing its panes and removing
-      its worktree): finish it by hand, do not merge again; 4 MERGED, but a finding left open
-      could not be filed as an issue: the NOT FILED lines are the last printed, with the command
-      that files them; 5 MERGED, but a post-merge line was refused or its step failed
+      its worktree): finish it by hand, do not merge again; 5 MERGED, but a post-merge line was refused or its step failed
 example: merge-unit-local.sh my-unit --dry-run
 EOF
 }
@@ -41,13 +37,11 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
 fi
 UNIT=$1; shift
-DRY_RUN=0 AREA="" MILESTONE="" AUTO=""
+DRY_RUN=0 AUTO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --auto) AUTO=${2:-}; [[ $AUTO =~ ^[0-9a-f]{7,40}$ ]] || { usage >&2; exit 2; }; shift 2 ;;
-    --area) AREA=${2:-}; [ -n "$AREA" ] || { usage >&2; exit 2; }; shift 2 ;;
-    --milestone) MILESTONE=${2:-}; [ -n "$MILESTONE" ] || { usage >&2; exit 2; }; shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
@@ -126,10 +120,8 @@ fi
 TIP=$(git -C "$WT" rev-parse HEAD)
 # Builder proof: a Builder runs its own review passes, so its last round file
 # must be the pass script's, GO, for this tip or a clean rebase of it, from a
-# real reviewer session. Or, with no closing GO, a P2/P3-only tail every commit
-# of which a narrowed pass read. The proof says which rule let the tip through
-# and lists each finding open at merge, in a dry run as in a real merge: main
-# reads these lines and files what stays open. Every unit owes the proof: the
+# real reviewer session, that names no finding: every finding, P0 to P3, blocks
+# the merge. The proof says which rule let the tip through. Every unit owes the proof: the
 # worktree's own settings file is the Builder's to edit, so it cannot switch it off.
 # A tail of commits after the reviewed one that only rebuild the files the project
 # lists as generated (.claude/commandeck.json generatedFiles, main's copy) keeps
@@ -158,46 +150,6 @@ rm -f "$VERR"
 echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
-# --auto merges a GO only, as main-watch's gate does: a P2 tail, or any rule not named here, is the owner's call (issue 212).
-RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
-[ -z "$AUTO" ] || pp_go_rule "$RULE" || fail "step 3 proof" "--auto merges a GO only, and the proof's rule is $RULE: merging it is the owner's call"
-MERGE_OPEN=$(grep -c '^Open at merge: ' <<<"$BUILDER_PROOF" || true)
-# One issue per finding left open, filed by the merge and not from memory.
-# GitHub failing never fails or undoes the merge: this returns 0 whatever
-# happens, and the unfiled findings are printed last, where the script ends
-# with code 4. A project with no gh, no login or no GitHub remote gets exactly
-# that for every finding: the merge stands and each finding is named NOT FILED.
-MERGE_ISSUES="" NOT_FILED="" FILE_AGAIN=""
-file_open_findings() { # <commit> [--dry-run]
-  local sha=$1 out rc=0 keyed owed="" key line k rest; shift
-  [ "${MERGE_OPEN:-0}" -gt 0 ] 2>/dev/null || return 0
-  local cmd=(bash "${HERE:-$(dirname "${BASH_SOURCE[0]}")}/file-open-findings.sh" "$UNIT" "$sha" "$@")
-  [ -z "${AREA:-}" ] || cmd+=(--area "$AREA")
-  [ -z "${MILESTONE:-}" ] || cmd+=(--milestone "$MILESTONE")
-  out=$("${cmd[@]}" <<<"$BUILDER_PROOF" 2>&1) || rc=$?
-  { grep -vE '^(NOT FILED: |KEY )' <<<"$out" || true; } | sed 's/^/step 4 issues: /'
-  # Read from the answers, not the script's closing line: a script killed part way never prints that.
-  MERGE_ISSUES=$(sed -nE 's/^(FILED|ALREADY OPEN) #([0-9]+): .*/\2/p' <<<"$out" | paste -sd' ' -)
-  NOT_FILED=$(grep '^NOT FILED: ' <<<"$out" || true)
-  # The script names every finding's key before it calls GitHub, then answers
-  # each finding with its key. Counted against the proof's own list: a
-  # finding with no key line of its own (the script died naming them) or with
-  # a key and no answer is one it never reached.
-  keyed=$(grep '^KEY ' <<<"$out" || true)
-  while IFS= read -r line; do
-    key=""
-    # Whole lines compared, never split into words: a command in a finding may hold two spaces.
-    while IFS= read -r k; do rest=${k#KEY *: }; [ "$rest" != "$line" ] || { k=${k#KEY }; key=${k%%:*}; break; }; done <<<"$keyed"
-    [ -n "$key" ] && grep -qE '^(FILED #|ALREADY OPEN #|WOULD FILE |NOT FILED: )' <<<"$(grep -F -- " [$key]" <<<"$out")" || owed+=$line$'\n'
-  done < <(sed -n 's/^Open at merge: //p' <<<"$BUILDER_PROOF")
-  owed=$(sed "/^\$/d; s/\$/ (file-open-findings.sh ended with code $rc before it reached this finding)/; s/^/NOT FILED: /" <<<"$owed")
-  [ -z "$owed" ] || NOT_FILED+=${NOT_FILED:+$'\n'}$owed
-  # Any ending but a clean one earns the retry command, printed with these lines.
-  [ "$rc" = 0 ] || [ -n "$NOT_FILED" ] \
-    || NOT_FILED="NOT FILED: not known which (file-open-findings.sh ended with code $rc after an answer for every finding)"
-  FILE_AGAIN="printf '%s\\n' $(printf '%q ' "$(grep -E '^(Builder proof|Open at merge): ' <<<"$BUILDER_PROOF")") | $(printf '%q ' "${cmd[@]}")"
-  return 0
-}
 # The unit's issues, closed at its merge (issue 239): each one the brief lists that the commit message names (#N),
 # and each one under the brief's "Close as shipped" heading. One the message does not name stays open and is named.
 # A close GitHub refuses is printed last as NOT CLOSED with its command, and the script ends with code 3.
@@ -225,11 +177,6 @@ merged_end() {
   local rc=$?
   trap - EXIT
   [ "$rc" = 0 ] || { echo "MERGED as $(git rev-parse --short=8 HEAD), but a step after the merge commit failed (above): do not merge $UNIT again; finish that step by hand" >&2; rc=3; }
-  if [ -n "$NOT_FILED" ]; then
-    echo "MERGED, but $(grep -c . <<<"$NOT_FILED") finding(s) left open have no issue. File them from the main checkout with: $FILE_AGAIN" >&2
-    echo "$NOT_FILED" >&2
-    [ "$rc" = 3 ] || rc=4
-  fi
   if [ -n "$NOT_CLOSED" ]; then
     echo "MERGED, but GitHub did not close $(grep -c . <<<"$NOT_CLOSED") issue(s); close them by hand:" >&2
     printf '%s' "$NOT_CLOSED" >&2; rc=3
@@ -237,12 +184,6 @@ merged_end() {
   [ "$rc" != 0 ] || [ -z "$POST_FAILED" ] || { echo "MERGED, but a post-merge line was refused or its step failed (step 4 post-merge, above); the merge stands" >&2; rc=5; }
   exit "$rc"
 }
-if [ "$DRY_RUN" = 1 ]; then
-  file_open_findings "$TIP" --dry-run
-  # A dry run filed nothing, so it owes nothing at its end: what the lookup could not answer is said here.
-  [ -z "$NOT_FILED" ] || sed 's/^NOT FILED: /step 4 issues: could not look up: /' <<<"$NOT_FILED"
-  NOT_FILED=""
-fi
 
 # The feat commit names the unit; a red-tests commit can touch a support file
 # too, so "first non-test commit" alone would title the squash "add red tests".
@@ -457,7 +398,6 @@ if [ "$DRY_RUN" = 0 ]; then
   else TREES="$MERGE_TREE != unit tip tree $TIP_TREE"
   fi
   echo "step 4 evidence: merged $UNIT as $(git rev-parse --short=8 "$MERGE_SHA"); tree $TREES"
-  file_open_findings "$MERGE_SHA"
   close_issues
   # Issue 255: the brief's "## Post-merge" lines, each a job of its own once the merge stands. Only the three on
   # the list run; any other line is refused with exit 5. A refused or failed step undoes nothing and ends the
@@ -497,10 +437,9 @@ if [ "$DRY_RUN" = 0 ]; then
   # cannot be written (the lock held 5 s) costs the list one build, never the merge. The line names this checkout by its real path: the
   # file is named by the folder's name alone, which another checkout elsewhere may share.
   BUILDS=$HOME/.commandeck/builds/$PP_PROJECT.jsonl
-  open_at() { grep -cE "^Open at merge: ([-*][[:space:]]*)?\[$1\]" <<<"$BUILDER_PROOF" || true; }
   ( exec 8<"$HOME" && flock -w 5 8 && mkdir -p "${BUILDS%/*}" && jq -cn --arg main "$(cd "$ROOT" && pwd -P)" --arg unit "$UNIT" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$MERGE_SHA" \
-      --argjson p1 "$(open_at P1)" --argjson p2 "$(open_at P2)" --argjson p3 "$(open_at P3)" --argjson post "$POST_JSON" \
-      '{$main, $unit, how: "merged", $at, $sha, open: {P1: $p1, P2: $p2, P3: $p3}} + (if $post == [] then {} else {$post} end)' >> "$BUILDS" ) \
+      --argjson post "$POST_JSON" \
+      '{$main, $unit, how: "merged", $at, $sha} + (if $post == [] then {} else {$post} end)' >> "$BUILDS" ) \
     || echo "finished-builds record not written to $BUILDS: the dashboard will not list $UNIT (ignored)" >&2
   # The token ledger: a Builder's seat is never collected, it ends with this merge, so its row is written here,
   # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.
@@ -514,13 +453,11 @@ if [ "$DRY_RUN" = 0 ]; then
   ENDS=$(for f in ${REPORTS[@]+"${REPORTS[@]}"}; do tail -n 1 "$f"; done)
   GO_ROUNDS=$(grep -cx 'VERDICT: GO' <<<"$ENDS" || true) NO_GO_ROUNDS=$(grep -cx 'VERDICT: NO-GO' <<<"$ENDS" || true)
   [ $((GO_ROUNDS + NO_GO_ROUNDS)) = "${#REPORTS[@]}" ] || GO_ROUNDS="" NO_GO_ROUNDS=""
-  # The outcome is the rule the proof verified: a P2 tail merged on a closing NO-GO, never a converged GO.
   RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
   COMMANDECK_MAIN=$ROOT UNIT_LEDGER_MERGE_SHA=$MERGE_SHA \
-    UNIT_LEDGER_VERDICT=$(if [ "${#REPORTS[@]}" = 0 ]; then echo NO-ROUNDS; elif [ "$RULE" = "P2 tail" ]; then echo P2-TAIL; else echo CONVERGED-GO; fi) \
+    UNIT_LEDGER_VERDICT=$(if [ "${#REPORTS[@]}" = 0 ]; then echo NO-ROUNDS; else echo CONVERGED-GO; fi) \
     UNIT_LEDGER_ROUNDS=${#REPORTS[@]} UNIT_LEDGER_GO_ROUNDS=$GO_ROUNDS UNIT_LEDGER_NO_GO_ROUNDS=$NO_GO_ROUNDS \
-    UNIT_LEDGER_MERGE_RULE=$RULE UNIT_LEDGER_MERGE_OPEN=$MERGE_OPEN \
-    UNIT_LEDGER_MERGE_ISSUES=$MERGE_ISSUES bash "$HERE/unit-ledger.sh" "$UNIT" local --append \
+    UNIT_LEDGER_MERGE_RULE=$RULE bash "$HERE/unit-ledger.sh" "$UNIT" local --append \
     || echo "no unit ledger row written for $UNIT (ignored)" >&2
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -540,6 +477,6 @@ if [ "$DRY_RUN" = 0 ]; then
   orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"
   bash "$HERE/codex-helpers.sh" stop "$WT" || true
 fi
-echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${MERGE_ISSUES:+; issues for the findings left open: $MERGE_ISSUES}"
+echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed"
 # The unit's seats are done with: main-watch's item tasks about them are handled by this merge.
 [ "$DRY_RUN" = 1 ] || pp_close_items $(sed -n 's/^handle=//p' "$PP_SCRATCH"/seat-"$UNIT"-*.txt 2>/dev/null || true)
