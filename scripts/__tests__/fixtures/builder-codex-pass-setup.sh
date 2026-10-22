@@ -11,7 +11,7 @@ TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
 # Issue 301: a fresh-round helper a pass started outlives the file; the exit kills any that still names its folder.
 trap 'pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"' EXIT
 export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
-unset COMMANDECK_MAIN COMMANDECK_ROUTING
+unset COMMANDECK_MAIN COMMANDECK_ROUTING CLAUDE_CONFIG_DIR
 REPO=$TMP/proj U=unit
 mkdir -p "$HOME" "$TMP/ws" "$TMP/cli" "$TMP/py" "$CODEX_HOME"
 

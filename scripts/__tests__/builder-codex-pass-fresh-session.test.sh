@@ -15,8 +15,9 @@ mkdir -p "$PROJ"; echo "$B/$U-fix-r7.md" > "$PROJ/old-sid.jsonl"; touch -t 20990
 
 # Issue 302: a pass that ran long ends GO in a context grown through it; the next round starts fresh as after a NO-GO.
 rm -f "$TMP/frs-calls"; printf 'echo twenty-two\n' > "$W/a.sh"
+# -1, not 0: the stub pass can end within the second it started, and a pass of 0 s is not over 0 s.
 check "a GO after a long pass writes the continue hand-off and starts the helper" "0 1 1" \
-  "$(fpass "$W" 22 review 'VERDICT: GO' COMMANDECK_LONG_PASS_SECONDS=0) $(grep -c 'Pass 22 ended GO; continue from the evidence file' "$B/$U-after-r22.md" 2>/dev/null) $(grep -c '^FRESH SESSION after pass 22: end your turn now' "$TMP/out")"
+  "$(fpass "$W" 22 review 'VERDICT: GO' COMMANDECK_LONG_PASS_SECONDS=-1) $(grep -c 'Pass 22 ended GO; continue from the evidence file' "$B/$U-after-r22.md" 2>/dev/null) $(grep -c '^FRESH SESSION after pass 22: end your turn now' "$TMP/out")"
 for _ in $(seq 100); do grep -q 'now names\|stays in' "$SC/$U-after-r22.log" 2>/dev/null && break; sleep 0.1; done
 check "and the helper typed the pointer to it" 1 "$(grep -cF "Your task spec is the file $B/$U-after-r22.md." "$TMP/frs-calls")"
 # A closing GO, then a commit after it: the review over it runs as final.

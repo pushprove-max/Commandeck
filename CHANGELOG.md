@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.2 -- 2026-10-22
+
+- The fresh-session pass test no longer fails on a fast CI runner: its long-pass case sets the threshold below zero,
+  so a pass that ends in the second it started still counts as long.
+- The pass tests' shared fixture clears `CLAUDE_CONFIG_DIR`, so a run inside an Orca pane uses the fixture's stub
+  Codex plugin, not the real one under that profile.
+
 ## 0.25.1 -- 2026-10-22
 
 - A past-line marker left behind by a compaction or a restart that never came no longer blocks main's tools: the gate
