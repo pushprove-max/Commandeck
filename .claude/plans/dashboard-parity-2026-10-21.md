@@ -40,13 +40,13 @@ Port by commit (owner ruling, 2026-10-20): a PORT item ports the named host comm
 
 ## Owner answers
 
-1. Issue 292: this unit builds the switch breakers (item 2) and the rows its own issues cover; the rest of 292 is a second plan, one row per host commit, written after this unit merges (r-20261021-105952-1).
-2. Size: this unit builds items 1-13; items 14 and 15 (issues 269 and 263) are a second unit, built from this plan right after this one merges (r-20261021-105952-2).
-3. Issue 263: the login is on only when the bind is not loopback, and off on a loopback bind, as today (r-20261021-105952-3).
-4. No second-machine (peer host) support anywhere in the plugin: issue 269 has no peer lane, and no peer row of issue 292 is built (r-20261021-105952-4). The owner also closed sibling issues 296 and 297 as won't do.
-5. Issues 271 and 272: port the host's unit-ledger writer into the plugin's merge, and both panels read it (r-20261021-110114-1). Escapes reach that ledger through the host's escape tagger, ported to append to it (main, under r-20261021-110114-1).
-6. The plugin never writes the host's personal-name decisions key; the host's relay watchers read `needsOwner.decisions` after the switch, a host-side change (r-20261021-110114-2).
-7. Alert ids: seed once. `cos-watch-alerts.sh --seed` adds every alert id open now to the seen file, the switch steps run it once, and ids stay as they are (r-20261021-110114-3).
+1. Issue 292: this unit builds the switch breakers (item 2) and the rows its own issues cover; the rest of 292 is a second plan, one row per host commit, written after this unit merges.
+2. Size: this unit builds items 1-13; items 14 and 15 (issues 269 and 263) are a second unit, built from this plan right after this one merges.
+3. Issue 263: the login is on only when the bind is not loopback, and off on a loopback bind, as today.
+4. No second-machine (peer host) support anywhere in the plugin: issue 269 has no peer lane, and no peer row of issue 292 is built. The owner also closed sibling issues 296 and 297 as won't do.
+5. Issues 271 and 272: port the host's unit-ledger writer into the plugin's merge, and both panels read it. Escapes reach that ledger through the host's escape tagger, ported to append to it (main, under the same ruling).
+6. The plugin never writes the host's personal-name decisions key; the host's relay watchers read `needsOwner.decisions` after the switch, a host-side change.
+7. Alert ids: seed once. `cos-watch-alerts.sh --seed` adds every alert id open now to the seen file, the switch steps run it once, and ids stay as they are.
 
 ## Item 0. Close as shipped (main closes these; no build)
 

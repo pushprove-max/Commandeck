@@ -41,15 +41,15 @@ Skill for the build: `mattpocock-skills:tdd`. Every item with logic is red first
 
 ## Owner answers
 
-1. Issue 287: a written rule, no mechanical gate (r-20261021-110244-1). Item 2.
-2. Issues 302, 303 and 304: build them now, from the issue text (r-20261021-110244-2). Items 15-17.
-3. Issue 256: add a `maxBuilders` cap setting, read under one admission lock (r-20261021-110244-3). Item 7.
-4. Issue 258: its merge-gate part goes with issue 254 in the sibling unit merge-checkpoint-relay-2026-10-21
-   (r-20261021-110244-4). Item 14 drops it.
-5. Issues 260 and 266: as the host does, `review` stays narrowed before the first closing pass (r-20261021-110320-1).
+1. Issue 287: a written rule, no mechanical gate. Item 2.
+2. Issues 302, 303 and 304: build them now, from the issue text. Items 15-17.
+3. Issue 256: add a `maxBuilders` cap setting, read under one admission lock. Item 7.
+4. Issue 258: its merge-gate part goes with issue 254 in the sibling unit merge-checkpoint-relay-2026-10-21.
+   Item 14 drops it.
+5. Issues 260 and 266: as the host does, `review` stays narrowed before the first closing pass.
    Item 10.
-6. Issue 265: port the merge refusal too (r-20261021-110320-2). Item 6, in `merge-unit-local.sh`.
-7. Plugin-wide: the plugin does not add support for a second machine (r-20261021-105952-4). No item in this unit had a
+6. Issue 265: port the merge refusal too. Item 6, in `merge-unit-local.sh`.
+7. Plugin-wide: the plugin does not add support for a second machine. No item in this unit had a
    peer-host part: none of its 32 issues asks for one. Issue 256's "host load" is not built (item 7).
 
 ## Item 0. Close as shipped (main closes these; no build)

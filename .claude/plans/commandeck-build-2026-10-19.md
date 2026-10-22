@@ -2,7 +2,7 @@
 
 Order: the owner, 2026-10-19 06:43 ET: "now start the plugin build for all the plugin issues". One unit, one
 Builder, no split. Scope: every issue open at that time, 191 to 212 (22). At 06:44 the owner added 213 and 214
-(ruling r-20261019-064404), so there are 24. Issues 191 to 202 and 205 already shipped (item 0); this build is
+so there are 24. Issues 191 to 202 and 205 already shipped (item 0); this build is
 the other eleven. Issues 212 and 206 (both P1) are built first.
 
 Base: local main 6c0e3dc (0.19.0, not yet pushed; origin/main is f7ac166).
@@ -70,7 +70,7 @@ The rest of 203 is item 8.
   step. Also, a P0/P1 written in prose only, with no `[P1]` line, is not read (`:628`, a known `shortcut:`).
 
 Issue 212 asks for two things. The next step after a NO-GO is never "merge". The merge refuses when the latest
-verdict is not GO. The second would retire the P2-tail rule. The owner ruled on that (r-20261019-065159): **keep
+verdict is not GO. The second would retire the P2-tail rule. The owner ruled on that: **keep
 the P2 tail at merge.** The script says "fix round" after any NO-GO and never "merge it". It names a P2-tail merge
 as the owner's call, and main asks the owner before that merge. `--verify` does not change.
 
