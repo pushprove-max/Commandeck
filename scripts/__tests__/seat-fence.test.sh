@@ -7,25 +7,25 @@ set -uo pipefail
 # The judge these cases read, launched in pu's planning worktree by the setup lines of seat-plan-marker.test.sh.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
-srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
-JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt)
+srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-sol.txt)
 
 # Sol r4: with no session log to read, the idle screen decides, and a marker it shows inside a fence is a quoted
 # sample, never the pane's own: three idle polls of it saved the marker and flagless collect closed the seat.
 printf 'Still judging.\n```\nPLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
-srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
 check "an idle screen quoting the marker in a fence, with no session log, is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
-srun collect plan-judge-claude pu --marker PLAN-DONE >"$T/out" 2>&1
+srun collect plan-judge-sol pu --marker PLAN-DONE >"$T/out" 2>&1
 check "and collect, even given the marker, keeps the pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
 # A screen is a viewport: one that opens inside the fence, its opening line scrolled away, still quotes the marker.
 printf 'PLAN-DONE\n```\nPlease clarify the scope.\n' > "$T/screen"
-srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
 check "a screen opening inside a fence that quotes the marker is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
 # Sol r5: a real bare opening fence still streaming is the same text as a cropped closing one; ambiguity never releases.
 printf 'Still judging.\n```\nPLAN-DONE\n' > "$T/screen"
-srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
+srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 3 >"$T/out" 2>&1
 check "a screen ending inside a bare fence that quotes the marker is not released" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
-srun collect plan-judge-claude pu --marker PLAN-DONE >"$T/out" 2>&1
+srun collect plan-judge-sol pu --marker PLAN-DONE >"$T/out" 2>&1
 check "and collect, even given the marker, keeps the pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
 # The session log outranks the screen (Sol r2): a finished turn whose reply ends on a question, not the marker, is no
 # marker, though the idle screen still shows the reply's fenced sample of it.
@@ -60,8 +60,8 @@ jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$PWT" '
   {type: "response_item", timestamp: $t, payload: {type: "message", role: "user", content: [{type: "input_text", text: "Judge it. Seat tag seat-sol-1."}]}},
   {type: "event_msg", timestamp: $t, payload: {type: "task_started"}},
   {type: "event_msg", timestamp: $t, payload: {type: "task_complete", last_agent_message: "No findings.\nVERDICT: GO"}}' > "$JL"
-# A project that allows the judge its Codex model, so the seat stays a Codex one.
-jq --arg m "$(jq -r '.roles["plan-judge-sol"].model' "$REAL/config/routing.json")" '.planModels = [$m]' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+# The judge's agent key on codex, so the seat is a Codex one.
+jq '.pluginConfigs["commandeck@commandeck"].options.planJudgeSolAgent = "codex"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 # A Codex seat's log is not found at launch (no Claude process to ask), so the wait binds it into the record: a
 # running judge's spend is then its own, not "Not tied to a seat". A sibling's newer log in the same home and
 # worktree, under another seat's tag, is not the one bound.

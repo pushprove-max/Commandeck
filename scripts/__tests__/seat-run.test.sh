@@ -10,8 +10,8 @@ PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo
 echo PLAN-DONE > "$T/screen"; mkdir -p "$PWT/.claude/plans"; echo 'the plan' > "$PWT/.claude/plans/pu.md"
 PH=$(sha256sum < "$PWT/.claude/plans/pu.md" | cut -d' ' -f1)
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
-srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
-JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt)
+srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-sol.txt)
 
 # Issue 257: seat.sh run is launch, wait and collect in one call, one line back; issue 288: each outcome is exactly
 # one wake for main (collect's verdict wake, or run's own line when there is none), never zero and never two.
@@ -19,10 +19,10 @@ SQ=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1)queue/main.jsonl
 wakes() { cat "$T/wakes" "$SQ" 2>/dev/null | wc -l | tr -d ' '; }
 rrun() { : > "$T/wakes"; rm -f "$SQ" "$T/pane-up"; (export COMMANDECK_FOREGROUND=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 COMMANDECK_LOOP_POLL_SECONDS=0; seat_sh run "$@"); }
 printf 'Judge the plan below, run one.\nPlan: .claude/plans/pu.md\nEnd on a verdict line.\n' > "$T/run-go.md"; echo 'VERDICT: GO' > "$T/screen"
-OUT=$(rrun plan-judge-claude pu "$T/run-go.md" --effort high 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")
+OUT=$(rrun plan-judge-sol pu "$T/run-go.md" --effort high 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")
 # The line is the whole of stdout: a reader of its first line gets the verdict, never the launch's or wait's chatter.
 check "run on GO: exit 0, one line naming the verdict and a report that exists, nothing else on stdout, one wake" "0:1:1:yes:1" \
-  "$RC:$(grep -cx "seat=plan-judge-claude unit=pu VERDICT: GO report=$RP" <<<"$OUT"):$(grep -c . <<<"$OUT"):$([ -s "$RP" ] && echo yes):$(wakes)"
+  "$RC:$(grep -cx "seat=plan-judge-sol unit=pu VERDICT: GO report=$RP" <<<"$OUT"):$(grep -c . <<<"$OUT"):$([ -s "$RP" ] && echo yes):$(wakes)"
 check "run hands the plan seat's launch options to its launch, and main's rules name run" "1:1" \
   "$(grep -cx 'opts=--effort high' "$JREC"):$(grep -c '`seat.sh run` launches, waits and collects' "$REAL/templates/main-session.md")"
 check "a plan judge's launch records the plan it reads and that plan's hash, and its collect when (issue 256)" "1:1:1" \
@@ -35,14 +35,14 @@ check "a plan judge reads a read-only copy of the plan, the copy its record hash
   "$(grep -c '^Judge the plan below, run one\.$' "$JSPEC" 2>/dev/null):$(grep -c '^Plan: \.claude/plans/pu\.md$' "$JSPEC" 2>/dev/null):$(sha256sum < "$SNAP" 2>/dev/null | cut -d' ' -f1):$([ -f "$SNAP" ] && [ ! -w "$SNAP" ] && echo ro)"
 echo 'the plan' > "$PWT/.claude/plans/pu.md"
 printf 'Judge the plan, run two.\nEnd on a verdict line.\n' > "$T/run-nogo.md"; printf -- '- [P1] a gap\nVERDICT: NO-GO\n' > "$T/screen"
-OUT=$(rrun plan-judge-claude pu "$T/run-nogo.md" 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")
+OUT=$(rrun plan-judge-sol pu "$T/run-nogo.md" 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")
 check "run on NO-GO: exit 1, one line, a report that exists, one wake" "1:1:yes:1" \
-  "$RC:$(grep -cx "seat=plan-judge-claude unit=pu VERDICT: NO-GO report=$RP" <<<"$OUT"):$([ -s "$RP" ] && echo yes):$(wakes)"
+  "$RC:$(grep -cx "seat=plan-judge-sol unit=pu VERDICT: NO-GO report=$RP" <<<"$OUT"):$([ -s "$RP" ] && echo yes):$(wakes)"
 printf 'Judge the plan, run three.\nEnd on a verdict line.\n' > "$T/run-dead.md"; printf 'Still judging.\nesc to interrupt\n' > "$T/screen"; touch "$T/die-on-wait"
-OUT=$(rrun plan-judge-claude pu "$T/run-dead.md" 2>/dev/null); RC=$?
+OUT=$(rrun plan-judge-sol pu "$T/run-dead.md" 2>/dev/null); RC=$?
 # The wake is a question, never a status: orca-wait.sh drops a status main's own handle sent, and a run from main has it.
 check "a pane killed mid-run: exit 3, no verdict, never GO, and one wake saying so, of a type main's inbox keeps" "3:1:0:1:1:question" \
-  "$RC:$(grep -c '^seat=plan-judge-claude unit=pu no verdict' <<<"$OUT"):$(grep -c 'GO' <<<"$OUT"):$(wakes):$(grep -c 'no verdict' "$SQ" 2>/dev/null):$(jq -r .type "$SQ" 2>/dev/null)"
+  "$RC:$(grep -c '^seat=plan-judge-sol unit=pu no verdict' <<<"$OUT"):$(grep -c 'GO' <<<"$OUT"):$(wakes):$(grep -c 'no verdict' "$SQ" 2>/dev/null):$(jq -r .type "$SQ" 2>/dev/null)"
 rm -f "$T/die-on-wait"
 
 echo "$PASS passed, $FAIL failed"

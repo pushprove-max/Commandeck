@@ -2,10 +2,10 @@
 # plan-tier.sh <batch-brief> -- the Auto answer to "Write a plan first?", the default (owner's ruling 2026-10-17).
 # Picks No plan, Plan + judge or Panel from the triggers in the project's .claude/plan-triggers.tsv, or the plugin's
 # config/plan-triggers.tsv when the project has none, read against the batch's "The issues" and "The batch"
-# sections. When unsure it goes one tier up: No plan only when every item line matches a none trigger. Prints the
-# tier and the trigger that picked it, then each seat with the model it runs on among the models setup allows
-# (pp_plan_seat says any model or seat used instead, on stderr). For Panel the owner is still asked which model
-# writes the second plan.
+# sections. When unsure it goes one tier up: No plan only when every item line matches a none trigger. A seat off in
+# /plugin config is no seat: plan-author off is No plan, one judge off leaves the other alone, and both off is One
+# planner (the plan installs unjudged). Prints each seat that is off, the tier and the trigger that picked it, then
+# each seat with the agent and model it runs on.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -30,16 +30,24 @@ PICK=$(awk -F'\t' '
     else if (quiet) print "Plan + judge\t" none " matched only some items, so one tier up"
     else print "Plan + judge\teverything else" }' "$TRIG" "$BATCH")
 TIER=${PICK%%$'\t'*} WHY=${PICK#*$'\t'}
-echo "tier: $TIER (trigger: $WHY; from $TRIG)"
+# on <role> -- the seat is on in /plugin config (issue 312); a value its Enabled key does not take stops here.
+on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
 case $TIER in
-  'No plan') echo "launch: builder-launch.sh --skip-plan --reason 'Auto picked No plan: $WHY'"; exit 0 ;;
-  'Plan + judge') SEATS=(plan-author plan-judge-sol) ;;
-  *) SEATS=(plan-author plan-author-second plan-judge-astra plan-judge-sol) ;;
+  'No plan') SEATS=() ;;
+  'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-astra) ;;
+  *) SEATS=(plan-author plan-judge-astra plan-judge-sol) ;;
 esac
-for r in "${SEATS[@]}"; do
-  S=$(pp_plan_seat "$r") || exit 2
-  # Launched under its own name (seat.sh routes it as the other role), so two judges stay two seats.
-  if [ "${S% *}" = "$r" ]; then echo "seat: $S"; else echo "seat: $r ${S#* } (as ${S% *})"; fi
-  [ "$r" != plan-author-second ] || SECOND=${S#* }
+# An author that is off is no plan; a judge that is off leaves the other to judge alone, and none leaves the plan unjudged.
+OUT=()
+for r in ${SEATS[@]+"${SEATS[@]}"}; do
+  if on "$r"; then OUT+=("$r"); else echo "off: $r ($(pp_role_key "$r" enabled)=false in /plugin config)"; fi
 done
-[ "$TIER" != Panel ] || echo "ask the owner: which model writes the second plan? (default $SECOND; allowed: $(pp_plan_models))"
+if [ "$TIER" != 'No plan' ] && [[ " ${OUT[*]-} " != *" plan-author "* ]]; then TIER='No plan' WHY='plan-author is off in /plugin config'
+elif [ "$TIER" != 'No plan' ] && [ "${#OUT[@]}" = 1 ]; then TIER='One planner' WHY="$WHY; every judge is off in /plugin config, so the plan installs unjudged"; fi
+echo "tier: $TIER (trigger: $WHY; from $TRIG)"
+[ "$TIER" != 'No plan' ] || { [[ $WHY == *' is off in '* ]] || WHY="Auto picked No plan: $WHY"; echo "launch: builder-launch.sh --skip-plan --reason '$WHY'"; exit 0; }
+# Each seat launches under its own name, on its own agent, model and effort keys, so two judges stay two seats.
+for r in "${OUT[@]}"; do
+  S=$(pp_plan_seat "$r") || exit 2
+  echo "seat: $S"
+done

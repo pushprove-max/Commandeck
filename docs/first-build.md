@@ -25,8 +25,8 @@ seat=builder unit=add-csv-export handle=term_… task=task_… state=… record=
 ```
 
 The Builder builds the batch, then runs its own review passes with
-`builder-codex-pass.sh` (or `builder-claude-pass.sh` in the `claude`
-profile). Each pass commits the worktree first, excluding its brief files, so the
+`builder-codex-pass.sh`, on the reviewer the `codexReviewerAgent` key
+names (Codex, or Claude in the `claude` profile). Each pass commits the worktree first, excluding its brief files, so the
 reviewer reads a fixed commit, and writes a round file from the reviewer's own session record.
 The merge takes the verdict from the reviewer's session files and not from
 the round file, so a round file written by hand merges nothing. That stops a

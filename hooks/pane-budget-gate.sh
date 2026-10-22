@@ -129,7 +129,7 @@ HANDOFF="$CLAUDE_PROJECT_DIR/.claude/briefs/${UNIT}-handoff.md"
 [ "$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty')" = "$HANDOFF" ] && exit 0
 if [ ! -f "$HANDOFF" ]; then
   echo "pane budget exceeded ($PB_SUMMARY); write $HANDOFF with headings: decisions, unresolved findings, current commit, test evidence" >&2
-  echo "options: simplify the unit; reset the pane from the handoff file; reassign to a fresh pane; escalate to a design pane" >&2
+  echo "options: simplify the unit; reset the pane from the handoff file; reassign to a fresh pane; escalate to main" >&2
   exit 2
 fi
 # Every missing heading in one refusal, with the skeleton to paste.

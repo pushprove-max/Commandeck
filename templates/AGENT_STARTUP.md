@@ -21,8 +21,8 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
    `templates/main-session.md` under Details. A plan is never a build order: with no build word from the owner,
    main STOPS at the plan file.
 1. Main: `bash scripts/builder-launch.sh <unit> <batch file>` opens the
-   worktree, the brief and the Builder pane. With `--risky` it opens a design
-   pane instead; run it again once the design note exists to open the Builder.
+   worktree, the brief and the Builder pane. With `--risky` the merge waits on
+   three reviewers.
    A tooling build expected under 200 changed lines is launched `--small` on
    the smaller model with `--model sonnet --reason '<one line>'`: no advisor
    unless it is `--risky`, and the pick is logged in `.claude/routing-log`. A

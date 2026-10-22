@@ -38,11 +38,14 @@ that leaves only P2 or P3 findings still merges: the merge prints each one as
 open and files a GitHub issue for it. If GitHub cannot be reached the merge
 stands, the output lists what was not filed, and the exit code is 4.
 
-A launch with `--risky` opens a design pane first. It writes a design note
-that the Builder reads before it builds; running the same command again opens
-the Builder at the effort the first call recorded. Given `--effort` and `--reason`,
-that second call rewrites the brief's override and logs the change in the evidence
-file before the Builder opens; it refuses while that Builder already runs. Setup adds no advisor, including for risky builds. A manually configured
+The fix passes after a review run as the fixer role. The first one runs on the
+model and effort the Builder was launched with, and the later ones on Opus
+high. The `fixer*` keys in `/plugin` config change both, and
+`fixerEnabled=false` keeps every fix pass on the Builder's launch.
+
+A launch with `--risky` opens the Builder at once. Its brief gets a
+`## Risky launch` section, and its first pass has three reviewers whatever its
+size. Setup adds no advisor, including for risky builds. A manually configured
 `roles.builder.advisor` can still add one. A
 launch with `--small` says the batch is expected under 200 changed lines; it
 also drops an advisor written into `config/routing.json`'s `roles.builder` by

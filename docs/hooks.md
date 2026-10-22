@@ -15,7 +15,7 @@ and event checks:
 | `duplicate-agent-guard.sh` | Blocks a second live agent in one worktree and a new job sent to a busy pane. |
 | `dependency-addition-guard.sh` | Blocks unapproved new npm packages in install commands and package edits; protects dependency and supply-chain decisions. |
 | `literal-secret-warning.sh` | Warns about quoted secret-like literals of eight or more characters in executable code; excludes tests and config/env files. |
-| `agent-model-guard.sh` | Fills missing helper models, forces Builder Explore calls to Haiku, and suggests lean helpers; it never refuses the call. |
+| `agent-model-guard.sh` | Fills missing helper models (Explore: Haiku, general-purpose: Sonnet), forces Builder Explore calls to Haiku, and asks for a type when a call names none; it never refuses the call. |
 | `no-poll-loops.sh` | Blocks main's sleep polling, unqualified Orca inbox checks and worker foreground waits past the cache budget; use event waits or background jobs. |
 | `worker-ask-guard.sh` | Blocks worker pickers that would never reach you; main and the relay can ask, with a decoy first option outside setup. |
 | `write-existing-file-guard.sh` | Warns when a large edit mostly repeats existing lines, so the edit can stay small. |

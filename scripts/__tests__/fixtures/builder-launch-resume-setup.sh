@@ -16,7 +16,7 @@ git -C "$P" add -A && git -C "$P" -c user.name=t -c user.email=t@t commit -q -m 
 # the Builder would open with; the pass script has nothing to check, and the planning worktree has nothing to close.
 cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/templates" "$REAL/config" "$T/plug/"
 printf '#!/usr/bin/env bash\n[ ! -e "%s/seat-fails" ] || exit 1\necho "$1 $2 $3" >> "%s/seats"\n[ ! -e "%s/seat-opens-fails" ] || { touch "%s/pane-open"; exit 1; }\n[ "$1 $2" != "launch builder" ] || { bash "$(dirname "$0")/worktree-setup.sh" "$COMMANDECK_WORKSPACES/$3" >/dev/null 2>&1; jq -r ".env.COMMANDECK_SKILL_KEEP // \\"none\\"" "$COMMANDECK_WORKSPACES/$3/.claude/settings.local.json" > "%s/keep-at-open"; }\n' "$T" "$T" "$T" "$T" "$T" > "$T/plug/scripts/seat.sh"
-printf '#!/usr/bin/env bash\necho "claude-x\\tx"\n' > "$T/plug/scripts/builder-claude-pass.sh"
+printf '#!/usr/bin/env bash\necho "claude-x\\tx"\n' > "$T/plug/scripts/builder-codex-pass.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T/plug/scripts/plan-worktree-close.sh"
 cat > "$T/bin/orca-ide" <<EOS
 #!/usr/bin/env bash

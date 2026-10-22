@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.0 -- 2026-10-22
+
+- Seven roles are left: orchestrator, plan-author, plan-judge-sol, plan-judge-astra, builder, fixer and
+  codex-reviewer. The second plan author, the Claude judge, the Claude reviewer, the design co-author, the platform
+  audit and the three plugin agent files are gone. A Panel is one plan author and both judges. A `--risky` launch
+  opens the Builder at once and its merge waits on three reviewers.
+- Helpers are the built-in types: `Explore` runs on Haiku and `general-purpose` on Sonnet. The model guard asks for
+  a type when a call names none.
+- The new fixer role runs the fix passes after a review: the first one on the model and effort the Builder was
+  launched with, the later ones on Opus high. The `fixer*` keys change both; `fixerEnabled=false` keeps every fix
+  pass on the Builder's launch (#313).
+- Each role's model, effort, agent, on/off and fast tier is a `/plugin` config key, 25 new keys, read by one checked
+  reader; a value a role does not take is refused, naming the key. The reviewer and both judges can run on Claude by
+  their agent key. Setup takes `--option <key>=<value>` in place of `--builder-model`, `--builder-effort`,
+  `--codex-model`, `--plan-models`, `--plan-fast` and `--codex-fast`, and writes the main session's model and effort.
+  Role settings an older setup saved in `.claude/commandeck.json` are no longer read: set them again as keys (#312).
+
 ## 0.25.3 -- 2026-10-22
 
 - Fifteen plugin test cases that another named case already proves are gone, so the suites run fewer duplicate

@@ -7,19 +7,22 @@
 set -uo pipefail
 . "$(dirname "$0")/fixtures/seat-setup.sh"
 
-run launch claude-reviewer seat-unit "$T/spec.md" >"$T/out" 2>&1
+# The reviewer on its Claude agent (codexReviewerAgent=claude, the fixture's) is headless through its overlay.
+run launch codex-reviewer seat-unit "$T/spec.md" >"$T/out" 2>&1
 check "a headless role is refused as a pane seat" "2:1" "$?:$(grep -c 'is not a pane seat' "$T/out")"
 printf 'Write the findings to out.md.\n' > "$T/spec-w.md"; printf 'Read the fenced write). Map: x.md\n' > "$T/spec-p.md"
+# On codex the reviewer is a read-only Codex pane seat.
+jq '.pluginConfigs["commandeck@commandeck"].options.codexReviewerAgent = "codex"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 check "a read-only seat asked to write a file is refused; a clause ending on the verb is not an ask" '1:0' \
   "$(run launch codex-reviewer seat-unit "$T/spec-w.md" 2>&1 | grep -c 'spec asks it to write'):$(run launch codex-reviewer seat-unit "$T/spec-p.md" 2>&1 | grep -c 'spec asks it to write')"
 
 seat() { COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md"; }
-jq '.builder = {model: "sonnet"}' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+jq '.pluginConfigs["commandeck@commandeck"].options.builderModel = "sonnet"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 seat >"$T/out" 2>&1; check "the first Builder launch opens a pane" 0 $?
 seat >"$T/out" 2>&1; check "a second launch on the same settings reuses it" '0:1' "$?:$(grep -c 'state=reused' "$T/out")"
-jq 'del(.builder)' "$CFG" > "$T/cfg" && cp "$T/cfg" "$CFG"
+jq 'del(.pluginConfigs["commandeck@commandeck"].options.builderModel)' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 seat >"$T/out" 2>&1
-check "once the project's Builder model changed, the live pane is refused, and the refusal says why" '2:0:1' \
+check "once the Builder's model key changed, the live pane is refused, and the refusal says why" '2:0:1' \
   "$?:$(grep -c 'state=reused' "$T/out"):$(grep -c 'REFUSED: live builder seat h1 for seat-builder was opened with other launch settings' "$T/out")"
 # The reader prints an unfinished pane's last lines under "NO VERDICT YET"; reading a verdict there closed the seat.
 run collect builder seat-builder >"$T/out" 2>&1
@@ -36,17 +39,18 @@ check "a launched seat whose last screen read fails exits 0, its state unknown" 
 rm "$T/read-fails"
 run launch builder seat-builder "$T/spec.md" --effort max >"$T/out" 2>&1
 check "--effort max is refused before any pane opens" '2:1' "$?:$(grep -c 'REFUSED: --effort takes medium or high' "$T/out")"
-# A seat launched by hand is held to the launcher's floor: medium under a project default of high would lower it.
-jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+# A seat launched by hand is held to the launcher's floor: medium under a Builder default of high would lower it.
+jq '.pluginConfigs["commandeck@commandeck"].options.builderEffort = "high"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 run launch builder seat-builder "$T/spec.md" --effort medium >"$T/out" 2>&1
 check "--effort medium under a Builder default of high is refused before any pane opens" '2:1' \
   "$?:$(grep -c "REFUSED: --effort medium is below this project's Builder default high" "$T/out")"
-# Issue 293: the /config effort beats the project's saved one on the launch command itself, not only in the resolver.
+# Issue 293: the /config effort reaches the launch command itself, not only the resolver; the project's builder.effort,
+# an older setup's, is not read (issue 312).
 unset CLAUDE_CONFIG_DIR; mkdir -p "$HOME/.claude"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 jq '.builder = {effort: "medium"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; rm -f "$T/pane-up"
 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" >"$T/out" 2>&1
-check "a Builder launched with /config's effort high over the project's medium opens with --effort high" '0:1' \
+check "a Builder launched with /config's effort high, the project's file saying medium, opens with --effort high" '0:1' \
   "$?:$(grep '^cmd=' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt | tail -1 | grep -cE -- ' --effort high( |$)')"
 rm "$HOME/.claude/settings.json"
 

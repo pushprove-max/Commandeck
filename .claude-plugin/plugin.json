@@ -1,25 +1,189 @@
 {
   "name": "commandeck",
-  "version": "0.25.3",
+  "version": "0.26.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
   "repository": "https://github.com/pushprove-max/Commandeck",
   "license": "Apache-2.0",
   "userConfig": {
+    "orchestratorModel": {
+      "type": "string",
+      "title": "Main model",
+      "description": "The model main (the orchestrator) runs; setup writes it to the project's settings. project: Opus. Main cannot be off: it runs everything.",
+      "options": ["project", "opus", "sonnet", "fable"],
+      "default": "project"
+    },
+    "orchestratorEffort": {
+      "type": "string",
+      "title": "Main effort",
+      "description": "Main's reasoning effort; setup writes it to the project's settings. project: Claude Code's default.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
     "builderModel": {
       "type": "string",
       "title": "Builder model",
-      "description": "The model each Builder runs. Set here, it beats every project's setup answer; project keeps that answer.",
+      "description": "The model each Builder runs. project: Opus. A Builder cannot be off: with none there is no branch to review or merge.",
       "options": ["project", "opus", "sonnet", "fable"],
       "default": "project"
     },
     "builderEffort": {
       "type": "string",
       "title": "Builder effort",
-      "description": "The Builder's reasoning effort. Set here, it beats every project's setup answer; project keeps that answer.",
+      "description": "The Builder's reasoning effort. project: medium. A launch may raise it for one build.",
       "options": ["project", "low", "medium", "high", "max"],
       "default": "project"
+    },
+    "fixerEnabled": {
+      "type": "boolean",
+      "title": "Fixer",
+      "description": "On: the fix rounds of a build follow the Fixer settings below. Off: every fix round keeps the Builder's launched model and effort.",
+      "default": true
+    },
+    "fixerFirstModel": {
+      "type": "string",
+      "title": "Fixer model, first fix round",
+      "description": "The model of a build's first fix round. project or builder: the Builder's launched model.",
+      "options": ["project", "builder", "opus", "sonnet", "fable"],
+      "default": "project"
+    },
+    "fixerFirstEffort": {
+      "type": "string",
+      "title": "Fixer effort, first fix round",
+      "description": "The effort of a build's first fix round. project or builder: the Builder's launched effort, a per-build raise included.",
+      "options": ["project", "builder", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "fixerModel": {
+      "type": "string",
+      "title": "Fixer model, later fix rounds",
+      "description": "The model of a build's second and later fix rounds. project: Opus.",
+      "options": ["project", "opus", "sonnet", "fable"],
+      "default": "project"
+    },
+    "fixerEffort": {
+      "type": "string",
+      "title": "Fixer effort, later fix rounds",
+      "description": "The effort of a build's second and later fix rounds. project: high.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "codexReviewerAgent": {
+      "type": "string",
+      "title": "Reviewer",
+      "description": "Who runs the review passes: codex, or claude (a headless read-only Claude session). project: codex, or claude on the Claude-only profile. The reviewer cannot be off: the merge needs a GO pass.",
+      "options": ["project", "codex", "claude"],
+      "default": "project"
+    },
+    "codexReviewerModel": {
+      "type": "string",
+      "title": "Reviewer model",
+      "description": "On codex: a family (sol, astra) or a model id (gpt-6.1-sol). On claude: opus, sonnet or fable. project: sol, or sonnet on claude.",
+      "default": "project"
+    },
+    "codexReviewerEffort": {
+      "type": "string",
+      "title": "Reviewer effort",
+      "description": "The review pass's reasoning effort. project: medium, or high on claude.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "codexReviewerFast": {
+      "type": "boolean",
+      "title": "Reviewer fast tier",
+      "description": "The review passes run on the fast tier, which costs more. On codex it needs service_tier = \"fast\" in Codex's config.toml.",
+      "default": false
+    },
+    "planAuthorEnabled": {
+      "type": "boolean",
+      "title": "Plan author",
+      "description": "On: main asks for a plan before a build when the plan tier wants one. Off: no plan; builds launch with --skip-plan.",
+      "default": true
+    },
+    "planAuthorModel": {
+      "type": "string",
+      "title": "Plan author model",
+      "description": "The model that writes the plan. project: Opus.",
+      "options": ["project", "opus", "sonnet", "fable"],
+      "default": "project"
+    },
+    "planAuthorEffort": {
+      "type": "string",
+      "title": "Plan author effort",
+      "description": "The plan author's reasoning effort. project: high.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "planAuthorFast": {
+      "type": "boolean",
+      "title": "Plan author fast tier",
+      "description": "The plan author runs on the fast tier, which costs more.",
+      "default": false
+    },
+    "planJudgeSolEnabled": {
+      "type": "boolean",
+      "title": "Sol judge",
+      "description": "On: the Sol judge reads the plan. Off: the Astra judge judges alone, and with both off the plan installs unjudged.",
+      "default": true
+    },
+    "planJudgeSolAgent": {
+      "type": "string",
+      "title": "Sol judge agent",
+      "description": "codex, or claude (a read-only Claude pane). project: codex, or claude on the Claude-only profile.",
+      "options": ["project", "codex", "claude"],
+      "default": "project"
+    },
+    "planJudgeSolModel": {
+      "type": "string",
+      "title": "Sol judge model",
+      "description": "On codex: a family or a model id. On claude: opus, sonnet or fable. project: sol, or sonnet on claude.",
+      "default": "project"
+    },
+    "planJudgeSolEffort": {
+      "type": "string",
+      "title": "Sol judge effort",
+      "description": "The Sol judge's reasoning effort. project: high.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "planJudgeSolFast": {
+      "type": "boolean",
+      "title": "Sol judge fast tier",
+      "description": "The Sol judge runs on the fast tier, which costs more. On codex it needs service_tier = \"fast\" in Codex's config.toml.",
+      "default": false
+    },
+    "planJudgeAstraEnabled": {
+      "type": "boolean",
+      "title": "Astra judge",
+      "description": "On: the Astra judge reads the plan on the Panel tier. Off: the Sol judge judges alone.",
+      "default": true
+    },
+    "planJudgeAstraAgent": {
+      "type": "string",
+      "title": "Astra judge agent",
+      "description": "codex, or claude (a read-only Claude pane). project: codex, or claude on the Claude-only profile.",
+      "options": ["project", "codex", "claude"],
+      "default": "project"
+    },
+    "planJudgeAstraModel": {
+      "type": "string",
+      "title": "Astra judge model",
+      "description": "On codex: a family or a model id. On claude: opus, sonnet or fable. project: astra, or sonnet on claude.",
+      "default": "project"
+    },
+    "planJudgeAstraEffort": {
+      "type": "string",
+      "title": "Astra judge effort",
+      "description": "The Astra judge's reasoning effort. project: high.",
+      "options": ["project", "low", "medium", "high", "xhigh", "max"],
+      "default": "project"
+    },
+    "planJudgeAstraFast": {
+      "type": "boolean",
+      "title": "Astra judge fast tier",
+      "description": "The Astra judge runs on the fast tier, which costs more. On codex it needs service_tier = \"fast\" in Codex's config.toml.",
+      "default": false
     },
     "maxReviewRounds": {
       "type": "number",

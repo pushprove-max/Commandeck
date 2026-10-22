@@ -17,8 +17,19 @@ check "a family resolved from the cache beside a stderr warning is the bare mode
 check "the warning still goes to stderr" 1 "$(grep -c 'tomllib' "$TMP/err")"
 
 printf 'echo built\n' > "$W/a.sh"
+# Pass 8: one pass script runs both reviewers, so a refusal on the Claude reviewer names it, never builder-claude-pass.sh,
+# and no command in a script is built from the reviewer's agent.
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"codexReviewerAgent": "claude"}' COMMANDECK_PASS=claude bash "$PASS_SH" "$U" 1 review >"$TMP/out" 2>"$TMP/err")
+check "a review pass with no earlier one, on the Claude reviewer, says to start with builder-codex-pass.sh" "1:0" \
+  "$(grep -c "Start with: builder-codex-pass.sh $U 1 adversarial" "$TMP/err"):$(grep -c 'builder-claude-pass' "$TMP/err")"
+check "no script builds a pass script's name from the reviewer's agent" 0 \
+  "$(cat "$REAL"/scripts/*.sh | grep -cE 'builder-\$[^ ]*-pass\.sh')"
+# A brief launched --risky has a "## Risky launch" section, so a small build gets three.
+printf '## Risky launch\n' >> "$MAINBRIEF"
 pass 1 adversarial
 check "a first pass has no earlier pass to count a round from" 0 "$(grep -c '^Changed since' "$TMP/out")"
+check "a launch brief with ## Risky launch is a risky launch: three reviewers on a small build" 1 \
+  "$(grep -c '^Reviewers: 3 (.*, a risky launch;' "$B/$U-r1-reports.md")"
 
 # A round of one comment line: the pass names the file and its count, and says no code changed.
 printf '# fixed: the finding\n' >> "$W/a.sh"
@@ -80,13 +91,14 @@ COMMANDECK_PROBE_BACKOFF=0 pass 5 review
 check "one failed try then an answer runs the pass, every try outside the worktree" "2 0" \
   "$(wc -l < "$TMP/probe" | tr -d ' ') $(grep -c "^$W" "$TMP/probe")"
 check "with the scope record deleted, a review pass reads the whole branch" 1 "$(grep -cx 'Pass: final' "$B/$U-r5-reports.md")"
-# every reviewer is told a new required setting with no deployed-format test blocks the merge.
+# every reviewer is told a new required setting with no deployed-format test blocks the merge. Round 1 is risky (above),
+# so its behaviour reviewer is prompt 2 of three.
 check "the first and later passes' prompts carry the deployed-format rule" "1 1" \
-  "$(grep -c 'format already deployed' "$B/$U-r1-prompt-1.md") $(grep -c 'format already deployed' "$B/$U-r4-prompt-1.md")"
+  "$(grep -c 'format already deployed' "$B/$U-r1-prompt-2.md") $(grep -c 'format already deployed' "$B/$U-r4-prompt-1.md")"
 # A diff that changes a function or a data shape can break callers it never shows, and code right today can
 # grow in cost later: both are asked of the behaviour reviewer in every pass.
 check "the first and later passes' prompts ask about untouched callers and cost over time" "1 1 1 1" \
-  "$(grep -c 'callers and readers the diff did not touch' "$B/$U-r1-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r1-prompt-1.md") $(grep -c 'callers and readers the diff did not touch' "$B/$U-r4-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r4-prompt-1.md")"
+  "$(grep -c 'callers and readers the diff did not touch' "$B/$U-r1-prompt-2.md") $(grep -c 'Cost over time' "$B/$U-r1-prompt-2.md") $(grep -c 'callers and readers the diff did not touch' "$B/$U-r4-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r4-prompt-1.md")"
 # Every pass asks whether the change hand-builds what the project's paved-road registry or a standard covers,
 # and has such a finding cite the registry row.
 # Issue 282: an exception entry with no proof in its test and no ruling id is P1, asked of the first pass and of later ones.
@@ -100,6 +112,26 @@ check "the first and later passes' prompts ask the paved-road question, citing t
 mkdir -p "$TMP/profile/plugins/cache/openai-codex/codex" "$TMP/nohome"; cp -R "$PLUG" "$TMP/profile/plugins/cache/openai-codex/codex/"
 check "issue 291: the Codex companion is found under CLAUDE_CONFIG_DIR alone" 0 \
   "$(cd "$REPO" && HOME=$TMP/nohome CLAUDE_CONFIG_DIR=$TMP/profile COMMANDECK_MAIN=$REPO bash "$PASS_SH" --waits >/dev/null 2>&1; echo $?)"
+
+# Issue 312: the reviewer's /plugin config keys pick its agent and model; a plugin update replaces routing.json, never
+# them. Caught: a key the pass never read, and a Claude reviewer that could write.
+opts() { mkdir -p "$HOME/.claude"; jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {options: $o}}}' > "$HOME/.claude/settings.json"; }
+pre() { (cd "$REPO" && PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --preflight 2>"$TMP/err" | cut -f1); }
+printf '{"models":[{"slug":"gpt-6.1-sol"},{"slug":"gpt-6.2-astra"}]}\n' > "$CODEX_HOME/models_cache.json"
+opts '{}'
+check "codexReviewerAgent unset: the pass runs the companion on sol" "gpt-6.1-sol" "$(pre)"
+opts '{"codexReviewerModel": "astra"}'
+check "codexReviewerModel=astra: the reviewer runs the astra id" "gpt-6.2-astra" "$(pre)"
+opts '{"codexReviewerAgent": "claude"}'
+check "codexReviewerAgent=claude: the pass runs headless Claude on sonnet and its argv denies Write, Edit and NotebookEdit" \
+  "sonnet:1:1" "$(pre):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -c '^-p$'):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -cx 'Write,Edit,NotebookEdit')"
+# Class caller-mismatch (r3): an owner's pane-shaped Claude reviewer row still runs as the headless pass, on its model.
+jq '.roles["codex-reviewer"] = {agent: "claude", model: "opus", effort: "high", unboxed: true, edits: false, tools: ["Write", "Edit", "NotebookEdit"]}' \
+  "$REAL/config/routing.json" > "$TMP/pane-routing.json"
+check "a pane-shaped Claude reviewer row passes preflight as the headless pass on its model" opus "$(COMMANDECK_ROUTING=$TMP/pane-routing.json pre)"
+opts '{"codexReviewerModel": "opus"}'
+check "a reviewer model the key does not take is refused naming the key" "1" "$(pre >/dev/null; grep -c 'codexReviewerModel' "$TMP/err")"
+rm -f "$HOME/.claude/settings.json"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

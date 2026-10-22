@@ -12,34 +12,32 @@ It owns launch templates, agent types, model families and effort. A model
 family is resolved at launch; available model ids depend on the account.
 A null effort is omitted from the command.
 
-| Role | Default agent / model | Effort |
-|---|---|---|
-| orchestrator | Claude / opus | omitted |
-| plan-author | Claude / opus | high |
-| plan-author-second | Claude / fable | high |
-| plan-judge-sol | Codex / sol | high |
-| plan-judge-astra | Codex / astra | high |
-| plan-judge-claude | Claude / sonnet, used without Codex | high |
-| builder | Claude / opus | medium |
-| codex-reviewer | Codex / sol | medium |
-| claude-reviewer | Claude / sonnet, headless | high |
-| design-coauthor | Claude / fable | high |
-| audit-auditor | Codex / astra, headless platform audit | xhigh |
-| audit-verifier | Claude / opus, headless platform verifier | omitted |
-| lean-worker | Claude / sonnet helper | medium |
-| lean-checker | Claude / sonnet blind checker | high |
+| Role | Default agent / model | Effort | `/plugin` config keys | Can be off |
+|---|---|---|---|---|
+| orchestrator | Claude / opus | omitted | `orchestratorModel`, `orchestratorEffort` | no: it is the session that runs everything |
+| plan-author | Claude / opus | high | `planAuthorModel`, `planAuthorEffort`, `planAuthorEnabled`, `planAuthorFast` | yes: no plan |
+| plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
+| plan-judge-astra | Codex / astra (Claude: sonnet) | high | `planJudgeAstra` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
+| builder | Claude / opus | medium | `builderModel`, `builderEffort` | no: no branch to review or merge |
+| fixer | Claude / opus | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
+| codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
 
-Fable planning falls back to another allowed Claude model when unavailable.
-The Claude-only profile uses its Claude judge instead of the Codex plan
-judges. Its stock code reviewer is Sonnet, distinct from the default Opus Builder.
-A Builder model override can make both Sonnet; the scripts do not enforce
-different families.
+Each role setting is a key in `/plugin` config. A per-launch pin
+(`seat.sh --model/--effort`, `builder-launch.sh --effort`) beats the key, and
+the key beats routing's default. `project`, the default, is no answer. A value
+the role does not take is refused, naming the key. Setup writes the keys
+from its answers (`--option <key>=<value>`). The keys live in your user
+settings file, so a plugin update does not change them.
 
-The three plugin agent definitions in `agents/` are `commandeck:helper`
-(read-only fact gathering), `commandeck:lean-worker` (edits and checks) and
-`commandeck:lean-checker` (blind criterion checks). They omit CLAUDE.md and
-have narrow tool lists. The model guard fills missing lean-agent settings
-from routing; the helper uses Sonnet when no model is named.
+The fixer runs the fix passes after a review. The first one runs on the model
+and effort the Builder was launched with (`fixerFirstModel=builder`, the
+default); the later ones run on Opus high. The reviewer and both judges can
+run on Claude (`<role>Agent=claude`): a Claude reviewer or judge cannot write.
+The Claude-only profile sets those three agent keys to `claude`.
+
+A helper is a built-in subagent type: `Explore` (Haiku) for search and lookup,
+`general-purpose` (Sonnet) for edits, tests and judgment. The model guard
+fills those models in, and asks for a type when a call names none.
 
 | Location | Owns |
 |---|---|
@@ -53,10 +51,11 @@ from routing; the helper uses Sonnet when no model is named.
 | `~/.commandeck/plugin` | Stable link to the plugin folder setup last applied. |
 
 Use setup to change answers. Its project keys include `profile`, `testCommand`,
-`strictHooks`, `serena`, `standardContext`, `builder.model`, `builder.effort`,
-`builder.clearLine`, `issueSizing`, `chiefOfStaff`, `ponytail`, `cacheTtl`,
-`autoMode`, `workerSkillsOff`, `workerPluginsOff`, `keeps`, `planModels`,
-`planFast`, `codexModels`, `codexFast` and `reviewLoop`.
+`strictHooks`, `serena`, `standardContext`, `builder.clearLine`, `issueSizing`,
+`chiefOfStaff`, `ponytail`, `cacheTtl`, `autoMode`, `workerSkillsOff`,
+`workerPluginsOff`, `keeps` and `reviewLoop`. Role settings are `/plugin` keys
+only: 0.26.0 reads no `builder.model`, `builder.effort`, `planModels`,
+`planFast`, `codexModels` or `codexFast` an older setup saved there.
 
 Review-loop keys are `maxRounds`, `closingPass`, `smallBuild`, `maxReviewMinutes`,
 `maxTestPercent` and `maxUsd`. Setup saves tuned numeric answers as strings.

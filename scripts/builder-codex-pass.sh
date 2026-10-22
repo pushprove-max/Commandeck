@@ -53,13 +53,14 @@
 # plugin update between a pass and its merge costs nothing; a session with no
 # such record was not started by a pass.
 #
-# builder-claude-pass.sh runs this same body with COMMANDECK_PASS=claude: each
-# reviewer is then a headless session on roles["claude-reviewer"], its record is
-# its transcript under ~/.claude/projects/*/<session id>.jsonl, its prompt is
-# the template in this file (that profile has no Codex plugin), and the
-# reviewed commit is the one this script names after the prompt (a transcript
-# carries no commit hash). --verify reads either round file, by its id lines,
-# and takes only the pass the configured profile uses.
+# The reviewer's agent is codexReviewerAgent in /plugin config (the Claude-only
+# profile sets it to claude). On claude each reviewer is a headless session on
+# codex-reviewer's claude overlay, its record is its transcript under
+# ~/.claude/projects/*/<session id>.jsonl, its prompt is the template in this
+# file (that profile has no Codex plugin), and the reviewed commit is the one
+# this script names after the prompt (a transcript carries no commit hash).
+# --verify reads either round file, by its id lines, and takes only the pass
+# the configured agent uses.
 # Ceiling: a same-user process could still forge the reviewer's own session
 # files or that record; the upgrade path is a merge-side re-run.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
@@ -70,8 +71,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 die() { echo "REFUSED: $*" >&2; exit 2; }
 CODEX_DIR=${CODEX_HOME:-$HOME/.codex}
 CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
-# Which reviewer this run is: builder-claude-pass.sh sets claude. --verify reads it from the round file instead.
-BY=${COMMANDECK_PASS:-codex}
+# Which reviewer this run is: codexReviewerAgent (COMMANDECK_PASS is the self-test's switch). --verify reads it
+# from the round file instead.
+BY=${COMMANDECK_PASS:-$(pp_pass)} || exit 2
 case $BY in codex) NAME="Codex thread" RHOME=$CODEX_DIR ;; claude) NAME="Claude session" RHOME=$CLAUDE_DIR ;; *) die "COMMANDECK_PASS must be codex or claude, not $BY" ;; esac
 # pass_waits -- find the reviewer's program (the Codex plugin's companion, or
 # claude) and set the pass's two fixed waits: how long it waits for the record
@@ -348,7 +350,7 @@ CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 # commit against its fork from main: insertions plus deletions, .claude/briefs/
 # left out as the merge leaves it out (collect.py's lines_changed counts the
 # same way). <risky> is 1 for a build main launched with builder-launch.sh
-# --risky, read from the "## Design check" section that launch writes into the
+# --risky, read from the "## Risky launch" section that launch writes into the
 # brief it keeps in main's own checkout, never from a copy in <worktree>: those
 # are the Builder's to edit. It is 2 when that copy cannot be read as the
 # launcher's brief for this unit (missing, unreadable, or without the first-pass
@@ -362,7 +364,7 @@ build_size() {
   changed=$(git -C "$1" diff --numstat --no-renames --no-ext-diff --no-textconv "$base" "$2" -- . ':(exclude).claude/briefs') || die "cannot count the lines changed between $base and $2 in $1"
   main=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || die "$1 is not a git worktree, so its launch cannot be read"
   main=${main%/.git}/.claude/briefs/$UNIT-builder-brief.md
-  if ! grep -qF -- "-pass.sh $UNIT 1 adversarial" "$main" 2>/dev/null; then risky=2; elif grep -qx '## Design check' "$main"; then risky=1; fi
+  if ! grep -qF -- "-pass.sh $UNIT 1 adversarial" "$main" 2>/dev/null; then risky=2; elif grep -qx '## Risky launch' "$main"; then risky=1; fi
   echo "$(awk '$1 == "-" || $2 == "-" { unknown++; next } NF { n += $1 + $2 } END { print n + 0, unknown + 0 }' <<<"$changed") $risky"
 }
 # size_words <"lines unknown risky"> -- the three numbers as the pass's line and the merge's refusal say them.
@@ -382,7 +384,7 @@ one_reviewer_allowed() {
   local size
   size=$(build_size "$1" "$2") || exit 2
   one_reviewer_fits "$size" \
-    || die "$3 is a first pass of one reviewer on a commit of $(size_words "$size"): the rule is $SMALL_WORDS. Run: builder-$BY-pass.sh $UNIT <N> adversarial"
+    || die "$3 is a first pass of one reviewer on a commit of $(size_words "$size"): the rule is $SMALL_WORDS. Run: builder-codex-pass.sh $UNIT <N> adversarial"
 }
 
 # pass_threads <worktree> -- "<session id> <round>" for every pass the reviewer $BY names
@@ -524,9 +526,9 @@ if [ "${1:-}" = --verify ]; then
   BY=codex NAME="Codex thread" RHOME=$CODEX_DIR
   TIDS=$(sed -n '/^$/q; s/^Codex thread: \([A-Za-z0-9-]*\)$/\1/p' "$LAST")
   [ -n "$TIDS" ] || { BY=claude NAME="Claude session" RHOME=$CLAUDE_DIR; TIDS=$(sed -n '/^$/q; s/^Claude session: \([A-Za-z0-9-]*\)$/\1/p' "$LAST"); }
-  [ -n "$TIDS" ] || die "${LAST##*/} names no Codex thread or Claude session: it was not written by builder-codex-pass.sh or builder-claude-pass.sh"
-  # A Builder does not pick its reviewer: the profile does.
-  [ "$BY" = "$(pp_pass)" ] || die "${LAST##*/} is a $BY pass, and the profile in $(pp_routing) reviews with builder-$(pp_pass)-pass.sh"
+  [ -n "$TIDS" ] || die "${LAST##*/} names no Codex thread or Claude session: it was not written by builder-codex-pass.sh"
+  # A Builder does not pick its reviewer: codexReviewerAgent does.
+  [ "$BY" = "$(pp_pass)" ] || die "${LAST##*/} is a $BY pass, and codexReviewerAgent in /plugin config reviews with $(pp_pass)"
   # No commit subject is exempt: a commit after the review is unreviewed whatever it is called.
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
   SEEN="" OF="" WHAT="" RULE="" LEFT="" STEPS="" NOT_GO=""
@@ -556,8 +558,8 @@ if [ "${1:-}" = --verify ]; then
         # A passing whole-branch pass may still name a finding; it is open at merge like any other.
         if [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ]; then LEFT+=${FOUND:+$FOUND$'\n'}
         else
-          ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}), the closing pass, found a P0 or P1: only a closing pass that left P2 and P3 alone merges without a GO. Fix it, then run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
-          [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}), the closing pass, ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
+          ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}), the closing pass, found a P0 or P1: only a closing pass that left P2 and P3 alone merges without a GO. Fix it, then run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
+          [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}), the closing pass, ended NO-GO and names no finding with a severity, so it is not known to be a P2/P3 tail. Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
           RULE="P2 tail" LEFT+=${FOUND:+$FOUND$'\n'}
         fi ;;
       # session_proof has just bound this GO to the tip, so a closing pass would read the same commit again.
@@ -565,7 +567,7 @@ if [ "${1:-}" = --verify ]; then
         FOUND=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" | uncleared || true); LEFT+=${FOUND:+$FOUND$'\n'} ;;
       fix) NOW="narrowed pass" RULE="P2 tail"
         ALL=$(sed 1,2d <<<"$PROOF" | grep -E "$FINDING" || true); FOUND=$(uncleared <<<"$ALL")
-        ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}) found a P0 or P1: only a tail of P2 and P3 merges without a closing GO. Fix it, then run the closing pass: builder-$BY-pass.sh $UNIT <N> final"
+        ! grep -qE "$BLOCKER" <<<"$FOUND" || die "$NAME $TID (${LAST##*/}) found a P0 or P1: only a tail of P2 and P3 merges without a closing GO. Fix it, then run the closing pass: builder-codex-pass.sh $UNIT <N> final"
         [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || NOT_GO=1
         [ -z "$NOT_GO" ] || [ -n "$ALL" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO and names no finding with a severity, so what it left open cannot be read. Run another pass"
         LEFT+=${FOUND:+$FOUND$'\n'} STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
@@ -617,7 +619,7 @@ if [ "${1:-}" = --verify ]; then
        END { for (pass in got) { split(pass, of, " "); if (got[pass] == of[2]) found = 1 } exit !found }' <<<"$PASSES" \
     || {
       SOLO=$(awk '$1 == "@" && $3 == "full" && $5 == 1 { print $2, $9 }' <<<"$PASSES")
-      [ -n "$SOLO" ] || die "no pass before ${LAST##*/} is the first pass of $UNIT: the closing pass's GO merges only on top of it. Run: builder-$BY-pass.sh $UNIT <N> adversarial, then the closing pass again"
+      [ -n "$SOLO" ] || die "no pass before ${LAST##*/} is the first pass of $UNIT: the closing pass's GO merges only on top of it. Run: builder-codex-pass.sh $UNIT <N> adversarial, then the closing pass again"
       while read -r SOLO_TID SOLO_READ; do one_reviewer_allowed "$WT" "$SOLO_READ" "$NAME $SOLO_TID, before ${LAST##*/},"; done <<<"$SOLO"
     }
   # With the full suite on (issue 243), a closing pass merges only on a green run of the commit it read, as its own
@@ -627,7 +629,7 @@ if [ "${1:-}" = --verify ]; then
   if [ "$WHAT" = "closing pass" ] && [ "$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)" = true ]; then
     for TID in $TIDS; do
       SUITE_PROOF=$(awk 'p { print; exit } / Reviewer [0-9]+ of [0-9]+, round [0-9]+\.$/ { p = 1 }' "$RHOME/builder-pass-prompts/$TID" | grep -E "^Suite: $WAS_READ pass ") \
-        || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-$BY-pass.sh $UNIT <N> final"
+        || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
     done
   fi
   if [ "$RULE" = "P2 tail" ] && [ "$WHAT" = "closing pass" ]; then
@@ -645,7 +647,7 @@ if [ "${1:-}" = --verify ]; then
     # narrowed range began, and the findings in each reply. Any other state
     # with no closing GO refuses.
     # shortcut: a P0 or P1 a reviewer states only in prose, with no "[P1]" finding line, is not read; the pass prompt demands the line.
-    AGAIN="Run the closing pass: builder-$BY-pass.sh $UNIT <N> final"
+    AGAIN="Run the closing pass: builder-codex-pass.sh $UNIT <N> final"
     found_by() { awk -v t="$1" '$1 == "@" { on = ($2 == t); next } on' <<<"$PASSES"; }
     read -r C_ENDED C_TID COVERED C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $9, $11 }' <<<"$PASSES" | sort | tail -1)"
     ANCHOR="closing pass" NOCLOSE=""
@@ -653,7 +655,7 @@ if [ "${1:-}" = --verify ]; then
       # The owner chose no closing pass at setup: the last first pass anchors the chain instead, and
       # the narrowed pass under merge must end GO. It was handed every earlier finding (checked above),
       # so a P0 or P1 an earlier narrowed pass found is cleared by its GO, as a closing GO clears one.
-      ANCHOR="first pass" NOCLOSE=1 AGAIN="Fix it, then run another narrowed pass: builder-$BY-pass.sh $UNIT <N> review"
+      ANCHOR="first pass" NOCLOSE=1 AGAIN="Fix it, then run another narrowed pass: builder-codex-pass.sh $UNIT <N> review"
       [ -z "$NOT_GO" ] || die "${LAST##*/} ended NO-GO, and this project runs no closing pass (reviewLoop.closingPass): only a narrowed pass that ends GO merges. $AGAIN"
       read -r C_ENDED C_TID COVERED _ <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9 }' <<<"$PASSES" | sort | tail -1)"
     else
@@ -729,23 +731,22 @@ plugin_prompt() {
 }
 plugin_prompt "$FOCUS_REVIEW" >/dev/null
 
+# The reviewer's seat as it resolves: its /plugin config keys over routing's row, on the agent it runs.
+# Its warnings stay on stderr: one beside a resolved Codex id is not part of the id.
+WHY=$(mktemp) || die "cannot make a temp file"
+SOL=$(pp_route_json codex-reviewer 2>"$WHY") || { MODEL=$(<"$WHY"); rm -f "$WHY"; die "codex-reviewer: ${MODEL#REFUSED: }"; }
+cat "$WHY" >&2; rm -f "$WHY"
+[ "$(jq -r .agent <<<"$SOL")" = "$BY" ] || die "this pass runs on $BY, but codexReviewerAgent in /plugin config puts the reviewer on $(jq -r .agent <<<"$SOL")"
+MODEL=$(jq -r .model <<<"$SOL")
 if [ "$BY" = claude ]; then
-  MODEL=$(jq -re '.roles["claude-reviewer"].model // empty' "$(pp_routing)") || die "no roles.claude-reviewer model in $(pp_routing)"
-  mapfile -t ARGV < <(pp_argv claude-reviewer)
-  [ "${#ARGV[@]}" -gt 0 ] || die "roles.claude-reviewer in $(pp_routing) is not a usable headless role"
+  mapfile -t ARGV < <(jq -r '.argv[]?' <<<"$SOL")
+  [ "${#ARGV[@]}" -gt 0 ] || die "codex-reviewer's claude overlay in $(pp_routing) is not a usable headless role"
 else
-  SOL=$(jq -ce '.roles["codex-reviewer"] | select(.model)' "$(pp_routing)") || die "no roles.codex-reviewer model in $(pp_routing)"
-  MODEL=$(jq -r .model <<<"$SOL")
   EFFORT=$(jq -r '.effort // empty' <<<"$SOL")
   [ -n "$EFFORT" ] || die "no roles.codex-reviewer effort in $(pp_routing); the passes never run on the Codex home's own effort"
-  # A family name becomes the newest model id the account lists, or the id setup saved (paths.sh).
-  # Its warnings stay on stderr: one beside a resolved id is not part of the id.
-  WHY=$(mktemp) || die "cannot make a temp file"
-  MODEL=$(pp_codex_model "$MODEL" codex-reviewer 2>"$WHY") || { MODEL=$(<"$WHY"); rm -f "$WHY"; die "roles.codex-reviewer: ${MODEL#routing: }"; }
-  cat "$WHY" >&2; rm -f "$WHY"
-  # Fast mode is the owner's saved answer (set-up asks; no answer is off), never routing.json's.
+  # Fast mode is the owner's codexReviewerFast (no answer is off), never routing.json's.
   if pp_codex_fast; then
-    pp_codex_fast_home || die "this project chose Codex fast mode but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier. Add that line, or turn it off: setup.sh --no-codex-fast"
+    pp_codex_fast_home || die "codexReviewerFast is on but $CODEX_DIR/config.toml has no service_tier = \"fast\"; the Codex passes would run on the slow tier. Add that line, or turn it off: codexReviewerFast=false in /plugin config"
   fi
   if [ "${1:-}" = --preflight ]; then
     # The companion runs the Codex CLI under the owner's sign-in; the plugin alone is not enough.
@@ -758,7 +759,7 @@ if [ "${1:-}" = --preflight ]; then printf '%s\t%s\n' "$MODEL" "$COMPANION"; exi
 # --ack-rulings <unit> runs no pass: the round and kind below are only stand-ins for it.
 CHECK=0; [ "${1:-}" != --check ] || { CHECK=1; shift; }
 ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
-UNIT=${1:?usage: builder-$BY-pass.sh [--check] <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
+UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
@@ -791,7 +792,7 @@ if [ "${#RULINGS[@]}" -gt 0 ]; then
   SUM=$(cat "${RULINGS[@]}" | cksum)
   if [ "$ACK" = 1 ]; then echo "$SUM" > "$ACKED"; echo "acknowledged: ${RULINGS[*]}"; exit 0; fi
   [ "$SUM" = "$(cat "$ACKED" 2>/dev/null)" ] || die "main's rulings for $UNIT have changed since you last acknowledged them: ${RULINGS[*]}
-Read the file and do what it says, then acknowledge it and run the pass again: builder-$BY-pass.sh --ack-rulings $UNIT"
+Read the file and do what it says, then acknowledge it and run the pass again: builder-codex-pass.sh --ack-rulings $UNIT"
 fi
 [ "$ACK" = 0 ] || { echo "no rulings file for $UNIT: nothing to acknowledge"; exit 0; }
 OUT=$WT/.claude/briefs/$UNIT-r$N-reports.md
@@ -822,7 +823,7 @@ PASS_T0=$SECONDS
 PREV=$(round_files "$WT" "$UNIT" | awk -v n="$N" '$1 < n' | sort -n | tail -1 | cut -d' ' -f2-)
 PASSES=$(CUT=mark earlier_passes "$WT") || exit 2
 EARLIER=$(awk '$1 == "@" { print "Earlier pass " $2 " ended " $8; next } !seen[$0]++' <<<"$PASSES")
-[ "$KIND" = adversarial ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-$BY-pass.sh $UNIT $N adversarial"
+[ "$KIND" = adversarial ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-codex-pass.sh $UNIT $N adversarial"
 # Main adds scope in a fix round by changing the brief or its rulings. A narrowed
 # pass would read only the fix and leave the new part unread until the closing
 # pass, so the first pass after such a change reads the whole branch as a closing
@@ -968,7 +969,7 @@ fi
 # changes marked (one diff gives both), so the reviewer fetches neither.
 if [ "$KIND" = review ]; then
   [ -n "$FROM" ] || die "${PREV##*/} names no reviewed commit: it was not written by the pass script"
-  [ "$FROM" != "$SHA" ] || die "nothing changed since ${PREV##*/} reviewed $SHA: a narrowed pass has nothing to read. A whole-branch pass that ended GO there merges as it is; otherwise the closing pass is: builder-$BY-pass.sh $UNIT $N final"
+  [ "$FROM" != "$SHA" ] || die "nothing changed since ${PREV##*/} reviewed $SHA: a narrowed pass has nothing to read. A whole-branch pass that ended GO there merges as it is; otherwise the closing pass is: builder-codex-pass.sh $UNIT $N final"
   RANGE=$FROM..HEAD HEAD_LINE=$HEAD_FIX
   NOTE="The range is git diff $FROM..HEAD. Check that each earlier finding is fixed, that the fix is right, and that it breaks nothing beside it."
 else
@@ -1150,11 +1151,11 @@ for i in "${!FOCI[@]}"; do
   mkdir -p "$RHOME/builder-pass-prompts" && cp "$RUN-prompt-$((i + 1)).md" "$RHOME/builder-pass-prompts/$TID" \
     || die "cannot record the prompt of $NAME $TID under $RHOME/builder-pass-prompts"
 done
-[ ! -e "$SOCKS/no-session" ] || die "no Codex session appeared within ${SESSION_WAIT}s of the launch for reviewer(s) $(tr -s ' ' < "$SOCKS/no-session" | sed 's/ $//'), so this was not a pass and no round file is written. Run the same pass again: builder-$BY-pass.sh $UNIT $N $KIND"
+[ ! -e "$SOCKS/no-session" ] || die "no Codex session appeared within ${SESSION_WAIT}s of the launch for reviewer(s) $(tr -s ' ' < "$SOCKS/no-session" | sed 's/ $//'), so this was not a pass and no round file is written. Run the same pass again: builder-codex-pass.sh $UNIT $N $KIND"
 [ -z "$FAILED" ] || die "the $BY $KIND pass failed for reviewer(s)$FAILED; raw output in $RUN-$BY-<k>.json"
 # A companion that answers without JSON gave no thread and no verdict: the pass
 # ended here with no word and no round file, and read as one still running.
-[ -z "$NOJSON" ] || die "reviewer$NOJSON answered without JSON, so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json. Run the same pass again: builder-$BY-pass.sh $UNIT $N $KIND"
+[ -z "$NOJSON" ] || die "reviewer$NOJSON answered without JSON, so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json. Run the same pass again: builder-codex-pass.sh $UNIT $N $KIND"
 # A Claude reviewer's shell is not sandboxed as Codex's is, so the tree is
 # checked as well, files it added included.
 # shortcut: a change to a file that was already untracked is not seen; sandbox the session when Claude Code can.

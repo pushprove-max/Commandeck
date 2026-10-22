@@ -107,17 +107,14 @@ seat_codex_home() {
 }
 seat_codex_home
 [ -d "$WT" ] || [[ $CMDNAME =~ ^(launch|run)$ && $ROLE == plan-* && -z $SEAT_REPO ]] || { echo "no worktree at $WT" >&2; exit 2; }
-# The role whose routing the seat runs on. A plan seat put on another (pp_plan_seat: a Codex judge with no Codex
-# runs as plan-judge-claude) keeps its own name, pane and record, so the Panel's two judges stay two.
-RROLE=$ROLE
-if [[ $ROLE == plan-* ]] && S=$(pp_plan_seat "$ROLE" 2>/dev/null); then RROLE=${S% *}; fi
-# The seat's agent CLI, so the session reader looks in one provider's logs.
+# The seat's agent CLI, so the session reader looks in one provider's logs. A seat runs as its own role, on the
+# agent its /plugin config key names (issue 312): two judges on Claude stay two seats, each with its own record.
 seat_agent() {
-  pp_route "$RROLE" 2>/dev/null && printf '%s\n' "$RT_AGENT" || true
+  pp_route "$ROLE" 2>/dev/null && printf '%s\n' "$RT_AGENT" || true
 }
 # The role's pane cannot write files: a codex read-only sandbox or a Claude seat without Write.
 seat_readonly() {
-  pp_route "$RROLE" && [ "$RT_READONLY" = 1 ]
+  pp_route "$ROLE" && [ "$RT_READONLY" = 1 ]
 }
 # Bounded, so a blocked log read cannot freeze a wait or a launch.
 worker_state_kv() {
@@ -213,6 +210,9 @@ effort)
 launch)
   SPEC=${1:?spec file}
   [ -s "$SPEC" ] || { echo "empty spec: $SPEC" >&2; exit 2; }
+  # Issue 312: a role the owner turned off in /plugin config opens no pane and writes no record, by hand too.
+  rc=0; WHY=$(pp_role_enabled "$ROLE" 2>&1) || rc=$?
+  [ "$rc" = 0 ] || { echo "REFUSED: ${WHY:-$ROLE is off}; nothing was opened" >&2; exit 2; }
   # A launch of this seat still running in the background is this seat: a retry opens no second pane.
   if [ "$(rec phase)" = launching ] && kill -0 "$(rec pid)" 2>/dev/null; then
     echo "REFUSED: $ROLE for $UNIT is still launching: $(seat_status)" >&2; exit 2
@@ -237,22 +237,15 @@ launch)
       [ -z "$LMODEL" ] || pp_builder_model_ok "$LMODEL" || exit 2
       [ -z "$LEFFORT" ] || pp_builder_effort_ok "$LEFFORT" "$(pp_route_json builder "" "$LMODEL" | jq -r '.effort // "none"')" || exit 2
     else
-      # A plan seat's effort is any level, checked with its role below; its model, one the agent it runs on already runs.
-      [ -z "$LMODEL" ] || pp_seat_model_ok "$RROLE" "$LMODEL" || exit 2
+      # A plan seat's effort is any level, checked with its role below; its model, one of the agent it runs on.
+      [ -z "$LMODEL" ] || pp_seat_model_ok "$ROLE" "$LMODEL" || exit 2
     fi
   fi
-  # A plan seat runs only on a model setup allows (planModels): a pick outside them is refused, and a default
-  # outside them is swapped for an allowed one, which is said.
-  if [[ $ROLE == plan-* ]]; then
-    if [ -n "$LMODEL" ]; then
-      [[ " $(pp_plan_models) " == *" $LMODEL "* ]] || { echo "REFUSED: --model $LMODEL is not one of the models this project allows a plan seat ($(pp_plan_models)); setup sets them (--plan-models)" >&2; exit 2; }
-    else
-      S=$(pp_plan_seat "$ROLE") || exit 2
-      RROLE=${S% *} LMODEL=${S#* }
-    fi
-  fi
-  pp_route "$RROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$RROLE in routing.json" >&2; exit 2; }
-  [ -n "$RT_CMD" ] || { echo "roles.$RROLE in routing.json is not a pane seat" >&2; exit 2; }
+  # A plan seat on Codex where no codex is installed is refused, naming the keys that move it (pp_plan_seat). Its
+  # check resolves the launch's own model: a named one needs no default to resolve.
+  [[ $ROLE != plan-* ]] || pp_plan_seat "$ROLE" "$LMODEL" >/dev/null || exit 2
+  pp_route "$ROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
+  [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
   # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
   CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
   # A finished spec does not run twice: the same plan-reviser job ran
@@ -317,7 +310,7 @@ launch)
   # first line seconds before `terminal create` returns -- a record stamped
   # afterwards rejected the round's own log and sent every Claude seat down the
   # partial rendered-screen path (three drivers stalled on 2026-09-13).
-  # A Builder opened here by hand waits out a risky launch's second call (builder-launch.sh), which rewrites its records.
+  # A Builder opened here by hand waits out a builder-launch.sh call for the same unit, which writes its records.
   [ "$ROLE" != builder ] || pp_builder_lock "$UNIT" || exit 1
   . "$PP_SCRIPTS/codex-helpers.sh"
   # Issue 256: under the owner's Builder cap (maxBuilders in /config), one launch at a time counts the live Builder

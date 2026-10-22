@@ -106,15 +106,21 @@ Ask them in this order, up to four questions per call.
    - Install (no file yet): creates the file with them. `install`
    - Skip: the file is left alone. `skip`
    "Global rules" are the plugin's working, review, agent and test rules; "Global CLAUDE" its general instructions (working rules, code exploration, root-cause discipline). Your own text is never changed, and a copy of the file is made first.
-6. Which model builds?
+6. Which models run? Each answer is sent as `--option <key>=<value>` lines and saved as that role's key in `/plugin` config, where it can be changed later; `<key>=project` takes back an earlier answer, so the role runs on its default.
+   Ask "Main": Opus, default effort (recommended) | Opus high | Opus medium
+   - The orchestrator: this session. Saved in this checkout's `.claude/settings.local.json` as its model and effort. Opus, default effort: `--option orchestratorModel=project --option orchestratorEffort=project`; Opus high: `--option orchestratorModel=opus --option orchestratorEffort=high`; Opus medium: `--option orchestratorModel=opus --option orchestratorEffort=medium`.
    Ask "Builder model": Opus (recommended) | Sonnet
-   - Opus: best quality, with no advisor. `--builder-model ''`
-   - Sonnet: uses less of your plan. `--builder-model sonnet`
+   - Opus: best quality, with no advisor. `--option builderModel=project`
+   - Sonnet: uses less of your plan. `--option builderModel=sonnet`
    Then the effort, right after the model: its recommended answer follows the model picked. On Opus:
    Ask "Builder effort": Medium (recommended) | Low | High | Maximum
    On Sonnet:
    Ask "Builder effort": High (recommended) | Low | Medium | Maximum
-   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. `--builder-effort ''`, or `low`, `medium`, `high`; Maximum: `max`. Which answer a launch takes, /config's or this one: `pp_option` in `scripts/paths.sh`.
+   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. Medium: `--option builderEffort=project`, or `--option builderEffort=low`, `high`; Maximum: `max`.
+   Ask "Fixer": Same as Builder, then Opus high (recommended) | Opus high every round | Builder's model every round
+   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
+   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=opus --option fixerFirstEffort=high`
+   - Builder's model every round: no switch; every fix pass runs as the Builder was launched. `--option fixerEnabled=false`
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
    - Larger: your model holds more (a 1M window). `--no-standard-context`
@@ -128,10 +134,25 @@ Ask them in this order, up to four questions per call.
    - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000`; Off: `--builder-clear-line off`
    Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off
    - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
-   Ask "Plan models": All (recommended) | Without Fable | Without Codex | Without both
-   - The models the plan seats (the planners and judges before a build) may run on; every planning answer offers only these, and a seat whose default is left out says which model it used instead. All: `--plan-models ''`; Without Fable: `--plan-models opus,sonnet,sol,astra`; Without Codex: `--plan-models opus,sonnet,fable`; Without both: `--plan-models opus,sonnet`. On the Claude-only profile ask All | Without Fable, and Without Fable is `--plan-models opus,sonnet`.
-   Ask "Plan seats on the fast tier", one multi-select question (`multiSelect: true`): None (recommended) | Planners | Codex judges | Claude judge
-   - Each plan seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. None is the default, every seat on the standard tier: `--plan-fast ''`. None picked with a seat means that seat alone. Planners: `plan-author,plan-author-second`; Codex judges: `plan-judge-sol,plan-judge-astra`; Claude judge: `plan-judge-claude`; the chosen ones joined by commas, as `--plan-fast plan-author,plan-judge-claude`. Offer Codex judges only on the Claude+OpenAI profile and when the check said "Codex fast mode: available".
+   Only with the Codex reviewer:
+   Ask "Reviewer model": Sol medium (recommended) | Astra high
+   - Sol medium: `--option codexReviewerModel=project --option codexReviewerEffort=project`
+   - Astra high: `--option codexReviewerModel=astra --option codexReviewerEffort=high`
+   - When the check said "Codex model: not found", offer the id it printed first, as recommended: `--option codexReviewerModel=<id>`.
+   The Claude reviewer runs Sonnet high and is not asked.
+   Then the plan seats, which plan a risky build before it starts:
+   Ask "Plan author": Opus high (recommended) | Sonnet medium | Off
+   - Opus high: `--option planAuthorEnabled=true --option planAuthorModel=project --option planAuthorEffort=project`
+   - Sonnet medium: `--option planAuthorEnabled=true --option planAuthorModel=sonnet --option planAuthorEffort=medium`
+   - Off: no plan is written for a build. `--option planAuthorEnabled=false`
+   Ask "Sol judge": Codex high (recommended) | Claude Sonnet high | Off
+   Ask "Astra judge": Codex high (recommended) | Claude Sonnet high | Off
+   - Codex high: `--option planJudgeSolEnabled=true --option planJudgeSolAgent=codex` (Astra: `planJudgeAstra...`)
+   - Claude Sonnet high: the judge runs on Claude, which cannot write. `--option planJudgeSolEnabled=true --option planJudgeSolAgent=claude`
+   - Off: the plan is judged without it. `--option planJudgeSolEnabled=false`
+   On the Claude profile, ask Claude Sonnet high (recommended) | Off.
+   Ask "Fast tier", one multi-select question (`multiSelect: true`): None (recommended) | Plan author | Judges | Reviewer
+   - A seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Each chosen one is sent as true and the rest as false: Plan author `planAuthorFast`; Judges `planJudgeSolFast` and `planJudgeAstraFast`; Reviewer `codexReviewerFast`, as `--option planAuthorFast=true --option planJudgeSolFast=false ...`. None picked with a seat means that seat alone. Offer a seat that runs on Codex only when the check said "Codex fast mode: available".
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`
@@ -215,18 +236,11 @@ Ask them in this order, up to four questions per call.
     Ask "Test share": 33 (recommended) | Off | 50
     Ask "List price": 30 (recommended) | Off | 100
     - "Off" sends `off` for that flag; a default (30, 33, 30) sends `''`; another number is sent as typed.
-14. Only with the Codex reviewer:
-    Ask "Codex fast": Off (recommended) | On
-    - Off: the review passes run on Codex's standard tier. `--no-codex-fast`
-    - On: the fast tier, which answers sooner and costs more per pass. `--codex-fast`
-    Offer On only when the check said "Codex fast mode: available".
-    When the check said "Codex model: not found", ask:
-    Ask "Codex model": <an id the check printed> (recommended) | gpt-6.1-sol
-    - the model id for the review pass; saved in this project's config. `--codex-model codex-reviewer=<id>`
 
 Numbers and typed values are passed exactly as typed. Setup refuses one it
 cannot use and changes nothing; read its line to the owner and ask that
-question again as a picker.
+question again as a picker. Main, the Builder and the reviewer cannot be off:
+setup refuses that answer and says why.
 
 ## 2. Preview, then apply
 

@@ -39,7 +39,7 @@ if [ -s "$IL_PROJECT" ]; then
   S=$PP_MAIN/.claude/settings.json
   ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_workflows "$IL_PROJECT" "$S" off; il_advisor_off "$IL_PROJECT" "$S" off; il_cache_ttl "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
   S=$PP_MAIN/.claude/settings.local.json
-  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || il_allow_set "$IL_PROJECT" "$S" '[]'
+  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_main_model "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
   # The plugin's rules merged into the owner's own startup files: only the marked block goes.
   for S in "$PP_MAIN/AGENT_STARTUP.md" "$PP_MAIN/.claude/main-session.md"; do
     ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || IL_BEGIN='<!-- commandeck:merge:begin -->' IL_END='<!-- commandeck:merge:end -->' il_block "$S"

@@ -4,9 +4,8 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-model <alias>] [--builder-effort low|medium|high|max] [--builder-clear-line <tokens>|off]
-#          [--issue-sizing <tokens>|off] [--codex-fast|--no-codex-fast] [--plan-models <model>[,<model>...]|'']
-#          [--codex-model <Codex role>=<model id>|<Codex role>= ...] [--plan-fast <plan seat>[,<plan seat>...]|'']
+#          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]
+#          [--option <role key>=<value> ...] (a role's /plugin config key: builderModel=sonnet, planJudgeSolAgent=claude)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
@@ -53,7 +52,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-model --builder-effort --builder-clear-line --issue-sizing --plan-models --plan-fast --codex-model --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -109,14 +108,15 @@ fi
 OWN=(AGENT_STARTUP.md .claude/main-session.md)
 PROFILE=$(old .profile) NAME=$(old .chiefOfStaff.name) PERSONA=$(old .chiefOfStaff.persona) TEST=$(old .testCommand)
 STRICT=$(old .strictHooks) STANDARD=$(old .standardContext) SERENA=$(old .serena)
-BMODEL=$(old .builder.model) BEFFORT=$(old .builder.effort) BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing) FAST=$(old .codexFast)
-# The builder keys setup asks nothing about (maxBuilders, issue 256) are carried over as saved.
+BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing)
+# The builder keys setup asks nothing about (maxBuilders, issue 256) are carried over as saved; its model and effort
+# are /plugin config keys now (issue 312), so this file keeps neither.
 BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clearLine) else {} end' "$IL_CONFIG" 2>/dev/null || true); [ -n "$BUILDER" ] || BUILDER='{}'
-PMODELS=$(old '.planModels | join(",")') PFAST=$(old '.planFast | join(",")')
+# This run's --option answers, {key: value}: each is saved over the key's value.
+GIVEN='{}'
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
 FULL=$(old .fullSuiteBeforeFinal)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
-CMODELS=$(jq -c '.codexModels // {}' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
 # The owner's worker cuts (worktree-setup.sh writes them): carried over as saved, and each answer below changes one.
@@ -157,8 +157,8 @@ if [ "$QUESTIONS" = begin ]; then
   else echo "  Codex fast mode: not available (${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line); do not offer it"; fi
   # Codex's model is found before the question, not after a refused run.
   if [ -z "${REQ_NAMES:-}" ]; then
-    if M=$(COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=codex bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then echo "  Codex model: found ($(pp_codex_route))"
-    else echo "  Codex model: not found, so ask for its id (--codex-model codex-reviewer=<id>): $M"; fi
+    if M=$(COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_OPTIONS='{"codexReviewerAgent": "codex"}' COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=codex bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then echo "  Codex model: found ($(pp_codex_route))"
+    else echo "  Codex model: not found, so ask for its id (--option codexReviewerModel=<id>): $M"; fi
   fi
   # The context window: a model setting that names a 1M model ends in [1m] (the nearest settings file wins).
   CM=${ANTHROPIC_MODEL:-$(for f in "$PP_MAIN/.claude/settings.local.json" "$PP_MAIN/.claude/settings.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do jq -r '.model // empty' "$f" 2>/dev/null; done | head -1)}
@@ -184,14 +184,11 @@ while [ $# -gt 0 ]; do
     --port) PORT=$2; shift 2 ;;
     --hosts) HOSTS=$2; shift 2 ;;
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
-    --builder-model) BMODEL=$2; shift 2 ;;
-    # The Builder's effort and clear line, and the issue sizing line: '' takes the default back (nothing saved).
-    --builder-effort) case $2 in low|medium|high|max|'') BEFFORT=$2 ;; *) die "--builder-effort takes low, medium, high or max, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    # The Builder's clear line and the issue sizing line: '' takes the default back (nothing saved).
     --builder-clear-line) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--builder-clear-line takes a number of tokens, or off, not '$2'. Nothing was changed"; BCLEAR=$2; shift 2 ;;
-    # The models a plan seat may run on, comma-separated; '' takes the default back (every model routing names).
-    --plan-models) PMODELS=$2; shift 2 ;;
-    # The plan seats that run on the fast tier, comma-separated; '' is none, the default.
-    --plan-fast) PFAST=$2; shift 2 ;;
+    # A role's /plugin config key (issue 312), checked below once every answer is in; project takes the default back.
+    --option) [[ $2 =~ ^[A-Za-z]+=. ]] || die "--option takes <key>=<value>, not '$2'. Nothing was changed"
+      GIVEN=$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '.[$k] = $v' <<<"$GIVEN"); shift 2 ;;
     --issue-sizing) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--issue-sizing takes a number of tokens, or off, not '$2'. Nothing was changed"; SIZING=$2; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
@@ -216,8 +213,6 @@ while [ $# -gt 0 ]; do
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
     --worker-skills-off|--worker-plugins-off|--keep-word) CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2 ;;
-    # A role with no id clears the saved one. Checked below, once the routing file is known.
-    --codex-model) [[ $2 == *=* ]] || usage; CMODELS=$(jq -c --arg r "${2%%=*}" --arg m "${2#*=}" 'if $m == "" then del(.[$r]) else .[$r] = $m end' <<<"$CMODELS"); shift 2 ;;
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
     --max-rounds) rl maxRounds "$2" "$INT" "$1" "a whole number of passes"; shift 2 ;;
     --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
@@ -235,8 +230,6 @@ while [ $# -gt 0 ]; do
     --no-serena) SERENA=false; shift ;;
     --standard-context) STANDARD=true; shift ;;
     --no-standard-context) STANDARD=false; shift ;;
-    --codex-fast) FAST=true; shift ;;
-    --no-codex-fast) FAST=false; shift ;;
     --dashboard) DASHBOARD=1; shift ;;
     --no-dashboard) DASHBOARD=; shift ;;
     *) usage ;;
@@ -263,33 +256,38 @@ done
 RT=$(mktemp); trap 'rm -f "$RT"; [ -n "$PLAN" ] || [ -n "$QUESTIONS" ] || rm -f "$ASKING"' EXIT
 il_routing_merged "$(pp_routing)" "$IL_ROOT/config/routing.json" > "$RT" && [ -s "$RT" ] || cp "$(pp_routing)" "$RT" 2>/dev/null
 COMMANDECK_ROUTING=$RT pp_routing_valid || die "the routing file $(pp_routing), with the plugin's missing seats added, does not validate (above). Nothing was changed"
-# The Builder's model: no answer means the routing file's own; a name is one routing already names.
-# No advisor is asked: every Builder runs with none, and a rerun drops one an older set-up stored.
-[ -z "$BMODEL" ] || jq -e --arg a "$BMODEL" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$RT" >/dev/null \
-  || die "the Builder's model is one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$RT"), not '$BMODEL'. Nothing was changed"
-# A Codex model id named at setup is the project's own, so a plugin update keeps it (paths.sh pp_codex_model).
-# Only a Codex role takes one, and only an id: a bare family name would be looked up again.
-for r in $(jq -r 'keys[]' <<<"$CMODELS"); do
-  jq -e --arg r "$r" '.roles[$r].agent == "codex"' "$RT" >/dev/null \
-    || die "--codex-model takes a Codex role, one of $(jq -r '[.roles | to_entries[] | select(.value.agent == "codex") | .key] | join(", ")' "$RT"), not '$r'. Nothing was changed"
-  m=$(jq -r --arg r "$r" '.[$r]' <<<"$CMODELS")
-  [[ $m =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] && ! [[ $m =~ ^[a-z]+$ ]] \
-    || die "--codex-model $r=$m: name a model id, such as gpt-6.1-sol, not a family or other text. Nothing was changed"
+# --- role keys (issue 312): this run's --option answers, checked as every reader checks them ---
+# A profile given this run sets the three agent keys (claude: the reviewer and both judges on Claude); an --option
+# naming one beats it. No advisor is asked: every Builder runs with none, and a rerun drops one an older set-up stored.
+if [ -n "$ASKED" ]; then
+  a=codex; [ "$PROFILE" != claude ] || a=claude
+  GIVEN=$(jq -c --arg a "$a" '{codexReviewerAgent: $a, planJudgeSolAgent: $a, planJudgeAstraAgent: $a} + .' <<<"$GIVEN")
+fi
+ROLES=$(jq -r '.roles | keys[]' "$RT")
+# rk <key> -- "<role> <field>" of a role key /plugin config lists; fails for any other key.
+rk() { local r f; for r in $ROLES; do for f in $PP_ROLE_FIELDS; do [ "$(pp_role_key "$r" "$f")" != "$1" ] || { pp_role_has "$r" "$f" && echo "$r $f"; return; }; done; done; return 1; }
+for k in $(jq -r 'keys[]' <<<"$GIVEN"); do
+  # Three roles cannot be off, so none has an Enabled key: the answer is refused with the reason.
+  case $k in
+    orchestratorEnabled) die "the orchestrator cannot be off: it is the session that runs everything. Nothing was changed" ;;
+    builderEnabled) die "the Builder cannot be off: with none there is no branch to review or merge. Nothing was changed" ;;
+    codexReviewerEnabled) die "the reviewer cannot be off: the merge check needs a GO round file from it. Nothing was changed" ;;
+  esac
+  RF=$(rk "$k") || die "--option takes a role key /plugin config lists ($(for r in $ROLES; do for f in $PP_ROLE_FIELDS; do ! pp_role_has "$r" "$f" || pp_role_key "$r" "$f"; done; done | paste -sd' ' -)), not '$k'. Nothing was changed"
+  # A boolean key is saved as one, so /plugin shows it as its own toggle.
+  if [ "$(jq -r --arg k "$k" '.userConfig[$k].type' "$IL_ROOT/.claude-plugin/plugin.json")" = boolean ]; then
+    case $(jq -r --arg k "$k" '.[$k]' <<<"$GIVEN") in true|false) ;; *) die "--option $k takes true or false. Nothing was changed" ;; esac
+    GIVEN=$(jq -c --arg k "$k" '.[$k] |= (. == "true")' <<<"$GIVEN")
+  fi
+  # shellcheck disable=SC2086 # "<role> <field>", two words
+  rc=0; W=$(COMMANDECK_ROUTING=$RT COMMANDECK_OPTIONS=$GIVEN pp_role_option $RF 2>&1 >/dev/null) || rc=$?
+  [ "$rc" != 2 ] || die "${W#REFUSED: }. Nothing was changed"
 done
-# Leaving fable out opts out of Fable, leaving every Codex model out opts out of Codex. A Claude model stays: it
-# writes the plan. A Codex one only on the Claude+OpenAI profile, which has Codex.
-for m in ${PMODELS//,/ }; do
-  jq -e --arg m "$m" --arg p "$PROFILE" 'any(.roles[] | (.candidates // [.])[]; .model == $m and (.agent == "claude" or $p == "claude-openai"))' "$RT" >/dev/null \
-    || die "--plan-models takes models routing.json gives a seat ($(jq -r --arg p "$PROFILE" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "claude-openai") | .model] | unique | join(", ")' "$RT")), not '$m'. Nothing was changed"
-done
-[ -z "$PMODELS" ] || jq -e --arg l "$PMODELS" 'any(.roles[] | (.candidates // [.])[]; .agent == "claude" and IN(.model; ($l | split(",")[])))' "$RT" >/dev/null \
-  || die "--plan-models keeps at least one Claude model, the one that writes the plan. Nothing was changed"
-# A fast plan seat is a plan role routing.json names; a Codex one needs the Codex home's fast tier, as the review pass does.
-for r in ${PFAST//,/ }; do
-  a=$(jq -r --arg r "$r" 'if ($r | startswith("plan-")) then .roles[$r].agent // empty else empty end' "$RT")
-  [ -n "$a" ] || die "--plan-fast takes plan seats, $(jq -r '[.roles | keys[] | select(startswith("plan-"))] | join(", ")' "$RT"), not '$r'. Nothing was changed"
-  [ "$a" != codex ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
-    || die "$r was set to fast, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line. Add that line and run setup again, or leave $r out of --plan-fast. Nothing was changed"
+# A seat on Codex's fast tier needs that tier in the Codex home, as setup never writes it: refused here, not at a launch.
+for r in $ROLES; do
+  pp_role_has "$r" fast && [ "$(COMMANDECK_ROUTING=$RT COMMANDECK_OPTIONS=$GIVEN pp_role_option "$r" fast 2>/dev/null)" = true ] || continue
+  [ "$(COMMANDECK_ROUTING=$RT COMMANDECK_OPTIONS=$GIVEN pp_role_agent "$r")" != codex ] || pp_codex_fast_home \
+    || die "$(pp_role_key "$r" fast) is on, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so $r would run on the standard tier. Add that line and run setup again, or answer $(pp_role_key "$r" fast)=false. Nothing was changed"
 done
 
 # --- preflight: refuse here, before anything changes ---
@@ -309,16 +307,10 @@ while IFS= read -r m; do
   [ -z "$o" ] || [ "$(pp_norm "$o")" = "$(pp_norm "$PP_MAIN")" ] || [ "${n//[^A-Za-z0-9_.-]/-}" != "$MINE" ] \
     || die "another project named ${PP_MAIN##*/} is set up at $o. The watcher's job and the logs under ~/.claude are named for the folder name, so the two would share them: rename one checkout's folder, or uninstall the other first"
 done < <(il_projects)
-PASS=claude
-if [ "$PROFILE" = claude-openai ]; then
-  PASS=codex
-fi
-# Codex fast mode changes what a run costs, so only the owner's yes turns it on; no answer is off. The
-# tier itself is the Codex home's own setting, which setup never writes: a yes that home does not match is refused here.
-[ "$FAST" != true ] || [ "$PROFILE" != claude-openai ] || pp_codex_fast_home \
-  || die "Codex fast mode was chosen, but ${CODEX_HOME:-$HOME/.codex}/config.toml has no service_tier = \"fast\" line, so the review passes would run on the standard tier. Add that line and run setup again, or answer off (--no-codex-fast). Nothing was changed"
-COMMANDECK_ROUTING=$RT COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_CODEX_MODELS=$CMODELS COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the $PROFILE profile's review pass cannot run (above); nothing was changed"
-[ "$PROFILE" != claude-openai ] || echo "setup: $(pp_codex_route)"
+# The review pass runs on the reviewer's agent key, as this run leaves it. Its fast tier was checked above.
+PASS=$(COMMANDECK_ROUTING=$RT COMMANDECK_OPTIONS=$GIVEN pp_pass) || die "the reviewer's agent key does not read (above); nothing was changed"
+COMMANDECK_ROUTING=$RT COMMANDECK_REVIEW_LOOP=$RL COMMANDECK_OPTIONS=$GIVEN COMMANDECK_CODEX_FAST=false COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight >/dev/null || die "the review pass on $PASS cannot run (above); nothing was changed"
+[ "$PASS" != codex ] || echo "setup: $(pp_codex_route)"
 [ -L "$IL_LINK" ] || [ ! -e "$IL_LINK" ] || die "$IL_LINK is not a link; setup keeps a link to the plugin there. Move it aside. Nothing was changed"
 for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$IL_CODEX/hooks.json"; do
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
@@ -339,6 +331,8 @@ il_record "$SM" merge "$SETTINGS"
 PSET=$PP_MAIN/.claude/settings.json WF=$PP_MAIN/.claude/workflows/test-audit.js
 il_record "$IL_PROJECT" merge "$PSET"
 il_record "$IL_PROJECT" own "$WF"
+# Main's model and effort keys are written into the main checkout's local settings at either scope (il_main_model).
+il_record "$IL_PROJECT" merge "$PP_MAIN/.claude/settings.local.json"
 if [ "$PROFILE" = claude-openai ]; then
   il_record "$IL_PROJECT" merge "$IL_AGENTS"
   il_record "$IL_MACHINE" merge "$IL_CODEX/hooks.json" "$IL_CODEX/config.toml"
@@ -375,18 +369,14 @@ EXCLUDE_WAS=$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)
 # After every refusal above, so a refused run leaves the owner's routing file as it was.
 il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could not add the plugin's missing seats to $(pp_routing)"
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
-  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bm "$BMODEL" --arg be "$BEFFORT" --arg bc "$BCLEAR" --arg sz "$SIZING" --arg pm "$PMODELS" --arg pf "$PFAST" --arg fast "$FAST" --argjson cm "$CMODELS" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
+  --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bc "$BCLEAR" --arg sz "$SIZING" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
   --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" '
-  {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true"),
-   codexFast: ($fast == "true")}
+  {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $gen == null then {} else {generatedFiles: $gen} end)
-  + ($ob + ({model: $bm, effort: $be, clearLine: $bc} | with_entries(select(.value != ""))) | if . == {} then {} else {builder: .} end)
+  + ($ob + ({clearLine: $bc} | with_entries(select(.value != ""))) | if . == {} then {} else {builder: .} end)
   + (if $sz == "" then {} else {issueSizing: $sz} end)
-  + (if $pm == "" then {} else {planModels: ($pm | split(",") | map(select(. != "")))} end)
-  + (if $pf == "" then {} else {planFast: ($pf | split(",") | map(select(. != "")))} end)
-  + (if $cm == {} then {} else {codexModels: $cm} end)
   + (if $rl == {} then {} else {reviewLoop: $rl} end)
   + (if $own == {} then {} else {ownFiles: $own} end)
   + (if $rules == "" then {} else {rules: $rules} end)
@@ -461,13 +451,16 @@ if [ "$(pp_config_option ponytail || echo "$PONYTAIL")" = false ]; then
 elif [ -n "$PONY_OURS" ]; then
   for f in SKILL.md LICENSE; do il_write "$PONY/$f" < "$IL_ROOT/templates/ponytail/$f"; done
 fi
-# The answers that are the same in every project go into /config's options where it has none (issue 245).
-il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --arg bm "$BMODEL" --arg be "$BEFFORT" --argjson rl "$RL" \
+# The answers that are the same in every project go into /config's options where it has none (issue 245); this
+# run's --option answers replace the key's value (issue 312).
+il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --argjson rl "$RL" \
   --arg full "$FULL" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
-  {builderModel: $bm, builderEffort: $be, maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
+  {maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
    closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony != "false"),
    promptCacheTtl: $cache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
-  | with_entries(select(.value != ""))')"
+  | with_entries(select(.value != ""))')" "$GIVEN"
+# Main's model and effort (orchestratorModel, orchestratorEffort) go into the main checkout's own settings file.
+COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json"
 [ -z "$STATUS" ] || il_status_set "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$STATUS"
 
 # --- what the owner should know: said in a plan and at the end of a run alike ---
@@ -484,7 +477,7 @@ for f in "${OWN[@]}"; do
     *) NOTES+=("$f: yours loads instead of the plugin's whole version (to change that: $flag replace or merge)") ;;
   esac
 done
-[ -e "$PP_MAIN/.claude/paved-road.md" ] || NOTES+=("paved road: no .claude/paved-road.md; start it from $IL_ROOT/templates/paved-road.md, which also says what .claude/paved-road-areas.tsv holds")
+[ -e "$PP_MAIN/.claude/paved-road.md" ] || NOTES+=("paved road: no .claude/paved-road.md; start it from $IL_ROOT/templates/paved-road.md")
 [ "$RULES" != merge ] || NOTES+=("rules: sessions leave out the plugin's rules your CLAUDE.md and .claude/rules/ already state word for word$(n=$(jq '[.[] | select(. == "keep-mine")] | length' <<<"$DROPS"); [ "$n" = 0 ] || echo ", and the $n you keep your own wording for")")
 
 if [ -n "$PLAN" ]; then

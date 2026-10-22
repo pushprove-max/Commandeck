@@ -36,11 +36,10 @@ any other line is refused.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
-  after another: a helper started late is waited on alone. A helper that counts
-  (not a code search, which stays Explore) is `commandeck:helper`; one that
-  edits, runs or tests is `commandeck:lean-worker`; a blind re-check is
-  `commandeck:lean-checker`. These start without CLAUDE.md, so the prompt
-  carries every fact and limit the helper needs.
+  after another: a helper started late is waited on alone. A helper that
+  searches or looks up is `Explore` (Haiku); one that edits, runs, tests or
+  judges is `general-purpose` (Sonnet). Every helper prompt carries every fact
+  and limit the helper needs.
 - Every helper prompt, Explore included, carries three caps: at most 15 lines,
   an answer by the 20th tool call with what it has, and one `NOT FOUND: <what
   it searched, where>` line for anything it did not find. Before sending a

@@ -43,14 +43,14 @@ start() { local f="$P/$1/s2/subagents/agent-$2.jsonl"; mkdir -p "${f%/*}"
   touch -d "@$(( $(date +%s) - 20 * 60 ))" "$f"; }
 start "$(slug "$T/proj")" e1 Explore 1000
 start "$(slug "$T/proj")" e2 Explore 3000
-start "$(slug "$T/ws")-u1" l1 commandeck:lean-worker 10
-start "$(slug "$T/ws")-u1" l2 commandeck:lean-worker 30
+start "$(slug "$T/ws")-u1" l1 general-purpose 10
+start "$(slug "$T/ws")-u1" l2 general-purpose 30
 BEFORE=$(cat "$T/proj/.claude/metrics/subagent-usage.jsonl")
 OUT=$(usage --start)
 check "two runs of a type give the median of their first request's input" \
   "Explore: 2 runs, median 5000, p90 6000" "$(grep '^Explore:' <<<"$OUT")"
 check "a worktree's runs are measured too" \
-  "commandeck:lean-worker: 2 runs, median 3020, p90 3030" "$(grep '^commandeck:lean-worker:' <<<"$OUT")"
+  "general-purpose: 2 runs, median 3020, p90 3030" "$(grep '^general-purpose:' <<<"$OUT")"
 check "and the ledger is untouched" "$BEFORE" "$(cat "$T/proj/.claude/metrics/subagent-usage.jsonl")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

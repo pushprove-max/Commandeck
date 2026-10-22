@@ -68,6 +68,21 @@ check "a plan path on main that is a link is refused, its target untouched, no B
 fpunit f9; judged f9 GO 200; mkdir "$T/away"; mv "$P/.claude/plans" "$T/plansdir"; ln -s "$T/away" "$P/.claude/plans"; fp f9
 check "a plans folder on main that is a link is refused, nothing written through it" "2:0" "$RC:$(ls "$T/away" | wc -l | tr -d ' ')"
 rm "$P/.claude/plans"; mv "$T/plansdir" "$P/.claude/plans"
+# Issue 312: with both judges off in /plugin config the plan installs unjudged: the author's PLAN-DONE plan, no other.
+cp -R "$REAL/.claude-plugin" "$T/plug/"   # the manifest lists the Enabled keys, as an installed plugin has it
+fpunit f10; author 100 f10 PLAN-DONE; fp --dry-run f10
+check "a judge on and no verdict: the author's plan alone is refused" "2:1" "$RC:$(grep -c "^REFUSED: no plan judge's verdict" "$T/out")"
+mkdir -p "$HOME/.claude"; echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": false, "planJudgeAstraEnabled": false}}}}' > "$HOME/.claude/settings.json"
+fp f10
+check "both judges off: the author's PLAN-DONE plan installs unjudged and the Builder opens" "0:plan of f10:1" "$RC:$(onmain f10):$(grep -cx 'launch builder f10' "$T/seats")"
+fpunit f11; author 100 f11 PLAN-BLOCKED; fp --dry-run f11
+check "both judges off: a PLAN-BLOCKED plan is still refused" 2 "$RC"
+# A value an Enabled key does not take is no answer that the judges are off: the launch stops, as plan-tier.sh does.
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": "disabled", "planJudgeAstraEnabled": "disabled"}}}}' > "$HOME/.claude/settings.json"
+fpunit f12; author 100 f12 PLAN-DONE; fp f12
+check "judges' Enabled keys holding a value they do not take: refused naming the key, nothing on main, no Builder" "2:1:none:0" \
+  "$RC:$(grep -c '^REFUSED: /plugin config planJudgeSolEnabled = disabled' "$T/out"):$(onmain f12):$(grep -cx 'launch builder f12' "$T/seats")"
+rm -f "$HOME/.claude/settings.json"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

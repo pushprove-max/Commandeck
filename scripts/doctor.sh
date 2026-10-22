@@ -51,7 +51,13 @@ else
   # The Builder answers as their readers take them: the launch, the prompt hook, the launch's sizing check.
   # Each value's source (issue 293), "the default" being routing's.
   src() { local s; s=$(pp_option "$1" source); [ "$s" != default ] || s="the default"; echo "from $s"; }
-  if V=$(pp_route_json builder 2>&1); then ok "builder: $(jq -r '.model' <<<"$V") ($(src builderModel)), effort $(jq -r '.effort' <<<"$V") ($(src builderEffort)); setup.sh --builder-model, --builder-effort, or /config"; else bad "builder: $(tail -1 <<<"$V")"; fi
+  if V=$(pp_route_json builder 2>&1); then ok "builder: $(jq -r '.model' <<<"$V") ($(src builderModel)), effort $(jq -r '.effort' <<<"$V") ($(src builderEffort)); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config"; else bad "builder: $(tail -1 <<<"$V")"; fi
+  # Main runs on the model and effort in its settings file, which setup writes from the orchestrator keys.
+  for f in model effort; do
+    w=$(pp_role_option orchestrator "$f" 2>/dev/null) || continue
+    h=$(jq -r --arg k "$([ "$f" = model ] && echo model || echo effortLevel)" '.[$k] // empty' "$PP_MAIN/.claude/settings.local.json" 2>/dev/null)
+    [ "$h" = "$w" ] || warn "main: $(pp_role_key orchestrator "$f") is $w in /plugin config, but $PP_MAIN/.claude/settings.local.json sets ${h:-none}, and main runs on the file's; rerun /commandeck:setup"
+  done
   if V=$(. "$IL_ROOT/hooks/lib/project.sh" && pp_builder_clear_line "$PP_MAIN" 2>&1); then ok "builder clear line: $V (tokens of context, or off; setup.sh --builder-clear-line)"; else bad "builder clear line: $V"; fi
   if V=$(pp_issue_sizing 2>&1); then ok "issue sizing: $V (tokens to read, or off; setup.sh --issue-sizing)"; else bad "issue sizing: $V"; fi
   # The merge check runs on a copy that links main's node_modules (merge-unit-local.sh).
@@ -108,8 +114,9 @@ if [ -n "$PROFILE" ]; then
   ok "serena hooks (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG" 2>/dev/null)"
   if MW=$(bash "$HERE/main-watch.sh" --status 2>&1); then ok "main-watch"
   else bad "main-watch: not running, so nothing wakes the orchestrator; run: bash $(printf '%q' "$HERE")/main-watch.sh --install"; fi
-  PASS=claude; [ "$PROFILE" != claude-openai ] || PASS=codex
-  if ERR=$(COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then ok "review pass ($PASS)"
+  # The pass runs on the reviewer's agent key (codexReviewerAgent), which may differ from the profile.
+  if ! PASS=$(pp_pass 2>&1); then bad "review pass: ${PASS#REFUSED: }"
+  elif ERR=$(COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then ok "review pass ($PASS)"
   else bad "review pass: $(tail -1 <<<"$ERR")"; fi
   # No tomllib is already the "FAIL tools" line: a second line, marked ok, would say it twice.
   [ "$PASS" != codex ] || ! python3 -c 'import tomllib' 2>/dev/null || ok "codex route: $(pp_codex_route)"

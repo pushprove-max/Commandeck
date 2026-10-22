@@ -91,27 +91,27 @@ jq -n --arg p "$T/p" '{result: {terminals: [{handle: "term_old", worktreePath: $
 start term_7 >/dev/null
 check "a send reaches the live pane, past a disconnected one and a reviewer" "to-main: sent to main (term_7)" "$(send seven)"
 # A Builder's answer goes to the pane its last session start recorded, not to another seat in its worktree.
-jq -n --arg w "$T/ws/u1" '{result: {terminals: [{handle: "term_design", worktreePath: $w, agentIdentity: "claude", title: "Design coauthor — u1"},
+jq -n --arg w "$T/ws/u1" '{result: {terminals: [{handle: "term_plan", worktreePath: $w, agentIdentity: "claude", title: "Plan author —u1"},
   {handle: "term_b2", worktreePath: $w, agentIdentity: "claude", title: "Builder — u1"}]}}' > "$T/list.json"
-check "a message to a Builder reaches the Builder, not its design co-author" "to-main: sent to the Builder of u1 (term_b2)" \
+check "a message to a Builder reaches the Builder, not its plan author" "to-main: sent to the Builder of u1 (term_b2)" \
   "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit u1 status s b 2>&1)"
-# A risky build's design co-author runs in the Builder's worktree with the Builder's settings: its start is not the Builder's.
-printf 'path:%s\tDesign coauthor — u1\tterm_design\t1\n' "$T/ws/u1" >> "$T/scratch/pane-titles.tsv"
-(cd "$T/ws/u1" && "${E[@]}" COMMANDECK_BUILDER=1 ORCA_TERMINAL_HANDLE=term_design bash "$REAL/hooks/agent-startup-context.sh" </dev/null >/dev/null 2>&1)
-jq -n --arg w "$T/ws/u1" '{result: {terminals: [{handle: "term_design", worktreePath: $w, agentIdentity: "claude", title: "Design coauthor — u1"}]}}' > "$T/list.json"
+# A plan seat runs in the Builder's worktree with the Builder's settings: its start is not the Builder's.
+printf 'path:%s\tPlan author —u1\tterm_plan\t1\n' "$T/ws/u1" >> "$T/scratch/pane-titles.tsv"
+(cd "$T/ws/u1" && "${E[@]}" COMMANDECK_BUILDER=1 ORCA_TERMINAL_HANDLE=term_plan bash "$REAL/hooks/agent-startup-context.sh" </dev/null >/dev/null 2>&1)
+jq -n --arg w "$T/ws/u1" '{result: {terminals: [{handle: "term_plan", worktreePath: $w, agentIdentity: "claude", title: "Plan author —u1"}]}}' > "$T/list.json"
 (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit u1 status s b >/dev/null 2>&1); RC=$?
-check "a design co-author's start does not make it the Builder: a message for the Builder is queued" 3 "$RC"
-# A fresh risky unit: the design pane is up and no Builder has started yet, so nothing names the Builder's pane.
+check "a plan author's start does not make it the Builder: a message for the Builder is queued" 3 "$RC"
+# A unit still in planning: the plan author is up and no Builder has started yet, so nothing names the Builder's pane.
 git -C "$T/p" worktree add -q "$T/ws/u2" 2>/dev/null
-jq -n --arg w "$T/ws/u2" '{result: {terminals: [{handle: "term_d2", worktreePath: $w, agentIdentity: "claude", title: "Design coauthor — u2"}]}}' > "$T/list.json"
+jq -n --arg w "$T/ws/u2" '{result: {terminals: [{handle: "term_d2", worktreePath: $w, agentIdentity: "claude", title: "Plan author —u2"}]}}' > "$T/list.json"
 (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit u2 status s b >/dev/null 2>&1); RC=$?
 check "before its Builder starts, a message for it is queued, never sent to another pane" 3 "$RC"
 # A seat that starts before its launch record is written still knows its role: seat.sh exports it.
 git -C "$T/p" worktree add -q "$T/ws/u3" 2>/dev/null
-(cd "$T/ws/u3" && "${E[@]}" COMMANDECK_BUILDER=1 COMMANDECK_SEAT=design-coauthor ORCA_TERMINAL_HANDLE=term_d3 bash "$REAL/hooks/agent-startup-context.sh" </dev/null >/dev/null 2>&1)
+(cd "$T/ws/u3" && "${E[@]}" COMMANDECK_BUILDER=1 COMMANDECK_SEAT=plan-author ORCA_TERMINAL_HANDLE=term_d3 bash "$REAL/hooks/agent-startup-context.sh" </dev/null >/dev/null 2>&1)
 jq -n --arg w "$T/ws/u3" '{result: {terminals: [{handle: "term_d3", worktreePath: $w, agentIdentity: "claude"}]}}' > "$T/list.json"
 (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit u3 status s b >/dev/null 2>&1); RC=$?
-check "a design seat with no launch record yet is not taken for the Builder" 3 "$RC"
+check "a plan seat with no launch record yet is not taken for the Builder" 3 "$RC"
 # drain <handle> -- main's drain itself, as its session start runs it.
 drain() { (cd "$T/p" && "${E[@]}" ORCA_TERMINAL_HANDLE="$1" bash "$REAL/scripts/inbox-drain.sh" main 2>/dev/null); }
 # A handle whose check timed out is not dropped from the history: its mail is shown at a later start.

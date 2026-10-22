@@ -427,22 +427,45 @@ il_options_report() {
     echo "ok option $k: $(pp_option "$k" | sed 's/^$/none/') (from $s)"
   done
 }
-# il_plugin_options <user settings> <answers> -- setup's answers into /config's options (issue 245), each only where
-# /config has none, under the key the plugin is enabled by. The owner's /config answer beats every project's, so one
-# that differs from this setup's is named. What it adds is recorded in the machine's manifest, by file and key, for
-# il_plugin_options_out.
+# il_plugin_options <user settings> <answers> [<given answers>] -- setup's answers into /config's options (issue 245),
+# under the key the plugin is enabled by: <answers> (carried over from the project's file) each only where /config has
+# none, and the owner's /config answer that differs is named; <given answers>, this run's own (issue 312), over the
+# key's value, as the owner gave them now. What it adds where there was none is recorded in the machine's manifest, by
+# file and key, for il_plugin_options_out: a value it replaced was the owner's, and uninstall leaves the key.
 il_plugin_options() {
-  local add
-  [ -f "$1" ] || return 0
+  local add doc g=${3:-'{}'}
+  # No file yet is an empty one: a role key (issue 312) has no home but this file.
+  doc=$(il_read "$1") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  [ "$(jq -c --argjson g "$g" '. + $g' <<<"$2")" != '{}' ] || return 0
   # A "project" picker answer is none (issue 293): setup's answer replaces it.
-  jq -r --argjson a "$2" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | select($o[.key] != null and $o[.key] != "project" and $o[.key] != .value)
-    | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' "$1"
-  [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none ($1)"; return 0; }
-  add=$(jq -c --argjson a "$2" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a | with_entries(select($o[.key] == null or $o[.key] == "project")))}' "$1") || return 1
+  jq -r --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | .key as $k | select(($g | has($k) | not) and $o[.key] != null and $o[.key] != "project" and $o[.key] != .value)
+    | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' <<<"$doc"
+  [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none, and this run's --option answers over theirs ($1)"; return 0; }
+  add=$(jq -c --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a + $g | with_entries(select($o[.key] == null or $o[.key] == "project")))}' <<<"$doc") || return 1
   # Recorded before it is written: update's rollback deletes a recorded file with no prior as one setup made.
   il_record "$IL_MACHINE" merge "$1" || return 1
-  il_set "$1" --argjson a "$2" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {} | with_entries(select(.value != "project"))))' || return 1
+  doc=$(jq --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {} | with_entries(select(.value != "project"))) + $g)' <<<"$doc") \
+    && il_write "$1" <<<"$doc" || return 1
   il_set "$IL_MACHINE" --arg f "$1" --argjson n "$add" '.entries[$f].options = ((.entries[$f].options // {}) * $n)'
+}
+# il_main_model <manifest> <settings file> [off] -- main's model and effort: the orchestratorModel and
+# orchestratorEffort keys, as that file's model and effortLevel. The value each replaced is kept (mainModelWas). An
+# unset key writes nothing, and a value setup wrote earlier that nobody changed since goes back to the kept one; off
+# (uninstall) puts back every such value.
+il_main_model() {
+  local m=$1 f=$2 doc r s='{}' w
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  r=$(jq -c --arg p "$f" '.entries[$p] | {set: (.mainModel // {}), was: (.mainModelWas // {})}' "$m" 2>/dev/null) || r='{"set":{},"was":{}}'
+  [ "${3:-}" = off ] || s=$(jq -cn --arg mo "$(pp_role_option orchestrator model 2>/dev/null)" --arg ef "$(pp_role_option orchestrator effort 2>/dev/null)" \
+    '{model: $mo, effortLevel: $ef} | with_entries(select(.value != ""))')
+  [ "$(jq -c .set <<<"$r")$s" != '{}{}' ] || return 0
+  # Back to the kept value where setup's still stands; then each value s replaces is the one now kept.
+  w=$(jq -c --argjson r "$r" --argjson s "$s" '. as $d | reduce ($r.set | to_entries[] | select($d[.key] == .value) | .key) as $k
+    (.; if $r.was | has($k) then .[$k] = $r.was[$k] else del(.[$k]) end)
+    | {doc: (. + $s), was: (. as $b | $s | with_entries(.value = $b[.key]) | with_entries(select(.value != null)))}' <<<"$doc") \
+    && jq .doc <<<"$w" | il_write "$f" \
+    && il_set "$m" --arg p "$f" --argjson s "$s" --argjson w "$(jq -c .was <<<"$w")" \
+      'if $s == {} then del(.entries[$p].mainModel, .entries[$p].mainModelWas) else .entries[$p].mainModel = $s | .entries[$p].mainModelWas = $w end'
 }
 # il_profile_files <manifest> -- every Claude Code user settings file setup wrote to, one a line, by the manifest:
 # CLAUDE_CONFIG_DIR today may not be the profile it was then.

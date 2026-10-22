@@ -30,7 +30,7 @@ case "\$*" in
     case "\$*" in *"--timeout-ms 120000"*) ! rm "$T/hold" 2>/dev/null || until [ -e "$T/release" ]; do sleep 0.05; done ;; esac
     [ ! -e "$T/gone" ] || exit 1 ;;
   *"terminal list"*) [ -e "$T/gone" ] && echo '{"result":{"terminals":[]}}' || echo '{"result":{"terminals":[{"handle":"term_x","worktreePath":"/elsewhere"}]}}' ;;
-  *"terminal send"*) printf '%s\n' "\$*" | grep -oE -- '--text (/clear|/model opus|Your task spec)' >> "$T/sends" ;;
+  *"terminal send"*) printf '%s\n' "\$*" | grep -oE -- '--text (/clear|/model [a-z]+|/effort [a-z]+|Your task spec)' >> "$T/sends" ;;
   *"terminal set-pane-title"*) [ ! -e "$T/no-title" ] || { echo "unknown command" >&2; exit 1; }
     printf '%s\n' "\$*" | sed -n 's/.*--title \(.*\)/--text title:\1/p' >> "$T/sends" ;;
 esac
@@ -73,31 +73,59 @@ for f in down werr werr2; do
     "$R $(cat "$T/sends" 2>/dev/null | wc -l | tr -d ' ') $(grep -c 'Orca failed 5 times in a row' "$T/$f.out") $(jq -r .body "$SC/queue/main.jsonl" 2>/dev/null | grep -c '^re-run: ')"
 done
 
-# Issue 289: a fix round is /clear in the same pane, which keeps the model it opened with, so a Sonnet Builder ran
-# its hard later rounds on Sonnet. From fix round 2 on, a Builder not on Opus steps up; fix round 1 and added work
-# keep the Builder's model. Issue 278: the new session retitles its pane, so the role and unit title is set again.
-BR=$T/ws/u9/.claude/briefs; mkdir -p "$BR"
+# Issue 313, the fixer: a fix round is /clear in the same pane, which keeps the model and effort it opened with. A
+# build's first fix round runs on the Builder's launched model and effort (a per-build raise included), every later
+# one on Opus high, a /plugin config key beating either; the count is the build's fix hand-offs, so it resets per
+# build, and only a fix hand-off switches anything. Caught: a later round left on a weaker Builder model, and a GO
+# continuation or added work moved to the fixer's model. Issue 278: the new session's pane gets its title back.
+BR=$T/ws/u9/.claude/briefs; mkdir -p "$BR" "$T/home/.claude"
 LOGS=$T/home/.claude/projects/$(printf '%s' "$T/ws/u9" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$LOGS"
-# fr <hand-off name> <model in the record's cmd> -- one hand-off of the Builder of u9 with that seat record; the new
-# session's log is there before the hand-off looks for it.
-fr() { rm -f "$T/sends"; printf 'handle=term_x\nunit=u9\nrole=builder\ncmd=export COMMANDECK_SEAT=builder; claude --model %s --effort medium\n' "$2" > "$T/rec"
+opts() { jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {options: $o}}}' > "$T/home/.claude/settings.json"; }
+# fr <hand-off name> <model> <effort> [record lines] -- one hand-off of the Builder of u9, launched on that model and
+# effort, the record lines (an earlier round's switch) after the launch's; a fix hand-off is written first, as the pass
+# writes it. The new session's log is there before the hand-off looks for it.
+fr() { rm -f "$T/sends"; printf 'handle=term_x\nunit=u9\nrole=builder\ncmd=export COMMANDECK_SEAT=builder; claude --model %s --effort %s\n' "$2" "$3" > "$T/rec"
+  [ -z "${4:-}" ] || printf '%s\n' "$4" >> "$T/rec"
+  echo hand-off > "$BR/$1"; cp "$T/rec" "$T/rec.before"
   (sleep 1; echo "$BR/$1" > "$LOGS/s-$1.jsonl") &
-  (cd "$T/p" && env HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$SC" COMMANDECK_WORKSPACES="$T/ws" \
+  (cd "$T/p" && env -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$SC" COMMANDECK_WORKSPACES="$T/ws" \
     COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 timeout 10 bash "$REAL/scripts/builder-fresh-round.sh" term_x "$BR/$1" "$T/rec" > "$T/fr.out" 2>&1); R=$?
-  SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); }
-fr u9-fix-r1.md sonnet
-check "a Sonnet Builder's fix round 1 keeps its model, and its pane gets its title back before the pointer" "/clear,title:Builder — u9,Your task spec 0" \
-  "$SEQ $(grep -c '^model=' "$T/rec")"
-for n in 2 3; do
-  fr "u9-fix-r$n.md" sonnet
-  check "a Sonnet Builder's fix round $n types /model opus after /clear, the title after it, then the pointer; the record says opus" \
-    "/clear,/model opus,title:Builder — u9,Your task spec model=opus" "$SEQ $(grep '^model=' "$T/rec")"
-done
-fr u9-fix-r2.md opus
-check "an Opus Builder's fix round 2 gets no /model" "/clear,title:Builder — u9,Your task spec" "$SEQ"
-fr u9-added-19990101-000000.md sonnet
-check "work added mid-build keeps the Builder's model" "/clear,title:Builder — u9,Your task spec" "$SEQ"
-touch "$T/no-title"; fr u9-fix-r1.md opus; rm -f "$T/no-title"
+  SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); NEWREC=$(diff "$T/rec.before" "$T/rec" | sed -n 's/^> //p' | grep -v '^session=' | paste -sd' ' -); }
+newbuild() { rm -f "$BR"/*-fix-r*.md; }
+TS="title:Builder — u9,Your task spec"
+fr u9-fix-r1.md sonnet high
+check "first NO-GO on a build: the fixer keeps the Builder's launched model and effort, a raised Sonnet high Builder included, and the record says fixer=first:builder" \
+  "/clear,$TS|model=sonnet effort=high fixer=first:builder" "$SEQ|$NEWREC"
+fr u9-fix-r2.md sonnet medium
+check "second NO-GO on the same build: the fixer types /model opus and /effort high; the record says model=opus effort=high fixer=later:routing" \
+  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing" "$SEQ|$NEWREC"
+newbuild; opts '{"fixerFirstModel": "opus"}'; fr u9-fix-r1.md sonnet high
+check "a /plugin override wins on the first pass: fixerFirstModel=opus" "/clear,/model opus,$TS|model=opus effort=high fixer=first:config" "$SEQ|$NEWREC"
+opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'; fr u9-fix-r2.md opus high
+check "a /plugin override wins on the second pass: fixerModel=sonnet fixerEffort=medium" \
+  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=later:config" "$SEQ|$NEWREC"
+opts '{"fixerEnabled": false}'; fr u9-fix-r3.md sonnet medium
+check "fixer off: no /model or /effort on a later round, and the record says fixer=off" "/clear,$TS|model=sonnet effort=medium fixer=off" "$SEQ|$NEWREC"
+# Off after an earlier round moved the pane to Opus high: the pane goes back to the Builder's launch settings.
+fr u9-fix-r3.md sonnet medium $'model=opus\neffort=high\nfixer=later:routing'
+check "fixer off after an escalation: /model and /effort put the Builder's launch settings back, and the record says so" \
+  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=off" "$SEQ|$NEWREC"
+opts '{"fixerModel": "gpt-6.1-sol"}'; fr u9-fix-r4.md sonnet medium
+check "a value the key does not take stops the hand-off naming the key, nothing switched or typed after /clear" "1|/clear|1" \
+  "$R|$SEQ|$(grep -c '/plugin config fixerModel = gpt-6.1-sol is not a claude model for fixer' "$T/fr.out")"
+opts '{}'; rm -f "$BR/u9-fix-r4.md"
+# A new unit's first fix hand-off is its first, whatever its pass number and whatever another unit's files hold.
+BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r3.md sonnet medium; BR=$OBR
+check "a new unit's first fix round counts as first" "fixer=first:builder" "$(grep '^fixer=' "$T/rec")"
+# The filename guard: with two fix files there and a fixer that would switch, a GO continuation and added work switch nothing.
+newbuild; echo x > "$BR/u9-fix-r1.md"; echo x > "$BR/u9-fix-r2.md"; opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'
+fr u9-after-r3.md opus high
+check "two fix files, an Opus high pane, fixerModel=sonnet fixerEffort=medium: a GO continuation types nothing and leaves the record unchanged" \
+  "/clear,$TS|" "$SEQ|$NEWREC"
+fr u9-added-19990101-000000.md opus high
+check "and an added-work hand-off types nothing and leaves the record unchanged" "/clear,$TS|" "$SEQ|$NEWREC"
+opts '{}'; newbuild
+touch "$T/no-title"; fr u9-fix-r1.md opus medium; rm -f "$T/no-title"
 check "an Orca without set-pane-title: the hand-off still goes through" "0 /clear,Your task spec" "$R $SEQ"
 wait
 check "no hand-off of this file is left running" 0 "$(pgrep -f "$T/" | wc -l | tr -d ' ')"

@@ -62,15 +62,13 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   seats; tell the owner all three. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
-  written. Panel: `plan-author` and `plan-author-second` write a plan each in parallel, `plan-judge-astra` and
-  `plan-judge-sol` read both, and `plan-author` merges them into one plan; always ask which model writes the
-  second plan (default Fable when allowed). Then ask "Which model and effort?" for each seat, offering only the
-  models setup allows (`planModels`, which `plan-tier.sh` prints per seat), default that seat's printed model,
-  high effort (`seat.sh launch <role> <unit> <spec> --model <alias> --effort <level>`, or `seat.sh run` with the
-  same options: one call, one line back). A size target in a planner's spec is soft: the planner exceeds it when
-  the content needs it and says why in the plan, never trimming needed content to fit. One judge round and one
-  revision, never a judging loop. A seat whose default model is not allowed runs on an allowed one, and a Codex
-  judge with no Codex allowed runs as `plan-judge-claude`; its launch says which, and you tell the owner. Never
+  written. Panel: `plan-author` writes the plan, and `plan-judge-astra` and `plan-judge-sol` both read it. A seat
+  that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Then ask "Which model and effort?" for
+  each seat, default that seat's printed model and effort (`seat.sh launch <role> <unit> <spec> --model <alias>
+  --effort <level>`, or `seat.sh run` with the same options: one call, one line back). A size target in a
+  planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
+  trimming needed content to fit. One judge round and one revision, never a judging loop. Either judge may run
+  on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never
   refuse an answer for a missing tool. Launch each seat under its own role name and the build's unit name: every
   plan seat works in the unit's own worktree `<unit>`, which its first launch cuts from main and marks as
   planning; the Builder's launch takes it over. Planners write the plan file (`.claude/plans/<file>.md`) and
@@ -86,8 +84,8 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   installs only the plan the judge read: a judge's spec has the line `Plan: .claude/plans/<unit>.md`, or its GO
   certifies no plan. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected plan run `bash
   scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build
-  order: a plan that exists, is approved or is committed starts no build. A `--risky` design pane runs after the
-  plan.
+  order: a plan that exists, is approved or is committed starts no build. A `--risky` launch opens the Builder at
+  once; its merge waits on three reviewers.
 - The merge gate (main-watch, on a Builder's DONE): a closing or first-pass GO on the tip (`--verify`, run once per
   tip; `orca-wait.sh` reads its kept result), a clean tree, no `Merge: hold` line in the brief, no open owner
   decision. A pass merges with `merge-queue.sh <unit>@<tip>` (a train for two or more); never a push. Routine
@@ -144,8 +142,8 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   plain-chat ask needs `decision.sh add` in the same turn or the Stop is held;
   when the owner answers, run `decision.sh answer <id> '<answer>'` (agent-awareness
   lists the open ids every turn).
-- Helper agents (owner ruling 2026-10-10): a helper that edits, runs or tests is `commandeck:lean-worker`, a
-  blind re-check `commandeck:lean-checker`. On the bug-hunt plan
+- Helper agents (owner ruling 2026-10-10): a helper that searches or looks up is `Explore` (Haiku); one that
+  edits, runs, tests or judges is `general-purpose` (Sonnet). On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
   helper brief says: python3/rg into /tmp/commandeck, report what is unanswered
   at 40 turns. A lookup serena, codebase-memory or one `rg` answers stays in

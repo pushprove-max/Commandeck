@@ -11,6 +11,8 @@ PASS=0 FAIL=0
 # INSTALL_LIB_TEST_CASE=<text> re-checks only the cases whose name holds <text>; the fixtures still build, the others are not counted.
 check() { case $1 in *"${INSTALL_LIB_TEST_CASE-}"*) ;; *) return 0 ;; esac; if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 H=$T/home C=$T/home/.codex PROJ=$T/proj
+# The caller's profile is never read: a case names its own CLAUDE_CONFIG_DIR, else it is the hand-written HOME's.
+unset CLAUDE_CONFIG_DIR
 mkdir -p "$C" && git init -q -b main "$PROJ"
 # Another tool's Codex hooks and its trust entry, one of them disabled.
 cat > "$C/hooks.json" <<'EOF'
@@ -242,17 +244,18 @@ check "a re-run with no answer keeps off as saved, not dropped" false "$(full '{
 check "with no test command it records off, whatever the answer: the closing pass would have no suite to run" false "$(full '{"version":1}' true)"
 
 # Issue 256: setup rebuilds .builder from its answers; a key it asks nothing about (the hand-written maxBuilders cap)
-# must survive, or an update lifts the cap. The second arg is the --builder-effort answer ('' clears it). No setup run.
+# must survive, or an update lifts the cap. The second arg is the --builder-clear-line answer ('' clears it). No setup
+# run. Issue 312: the Builder's model and effort are /plugin config keys, so the file saves neither again.
 builder() {
   echo "$1" > "$T/builder.json"
-  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={}
-    eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^BMODEL=\$(old " <<<"$S")"; eval "$(grep "^BUILDER=" <<<"$S")"; [ "$2" = keep ] || BEFFORT=$2
+  lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; RL={} GEN=null DROPS={} CUTS={}
+    eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^BCLEAR=\$(old " <<<"$S")"; eval "$(grep "^BUILDER=" <<<"$S")"; [ "$2" = keep ] || BCLEAR=$2
     { eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"; } | jq -c .builder' "$T/builder.json" "$2"
 }
-check "a re-run keeps the project's Builder cap and its other builder answers" '{"maxBuilders":1,"model":"opus","effort":"high"}' \
-  "$(builder '{"version":1,"builder":{"model":"opus","effort":"high","maxBuilders":1}}' keep)"
+check "a re-run keeps the project's Builder cap and clear line, and saves no model or effort there" '{"maxBuilders":1,"clearLine":"300000"}' \
+  "$(builder '{"version":1,"builder":{"model":"opus","effort":"high","maxBuilders":1,"clearLine":"300000"}}' keep)"
 check "an answer cleared to the default is dropped, the cap kept" '{"maxBuilders":1}' \
-  "$(builder '{"version":1,"builder":{"effort":"high","maxBuilders":1}}' '')"
+  "$(builder '{"version":1,"builder":{"clearLine":"300000","maxBuilders":1}}' '')"
 
 # --- a routing file of the owner's own gains the plan seats it lacks, and uninstall takes back only those ---
 # A COMMANDECK_ROUTING file kept from before the plan seats had none, so no plan run could start. Setup adds each
@@ -428,12 +431,42 @@ done
 rm -f "$MB" "$MC"
 
 # Setup's routing checks and its review preflight read the merged routing (judge amendment A): with only an edited
-# builder in the owner's file, the Claude profile's preflight found no claude-reviewer and refused before any write.
+# builder in the owner's file, the Claude profile's preflight found no Claude reviewer and refused before any write.
 setup_routing() { COMMANDECK_ROUTING=$1 lib 'S=$(cat "$0/setup.sh"); HERE=$0; die() { echo "setup: $*" >&2; exit 1; }
-  BMODEL= PMODELS= PFAST= PROFILE=claude PASS=claude CMODELS={} RL={}
+  ASKED=claude GIVEN={} PROFILE=claude PASS=claude RL={}
   eval "$(sed -n "/^# --- routing:/,/^# --- preflight:/p" <<<"$S")"
   eval "$(grep -F "COMMANDECK_PASS=\$PASS bash \"\$HERE/builder-codex-pass.sh\" --preflight" <<<"$S")" && echo "preflight ok"' 2>&1; }
 check "setup's routing block and review preflight pass on an owner's file with only an edited builder" 1 "$(setup_routing "$T/routing.orig" | grep -c '^preflight ok$')"
+
+# Issue 312: setup's --option answers are role keys, checked before anything is written, as every reader checks them.
+# setup_keys <--profile or ""> <--option answers as JSON> -- the answers setup writes.
+setup_keys() { ASK=$1 GV=$2 lib 'S=$(cat "$0/setup.sh"); HERE=$0; die() { echo "setup: $*" >&2; exit 1; }
+  ASKED=$ASK GIVEN=$GV PROFILE=${ASK:-claude-openai} RL={}
+  eval "$(sed -n "/^# --- routing:/,/^# --- preflight:/p" <<<"$S")" && echo "$GIVEN"' 2>&1; }
+[ ! -e "$PROJ/.claude" ] || { echo "install-lib: the key cases expect no $PROJ/.claude; a case above left one" >&2; exit 1; }
+mkdir "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"
+check "--profile claude puts the reviewer and both judges on Claude" '{"codexReviewerAgent":"claude","planJudgeAstraAgent":"claude","planJudgeSolAgent":"claude"}' \
+  "$(setup_keys claude '{}' | jq -cS '{codexReviewerAgent, planJudgeSolAgent, planJudgeAstraAgent}')"
+check "and an --option naming one of them beats the profile" codex "$(setup_keys claude '{"codexReviewerAgent": "codex"}' | jq -r .codexReviewerAgent)"
+check "a boolean answer is saved as a boolean, so /plugin shows it as its toggle" false "$(setup_keys '' '{"fixerEnabled": "false"}' | jq -r '.fixerEnabled | if type == "boolean" then tostring else "not a boolean" end')"
+for k in orchestrator builder codexReviewer; do
+  check "${k}Enabled=false is refused, saying why that role cannot be off" 1 "$(setup_keys '' "{\"${k}Enabled\": \"false\"}" | grep -c 'cannot be off.*Nothing was changed')"
+done
+check "a model the fixer does not take is refused naming its key" 1 "$(setup_keys '' '{"fixerFirstModel": "gpt-9"}' | grep -c '^setup: .*fixerFirstModel.*Nothing was changed')"
+check "a key /plugin config does not list is refused" 1 "$(setup_keys '' '{"leanWorkerModel": "sonnet"}' | grep -c "not 'leanWorkerModel'")"
+rm -f "$H/.claude/settings.json"; rm -r "$PROJ/.claude"
+
+# Issue 312: main's model and effort keys go into main's settings file over the owner's own values, which come back
+# when the keys are unset again or the plugin is uninstalled; a value the owner changed since stays theirs.
+MS=$T/main-settings.json; echo '{"model": "sonnet", "effortLevel": "medium", "x": 1}' > "$MS"; OWN='{"effortLevel":"medium","model":"sonnet","x":1}'
+# mm <keys> [off] -- setup's (or uninstall's) call, the file recorded in the project's manifest first as setup records it.
+mm() { COMMANDECK_OPTIONS=$1 lib 'il_record "$IL_PROJECT" merge "$1" && il_main_model "$IL_PROJECT" "$1" $2' "$MS" "${2:-}"; jq -c '{model, effortLevel}' "$MS"; }
+KEYS='{"orchestratorModel": "opus", "orchestratorEffort": "high"}'
+check "main model: the keys replace the owner's model and effort, a rerun too" '{"model":"opus","effortLevel":"high"}' "$(mm "$KEYS" >/dev/null; mm "$KEYS")"
+check "main model: the keys unset again put the owner's values back" "$OWN" "$(mm '{}' >/dev/null; jq -cS . "$MS")"
+check "main model: uninstall puts the owner's values back" "$OWN" "$(mm "$KEYS" >/dev/null; mm '{}' off >/dev/null; jq -cS . "$MS")"
+mm "$KEYS" >/dev/null; jq '.effortLevel = "low"' "$MS" > "$T/x" && mv "$T/x" "$MS"
+check "main model: uninstall leaves an effort the owner changed since, and puts back the model" '{"model":"sonnet","effortLevel":"low"}' "$(mm '{}' off)"
 
 # --- issue 207: a wrapper that already calls the stable link is no question, even before setup re-points the link ---
 H2=$T/h2; mkdir -p "$H2/.codex" "$H2/.commandeck" "$T/v1/hooks"; echo old > "$T/v1/hooks/codex-notify.sh"; ln -s "$T/v1" "$H2/.commandeck/plugin"

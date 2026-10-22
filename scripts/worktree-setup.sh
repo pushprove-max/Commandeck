@@ -240,7 +240,7 @@ if [ "$BUILDER" = 1 ]; then
     def reg($m): [{hooks: [{type: "command", command: $cmd}]} + (if $m then {matcher: $m} else {} end)];
     .env.COMMANDECK_BUILDER = "1"
     | .permissions.deny -= ["Agent"]
-    | .permissions.allow = ((.permissions.allow | map(select(test("^Bash\\(bash .*/builder-(codex|claude)-pass[.]sh:") | not))) + ["Bash(node:*)", "Bash(bash \($s)/builder-codex-pass.sh:*)", "Bash(bash \($s)/builder-claude-pass.sh:*)"] | unique)
+    | .permissions.allow = ((.permissions.allow | map(select(test("^Bash\\(bash .*/builder-(codex|claude)-pass[.]sh:") | not))) + ["Bash(node:*)", "Bash(bash \($s)/builder-codex-pass.sh:*)"] | unique)
     | .claudeMdExcludes = (.claudeMdExcludes + $bx | unique)
     | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + reg(null) | unique)
     | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + reg(null) | unique)

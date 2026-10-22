@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# builder-launch-resume.test.sh -- the second call of a risky launch (the one that opens the Builder once the design
-# note exists), on a real worktree and the real worktree-setup.sh, with seat.sh, the pass script and orca-ide stood
-# in for. What this pins: a --keep given on the second call reaches the Builder's settings before its pane opens,
-# as it does on a first call, so a billing exemption asked for late is not silently dropped. And a unit is planned and
+# builder-launch-resume.test.sh -- a risky launch, on a real worktree and the real worktree-setup.sh, with seat.sh,
+# the pass script and orca-ide stood in for. What this pins: a risky launch opens its Builder in one call (no design
+# pane waits first), its brief carries the "## Risky launch" section the merge gate reads for three reviewers, and a
+# --keep reaches the Builder's settings before its pane opens. And a unit is planned and
 # built in one worktree: a clean planning worktree is adopted and the Builder opens in it, based on local main; a
 # dirty one is refused before any pane closes, and an unmarked one (another Builder's) is refused as before.
 set -uo pipefail
 . "$(dirname "$0")/fixtures/builder-launch-resume-setup.sh"
-launch >"$T/out"; check "the first call opens the design pane and no Builder" "1:0" "$(grep -c 'design pane open' "$T/out"):$(test -e "$T/keep-at-open" && echo 1 || echo 0)"
-mkdir -p "$WS/u1/.claude/briefs"; echo note > "$WS/u1/.claude/briefs/u1-design.md"
-launch --keep billing >"$T/out"
-check "a second call with --keep billing opens the Builder with Stripe kept" "billing:null" \
-  "$(cat "$T/keep-at-open" 2>/dev/null):$(jq -c '.enabledPlugins["stripe@claude-plugins-official"]' "$WS/u1/.claude/settings.local.json")"
+: > "$T/seats"; launch --keep billing >"$T/out"
+check "a risky launch opens the Builder at once and its brief has ## Risky launch, Stripe kept" "1:0:1:billing:null" \
+  "$(grep -cx 'launch builder u1' "$T/seats"):$(grep -vc 'launch builder' "$T/seats"):$(grep -cx '## Risky launch' "$WS/u1/.claude/briefs/u1.md"):$(cat "$T/keep-at-open" 2>/dev/null):$(jq -c '.enabledPlugins["stripe@claude-plugins-official"]' "$WS/u1/.claude/settings.local.json")"
 
 # --- a unit planned in its own worktree: the real plan-worktree-close.sh, a launch with no --risky ---
 cp "$REAL/scripts/plan-worktree-close.sh" "$T/plug/scripts/"

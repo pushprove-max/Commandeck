@@ -13,46 +13,46 @@ printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
 
 # A seat Orca would not dispatch gets its pointer typed, and no preamble then names its task: the typed text
 # carries the task id, so the seat's session can be tied to its task (read-verdict.sh --task).
-rm -f "$T/pane-up" "$T/sent"; touch "$T/no-dispatch"; jq 'del(.planModels)' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
-COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+rm -f "$T/pane-up" "$T/sent"; touch "$T/no-dispatch"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a typed pointer ends with its task id" 'Task id task_1.' "$(grep -m1 'Your task spec' "$T/sent" 2>&1 | grep -o 'Task id task_1\.$')"
 rm -f "$T/no-dispatch"
 
 # Issue 233: launch wrote its record only after the tui-idle wait (up to 120 s) and the dispatch retries (60 s); a
 # caller that timed out first left a live pane with no record, and its retry opened a second pane.
-JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt); touch "$T/slow-idle"; rm -f "$T/pane-up" "$T/titles"; : > "$T/creates"
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-sol.txt); touch "$T/slow-idle"; rm -f "$T/pane-up" "$T/titles"; : > "$T/creates"
 # The pane's tui-idle wait lasts until the test removes slow-idle: a launch that waited on it would hit its timeout.
-COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
 check "launch returns while the pane's tui-idle wait still holds, naming the task and phase" "0:1" \
   "$RC:$(grep -c 'handle=h1 task=task_1 phase=launching' "$T/out")"
-check "status shows launching meanwhile" "phase=launching handle=h1 task=task_1" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1-3)"
-COMMANDECK_SEAT_FORCE=1 seat_sh launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "status shows launching meanwhile" "phase=launching handle=h1 task=task_1" "$(seat_sh status plan-judge-sol pu | cut -d' ' -f1-3)"
+COMMANDECK_SEAT_FORCE=1 seat_sh launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a second launch while the first is still launching is refused with its status, and opens no pane" "2:1:1" \
-  "$?:$(grep -c 'REFUSED: plan-judge-claude for pu is still launching: phase=launching handle=h1' "$T/out"):$(grep -c . "$T/creates")"
+  "$?:$(grep -c 'REFUSED: plan-judge-sol for pu is still launching: phase=launching handle=h1' "$T/out"):$(grep -c . "$T/creates")"
 BEFORE=$(cat "$T/titles" 2>/dev/null | grep -c .)
-rm -f "$T/slow-idle"; settle pu plan-judge-claude
-check "then status shows dispatched" "phase=dispatched" "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1)"
+rm -f "$T/slow-idle"; settle pu plan-judge-sol
+check "then status shows dispatched" "phase=dispatched" "$(seat_sh status plan-judge-sol pu | cut -d' ' -f1)"
 # Issue 278: the agent retitles its pane as it starts, so the role and unit title is set once it is up.
-check "the pane is titled with its role and unit only after the tui-idle wait" "0:Plan judge claude — pu" \
+check "the pane is titled with its role and unit only after the tui-idle wait" "0:Plan judge sol — pu" \
   "$BEFORE:$(cat "$T/titles" 2>/dev/null)"
 rm -f "$T/pane-up"; : > "$T/creates"; touch "$T/no-title"
-COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "an Orca without set-pane-title still launches, in one pane" "0:1:phase=dispatched" \
-  "$?:$(grep -c . "$T/creates"):$(seat_sh status plan-judge-claude pu | cut -d' ' -f1)"
+  "$?:$(grep -c . "$T/creates"):$(seat_sh status plan-judge-sol pu | cut -d' ' -f1)"
 rm -f "$T/no-title"
 rm -f "$T/pane-up"; touch "$T/no-dispatch" "$T/send-fails"
-COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a launch whose pointer cannot be sent ends phase=failed, and its log names the cause" "phase=failed:1" \
-  "$(seat_sh status plan-judge-claude pu | cut -d' ' -f1):$(grep -c 'send failed to h1' "$JREC.log")"
+  "$(seat_sh status plan-judge-sol pu | cut -d' ' -f1):$(grep -c 'send failed to h1' "$JREC.log")"
 rm -f "$T/no-dispatch" "$T/send-fails"
 
 # A unit planned before 0.18.0 plans in its marked <unit>-plan, its plan not yet committed: a seat launched in a new
 # <unit> cut from main read no plan.
 LWT=$HOME/orca/workspaces/proj/pl-plan; git -C "$PROJ" worktree add -q "$LWT" && echo pl > "$(git -C "$LWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 mkdir -p "$LWT/.claude/plans" && echo draft > "$LWT/.claude/plans/pl.md"; : > "$T/creates"
-srun launch plan-judge-claude pl "$T/judge-spec.md" >"$T/out" 2>&1
+srun launch plan-judge-sol pl "$T/judge-spec.md" >"$T/out" 2>&1
 check "a plan seat of a unit planned in <unit>-plan opens there, its record names it, and no <unit> is made" '0:1:1:no' \
-  "$?:$(grep -c -- "path:$LWT " "$T/creates"):$(grep -cx 'worktree=pl-plan' "$HOME/.commandeck/scratch/"*/seat-pl-plan-judge-claude.txt):$([ -e "$HOME/orca/workspaces/proj/pl" ] && echo yes || echo no)"
+  "$?:$(grep -c -- "path:$LWT " "$T/creates"):$(grep -cx 'worktree=pl-plan' "$HOME/.commandeck/scratch/"*/seat-pl-plan-judge-sol.txt):$([ -e "$HOME/orca/workspaces/proj/pl" ] && echo yes || echo no)"
 
 # Issue 256: the owner caps how many Builders run at once (maxBuilders in /config), over all units. A Builder of
 # another unit whose pane is connected counts; a launch at the cap opens no pane; with no cap nothing is counted.
@@ -92,6 +92,33 @@ bl b2 > "$T/o2" & bl b3 > "$T/o3" & wait
 check "two launches together under cap 1 open one pane, and one is refused" "1:1" \
   "$(grep -c . "$T/creates"):$(cat "$T/o2" "$T/o3" | grep -c '^REFUSED: 1 Builders are running')"
 rm -f "$T/pane-up"
+
+# Issue 312: each judge's agent key picks its agent. On codex it is the read-only Codex sandbox; on claude the Claude
+# overlay, Sonnet with Write, Edit and NotebookEdit denied. Two judges on Claude stay two seats with two records.
+printf '#!/bin/sh\nexit 0\n' > "$BIN/codex"; chmod +x "$BIN/codex"
+jq '.models += [{slug: "gpt-9.1-astra"}]' "$HOME/.codex/models_cache.json" > "$T/mc" && mv "$T/mc" "$HOME/.codex/models_cache.json"
+jrec() { sed -n 's/^cmd=//p' "$HOME/.commandeck/scratch/"*/"seat-pu-$1.txt" | tail -1; }
+for j in sol:planJudgeSol astra:planJudgeAstra; do
+  r=plan-judge-${j%%:*} k=${j#*:}
+  cap "{\"${k}Agent\": \"codex\"}"; rm -f "$T/pane-up"
+  COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
+  check "$r on codex launches the read-only Codex sandbox" "0:1" "$?:$(jrec "$r" | grep -c "codex --model gpt-9.1-${j%%:*} .*--sandbox read-only")"
+  cap "{\"${k}Agent\": \"claude\"}"; rm -f "$T/pane-up"
+  COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
+  check "$r on claude launches Claude Sonnet with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
+    "$?:$(jrec "$r" | grep -c 'claude --model sonnet --effort high --disallowedTools Write,Edit,NotebookEdit')"
+done
+# Pass 8: a judge launched on its own --model needs no default model: with the Sol family's sources taken away one at
+# a time (its cache entry, then the whole cache), the named model still launches.
+cap '{"planJudgeSolAgent": "codex"}'
+jq 'del(.models[] | select(.slug | endswith("-sol")))' "$HOME/.codex/models_cache.json" > "$T/mc" && mv "$T/mc" "$HOME/.codex/models_cache.json"
+for gone in "the Sol cache entry" "the models cache"; do
+  [ "$gone" = "the Sol cache entry" ] || rm -f "$HOME/.codex/models_cache.json"; rm -f "$T/pane-up"
+  COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" --model gpt-9.1-astra >"$T/out" 2>&1
+  check "plan-judge-sol --model gpt-9.1-astra launches with $gone gone" "0:1" "$?:$(jrec plan-judge-sol | grep -c 'codex --model gpt-9.1-astra ')"
+done
+check "two judges on Claude are two seats with two records" "2:2" \
+  "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | grep -c '^role=plan-judge-')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

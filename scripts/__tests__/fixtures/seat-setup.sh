@@ -11,6 +11,8 @@ export HOME=$T/home
 PROJ=$T/proj CFG=$T/proj/.claude/commandeck.json BIN=$T/bin; mkdir -p "$HOME" "$BIN" "$PROJ/.claude"
 git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 echo '{"version": 1, "profile": "claude"}' > "$CFG"
+# The stock read-only Claude seat is plan-judge-sol on its Claude agent key (issue 312), and the reviewer runs on Claude.
+mkdir -p "$HOME/.claude" && echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolAgent": "claude", "codexReviewerAgent": "claude"}}}}' > "$HOME/.claude/settings.json"
 # A Codex seat's model is read from Codex's own model list.
 mkdir -p "$HOME/.codex" && jq -n --arg f "$(jq -r '.roles["codex-reviewer"].model' "$REAL/config/routing.json")" '{models: [{slug: "gpt-9.1-\($f)"}]}' > "$HOME/.codex/models_cache.json"
 seat_sh() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING -u CODEX_HOME -u CLAUDE_CONFIG_DIR \

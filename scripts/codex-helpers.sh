@@ -45,17 +45,17 @@ pane_title() { printf '%s%s — %s\n' "$(pane_word "$1")" "${3:+ $3}" "$2"; }
 # null is a seat, never a unit stage. `reviewer`
 # is review-round.sh's title word for every review seat.
 ROLE_LANES='{
-  "plan-author": "planning", "brief-reviewer": "planning", "design-coauthor": "planning",
+  "plan-author": "planning", "brief-reviewer": "planning",
   "plan-author-arch": "planning", "brief-reviewer-arch": "planning",
   "plan-author-hard": "planning", "brief-reviewer-hard": "planning",
-  "plan-author-second": "planning", "plan-judge-sol": "planning", "plan-judge-astra": "planning", "plan-judge-claude": "planning",
+  "plan-judge-sol": "planning", "plan-judge-astra": "planning",
   "investigator": "planning", "debugger": "planning", "debugger-pipeline": "planning",
   "implementer": "building", "implementer-light": "building", "race-implementer": "building", "escalation": "building", "builder": "building",
-  "reviewer": "review", "claude-reviewer": "review", "codex-reviewer": "review", "codex-reviewer-risky": "review",
+  "reviewer": "review", "codex-reviewer": "review", "codex-reviewer-risky": "review",
   "luna-reviewer": "review", "refuter": "review", "certifier": "review", "judge-fable": "review",
   "judge-luna": "review", "judge-luna-high": "review", "judge-sol-high": "review", "judge-sol-xhigh": "review",
   "fixer": "fixing", "design-fixer": "fixing",
-  "e2e-driver": null, "audit-auditor": null, "audit-verifier": null, "companion": null, "automation-claude": null,
+  "e2e-driver": null, "companion": null, "automation-claude": null,
   "main-session": null, "release-captain": null}'
 # The flow's order: with two lanes working at once, the later one is the unit's.
 LANE_ORDER='["planning","building","review","fixing"]'

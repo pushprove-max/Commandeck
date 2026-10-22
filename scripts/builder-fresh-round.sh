@@ -71,16 +71,43 @@ STAMP=$(mktemp) || fail "cannot make a temp file; nothing typed"
 trap 'rm -f "$STAMP"' EXIT
 send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing typed"
 idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
-# Issue 289: /clear keeps the model the pane opened with; from fix round 2 on, a Builder not on Opus steps up.
-N=$(sed -n 's/.*-fix-r\([0-9][0-9]*\)\.md$/\1/p' <<<"${HAND##*/}")
-if [ "${N:-0}" -ge 2 ] && [ -n "$REC" ] && [ -f "$REC" ]; then
-  M=$(sed -n 's/^model=//p' "$REC" | tail -1)
-  [ -n "$M" ] || M=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
-  if [[ $M != *opus* ]]; then
-    send "/model opus" || fail "typed /clear but typing /model opus into $H failed (${SENT:-no answer})"
-    idle 120000 || fail "typed /model opus but $H was not idle within 120s; the hand-off pointer was not typed"
-    echo model=opus >> "$REC"
+# Issue 313, the fixer: /clear keeps the model and effort the pane opened with. Only a fix hand-off
+# (<unit>-fix-r<N>.md) switches anything, and its count is that unit's fix hand-offs in the folder (not N, the pass
+# number), so it resets per build. The first runs on fixer first (builder: as the Builder launched, a per-build
+# raise included), every later one on fixer's model and effort (Opus high); /plugin config keys beat routing's.
+# fixerEnabled=false keeps the Builder's launched model and effort, switching back a pane an earlier round moved. Each
+# switch is typed only where the pane differs, and the record says the rule.
+if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]; then
+  FU=${BASH_REMATCH[1]}
+  K=$(ls "${HAND%/*}/$FU"-fix-r*.md 2>/dev/null | grep -cE -- '-fix-r[0-9]+\.md$')
+  # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take stops the hand-off.
+  SRC=routing
+  pick() { local v rc=0; v=$(pp_role_option fixer "$2" 2>&1) || rc=$?
+    case $rc in 0) SRC=config ;; 1) v=$(jq -r "$3 // empty" "$(pp_routing)") ;; *) fail "${v#REFUSED: }; nothing switched, the hand-off pointer was not typed" ;; esac
+    printf -v "$1" '%s' "$v"; }
+  rc=0; EN=$(pp_role_option fixer enabled 2>&1) || rc=$?
+  [ "$rc" != 2 ] || fail "${EN#REFUSED: }; nothing switched, the hand-off pointer was not typed"
+  # The pane's model and effort now: the last switch the record names, else the launch's own command.
+  CM=$(sed -n 's/^model=//p' "$REC" | tail -1); [ -n "$CM" ] || CM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
+  CE=$(sed -n 's/^effort=//p' "$REC" | tail -1); [ -n "$CE" ] || CE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
+  if [ "$EN" = false ]; then RULE=off WM=builder WE=builder
+  elif [ "$K" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:builder
+    [ "$SRC" != config ] || RULE=first:config
+  else pick WM model .roles.fixer.model; pick WE effort .roles.fixer.effort; RULE=later:$SRC; fi
+  # builder: the Builder's launched model or effort, which the pane keeps.
+  [ "$WM" != builder ] || WM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
+  [ "$WE" != builder ] || WE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
+  if [ -n "$WM" ] && [[ $CM != *"$WM"* ]]; then
+    send "/model $WM" || fail "typed /clear but typing /model $WM into $H failed (${SENT:-no answer})"
+    idle 120000 || fail "typed /model $WM but $H was not idle within 120s; the hand-off pointer was not typed"
   fi
+  # /effort takes in place in an idle Claude pane (checked on a live pane for issue 313), as seat.sh effort sends it.
+  if [ -n "$WE" ] && [ "$CE" != "$WE" ]; then
+    send "/effort $WE" || fail "typed /clear but typing /effort $WE into $H failed (${SENT:-no answer})"
+    idle 120000 || fail "typed /effort $WE but $H was not idle within 120s; the hand-off pointer was not typed"
+  fi
+  { [ -z "$WM" ] || echo "model=$WM"; [ -z "$WE" ] || echo "effort=$WE"; } >> "$REC"
+  echo "fixer=$RULE" >> "$REC"
 fi
 # Issue 278: the new session retitles its pane; give it back its role and unit.
 U=$(sed -n 's/^unit=//p' "$REC" 2>/dev/null | tail -1)

@@ -58,28 +58,30 @@ check "read-verdict.sh --seat prints the verdict collect closed on, then that re
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
 # Issue 291: under an account profile (CLAUDE_CONFIG_DIR) Claude Code keeps .claude.json in that folder, not in HOME.
 mkdir -p "$T/prof-off" "$T/prof-on"
+# The profile's own settings put the judge on Claude: the check is a Claude seat's, and a Codex judge skips it.
+tee "$T/prof-off/settings.json" < "$HOME/.claude/settings.json" > "$T/prof-on/settings.json"
 jq -n --arg p "$PROJ" '{projects: {($p): {disabledMcpServers: ["serena"]}}}' | tee "$T/prof-off/.claude.json" > "$HOME/.claude.json"
-PROFILE=$T/prof-off srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+PROFILE=$T/prof-off srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "issue 291: a profile's .claude.json that disables a needed server refuses the launch" "2:1" "$?:$(grep -c 'BLOCKED: serena disabled' "$T/out")"
-PROFILE=$T/prof-on srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches; under a profile HOME's .claude.json is not read" 0 $?
+PROFILE=$T/prof-on srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1; check "the judge launches; under a profile HOME's .claude.json is not read" 0 $?
 rm "$HOME/.claude.json"
-JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-claude.txt)
+JREC=$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-sol.txt)
 printf 'Reading the plan.\nesc to interrupt\n' > "$T/screen"; echo PLAN-DONE > "$T/on-create"
-COMMANDECK_SEAT_SILENT_SECONDS=1 srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 20 >"$T/out" 2>&1
+COMMANDECK_SEAT_SILENT_SECONDS=1 srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 20 >"$T/out" 2>&1
 check "a silent judge is relaunched once and its wait then sees the marker" '0:1' "$?:$(grep -c 'relaunching once' "$T/out")"
 check "the relaunched record keeps relaunched=1 and the wait's marker" '1:1' "$(grep -cx 'relaunched=1' "$JREC"):$(grep -cx 'marker=PLAN-DONE' "$JREC")"
-srun collect plan-judge-claude pu >"$T/out" 2>&1
-check "and collect with no --marker closes it" '0:1' "$?:$(grep -c 'closed seat=plan-judge-claude unit=pu PLAN-DONE' "$T/out")"
+srun collect plan-judge-sol pu >"$T/out" 2>&1
+check "and collect with no --marker closes it" '0:1' "$?:$(grep -c 'closed seat=plan-judge-sol unit=pu PLAN-DONE' "$T/out")"
 rm -f "$T/on-create" "$T/grow"
-COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-claude pu "$T/judge-spec.md" >"$T/out" 2>&1
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a plain launch writes a record with no marker of an earlier wait" '0:0' "$?:$(grep -c '^marker=' "$JREC")"
 check "and keeps the seat's first launch, so a relaunch does not move its planning's start" 1 \
   "$(awk -F= '$1 == "first" { f = $2 } $1 == "launched" { l = $2 } END { print (f != "" && f < l) }' "$JREC")"
 # A wait that gives up has proven nothing: an unfinished pane quoting the marker in a fence must not be collected on it.
 printf 'Still judging.\n```\nPLAN-DONE\n```\nesc to interrupt\n' > "$T/screen"
-srun wait plan-judge-claude pu --marker PLAN-DONE --timeout-s 0 >"$T/out" 2>&1
+srun wait plan-judge-sol pu --marker PLAN-DONE --timeout-s 0 >"$T/out" 2>&1
 check "a wait that times out fails and saves no marker" '1:0' "$?:$(grep -c '^marker=' "$JREC")"
-srun collect plan-judge-claude pu >"$T/out" 2>&1
+srun collect plan-judge-sol pu >"$T/out" 2>&1
 check "so collect with no --marker keeps the unfinished pane open" '3:0' "$?:$(grep -c 'closed seat' "$T/out")"
 
 echo "$PASS passed, $FAIL failed"

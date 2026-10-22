@@ -37,7 +37,9 @@ check "it carries a description" yes "$(jq -r 'if (.description | type == "strin
 check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .commands' "$M" 2>/dev/null | paste -sd' ' -)"
 # Issue 245: an option /config shows that nothing reads is a setting that does nothing; a default other than setup's
 # recommended answer shows the owner one thing in /config while setup recommends another.
-READ=$(cd "$REAL" && grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' --exclude-dir=__tests__ | awk '{print $2}' | sort -u)
+# A role key (issue 312) is read by pp_role_option for every role and field routing.json has; its name is built.
+READ=$(cd "$REAL" && { grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' --exclude-dir=__tests__ | awk '{print $2}'
+  bash -c '. scripts/paths.sh && for r in $(jq -r ".roles | keys[]" config/routing.json); do for f in $PP_ROLE_FIELDS; do pp_role_key "$r" "$f"; done; done'; } | sort -u)
 for k in $(jq -r '.userConfig | keys[]' "$M"); do
   check "option $k has a reader" 1 "$(grep -cx "$k" <<<"$READ")"
 done
@@ -45,10 +47,18 @@ done
 # -: setup asks nothing for it, so only the default is checked.
 while IFS='|' read -r k d a; do
   [ "$a" != - ] || { check "option $k, which setup does not ask, has no default" "$d" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M")"; continue; }
-  check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
+  check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k] | if has("default") then .default else "none" end' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
 done <<'EOF'
 builderModel|"project"|Ask "Builder model": Opus
 builderEffort|"project"|Ask "Builder effort": Medium
+orchestratorEffort|"project"|Ask "Main": Opus, default effort
+fixerEnabled|true|Ask "Fixer": Same as Builder, then Opus high
+fixerFirstModel|"project"|Ask "Fixer": Same as Builder, then Opus high
+codexReviewerModel|"project"|Ask "Reviewer model": Sol medium
+planAuthorEnabled|true|Ask "Plan author": Opus high
+planJudgeSolEnabled|true|Ask "Sol judge": Codex high
+planJudgeAstraEnabled|true|Ask "Astra judge": Codex high
+planAuthorFast|false|Ask "Fast tier", one multi-select question (`multiSelect: true`): None
 maxReviewRounds|"none"|Ask "Review rounds": No cap
 closingPass|true|Ask "Closing pass": Runs
 fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
@@ -59,7 +69,7 @@ dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
 dashboardPort|"none"|Ask "Dashboard": On, this machine only
 maxBuilders|"none"|-
 EOF
-check "the set is the ten options of the plan's question 9 and the Builder cap (issue 256)" 11 "$(jq '.userConfig | length' "$M")"
+check "the set is the ten options of the plan's question 9, the Builder cap (issue 256) and 25 role keys (issue 312)" 36 "$(jq '.userConfig | length' "$M")"
 # Issue 293: a Sonnet Builder ran at medium because setup recommended Medium whatever the model, and asked it three
 # questions later. The effort is asked right after the model, High recommended on Sonnet; the model and effort
 # options default to "project", no answer, which the /config dialog may save without hiding the project's answer.
@@ -86,28 +96,14 @@ for n in setup update uninstall handoff worktreereview; do
   check "skills/$n sets disable-model-invocation: a side-effect skill Claude could start by itself is the failure" 1 \
     "$(grep -c '^disable-model-invocation: true$' "$REAL/skills/$n/SKILL.md")"
 done
-# The lean helper agent: omitClaudeMd and maxTurns do the work; hooks, mcpServers and permissionMode are ignored for a
-# plugin's agents, so each would be a setting that silently does nothing.
-H=$REAL/agents/helper.md
-check "agents/helper.md sets omitClaudeMd and maxTurns, and none of the keys a plugin agent ignores" "1 1 0" \
-  "$(grep -c '^omitClaudeMd: true$' "$H") $(grep -c '^maxTurns: [0-9]' "$H") $(grep -cE '^(hooks|mcpServers|permissionMode):' "$H")"
 # Issue 203: a helper answers by its 20th tool call and names what it did not find, and every helper prompt carries
 # those caps and reuses an earlier helper's file:line pointers. A Builder waiting on its own run keeps its cache warm on
 # a Signal WARM line, and a worker's ask fits under the prompt cache (issue 214).
 BT=$REAL/templates/_builder-brief-template.md
-check "helper.md and the Builder template carry the helper caps, the reuse rule, the WARM reply and the 240 s ask" "1 1 1 1 1 1" \
-  "$(grep -c 'NOT FOUND: <what you searched, where>' "$H") $(grep -c '20th tool call' "$H") $(for p in 'NOT FOUND:' \
-    'already answered part of it' 'Signal WARM' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
-# Issue 201: the lean agents start small (no CLAUDE.md, no skill or MCP tool), and set no model or effort, so
-# routing's roles.lean-worker and roles.lean-checker (filled in by agent-model-guard.sh) are never outranked.
-for a in lean-worker lean-checker; do
-  F=$REAL/agents/$a.md; FM=$(awk 'NR == 1 && /^---$/ { on = 1; next } on && /^---$/ { exit } on' "$F" 2>/dev/null)
-  check "agents/$a.md omits CLAUDE.md, lists no Skill or mcp__ tool, and names no model or effort" "1 1 0 0" \
-    "$(grep -c '^omitClaudeMd: true$' <<<"$FM") $(grep -c '^tools: ' <<<"$FM") $(grep -E '^tools: ' <<<"$FM" | grep -cE 'Skill|mcp__') $(grep -cE '^(model|effort):' <<<"$FM")"
-done
-# The fast-tier question's "None" answer is `--plan-fast ''` (skills/setup): the flag takes the empty value, and an empty value saves no planFast.
-check "setup.sh takes --plan-fast as a value flag and saves nothing for an empty one" "1 1" \
-  "$(grep -c '^TAKES=.* --plan-fast ' "$REAL/scripts/setup.sh") $(grep -c 'if $pf == "" then {} else {planFast' "$REAL/scripts/setup.sh")"
+check "the Builder template carries the helper caps, the reuse rule, the WARM reply and the 240 s ask" "1 1 1 1 1" \
+  "$(for p in '20th tool call' 'NOT FOUND: <what' 'already answered part of it' 'Signal WARM' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
+# A helper is a built-in type (Explore or general-purpose): a plugin agent folder would be one more set of agents to keep.
+check "the plugin ships no agents/ folder" no "$([ -e "$REAL/agents" ] && echo yes || echo no)"
 # Every key merge-unit-local.sh reads from .claude/commandeck.json must survive setup's rebuild of that file
 # (update reruns setup): a key the writer's object does not build is dropped at the next update.
 for k in $(sed -n "s/.*jq -r '\.\([A-Za-z]*\).*commandeck\.json.*/\1/p" "$REAL/scripts/merge-unit-local.sh"); do

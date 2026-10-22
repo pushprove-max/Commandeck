@@ -4,10 +4,9 @@
     "templates": {
       "claude": "{box} {env} claude {model} {effort} {tools} {advisor} {fast}",
       "codex": "{box} {env} codex {compact} {model} {effort} {fast} {sandbox} {approval} {network} {shellenv} {mcp} {skills} {plugins}",
-      "claude-headless": "{env} claude -p {model} {effort} {tools} {fast}",
-      "codex-headless": "{env} codex exec {sandbox} {projectdoc} {model} {effort} {fast}"
+      "claude-headless": "{env} claude -p {model} {effort} {tools} {fast}"
     },
-    "note": "The one home of every per-role launch setting. A role's structured fields are the settings; launch.templates is only the wiring each agent's command follows, and the reader in scripts/paths.sh (pp_route, pp_review, pp_argv) fills its placeholders and fails before any launch on a malformed entry. A model is a family name, never a version: Claude Code resolves opus, sonnet, haiku and fable itself, and builder-codex-pass.sh resolves a Codex family to the newest model the account lists. A null effort is omitted from the command, never defaulted. fast renders as Codex service_tier=fast or Claude --settings {\"fastMode\":true}; false is the default tier, and the Codex review role takes it from set-up's saved answer only. A headless role (headless: true) is one a script runs with codex exec or claude -p. Every pane role is unboxed: the plugin ships no pane box, so launch.paneBox is not set."
+    "note": "The one home of every per-role launch setting. A role's structured fields are the settings; launch.templates is only the wiring each agent's command follows, and the reader in scripts/paths.sh (pp_route, pp_argv) fills its placeholders and fails before any launch on a malformed entry. A model is a family name, never a version: Claude Code resolves opus, sonnet, haiku and fable itself, and builder-codex-pass.sh resolves a Codex family to the newest model the account lists. A null effort is omitted from the command, never defaulted. fast renders as Codex service_tier=fast or Claude --settings {\"fastMode\":true}; false is the default tier, and the review and plan roles take it from their /plugin config Fast key only. A role's /plugin config keys (pp_role_option) beat its fields here; a launch's own --model or --effort beats both. A headless role (headless: true) is one a script runs with codex exec or claude -p. Every pane role is unboxed: the plugin ships no pane box, so launch.paneBox is not set."
   },
   "roles": {
     "orchestrator": {
@@ -16,7 +15,7 @@
       "effort": null,
       "unboxed": true,
       "edits": true,
-      "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges."
+      "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges. Cannot be off: it is the session that runs everything."
     },
     "plan-author": {
       "agent": "claude",
@@ -24,15 +23,7 @@
       "effort": "high",
       "unboxed": true,
       "edits": true,
-      "note": "The plan main asks for before every build: it writes the plan file and nothing else. Main stops once the plan exists; the build starts only on the owner's own go after reading it. The owner may pick another model and effort when asked; this is the default."
-    },
-    "plan-author-second": {
-      "agent": "claude",
-      "model": "fable",
-      "effort": "high",
-      "unboxed": true,
-      "edits": true,
-      "note": "The Panel answer's second planner: writes its own plan beside plan-author's, in parallel, for the merge. Where Fable is not available main runs this seat on another Claude model (seat.sh launch --model) and says so."
+      "note": "The plan main asks for before every build: it writes the plan file and nothing else. Main stops once the plan exists; the build starts only on the owner's own go after reading it. Off (planAuthorEnabled=false in /plugin config): no plan, plan-tier.sh prints the --skip-plan line."
     },
     "plan-judge-sol": {
       "agent": "codex",
@@ -42,7 +33,14 @@
       "sandbox": "read-only",
       "unboxed": true,
       "edits": false,
-      "note": "Judge of the Plan + judge and Panel answers: reads the plan or plans and prints its findings; the planner revises once with them. One round, no judging loop. A project set up with no Codex (profile claude) uses plan-judge-claude instead."
+      "claude": {
+        "model": "sonnet",
+        "effort": "high",
+        "reviewer": true,
+        "tools": ["Write", "Edit", "NotebookEdit"],
+        "unboxed": true
+      },
+      "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round, no judging loop. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
     },
     "plan-judge-astra": {
       "agent": "codex",
@@ -52,17 +50,14 @@
       "sandbox": "read-only",
       "unboxed": true,
       "edits": false,
-      "note": "The Panel answer's second judge, beside plan-judge-sol: reads both plans and prints its findings for the merge. With no Codex, plan-judge-claude takes its place."
-    },
-    "plan-judge-claude": {
-      "agent": "claude",
-      "model": "sonnet",
-      "effort": "high",
-      "reviewer": true,
-      "tools": ["Write", "Edit", "NotebookEdit"],
-      "unboxed": true,
-      "edits": false,
-      "note": "The plan judge of a project set up with no Codex (profile claude): a read-only Claude pane in place of plan-judge-sol and plan-judge-astra, which main says when it runs it."
+      "claude": {
+        "model": "sonnet",
+        "effort": "high",
+        "reviewer": true,
+        "tools": ["Write", "Edit", "NotebookEdit"],
+        "unboxed": true
+      },
+      "note": "The Panel answer's second judge, beside plan-judge-sol: reads the plan and prints its findings. planJudgeAstraAgent=claude runs it as the read-only Claude pane in claude; off, the other judge judges alone."
     },
     "builder": {
       "agent": "claude",
@@ -70,7 +65,16 @@
       "effort": "medium",
       "unboxed": true,
       "edits": true,
-      "note": "One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore subagents (haiku) and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh."
+      "note": "One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore (haiku) and general-purpose (sonnet) subagents and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
+    },
+    "fixer": {
+      "agent": "claude",
+      "model": "opus",
+      "effort": "high",
+      "first": {"model": "builder", "effort": "builder"},
+      "unboxed": true,
+      "edits": true,
+      "note": "Not a pane of its own: the Builder's pane on a fix round (builder-fresh-round.sh). The first fix round of a build runs on first (builder: the build's launched Builder model and effort), every later one on this model and effort. Off (fixerEnabled=false): every fix round keeps the Builder's launched model and effort."
     },
     "codex-reviewer": {
       "agent": "codex",
@@ -80,57 +84,13 @@
       "sandbox": "read-only",
       "unboxed": true,
       "edits": false,
-      "note": "The Codex review pass of the Claude+OpenAI profile. Fast mode is not set here: it changes what a run costs, so it is the owner's answer at set-up (codexFast in the project's .claude/commandeck.json, off by default). With a yes the pass preflight needs service_tier = \"fast\" in the Codex config."
-    },
-    "claude-reviewer": {
-      "agent": "claude",
-      "headless": true,
-      "model": "sonnet",
-      "effort": "high",
-      "tools": ["Write", "Edit", "NotebookEdit"],
-      "edits": false,
-      "note": "The review pass of the Claude-only profile: a headless read-only session on a different family than the Builder's, so the review is not the Builder checking itself."
-    },
-    "design-coauthor": {
-      "agent": "claude",
-      "model": "fable",
-      "effort": "high",
-      "unboxed": true,
-      "edits": true,
-      "note": "The design check of a batch marked risky: builder-launch.sh --risky opens this pane before the Builder, and it writes the design note the Builder reads first. It writes that note and no code."
-    },
-    "audit-auditor": {
-      "agent": "codex",
-      "headless": true,
-      "model": "astra",
-      "effort": "xhigh",
-      "sandbox": "read-only",
-      "edits": false,
-      "note": "scripts/platform-audit/run.sh: one read-only auditor per area of the project's paved-road registry."
-    },
-    "audit-verifier": {
-      "agent": "claude",
-      "headless": true,
-      "model": "opus",
-      "effort": null,
-      "edits": false,
-      "note": "scripts/platform-audit/verify.sh: one verifier per area, tries to disprove each auditor finding with read tools only; verify.sh saves its final message as the verdict. Effort omitted."
-    },
-    "lean-worker": {
-      "agent": "claude",
-      "headless": true,
-      "model": "sonnet",
-      "effort": "medium",
-      "edits": true,
-      "note": "The commandeck:lean-worker subagent (agents/lean-worker.md): edits, runs and tests with no CLAUDE.md, MCP or skills. agent-model-guard.sh fills a dispatch's missing model and effort from here."
-    },
-    "lean-checker": {
-      "agent": "claude",
-      "headless": true,
-      "model": "sonnet",
-      "effort": "high",
-      "edits": false,
-      "note": "The commandeck:lean-checker subagent (agents/lean-checker.md): a blind read-only check, one line per criterion. agent-model-guard.sh fills a dispatch's missing model and effort from here."
+      "claude": {
+        "headless": true,
+        "model": "sonnet",
+        "effort": "high",
+        "tools": ["Write", "Edit", "NotebookEdit"]
+      },
+      "note": "The review pass. codexReviewerAgent=claude (the Claude-only profile sets it) runs the headless read-only Claude session in claude, on a different family than the Builder's. Fast mode is not set here: it changes what a run costs, so it is the owner's answer (codexReviewerFast in /plugin config, off by default). With a yes the pass preflight needs service_tier = \"fast\" in the Codex config. Cannot be off: the merge gate needs a GO round file."
     }
   },
   "review": {},

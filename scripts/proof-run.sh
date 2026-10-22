@@ -122,7 +122,7 @@ for P in "${PROFILES[@]}"; do
   [ "$(jq 'map(.fires) | add // 0' <<<"$COST")" -gt 0 ] || RC=1
   row "tokens and turns per role" "$LIVE bash scripts/unit-cost.sh <unit>; bash scripts/seat-tokens.sh"
   row "cache hit rate and write share" "$LIVE bash scripts/builder-cache-check.sh <worktree>; the dashboard's cache tiles"
-  row "review passes to GO, findings" "$LIVE the unit's round files; bash scripts/builder-${P/claude-openai/codex}-pass.sh --verify <worktree> <unit> <tip>"
+  row "review passes to GO, findings" "$LIVE the unit's round files; bash scripts/builder-codex-pass.sh --verify <worktree> <unit> <tip>"
 
   # Standard context: the project's answer alone moves the line to 140K (issue 267).
   p "$SAMPLE" setup.sh --standard-context >/dev/null 2>&1 || RC=1

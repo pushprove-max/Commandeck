@@ -25,6 +25,10 @@ check "searches 1-3 of a streak pass" "0 0 0" "$(echo "$(sg gs-1 "$GREP") $(sg g
 check "the 4th is refused" 2 "$(sg gs-1 "$GREP")"
 check "the refusal is one line naming Agent and Explore" "1 $EXPLORE_LINE" "$(wc -l < "$TMP/gerr" | tr -d ' ') $(cat "$TMP/gerr")"
 check "an Agent call resets the streak" "0 0" "$(echo "$(sg gs-1 "$(tool Agent '{"subagent_type":"Explore"}')") $(sg gs-1 "$GREP")")"
+# The plugin ships no helper agent: general-purpose is the Builder's other helper type, and it resets the count too.
+sg gs-1 "$GREP" >/dev/null; sg gs-1 "$GREP" >/dev/null
+check "a general-purpose Agent call resets the streak" "2 0 0" \
+  "$(echo "$(sg gs-1 "$GREP") $(sg gs-1 "$(tool Agent '{"subagent_type":"general-purpose"}')") $(sg gs-1 "$GREP")")"
 for t in Edit Write; do
   sg gs-1 "$GREP" >/dev/null; sg gs-1 "$GREP" >/dev/null; sg gs-1 "$GREP" >/dev/null
   check "a $t call resets after a refusal" "2 0 0" "$(echo "$(sg gs-1 "$GREP") $(sg gs-1 "$(tool $t '{"file_path":"a"}')") $(sg gs-1 "$GREP")")"
@@ -36,6 +40,9 @@ check "find on a directory is a small search" 0 "$(sg gs-5 "$(bash_ 'find src -n
 SUB=$(jq -c '. + {agent_id:"a1", agent_type:"Explore"}' <<<"$GREP")
 check "four subagent searches all pass, and the main session is still on call 1" "0 0 0 0 0" \
   "$(echo "$(sg gs-6 "$SUB") $(sg gs-6 "$SUB") $(sg gs-6 "$SUB") $(sg gs-6 "$SUB") $(sg gs-6 "$GREP")")"
+GPSUB=$(jq -c '. + {agent_id:"a2", agent_type:"general-purpose"}' <<<"$(tool Grep '{"pattern":"x"}')")
+check "a general-purpose subagent's search is never counted or refused, a whole-repo one included" "0 0 0 0 0" \
+  "$(echo "$(sg gs-6b "$GPSUB") $(sg gs-6b "$GPSUB") $(sg gs-6b "$GPSUB") $(sg gs-6b "$GPSUB") $(sg gs-6b "$GREP")")"
 # Reads sent together in one turn are ONE lookup. A Builder refused on turns that
 # carried several reads went on to read one file per turn, each turn replaying the whole context.
 # A turn's calls are the tool_use blocks sharing one message id in the transcript.

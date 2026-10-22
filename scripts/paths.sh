@@ -421,7 +421,7 @@ def check_seat($name; $root):
       (keys - ["agent", "inherit", "edits", "note"]) as $x
       | if ($x | length) > 0 then fail("\($name) inherits its model, so \($x[0]) has no place on it") else . end
     else
-      (keys - (slot | keys) - ["agent", "headless", "unboxed", "edits", "note", "triggers", "role"]) as $x
+      (keys - (slot | keys) - ["agent", "headless", "unboxed", "edits", "note", "triggers", "role", "claude", "first"]) as $x
       | if ($x | length) > 0 then fail("\($name) has unknown field \($x[0])") else . end
       | if (.model | is("^[a-z0-9][a-z0-9._-]*$")) | not then fail("\($name).model is missing or not a model id") else . end
       | if has("effort") | not then fail("\($name).effort must be present (null omits it)") else . end
@@ -460,8 +460,42 @@ def check_templates:
   | ($w[] | select(test("^\\{[a-z]+\\}$") or IN(wiring[]) | not)
      | fail("launch.templates.\($k): \(.) is neither a placeholder nor wiring; settings live in role fields"))
   , (if [$w[] | select(test("^\\{[a-z]+\\}$") or IN("claude", "codex"))] != ($c | split(" ")) then fail("launch.templates.\($k) must follow \($c) around its wiring") else empty end);
-# The Claude model aliases this file already names: what a project may choose from.
-def aliases: [.roles[] | (.candidates // [.])[] | select(.agent == "claude") | .model, .advisor | strings] | unique;
+# The values a role setting takes (issue 312): fixed lists, never the models the rows happen to name. A Codex model is
+# a family pp_codex_model resolves, or an exact id (any a seat takes, gpt-5.3-codex-spark included), never a Claude alias.
+def claude_models: ["opus", "sonnet", "fable"];
+def model_ok($agent):
+  if $agent == "claude" then IN(claude_models[]) else is("^[a-z0-9][a-z0-9._-]*$") and (IN(claude_models[], "haiku") | not) end;
+# A Claude seat that never writes denies all three writing tools; Write alone leaves Edit and NotebookEdit.
+def denies_writes: (["Write", "Edit", "NotebookEdit"] - (.tools // [])) == [];
+# A Claude reviewer or judge seat, however the owner wrote it, keeps the contract of the overlay the plugin ships ($c):
+# every writing tool denied, and its shape, headless or pane, which its caller needs. Its model and effort stay.
+def review_contract($c):
+  (if $c.headless then del(.memory, .reviewer, .unboxed, .advisor) + {headless: true} else del(.headless) + ($c | {reviewer, unboxed}) end)
+  | .tools = ((.tools // []) as $t | $t + ($c.tools - $t));
+# The row a seat of <role>[.<candidate>] reads: a row of candidates has its agent and model on each, so the one named,
+# else the first when every candidate runs on its agent.
+def role_row($spec):
+  ($spec | split(".")) as [$r, $i]
+  | .roles[$r] // null
+  | if . == null or (.candidates | not) then .
+    elif $i != null then try .candidates[$i | tonumber] catch null
+    elif ([.candidates[].agent] | unique | length) == 1 then .candidates[0]
+    else null end;
+# The one reader of the settings of a row on agent $a: the row itself when on $a,
+# else its claude overlay for Claude, else the row the plugin ships (ship) for $a. The edits and note of the row stay.
+def for_agent($r; $a):
+  ($ARGS.named.ship // [] | .[0].roles[$r] // {}) as $s
+  | if .agent == $a then .
+    elif $a == "claude" and .claude then {edits, note} + .claude + {agent: "claude"}
+    elif $s.agent == $a then {edits, note} + ($s | del(.claude, .first, .edits, .note))
+    else fail("\($r) has no \($a) choice in routing") end
+  | if $a == "claude" and $s.claude then review_contract($s.claude) else . end;
+def role_value($role; $field; $agent):
+  if $field == "agent" then IN("codex", "claude")
+  elif IN($field; "enabled", "fast") then IN("true", "false")
+  elif ($field | startswith("first")) and . == "builder" then true
+  elif ($field | test("[Mm]odel$")) then model_ok($agent)
+  else IN((if $role == "builder" then ["low", "medium", "high", "max"] else efforts end)[]) end;
 def seat_at($root; $spec):
   ($spec | capture("^(?<r>[a-z0-9-]+)(\\.(?<i>[0-9]+))?$") // fail("\($spec) is not a role name")) as $p
   | ($root.roles[$p.r] // fail("no role \($p.r)")) as $role
@@ -471,19 +505,14 @@ def seat_at($root; $spec):
     elif $p.i != null then fail("\($p.r) has no candidates")
     else $role end
   | . + {role: $p.r}
-  # A project may choose the model and effort of its Builder (set-up stores them,
-  # pp_route_json hands them in). The one place they apply, and only to this role.
-  # An advisor an older set-up stored is not read: every Builder runs with none (the owner, 2026-10-14).
-  | if $p.r != "builder" then . else
-      . + ($ARGS.named.builder // {} | {model, effort} | with_entries(select(.value != null)
-        | (if .key == "model" then $root | aliases else ["low", "medium", "high", "max"] end) as $ok
-        | if .value | IN($ok[]) then . else fail("this project has builder.\(.key) \(.value), which is not one of \($ok | join(", ")); set-up sets it") end))
-    end
-  # Codex fast mode changes what a run costs: it is the answer set-up saved
-  # (pp_codex_fast hands it in) and never the routing file itself. No quote mark here: this is inside one.
-  | if ($p.r | startswith("codex-reviewer")) then .fast = ($ARGS.named.codexFast == true) else . end
-  # The same for a plan seat: the per-seat answer of the owner at set-up (planFast, pp_route_json hands it in).
-  | if ($p.r | startswith("plan-")) and any($ARGS.named.planFast // [] | .[]; . == $p.r) then .fast = true else . end;
+  # The role /plugin config keys, checked by pp_role_option and handed in by pp_route_json (issue 312): the agent picks
+  # the row settings for_agent gives; model and effort replace the row values; fast, on a role with a Fast key,
+  # is the owner answer and never the routing file itself (it changes what a run costs). No quote mark here: this is inside one.
+  | ($ARGS.named.opts // {}) as $o
+  | (if $o.agent then for_agent($p.r; $o.agent) + {role: $p.r} else . end)
+  | del(.claude, .first)
+  | . + ($o | {model, effort} | with_entries(select(.value != null)))
+  | if $o | has("fast") then .fast = $o.fast else . end;
 def validate:
   . as $root
   | ([check_templates] | length) as $_
@@ -492,6 +521,14 @@ def validate:
   | ([.launch.skillSets // {} | .[][] | select(is("^(\\$HOME)?/[A-Za-z0-9._/-]+$") | not)] | if length > 0 then fail("launch.skillSets holds a value that is not a path: \(.[0])") else . end) as $_
   | ([.roles | to_entries[] | .key as $k | .value
       | if .candidates then (.candidates | to_entries[] | .value | check_seat("\($k).\(.key)"; $root)) else check_seat($k; $root) end] | length) as $_
+  # A Claude reviewer or judge never writes: its overlay denies every writing tool, and is a seat of its own.
+  | ([.roles | to_entries[] | select(.value.claude) | .key as $k | .value
+      | if (.claude | denies_writes | not) then fail("\($k).claude must deny Write, Edit and NotebookEdit in its tools: a Claude reviewer or judge never writes") else . end
+      | {edits, note} + .claude + {agent: "claude"} | check_seat("\($k).claude"; $root)] | length) as $_
+  | ([.roles | to_entries[] | select(.value.first) | .key as $k | .value.first
+      | if type != "object" or (keys - ["model", "effort"] | length) > 0 then fail("\($k).first holds only model and effort") else . end
+      | if (.model // "builder" | . == "builder" or model_ok("claude")) | not then fail("\($k).first.model \(.model) is not builder or one of \(claude_models | join(", "))") else . end
+      | if (.effort // "builder" | . == "builder" or IN(efforts[])) | not then fail("\($k).first.effort \(.effort) is not builder or one of \(efforts | join(", "))") else . end] | length) as $_
   | ([.review // fail("review is missing") | to_entries[] | .key as $k | .value
       | (if type == "array" then .[] elif keys != ["with"] then fail("review.\($k) holds only its substitute seat, with") else .with end)
       | ($root.roles[.role] // fail("review.\($k) names no role \(.role)")) as $r
@@ -544,17 +581,12 @@ def argword($home):
 def resolve($root; $effort; $model):
   (if $effort != "" then .effort = $effort else . end) | (if $model != "" then .model = $model else . end)
   | check_seat(.role; $root)
-  | . + {readonly: ((.sandbox == "read-only") or ((.tools // []) | index("Write") != null)),
+  | . + {readonly: ((.sandbox == "read-only") or denies_writes),
          banner: banner, family: family, model: (.model + (if .context then "[\(.context)]" else "" end)), words: words($root)}
   | if .headless then . + {argv: [.words[] | argword($home)]} else . + {cmd: (.words | map(shellword) | join(" "))} end
   | del(.words);
 def seat($spec; $effort; $model; $advisor):
   . as $root | seat_at($root; $spec) | (if $advisor == "none" then del(.advisor) else . end) | resolve($root; $effort; $model);
-def review($key):
-  . as $root
-  | def one: seat_at($root; .role) | resolve($root; ""; "") | . + {reviewer: .family};
-    (.review[$key] // fail("no review.\($key)"))
-  | if type == "array" then map(one) else {with: (.with | one)} end;
 '
 pp_routing_valid() { # the whole file validates; prints why when it does not
   local cfg; cfg=$(pp_routing)
@@ -591,15 +623,11 @@ pp_codex_route() { # one plain line for doctor, setup and a refusal
 # list is the proxy's (models_cache.json is then empty or stale), with the
 # cache as the fallback. A family neither list carries fails here, before a
 # pane opens or a pass starts. A name that is not a bare family is a model id
-# and is printed as written. Above both: the model id setup saved for the role
-# in the project's own config (setup.sh --codex-model; COMMANDECK_CODEX_MODELS
-# is setup's answer before it is saved), which no plugin update replaces.
+# and is printed as written: a role's /plugin config model key (pp_role_option)
+# takes either, and no plugin update replaces it. [role] only names that key in a refusal.
 pp_codex_model() { # <family or model id> [role]
   local list=${CODEX_HOME:-$HOME/.codex}/models_cache.json id= px url key
   local newest='[.[] | select(test("^gpt-[0-9.]+-\($f)$"))] | sort_by(capture("^gpt-(?<v>[0-9.]+)-").v | split(".") | map(tonumber)) | last // empty'
-  [ -z "${2:-}" ] || id=$(jq -rn --arg r "$2" --argjson m "${COMMANDECK_CODEX_MODELS:-$(jq -c '.codexModels // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null || echo '{}')}" \
-    '$m[$r] // empty | strings' 2>/dev/null)
-  [ -z "$id" ] || { printf '%s\n' "$id"; return 0; }
   [[ $1 =~ ^[a-z]+$ ]] || { printf '%s\n' "$1"; return 0; }
   px=$(pp_codex_proxy) || px=
   if [ -n "$px" ]; then
@@ -613,7 +641,7 @@ pp_codex_model() { # <family or model id> [role]
   if [ -z "$id" ]; then
     local via= or=" Or run codex once while signed in."
     [ -z "$px" ] || { via=", and its model list has none" or=; }
-    echo "routing: no gpt-<version>-$1 model for the Codex family $1. $(pp_codex_route)$via; $list lists none either. Name the model id: setup.sh --codex-model ${2:-codex-reviewer}=<model id>.$or" >&2
+    echo "routing: no gpt-<version>-$1 model for the Codex family $1. $(pp_codex_route)$via; $list lists none either. Name the model id: $(pp_role_key "${2:-codex-reviewer}" model)=<model id> in /plugin config.$or" >&2
     return 2
   fi
   printf '%s\n' "$id"
@@ -687,10 +715,10 @@ pp_sync_main() {
     git -C "$c" update-ref refs/heads/main "$got" || return 1
   fi
 }
-# Codex fast mode: on only when set-up saved the owner's yes. No config, no answer and an unreadable file are off.
+# Codex fast mode: on only with the owner's yes (codexReviewerFast). No answer and an unreadable one are off.
 # COMMANDECK_CODEX_FAST=false turns it off for one call and no value of it turns it on: set-up's own
 # preflight runs before the new answer is saved, and has checked the tier for that answer itself.
-pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(jq -r '.codexFast // false' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null)" = true ]; }
+pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(pp_role_option codex-reviewer fast 2>/dev/null)" = true ]; }
 # pp_review_loop <key> <default> <regex> -- a review-loop setting setup saved
 # in this project's config (reviewLoop.<key>), as the owner typed it, else the
 # default. A saved value the regex does not take says so on stderr and fails:
@@ -724,10 +752,49 @@ PP_OPTS_KEY='def key: . as $s | first(((.enabledPlugins // {}) | to_entries[] | 
   ((.pluginConfigs // {}) | keys[] | select(($s.enabledPlugins // {})[.] != false)), ((.enabledPlugins // {}) | keys[])
   | select(startswith("commandeck@"))) // "commandeck@commandeck";'
 # pp_config_option <key> -- the /config answer in the form the project's file saves it; fails when there is none.
+# COMMANDECK_OPTIONS: setup's own answers ({key: value}), read first by its preflight before they are saved.
 pp_config_option() {
-  jq -er --arg k "$1" "$PP_OPTS_KEY"' .pluginConfigs[key].options[$k]? | select(. != null and . != "project")
-    | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' \
-    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
+  local a=${COMMANDECK_OPTIONS:-}
+  { cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || echo '{}'; } \
+    | jq -er --arg k "$1" --argjson a "${a:-null}" "$PP_OPTS_KEY"' (if $a // {} | has($k) then $a[$k] else .pluginConfigs[key].options[$k]? end)
+    | select(. != null and . != "project")
+    | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' 2>/dev/null
+}
+# Issue 312: every role's settings are /plugin config keys, <role in camelCase><Field> (plan-judge-sol model:
+# planJudgeSolModel). A key the manifest does not list is no setting: orchestrator, builder and codex-reviewer have no
+# Enabled key, as none of them can be off. Precedence, one order for every role: a launch's own --model or --effort,
+# then the key, then routing's field.
+PP_ROLE_FIELDS='agent model effort enabled fast firstModel firstEffort'
+pp_role_key() { local k=$1 t; while [[ $k == *-* ]]; do t=${k#*-}; k=${k%%-*}${t^}; done; printf '%s%s\n' "$k" "${2^}"; }
+pp_role_has() { jq -e --arg k "$(pp_role_key "$1" "$2")" '.userConfig | has($k)' "$PP_SCRIPTS/../.claude-plugin/plugin.json" >/dev/null 2>&1; }
+# pp_role_option <role>[.<candidate>] <field> -- that role setting's value, checked against the fixed lists in PP_ROUTE_JQ
+# on the agent of the candidate named (the key is the role's); prints nothing and fails (1) when unset. A value it does
+# not take is REFUSED naming the key (2): the file can be edited by hand, and a wrong value must not pass for a setting.
+pp_role_option() {
+  local r=${1%%.*} k v a=
+  pp_role_has "$r" "$2" || return 1
+  k=$(pp_role_key "$r" "$2")
+  v=$(pp_config_option "$k") || return 1
+  case $2 in agent|enabled|fast) ;; *) a=$(pp_role_agent "$1") || return 2 ;; esac
+  jq -ne --arg v "$v" --arg r "$r" --arg f "$2" --arg a "$a" "$PP_ROUTE_JQ"' $v | role_value($r; $f; $a)' >/dev/null \
+    || { echo "REFUSED: /plugin config $k = $v is not a ${a:+$a }$2 for $1" >&2; return 2; }
+  printf '%s\n' "$v"
+}
+# pp_role_agent <role>[.<candidate>] -- the agent the role runs on: its Agent key, else routing's.
+pp_role_agent() {
+  local a rc=0
+  a=$(pp_role_option "${1%%.*}" agent) || rc=$?
+  [ "$rc" != 2 ] || return 2
+  [ -n "$a" ] || a=$(jq -r --arg s "$1" "$PP_ROUTE_JQ"' role_row($s).agent // empty' "$(pp_routing)" 2>/dev/null)
+  [ -n "$a" ] || { echo "routing: no role $1, or its candidates run on more than one agent (name one as ${1%%.*}.<index>)" >&2; return 2; }
+  printf '%s\n' "$a"
+}
+# pp_role_enabled <role> -- fails, saying so, when the role is off (its Enabled key false); a role with no such key is on.
+pp_role_enabled() {
+  local v rc=0
+  v=$(pp_role_option "$1" enabled) || rc=$?
+  [ "$rc" != 2 ] || return 2
+  [ "$v" != false ] || { echo "$1 is off ($(pp_role_key "$1" enabled)=false in /plugin config)" >&2; return 1; }
 }
 # pp_option <key> [source] -- the value a reader takes: the /config answer, else the project's saved one (the
 # dashboard's: this machine's), else what the reader took before 0.22.0. With "source", where that value is from.
@@ -735,9 +802,22 @@ pp_config_option() {
 # default. builderModel's and builderEffort's manifest default is "project", read as no answer: the /config dialog
 # may save a default untouched, and a fixed one would hide the project's answer.
 pp_option() {
-  local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config
+  local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config r fl rc
+  # A role key (issue 312): its checked value, else routing's field; where it is from as for every other key.
+  for r in $(jq -r '.roles | keys[]' "$(pp_routing)" 2>/dev/null); do for fl in $PP_ROLE_FIELDS; do
+    [ "$(pp_role_key "$r" "$fl")" = "$1" ] || continue
+    pp_config_option "$1" >/dev/null || src=default
+    rc=0; v=$(pp_role_option "$r" "$fl" 2>/dev/null) || rc=$?
+    case $rc in
+      1) v=$(jq -r --arg r "$r" --arg f "$fl" "$PP_ROUTE_JQ"' (.roles[$r] | {first}) + (role_row($r) // {}) | if $f == "enabled" then true elif $f == "fast" then .fast // false
+           elif ($f | startswith("first")) then .first[$f[5:] | ascii_downcase] else .[$f] end | values | tostring' "$(pp_routing)") ;;
+      2) v="$(pp_config_option "$1") (refused: not a value it takes)" ;;
+    esac
+    if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
+    return 0
+  done; done
   case $1 in
-    builderModel) p=.builder.model ;; builderEffort) p=.builder.effort ;; maxBuilders) p=.builder.maxBuilders ;;
+    maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=false ;;
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
@@ -771,56 +851,50 @@ p = (c.get("profiles") or {}).get(c.get("profile"))
 sys.exit((p if isinstance(p, dict) and "service_tier" in p else c).get("service_tier") != "fast")' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null
 }
 pp_route_json() { # <role>[.<candidate>] [effort] [model] [none: this launch has no advisor] -- the resolved seat, as JSON
-  local cfg m=${3:-} b pf d; cfg=$(pp_routing)
+  local cfg r=${1%%.*} m=${3:-} o a v f rc; cfg=$(pp_routing)
   [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
-  b=$(jq -c '.builder // {}' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$b" ] || b='{}'
-  b=$(jq -c --arg m "$(pp_config_option builderModel)" --arg e "$(pp_config_option builderEffort)" \
-    '. + ({model: $m, effort: $e} | with_entries(select(.value != "")))' <<<"$b" 2>/dev/null || echo "$b")
-  pf=$(jq -c '.planFast // []' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) && [ -n "$pf" ] || pf='[]'
-  # Every Codex role's model goes through the resolver, one handed in (a plan seat's pick) too. The project's saved
-  # id is for the role's own model: it beats that family and an id alike, never another family picked for the seat.
-  d=$(jq -r --arg r "${1%%.*}" '.roles[$r] | select(.agent == "codex") | .model // empty' "$cfg" 2>/dev/null || true)
-  if [ -n "$d" ]; then
-    if [ -z "$m" ] || [ "$m" = "$d" ]; then m=$(pp_codex_model "$d" "${1%%.*}") || return 2
-    else m=$(pp_codex_model "$m") || return 2; fi
+  # The role's /plugin config keys, each checked (issue 312); a refused one stops the launch.
+  a=$(pp_role_agent "$1") || return 2
+  o=$(jq -nc --arg a "$a" '{agent: $a}')
+  for f in model effort fast; do
+    rc=0; v=$(pp_role_option "$1" "$f") || rc=$?
+    case $rc in 0) o=$(jq -c --arg f "$f" --arg v "$v" '.[$f] = (if $f == "fast" then $v == "true" else $v end)' <<<"$o") ;; 1) ;; *) return 2 ;; esac
+  done
+  # A Fast key's no answer is off; COMMANDECK_CODEX_FAST=false is setup's preflight, which checks the tier itself.
+  ! pp_role_has "$r" fast || o=$(jq -c '.fast = (.fast == true)' <<<"$o")
+  [ "$r" != codex-reviewer ] || [ "${COMMANDECK_CODEX_FAST:-}" != false ] || o=$(jq -c '.fast = false' <<<"$o")
+  # Every Codex model goes through the resolver: the launch's own pick, else the key, else routing's family.
+  if [ "$a" = codex ]; then
+    m=${m:-$(jq -r '.model // empty' <<<"$o")}
+    m=${m:-$(jq -r --arg r "$r" --arg s "$1" --slurpfile ship "$PP_SCRIPTS/../config/routing.json" "$PP_ROUTE_JQ"' role_row($s) | for_agent($r; "codex").model // empty' "$cfg" 2>/dev/null)}
+    m=$(pp_codex_model "$m" "$r") || return 2
   fi
-  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson builder "$b" --argjson planFast "$pf" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
+  jq -ce --arg spec "$1" --arg effort "${2:-}" --arg model "$m" --arg advisor "${4:-}" --arg home "$HOME" --argjson opts "$o" --slurpfile ship "$PP_SCRIPTS/../config/routing.json" "$PP_ROUTE_JQ"' validate | seat($spec; $effort; $model; $advisor)' "$cfg"
 }
 # The model one Builder launch may run: an alias routing.json already names, the
-# check set-up makes for --builder-model. builder-launch.sh asks before it
+# check pp_role_option makes for the builderModel key. builder-launch.sh asks before it
 # creates anything and seat.sh asks again, so a seat launched by hand is held to it.
 pp_builder_model_ok() { # <alias> -- says why not
-  jq -e --arg a "$1" "$PP_ROUTE_JQ"' aliases | any(. == $a)' "$(pp_routing)" >/dev/null 2>&1 \
-    || { echo "REFUSED: --model ${1:-(none)} is not one of $(jq -r "$PP_ROUTE_JQ"' aliases | join(", ")' "$(pp_routing)" 2>/dev/null)" >&2; return 2; }
+  jq -ne --arg a "$1" "$PP_ROUTE_JQ"' $a | model_ok("claude")' >/dev/null 2>&1 \
+    || { echo "REFUSED: --model ${1:-(none)} is not one of $(jq -rn "$PP_ROUTE_JQ"' claude_models | join(", ")')" >&2; return 2; }
 }
-# The model a plan seat may be launched on: one routing.json already names for a seat of the same agent, so a Codex
-# judge is never handed a Claude model.
+# The model a plan seat may be launched on: one of the agent it runs on (its Agent key), so a Codex judge is never
+# handed a Claude model.
 pp_seat_model_ok() { # <role> <alias> -- says why not
-  local ok; ok=$(jq -r --arg r "$1" '.roles[$r].agent as $a | [.roles[] | (.candidates // [.])[] | select(.agent == $a) | .model, .advisor | strings] | unique | join(", ")' "$(pp_routing)") || return 2
-  [[ -n $2 && ", $ok, " == *", $2, "* ]] || { echo "REFUSED: --model $2 is not one of $ok" >&2; return 2; }
+  local a; a=$(pp_role_agent "$1") || return 2
+  jq -ne --arg m "$2" --arg a "$a" "$PP_ROUTE_JQ"' $m | model_ok($a)' >/dev/null 2>&1 \
+    || { echo "REFUSED: --model ${2:-(none)} is not a $a model for $1" >&2; return 2; }
 }
-# pp_plan_models -- the models a plan seat may run on, space-separated: setup's planModels (owner's ruling
-# 2026-10-17), or with none saved every model routing.json gives a seat, Codex's only on the Claude+OpenAI profile.
-pp_plan_models() {
-  local saved; saved=$(jq -r '.planModels // empty | join(" ")' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) || saved=
-  [ -z "$saved" ] || { echo "$saved"; return 0; }
-  jq -r --arg p "$(pp_pass)" '[.roles[] | (.candidates // [.])[] | select(.agent == "claude" or $p == "codex") | .model] | unique | join(" ")' "$(pp_routing)"
-}
-# pp_plan_seat <role> -- "<role> <model>": the plan seat on its own model when setup allows it, else on the first
-# allowed model of its agent, else, for a Codex judge with no Codex model allowed, plan-judge-claude. Says on stderr
-# which model or seat it used instead.
+# pp_plan_seat <role> [model] -- "<role> <agent> <model>": the plan seat as it launches, on its own agent, model and
+# effort keys, or on the launch's own model when one is named. A seat on Codex where no codex is installed is refused,
+# naming the key that moves it.
 pp_plan_seat() {
-  local r=$1 ok a m alt; ok=" $(pp_plan_models) "
-  a=$(jq -r --arg r "$r" '.roles[$r].agent // empty' "$(pp_routing)") m=$(jq -r --arg r "$r" '.roles[$r].model // empty' "$(pp_routing)")
-  [ -n "$a" ] || { echo "routing: no role $r" >&2; return 2; }
-  if [[ $ok != *" $m "* ]]; then
-    alt=$(jq -r --arg a "$a" --arg ok "$ok" '[.roles[] | (.candidates // [.])[] | select(.agent == $a) | .model] as $mine
-      | first($ok | split(" ")[] | select(. != "" and IN($mine[]))) // empty' "$(pp_routing)")
-    if [ -n "$alt" ]; then echo "$r: $m is not one of the models this project allows (setup's planModels:$ok); used $alt instead" >&2; m=$alt
-    elif [ "$a" = codex ]; then echo "$r: no Codex model is allowed in this project; used plan-judge-claude instead" >&2; pp_plan_seat plan-judge-claude; return
-    else echo "REFUSED: no model this project allows can run $r (setup's planModels:$ok)" >&2; return 2; fi
-  fi
-  echo "$r $m"
+  local r=$1 a j
+  a=$(pp_role_agent "$r") || return 2
+  [ "$a" != codex ] || command -v codex >/dev/null 2>&1 \
+    || { echo "REFUSED: $r runs on Codex, which is not installed here; set $(pp_role_key "$r" agent)=claude, or $(pp_role_key "$r" enabled)=false, in /plugin config" >&2; return 2; }
+  j=$(pp_route_json "$r" "" "${2:-}") || return 2
+  echo "$r $a $(jq -r .model <<<"$j")"
 }
 # The effort one Builder launch may run: medium or high, never under the project's Builder default. Asked the
 # same two places as the model, so a seat launched by hand cannot lower it either.
@@ -836,27 +910,20 @@ pp_route() { # same arguments; sets RT_AGENT RT_MODEL RT_EFFORT RT_READONLY RT_B
   mapfile -t f < <(jq -r '.agent, .model, (.effort // ""), (if .readonly then 1 else 0 end), .banner, .family, (.cmd // "")' <<<"$json")
   RT_AGENT=${f[0]} RT_MODEL=${f[1]} RT_EFFORT=${f[2]} RT_READONLY=${f[3]} RT_BANNER=${f[4]} RT_FAMILY=${f[5]} RT_CMD=${f[6]}
 }
-pp_review() { # <review key> -- its resolved seats as a JSON array, each with .reviewer (its family)
-  local cfg; cfg=$(pp_routing)
-  [ -f "$cfg" ] || { echo "routing: no config at $cfg" >&2; return 2; }
-  jq -ce --arg key "$1" --arg home "$HOME" --argjson codexFast "$(pp_codex_fast && echo true || echo false)" "$PP_ROUTE_JQ"' validate | review($key)' "$cfg"
-}
-# The review pass of the configured profile: claude for the Claude-only profile,
-# codex for Claude+OpenAI, which is also what a file with no profile means.
 # pp_unit_briefs <briefs dir> <unit> -- the unit's own files there, one a line:
-# its brief, evidence, design note, main's rulings, round files and later-cut briefs. Never
+# its brief, evidence, main's rulings, round files and later-cut briefs. Never
 # "$unit"*.md: unit "pre" would then own the briefs of "prefab" and "pre-other".
 pp_unit_briefs() {
   local f b
   for f in "$1/$2".md "$1/$2"-*.md; do
     [ -e "$f" ] || continue
     b=${f##*/}; b=${b#"$2"}
-    [[ $b =~ ^(\.md|-evidence\.md|-design(-spec)?\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
+    [[ $b =~ ^(\.md|-evidence\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
   done
   return 0
 }
-# pp_builder_lock <unit> -- one Builder launch of a unit at a time, held until this process exits: builder-launch.sh
-# rewrites a risky unit's records before seat.sh opens the pane, so a seat.sh run by hand takes the same lock.
+# pp_builder_lock <unit> -- one Builder launch of a unit at a time, held until this process exits: two launches of
+# one unit would each open a pane on the same records, so seat.sh takes it for every Builder launch.
 # Taken once per process: builder-launch.sh execs seat.sh with it held, and a second flock on a new open would wait on itself.
 pp_builder_lock() {
   [ "${PP_BUILDER_LOCKED:-}" != "$1" ] || return 0
@@ -868,8 +935,8 @@ pp_builder_lock() {
 # no unit may be named like one: `u-evidence` would lose its brief to `u`.
 # Refuses with the rule and the part of the name it hit.
 pp_unit_name() {
-  [[ $1 =~ (-evidence|-design(-spec)?|-main-rulings|-review-cap|-r[0-9a-z]+-reports)$|(-cut[0-9]+) ]] || return 0
-  echo "unit $1 may not be named like a paper (it has ${BASH_REMATCH[1]:-${BASH_REMATCH[3]}}): a name ending in -evidence, -design, -design-spec, -main-rulings, -review-cap or -r<N>-reports, or holding -cut<N>, is how another unit's brief files are told from its own. Pick another name" >&2
+  [[ $1 =~ (-evidence|-main-rulings|-review-cap|-r[0-9a-z]+-reports)$|(-cut[0-9]+) ]] || return 0
+  echo "unit $1 may not be named like a paper (it has ${BASH_REMATCH[1]:-${BASH_REMATCH[2]}}): a name ending in -evidence, -main-rulings, -review-cap or -r<N>-reports, or holding -cut<N>, is how another unit's brief files are told from its own. Pick another name" >&2
   return 1
 }
 # pp_merge_held <unit> <worktree> -- exit 0, printing why, when the unit may not merge on its own (issues 254, 258):
@@ -889,13 +956,8 @@ pp_go_rule() { case $1 in "closing GO"|"first-pass GO"|"no closing pass") return
 # pp_gate_key <unit> <worktree> -- what a kept merge-gate result stands for: the tip and the unit's round files, so a
 # new pass on an unchanged commit is checked again. main-watch.sh writes it, orca-wait.sh reads it.
 pp_gate_key() { echo "$(git -C "$2" rev-parse HEAD 2>/dev/null) $(cat "$2/.claude/briefs/$1"-r*-reports.md 2>/dev/null | cksum | tr ' ' :)"; }
-# The project's own profile, which setup writes, wins over the plugin's default.
-pp_pass() {
-  local p
-  p=$(jq -r '.profile // empty' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null) || p=
-  [ -n "$p" ] || p=$(jq -r '.profile // empty' "$(pp_routing)")
-  [ "$p" = claude ] && echo claude || echo codex
-}
+# The review pass: the reviewer's agent, codexReviewerAgent (the Claude-only profile sets it to claude), else codex.
+pp_pass() { pp_role_agent codex-reviewer; }
 pp_argv() { # <headless role> [effort] -- its command, one argv word per line
   local json
   json=$(pp_route_json "$1" "${2:-}") || return 2
