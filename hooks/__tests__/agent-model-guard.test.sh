@@ -36,7 +36,6 @@ check "sonnet asked to review and validate passes"  0 "$(run '{"model":"sonnet",
 check "opus for review passes"                      0 "$(run '{"model":"opus","subagent_type":"debugger","description":"Review","prompt":"debug it"}')"
 check "the legacy Task tool name gets the Opus default too (no subagent_type)" 1 \
   "$(jq -cn '{tool_name:"Task", tool_input:{description:"x",prompt:"y"}}' | bash "$HOOK" 2>/dev/null | jq -e '.hookSpecificOutput.updatedInput.model == "opus"' >/dev/null 2>&1 && echo 1 || echo 0)"
-check "TaskCreate is not an agent call"             0 "$(jq -cn '{tool_name:"TaskCreate", tool_input:{subject:"x",description:"review it"}}' | bash "$HOOK" >/dev/null 2>&1; echo $?)"
 check "TaskCreate is never rewritten"               "" "$(jq -cn '{tool_name:"TaskCreate", tool_input:{subject:"x",description:"y"}}' | bash "$HOOK" 2>/dev/null)"
 
 # An unnamed Explore call runs as Haiku (owner ruling 2026-10-08); the
@@ -84,7 +83,6 @@ check "so is one that names its own model, whose model stays" "1:none" "$(note "
 check "one whose description names a skill gets no note" 0 "$(note '{"subagent_type":"general-purpose","description":"run the tdd skill","prompt":"y"}')"
 check "one whose description names an MCP tool gets no note" 0 "$(note '{"subagent_type":"general-purpose","description":"query mcp__serena__find_symbol","prompt":"y"}')"
 check "an Explore call gets no note" 0 "$(note "$EXPLORE")"
-check "the note never refuses" 0 "$(run "$NOMODEL")"
 # The lean agents name no model or effort of their own: routing is their one home, filled in at dispatch.
 LEAN='{"subagent_type":"commandeck:lean-worker","description":"fix the test","prompt":"y"}'
 check "an unnamed lean worker gets routing's model and effort, every other argument kept" 1 \

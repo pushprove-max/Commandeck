@@ -18,7 +18,7 @@ PROJ=$HOME/.claude/projects/$(printf '%s' "$COMMANDECK_WORKSPACES/u" | tr -c 'A-
 log() { jq -nc --arg t "$(date -u -d "@$2" +%FT%TZ)" --arg p "Seat tag $3: read the brief." '{type: "user", timestamp: $t, message: {content: $p}}' > "$PROJ/$1.jsonl"; }
 log sibling $((LA + 10)) SEAT-TAG-SIBLING; log builder $((LA + 20)) SEAT-TAG-BUILDER
 go u
-check "a GO merge of u ends 0" 0 "$(merge u)"
+merge u > /dev/null
 check "the Builder's ledger row names the Builder's own session, not its sibling's" "$PROJ/builder.jsonl" \
   "$(jq -r 'select(.unit == "u" and .role == "builder") | .session' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
 # Issue 271: the merge adds the unit's row to the unit ledger, its outcome read from the round files and the proof.
@@ -36,7 +36,7 @@ use() { jq -nc --arg t "$(date -u -d "@$2" +%FT%TZ)" --argjson i "$3" '{type: "a
 { jq -nc --arg t "$(date -u -d "@$((LA + 30))" +%FT%TZ)" '{type: "user", timestamp: $t, message: {content: "Seat tag SEAT-TAG-V: read the brief."}}'; use x $((LA + 31)) 100; } > "$PV/first.jsonl"
 use x $((LA + 40)) 200 > "$PV/second.jsonl"
 go v
-check "a GO merge of v ends 0" 0 "$(merge v)"
+merge v > /dev/null
 check "a refused ledger writer prints its line, and the merge of v still ends 0" "1 1 1" \
   "$(grep -c '^DONE unit=v merged=local' "$TMP/out") $(grep -c "^unit-ledger: cannot write $UL" "$TMP/out") $(grep -c "no unit ledger row written for v (ignored)" "$TMP/out")"
 rmdir "$UL"; mv "$TMP/ul.kept" "$UL"

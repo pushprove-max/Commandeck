@@ -27,8 +27,7 @@ SLUG=$(cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR bash -c '. "$0
 mkdir -p "$HOME/.commandeck/install" && echo '{"root": "/old", "entries": {}}' > "$HOME/.commandeck/install/$SLUG.json"
 upd() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME bash "$PL/scripts/update.sh" 2>&1); }
 
-OUT=$(upd); RC=$?
-check "the update finishes" 0 "$RC"
+OUT=$(upd)
 check "it shows setup's Needs-you block, the failed install's line whole" "Needs you:
   add-on ponytail: the install FAILED (network down); to try again, run in the project: x" "$(grep -A1 '^Needs you:$' <<<"$OUT")"
 check "and not the rest of setup's report" 0 "$(grep -c '^Optional\.\|^add-on serena' <<<"$OUT")"

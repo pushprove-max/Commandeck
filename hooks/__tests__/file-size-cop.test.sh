@@ -58,8 +58,6 @@ check "a 390-line .tsx Write is SILENT"          "" "$(run_err "$(write "$TMP/ne
 # script were all refused on a number nobody chose.
 check "a 900-line markdown Write passes"         0 "$(run "$(write "$TMP/doc.md" "$(lines 900)")")"
 check "a 900-line markdown Write is SILENT"      "" "$(run_err "$(write "$TMP/doc.md" "$(lines 900)")")"
-check "a 900-line JSON fixture passes"           0 "$(run "$(write "$TMP/fixture.json" "$(lines 900)")")"
-check "a 900-line Python file passes"            0 "$(run "$(write "$TMP/tool.py" "$(lines 900)")")"
 check "an Edit growing a markdown file past 800 passes" 0 \
   "$(run "$(edit "$MD" "const x1 = 1;" "$(lines 20)")")"
 

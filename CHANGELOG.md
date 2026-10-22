@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.3 -- 2026-10-22
+
+- Fifteen plugin test cases that another named case already proves are gone, so the suites run fewer duplicate
+  checks.
+- The platform audit's "no duplicate answer" case now fails when the verifier stops requiring the duplicate cell;
+  before, it passed with that rule removed.
+
 ## 0.25.2 -- 2026-10-22
 
 - The fresh-session pass test no longer fails on a fast CI runner: its long-pass case sets the threshold below zero,

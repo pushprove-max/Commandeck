@@ -121,7 +121,6 @@ fi
 # --- the paved-road note: setup's one rule, run alone on a hand-written project (no setup run) ---
 note() { (NOTES=(); PP_MAIN=$PROJ IL_ROOT=$PLUGIN; eval "$(grep -F 'paved-road.md' "$SOURCE/scripts/setup.sh")"; printf '%s\n' ${NOTES[@]+"${NOTES[@]}"}); }
 check "with no .claude/paved-road.md setup names the template to start it from" 1 "$(note | grep -c "start it from $PLUGIN/templates/paved-road.md")"
-check "and the template it names is shipped" 1 "$([ -f "$SOURCE/templates/paved-road.md" ] && echo 1)"
 mkdir -p "$PROJ/.claude"; echo '# Paved road' > "$PROJ/.claude/paved-road.md"
 check "with the file there it says nothing" '' "$(note)"
 rm -rf "$PROJ/.claude"

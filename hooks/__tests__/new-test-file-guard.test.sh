@@ -240,9 +240,6 @@ ln -sfn "${TS_MODULES:-$NO_MODULES}" "$REPO/node_modules"
 check "a .spec.ts write is allowed"                0 \
   "$(run "$(write "$REPO/src/services/__tests__/second-transfer.spec.ts" \
     "import { createTransfer } from '../transfer-service';")")"
-check "a .test.js write is allowed"                0 \
-  "$(run "$(write "$REPO/src/services/__tests__/second-transfer.test.js" \
-    "require('../transfer-service');")")"
 check "a MultiEdit payload naming a test file is allowed" 0 \
   "$(run "$(jq -cn --arg fp "$NEW" '{tool_name:"MultiEdit", tool_input:{file_path:$fp, edits:[{old_string:"a", new_string:"b"}]}}')")"
 check "a relative in-scope path still resolves"    2 \

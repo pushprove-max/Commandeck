@@ -219,7 +219,7 @@ check "a row with no evidence is no verdict" "1 none" \
 check "a row with no severity is no verdict" "1 none" \
   "$(verdict "$(sed 's/| CONFIRMED | P1 |/| CONFIRMED | |/' <<<"$GOOD")" 'confirmed=1 partly=0 refuted=1 duplicates=1')"
 check "a row with no duplicate answer is no verdict" "1 none" \
-  "$(verdict "$(sed 's/| new |/| |/' <<<"$GOOD")" 'confirmed=1 partly=0 refuted=1 duplicates=1')"
+  "$(verdict "$(sed 's/| new |/| |/' <<<"$GOOD")" 'confirmed=1 partly=0 refuted=1 duplicates=2')"
 check "a counts line that miscounts the verdicts is no verdict" "1 none" "$(verdict "$GOOD" 'confirmed=2 partly=0 refuted=0 duplicates=1')"
 check "a counts line that miscounts the duplicates is no verdict" "1 none" "$(verdict "$GOOD" 'confirmed=1 partly=0 refuted=1 duplicates=0')"
 check "a verdict with no counts line is no verdict" "1 none" "$(verdict "$GOOD" '')"

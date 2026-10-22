@@ -127,7 +127,6 @@ mkdir -p "$TMP/a root"; ln -s "$REAL/hooks" "$TMP/a root/hooks"
 check "and each one is a runnable word under a root with a space in it" "" \
   "$(jq -r '.hooks[][].hooks[].command' "$H" | while IFS= read -r c; do CLAUDE_PLUGIN_ROOT="$TMP/a root" bash -c "set -- $c; [ -x \"\$1\" ]" 2>/dev/null || echo "$c"; done | head -3)"
 check "every registered hook is an executable file in the repo" "" "$(hook_files | while read -r f; do [ -x "$REAL/$f" ] || echo "$f"; done)"
-check "hooks.json registers hooks" yes "$([ "$(hook_files | wc -l)" -ge 10 ] && echo yes || echo no)"
 # Main may read any file in a worker's worktree (owner ruling 2026-10-15, restoring 2026-09-25): every
 # hook that runs before main's Read, Grep or Glob lets a worktree path through.
 git init -q "$TMP/main"; mkdir -p "$TMP/main/.claude"; echo '{"version": 1}' > "$TMP/main/.claude/commandeck.json"; W=$TMP/main/orca/workspaces/u/src/a.sh

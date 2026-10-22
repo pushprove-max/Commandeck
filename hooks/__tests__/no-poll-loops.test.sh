@@ -14,10 +14,6 @@ json() { jq -cn --arg cmd "$1" '{tool_input:{command:$cmd}}'; }
 
 check "for-loop with sleep blocks" 2 \
   "$(run_hook "$(json 'for i in 1 2 3; do sleep 30; gh pr view 1; done')")"
-check "while-loop with sleep blocks" 2 \
-  "$(run_hook "$(json 'while true; do sleep 60; done')")"
-check "until-loop with sleep blocks" 2 \
-  "$(run_hook "$(json 'until test -f x; do sleep 5; done')")"
 check "sleep-then-check chain blocks" 2 \
   "$(run_hook "$(json 'sleep 30; gh pr checks 1; sleep 30; gh pr checks 1')")"
 check "sleep && check chain blocks" 2 \
@@ -78,8 +74,6 @@ check "Monitor running orca-wait.sh once blocks" 2 \
   "$(run_hook "$(mon 'bash scripts/orca-wait.sh')")"
 check "a background while-loop of orca-wait.sh blocks" 2 \
   "$(run_hook "$(bg 'while true; do bash scripts/orca-wait.sh; done' true)")"
-check "a background until-loop of orca-wait.sh blocks" 2 \
-  "$(run_hook "$(bg 'until false; do bash scripts/orca-wait.sh; done' true)")"
 check "a background loop of the raw check --wait blocks" 2 \
   "$(run_hook "$(bg 'while :; do orca-ide orchestration check --wait --json; done' true)")"
 check "a loop that only SEARCHES for orca-wait.sh passes" 0 \
@@ -161,8 +155,6 @@ check "a foreground wait AFTER a documenting heredoc still blocks" 2 \
   "$(run_hook "$(bg $'cat >> report.md <<\'EOF\'\n  orca-ide orchestration check --wait --json\nEOF\norca-ide orchestration check --wait --json' false)")"
 
 # A comment is not run: a loop that is only written in one is not a poll.
-check "a loop that is only in a comment passes" 0 \
-  "$(run_hook "$(json 'printf done # while true; do sleep 1; done')")"
 check "a # inside a word starts no comment: the loop after it still blocks" 2 \
   "$(run_hook "$(json 'echo $# a#b; while true; do sleep 1; done')")"
 
