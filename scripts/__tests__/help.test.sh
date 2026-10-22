@@ -15,7 +15,7 @@ git init -q -b main "$T/proj" && git -C "$T/proj" -c user.name=t -c user.email=t
 files() { find "$T" -path "$T/calls" -prune -o -print | sort; }
 for f in "$REAL"/scripts/*.sh; do
   n=${f##*/}
-  case $n in paths.sh|install-lib.sh|host-services.sh|project-main.sh|cos-lib.sh|requirements.sh|lib-mutation-note.sh) continue ;; esac
+  case $n in paths.sh|install-lib.sh|host-services.sh|project-main.sh|cos-lib.sh|requirements.sh) continue ;; esac
   for a in --help -h; do
     : > "$T/calls"; before=$(files)
     out=$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR -u ORCA_TERMINAL_HANDLE HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" \

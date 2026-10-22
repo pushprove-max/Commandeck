@@ -298,10 +298,6 @@ while IFS= read -r deleted; do
   else fail "step 4 merge" "the squash deletes $deleted, which the brief never names; the rebase probably replayed stale content"
   fi
 done < <(git diff --no-relative --diff-filter=D --name-only "$BASE" "$BRANCH")
-# The squash drops every unit commit body; a commit-msg hook that asks for the
-# mutation note the pass commit carried would refuse it, so the notes ride along.
-MUTATIONS=$(git -C "$WT" log --format=%B "$BASE".."$BRANCH" | grep -i -A2 '^Mutation-verified' || true)
-[ -z "$MUTATIONS" ] || TITLE=$(printf '%s\n\n%s' "$TITLE" "$MUTATIONS")
 # The message is the one text of the unit no file check reads (issue 221): a home path, this machine's name or a
 # word of the project's own leak list refuses the merge before anything is merged.
 MSG=$(mktemp) || fail "step 4 message" "could not write the message to a file"

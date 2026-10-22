@@ -63,6 +63,11 @@ check "the issue the commit names is closed once, naming the merge commit" 1 "$(
 check "the issue the commit does not name stays open, and is named" "0 1" "$(grep -c '^issue close 6' "$TMP/gh-calls") $(grep -c 'left open: #6' "$TMP/out")"
 check "the unit's item task is completed, another unit's is not" "1 0" \
   "$(grep -c 'task-update --id task_item_w --status completed' "$TMP/orca-calls") $(grep -c 'task_item_o' "$TMP/orca-calls")"
+# Issue 323: red proofs are retired. w's commit carried no Mutation-verified: line and merged above; a branch that
+# still carries an old one merges too, and the squash message no longer carries it along.
+mk mv $'feat(mv): the unit\n\nMutation-verified: an old note from before issue 323'; go mv
+check "a commit with an old Mutation-verified: line merges, and the merge message drops it" "0 0" \
+  "$(merge mv) $(git -C "$REPO" log -1 --format=%B | grep -c 'Mutation-verified')"
 # A dry run closes nothing; a close GitHub refuses ends the merge with code 3 and the command that closes it.
 mk x "feat(x): the unit (#7)"; printf '# x\n\n## The issues\n\n1. #7: one\n' > "$COMMANDECK_WORKSPACES/x/.claude/briefs/x.md"
 go x; : > "$TMP/gh-calls"

@@ -11,8 +11,8 @@ setup asks, the picker guard's stray-keypress option is off.
 | Your rules | asked when the project has a `CLAUDE.md` or `.claude/rules/`: merge (sessions leave out the plugin's rules yours already state word for word; for a rule that only says the same in other words, or disagrees, you choose keep mine, use the plugin's or keep both) or keep both |
 | Your own startup files | asked each time for a project's own `AGENT_STARTUP.md` and `.claude/main-session.md`, which otherwise load instead of the plugin's: merge (the plugin's rules yours lack are added in a marked block), replace (sessions load the plugin's; yours stays on disk) or skip |
 | Global rules, global CLAUDE.md | when `~/.claude/CLAUDE.md` exists: merge (only the rules it lacks), add as block, or skip; when it does not: install or skip. Your own text is never changed; uninstall takes out only the plugin's blocks |
-| Builder model, context | Opus (the default) or Sonnet for less usage; no advisor is added by setup. 200K or a larger window |
-| Builder effort | medium (the default; high recommended on Sonnet), low, high or max, for every Builder; review seats keep their own |
+| Builder model, context | Sonnet (the default) or Opus; no advisor is added by setup. 200K or a larger window |
+| Builder effort | high (the default; medium recommended on Opus), low, medium or max, for every Builder; review seats keep their own |
 | Builder clear line | 180K tokens of context (the default), another count, or off: past it the Builder writes a handoff and goes on in a fresh session of its pane, and its card on the dashboard shows its context against the line |
 | Issue sizing | 40K tokens (the default), another count, or off: an issue the batch brief sizes as sharing no files and needing more reading than this is proposed as its own unit when the Builder is launched; off keeps today's grouping |
 | Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |

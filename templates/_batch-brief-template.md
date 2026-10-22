@@ -12,6 +12,16 @@ means. Then the tests to write first, and how the batch will be reviewed.
 An item that adds a step to the build, merge, review or push flow carries a
 `Catches:` line: what the step catches that no existing step does.
 
+- Name every reader of anything an item deletes (exports, docs, scripts that
+  call it), so none is left calling it.
+- An input called "existing" cites the code that computes it and the code that
+  fills it on the real path; a type, a schema field or an initial state is
+  neither. With no such code, the item does not rely on it.
+- Each item names its test file and case, and says which case fails before the
+  change (red first) and which only pins behaviour that already holds. An item
+  whose files are all docs or config may name none: say why, and the command
+  that proves it.
+
 ## Launch
 
 Required: builder-launch.sh refuses a batch without it, and a plan seat's

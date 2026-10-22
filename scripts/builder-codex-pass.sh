@@ -67,7 +67,6 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
-. "$HERE/lib-mutation-note.sh"
 die() { echo "REFUSED: $*" >&2; exit 2; }
 CODEX_DIR=${CODEX_HOME:-$HOME/.codex}
 CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
@@ -853,8 +852,8 @@ if [ "$KIND" = review ]; then
   fi
   [ -z "$WHY" ] || { KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"; }
 fi
-# Stages what the pass will commit and refuses on the evidence-file checks; sets NOTES for the commit message.
-# --check runs it in a copy of the index, so the Builder learns of a refusal before a launch costs a retry.
+# Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
+# so the Builder learns of a refusal before a launch costs a retry.
 stage_and_check() {
   # Staged whole, then the briefs taken back out: an exclude pathspec naming
   # .claude/briefs makes git add fail in a repo that ignores .claude/.
@@ -864,14 +863,6 @@ stage_and_check() {
   # Only when one is tracked: git fails a pathspec that matches no tracked file.
   TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
   [ -z "$TEMPLATES" ] || git -C "$WT" add -u -- '.claude/briefs/_*'
-  # commit-msg demands a mutation note when a guard-class test is added; the pass
-  # carries the evidence file's notes, and refuses here rather than at the hook.
-  NOTES=$(grep -E '^Mutation-verified: ' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
-  GUARDS=$(git -C "$WT" diff --cached --name-only --diff-filter=A | guard_class_tests)
-  [ -n "$GUARDS" ] && [ -z "$NOTES" ] && die "this pass adds guard-class tests ($(paste -sd' ' - <<<"$GUARDS")) and .claude/briefs/$UNIT-evidence.md has no line of the form
-  Mutation-verified: <what you broke and how the test went red>
-Add one per guard test, then rerun the pass."
-  return 0
 }
 # The full suite before the closing pass (issue 243), when main's config asks for it. A pass with nothing to run
 # refuses before anything is committed.
@@ -887,7 +878,7 @@ fi
 if [ "$CHECK" = 1 ]; then
   cp "$(git -C "$WT" rev-parse --absolute-git-dir)/index" "$LOCK/index" || die "cannot copy the index of $WT"
   GIT_INDEX_FILE=$LOCK/index stage_and_check
-  echo "check ok: a launch of $UNIT $N $KIND passes the evidence-file checks. Not run: the Codex sign-in check. Nothing was staged or committed."
+  echo "check ok: a launch of $UNIT $N $KIND passes the launch checks. Not run: the Codex sign-in check. Nothing was staged or committed."
   exit 0
 fi
 # A revoked sign-in made the pass end with no output while `codex login status`
@@ -920,7 +911,7 @@ fi
 stage_and_check
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
-git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N${NOTES:+$'\n\n'$NOTES}"
+git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N"
 SHA=$(git -C "$WT" rev-parse HEAD)
 # The suite runs on the tip just committed, before any reviewer starts. Its line goes first in the review input,
 # where --verify reads it from the prompt the pass recorded; a red run makes the pass NO-GO whatever the reviewer says.
@@ -1227,8 +1218,8 @@ REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n
     case $p in (*.test.*) t=$p ;; (hooks/*|scripts/*) t=${p%%/*}/__tests__/$(basename "${p%.*}").test.sh ;; (*) t="" ;; esac
     if [ -n "$t" ] && [ -f "$WT/$t" ]; then
       v=$(sed -n '/^#/!q;p' "$WT/$t" | grep -oE '[A-Z][A-Z0-9_]*_TEST_CASE' | head -1 || true)
-      printf -- "- %s:%s: test %s%s; run: bash %s %s; red proof: %sbash %s %s %s '<replacement>' -- bash %s %s\n" "$p" "$l" "$t" "${v:+, one case with $v=<case label>}" \
-        "$HERE/run-shell-tests.sh" "$t" "${v:+$v='<case label>' }" "$HERE/red-proof.sh" "$p" "$l" "$HERE/run-shell-tests.sh" "$t"
+      printf -- "- %s:%s: test %s%s; run: %sbash %s %s\n" "$p" "$l" "$t" "${v:+, one case with $v=<case label>}" \
+        "${v:+$v='<case label>' }" "$HERE/run-shell-tests.sh" "$t"
     else echo "- $p:$l: no same-name test: name the test file in the evidence before the fix."; fi
   done)
   [ -z "$TPF" ] || printf '\n## Tests per finding\n\n%s\n' "$TPF"

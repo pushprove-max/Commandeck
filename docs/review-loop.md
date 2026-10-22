@@ -38,9 +38,8 @@ that leaves only P2 or P3 findings still merges: the merge prints each one as
 open and files a GitHub issue for it. If GitHub cannot be reached the merge
 stands, the output lists what was not filed, and the exit code is 4.
 
-The fix passes after a review run as the fixer role. The first one runs on the
-model and effort the Builder was launched with, and the later ones on Opus
-high. The `fixer*` keys in `/plugin` config change both, and
+The fix passes after a review run as the fixer role, every one on Opus high
+by default. The `fixer*` keys in `/plugin` config change both, and
 `fixerEnabled=false` keeps every fix pass on the Builder's launch.
 
 A launch with `--risky` opens the Builder at once. Its brief gets a

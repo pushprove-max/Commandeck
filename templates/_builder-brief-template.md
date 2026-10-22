@@ -16,8 +16,9 @@ any other line is refused.
 ## How to work
 
 - `/ponytail full`: the smallest complete change.
-- Auto memory is off in this pane. If the work hinges on a ruling or fact the brief does not state, ask main with
-  the orchestration ask command before guessing.
+- Auto memory is off in this pane. If the work hinges on a ruling or fact the brief does not state, send main the
+  question, then keep working on what the answer cannot affect; never guess it. A review finding that contradicts
+  an owner ruling is not fixed: ask main, naming the ruling id.
 - The batch's Prior art section binds: build on the standard and the library
   or service it names, as the project's `.claude/paved-road.md` lists them for
   the area. A deviation states its reason in the evidence file.
@@ -55,11 +56,7 @@ any other line is refused.
   or rule a change touches, on a hand-written config.
 - Tests first: red, then green. A red test that shows a hang sets its own
   short timeout (a few seconds), so it fails fast instead of running to the
-  command's time limit. To show a test catches a break without editing your
-  tree, run `bash {scripts}/red-proof.sh <file> <line> <replacement> -- <test
-  command>`: it breaks that line in a scratch copy of your work and says RED
-  or NOT RED. `red-proof.sh --batch <list>` runs many proofs in one copy (one tab-separated
-  `<file> <line> <replacement> <test command>` per line); a case-aware test file runs with its case variable set.
+  command's time limit.
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
   next line. The dashboard counts an item built only from that heading and line.
@@ -98,6 +95,8 @@ any other line is refused.
   evidence file lists each touched test file as run or cited:
   `Closing run: <file>: run, <n> passed, <n> failed` or
   `Closing run: <file>: cited <log path>, <n> passed, <n> failed`.
+  Never start it while another run expected over about 5 minutes is still going: wait for that one with
+  `wait-test-run.sh` first. Overlapped runs time out under the load and pass alone.
 - A new or changed image needs the owner's review: the evidence file carries
   `image reviewed by the owner: <file>` for each, which you ask main for. The
   leak check searches only an image's text chunks; its pixels are a human check.
@@ -115,7 +114,14 @@ any other line is refused.
 - A question for main is one `orca-ide orchestration send --type question`.
   Main answers with `answer-worker.sh`, which reaches you whether you wait on
   your inbox or have ended your turn. When the answer reaches you another way,
-  stop your own command still waiting on that question at once.
+  stop your own command still waiting on that question at once. While you keep working, read your inbox with
+  `orca-ide orchestration check --terminal <your handle> --ack <the deliveryId your last read returned> --json`
+  (no `--ack` on the first read; without it every read returns the same oldest batch) before each pass and
+  whenever a background run reports back.
+- A question to the owner, yours or main's, goes as `orchestration send --type question`, never the blocking
+  `ask`. When main says an owner question is open that would change the fix in progress, build only what the
+  answer cannot change, then wait for main's answer with `check --wait --timeout-ms 240000`, resumed until 9
+  minutes in all (one wait over 270 s is refused by the cache-budget hook); a question that cannot change the fix never holds it.
 - Never commit by hand, never push. The pass script below commits exactly what
   {reviewer} reviews; main merges.
 
@@ -132,25 +138,18 @@ merge refuses a round file the script did not write, or one older than the tip.
    pass prints which); fix everything it finds together.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
-   when main changed this brief or its rulings since the last pass. Fix and repeat until one
-   ends `VERDICT: GO` (nothing at P0-P2). A `review` that prints `final in place of review` (after a
-   closing pass that found a P0 or P1 or named nothing, or after a commit on a closing GO) is the closing
-   pass: its GO merges, and no separate final follows.
+   when main changed this brief or its rulings since the last pass. Every finding, P0 to P3, blocks the
+   merge: fix it, red first, and repeat until one ends `VERDICT: GO` with no finding named. A `review`
+   that prints `final in place of review` is the closing pass: its GO merges, and no separate final follows.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
-   branch once more. Its GO is the one the merge takes. A P0 or P1 there goes
-   back to step 2, whose next `review` runs as the closing pass. If it leaves P2/P3 only:
-   fix the ones that change what a user or main sees, red first, take ONE
-   narrowed pass (`review`), and report DONE with every open P2 and P3 listed.
-   No second closing pass: the merge takes that tip when the narrowed pass
-   ended GO or left P2/P3 only, which the merge prints as open. A P0 or P1 in
-   that narrowed pass: fix it and run the closing pass again. If you fix none
-   of them, commit nothing after the closing pass: the merge takes that tip
-   too, and prints each P2 and P3 as open.
+   branch once more. Its GO, naming no finding, is the one the merge takes. Any finding there, P0 to P3,
+   goes back to step 2 as a fix round, whose next `review` runs as the closing pass. There is no
+   narrowed-pass exit and no finding left open at merge.
 
 Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
-it runs the launch's own checks on what the pass would commit (the
-`Mutation-verified:` line a new guard test needs), names what is missing and
-stages, commits and sends nothing. A launch refused for a missing line costs a pass and a retry.
+it runs the launch's own checks (the round cap, main's rulings acknowledged, an
+earlier pass), names what is missing and stages, commits and sends nothing. A
+refused launch costs a pass and a retry.
 {loop-rules}
 When a pass reports a bug, look for the same kind of bug nearby and fix
 the whole class before the next pass. Each fix gets one evidence line
@@ -163,14 +162,24 @@ A finding only main can fix (a settings file entry, a file only main edits)
 goes as one line under `## Main-only (deferred)` in the evidence file: every
 later pass is handed that list as known, so it is not raised again.
 When a reviewer finds a way round a guard, list the other ways round the same guard
-and add a test case for each BEFORE asking for the next pass.
+and fix them all BEFORE asking for the next pass; one test covers the bug class, not one per way round.
+A fix that changes when a state is trusted (narrows or widens it) reruns the existing
+cases with the state swapped in before the next pass, and the evidence file records the result.
 When a pass finds a SECOND variant of a finding you already fixed in this
 build, fix the whole class, not the named case: work out what the variants have
-in common, list every input the check trusts without verifying it, add a test
-case for each, and write in the evidence file what the class is. Send
+in common, list every input the check trusts without verifying it, add one test
+for the class (not one per variant), and write in the evidence file what the class is. Send
 main a note of about 100 tokens (an Orca `status` naming the class and the fix)
 without waiting for a reply. Ask main and wait
 only when the class fix would cross a stated limit of this brief.
+A fix adds a test only if it guards a real regression. Write no test that only
+shows a file, function or setting exists. A shell test file over its time budget
+is a red you trim or split, never a raised limit.
+
+A pass that ends NO-GO writes `.claude/briefs/{unit}-fix-r<N>.md` and prints `FIX ROUND <N>: end your turn
+now`: end your turn without fixing anything. The script clears your pane and points a fresh session at that
+file, so keep the evidence file current before every pass, including what is left and what your report to
+main must say.
 
 <!-- advisor -->
 Write one line per advisor consult in the evidence file: what the advisor said
@@ -185,16 +194,15 @@ A consult that fails or times out is retried once, never more. If the retry
 fails too, carry on and write `consult not had: <reason>` in the evidence file.
 <!-- /advisor -->
 
-Change nothing after the pass the merge will take (the GO of the closing pass,
-or the one narrowed pass after a P2/P3-only closing pass); a later edit needs
+Change nothing after the pass the merge will take (the GO of the closing pass); a later edit needs
 another pass. The rule is lifted when the merge refuses the branch or main
 tells you to change something: make the change, then take the passes the steps
 above call for.
 
 ## Done
 
-Every batch item built with its tests green, and the last round file a GO, or
-the narrowed pass after a P2/P3-only closing pass with every open finding listed.
+Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
+with no finding named.
 Print `{UNIT}-DONE` as your last line and stop. An answer from main that
 arrives after it is still yours: read it and act on it.
 

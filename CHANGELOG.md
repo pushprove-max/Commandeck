@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.28.0 -- 2026-10-22
+
+- Red proofs are retired (#323). The Builder brief template no longer orders them, `scripts/red-proof.sh` is gone,
+  and a fix-round hand-off names each finding's test and run command only. A pass no longer refuses a new guard test
+  for a missing `Mutation-verified:` line and puts none in its commit; the merge no longer carries one into the
+  squash message, and a branch that still has one merges.
+- The Builder brief, batch brief and global rules follow the owner's current workflow: every review finding, P0 to
+  P3, blocks the merge, and Done is a closing GO that names no finding. New rules: send main a question and keep
+  working on what it cannot change; a finding against an owner ruling goes to main; read the inbox with `--ack`;
+  never overlap the closing run with a long run; one test per bug class; a test only for a real regression; name
+  what a new flow step catches; comments carry no credits or P-levels; main may raise a Builder's effort, never
+  lower it.
+- New default seats: a Builder runs Sonnet high (was Opus medium), every fix round Opus high (the first one kept the
+  Builder's launch; `fixerFirstModel=builder` and `fixerFirstEffort=builder` still do), and main runs at medium
+  effort, which setup now writes to main's settings file when `orchestratorEffort` is unset. A project's own
+  `routing.json` keeps its seats; setup's questions recommend the new defaults.
+
 ## 0.27.0 -- 2026-10-22
 
 - Only actionable messages wake main (#318). A nudge whose unread mail is all status notes or heartbeats is dropped

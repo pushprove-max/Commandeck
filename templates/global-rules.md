@@ -16,18 +16,29 @@
   once, each from another angle (correctness, security and failure, what
   breaks under real load). Fix everything they find together, then review
   only the fixes.
-- When a review leaves only medium findings, fix or file each one, then merge.
-  Don't hold the change for another round.
+- Every review finding, P0 to P3, blocks the merge and goes back to a fix
+  round. Done is a closing pass that ends GO with no finding named; nothing is
+  left open at merge.
+- No redundant steps: before adding a step to the build, merge, review or push
+  flow (a check, a test run, a review pass, a record, a wait, a confirmation),
+  name what it catches that no existing step does. If you cannot, don't add
+  it; a step that repeats another's work is removed, not kept "for safety".
 
 ## Agents and tokens
 
+- Every seat runs at the model and effort its role is configured with. Main
+  may raise one Builder's effort for one build, never lower it, and names the
+  raise and its reason in the brief. Main does not switch its own effort; it
+  asks the owner.
 - Send independent tool calls together in one turn, not one after another.
 - Don't pay twice for the same information: reuse what is already in context,
   and don't re-read a file you just edited.
 - Keep context small: read line ranges, not whole files, and send a long
   output to a file and read the part you need.
-- A code comment says only what the code cannot: the why, a limit, a hazard.
-  Never what the next line does.
+- A code comment says only what the code cannot: the why, a limit and its
+  upgrade path, a contract another file relies on, a hazard. Never what the
+  next line does, who or which tool wrote or reviewed it, a finding's
+  P-level, or commented-out code (git keeps it). A new TODO names its issue.
 
 ## Tests and planning
 

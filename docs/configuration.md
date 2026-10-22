@@ -14,11 +14,11 @@ A null effort is omitted from the command.
 
 | Role | Default agent / model | Effort | `/plugin` config keys | Can be off |
 |---|---|---|---|---|
-| orchestrator | Claude / opus | omitted | `orchestratorModel`, `orchestratorEffort` | no: it is the session that runs everything |
+| orchestrator | Claude / opus | medium | `orchestratorModel`, `orchestratorEffort` | no: it is the session that runs everything |
 | plan-author | Claude / opus | high | `planAuthorModel`, `planAuthorEffort`, `planAuthorEnabled`, `planAuthorFast` | yes: no plan |
 | plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | plan-judge-astra | Codex / astra (Claude: sonnet) | high | `planJudgeAstra` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
-| builder | Claude / opus | medium | `builderModel`, `builderEffort` | no: no branch to review or merge |
+| builder | Claude / sonnet | high | `builderModel`, `builderEffort` | no: no branch to review or merge |
 | fixer | Claude / opus | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
 | codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
 
@@ -29,9 +29,9 @@ the role does not take is refused, naming the key. Setup writes the keys
 from its answers (`--option <key>=<value>`). The keys live in your user
 settings file, so a plugin update does not change them.
 
-The fixer runs the fix passes after a review. The first one runs on the model
-and effort the Builder was launched with (`fixerFirstModel=builder`, the
-default); the later ones run on Opus high. The reviewer and both judges can
+The fixer runs the fix passes after a review, every one on Opus high by
+default. `fixerFirstModel=builder` and `fixerFirstEffort=builder` run the
+first one on the model and effort the Builder was launched with. The reviewer and both judges can
 run on Claude (`<role>Agent=claude`): a Claude reviewer or judge cannot write.
 The Claude-only profile sets those three agent keys to `claude`.
 

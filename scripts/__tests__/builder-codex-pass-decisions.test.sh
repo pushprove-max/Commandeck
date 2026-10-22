@@ -60,9 +60,9 @@ printf '#!/usr/bin/env bash\n# BASH_GUARDRAILS_TEST_CASE=<label part> runs one c
 P2B=$'- [P2] (class: other-class) GUARD-PROBE -- hooks/bash-guardrails.sh:1 -- it lets one through -- bash x\n- [P2] (class: other-class) BARE-PROBE -- a.sh:1 -- no test -- bash a.sh\nVERDICT: NO-GO'
 check "a NO-GO of two other classes runs" 0 "$(fpass "$W" 21 review "$P2B")"
 TPF=$(hand 21 | sed -n '/^## Tests per finding/,/^## /p')
-check "a finding on a hook names its same-name test, its case variable and both commands; that test exists" "1 1 1 1 1" \
+check "a finding on a hook names its same-name test, its case variable and its run command, no red proof (issue 323); that test exists" "1 1 1 0 1" \
   "$(grep -c '^- hooks/bash-guardrails.sh:1: test hooks/__tests__/bash-guardrails.test.sh' <<<"$TPF") $(grep -c 'BASH_GUARDRAILS_TEST_CASE' <<<"$TPF") \
-$(grep -c "bash $REAL/scripts/run-shell-tests.sh hooks/__tests__/bash-guardrails.test.sh" <<<"$TPF") $(grep -c "bash $REAL/scripts/red-proof.sh hooks/bash-guardrails.sh 1 " <<<"$TPF") \
+$(grep -c "run: BASH_GUARDRAILS_TEST_CASE='<case label>' bash $REAL/scripts/run-shell-tests.sh hooks/__tests__/bash-guardrails.test.sh" <<<"$TPF") $(grep -c -e 'red proof:' -e 'red-proof\.sh' <<<"$TPF") \
 $([ -f "$W/$(grep -o 'test hooks/__tests__/[^ ;,]*' <<<"$TPF" | head -1 | cut -d' ' -f2)" ] && echo 1)"
 check "a finding on a file with no same-name test says so" 1 "$(grep -c '^- a.sh:1: no same-name test: name the test file in the evidence before the fix' <<<"$TPF")"
 check "two different classes add no approach line" 0 "$(hand 21 | grep -c 'came back in two passes in a row')"

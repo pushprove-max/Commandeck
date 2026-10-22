@@ -214,7 +214,7 @@ check "the cache report follows the /config answers over the project's" 1 "$(cac
 jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 check "the doctor's Builder line names the model's source and the effort's, and reads no builder.model from the project's file" 1 \
-  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | tee "$T/doc" | grep -cxF "ok   builder: opus (from the default), effort high (from /config); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config")"
+  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | tee "$T/doc" | grep -cxF "ok   builder: sonnet (from the default), effort high (from /config); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config")"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"orchestratorModel": "opus", "orchestratorEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 echo '{"model": "opus", "effortLevel": "medium"}' > "$PROJ/.claude/settings.local.json"
 check "main's settings file differing from the orchestrator key is flagged, the matching one is not" "1 0" \

@@ -12,7 +12,7 @@
     "orchestrator": {
       "agent": "claude",
       "model": "opus",
-      "effort": null,
+      "effort": "medium",
       "unboxed": true,
       "edits": true,
       "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges. Cannot be off: it is the session that runs everything."
@@ -61,8 +61,8 @@
     },
     "builder": {
       "agent": "claude",
-      "model": "opus",
-      "effort": "medium",
+      "model": "sonnet",
+      "effort": "high",
       "unboxed": true,
       "edits": true,
       "note": "One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore (haiku) and general-purpose (sonnet) subagents and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
@@ -71,10 +71,10 @@
       "agent": "claude",
       "model": "opus",
       "effort": "high",
-      "first": {"model": "builder", "effort": "builder"},
+      "first": {"model": "opus", "effort": "high"},
       "unboxed": true,
       "edits": true,
-      "note": "Not a pane of its own: the Builder's pane on a fix round (builder-fresh-round.sh). The first fix round of a build runs on first (builder: the build's launched Builder model and effort), every later one on this model and effort. Off (fixerEnabled=false): every fix round keeps the Builder's launched model and effort."
+      "note": "Not a pane of its own: the Builder's pane on a fix round (builder-fresh-round.sh). The first fix round of a build runs on first, every later one on this model and effort; builder in either means the build's launched Builder model or effort. Off (fixerEnabled=false): every fix round keeps the Builder's launched model and effort."
     },
     "codex-reviewer": {
       "agent": "codex",

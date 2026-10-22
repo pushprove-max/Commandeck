@@ -107,19 +107,19 @@ Ask them in this order, up to four questions per call.
    - Skip: the file is left alone. `skip`
    "Global rules" are the plugin's working, review, agent and test rules; "Global CLAUDE" its general instructions (working rules, code exploration, root-cause discipline). Your own text is never changed, and a copy of the file is made first.
 6. Which models run? Each answer is sent as `--option <key>=<value>` lines and saved as that role's key in `/plugin` config, where it can be changed later; `<key>=project` takes back an earlier answer, so the role runs on its default.
-   Ask "Main": Opus, default effort (recommended) | Opus high | Opus medium
-   - The orchestrator: this session. Saved in this checkout's `.claude/settings.local.json` as its model and effort. Opus, default effort: `--option orchestratorModel=project --option orchestratorEffort=project`; Opus high: `--option orchestratorModel=opus --option orchestratorEffort=high`; Opus medium: `--option orchestratorModel=opus --option orchestratorEffort=medium`.
-   Ask "Builder model": Opus (recommended) | Sonnet
-   - Opus: best quality, with no advisor. `--option builderModel=project`
-   - Sonnet: uses less of your plan. `--option builderModel=sonnet`
-   Then the effort, right after the model: its recommended answer follows the model picked. On Opus:
-   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
-   On Sonnet:
+   Ask "Main": Opus medium (recommended) | Opus high
+   - The orchestrator: this session. Saved in this checkout's `.claude/settings.local.json` as its model and effort. Opus medium: `--option orchestratorModel=project --option orchestratorEffort=project`; Opus high: `--option orchestratorModel=opus --option orchestratorEffort=high`.
+   Ask "Builder model": Sonnet (recommended) | Opus
+   - Sonnet: uses less of your plan. `--option builderModel=project`
+   - Opus: best quality, with no advisor. `--option builderModel=opus`
+   Then the effort, right after the model: its recommended answer follows the model picked. On Sonnet:
    Ask "Builder effort": High (recommended) | Low | Medium | Maximum
-   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. Medium: `--option builderEffort=project`, or `--option builderEffort=low`, `high`; Maximum: `max`.
-   Ask "Fixer": Same as Builder, then Opus high (recommended) | Opus high every round | Builder's model every round
-   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
-   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=opus --option fixerFirstEffort=high`
+   On Opus:
+   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
+   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. High: `--option builderEffort=project`, or `--option builderEffort=low`, `medium`; Maximum: `max`.
+   Ask "Fixer": Opus high every round (recommended) | Same as Builder, then Opus high | Builder's model every round
+   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
+   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=builder --option fixerFirstEffort=builder`
    - Builder's model every round: no switch; every fix pass runs as the Builder was launched. `--option fixerEnabled=false`
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`

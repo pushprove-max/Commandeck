@@ -88,7 +88,7 @@ check "pp_rm_rf removes a plain folder, a file, and a file in a checkout's work 
   "$(rmrf "$T/junk" "$T/junk-file" "$V/nest/proj/.claude/metrics/decisions.jsonl") $([ -e "$T/junk" ] || [ -e "$T/junk-file" ] || [ -e "$V/nest/proj/.claude/metrics/decisions.jsonl" ] || echo gone)"
 # Every other raw rm -rf removes a folder its own script made with mktemp; a new one is read here before it ships.
 check "only the scripts that remove their own mktemp folder use a raw rm -rf" \
-  "scripts/hook-probe.sh scripts/paths.sh scripts/proof-run.sh scripts/red-proof.sh scripts/run-shell-tests.sh scripts/startup-size.sh scripts/update.sh" \
+  "scripts/hook-probe.sh scripts/paths.sh scripts/proof-run.sh scripts/run-shell-tests.sh scripts/startup-size.sh scripts/update.sh" \
   "$(cd "$REAL" && grep -lE 'rm -(rf|fr|r) ' hooks/*.sh hooks/lib/*.sh scripts/*.sh | while read -r f; do grep -E 'rm -(rf|fr|r) ' "$f" | grep -qv 'pp_rm_rf\|^[[:space:]]*#\|warn "running state' && echo "$f"; done | sort | paste -sd' ' -)"
 
 # COMMANDECK_MAIN is kept as given and a worktrees folder loses only a trailing / or /., so each compare

@@ -6,7 +6,7 @@
 # "If code can answer, code answers" is a standing rule with nothing behind
 # it. The waste it names is never one big read; it is the sixth, tenth and
 # fortieth file of the same shape opened to compute one aggregate -- which
-# unit has a GO, how many rows failed, which briefs carry a mutation line.
+# unit has a GO, how many rows failed, which briefs carry a deferred line.
 # Every one of those reads is individually reasonable, so no per-call gate can
 # see the waste. Only the running count can.
 #

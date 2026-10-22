@@ -23,17 +23,17 @@ conf() { jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {opti
 echo '{"version": 1, "profile": "claude"}' > "$P"; echo '{}' > "$S"
 
 check "boolean: with no answer anywhere, the reader's old default" "false|default" "$(O ponytail)"
-check "picker: with no answer anywhere, the routing file's own, as the doctor shows it" "medium|default" "$(O builderEffort)"
+check "picker: with no answer anywhere, the routing file's own, as the doctor shows it" "high|default" "$(O builderEffort)"
 check "number: with no answer anywhere, none (setup's first free port)" "|default" "$(O dashboardPort)"
 check "another plugin's options are never read" "false|default" "$(conf '{}'; O ponytail)"
 
 # The format 0.21.0 deployed: the answers in the project file, the dashboard's in the machine file.
-jq '. + {ponytail: true, builder: {effort: "high"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
+jq '. + {ponytail: true, builder: {effort: "medium"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
 check "boolean: the project's saved answer, with no /config one" "true|$P" "$(O ponytail)"
 # A role key (issue 312) reads no answer from the project's file: builder.effort there is an older setup's, not read.
-check "picker: a role key's project answer is not read, routing's own runs" "medium|default" "$(O builderEffort)"
+check "picker: a role key's project answer is not read, routing's own runs" "high|default" "$(O builderEffort)"
 check "number: the machine's saved port, with no /config one" "8795|$M" "$(O dashboardPort)"
-check "and the Builder's launch takes routing's effort, not the project's" medium "$(L 'pp_route_json builder | jq -r .effort')"
+check "and the Builder's launch takes routing's effort, not the project's" high "$(L 'pp_route_json builder | jq -r .effort')"
 
 conf '{"ponytail": false, "builderEffort": "low", "dashboardPort": 8800}'
 check "boolean: a /config false beats the project's true" "false|/config" "$(O ponytail)"
@@ -43,7 +43,7 @@ check "the Builder's launch takes the /config effort" low "$(L 'pp_route_json bu
 # Issue 293: the model and effort pickers default to "project", which /config's dialog may save untouched; it is no
 # answer, so routing's own runs.
 conf '{"builderEffort": "project"}'
-check "picker: a /config 'project' is no answer, routing's own runs" "medium|default" "$(O builderEffort)"
+check "picker: a /config 'project' is no answer, routing's own runs" "high|default" "$(O builderEffort)"
 conf '{"builderEffort": "low", "dashboardPort": 8800}'
 check "a CLAUDE_CONFIG_DIR's settings file is the one read" "8795|machine" \
   "$(mkdir -p "$T/cd" && echo '{}' > "$T/cd/settings.json" && L "export CLAUDE_CONFIG_DIR=$T/cd"'; echo "$(pp_option dashboardPort)|$(pp_option dashboardPort source)"' | sed "s#|$M#|machine#")"

@@ -49,11 +49,11 @@ while IFS='|' read -r k d a; do
   [ "$a" != - ] || { check "option $k, which setup does not ask, has no default" "$d" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M")"; continue; }
   check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k] | if has("default") then .default else "none" end' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
 done <<'EOF'
-builderModel|"project"|Ask "Builder model": Opus
-builderEffort|"project"|Ask "Builder effort": Medium
-orchestratorEffort|"project"|Ask "Main": Opus, default effort
-fixerEnabled|true|Ask "Fixer": Same as Builder, then Opus high
-fixerFirstModel|"project"|Ask "Fixer": Same as Builder, then Opus high
+builderModel|"project"|Ask "Builder model": Sonnet
+builderEffort|"project"|Ask "Builder effort": High
+orchestratorEffort|"project"|Ask "Main": Opus medium
+fixerEnabled|true|Ask "Fixer": Opus high every round
+fixerFirstModel|"project"|Ask "Fixer": Opus high every round
 codexReviewerModel|"project"|Ask "Reviewer model": Sol medium
 planAuthorEnabled|true|Ask "Plan author": Opus high
 planJudgeSolEnabled|true|Ask "Sol judge": Codex high
@@ -81,10 +81,11 @@ check "wake options: an empty or unknown kinds list and a window that is not who
   "$(wopt '{"wakeKinds":"","wakeWindowSeconds":"soon"}'):$(wopt '{"wakeKinds":"bogus","wakeWindowSeconds":-5}')"
 check "wake options: an answer is read, spaces dropped, and a window of 0 kept" "question,status 0" "$(wopt '{"wakeKinds":"question, status","wakeWindowSeconds":0}')"
 # Issue 293: a Sonnet Builder ran at medium because setup recommended Medium whatever the model, and asked it three
-# questions later. The effort is asked right after the model, High recommended on Sonnet; the model and effort
-# options default to "project", no answer, which the /config dialog may save without hiding the project's answer.
-check "setup asks the Builder effort right after the model, High recommended on Sonnet" '1:1' \
-  "$(awk '/Ask "Builder model":/ {m = 1; next} m && /^ +Ask / {print ($0 ~ /Ask "Builder effort": Medium \(recommended\)/); exit}' "$REAL/skills/setup/SKILL.md"):$(grep -A1 -x '   On Sonnet:' "$REAL/skills/setup/SKILL.md" | grep -cxF '   Ask "Builder effort": High (recommended) | Low | Medium | Maximum')"
+# questions later. The effort is asked right after the model, High recommended on Sonnet (the default model), Medium on
+# Opus; the model and effort options default to "project", no answer, which the /config dialog may save without hiding
+# the project's answer.
+check "setup asks the Builder effort right after the model, High recommended on Sonnet and Medium on Opus" '1:1' \
+  "$(awk '/Ask "Builder model":/ {m = 1; next} m && /^ +Ask / {print ($0 ~ /Ask "Builder effort": High \(recommended\)/); exit}' "$REAL/skills/setup/SKILL.md"):$(grep -A1 -x '   On Opus:' "$REAL/skills/setup/SKILL.md" | grep -cxF '   Ask "Builder effort": Medium (recommended) | Low | High | Maximum')"
 # claude plugin validate refuses a picker with no default among its options.
 check "every picker's labels are 1 to 64 characters and hold its default" true \
   "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and any($o.options[]; . == $o.default)] | all' "$M")"
@@ -108,9 +109,10 @@ for n in setup update uninstall handoff worktreereview; do
 done
 # Issue 203: a helper answers by its 20th tool call and names what it did not find, and every helper prompt carries
 # those caps and reuses an earlier helper's file:line pointers. A Builder waiting on its own run keeps its cache warm on
-# a Signal WARM line, and a worker's ask fits under the prompt cache (issue 214).
+# a Signal WARM line, and a worker's ask and its wait for main's answer to an owner question each fit under the prompt
+# cache (issue 214).
 BT=$REAL/templates/_builder-brief-template.md
-check "the Builder template carries the helper caps, the reuse rule, the WARM reply and the 240 s ask" "1 1 1 1 1" \
+check "the Builder template carries the helper caps, the reuse rule, the WARM reply, the 240 s ask and the 240 s owner-answer wait" "1 1 1 1 2" \
   "$(for p in '20th tool call' 'NOT FOUND: <what' 'already answered part of it' 'Signal WARM' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
 # A helper is a built-in type (Explore or general-purpose): a plugin agent folder would be one more set of agents to keep.
 check "the plugin ships no agents/ folder" no "$([ -e "$REAL/agents" ] && echo yes || echo no)"

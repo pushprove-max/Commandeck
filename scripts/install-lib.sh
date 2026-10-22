@@ -450,13 +450,14 @@ il_plugin_options() {
 }
 # il_main_model <manifest> <settings file> [off] -- main's model and effort: the orchestratorModel and
 # orchestratorEffort keys, as that file's model and effortLevel. The value each replaced is kept (mainModelWas). An
-# unset key writes nothing, and a value setup wrote earlier that nobody changed since goes back to the kept one; off
-# (uninstall) puts back every such value.
+# unset effort key writes routing's orchestrator effort (medium), an unset model key nothing, and a value setup wrote
+# earlier that nobody changed since goes back to the kept one; off (uninstall) puts back every such value.
 il_main_model() {
   local m=$1 f=$2 doc r s='{}' w
   doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   r=$(jq -c --arg p "$f" '.entries[$p] | {set: (.mainModel // {}), was: (.mainModelWas // {})}' "$m" 2>/dev/null) || r='{"set":{},"was":{}}'
-  [ "${3:-}" = off ] || s=$(jq -cn --arg mo "$(pp_role_option orchestrator model 2>/dev/null)" --arg ef "$(pp_role_option orchestrator effort 2>/dev/null)" \
+  [ "${3:-}" = off ] || s=$(jq -cn --arg mo "$(pp_role_option orchestrator model 2>/dev/null)" \
+    --arg ef "$(pp_route_json orchestrator 2>/dev/null | jq -r '.effort // empty')" \
     '{model: $mo, effortLevel: $ef} | with_entries(select(.value != ""))')
   [ "$(jq -c .set <<<"$r")$s" != '{}{}' ] || return 0
   # Back to the kept value where setup's still stands; then each value s replaces is the one now kept.

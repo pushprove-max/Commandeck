@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -17,21 +17,21 @@
     "orchestratorEffort": {
       "type": "string",
       "title": "Main effort",
-      "description": "Main's reasoning effort; setup writes it to the project's settings. project: Claude Code's default.",
+      "description": "Main's reasoning effort; setup writes it to the project's settings. project: medium.",
       "options": ["project", "low", "medium", "high", "xhigh", "max"],
       "default": "project"
     },
     "builderModel": {
       "type": "string",
       "title": "Builder model",
-      "description": "The model each Builder runs. project: Opus. A Builder cannot be off: with none there is no branch to review or merge.",
+      "description": "The model each Builder runs. project: Sonnet. A Builder cannot be off: with none there is no branch to review or merge.",
       "options": ["project", "opus", "sonnet", "fable"],
       "default": "project"
     },
     "builderEffort": {
       "type": "string",
       "title": "Builder effort",
-      "description": "The Builder's reasoning effort. project: medium. A launch may raise it for one build.",
+      "description": "The Builder's reasoning effort. project: high. A launch may raise it for one build.",
       "options": ["project", "low", "medium", "high", "max"],
       "default": "project"
     },
@@ -44,14 +44,14 @@
     "fixerFirstModel": {
       "type": "string",
       "title": "Fixer model, first fix round",
-      "description": "The model of a build's first fix round. project or builder: the Builder's launched model.",
+      "description": "The model of a build's first fix round. project: Opus. builder: the Builder's launched model.",
       "options": ["project", "builder", "opus", "sonnet", "fable"],
       "default": "project"
     },
     "fixerFirstEffort": {
       "type": "string",
       "title": "Fixer effort, first fix round",
-      "description": "The effort of a build's first fix round. project or builder: the Builder's launched effort, a per-build raise included.",
+      "description": "The effort of a build's first fix round. project: high. builder: the Builder's launched effort, a per-build raise included.",
       "options": ["project", "builder", "low", "medium", "high", "xhigh", "max"],
       "default": "project"
     },

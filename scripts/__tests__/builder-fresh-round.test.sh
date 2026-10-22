@@ -94,13 +94,14 @@ fr() { rm -f "$T/sends"; printf 'handle=term_x\nunit=u9\nrole=builder\ncmd=expor
 newbuild() { rm -f "$BR"/*-fix-r*.md; }
 TS="title:Builder — u9,Your task spec"
 fr u9-fix-r1.md sonnet high
-check "first NO-GO on a build: the fixer keeps the Builder's launched model and effort, a raised Sonnet high Builder included, and the record says fixer=first:builder" \
-  "/clear,$TS|model=sonnet effort=high fixer=first:builder" "$SEQ|$NEWREC"
+check "first NO-GO on a build: routing's fixer first moves a Sonnet high Builder to Opus high, and the record says fixer=first:routing" \
+  "/clear,/model opus,$TS|model=opus effort=high fixer=first:routing" "$SEQ|$NEWREC"
 fr u9-fix-r2.md sonnet medium
 check "second NO-GO on the same build: the fixer types /model opus and /effort high; the record says model=opus effort=high fixer=later:routing" \
   "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing" "$SEQ|$NEWREC"
-newbuild; opts '{"fixerFirstModel": "opus"}'; fr u9-fix-r1.md sonnet high
-check "a /plugin override wins on the first pass: fixerFirstModel=opus" "/clear,/model opus,$TS|model=opus effort=high fixer=first:config" "$SEQ|$NEWREC"
+newbuild; opts '{"fixerFirstModel": "builder", "fixerFirstEffort": "builder"}'; fr u9-fix-r1.md sonnet high
+check "a /plugin override wins on the first pass: fixerFirstModel=builder keeps the Builder's launched model and effort, a raised Sonnet high Builder included" \
+  "/clear,$TS|model=sonnet effort=high fixer=first:config" "$SEQ|$NEWREC"
 opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'; fr u9-fix-r2.md opus high
 check "a /plugin override wins on the second pass: fixerModel=sonnet fixerEffort=medium" \
   "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=later:config" "$SEQ|$NEWREC"
@@ -116,7 +117,7 @@ check "a value the key does not take stops the hand-off naming the key, nothing 
 opts '{}'; rm -f "$BR/u9-fix-r4.md"
 # A new unit's first fix hand-off is its first, whatever its pass number and whatever another unit's files hold.
 BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r3.md sonnet medium; BR=$OBR
-check "a new unit's first fix round counts as first" "fixer=first:builder" "$(grep '^fixer=' "$T/rec")"
+check "a new unit's first fix round counts as first" "fixer=first:routing" "$(grep '^fixer=' "$T/rec")"
 # The filename guard: with two fix files there and a fixer that would switch, a GO continuation and added work switch nothing.
 newbuild; echo x > "$BR/u9-fix-r1.md"; echo x > "$BR/u9-fix-r2.md"; opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'
 fr u9-after-r3.md opus high
@@ -125,7 +126,7 @@ check "two fix files, an Opus high pane, fixerModel=sonnet fixerEffort=medium: a
 fr u9-added-19990101-000000.md opus high
 check "and an added-work hand-off types nothing and leaves the record unchanged" "/clear,$TS|" "$SEQ|$NEWREC"
 opts '{}'; newbuild
-touch "$T/no-title"; fr u9-fix-r1.md opus medium; rm -f "$T/no-title"
+touch "$T/no-title"; fr u9-fix-r1.md opus high; rm -f "$T/no-title"
 check "an Orca without set-pane-title: the hand-off still goes through" "0 /clear,Your task spec" "$R $SEQ"
 wait
 check "no hand-off of this file is left running" 0 "$(pgrep -f "$T/" | wc -l | tr -d ' ')"

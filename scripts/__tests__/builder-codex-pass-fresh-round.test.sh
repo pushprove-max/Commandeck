@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # builder-codex-pass.sh: the owner's extra rounds for one unit with no edit to the tracked settings file; --check
-# runs the launch's evidence check and nothing else; and after a NO-GO pass from the Builder's own pane the fix
+# runs the launch's checks and nothing else; and after a NO-GO pass from the Builder's own pane the fix
 # round starts in a fresh session from a hand-off file that stands alone, or main hears why it did not.
 # The fixture is the one builder-codex-pass.test.sh uses.
 set -uo pipefail
@@ -36,10 +36,8 @@ printf 'it()\n' > "$W/x.guard.test.ts"; : > "$TMP/probe"; HEAD7=$(git -C "$W" re
 chk() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" 7 review >"$TMP/out" 2>"$TMP/err"); echo $?; }
 untouched() { [ "$(git -C "$W" rev-parse HEAD)" = "$HEAD7" ] && [ -z "$(git -C "$W" diff --cached --name-only)" ] && [ ! -e "$B/$U-r7-reports.md" ] \
   && [ ! -s "$TMP/probe" ] && [ ! -e "$L" ] && echo untouched; }
-check "--check on an evidence file without the line: it names the line, exits 2, and nothing was staged, committed, locked or sent to Codex" "2 1 untouched" \
-  "$(chk) $(grep -c 'Mutation-verified: <what you broke' "$TMP/err") $(untouched)"
-echo 'Mutation-verified: emptied the guard test; it went red' >> "$B/$U-evidence.md"
-check "--check on a complete evidence file passes, and still stages, commits, locks and runs nothing" "0 1 untouched" \
+# Issue 323: red proofs are retired, so a new guard-class test with no Mutation-verified: line in the evidence passes.
+check "--check with a new guard test and no mutation line passes, and stages, commits, locks and runs nothing" "0 1 untouched" \
   "$(chk) $(grep -c '^check ok: ' "$TMP/out") $(untouched)"
 mkdir -p "$W/x/__tests__"; echo t > "$W/x/__tests__/y.test.sh"
 printf '## 1. RULING-PROBE: keep the probe\n' > "$REPO/.claude/briefs/$U-main-rulings.md"
@@ -58,8 +56,8 @@ check "the hand-off stands alone: brief, evidence, the findings, main's rulings 
 # time. The findings say what to fix; the brief stays reachable by path for the finding that needs it.
 check "the hand-off does not order the brief or the evidence file read whole at start; both stay reachable by path" "0 0 1 1" \
   "$(grep -ci 'read the brief whole' "$H7") $(grep -ci 'read the evidence file whole' "$H7") $(grep -c "Open it only when a finding needs it: $B/$U.md\$" "$H7") $(grep -c "update it before the next pass: $B/$U-evidence.md\$" "$H7")"
-check "the launch after a passing --check is not refused: the guard test is committed with its note" "1 1" \
-  "$(git -C "$W" log -1 --format=%B | grep -c '^Mutation-verified: ') $(git -C "$W" ls-files x.guard.test.ts | wc -l | tr -d ' ')"
+check "the launch after a passing --check is not refused: the guard test is committed with no mutation note" "0 1" \
+  "$(git -C "$W" log -1 --format=%B | grep -c 'Mutation-verified') $(git -C "$W" ls-files x.guard.test.ts | wc -l | tr -d ' ')"
 helper_done 7
 check "the pane is waited idle, cleared, then handed the file" "terminal wait,--text /clear,terminal wait,Your task spec is the file" \
   "$(grep -oE 'terminal wait|--text /clear|Your task spec is the file' "$TMP/frs-calls" | uniq | paste -sd, -)"

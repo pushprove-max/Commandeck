@@ -73,8 +73,8 @@ send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing 
 idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
 # Issue 313, the fixer: /clear keeps the model and effort the pane opened with. Only a fix hand-off
 # (<unit>-fix-r<N>.md) switches anything, and its count is that unit's fix hand-offs in the folder (not N, the pass
-# number), so it resets per build. The first runs on fixer first (builder: as the Builder launched, a per-build
-# raise included), every later one on fixer's model and effort (Opus high); /plugin config keys beat routing's.
+# number), so it resets per build. The first runs on fixer first, every later one on fixer's model and effort (both
+# Opus high; builder: as the Builder launched, a per-build raise included); /plugin config keys beat routing's.
 # fixerEnabled=false keeps the Builder's launched model and effort, switching back a pane an earlier round moved. Each
 # switch is typed only where the pane differs, and the record says the rule.
 if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]; then
@@ -91,8 +91,7 @@ if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]
   CM=$(sed -n 's/^model=//p' "$REC" | tail -1); [ -n "$CM" ] || CM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   CE=$(sed -n 's/^effort=//p' "$REC" | tail -1); [ -n "$CE" ] || CE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   if [ "$EN" = false ]; then RULE=off WM=builder WE=builder
-  elif [ "$K" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:builder
-    [ "$SRC" != config ] || RULE=first:config
+  elif [ "$K" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:$SRC
   else pick WM model .roles.fixer.model; pick WE effort .roles.fixer.effort; RULE=later:$SRC; fi
   # builder: the Builder's launched model or effort, which the pane keeps.
   [ "$WM" != builder ] || WM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)

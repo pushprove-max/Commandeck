@@ -21,7 +21,6 @@ check "a poll on test output goes to run_in_background, a blocking wait to wait-
 check "a refused merge or main's word lifts the no-change rule (#93)" "The rule is lifted when the merge refuses the branch or main tells you to change something"
 check "an answer after the done marker is still read (#93)" "An answer from main that arrives after it is still yours: read it and act on it."
 check "a file that times out twice is one question to main, not a third run" "a second timeout is one question to main"
-check "a red proof goes through red-proof.sh, never a hand-broken tree" "/red-proof.sh <file> <line> <replacement> -- <test"
 check "a main-only finding goes under the deferred heading every later pass reads" "goes as one line under \`## Main-only (deferred)\` in the evidence file"
 check "a test result carries the machine's load and time beside it" "\`bash -c '. {scripts}/host-services.sh && hs_stamp'\` prints it with the time"
 check "a fix-round session starts from its hand-off and opens the brief only when a finding needs it" "A fix-round session starts from its hand-off alone, and opens this brief and the evidence file only when a finding needs them."
@@ -49,6 +48,12 @@ check "and that review is the closing pass whose GO merges" 'is the closing pass
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
 check "main's class rule: one retry path, tested state by state" "$RETRY"
 BODY=$SAVED
+# Issue 323 (owner's merge rule, 2026-10-22): a P2/P3 left open at merge shipped known bugs, so every finding blocks.
+check "every finding, P0 to P3, blocks the merge, and only a GO naming no finding closes" "Every finding, P0 to P3, blocks the merge"
+check "no finding is left open at merge" "There is no narrowed-pass exit and no finding left open at merge."
+# The cache-budget hook refuses a foreground wait over 270 s, so the owner-answer wait is 240 s waits, resumed.
+check "the owner-answer wait fits the cache budget: 240 s waits resumed up to 9 minutes" "\`check --wait --timeout-ms 240000\`, resumed until 9 minutes in all"
+if grep -qi 'P2/P3 only' "$T"; then FAIL=$((FAIL+1)); echo "FAIL the template still lets a P2/P3-only pass merge"; else PASS=$((PASS+1)); echo "ok   no P2/P3-only exit"; fi
 # Issues 254 and 255: the gate merges a unit unless main holds it, and main's post-merge lines go under the last
 # heading, which the merge reads to the end: the template's own section is empty. Issue 306 R10: no rung line.
 check "the template names the hold line the merge gate reads" "unless main adds a line \`Merge: hold\` to this brief"
@@ -66,5 +71,11 @@ check "a 'leave as is' ruling under the heading main's rules name is the limit t
 # The plugin's own test rules carry the same rule.
 BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/templates/*}/CONTRIBUTING.md" | sed -E 's/ +/ /g')
 check "the contributor test rules forbid a new end-to-end test" "No test installs or uninstalls the plugin, or runs \`setup.sh\` or \`uninstall.sh\` whole"
+# Issue 323: red proofs are retired. A template line still ordering one kept Builders running red-proof batches,
+# and a pass or merge that wants a Mutation-verified: line refuses commits Builders no longer write.
+R=${T%/templates/*}
+LEFT=$(cd "$R" && grep -l -i -E 'red[- ]proof|Mutation-verified|mutation[- ]note' templates/* hooks/*.sh scripts/*.sh 2>/dev/null | paste -sd' ' -)
+if [ -z "$LEFT" ]; then PASS=$((PASS+1)); echo "ok   no template, prompt, pass or merge check mentions red proofs or a mutation line (issue 323)"
+else FAIL=$((FAIL+1)); echo "FAIL red proofs or a mutation line still in: $LEFT"; fi
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

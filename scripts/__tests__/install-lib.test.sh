@@ -457,16 +457,17 @@ check "a key /plugin config does not list is refused" 1 "$(setup_keys '' '{"lean
 rm -f "$H/.claude/settings.json"; rm -r "$PROJ/.claude"
 
 # Issue 312: main's model and effort keys go into main's settings file over the owner's own values, which come back
-# when the keys are unset again or the plugin is uninstalled; a value the owner changed since stays theirs.
-MS=$T/main-settings.json; echo '{"model": "sonnet", "effortLevel": "medium", "x": 1}' > "$MS"; OWN='{"effortLevel":"medium","model":"sonnet","x":1}'
+# when the keys are unset again or the plugin is uninstalled; a value the owner changed since stays theirs. With no
+# effort key main runs routing's orchestrator effort, medium.
+MS=$T/main-settings.json; echo '{"model": "sonnet", "effortLevel": "low", "x": 1}' > "$MS"; OWN='{"effortLevel":"low","model":"sonnet","x":1}'
 # mm <keys> [off] -- setup's (or uninstall's) call, the file recorded in the project's manifest first as setup records it.
 mm() { COMMANDECK_OPTIONS=$1 lib 'il_record "$IL_PROJECT" merge "$1" && il_main_model "$IL_PROJECT" "$1" $2' "$MS" "${2:-}"; jq -c '{model, effortLevel}' "$MS"; }
 KEYS='{"orchestratorModel": "opus", "orchestratorEffort": "high"}'
 check "main model: the keys replace the owner's model and effort, a rerun too" '{"model":"opus","effortLevel":"high"}' "$(mm "$KEYS" >/dev/null; mm "$KEYS")"
-check "main model: the keys unset again put the owner's values back" "$OWN" "$(mm '{}' >/dev/null; jq -cS . "$MS")"
+check "main model: the keys unset again put the owner's model back, and the effort goes to routing's medium" '{"effortLevel":"medium","model":"sonnet","x":1}' "$(mm '{}' >/dev/null; jq -cS . "$MS")"
 check "main model: uninstall puts the owner's values back" "$OWN" "$(mm "$KEYS" >/dev/null; mm '{}' off >/dev/null; jq -cS . "$MS")"
-mm "$KEYS" >/dev/null; jq '.effortLevel = "low"' "$MS" > "$T/x" && mv "$T/x" "$MS"
-check "main model: uninstall leaves an effort the owner changed since, and puts back the model" '{"model":"sonnet","effortLevel":"low"}' "$(mm '{}' off)"
+mm "$KEYS" >/dev/null; jq '.effortLevel = "max"' "$MS" > "$T/x" && mv "$T/x" "$MS"
+check "main model: uninstall leaves an effort the owner changed since, and puts back the model" '{"model":"sonnet","effortLevel":"max"}' "$(mm '{}' off)"
 
 # --- issue 207: a wrapper that already calls the stable link is no question, even before setup re-points the link ---
 H2=$T/h2; mkdir -p "$H2/.codex" "$H2/.commandeck" "$T/v1/hooks"; echo old > "$T/v1/hooks/codex-notify.sh"; ln -s "$T/v1" "$H2/.commandeck/plugin"
