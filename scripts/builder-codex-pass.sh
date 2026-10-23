@@ -826,6 +826,7 @@ fi
 # load one try can fail, so three tries, COMMANDECK_PROBE_BACKOFF (15 s) then
 # twice that apart. --ephemeral leaves no session for the pass's search to find.
 if [ "$BY" = codex ]; then
+  pp_codex_retrust  # issue 315: a hook a tool update changed since the last launch is trusted again before Codex starts
   PROBE_ERR=$(mktemp) || die "cannot make a temp file for the Codex sign-in check"
   TRY=0 PROBE_OK=0
   while [ "$TRY" -lt 3 ]; do
@@ -1020,6 +1021,7 @@ else
   TIER=default; ! pp_codex_fast || TIER=
   BROKER=${COMPANION%/*}/app-server-broker.mjs
   [ -f "$BROKER" ] || die "no Codex plugin broker beside $COMPANION"
+  pp_codex_retrust  # the probe above may be minutes old
   for i in "${!FOCI[@]}"; do
     K=$((i + 1))
     PATH="$HERE/codex-no-helpers:$PATH" COMMANDECK_CODEX_TIER=$TIER node "$BROKER" serve --endpoint "unix:$SOCKS/$K.sock" --cwd "$WT" > "$SOCKS/$K.log" 2>&1 &

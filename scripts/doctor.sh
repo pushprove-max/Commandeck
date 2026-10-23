@@ -128,8 +128,8 @@ if [ "$PROFILE" = claude-openai ]; then
   N=$(il_codex_count "$IL_ROOT") ALL=$(il_codex_count)
   if [ "$N" = 5 ] && [ "$ALL" = 5 ]; then ok "codex hooks: five entries in $IL_CODEX/hooks.json run this plugin"
   else bad "codex hooks: $N of 5 entries in $IL_CODEX/hooks.json run $IL_ROOT ($ALL of the plugin's in all); run: bash $(printf '%q' "$HERE")/update.sh"; fi
-  if ERR=$(python3 "$HERE/codex-hook-trust.py" --check "$IL_CODEX" 2>&1); then ok "codex trust"
-  else bad "codex trust: $(grep -c 'not trusted' <<<"$ERR") of the plugin's entries are not trusted, and each Codex pane would open on the review menu; run: bash $(printf '%q' "$HERE")/update.sh"; fi
+  L=$(il_codex_trust_report)
+  if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else bad "${L#bad }"; fi
   L=$(il_notify_report)
   if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi
 fi

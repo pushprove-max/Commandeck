@@ -1,38 +1,17 @@
 #!/usr/bin/env bash
 # doctor.sh is what an owner runs when something seems off: each way Codex's one notify command can miss the plugin
-# is named with its own line and the fix, and its startup measure takes nothing of the owner's or main's. Codex
+# is named with its own line and the fix. Codex
 # takes a single notify command, so an owner with another notify tool runs a wrapper that calls both; a wrapper
 # that kept an old version's path went on calling a stale hook through several updates. The wrapper is the owner's
 # file: it changes only on a yes. Each case calls the check the doctor prints, or the repoint setup runs, on a
-# hand-written config.toml (no setup or uninstall run), so this runs in seconds.
+# hand-written config.toml (no setup or uninstall run), so this runs in seconds. The option lines are in
+# doctor-options.test.sh, the startup measure and the whole run in doctor-run.test.sh; the setup all three share is
+# fixtures/doctor-setup.sh.
 set -uo pipefail
-REAL=$(cd "$(dirname "$0")/../.." && pwd -P)   # -P: as install-lib.sh's IL_ROOT, or a checkout under a link fails the first check
-T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
-PASS=0 FAIL=0
-check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
-export HOME=$T/home
-PROJ=$T/proj BIN=$T/bin CFG=$T/home/.codex/config.toml LINK=$T/home/.commandeck/plugin/hooks/codex-notify.sh
-mkdir -p "$HOME/.codex" "$HOME/.commandeck" "$BIN" && ln -s "$REAL" "$HOME/.commandeck/plugin"
-git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
-mkdir -p "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"
-printf '#!/usr/bin/env bash\necho "{\\"ok\\":true,\\"result\\":{}}"\n' > "$BIN/orca-ide"; chmod +x "$BIN/orca-ide"
-printf 'notify = ["%s/hooks/codex-notify.sh"]\nmodel = "other"\n' "$REAL" > "$CFG"
-in_proj() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_HOST_OS=Linux "$@"); }
-# lib <shell> [args] -- the shell runs with install-lib.sh loaded and the args as "$1"...
-lib() { in_proj bash -c '. "$0/paths.sh" && . "$0/install-lib.sh" && c=$1 && shift && eval "$c"' "$REAL/scripts" "$@" 2>&1; }
+. "$(dirname "$0")/fixtures/doctor-setup.sh"
 # report -- the notify check doctor.sh prints, called by itself ("ok ..." or "warn ...").
 report() { lib il_notify_report; }
 check "the direct notify line passes, and says which case" 1 "$(report | grep -c "^ok codex notify: the line calls this plugin's hook$")"
-
-# --- the doctor's startup measure takes nothing of the owner's or main's ---
-# A message queued for main while it is down is main's to read; an open decision is the owner's to answer.
-QD=$(in_proj bash -c '. "$0" && echo "$PP_SCRATCH/queue"' "$REAL/scripts/paths.sh")
-mkdir -p "$QD" && echo '{"at":"x","type":"status","subject":"answer","body":"stop this build"}' > "$QD/main.jsonl"
-in_proj bash "$REAL/scripts/decision.sh" add doctor-test 'May this build ship?' no chat >/dev/null 2>&1
-in_proj bash "$REAL/scripts/startup-size.sh" >/dev/null 2>&1; in_proj bash "$REAL/scripts/startup-size.sh" --per-prompt >/dev/null 2>&1
-check "the doctor's startup measure leaves the owner's open decision open" null \
-  "$(in_proj bash "$REAL/scripts/decision.sh" list 2>/dev/null | jq '.[] | select(.id == "doctor-test") | .answeredAt')"
-check "and main's queued messages where they are" 1 "$(grep -c 'stop this build' "$QD/main.jsonl" 2>/dev/null)"
 
 # notify <script body> -- Codex's notify is the owner's wrapper with this body; the doctor's notify line.
 notify() {
@@ -135,11 +114,9 @@ echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.j
 echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
 echo '{"permissions":{"allow":[]}}' > "$PROJ/.claude/settings.local.json"
-cache() { COMMANDECK_WORKSPACES=$T/ws lib il_cache_ttl_report; }
 OUT=$(cache)
 check "the relay's own 1h beats the user's 5m: one ok line and no warn" '1:0' "$(grep -c '^ok prompt cache' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.local.json"
-shadow() { lib il_shadow_report; }
 OUT=$({ cache; shadow; })
 check "a TTL in the main checkout's local file warns, naming the file, and the relay then runs 5m" '1:1' \
   "$(grep -c "^warn prompt cache: $PROJ/.claude/settings.local.json sets CLAUDE_CODE_PROMPT_CACHE_TTL=5m" <<<"$OUT"):$(grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose' <<<"$OUT")"
@@ -200,32 +177,18 @@ mv "$T/away.gone" "$T/away" && git -C "$PROJ" worktree remove --force "$T/away"
 rm -f "$PROJ/.claude/settings.local.json"
 check "no local file: nothing shadowed" 1 "$(shadow | grep -c '^ok settings')"
 
-# --- issue 245: each /config option, its value and where that comes from, so an owner sees which answer runs ---
-echo '{"version": 1, "profile": "claude", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
-OUT=$(lib il_options_report)
-check "the doctor names each option's value and source: /config, the project's file, or the default" '1:1:1' \
-  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option promptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option maxReviewRounds: none (from the default)$' <<<"$OUT")"
-check "one line for each option the manifest declares" "$(jq '.userConfig | length' "$REAL/.claude-plugin/plugin.json")" "$(grep -c '^ok option ' <<<"$OUT")"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
-check "the cache report follows the /config answers over the project's" 1 "$(cache | grep -c '^ok prompt cache: setup sets none$')"
-# Issue 293: the Builder line names where each value comes from, so a launch below the expected effort is traced.
-# Issue 312: a builder.model an older setup left in the project's file is not read; the key or routing's default runs.
-jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
-check "the doctor's Builder line names the model's source and the effort's, and reads no builder.model from the project's file" 1 \
-  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | tee "$T/doc" | grep -cxF "ok   builder: sonnet (from the default), effort high (from /config); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config")"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"orchestratorModel": "opus", "orchestratorEffort": "high"}}}}' > "$HOME/.claude/settings.json"
-echo '{"model": "opus", "effortLevel": "medium"}' > "$PROJ/.claude/settings.local.json"
-check "main's settings file differing from the orchestrator key is flagged, the matching one is not" "1 0" \
-  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 > "$T/doc"; grep -c 'main: orchestratorEffort is high in /plugin config, but .* sets medium' "$T/doc") $(grep -c 'main: orchestratorModel' "$T/doc")"
-rm -f "$PROJ/.claude/settings.local.json"
-# The review pass the doctor checks runs on the reviewer's agent key, not the profile: a claude-profile project with
-# codexReviewerAgent=codex checks the Codex pass, and is not failed for a mismatch.
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"codexReviewerAgent": "codex", "codexReviewerModel": "gpt-6.1-sol"}}}}' > "$HOME/.claude/settings.json"
-check "the doctor checks the review pass on the reviewer's agent key, not the profile's" "1 0" \
-  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 > "$T/doc"; grep -c 'review pass' "$T/doc") $(grep -c 'puts the reviewer on' "$T/doc")"
-rm -f "$HOME/.claude/settings.json"
+# Issue 315: a hook another tool rewrote drops out of trust and opens every Codex pane on the review menu, so the
+# trust line covers every entry in the Codex home, not the plugin's alone, and names the modified one.
+: > "$CFG"; HJ=$HOME/.codex/hooks.json
+echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/opt/other/start.sh"}]}]}}' > "$HJ"
+python3 "$REAL/scripts/codex-hook-trust.py" --all "$HOME/.codex" >/dev/null
+check "trust line: a trusted third-party hook is ok" "ok codex trust: every hook in $HOME/.codex is trusted" "$(lib il_codex_trust_report)"
+echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/opt/other/start-v2.sh"}]}]}}' > "$HJ"
+TL=$(lib il_codex_trust_report)
+check "trust line: a modified non-plugin hook is flagged, named, and the fix says how to turn trust-all on" "1:1:1" \
+  "$(grep -c '^bad codex trust: 1 hook(s)' <<<"$TL"):$(grep -c 'start-v2.sh) is modified' <<<"$TL"):$(grep -c -- '--trust-all-hooks on' <<<"$TL")"
+echo '{"version": 1, "profile": "claude-openai", "trustAllHooks": true}' > "$PROJ/.claude/commandeck.json"
+check "with trust-all on the fix says the next launch re-trusts" 1 "$(lib il_codex_trust_report | grep -c 'each Codex launch trusts them again')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

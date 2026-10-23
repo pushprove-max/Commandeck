@@ -7,7 +7,7 @@
 #          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]   (<tokens>: 140000, 140k)
 #          [--option <role key>=<value> ...] (a role's /plugin config key: builderModel=sonnet, planJudgeSolAgent=claude)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
+#          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
@@ -52,7 +52,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -117,7 +117,7 @@ BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clear
 # This run's --option answers, {key: value}: each is saved over the key's value.
 GIVEN='{}'
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
-FULL=$(old .fullSuiteBeforeFinal)
+FULL=$(old .fullSuiteBeforeFinal) TRUSTALL=$(old .trustAllHooks)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
@@ -220,6 +220,8 @@ while [ $# -gt 0 ]; do
     --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
     # The closing pass's full run of the test command (builder-codex-pass.sh), saved as fullSuiteBeforeFinal.
     --full-suite) case $2 in on) FULL=true ;; off) FULL=false ;; *) die "--full-suite takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    # Issue 315: on trusts every hook in the Codex home before each Codex launch; off keeps the plugin's own hooks only.
+    --trust-all-hooks) case $2 in on) TRUSTALL=true ;; off) TRUSTALL=false ;; *) die "--trust-all-hooks takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     # off is saved as the word: no build is small, so every first pass has three reviewers.
     --small-build) rl smallBuild "$2" '^(off|[1-9][0-9]*)$' "$1" "a whole number of changed lines, or off"; shift 2 ;;
     --max-review-min) rl maxReviewMinutes "$2" "$OFFNUM" "$1" "a number of minutes, or off"; shift 2 ;;
@@ -373,7 +375,7 @@ il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could n
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bc "$BCLEAR" --arg sz "$SIZING" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" '
+  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" --arg trustall "$TRUSTALL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $gen == null then {} else {generatedFiles: $gen} end)
@@ -387,6 +389,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
   + (if $full == "" then {} else {fullSuiteBeforeFinal: ($full == "true")} end)
+  + (if $trustall == "" then {} else {trustAllHooks: ($trustall == "true")} end)
   + $cuts
   + {chiefOfStaff: ({name: $name, persona: $persona, cacheTtl: $rcache} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
@@ -414,8 +417,13 @@ if [ "$PROFILE" = claude-openai ]; then
   il_codex_hooks "$IL_ROOT"
   il_notify "$IL_ROOT"
   il_notify_repoint "$IL_MACHINE" "$NWRAP"
-  if [ -n "$PLAN" ]; then echo "plan: would mark the plugin's Codex hooks trusted in $IL_CODEX/config.toml"
-  else python3 "$HERE/codex-hook-trust.py" "$IL_CODEX" >/dev/null; fi
+  # Issue 315: with trust-all on, every hook in the Codex home is trusted here and again before each Codex launch.
+  TA=; [ "$TRUSTALL" != true ] || TA=--all
+  if [ -n "$PLAN" ]; then
+    echo "plan: would mark the plugin's five Codex hooks trusted in $IL_CODEX/config.toml$([ -n "$TA" ] && echo ', and every other hook there (all listed):' || echo ' (trust-all is off: another tool'"'"'s hook stays the owner'"'"'s to review; setup.sh --trust-all-hooks on trusts it too). Hooks listed:')"
+    { python3 "$HERE/codex-hook-trust.py" --list ${TA:+"$TA"} "$IL_CODEX" || true; } | sed 's/^/plan:   /'
+  # A hook of a shape the script cannot hash is named on stderr; with trust-all it is another tool's, and setup goes on.
+  else python3 "$HERE/codex-hook-trust.py" ${TA:+"$TA"} "$IL_CODEX" >/dev/null || [ -n "$TA" ]; fi
 fi
 ! V=$(pp_config_option dashboardBind) || BIND=$V
 ! V=$(pp_config_option dashboardPort) || PORT=$V
@@ -469,6 +477,7 @@ COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
 case $CACHE_ON in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
+[ "$PROFILE" != claude-openai ] || [ -n "$TRUSTALL" ] || NEED+=("Codex hook trust: not answered yet, so a hook another tool rewrites opens Codex panes on the review menu; /commandeck:setup asks, or: setup.sh --trust-all-hooks on|off")
 [ -z "$NAME" ] || case $RCACHE_ON in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac
 [ -z "$SERENA_AUTO" ] || NOTES+=("serena: on, because a serena server is configured on this machine (--no-serena turns it off)")
 for f in "${OWN[@]}"; do
@@ -592,6 +601,7 @@ done
 # Read back from the config written above, so this line and the hooks agree.
 echo "serena (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG")"
 echo "full suite before the final review: $([ "$FULL" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
+[ "$PROFILE" != claude-openai ] || echo "trust every hook in the Codex home before each Codex launch: $([ "$TRUSTALL" = true ] && echo on || echo off) (setup.sh --trust-all-hooks on|off)"
 if [ "$PONYTAIL" = false ]; then echo "ponytail skill: off (--ponytail turns it on)"
 elif [ -n "$PONY_OURS" ]; then echo "ponytail skill: installed ($PONY)"
 else echo "ponytail skill: the one already on this machine was left as it is"; fi

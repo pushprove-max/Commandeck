@@ -515,5 +515,65 @@ rm -f "$G".commandeck-bak-*; printf -- '- Another.\n' > "$T/rules3.md"
 OUT=$(H=$H2 IL_PLAN=1 IL_WROTE=$T/gw lib 'il_record "$IL_MACHINE" merge "$IL_GLOBAL" && il_global block claude-md "$1" x && il_global block rules "$2" y' "$T/claude2.md" "$T/rules3.md" 2>&1); rm -f "$T/gw"
 check "blocks: a plan that changes both blocks says it would copy the file once" 1 "$(grep -c 'would copy' <<<"$OUT")"
 
+# Issue 315: a Codex launch rewrites config.toml holding locked the folder of the file it resolves to
+# (codex-hook-trust.py). Setup's notify line waits for that lock: written at once, one of the two writes drops the
+# other's lines. The home's config.toml is a link, as when two homes share one file: the home's own folder is not the lock.
+H3=$T/h3; mkdir -p "$H3/.codex" "$T/shared3"; printf 'model = "m"\n' > "$T/shared3/config.toml"; ln -s "$T/shared3/config.toml" "$H3/.codex/config.toml"
+exec 8<"$T/shared3"; flock 8
+(H=$H3 lib 'il_notify "$IL_ROOT"') 8<&- & P=$!
+sleep 2
+check "notify: setup waits while a launch holds the linked config's folder" 0 "$(grep -c '^notify = ' "$T/shared3/config.toml")"
+exec 8<&-; wait "$P"
+check "notify: and writes its line once the launch lets go, keeping the rest" "1:1" "$(grep -c '^notify = ' "$T/shared3/config.toml"):$(grep -c '^model = "m"$' "$T/shared3/config.toml")"
+# Sol r3: the link repointed between setup's read and its write. The new file keeps its own settings and gets the line.
+mkdir -p "$T/old4" "$T/new4"; printf 'model = "old"\n' > "$T/old4/config.toml"; printf 'model = "new"\n' > "$T/new4/config.toml"
+ln -sfn "$T/old4/config.toml" "$H3/.codex/config.toml"
+NEW4=$T/new4/config.toml H=$H3 lib 'eval "real_$(declare -f il_read)"; il_read() { real_il_read "$1"; [ -e "$NEW4.moved" ] || { touch "$NEW4.moved"; ln -sfn "$NEW4" "$IL_CODEX/config.toml"; }; }; il_notify "$IL_ROOT"' >/dev/null 2>&1
+check "notify: repointed after the read, the new file keeps its own settings and gets the line" "1:0:1" \
+  "$(grep -c '^model = "new"$' "$T/new4/config.toml"):$(grep -c '^model = "old"$' "$T/new4/config.toml"):$(grep -c '^notify = ' "$T/new4/config.toml")"
+# Sol r4, and the rest of its class: config.toml is not the file it was at the
+# read (a link now, another file, or edited in place). Setup writes nothing over it; a link is retried at its target.
+# Under set -e, as setup.sh and uninstall.sh run it: the refused write must not end the shell before the retry.
+for how in link file edit; do
+  H5=$T/h5$how; mkdir -p "$H5/.codex"; printf 'model = "old"\n' > "$H5/.codex/config.toml"; printf 'model = "new"\n' > "$T/new5$how.toml"
+  OUT=$(HOW=$how NEW5=$T/new5$how.toml H=$H5 lib 'set -e; eval "real_$(declare -f il_read)"; il_read() { real_il_read "$1"; [ -e "$NEW5.moved" ] || { touch "$NEW5.moved"; c=$IL_CODEX/config.toml
+    case $HOW in link) rm "$c"; ln -s "$NEW5" "$c" ;; file) printf "model = \"theirs\"\n" > "$c.x"; mv "$c.x" "$c" ;; *) printf "theirs = 1\n" >> "$c" ;; esac; }; }; il_notify "$IL_ROOT"' 2>&1)
+  case $how in
+    link) check "notify: file made a link after the read: the link is kept, its target keeps its settings and gets the line" "yes:1:1" \
+      "$([ -L "$H5/.codex/config.toml" ] && echo yes):$(grep -c '^model = "new"$' "$T/new5link.toml"):$(grep -c '^notify = ' "$T/new5link.toml")" ;;
+    file) check "notify: file replaced after the read: the new file is left as it is, and setup says so" "1:0:1" \
+      "$(grep -c '^model = "theirs"$' "$H5/.codex/config.toml"):$(grep -c '^notify = ' "$H5/.codex/config.toml"):$(grep -c 'changed since it was read; nothing was written' <<<"$OUT")" ;;
+    edit) check "notify: file edited after the read: the edit is kept, and setup says so" "1:0:1" \
+      "$(grep -c '^theirs = 1$' "$H5/.codex/config.toml"):$(grep -c '^notify = ' "$H5/.codex/config.toml"):$(grep -c 'changed since it was read; nothing was written' <<<"$OUT")" ;;
+  esac
+done
+# Sol r5: config.toml made a link before the first stat, its target edited after the read. Both stats see the one
+# link, so its target's edit is not seen: only a regular file is trusted as the snapshot, and the link is retried at its target.
+H6=$T/h6; mkdir -p "$H6/.codex"; printf 'model = "original"\n' > "$H6/.codex/config.toml"; printf 'model = "old"\n' > "$T/shared6.toml"
+S6=$T/shared6.toml H=$H6 lib 'set -e; stat() { [ -e "$S6.linked" ] || { touch "$S6.linked"; rm "$IL_CODEX/config.toml"; ln -s "$S6" "$IL_CODEX/config.toml"; }; command stat "$@"; }
+  eval "real_$(declare -f il_read)"; il_read() { real_il_read "$1"; [ -e "$S6.edited" ] || { touch "$S6.edited"; printf "model = \"theirs\"\n" > "$S6"; }; }; il_notify "$IL_ROOT"' >/dev/null 2>&1
+check "notify: made a link before the first stat, its target edited after the read: the edit is kept and the target gets the line" "1:1" \
+  "$(grep -c '^model = "theirs"$' "$T/shared6.toml"):$(grep -c '^notify = ' "$T/shared6.toml")"
+# Sol r6: GNU stat translates %F ("fichier ordinaire" in French), so an unchanged regular file failed the regular check
+# in a translated locale and setup stopped under set -e. The stand-in stat translates as coreutils does without LC_ALL=C.
+H7=$T/h7; mkdir -p "$H7/.codex"; printf 'model = "owner"\n' > "$H7/.codex/config.toml"
+H=$H7 lib 'set -e; export LC_ALL=fr_FR.UTF-8; stat() { if [ "${LC_ALL:-}" = C ]; then command stat "$@"; else command stat "$@" | sed "s/^regular file/fichier ordinaire/; s/^regular empty file/fichier vide ordinaire/"; fi; }
+  il_notify "$IL_ROOT"' >/dev/null 2>&1
+check "notify: stat translated in the owner's locale: the unchanged file still gets the line, its settings kept" "1:1" \
+  "$(grep -c '^notify = ' "$H7/.codex/config.toml"):$(grep -c '^model = "owner"$' "$H7/.codex/config.toml")"
+# Two setup runs (ticks) with one piece of the first run's state taken away between them: the second run writes the
+# line into the file the home resolves to now, whichever piece is gone, and keeps its settings.
+for gone in "the notify line" "the link's target, swapped for a fresh file" "the old target, the link replaced by a file"; do
+  case $gone in
+    "the notify line") sed -i.bak '/^notify = /d' "$T/new4/config.toml" ;;
+    "the link's target"*) mkdir -p "$T/tick4"; printf 'model = "b"\n' > "$T/tick4/config.toml"; ln -sfn "$T/tick4/config.toml" "$H3/.codex/config.toml" ;;
+    *) rm "$T/tick4/config.toml" "$H3/.codex/config.toml"; printf 'model = "c"\n' > "$H3/.codex/config.toml" ;;
+  esac
+  H=$H3 lib 'il_notify "$IL_ROOT"' >/dev/null 2>&1
+  f=$(readlink -f "$H3/.codex/config.toml")
+  check "notify ticks: $gone gone, the next run writes the line in the file the home names, its settings kept" "1:1" \
+    "$(grep -c '^notify = ' "$f"):$(grep -c '^model = ' "$f")"
+done
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

@@ -120,5 +120,20 @@ done
 check "two judges on Claude are two seats with two records" "2:2" \
   "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | grep -c '^role=plan-judge-')"
 
+# Issue 315: a tool update rewrote another tool's hook in the Codex home, so its hash is stale and a Codex pane opens
+# on "N hooks need review" and sits there. With trust-all off the launch ends phase=failed within the tui-idle wait and
+# names the pane's blocked hooks and the fix; with it on, the launch trusts the hook again before the pane opens.
+printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/opt/other/start-v2.sh"}]}]}}\n' > "$HOME/.codex/hooks.json"
+printf '[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:stale"\n' "$HOME/.codex/hooks.json" > "$HOME/.codex/config.toml"
+trusted() { grep -c "^trusted_hash = \"sha256:stale\"" "$HOME/.codex/config.toml"; }
+echo 'SessionStart hooks — 1 hooks need review before they can run' > "$T/screen"; rm -f "$T/pane-up"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" --model gpt-9.1-astra >"$T/out" 2>&1
+check "trust-all off: a pane on the review menu ends the launch phase=failed, the log names the count, the home and the hook" "phase=failed:1:1:1" \
+  "$(seat_sh status plan-judge-sol pu | cut -d' ' -f1):$(grep -c "Codex pane blocked: 1 hooks need review in $HOME/.codex; run /hooks there or turn on trust-all" "$JREC.log"):$(grep -c 'start-v2.sh) is modified' "$JREC.log"):$(trusted)"
+jq '.trustAllHooks = true' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; echo 'Codex ready' > "$T/screen"; rm -f "$T/pane-up"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" --model gpt-9.1-astra >"$T/out" 2>&1
+check "trust-all on: the launch trusts the modified hook again before the pane opens, and the pane starts" "0:phase=dispatched" \
+  "$(trusted):$(seat_sh status plan-judge-sol pu | cut -d' ' -f1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

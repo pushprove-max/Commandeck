@@ -52,7 +52,7 @@ fills those models in, and asks for a type when a call names none.
 
 Use setup to change answers. Its project keys include `profile`, `testCommand`,
 `strictHooks`, `serena`, `standardContext`, `builder.clearLine`, `issueSizing`,
-`chiefOfStaff`, `ponytail`, `cacheTtl`, `autoMode`, `workerSkillsOff`,
+`chiefOfStaff`, `ponytail`, `trustAllHooks`, `cacheTtl`, `autoMode`, `workerSkillsOff`,
 `workerPluginsOff`, `keeps` and `reviewLoop`. Role settings are `/plugin` keys
 only: 0.26.0 reads no `builder.model`, `builder.effort`, `planModels`,
 `planFast`, `codexModels` or `codexFast` an older setup saved there.

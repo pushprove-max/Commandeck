@@ -249,6 +249,7 @@ launch)
   [[ $ROLE != plan-* ]] || pp_plan_seat "$ROLE" "$LMODEL" >/dev/null || exit 2
   pp_route "$ROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
   [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
+  LAUNCH_AGENT=$RT_AGENT  # the launch's own route: a later pp_route without its --model may resolve to none
   # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
   CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
   # A finished spec does not run twice: the same plan-reviser job ran
@@ -341,6 +342,9 @@ launch)
   fi
   LAUNCH_EPOCH=$(date +%s)
   REUSED=0
+  # Issue 315: trust the Codex home's hooks again right before the pane starts, so a hook a tool update changed
+  # since the last launch does not open the pane on the review menu.
+  [ "$LAUNCH_AGENT" != codex ] || pp_codex_retrust "$CMD"
   H=$(open_pane "path:$WT" "$(pane_title "$ROLE" "$UNIT")" "$CMD") || REUSED=$?
   # The pane is listed and recorded now; the launch's background part must not hold the next launch's count.
   [ -z "${ADMIT_FD:-}" ] || exec {ADMIT_FD}>&-
@@ -420,7 +424,17 @@ launch)
   # 120 s, the dispatch retries up to 60 s) outlasted callers' timeouts, and a retry then opened a second pane.
   # This part runs in the background, its output in $REC.log; it ends the record phase=dispatched or phase=failed.
   launch_rest() {
+    # Issue 315: a Codex pane left on the "hooks need review" menu (a hook trust could not cover) never takes the task.
+    # Read at the end of the bounded tui-idle wait, and again when no turn started; the launch ends phase=failed.
+    fail_if_review_menu() {
+      [ "$LAUNCH_AGENT" = codex ] || return 0
+      local msg
+      msg=$(pp_codex_blocked "$(pp_codex_home "$CMD")" "$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null)") \
+        && { printf '%s\n' "$msg" >&2; exit 1; }
+      return 0
+    }
     orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 120000 --json >/dev/null || true
+    fail_if_review_menu
     # Issue 278: the agent retitles its pane as it starts, so the title given at create is lost; an older Orca has no such command.
     timeout 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title "$ROLE" "$UNIT")" >/dev/null 2>&1 || true
     # Orca detects the agent in a fresh pane seconds after tui-idle, and until then
@@ -489,7 +503,7 @@ launch)
     fi
     # An unproven prompt may still sit in the composer, where `go` would join it.
     if [ "$PROVEN" = 1 ]; then bash "$PP_SCRIPTS/seat-go.sh" "$H" "$CMD"
-    else echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
+    else fail_if_review_menu; echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
     fi
     # The seat is launched: a failed read only leaves its state unknown, never fails the launch (builder-launch.sh undoes those).
     state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true

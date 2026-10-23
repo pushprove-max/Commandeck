@@ -40,5 +40,25 @@ jq '.hooks.PreToolUse += [{"matcher": "*", "hooks": [{"type": "command", "comman
 python3 "$SOURCE/scripts/codex-hook-trust.py" "$T/codex" > "$T/trust2.out" 2>&1
 check "a hook that is not the plugin's gets no trust entry" 5 "$(grep -c '^trusted_hash = "sha256:' "$T/codex/config.toml")"
 
+# Issue 315: another tool's update rewrites its hook, and a modified hook drops out of trust and opens every Codex
+# pane on the review menu. --all trusts every hook in the home, so a launch can re-trust before it starts the pane.
+TR="python3 $SOURCE/scripts/codex-hook-trust.py"
+sha() { shasum "$T/codex/config.toml" | cut -d' ' -f1; }
+BEFORE=$(sha); $TR --list --all "$T/codex" > "$T/list.out" 2>&1
+check "--list names the other tool's hook, and writes nothing" "1:$BEFORE" "$(grep -c '/opt/other/hook.sh' "$T/list.out"):$(sha)"
+$TR --all "$T/codex" > "$T/all.out" 2>&1; check "--all trusts the other tool's hook too" "0:6" "$?:$(grep -c '^trusted_hash = "sha256:' "$T/codex/config.toml")"
+jq '.hooks.PreToolUse[-1].hooks[0].command = "/opt/other/hook-v2.sh"' "$T/codex/hooks.json" > "$T/h.json" && cp "$T/h.json" "$T/codex/hooks.json"
+$TR --check "$T/codex" > "$T/c1.out" 2>&1; check "the plugin-only check ignores a modified hook that is not the plugin's" 0 $?
+$TR --check --all "$T/codex" > "$T/c2.out" 2>&1; RC=$?
+check "--check --all fails on it, saying modified and naming the hook" "1:1" "$RC:$(grep -c 'hook-v2.sh.* is modified' "$T/c2.out")"
+$TR --all "$T/codex" > "$T/all2.out" 2>&1
+$TR --check --all "$T/codex" > "$T/c3.out" 2>&1
+check "a launch's --all re-trusts the modified hook in place, adding no entry" "0:6" "$?:$(grep -c '^trusted_hash = "sha256:' "$T/codex/config.toml")"
+jq '.hooks.Stop[0].hooks += [{"type": "agent", "prompt": "x"}]' "$T/codex/hooks.json" > "$T/h.json" && cp "$T/h.json" "$T/codex/hooks.json"
+$TR --all "$T/codex" > "$T/all3.out" 2>&1; check "--all reports a hook of a shape it cannot hash instead of guessing" "1:1" "$?:$(grep -c 'Stop\[0\].hooks\[1\] (type agent)' "$T/all3.out")"
+jq 'del(.hooks.Stop[0].hooks[1])' "$T/codex/hooks.json" > "$T/h.json" && cp "$T/h.json" "$T/codex/hooks.json"
+$TR --forget --all "$T/codex" > "$T/forget.out" 2>&1
+check "--forget takes out the plugin's entries only, even with --all" "1" "$(grep -c '^trusted_hash = "sha256:' "$T/codex/config.toml")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

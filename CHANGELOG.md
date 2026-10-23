@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.34.0 -- 2026-10-23
+
+- Codex panes no longer sit on the "hooks need review" menu when another tool's hook changed. Setup asks once, with
+  the saved answer first, "Trust every hook in this Codex home before each Codex launch?" (`--trust-all-hooks
+  on|off`, saved as `trustAllHooks`; the `--plan` preview lists the hooks it would trust). With yes, every seat launch
+  and every review pass trusts every hook in the Codex home again right before Codex starts (`codex-hook-trust.py
+  --all`); with no, only the plugin's own hooks are trusted, as before, and a pane that still opens on the review menu
+  ends its launch `phase=failed` within the tui-idle wait, naming the hooks and the fix. `doctor.sh` now checks every
+  hook in the Codex home and names the ones not trusted or modified. Fixes #315.
+
 ## 0.33.0 -- 2026-10-23
 
 - Setup's own preview and apply pass the dependency guard again (issue 311): the plugin's `setup.sh` is recognised in

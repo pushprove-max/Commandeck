@@ -977,6 +977,7 @@ pp_option() {
     maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=false ;;
+    trustAllHooks) p=.trustAllHooks d=false ;;
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
     dashboardPort) p=.dashboard.port f=$HOME/.commandeck/install/_machine.json ;;
@@ -994,6 +995,29 @@ pp_option() {
     wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
   esac
   if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
+}
+# Issue 315: Codex opens a pane on its "hooks need review" menu when any hook in its home is untrusted, and a tool
+# update rewrites its own hook. pp_codex_retrust [<launch command>] trusts the home again right before a Codex launch
+# (the plugin's hooks; every hook when the owner answered yes to setup's trust-all question). The home is the one the
+# launch command names (CODEX_HOME=...), else this shell's. A hook the script cannot hash is said on stderr, not fatal:
+# pp_codex_blocked then names it from the pane.
+pp_codex_home() {
+  local h; h=$(sed -nE 's/^(.*[ ;])?CODEX_HOME=([^ ;]+).*/\2/p' <<<"${1-}" | tail -1)
+  h=${h:-${CODEX_HOME:-$HOME/.codex}}; printf '%s\n' "${h/#\~/$HOME}"
+}
+pp_codex_retrust() {
+  local a=; [ "$(pp_option trustAllHooks)" != true ] || a=--all
+  python3 "$PP_SCRIPTS/codex-hook-trust.py" ${a:+"$a"} "$(pp_codex_home "${1-}")" >/dev/null || true
+}
+# pp_codex_blocked <codex home> <pane text> -- when the pane text is Codex's review menu, say so (the count it shows,
+# the home, the fix and every hook not trusted there) and succeed; any other text fails.
+pp_codex_blocked() {
+  local n names
+  grep -qE 'hooks? needs? review' <<<"$2" || return 1
+  n=$(grep -oE '[0-9]+ hooks? needs? review' <<<"$2" | head -1 | grep -oE '^[0-9]+' || true)
+  names=$(python3 "$PP_SCRIPTS/codex-hook-trust.py" --check --all "$1" 2>&1 | sed 's/^/  /' || true)
+  echo "Codex pane blocked: ${n:-some} hooks need review in $1; run /hooks there or turn on trust-all (setup.sh --trust-all-hooks on)"
+  [ -z "$names" ] || printf '%s\n' "$names"
 }
 # pp_issue_sizing -- setup's issue sizing line (issueSizing: tokens, or off), default 40000. A saved value it does
 # not take fails, naming the key, as pp_review_loop does.

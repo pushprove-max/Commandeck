@@ -608,6 +608,18 @@ il_notify_stale() {
     [ "$(readlink -f "${p/#\~/$HOME}" 2>/dev/null)" = "$(readlink -f "$IL_ROOT/hooks/codex-notify.sh")" ] || printf '%s\n' "$p"
   done < <(il_notify_hooks "$1")
 }
+# il_codex_trust_report -- the doctor's line on Codex's hook trust (issue 315): "ok <why>" when every hook in the Codex
+# home is trusted, else "bad <the hooks not trusted or modified and the fix>". It checks every entry, not only the
+# plugin's: any one of them opens each Codex pane on the review menu.
+il_codex_trust_report() {
+  local err fix
+  if err=$(python3 "$PP_SCRIPTS/codex-hook-trust.py" --check --all "$IL_CODEX" 2>&1); then
+    echo "ok codex trust: every hook in $IL_CODEX is trusted"; return 0
+  fi
+  if [ "$(pp_option trustAllHooks)" = true ]; then fix="each Codex launch trusts them again; to do it now run: python3 $(printf '%q' "$PP_SCRIPTS")/codex-hook-trust.py --all"
+  else fix="turn on trust-all so each launch trusts them again (setup.sh --trust-all-hooks on), or review them with /hooks in a Codex pane"; fi
+  echo "bad codex trust: $(grep -c . <<<"$err") hook(s) in $IL_CODEX would open each Codex pane on the review menu: $(printf '%s\n' "${err//"$IL_CODEX: "/}" | awk 'NR > 1 { printf "; " } { printf "%s", $0 }'). $fix"
+}
 # il_notify_report -- the doctor's line on Codex's one notify command: "ok <why>"
 # when it calls this plugin's hook, straight or through the owner's wrapper,
 # else "warn <what is wrong and the fix>".
@@ -644,12 +656,35 @@ il_notify_repoint() {
     *) echo "codex notify: ASK: the wrapper $w calls an older plugin's hook. Old line: $old New line: $new Change it: --notify-wrapper yes; leave it: --notify-wrapper no" ;;
   esac
 }
+# A Codex launch rewrites config.toml holding the folder of the file it resolves to locked (codex-hook-trust.py
+# trust_home): this read and write wait for the same lock, and both use the file the link resolved to under it. The
+# one retry: the link repointed before the lock or during the write (a refused write included), so the run starts
+# over where it points now.
 il_notify() {
-  local f=$IL_CODEX/config.toml rest cur
+  local t s
+  while t=$(il_codex_config); [ -d "${t%/*}" ]; do
+    { flock 9 || return 1; [ "$(il_codex_config)" = "$t" ] || continue; il_notify_set "$1" "$t" && s=0 || s=$?
+      [ "$(il_codex_config)" != "$t" ] || return "$s"; } 9<"${t%/*}"
+  done
+  il_notify_set "$1" "$t"
+}
+il_codex_config() { readlink -f "$IL_CODEX/config.toml" 2>/dev/null || printf '%s\n' "$IL_CODEX/config.toml"; }
+# il_notify_set <root> <file> -- the notify line in <file>, the config.toml il_notify resolved, never the link.
+il_notify_set() {
+  local f=$2 rest cur seen
+  # Taken before the read, so a change during the read also fails the check before the write. LC_ALL=C: GNU stat
+  # translates %F, and the check below matches the English word.
+  seen=$(LC_ALL=C stat -c '%F %i %.9Y' -- "$f" 2>/dev/null)
   cur=$(il_read "$f") || return 1
   rest=$(grep -vE '^notify = \[".*/hooks/codex-notify\.sh"\]$' <<<"$cur" || true)
   [ -z "$1" ] || grep -qE '^[[:space:]]*notify[[:space:]]*=' <<<"$rest" || rest=$(il_notify_line "$1")${rest:+$'\n'$rest}
-  [ "$rest" = "$cur" ] || printf '%s\n' "$rest" | il_write "$f"
+  [ "$rest" != "$cur" ] || return 0
+  # Not the regular file read above (a link at either stat, another file, edited): refuse, and il_notify retries a link
+  # at its target. Nothing there is a create. A change between this check and il_write's mv is still written over:
+  # closing that window needs a lock every other writer honours.
+  [ "$(LC_ALL=C stat -c '%F %i %.9Y' -- "$f" 2>/dev/null)" = "$seen" ] && [[ ${seen:-regular} == regular* ]] \
+    || { echo "commandeck: $f changed since it was read; nothing was written, run this again" >&2; return 1; }
+  printf '%s\n' "$rest" | il_write "$f"
 }
 
 # il_block <file> [text file] -- the plugin's marked block in an instruction

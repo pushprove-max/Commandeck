@@ -141,6 +141,10 @@ Ask them in this order, up to four questions per call.
    - Sol medium: `--option codexReviewerModel=project --option codexReviewerEffort=project`
    - Astra high: `--option codexReviewerModel=astra --option codexReviewerEffort=high`
    - When the check said "Codex model: not found", offer the id it printed first, as recommended: `--option codexReviewerModel=<id>`.
+   Ask "Trust every hook in this Codex home before each Codex launch?": Yes (recommended) | No
+   - Yes: every Codex launch (a pane or `codex exec`) first trusts every hook in the Codex home, so a hook another tool rewrote in an update does not open the pane on Codex's "hooks need review" menu, where it sits. `--trust-all-hooks on`
+   - No: only the plugin's own hooks are trusted. A pane that opens on the review menu ends its launch as failed, naming the blocked hooks. `--trust-all-hooks off`
+   - The `--plan` preview lists the hooks it will trust; show that list with the question.
    The Claude reviewer runs Sonnet high and is not asked.
    Then the plan seats, which plan a risky build before it starts:
    Ask "Plan author": Opus high (recommended) | Sonnet medium | Off
