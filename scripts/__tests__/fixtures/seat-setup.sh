@@ -9,6 +9,8 @@ PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 export HOME=$T/home
 PROJ=$T/proj CFG=$T/proj/.claude/commandeck.json BIN=$T/bin; mkdir -p "$HOME" "$BIN" "$PROJ/.claude"
+# A Codex seat is refused where codex is not installed (CI has none): a stand-in, which a file may replace with its own.
+printf '#!/bin/sh\nexit 0\n' > "$BIN/codex"; chmod +x "$BIN/codex"
 git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 git -C "$PROJ" remote add origin https://github.com/o/proj.git
 echo '{"version": 1, "profile": "claude"}' > "$CFG"

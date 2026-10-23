@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.39.2 -- 2026-10-23
+
+- The seat tests no longer need Codex installed on the machine that runs them: their shared fixture puts a stand-in
+  `codex` on the path, so a Codex seat is not refused as "not installed here" on CI.
+
 ## 0.39.1 -- 2026-10-23
 
 - CI is green again after the 316/314/325 merges. The merge test's fixture gives the repo an origin and a `gh` that
