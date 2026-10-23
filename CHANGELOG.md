@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.31.0 -- 2026-10-22
+
+- Main's shell suite is green again after the 320/321b, 322 and 323 merges met: three tests fixed, no product change.
+  One test built its fixture with a jq form that jq 1.7.1 (CI's) refuses; one counted the new `planref=` record line as
+  a plan; one hook comment read as a bare BLOCKED text.
+
 ## 0.30.0 -- 2026-10-22
 
 - A plan seat that reported its finish in its own message to the run or main ("Plan revised", a `PLAN-DONE` line),

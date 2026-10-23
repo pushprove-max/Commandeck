@@ -7,7 +7,7 @@
 # no message. $HOME/.claude/hooks/codex-notify.sh links here; keep in parity
 # with its Claude twin, claude-worker-notify.sh.
 # Issue 321: a turn sends at most one message, and only when it has something to
-# act on: a QUESTION:/BLOCKED: line, always; a marker, only from a pane with no
+# act on: a line starting QUESTION: or BLOCKED:, always; a marker, only from a pane with no
 # seat record (a seat's finish is its wait's, collect's or main-watch's to report;
 # a Builder's pane has one, and its pass hands the Builder the verdict). The twin
 # has a plan-marker block this hook cannot (Codex's notify cannot block a turn).

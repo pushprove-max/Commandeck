@@ -70,7 +70,7 @@ done
 echo '{"ok":false}' > "$T/inbox.json"; srun collect plan-author pr >"$T/out" 2>&1
 check "the inbox not answering, the plan committed: collect keeps the pane open" 3 $?
 # The inbox is read newest first, 500 at a time: a full page that stops short of the prompt may hide a failure message.
-page() { jq -nc --argjson n "$NOW" --argjson old "$1" '{ok: true, result: {messages: [range(0; 500) | {from_handle: "other", to_handle: "run:run-1", type: "status", subject: "x", body: "", read: 1, created_at: (($n - 100 - .) | todate)}] | .[499].created_at = (($n - $old) | todate)}}' > "$T/inbox.json"; }
+page() { jq -nc --argjson n "$NOW" --argjson old "$1" '{ok: true, result: {messages: ([range(0; 500) | {from_handle: "other", to_handle: "run:run-1", type: "status", subject: "x", body: "", read: 1, created_at: (($n - 100 - .) | todate)}] | .[499].created_at = (($n - $old) | todate))}}' > "$T/inbox.json"; }
 page 100; srun collect plan-author pr >"$T/out" 2>&1
 check "a full inbox page that stops after the prompt, the plan committed: collect keeps the pane open" 3 $?
 page 5000; srun collect plan-author pr >"$T/out" 2>&1

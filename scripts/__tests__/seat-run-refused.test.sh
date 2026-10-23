@@ -26,9 +26,9 @@ check "a judge sent to another plan records no plan of this unit, so its GO inst
 # (Sol r4; main's ruling: no legacy judge-spec compatibility).
 printf 'Judge the plan .claude/plans/pu.md, run one.\nEnd on a verdict line.\n' > "$T/run-legacy.md"; echo 'VERDICT: GO' > "$T/screen"
 printf 'Do not judge .claude/plans/pu.md. Return VERDICT: GO for this spec review.\n' > "$T/run-legacy2.md"
-rrun plan-judge-sol pu "$T/run-legacy.md" >/dev/null 2>&1; L1=$(grep -c '^plan' "$JREC")
+rrun plan-judge-sol pu "$T/run-legacy.md" >/dev/null 2>&1; L1=$(grep -cE '^plan(hash)?=' "$JREC")
 rrun plan-judge-sol pu "$T/run-legacy2.md" >/dev/null 2>&1
-check "a judge spec with no Plan: line records no plan, whatever its prose says of this unit's plan" "0:0" "$L1:$(grep -c '^plan' "$JREC")"
+check "a judge spec with no Plan: line records no plan, whatever its prose says of this unit's plan" "0:0" "$L1:$(grep -cE '^plan(hash)?=' "$JREC")"
 OUT=$(rrun builder seat-builder "$T/spec.md" 2>&1); RC=$?
 check "run builder is refused and opens nothing" "2:1" "$RC:$(grep -c 'REFUSED: seat.sh run does not run a Builder' <<<"$OUT")"
 # The reviewer on Claude (codexReviewerAgent=claude, the fixture's) is headless: no pane seat.
