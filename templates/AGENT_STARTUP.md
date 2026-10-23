@@ -41,6 +41,16 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 3. Builder: print the marker the brief names as the last line, and stop.
 4. Main: `bash scripts/merge-unit-local.sh <unit>` checks the GO pass against
    the reviewed commit and squash-merges the branch. No proof, no merge.
+   From main's foreground the merge detaches: it prints "running detached as
+   pid N; watch <log>" and keeps running after the shell call ends. A
+   half-merged main tree while it runs is the merge at work, not leftovers. Its
+   state (unit, reviewed sha, pid, stage) is in `.git/merge-unit-local.state`
+   while it holds main; the file is gone when it ends, and a pid that is dead
+   is a stale lock. Wait for the end of the log (`DONE unit=..` or a `FAILED`
+   line) or for the message it sends main. Never re-run it, and never stash,
+   reset or check out in main under it: the same unit at the same sha, running
+   or waiting, is refused with exit 4, and the guard refuses those commands and
+   edits in main, naming the merge.
 
 ## Orca commands
 

@@ -34,6 +34,7 @@
       ]},
       {"matcher": "Bash", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/git-safety.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/merge-lock-guard.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/bash-guardrails.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/no-poll-loops.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/duplicate-agent-guard.sh\"", "onFailure": "block", "timeout": 60},
@@ -45,6 +46,7 @@
       ]},
       {"matcher": "Edit|Write|MultiEdit", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/main-edit-guard.sh\"", "onFailure": "block", "timeout": 30},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/merge-lock-guard.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/edit-content-tripwires.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/literal-secret-warning.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/test-skip-only-blocker.sh\"", "onFailure": "block", "timeout": 30},

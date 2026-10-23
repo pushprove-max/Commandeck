@@ -12,6 +12,7 @@ and event checks:
 |---|---|
 | `git-safety.sh` | Blocks force pushes, remote branch deletion, mirror pushes and hard resets to protect work; it handles quoted command words, but does not interpret arbitrary shell evaluation. |
 | `main-edit-guard.sh` | Blocks main from writing project code, including code in its worktrees; allows instruction and documentation paths, but caps counted uncommitted files at three even under `.claude/`. |
+| `merge-lock-guard.sh` | While a detached merge holds main (its pid alive in `merge-unit-local.state`, beside the merge lock in the git dir), refuses `git stash`, `checkout`, `reset`, `clean` and the other commands that move main's tree or index, and any edit of a file in main's checkout, naming the running merge. Each git call is judged on the checkout it changes (its `cd`'s, `-C`, `--git-dir`, `--work-tree`, a `bash -c` or `eval` string), so a Builder's worktree is never main. A dead pid is a stale lock and blocks nothing. |
 | `duplicate-agent-guard.sh` | Blocks a second live agent in one worktree and a new job sent to a busy pane. |
 | `dependency-addition-guard.sh` | Blocks unapproved new npm packages in install commands and package edits; protects dependency and supply-chain decisions. |
 | `literal-secret-warning.sh` | Warns about quoted secret-like literals of eight or more characters in executable code; excludes tests and config/env files. |

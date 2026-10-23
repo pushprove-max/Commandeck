@@ -794,6 +794,8 @@ gate() {
   WHY=$(pp_merge_held "$u" "$w") && { WHY="held: $WHY"; return 1; }
   tip=$(git -C "$w" rev-parse HEAD 2>/dev/null) || { WHY="its worktree has no commit"; return 1; }
   [ "$(sed -n 1p "$ST/merge-$u" 2>/dev/null)" != "$tip" ] || return 0
+  # Issue 317: a hand-started merge of this unit at this tip, running or waiting on the lock, is that merge; none is queued beside it.
+  pp_merge_active "$u" "$tip" >/dev/null && return 0
   [ -z "$(git -C "$w" status --porcelain 2>/dev/null)" ] || { WHY="its worktree has uncommitted files, which no pass read"; return 1; }
   key=$(pp_gate_key "$u" "$w")
   if [ "$(sed -n 1p "$f" 2>/dev/null)" != "$key" ]; then

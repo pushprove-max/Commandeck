@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.35.0 -- 2026-10-23
+
+- A running detached merge is visible, guarded and not duplicated (issue 317). `merge-unit-local.sh` writes
+  `merge-unit-local.state` (unit, reviewed sha, pid, start, stage, log) beside its lock in main's git dir while it holds
+  main, and removes it on every way out; a pid that is dead is a stale lock and blocks nothing. From main's foreground
+  it prints `running detached as pid N; watch <log>`.
+- A new hook, `merge-lock-guard.sh`, refuses `git stash`, `checkout`, `reset`, `clean` (and the other commands that move
+  main's tree or index) and edits of files in main's checkout while that lock is live, naming the running merge. Each git
+  call is judged on the checkout it changes: its `cd`'s, `-C`, `--git-dir` and `--work-tree`, `/usr/bin/git`, and the
+  string a `bash -c` or `eval` runs; from main, a command on a Builder's worktree is that worktree's.
+- The guard checks a redirection's or an edit's whole file, links followed, and main's `rg` takes only options that read.
+  A file git is given to write is checked the same way: `GIT_INDEX_FILE`, `GIT_CONFIG*`, a `GIT_TRACE*` path, and the
+  arguments of a git call that writes (`--output=`, `-o<file>`, `--prefix=`, `worktree add <path>`); `GIT_COMMON_DIR`
+  and `GIT_OBJECT_DIRECTORY` are read as folders, like `GIT_DIR`. Such an argument built from data (a `$` value, quoted
+  prose, a glob) or a link the same line makes is not seen.
+  While the lock is live, a command in main's checkout may hold no `$` and no backtick, and `printf` takes no `-v` (bash
+  runs a `$( )` held in a string it evaluates as a subscript or arithmetic, quoted or not). `orca-ide terminal send`
+  from main is not seen (an accepted gap), nor is a program git's config names (`diff.external`, a textconv or filter
+  driver, `core.fsmonitor`, a pager, gpg's program), which a git read runs like a script file. Outside main's checkout
+  the guard screens the git calls a command types; code the command builds from data (a `$( )` in a here-document's
+  body, text fed to a shell or an interpreter, a command word made by an expansion) is not seen either. Nor, in main's
+  checkout too, is script text fed to `bash` or `sh` (`/dev/stdin`, `/dev/fd`, a `/proc` fd, a fifo) in place of a
+  script file (an accepted gap).
+- A request to merge a unit at a commit that is already running or waiting on the lock is a no-op that says so (exit 4),
+  on the hand path and in main-watch's automatic merge. From main's foreground the request is queued before it detaches,
+  so a duplicate is refused at once and never starts a run that would empty the running merge's log; `merge-queue.sh`
+  appends to a unit's log, so a duplicate leaves the running merge's steps in place. The "staged work changed during the
+  run" refusal stays hard, now tested, and its text names a changed index as a cause.
+- `AGENT_STARTUP.md` and the first-build guide tell the orchestrator that the merge detaches, how to wait on it (its log
+  or the message it sends), and never to re-run it.
+
 ## 0.34.0 -- 2026-10-23
 
 - Codex panes no longer sit on the "hooks need review" menu when another tool's hook changed. Setup asks once, with

@@ -367,7 +367,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
         if [ -n "$rep" ]; then echo "  next: ask the owner one class-level question (two NO-GOs on $rep); the class is fixed in the unit"
         else echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"; fi
       elif [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
-      else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit"
+      else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit (it detaches; wait on its log, never run it again)"
       fi
     fi
   fi

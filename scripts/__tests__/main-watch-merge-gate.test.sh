@@ -63,4 +63,13 @@ grep -qx -- "--train ta@$A tb@$B\|--train tb@$B ta@$A" "$F/mq-calls" || fail "tw
 N=$((N + 1000)); unit axb; unit a.b; echo a.b > "$F/mq-late"; tick $N; said_done axb; said_done a.b; tick $((N + 60)); jobwait a.b; tick $((N + 120))
 [ "$(posts 'merge of a\.b did not land cleanly')" = 1 ] || fail "a.b's failed post-merge step was hidden by axb's success line"
 : > "$F/mq-late"
+# Issue 317: a merge of the unit at this tip that someone started by hand, running, is that merge: the gate queues none
+# beside it. Its pid dead, the lock is stale and the unit merges as any other.
+N=$((N + 1000)); unit hnd; H=$(tip hnd); sleep 300 & HP=$!
+printf 'unit=hnd\nsha=%s\ntip=%s\npid=%s\nstarted=1\nstage=check\nmain=%s\nlog=x\n' "$H" "$H" "$HP" "$REPO" > "$REPO/.git/merge-unit-local.state"
+tick $N; said_done hnd; tick $((N + 60))
+grep -q "hnd@" "$F/mq-calls" && fail "a unit another merge is running was queued a second time: $(cat "$F/mq-calls")"
+kill "$HP"; wait "$HP" 2>/dev/null || true; tick $((N + 120)); jobwait hnd
+grep -qx "hnd@$H" "$F/mq-calls" || fail "a stale lock (its pid dead) kept the unit from merging: $(cat "$F/mq-calls")"
+rm -f "$REPO/.git/merge-unit-local.state"; gone hnd
 echo "PASS main-watch-merge-gate.test.sh"

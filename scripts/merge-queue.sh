@@ -40,9 +40,11 @@ queue() { # <unit>[@<sha>] ...: merge each in order; returns 1 at the first that
   local arg unit log rc
   for arg in "$@"; do
     unit=${arg%@*}
+    # Appended, never emptied: a merge of this unit may be writing it now, and a request that turns out a duplicate
+    # (exit 4) must leave its steps in place (issue 317).
     log=$PP_SCRATCH/merge-$unit.log
-    if [[ $arg == *@* ]]; then "$HERE/merge-unit-local.sh" "$unit" --auto "${arg#*@}" > "$log" 2>&1; rc=$?
-    else "$HERE/merge-unit-local.sh" "$unit" > "$log" 2>&1; rc=$?; fi
+    if [[ $arg == *@* ]]; then "$HERE/merge-unit-local.sh" "$unit" --auto "${arg#*@}" >> "$log" 2>&1; rc=$?
+    else "$HERE/merge-unit-local.sh" "$unit" >> "$log" 2>&1; rc=$?; fi
     # 3 and 5 are a unit that merged and then failed a later step: merging it again would merge it twice. A train
     # goes on past it: each unit after it is checked or reused on its own tree, as it would be alone.
     if { [ "$rc" = 3 ] || [ "$rc" = 5 ]; } && [ "$TRAIN" = 1 ]; then
@@ -70,8 +72,8 @@ if [ "$TRAIN" = 1 ]; then
   # never stops the train with an untested part of it on main.
   OK=() DROPPED=0
   for arg in "$@"; do
-    log=$PP_SCRATCH/merge-${arg%@*}.log
-    if "$HERE/merge-unit-local.sh" "${arg%@*}" --dry-run --auto "${arg#*@}" > "$log" 2>&1; then OK+=("$arg"); continue; fi
+    log=$PP_SCRATCH/merge-${arg%@*}.log # appended, as in queue()
+    if "$HERE/merge-unit-local.sh" "${arg%@*}" --dry-run --auto "${arg#*@}" >> "$log" 2>&1; then OK+=("$arg"); continue; fi
     echo "merge-queue: STOPPED at ${arg%@*} (not merged: its dry run refused it, so it left the train); log: $log" >&2
     tail -n 3 "$log" >&2; DROPPED=1
   done

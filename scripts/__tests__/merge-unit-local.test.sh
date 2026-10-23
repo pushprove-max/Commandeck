@@ -139,16 +139,16 @@ rm -rf "$REPO/ci"
 # then completes detached and its result reaches main as a question.
 mk d; go d
 OUT=$(cd "$REPO" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 bash "$MERGE" d </dev/null 2>&1); RC=$?
-PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
-check "in main's foreground the merge returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $COMMANDECK_SCRATCH/merge-d.log" <<<"$OUT")"
+PID=$(sed -n 's/.*running detached as pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the merge returns 0 at once, naming its log" "0 1" "$RC $(grep -c "watch $COMMANDECK_SCRATCH/merge-d.log" <<<"$OUT")"
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "the detached merge completed, and main heard its result" "1 1" \
   "$(grep -c '^DONE unit=d merged=local' "$COMMANDECK_SCRATCH/merge-d.log" 2>/dev/null) $(cat "$TMP/orca-calls" "$COMMANDECK_SCRATCH"/queue/*.jsonl 2>/dev/null | grep -c 'merge-unit-local.sh d: exit 0')"
 # r1: the queue waits on each merge, so in main's foreground the queue detaches itself and runs its merges in its
 # own foreground: a detached merge's exit 0 is no merge.
 OUT=$(cd "$REPO" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 bash "$REAL/scripts/merge-queue.sh" no-such-a no-such-b </dev/null 2>&1); RC=$?
-PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
-check "in main's foreground the merge queue returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $COMMANDECK_SCRATCH/merge-queue.log" <<<"$OUT")"
+PID=$(sed -n 's/.*running detached as pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the merge queue returns 0 at once, naming its log" "0 1" "$RC $(grep -c "watch $COMMANDECK_SCRATCH/merge-queue.log" <<<"$OUT")"
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "the detached queue stopped at the first unit that did not merge, and never says all merged" "1 0" \
   "$(grep -c 'STOPPED at no-such-a (not merged)' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null) $(grep -c 'all 2 unit' "$COMMANDECK_SCRATCH/merge-queue.log" 2>/dev/null)"

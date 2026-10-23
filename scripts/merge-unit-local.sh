@@ -21,19 +21,37 @@ dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test fi
 exit: 0 merged; 1 refused or failed, not merged; 2 usage; 3 MERGED, but a step after the
       merge commit failed (archiving the unit's brief files, or closing its panes and removing
       its worktree): finish it by hand, do not merge again; 5 MERGED, but a post-merge line was refused or its step failed
+      4 a merge of this unit at this sha is already running or waiting (issue 317): nothing was queued; wait for that one, never run this again
 example: merge-unit-local.sh my-unit --dry-run
 EOF
 }
 # Before the lock: a usage error must not wait behind a running merge.
 case "${1:-}" in --help|-h) usage; exit 0 ;; "") usage >&2; exit 2 ;; esac
-# In main's own foreground the merge restarts itself detached and returns at once (issue 230).
+# Issue 317: the same unit at the same sha, merging or waiting on the lock below, is never run twice: exit 4, saying so.
+# The sha is --auto's, else the unit worktree's tip; a unit that cannot be read here is left to step 1 to refuse.
+# A dry run is no request. In main's own foreground the merge restarts itself detached and returns at once (issue 230).
+# The request is queued BEFORE it detaches: a second one is refused here, at once, and never starts a run that would
+# empty the first one's log. The detached run is handed its queue entry (MERGE_UNIT_LOCAL_QUEUE) and holds it by pid.
+QFILE=${MERGE_UNIT_LOCAL_QUEUE:-}
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -x -- --dry-run >/dev/null \
-   && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" && pp_main_foreground; then
-  pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@"; exit
+   && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"; then
+  REQ=$(printf '%s\n' "$@" | grep -x -A1 -- --auto | sed -n 2p || true)
+  [[ ${REQ:-HEAD} =~ ^([0-9a-f]{7,40}|HEAD)$ ]] && REQ=$(git -C "$PP_WORKSPACES/$1" rev-parse --verify -q "${REQ:-HEAD}^{commit}" 2>/dev/null) || REQ=
+  if [ -n "$REQ" ] && [ -z "$QFILE" ]; then
+    if DUP=$(pp_merge_active "$1" "$REQ" --register); then echo "$DUP; no second run was queued (exit 4). Wait for it: its log, and the message it sends main when it ends."; exit 4
+    elif [ $? != 1 ]; then echo "REFUSED: the merge queue's lock stayed busy 10 s (or its folder could not be made), so $1 was not queued; nothing ran. Run it again." >&2; exit 1; fi
+    QFILE=$(git -C "$PP_MAIN" rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.queue/$1@$REQ
+  fi
+  if pp_main_foreground; then
+    MERGE_UNIT_LOCAL_QUEUE=$QFILE pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@" || exit
+    # shortcut: a detached run that leaves the queue before this line is re-entered under its wrapper's pid, which
+    # refuses only this unit at this sha until that wrapper has sent main its result; fine while merges take seconds+.
+    [ -z "$QFILE" ] || { echo $! > "$QFILE.$$" && mv -f "$QFILE.$$" "$QFILE"; }; exit
+  fi
 fi
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
   # -o: a child the merge leaves running (a test command's) must not keep the lock after the merge ends (issue 301).
-  exec env MERGE_UNIT_LOCAL_LOCK=1 flock -o \
+  exec env MERGE_UNIT_LOCAL_LOCK=1 MERGE_UNIT_LOCAL_QUEUE="$QFILE" flock -o \
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
 fi
 UNIT=$1; shift
@@ -54,6 +72,20 @@ ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a g
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The project is the checkout the merge runs in, not the one the plugin lives in.
 COMMANDECK_MAIN=$ROOT . "$HERE/paths.sh"
+# Issue 317: while this merge holds main it writes its state beside the lock (pp_merge_active reads it, so does the
+# main-merge-guard hook and the orchestrator's rules), and removes it, and its place in the queue, on every way out:
+# the traps below end with release. A killed merge leaves a file whose pid is dead, which blocks nothing.
+STATE=$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.state
+state() { # <stage>
+  [ "$DRY_RUN" = 0 ] || return 0
+  printf 'unit=%s\nsha=%s\ntip=%s\npid=%s\nstarted=%s\nstage=%s\nmain=%s\nlog=%s\n' "$UNIT" "$PRE_TIP" "${TIP:-$PRE_TIP}" "$$" "$STARTED" "$1" "$ROOT" "$PP_SCRATCH/merge-$UNIT.log" \
+    > "$STATE.$$" && mv -f "$STATE.$$" "$STATE"
+}
+release() {
+  rm -f "${MERGE_UNIT_LOCAL_QUEUE:-}" "$STATE.$$"
+  [ "$(sed -n 's/^pid=//p' "$STATE" 2>/dev/null)" != "$$" ] || rm -f "$STATE"
+}
+trap release EXIT
 . "$HERE/../hooks/lib/project.sh"; pp_project "$ROOT"
 pp_unit_name "$UNIT" || fail "step 1 preconditions" "the unit's name (above)"
 WT=$PP_WORKSPACES/$UNIT
@@ -68,6 +100,7 @@ BRANCH=$(git -C "$WT" branch --show-current)
 git -C "$WT" diff --quiet && git -C "$WT" diff --cached --quiet || fail "step 1 preconditions" "unit worktree has tracked changes"
 # The tip before the rebase: --auto's gate passed on it, and the closing pass's suite ran on it (issue 307).
 PRE_TIP=$(git -C "$WT" rev-parse HEAD)
+STARTED=$(date +%s); state preconditions; rm -f "${MERGE_UNIT_LOCAL_QUEUE:-}"
 [ -z "$AUTO" ] || [ "$(git -C "$WT" rev-parse --verify -q "$AUTO^{commit}" || true)" = "$PRE_TIP" ] \
   || fail "step 1 preconditions" "--auto $AUTO: the branch tip is now $(git -C "$WT" rev-parse --short=8 HEAD), not the commit the gate passed; the gate runs again on the new tip"
 # The gate's hold and owner checks again, under the merge lock: either may have changed while this merge waited.
@@ -108,6 +141,7 @@ no_holds() { # <step>
 no_holds "step 1 preconditions"
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
+state rebase
 echo "STEP 2 rebase: git -C $WT rebase main"
 if [ "$DRY_RUN" = 0 ]; then
   git -C "$WT" rebase main || {
@@ -118,6 +152,7 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 
 TIP=$(git -C "$WT" rev-parse HEAD)
+state proof
 # Builder proof: a Builder runs its own review passes, so its last round file
 # must be the pass script's, GO, for this tip or a clean rebase of it, from a
 # real reviewer session, that names no finding: every finding, P0 to P3, blocks
@@ -181,6 +216,7 @@ close_issues() { # [--dry-run]
 merged_end() {
   local rc=$?
   trap - EXIT
+  release
   [ "$rc" = 0 ] || { echo "MERGED as $(git rev-parse --short=8 HEAD), but a step after the merge commit failed (above): do not merge $UNIT again; finish that step by hand" >&2; rc=3; }
   if [ -n "$NOT_CLOSED" ]; then
     echo "MERGED, but the merge did not close $(grep -c . <<<"$NOT_CLOSED") issue(s) (refused by GitHub, or not on the launch list, above); close those shipped by hand:" >&2
@@ -318,7 +354,8 @@ if [ "$DRY_RUN" = 0 ]; then
   done
   SQUASH_ADDED=(${NEW[@]+"${NEW[@]}"})
   mapfile -t SQUASH_PATHS < <(git -C "$ROOT" diff --name-only --no-renames HEAD "$BRANCH")
-  trap undo_squash EXIT
+  state merge
+  trap 'undo_squash; release' EXIT
   git merge --squash "$BRANCH" >/dev/null || fail "step 4 merge" "squash merge conflicted; resolve in the unit worktree by rebasing onto main"
   TREE=$(git write-tree)
   # The project's check runs once, on the merged tree, before the commit exists:
@@ -334,6 +371,7 @@ if [ "$DRY_RUN" = 0 ]; then
   # proof:" line; the round file is the Builder's to edit), on the tip before or after the rebase, and only for the
   # check this merge would run: its cksum must match. A merge train's run is not one: it tested a tree with later
   # units in it, and a record a caller hands in proves nothing.
+  state check
   REUSED="" STALE="" SUM=$(cksum <<<"$CHECK_CMD" | cut -d' ' -f1)
   SUITE_LINE=$(sed -n 's/^Suite proof: //p' <<<"$BUILDER_PROOF" | grep -m1 -E '^Suite: [0-9a-f]{40} pass ' || true)
   if [ -n "$CHECK_CMD" ] && [ -n "$SUITE_LINE" ]; then
@@ -366,6 +404,7 @@ if [ "$DRY_RUN" = 0 ]; then
   # nothing else. Main's untracked brief files of the unit are archived now and
   # removed only once the merge is committed; one git tracks is left as it is
   # (the doctor names it). The tar lives in the plugin's own state, never in the project.
+  state commit
   ARCHIVE=$HOME/.commandeck/briefs/$PP_PROJECT/$UNIT.tar
   mkdir -p "$(dirname "$ARCHIVE")" || fail "step 4 briefs" "could not create the archive directory"
   KEPT=0 MAIN_FILES=()
@@ -391,7 +430,7 @@ if [ "$DRY_RUN" = 0 ]; then
   # --auto's gate holds too, read again under the same lock: a hold or question added during the check counts.
   [ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 4 merge" "--auto: held since the gate passed: $HELD"
   if ! git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} {LEDGER_FD}<&-; then
-    git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged?"
+    git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged, or was main's index emptied during the run?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
   fi
   exec {LEDGER_FD}<&-
@@ -400,9 +439,10 @@ if [ "$DRY_RUN" = 0 ]; then
   if [ "$(git rev-parse 'HEAD^{tree}')" != "$TREE" ]; then
     HOOKED=$(git diff --no-relative --name-only "$TREE" 'HEAD^{tree}' | head -5 | paste -sd' ' -)
     git reset -q --soft HEAD~1
-    fail "step 4 merge" "a commit hook changed what was committed ($HOOKED), so the commit was not the tree that was reviewed and checked; it was taken back. Make that change in $WT and run another pass"
+    fail "step 4 merge" "the commit holds other files than the squash ($HOOKED), so the commit was not the tree that was reviewed and checked (a commit hook, or main's index changed during the run); it was taken back. If a hook did it, make that change in $WT and run another pass; if someone touched main's index, merge again"
   fi
   trap merged_end EXIT
+  state post-merge
   MERGE_SHA=$(git rev-parse HEAD)
   MERGE_TREE=$(git rev-parse --short=8 "$MERGE_SHA^{tree}") TIP_TREE=$(git -C "$WT" rev-parse --short=8 'HEAD^{tree}')
   # Equality is claimed only when it holds.
@@ -480,6 +520,7 @@ if [ "$DRY_RUN" = 0 ]; then
   echo "step 4 briefs: added $KEPT entries to $ARCHIVE"
 fi
 
+state cleanup
 echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
 if [ "$DRY_RUN" = 0 ]; then
   # `terminal close --worktree --all` reports terminal_close_incomplete for a

@@ -449,7 +449,35 @@ pp_detach() {
   mkdir -p "${log%/*}" || return 1
   COMMANDECK_FOREGROUND=1 nohup bash -c 'log=$1 label=$2; shift 2; "$@" > "$log" 2>&1; rc=$?
     bash "$0" question "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
-  echo "$label: running detached, pid $!; log $log. Its result comes to main as a message."
+  echo "$label: running detached as pid $!; watch $log. Its result comes to main as a message; wait for it, never run it again (issue 317)."
+}
+# Issue 317: the merge's state sits beside its lock in main's git dir. merge-unit-local.state is written while one merge
+# holds main (unit, sha: the unit's tip when asked, tip: after its rebase, pid, started, stage, main, log), and
+# merge-unit-local.queue/<unit>@<sha> holds the pid of each request waiting on the lock. A pid that is gone makes
+# either stale: it blocks nothing.
+# shortcut: a pid the system gave to another process since reads as live; rare, and the next merge replaces the file.
+# pp_merge_active <unit> <sha> [--register] -- 0, printing where it stands, when <unit> at <sha> is the running merge
+# or waits on the lock. With --register a request that is not yet there is entered in the queue under this shell's pid
+# and the answer is 1: the caller goes on to the lock. Registrations take the queue's .lock one at a time, from the read
+# to the entry: two that found the same stale entry would each remove the other's. A lock still busy after 10 s (or
+# a queue folder that cannot be made) answers 2 and enters nothing: the lock's owner could register between an
+# unlocked read and write, and an unentered request is no duplicate anyone sees.
+pp_merge_active() {
+  local u=$1 sha=$2 d s q pid
+  d=$(git -C "$PP_MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  s=$d/merge-unit-local.state q=$d/merge-unit-local.queue/$u@$sha
+  if [ "${3:-}" = --register ]; then
+    mkdir -p "${q%/*}" || return 2
+    { flock -w 10 9 || return 2
+      pp_merge_active "$u" "$sha" && return 0; echo $$ > "$q"; return 1; } 9>>"${q%/*}/.lock"
+  fi
+  # The queue before the state: a merge writes its state before it leaves the queue, so one of the two names it.
+  if pid=$(cat "$q" 2>/dev/null) && kill -0 "$pid" 2>/dev/null; then echo "$u at ${sha:0:8} is already queued behind the running merge (pid $pid)"; return 0; fi
+  if [ "$(sed -n 's/^unit=//p' "$s" 2>/dev/null)" = "$u" ] && pid=$(sed -n 's/^pid=//p' "$s") && kill -0 "$pid" 2>/dev/null \
+     && { [ "$(sed -n 's/^sha=//p' "$s")" = "$sha" ] || [ "$(sed -n 's/^tip=//p' "$s")" = "$sha" ]; }; then
+    echo "$u at ${sha:0:8} is already merging (pid $pid, stage $(sed -n 's/^stage=//p' "$s"); log $(sed -n 's/^log=//p' "$s"))"; return 0
+  fi
+  return 1
 }
 # pp_inbox_actionable <run> [main's handle] -- issue 318: main's unread messages whose type wakes it (wakeKinds), as one
 # JSON array, oldest first. Both forms that reach main count: the run, and main's terminal handle (to-main.sh's). Any

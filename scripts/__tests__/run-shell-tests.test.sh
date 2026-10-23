@@ -38,8 +38,8 @@ ran
 check "a deleted test or script selects nothing" "" "$GOT"
 git -C "$R" reset -q && git -C "$R" checkout -q -- .
 
-# The merge-queue tests were split in four to fit the time cap; the three not named after merge-queue.sh carry
-# `# covers:` so a change to it alone still runs all four. Each fixture test keeps the real file's header comments.
+# The merge-queue tests were split in five to fit the time cap; the four not named after merge-queue.sh carry
+# `# covers:` so a change to it alone still runs all five. Each fixture test keeps the real file's header comments.
 for t in "$REAL"/scripts/__tests__/merge-queue*.test.sh; do
   n=$(basename "$t" .test.sh); { sed -n '1,5{/^#/p}' "$t"; echo "echo $n >> \"\$RAN\""; } > "$R/scripts/__tests__/$n.test.sh"
 done
@@ -47,8 +47,8 @@ echo 'echo queue' > "$R/scripts/merge-queue.sh"
 git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm queue
 echo '# edited' >> "$R/scripts/merge-queue.sh"
 ran
-check "an edit to merge-queue.sh alone runs all four merge-queue tests, and no other" \
-  "merge-queue merge-queue-glob merge-queue-listing merge-queue-train" "$GOT"
+check "an edit to merge-queue.sh alone runs all five merge-queue tests, and no other" \
+  "merge-queue merge-queue-glob merge-queue-listing merge-queue-train merge-queue-train-detach" "$GOT"
 git -C "$R" checkout -q -- .
 
 # A base git cannot resolve is an error, never a green run of nothing.
@@ -74,8 +74,8 @@ git -C "$R" checkout -q -- .
 # runs detached, and its result reaches main as a question; the tests it runs are not main's foreground.
 : > "$RAN"; printf '#!/usr/bin/env bash\necho "fg=$COMMANDECK_FOREGROUND" >> "$RAN"\n' > "$R/scripts/__tests__/touched.test.sh"
 OUT=$(cd "$R" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 COMMANDECK_SCRATCH="$TMP/scratch" bash "$RUNNER" scripts/__tests__/touched.test.sh </dev/null 2>&1); RC=$?
-PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT")
-check "in main's foreground the run returns 0 at once, naming its log" "0 1" "$RC $(grep -c "log $TMP/scratch/shell-tests.log" <<<"$OUT")"
+PID=$(sed -n 's/.*running detached as pid \([0-9]*\);.*/\1/p' <<<"$OUT")
+check "in main's foreground the run returns 0 at once, naming its log" "0 1" "$RC $(grep -c "watch $TMP/scratch/shell-tests.log" <<<"$OUT")"
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "the detached run ran the test outside main's foreground, and main heard its result" "fg=1 1" \
   "$(cat "$RAN") $(cat "$TMP/scratch"/queue/*.jsonl 2>/dev/null | grep -c 'run-shell-tests.sh: exit 0')"
