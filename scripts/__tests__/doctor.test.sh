@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# timeout: 240
 # doctor.sh is what an owner runs when something seems off: each way Codex's one notify command can miss the plugin
 # is named with its own line and the fix. Codex
 # takes a single notify command, so an owner with another notify tool runs a wrapper that calls both; a wrapper
@@ -189,6 +190,38 @@ check "trust line: a modified non-plugin hook is flagged, named, and the fix say
   "$(grep -c '^bad codex trust: 1 hook(s)' <<<"$TL"):$(grep -c 'start-v2.sh) is modified' <<<"$TL"):$(grep -c -- '--trust-all-hooks on' <<<"$TL")"
 echo '{"version": 1, "profile": "claude-openai", "trustAllHooks": true}' > "$PROJ/.claude/commandeck.json"
 check "with trust-all on the fix says the next launch re-trusts" 1 "$(lib il_codex_trust_report | grep -c 'each Codex launch trusts them again')"
+
+# Issue 316: a seat type that cannot read GitHub is a FAIL line of its own, naming its agent, sandbox mode and roles.
+# The stubs: gh fails only under the codex stub's sandbox, as a read-only Codex seat without network does.
+git -C "$PROJ" remote add origin https://github.com/o/proj.git
+cat > "$BIN/gh" <<STUB
+#!/usr/bin/env bash
+case "\$*" in "auth status"*|"auth token"*) exit 0 ;; esac
+[ -z "\${GH_SANDBOXED:-}" ] || [ ! -e "$T/gh-fail-sandbox" ] || { cat "$T/gh-fail-sandbox" >&2; exit 1; }
+echo '{"nameWithOwner":"o/proj"}'
+STUB
+cat > "$BIN/codex" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = sandbox ]; then shift; while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; GH_SANDBOXED=1 exec "$@"; fi
+exit 0
+STUB
+chmod +x "$BIN/gh" "$BIN/codex"
+printf '{"models": [{"slug": "gpt-9.1-sol"}, {"slug": "gpt-9.1-astra"}]}\n' > "$HOME/.codex/models_cache.json"
+echo "error connecting to api.github.com" > "$T/gh-fail-sandbox"
+OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
+check "the doctor reports a seat type that cannot reach GitHub, with its sandbox and the reason, and exits 1" "1:1:1" \
+  "$(grep -c '^FAIL github read: codex read-only + network (plan-judge-sol, plan-judge-astra): no network in the sandbox: error connecting to api.github.com' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox (orchestrator, plan-author, builder, fixer)$' <<<"$OUT"):$RC"
+rm -f "$T/gh-fail-sandbox"
+OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
+check "with GitHub reachable from every seat the doctor says so for each agent and mode" "1:1" \
+  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol, plan-judge-astra)$' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox' <<<"$OUT")"
+# Same agent and sandbox, other credentials: Astra's routed token is its own seat's, so a read as Sol proves nothing for it.
+sed -i.bak '2a\
+[ "${GH_TOKEN:-}" != invalid ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }' "$BIN/gh"; rm -f "$BIN/gh.bak"
+jq '.roles["plan-judge-astra"].shellEnv = {GH_TOKEN: "invalid"}' "$REAL/config/routing.json" > "$T/routing.json"
+OUT=$(in_proj env COMMANDECK_ROUTING="$T/routing.json" timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
+check "a seat whose own environment cannot read GitHub fails alone, though another seat of its agent and mode reads" "1:1:1" \
+  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-astra): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

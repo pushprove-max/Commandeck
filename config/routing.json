@@ -31,6 +31,7 @@
       "effort": "high",
       "reviewer": true,
       "sandbox": "read-only",
+      "network": true,
       "unboxed": true,
       "edits": false,
       "claude": {
@@ -48,6 +49,7 @@
       "effort": "high",
       "reviewer": true,
       "sandbox": "read-only",
+      "network": true,
       "unboxed": true,
       "edits": false,
       "claude": {

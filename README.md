@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.35.0-111111?style=flat-square" alt="Version 0.35.0">
+  <img src="https://img.shields.io/badge/version-0.36.0-111111?style=flat-square" alt="Version 0.36.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -33,7 +33,7 @@ Orca with the Chief of Staff pinned, main orchestrating and one worktree per Bui
 
 - [Orca](https://github.com/stablyai/orca), with its command named `orca-ide` on your `PATH`
 - Claude Code 2.1.271 or later, signed in
-- git, and the GitHub CLI (`gh`), signed in
+- git, and the GitHub CLI (`gh`), signed in. The plan judges run Codex read-only for files with network on and your `gh` sign-in, so they can write to GitHub and reach any host (accepted; every guard still runs in their panes)
 - `jq`, `perl`, Python 3.11+, Bash 4+ and the GNU tools
 - macOS (launchd) or Linux (systemd user services). On Windows, use WSL.
 

@@ -1,7 +1,8 @@
 # Sourced by builder-codex-pass.test.sh, builder-codex-pass-fresh-round.test.sh, builder-codex-pass-suite.test.sh,
-# builder-codex-pass-closing.test.sh, builder-codex-pass-decisions.test.sh and builder-codex-pass-fresh-session.test.sh:
+# builder-codex-pass-closing.test.sh, builder-codex-pass-decisions.test.sh, builder-codex-pass-fresh-session.test.sh and
+# builder-codex-pass-github.test.sh:
 # a scratch repo with a Builder worktree, stubs of the Codex plugin, the Codex CLI and Orca, and the pass helpers.
-# Six files, not one: one file of every case ran 199 s alone at load ~150, past the runner's 120 s per-file cap, and
+# Seven files, not one: one file of every case ran 199 s alone at load ~150, past the runner's 120 s per-file cap, and
 # the owner ruled that no file raises it.
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS_SH=$REAL/scripts/builder-codex-pass.sh
@@ -54,6 +55,31 @@ case "\$1" in
 esac
 EOF
 chmod +x "$TMP/cli/codex"
+# Issue 316: the pass reads GitHub before any reviewer starts. The gh stand-in answers a read from the files under
+# $TMP/gh (issue-<n>.txt, JSON with body and comments; api-<n>.json, the HTML GitHub renders for them; pr.txt) and
+# fails with the text of $TMP/gh-fail, if there is one; it logs each call. Off a terminal, as here, a real gh issue view
+# --comments prints the comments and no body. gh api serves the comments one a page, so only --paginate reads them all.
+mkdir -p "$TMP/gh"
+cat > "$TMP/cli/gh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$TMP/gh.log"
+[ ! -e "$TMP/gh-fail" ] || { cat "$TMP/gh-fail" >&2; exit 1; }
+case "\$*" in
+  "repo view"*) echo '{"nameWithOwner":"o/proj"}' ;;
+  "issue view "*) n=\$3; [ -e "$TMP/gh/issue-\$n.txt" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of \$n." >&2; exit 1; }
+    case "\$*" in *--json*) cat "$TMP/gh/issue-\$n.txt" ;; *) jq -r '.comments[].body' "$TMP/gh/issue-\$n.txt" ;; esac ;;
+  "api "*) n=\$(echo "\$*" | sed -nE 's#.*/issues/([0-9]+)(/comments)?\$#\1#p'); f=$TMP/gh/api-\$n.json
+    [ -n "\$n" ] && [ -e "\$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    case "\$*" in
+      *--paginate*/comments) jq -c '.comments[] | [.]' "\$f" ;;
+      */comments) jq -c '.comments[:1]' "\$f" ;;
+      *) jq '{html_url, body_html}' "\$f" ;;
+    esac ;;
+  "pr view "*) [ -e "$TMP/gh/pr.txt" ] || { echo 'no pull requests found for branch "builder/unit"' >&2; exit 1; }; cat "$TMP/gh/pr.txt" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$TMP/cli/gh"
 # routing.json names the family; the account's model list holds its ids.
 printf 'model = "x"\n' > "$CODEX_HOME/config.toml"
 printf '{"models":[{"slug":"gpt-5.2-sol"},{"slug":"gpt-6.1-sol"}]}\n' > "$CODEX_HOME/models_cache.json"
@@ -62,6 +88,7 @@ export COMMANDECK_ROUTING=$TMP/routing.json
 
 git init -q -b main "$REPO"
 git -C "$REPO" config user.name t; git -C "$REPO" config user.email t@t; git -C "$REPO" config core.hooksPath /dev/null
+git -C "$REPO" remote add origin https://github.com/o/proj.git
 printf 'echo base\n' > "$REPO/a.sh"; mkdir -p "$REPO/.claude"; echo '{"reviewLoop":{"maxRounds":"5"}}' > "$REPO/.claude/commandeck.json"
 git -C "$REPO" add a.sh .claude/commandeck.json; git -C "$REPO" commit -qm base
 printf '%s\n' .claude/settings.local.json .claude/builder-events.jsonl >> "$REPO/.git/info/exclude"

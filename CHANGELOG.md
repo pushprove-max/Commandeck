@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.36.0 -- 2026-10-23
+
+- Every seat can read GitHub, and a seat that cannot is not launched (issue 316). The cause was measured: the Codex
+  read-only sandbox has no network, while `gh`'s sign-in is visible in every sandbox. The plan judges (Sol, Astra) now
+  run Codex's read-only permission profile with network on, so files stay read-only and `gh` reaches GitHub. The plan
+  judges run with network on and your `gh` sign-in, so they can write to GitHub and reach any host; the owner accepted
+  that, and every guard still runs in their panes.
+- Before a seat opens, `seat.sh launch` makes one `gh repo view` the way that seat would (its sandbox, Codex home,
+  `shellEnv` and settings env, against its target repo) and refuses with the reason: no network in the sandbox, no
+  credentials visible in the sandbox, not signed in to gh, or no GitHub remote. Main's restart makes the same read
+  and, when it fails, leaves the old pane up.
+- The review pass makes its read before any reviewer starts, with or without a `Closes:` line. The Claude reviewer
+  gets `gh issue view`, `gh pr view` and `gh pr checks`; the Codex reviewer, whose sandbox the Codex plugin fixes
+  without network, is handed the live `Closes:` issues whole (body and comments), every issue or pull request they
+  link (the links GitHub itself renders in them) and the pull request state, read on the host with the reviewer's `shellEnv`. A reviewer reply that ends on a
+  `BLOCKED: GitHub read failed:` line refuses the pass, and that round can run again; the line anywhere else in a
+  reply makes it a NO-GO.
+- A seat that loses GitHub mid-task prints `BLOCKED: GitHub read failed: <command>: <first error line>`, which wakes
+  main like a `QUESTION:` line. `doctor.sh` reports GitHub read per agent, sandbox mode and seat environment.
+
 ## 0.35.0 -- 2026-10-23
 
 - A running detached merge is visible, guarded and not duplicated (issue 317). `merge-unit-local.sh` writes

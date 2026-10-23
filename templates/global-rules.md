@@ -59,6 +59,9 @@
   unless its planned files overlap another unit's; combine units that overlap.
   Never put two workers in one worktree. Main closes the unit's panes and
   removes its worktree in the merge turn.
+- When a `gh` read fails mid-task, print `BLOCKED: GitHub read failed:
+  <command>: <first error line>` on a line of its own and stop. Never go on
+  from a brief's copy of an issue: main reads that line and decides.
 - If the task list, the worktree list or the process list shows a worktree, a
   commit or a process main did not start, stop and reconcile before acting.
 - No duplicate agent of any role: reuse a live pane with the same launch title,

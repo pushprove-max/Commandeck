@@ -95,14 +95,24 @@ rm -f "$T/pane-up"
 
 # Issue 312: each judge's agent key picks its agent. On codex it is the read-only Codex sandbox; on claude the Claude
 # overlay, Sonnet with Write, Edit and NotebookEdit denied. Two judges on Claude stay two seats with two records.
-printf '#!/bin/sh\nexit 0\n' > "$BIN/codex"; chmod +x "$BIN/codex"
+# The codex stand-in (issue 316): `codex sandbox <words> -- <cmd>` runs <cmd> as the sandboxed seat would (GH_SANDBOXED
+# set), and every call is logged with the CODEX_HOME it saw.
+cat > "$BIN/codex" <<EOF
+#!/usr/bin/env bash
+echo "\$*|CODEX_HOME=\${CODEX_HOME:-}" >> "$T/codex.log"
+if [ "\${1:-}" = sandbox ]; then shift; while [ \$# -gt 0 ] && [ "\$1" != -- ]; do shift; done; shift; GH_SANDBOXED=1 exec "\$@"; fi
+exit 0
+EOF
+chmod +x "$BIN/codex"
 jq '.models += [{slug: "gpt-9.1-astra"}]' "$HOME/.codex/models_cache.json" > "$T/mc" && mv "$T/mc" "$HOME/.codex/models_cache.json"
 jrec() { sed -n 's/^cmd=//p' "$HOME/.commandeck/scratch/"*/"seat-pu-$1.txt" | tail -1; }
 for j in sol:planJudgeSol astra:planJudgeAstra; do
   r=plan-judge-${j%%:*} k=${j#*:}
   cap "{\"${k}Agent\": \"codex\"}"; rm -f "$T/pane-up"
   COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
-  check "$r on codex launches the read-only Codex sandbox" "0:1" "$?:$(jrec "$r" | grep -c "codex --model gpt-9.1-${j%%:*} .*--sandbox read-only")"
+  # Issue 316: the judge's network rides Codex's read-only permission profile; --sandbox would override that profile.
+  check "$r on codex launches the read-only Codex profile with network, and no --sandbox" "0:1:1:0" \
+    "$?:$(jrec "$r" | grep -c "codex --model gpt-9.1-${j%%:*} ."):$(jrec "$r" | grep -c 'permissions.ghread.network.enabled=true -c .default_permissions="ghread"'):$(jrec "$r" | grep -c -- '--sandbox')"
   cap "{\"${k}Agent\": \"claude\"}"; rm -f "$T/pane-up"
   COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
   check "$r on claude launches Claude Sonnet with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \

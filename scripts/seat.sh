@@ -250,6 +250,11 @@ launch)
   pp_route "$ROLE" "$LEFFORT" "$LMODEL" "$LADVISOR" || { echo "no usable roles.$ROLE in routing.json" >&2; exit 2; }
   [ -n "$RT_CMD" ] || { echo "roles.$ROLE in routing.json is not a pane seat" >&2; exit 2; }
   LAUNCH_AGENT=$RT_AGENT  # the launch's own route: a later pp_route without its --model may resolve to none
+  # Issue 316: a seat that cannot read GitHub is not launched. The read is the seat's own, against its target checkout;
+  # a plan seat's first launch has no worktree yet, so it reads local main, which that worktree is cut from.
+  GH_NEW=; GH_DIR=$WT; [ -d "$WT" ] || { GH_NEW=--new; GH_DIR=$PP_MAIN; }
+  WHY=$(pp_gh_read ${GH_NEW:+"$GH_NEW"} "$ROLE" "$GH_DIR" "$LEFFORT" "$LMODEL") \
+    || { echo "BLOCKED: $ROLE cannot read GitHub from its sandbox: $WHY" >&2; exit 2; }
   # The pane's shell knows its seat before the agent starts: the launch record is written only after the pane opens.
   CMD="export COMMANDECK_SEAT=$ROLE; $RT_CMD"
   # A finished spec does not run twice: the same plan-reviser job ran

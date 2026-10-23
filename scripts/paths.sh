@@ -732,6 +732,18 @@ def banner:
 def family:
   if .agent == "claude" then "claude"
   else ((.model | capture("^gpt-[0-9.]+-(?<f>[a-z]+)$") | .f) // .model) end;
+# A read-only Codex seat with network runs the Codex read-only permission profile with network on: file writes stay
+# blocked, gh reaches GitHub (issue 316). --sandbox would override the profile, so such a seat gets no sandbox word.
+def ghread: ["-c", "permissions.ghread.extends=\":read-only\"", "-c", "permissions.ghread.network.enabled=true"];
+def boxwords:
+  if .sandbox == "read-only" and .network then {sandbox: [], network: (ghread + ["-c", "default_permissions=\"ghread\""])}
+  else {sandbox: (if .sandbox then ["--sandbox", .sandbox] else [] end),
+        network: (if .network then ["-c", "sandbox_workspace_write.network_access=true"] else [] end)} end;
+# The same sandbox as `codex sandbox` takes it, for the gh read of a launch: a profile by -P, a mode by -c.
+def probebox:
+  if .sandbox == "read-only" and .network then ghread + ["-P", "ghread"]
+  else (if .sandbox then ["-c", "sandbox_mode=\"\(.sandbox)\""] else [] end)
+    + (if .network then ["-c", "sandbox_workspace_write.network_access=true"] else [] end) end;
 def words($root):
   . as $s
   | {box: (if .headless or .unboxed then [] else [$root.launch.paneBox] end),
@@ -748,9 +760,9 @@ def words($root):
      advisor: (if .advisor then ["--advisor", .advisor] else [] end),
      tools: (if .tools then ["--disallowedTools", (.tools | join(","))] else [] end),
      compact: (if .compactLimit != null then ["-c", "model_auto_compact_token_limit=\(.compactLimit)"] else [] end),
-     sandbox: (if .sandbox then ["--sandbox", .sandbox] else [] end),
+     sandbox: boxwords.sandbox,
      approval: (if .approval then ["-a", .approval] else [] end),
-     network: (if .network then ["-c", "sandbox_workspace_write.network_access=true"] else [] end),
+     network: boxwords.network,
      shellenv: (if .shellEnv then ["-c", "shell_environment_policy.set={" + (.shellEnv | to_entries | map("\(.key)=\"\(.value)\"") | join(",")) + "}"] else [] end),
      mcp: [(.mcpDisabled // [])[] | "-c", "mcp_servers.\(.).enabled=false"],
      skills: (if .disabledSkills then ["-c", "skills.config=[" + ($root.launch.skillSets[.disabledSkills] | map("{path=\"\(.)\",enabled=false}") | join(",")) + "]"] else [] end),
@@ -767,7 +779,7 @@ def resolve($root; $effort; $model):
   (if $effort != "" then .effort = $effort else . end) | (if $model != "" then .model = $model else . end)
   | check_seat(.role; $root)
   | . + {readonly: ((.sandbox == "read-only") or denies_writes),
-         banner: banner, family: family, model: (.model + (if .context then "[\(.context)]" else "" end)), words: words($root)}
+         probebox: probebox, banner: banner, family: family, model: (.model + (if .context then "[\(.context)]" else "" end)), words: words($root)}
   | if .headless then . + {argv: [.words[] | argword($home)]} else . + {cmd: (.words | map(shellword) | join(" "))} end
   | del(.words);
 def seat($spec; $effort; $model; $advisor):
@@ -1125,6 +1137,54 @@ pp_route() { # same arguments; sets RT_AGENT RT_MODEL RT_EFFORT RT_READONLY RT_B
   json=$(pp_route_json "$@") || return 2
   mapfile -t f < <(jq -r '.agent, .model, (.effort // ""), (if .readonly then 1 else 0 end), .banner, .family, (.cmd // "")' <<<"$json")
   RT_AGENT=${f[0]} RT_MODEL=${f[1]} RT_EFFORT=${f[2]} RT_READONLY=${f[3]} RT_BANNER=${f[4]} RT_FAMILY=${f[5]} RT_CMD=${f[6]}
+}
+# pp_gh_read [--host] [--new] <role> <dir> [effort] [model] -- one gh read, made the way <role>'s seat makes it, from
+# <dir>, the seat's target checkout (issue 316): its Codex sandbox, Codex home and shellEnv, or the env of the settings
+# Claude Code applies to a Claude seat's shell (none for the restricted Claude reviewer). Fails with "<reason>: <first error line>. Fix: <fix>" on one line,
+# returning 1. --host reads outside the sandbox (the review pass hands the Codex reviewer host reads); --new reads the
+# settings a worktree cut from local main will have, for a plan seat's first launch.
+pp_gh_read() {
+  local host= new= j role dir agent e=() u=() w=() n h f fs out rc=0 err reason fix
+  while [[ ${1:-} == --* ]]; do case $1 in --host) host=1 ;; --new) new=1 ;; *) return 2 ;; esac; shift; done
+  role=$1 dir=$2
+  j=$(pp_route_json "$role" "${3:-}" "${4:-}") || return 2
+  git -C "$dir" remote get-url origin >/dev/null 2>&1 \
+    || { echo "no GitHub remote in $dir: there is no repository to read. Fix: give that checkout an origin remote on GitHub"; return 1; }
+  agent=$(jq -r .agent <<<"$j")
+  # shellEnv first: a Claude seat gets it as env words, and its settings env (below) overrides them.
+  mapfile -t e < <(jq -r '.shellEnv // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$j")
+  # The review pass runs the Claude reviewer with --restricted, which reads no settings file: its env is shellEnv alone.
+  if [ "$agent" = claude ] && [ "$role" != codex-reviewer ]; then
+    # Claude Code applies the env of the user's settings, then the checkout's; the later one wins.
+    fs=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"); [ -n "$new" ] || fs+=("$dir/.claude/settings.json" "$dir/.claude/settings.local.json")
+    for f in "${fs[@]}"; do
+      mapfile -t -O "${#e[@]}" e < <(jq -r '.env | objects | to_entries[] | "\(.key)=\(.value)"' "$f" 2>/dev/null || true)
+    done
+    [ -z "$new" ] || mapfile -t -O "${#e[@]}" e < <(git -C "$PP_MAIN" show main:.claude/settings.json 2>/dev/null | jq -r '.env | objects | to_entries[] | "\(.key)=\(.value)"' 2>/dev/null || true)
+  fi
+  if [ "$agent" = codex ] && [ -z "$host" ]; then
+    # codex sandbox keeps the host's *KEY*, *SECRET* and *TOKEN* variables, which a seat's shell policy drops (measured).
+    for n in $(compgen -e); do case ${n^^} in *KEY*|*SECRET*|*TOKEN*) u+=(-u "$n") ;; esac; done
+    h=$(jq -r '.codexHome // empty' <<<"$j"); [ -z "$h" ] || u+=("CODEX_HOME=${h/#\~/$HOME}")
+    mapfile -t w < <(jq -r '.probebox[]' <<<"$j")
+    out=$(cd "$dir" && timeout 20 env "${u[@]}" codex sandbox "${w[@]}" -- env "${e[@]}" gh repo view --json nameWithOwner 2>&1) || rc=$?
+  else
+    out=$(cd "$dir" && timeout 20 env "${e[@]}" gh repo view --json nameWithOwner 2>&1) || rc=$?
+  fi
+  [ "$rc" != 0 ] || return 0
+  err=$(grep -m1 . <<<"$out" | cut -c1-200)
+  if [ "$rc" = 127 ] || grep -qiE 'command not found|no such file' <<<"$out"; then
+    reason="no gh on PATH" fix="install the GitHub CLI, then run: gh auth login"
+  elif grep -qiE 'error connecting|could not resolve host|network is unreachable|dial tcp' <<<"$out"; then
+    if [ -n "$host" ]; then reason="no network on this machine" fix="check the connection to api.github.com"
+    else reason="no network in the sandbox" fix="set network: true on the seat's read-only Codex role in routing.json"; fi
+  elif grep -qiE 'gh auth login|not logged in|http 401|bad credentials' <<<"$out"; then
+    if gh auth status >/dev/null 2>&1; then
+      reason="no credentials visible in the sandbox" fix="the seat's environment hides gh's sign-in; check the role's shellEnv and codexHome, and any GH_TOKEN in the checkout's .claude/settings*.json env"
+    else reason="not signed in to gh" fix="run: gh auth login"; fi
+  else reason="gh read failed" fix="run it by hand to see why: gh repo view --json nameWithOwner"; fi
+  echo "$reason: $err. Fix: $fix"
+  return 1
 }
 # pp_unit_briefs <briefs dir> <unit> -- the unit's own files there, one a line:
 # its brief, evidence, main's rulings, round files and later-cut briefs. Never

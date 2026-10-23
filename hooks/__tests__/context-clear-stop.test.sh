@@ -37,6 +37,14 @@ case "$1 $2" in
 esac
 STUB
 chmod +x "$BOX/bin/orca-ide"
+# Issue 316: the restart reads GitHub as main would before it opens a pane; gh-fail holds the error a read prints.
+git -C "$BOX/repo" remote add origin https://github.com/o/repo.git
+cat > "$BOX/bin/gh" <<STUB
+#!/usr/bin/env bash
+[ ! -e "$BOX/gh-fail" ] || { cat "$BOX/gh-fail" >&2; exit 1; }
+echo '{"nameWithOwner":"o/repo"}'
+STUB
+chmod +x "$BOX/bin/gh"
 
 CPD="$BOX/home/.claude/checkpoints"
 run_hook() { # $1 = helper path override (empty = the real helper)
@@ -79,6 +87,16 @@ echo "2026-10-14T10:00:00 restart: terminal create failed; old pane old-pane lef
 check "one that did not finish says so at the next prompt, with the helper's reason" 1 \
   "$(prompt_line | grep -c '^HANDOFF NOT DONE: this pane is still main\. .*terminal create failed; old pane old-pane left up')"
 rm -f "$CPD/sid.handoff"
+
+# Issue 316: a main that cannot read GitHub is not opened, and the old pane, the only one holding the context, stays.
+echo "error connecting to api.github.com" > "$BOX/gh-fail"
+run_hook ""
+wait_for 'grep -q "REFUSED: main cannot read GitHub" "$CPD/clear-hook.log" && [ ! -e "$INFLIGHT" ]'
+check "a restart is refused when main cannot read GitHub: no pane opened, the old pane not closed" "0:0" \
+  "$(grep -c '^terminal create' "$BOX/calls"):$(grep -c '^terminal close' "$BOX/calls")"
+check "the refusal names the reason and the old pane in the log, and the restarted marker is gone" "1:no" \
+  "$(grep -c 'main cannot read GitHub: no network in the sandbox: error connecting to api.github.com.*old pane old-pane left up' "$CPD/clear-hook.log"):$([ -e "$CPD/sid.md.restarted" ] && echo yes || echo no)"
+rm -f "$BOX/gh-fail" "$CPD/sid.handoff"
 
 # Carry-over: a resumed main's next checkpoint must keep, or explicitly
 # close, every open item of the checkpoint it resumed from. A restart that

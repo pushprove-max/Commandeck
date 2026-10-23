@@ -29,6 +29,9 @@ main_panes() {
     ($w | pnorm) as $w | (.result.terminals // .result // .)[]
     | select((.worktreePath | pnorm) == $w and .handle != $o) | .handle' 2>>"$log"
 }
+# Issue 316: a main that cannot read GitHub is not opened. The old pane is the only one holding the context, so it stays.
+why=$(pp_gh_read orchestrator "$PP_MAIN" 2>&1) \
+  || { rm -f "$cp.restarted"; echo "$(date +%FT%T) restart: REFUSED: main cannot read GitHub: $why; old pane $old left up, next stop retries" >>"$log"; exit 1; }
 # Without a snapshot a leftover main pane is indistinguishable from the late one.
 before=$(main_panes) || adopt_tries=0
 created=$(orca-ide terminal create --worktree "path:$PP_MAIN" --title "$title" --command "$cmd" --json 2>>"$log")

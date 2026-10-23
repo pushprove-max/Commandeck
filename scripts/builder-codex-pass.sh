@@ -106,7 +106,7 @@ UPDATED='If the plugin was updated during this build, its earlier passes were se
 OPEN='<structured_output_contract>' CLOSE='</structured_output_contract>'
 LABEL='branch diff against main'
 # The diff goes out in the prompt, so the reads left are the ones around it.
-GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute a finding, never a generated file, and make no tour of the surrounding module. A P0, P1 or P2 finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, which fails on this diff and passes once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. This prompt and the brief outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: do not retry one or report it as a failure; your reply and its VERDICT line reach main.'
+GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute a finding, never a generated file, and make no tour of the surrounding module. A P0, P1 or P2 finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, which fails on this diff and passes once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. This prompt and the brief outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: do not retry one or report it as a failure; your reply and its VERDICT line reach main. GitHub: read issues, linked issues and pull request checks and labels with gh issue view, gh pr view and gh pr checks (each with -R <owner/repo>) where your shell reaches GitHub; where it has no network, the GitHub reads made on the host at launch are in the review input. A GitHub read you need that fails or is not there is BLOCKED: GitHub read failed: <command>: <first error line>, on a line of its own, and then stop.'
 # The Codex plugin's line made every NO-GO pass return exactly one finding.
 ONE='Prefer one strong finding over several weak ones.'
 MANY='List every finding you can defend, worst first. After each one, look for the same mistake elsewhere in the diff and list those too.'
@@ -304,6 +304,15 @@ kind = re.search(rf"^({'|'.join(map(re.escape, heads))}) Reviewer ([1-9]) of ([1
 if not kind:
     die(f"the prompt of {name} {tid} has no review-input line of the pass script")
 lines = (reply or "").strip().splitlines()
+# Issue 316: a reviewer that lost GitHub ends its reply on that line, in place of a verdict. A fixed slot, never a
+# fence parse: the line anywhere else is no refusal, and no GO either (below).
+refusal = "BLOCKED: GitHub read failed:"
+blocked = lines[-1].strip() if lines and lines[-1].strip().startswith(refusal) else ""
+# An earlier one ran no review, as one with no reply: its round can run again (exit 3, see above).
+if blocked and earlier:
+    sys.exit(3)
+if blocked:
+    die(f"{name} {tid} could not read GitHub, so its reply is not a review: {blocked}")
 if not lines or lines[-1].strip() not in ("VERDICT: GO", "VERDICT: NO-GO"):
     if not earlier:
         die(f"the final reply of {name} {tid} does not end with a VERDICT line")
@@ -317,8 +326,9 @@ verdict = lines[-1].strip()
 # reads "- ", so every reader of the report sees "- [P3]". The gate below does not depend on it.
 lines = [re.sub(r"^(\s*)((?:[-*+]|\d+[.)])\s+)?[*_`]*\[[*_`]*(P[0-3])[*_`]*\][*_`]*",
                 lambda m: f"{m[1]}{'- ' if m[2] else ''}[{m[3]}]", l) for l in lines]
-# A GO beside any finding is not a GO: every finding, P0 to P3, blocks the merge.
-if any(re.search(finding, l) for l in lines[:-1]):
+# A GO beside any finding is not a GO: every finding, P0 to P3, blocks the merge. Nor is one beside the refusal
+# line, quoted or not: a lost GitHub read may sit above it.
+if any(re.search(finding, l) or refusal in l for l in lines[:-1]):
     verdict = "VERDICT: NO-GO"
 said = said or verdict[9:]
 print(verdict)
@@ -676,6 +686,46 @@ plugin_prompt() {
 }
 plugin_prompt "$FOCUS_REVIEW" >/dev/null
 
+# Issue 316: the pass reads GitHub as its reviewer does and refuses, before any reviewer starts, when it cannot. The
+# Claude reviewer's shell is unsandboxed, so its own read is checked. The Codex companion pins a read-only sandbox with
+# no network (codex-companion.mjs "sandbox: read-only"), which this pass cannot change: its GitHub reads are made here,
+# on the host, and handed in with the prompt (gh_hand_in), so the host read is what is checked.
+review_gh_check() { # <dir>
+  local why
+  if [ "$BY" = claude ]; then why=$(pp_gh_read codex-reviewer "$1" 2>&1) || die "the Claude reviewer cannot read GitHub: $why"
+  else why=$(pp_gh_read --host codex-reviewer "$1" 2>&1) || die "the Codex reviewer's sandbox has no network, so its GitHub reads are made on the host, and the host cannot read GitHub: $why"; fi
+}
+# The Closes: issues, every issue or pull request their bodies and comments link (one level), and the unit branch's
+# pull request state, read on the host now, whole, with the reviewer's shellEnv as its preflight read was. --json, not
+# --comments: off a terminal that prints the comments and no body, and --json also reads a pull request's number. A
+# failed read refuses the pass; no pull request is a state, not a failure.
+gh_hand_in() {
+  local closes html="" seen="" n r m repo out br e f=title,state,labels,body,comments a='Accept: application/vnd.github.full+json'
+  mapfile -t e < <(jq -r '.shellEnv // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$SOL")
+  closes=$(grep -E '^Closes:' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | grep -oE '#[0-9]+' | tr -d '#' | awk '!s[$0]++')
+  for n in $closes; do
+    out=$(cd "$WT" && env "${e[@]}" gh issue view "$n" --json "$f" 2>&1) || die "GitHub read failed on the host: gh issue view $n --json $f: $(grep -m1 . <<<"$out")"
+    printf 'GitHub issue #%s with its comments, read on the host at launch:\n%s\n\n' "$n" "$out"
+    # What is a link is GitHub's call, not a Markdown parse here: the links are the hrefs of the HTML GitHub renders
+    # for the body and every page of comments.
+    out=$(cd "$WT" && env "${e[@]}" gh api -H "$a" "repos/{owner}/{repo}/issues/$n" 2>&1) && html+=$(jq -r .body_html <<<"$out")$'\n' \
+      && seen+=$(jq -r '"href=\"\(.html_url)\""' <<<"$out")$'\n' \
+      && out=$(cd "$WT" && env "${e[@]}" gh api --paginate -H "$a" "repos/{owner}/{repo}/issues/$n/comments" 2>&1) && html+=$(jq -r '.[].body_html' <<<"$out")$'\n' \
+      || die "GitHub read failed on the host: gh api repos/{owner}/{repo}/issues/$n: $(grep -m1 . <<<"$out")"
+  done
+  # A link is an href to github.com/<owner>/<repo>/(issues|pull)/<n>, ended by the path's end, /, ? or #; scheme, host
+  # and owner/repo are case-insensitive. The Closes: issues' own URLs come first, so a link to one is not read again.
+  for r in $(grep -oiE 'href="https?://github\.com/[^/"]+/[^/"]+/(issues|pull)/[0-9]+[/?#"]' <<<"$seen$html" | awk -F/ '{r = tolower($4 "/" $5) "#" ($7 + 0)} !s[r]++ && NR > '"$(grep -c . <<<"$seen")"' {print r}'); do
+    m=${r##*#} repo=${r%"#$m"}
+    out=$(cd "$WT" && env "${e[@]}" gh issue view "$m" -R "$repo" --json "$f" 2>&1) || die "GitHub read failed on the host: gh issue view $r --json $f: $(grep -m1 . <<<"$out")"
+    printf 'GitHub issue or pull request %s, linked from the issue above, read on the host at launch:\n%s\n\n' "$r" "$out"
+  done
+  br=$(git -C "$WT" branch --show-current)
+  out=$(cd "$WT" && env "${e[@]}" gh pr view "$br" --json state,labels,statusCheckRollup 2>&1) \
+    || { grep -q 'no pull requests found' <<<"$out" && out="no pull request for branch $br" || die "GitHub read failed on the host: gh pr view $br: $(grep -m1 . <<<"$out")"; }
+  printf 'Pull request of the unit branch %s, read on the host at launch:\n%s\n' "$br" "$out"
+}
+
 # The reviewer's seat as it resolves: its /plugin config keys over routing's row, on the agent it runs.
 # Its warnings stay on stderr: one beside a resolved Codex id is not part of the id.
 WHY=$(mktemp) || die "cannot make a temp file"
@@ -699,7 +749,7 @@ else
     codex login status >/dev/null 2>&1 || die "the Codex CLI is not signed in; run: codex login"
   fi
 fi
-if [ "${1:-}" = --preflight ]; then printf '%s\t%s\n' "$MODEL" "$COMPANION"; exit 0; fi
+if [ "${1:-}" = --preflight ]; then review_gh_check "$PP_MAIN"; printf '%s\t%s\n' "$MODEL" "$COMPANION"; exit 0; fi
 
 # --ack-rulings <unit> runs no pass: the round and kind below are only stand-ins for it.
 CHECK=0; [ "${1:-}" != --check ] || { CHECK=1; shift; }
@@ -712,6 +762,7 @@ MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
 case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
+[ "$ACK" = 1 ] || review_gh_check "$WT"  # an acknowledgement reads no GitHub
 # Main's rulings for the unit: a Builder once ran twelve passes without
 # reading three of them. Main writes the file in its own checkout; a copy in
 # the worktree counts too. No pass starts on rulings the Builder has not
@@ -937,6 +988,7 @@ holds() { COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" holds "$UNIT" 2>/
   || echo "The owner's decisions ledger ($MAIN_OF_WT/.claude/metrics/decisions.jsonl) could not be read, so an open question naming $UNIT cannot be ruled out: end the title of a finding that changes a behaviour the owner may have asked about with [HOLD unknown]."; }
 HOLDS=$(holds)
 REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
+[ "$BY" != codex ] || { GH_HAND=$(gh_hand_in) || exit 2; REST+=$'\n'$GH_HAND$'\n'; }
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
@@ -1005,7 +1057,7 @@ WRAP
     # here is refused.
     { cat "$RUN-prompt-$K.md"; printf '\nCommit under review: %s\n' "$SHA"; } \
       | (cd "$WT" && env PATH="$SOCKS:$PATH" "${ARGV[@]}" --session-id "${SIDS[i]}" --restricted --tools 'Read,Grep,Glob,Bash' \
-          --allowedTools 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)') > "$RUN-claude-$K.json" &
+          --allowedTools 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh issue view:*),Bash(gh pr view:*),Bash(gh pr checks:*)') > "$RUN-claude-$K.json" &
     PIDS+=($!)
   done
 else

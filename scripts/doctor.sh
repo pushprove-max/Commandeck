@@ -4,8 +4,9 @@
 # does not run), each FAIL with the command that fixes it. Exit 1 on any FAIL.
 # It changes nothing. Checked: the tools on PATH, the plugin's version and hook
 # files, what the hooks put into a session, the project's config and install
-# manifest, that Orca answers, the dashboard and the watcher, and for the
-# claude-openai profile the review pass and Codex's hooks, trust and notify.
+# manifest, that Orca answers, the dashboard and the watcher, the GitHub read of
+# each agent and sandbox mode, and for the claude-openai profile the review pass
+# and Codex's hooks, trust and notify.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -120,6 +121,19 @@ if [ -n "$PROFILE" ]; then
   else bad "review pass: $(tail -1 <<<"$ERR")"; fi
   # No tomllib is already the "FAIL tools" line: a second line, marked ok, would say it twice.
   [ "$PASS" != codex ] || ! python3 -c 'import tomllib' 2>/dev/null || ok "codex route: $(pp_codex_route)"
+  # Issue 316: one gh read per agent, sandbox mode and seat environment (shellEnv, Codex home), made as that seat makes
+  # it; roles that differ only in model share one. The review pass has its own line above.
+  declare -A GH_ROLES=(); GH_KEYS=()
+  for r in $(jq -r '.roles | keys_unsorted[]' "$(pp_routing)" 2>/dev/null); do
+    [ "$r" != codex-reviewer ] && pp_role_enabled "$r" >/dev/null 2>&1 && J=$(pp_route_json "$r" 2>/dev/null) || continue
+    M=$(jq -r '(if .agent == "claude" then "claude, no sandbox" else "codex \(.sandbox // "default sandbox")\(if .network then " + network" else "" end)" end) + "\t" + ([.shellEnv, .codexHome] | tojson)' <<<"$J")
+    [ -n "${GH_ROLES[$M]:-}" ] || GH_KEYS+=("$M")
+    GH_ROLES[$M]+="${GH_ROLES[$M]:+, }$r"
+  done
+  for M in ${GH_KEYS[@]+"${GH_KEYS[@]}"}; do
+    if WHY=$(pp_gh_read "${GH_ROLES[$M]%%,*}" "$PP_MAIN" 2>&1); then ok "github read: ${M%%$'\t'*} (${GH_ROLES[$M]})"
+    else bad "github read: ${M%%$'\t'*} (${GH_ROLES[$M]}): $WHY"; fi
+  done
 fi
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_auto_mode_report)
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_cache_ttl_report)
