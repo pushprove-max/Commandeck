@@ -144,6 +144,7 @@ jq '.trustAllHooks = true' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; echo 'Codex 
 COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" --model gpt-9.1-astra >"$T/out" 2>&1
 check "trust-all on: the launch trusts the modified hook again before the pane opens, and the pane starts" "0:phase=dispatched" \
   "$(trusted):$(seat_sh status plan-judge-sol pu | cut -d' ' -f1)"
+# Issue 314's update-prompt cases are in seat-update-prompt.test.sh (this file's time cap).
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

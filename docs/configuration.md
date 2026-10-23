@@ -46,7 +46,7 @@ fills those models in, and asks for a type when a call names none.
 | `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
 | `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line; the plugin's `/config` options (`pluginConfigs`), which setup fills where they are empty. A `/config` option beats the project's answer, and the doctor names where each value comes from. `maxBuilders`, the most Builders that may run at once over all units, is set there or by hand as `builder.maxBuilders` in the project's `commandeck.json`; setup asks nothing for it. `wakeKinds`, the Orca message types that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`; others are held and shown at the next wake), and `wakeWindowSeconds`, the window in which actionable messages wake main once (default 60; 0 wakes at once), are set there too; setup asks neither. |
 | `~/.claude/CLAUDE.md` | Optional marked global instruction blocks. |
-| `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks and trust, relocated when CODEX_HOME is set. |
+| `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks, trust, the notify line and `check_for_update_on_startup = false` (no update prompt in launched panes; an owner's own value stays), relocated when CODEX_HOME is set. |
 | `~/.commandeck/install/` | Per-project and machine manifests, original blobs and saved dashboard bind/port/hosts. |
 | `~/.commandeck/plugin` | Stable link to the plugin folder setup last applied. |
 

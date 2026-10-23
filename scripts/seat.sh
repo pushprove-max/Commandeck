@@ -121,7 +121,7 @@ seat_readonly() {
 }
 # Bounded, so a blocked log read cannot freeze a wait or a launch.
 worker_state_kv() {
-  timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --agent "${AGENT:-}" --marker "${MARKER:-}" "$@" 2>/dev/null || true
+  timeout --kill-after=2 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --agent "${AGENT:-}" --marker "${MARKER:-}" "$@" 2>/dev/null || true
 }
 kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
 rec() { sed -n "s/^$1=//p" "$REC" 2>/dev/null | tail -1; }
@@ -200,8 +200,8 @@ effort)
   if seat_readonly && [ "$(rank "$LEVEL")" -lt "$(rank "$FLOOR")" ]; then
     echo "effort: $ROLE is a reviewer seat; /effort $LEVEL is below its floor $FLOOR, not sent" >&2; exit 1
   fi
-  PANE=$(jq -rn --argjson ps "$(timeout 8 orca-ide worktree ps --json 2>/dev/null || echo '{}')" \
-    --argjson ts "$(timeout 8 orca-ide terminal list --json 2>/dev/null || echo '{}')" --arg h "$H" '
+  PANE=$(jq -rn --argjson ps "$(timeout --kill-after=2 8 orca-ide worktree ps --json 2>/dev/null || echo '{}')" \
+    --argjson ts "$(timeout --kill-after=2 8 orca-ide terminal list --json 2>/dev/null || echo '{}')" --arg h "$H" '
     (($ts.result // []) | if type == "array" then . else (.terminals // []) end)[]
     | select(.handle == $h) | "\(.tabId):\(.leafId)" as $k
     | first($ps.result.worktrees[]?.agents[]? | select(.paneKey == $k)) | "\(.agentType) \(.state)"' 2>/dev/null || true)
@@ -335,7 +335,7 @@ launch)
     OWN=$(pane_title builder "$UNIT") REG=
     [ ! -e "$PANE_TITLES" ] || REG=$(cat -- "$PANE_TITLES") \
       || { echo "REFUSED: the pane title registry $PANE_TITLES could not be read, so the Builders running cannot be counted against the maxBuilders cap in /config; the Builder was not launched" >&2; exit 1; }
-    LIVE=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -er --arg reg "$REG" --arg o "$OWN" --argjson now "$(date +%s)" '
+    LIVE=$(timeout --kill-after=2 10 orca-ide terminal list --json 2>/dev/null | jq -er --arg reg "$REG" --arg o "$OWN" --argjson now "$(date +%s)" '
       (reduce ($reg | split("\n")[] | split("\t") | select(length >= 4)) as $r ({}; .[$r[2]] = {title: $r[1], at: ($r[3] | tonumber? // 0)})) as $m
       | [.result | if type == "array" then . else .terminals end | .[]
         | select(.connected != false and .orphaned != true) | . as $t | ($m[$t.handle] // {}) as $r
@@ -431,17 +431,56 @@ launch)
   launch_rest() {
     # Issue 315: a Codex pane left on the "hooks need review" menu (a hook trust could not cover) never takes the task.
     # Read at the end of the bounded tui-idle wait, and again when no turn started; the launch ends phase=failed.
+    # screen_lines -- the pane's screen, one line each (a string tail as its lines); status 2 when Orca gives no screen
+    # within 8 s.
+    screen_lines() {
+      local r
+      r=$(timeout --kill-after=2 8 orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null) \
+        && jq -nr 'input.result.terminal.tail | if type == "array" then .[] elif type == "string" then . else error end' <<<"$r" 2>/dev/null \
+        || return 2
+    }
     fail_if_review_menu() {
       [ "$LAUNCH_AGENT" = codex ] || return 0
       local msg
-      msg=$(pp_codex_blocked "$(pp_codex_home "$CMD")" "$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null)") \
-        && { printf '%s\n' "$msg" >&2; exit 1; }
+      # No screen is not the menu: the first call follows a read that answer_update_prompt proved, the second a launch already failing.
+      msg=$(pp_codex_blocked "$(pp_codex_home "$CMD")" "$(screen_lines)") && { printf '%s\n' "$msg" >&2; exit 1; }
       return 0
     }
+    # Issue 314: a Codex pane left on Codex's "Update available" prompt never takes the task. Always Skip (key 2), never
+    # Update now: in a pane that runs the installer and exits Codex with the task untaken; setup/update.sh update Codex
+    # outside panes. Bounded: each Orca call ends in 8 s (the 15 s answer wait in 20 s), the answer is re-read 3 times.
+    # Only a screen read without the prompt clears it: no screen, a refused Skip or the prompt still there ends the
+    # launch phase=failed before the task is typed (its text could pick "1. Update now").
+    # update_prompt_heading -- status 0 and the heading: the prompt is on screen; 1: a screen without it; 2: no screen.
+    update_prompt_heading() {
+      local s
+      s=$(screen_lines) || return 2
+      awk '/^[[:space:]]*Update available/ && /→/ { h = $0 } /Skip until next version/ { m = 1 } END { if (h != "" && m) { print h; exit 0 } exit 1 }' <<<"$s"
+    }
+    answer_update_prompt() {
+      [ "$LAUNCH_AGENT" = codex ] || return 0
+      local h s
+      h=$(update_prompt_heading) && s=0 || s=$?
+      [ "$s" != 1 ] || return 0
+      [ "$s" = 0 ] || { echo "Codex pane $H: its screen could not be read (orca-ide terminal read), so its update prompt cannot be ruled out; the task was not sent" >&2; exit 1; }
+      h=${h%"${h##*[![:space:]]}"}
+      timeout --kill-after=2 8 orca-ide terminal send --terminal "$H" --text 2 --json 2>/dev/null | jq -e '.ok == true' >/dev/null 2>&1 \
+        || { echo "Codex pane $H is on its update prompt and Skip could not be sent (orca-ide terminal send); the task was not sent. Answer it in the pane, then run: bash $PP_SCRIPTS/update.sh" >&2; exit 1; }
+      timeout --kill-after=2 20 orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 15000 --json >/dev/null || true
+      for _ in 1 2 3; do
+        update_prompt_heading >/dev/null && s=0 || s=$?
+        [ "$s" != 1 ] || { echo "codex update prompt: answered Skip (${h#*· }); Codex is updated outside panes: bash $PP_SCRIPTS/update.sh"; return 0; }
+        sleep 1
+      done
+      if [ "$s" = 2 ]; then echo "Codex pane $H: its screen could not be read after answering Skip (orca-ide terminal read); the task was not sent" >&2
+      else echo "Codex pane held by its update prompt after answering Skip; run: bash $PP_SCRIPTS/update.sh" >&2; fi
+      exit 1
+    }
     orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms 120000 --json >/dev/null || true
+    answer_update_prompt
     fail_if_review_menu
     # Issue 278: the agent retitles its pane as it starts, so the title given at create is lost; an older Orca has no such command.
-    timeout 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title "$ROLE" "$UNIT")" >/dev/null 2>&1 || true
+    timeout --kill-after=2 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title "$ROLE" "$UNIT")" >/dev/null 2>&1 || true
     # Orca detects the agent in a fresh pane seconds after tui-idle, and until then
     # refuses inject with "no recognized agent". Retrying that refusal is
     # fewer lines than polling the pane's agent state; --keep-task leaves the task
@@ -498,11 +537,11 @@ launch)
     # with no turn and the pane still shows the pointer. Anything less could be a
     # slow start, and a second prompt then runs the spec twice.
     if [ "$PROVEN" = 0 ] && [ "$DIRECT" = 0 ] && [ "$(kv reason)" = "no turn" ]; then
-      screen=$(orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail[]?' 2>/dev/null || true)
+      screen=$(screen_lines || true)
       if grep -qF "$PTR" <<<"$screen" && ! grep -qE 'esc to interrupt|· Working' <<<"$screen"; then
         # ponytail: Ctrl-U clears the composer line in the Claude and Codex TUIs; not
         # proven on a live pane, so an unrecovered launch still says UNPROVEN below.
-        orca-ide terminal send --terminal "$H" --text $'\x15' --json >/dev/null 2>&1 || true
+        timeout --kill-after=2 8 orca-ide terminal send --terminal "$H" --text $'\x15' --json >/dev/null 2>&1 || true
         send_pointer | submitted && PROVEN=1
       fi
     fi
@@ -511,7 +550,7 @@ launch)
     else fail_if_review_menu; echo "UNPROVEN SUBMISSION: no turn start seen for $ROLE on $H (task $T). Read the pane before sending anything; nothing was typed twice." >&2
     fi
     # The seat is launched: a failed read only leaves its state unknown, never fails the launch (builder-launch.sh undoes those).
-    state=$(orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true
+    state=$(timeout --kill-after=2 8 orca-ide terminal read --terminal "$H" --screen --json | jq -r '.. | strings' | { grep -oE 'Working|Ready|model: *[^ ]+' || true; } | head -2 | tr '\n' ' ') || true
     echo "seat=$ROLE unit=$UNIT handle=$H task=$T state=${state:-unknown} record=$REC"
     echo "phase=dispatched" >> "$REC"
   }

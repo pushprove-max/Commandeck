@@ -13,6 +13,7 @@ mkdir -p "$PL/scripts" "$HOME" && ln -s "$REAL/.claude-plugin" "$REAL/CHANGELOG.
 for f in "$REAL"/scripts/*; do case ${f##*/} in setup.sh|doctor.sh) ;; *) ln -s "$f" "$PL/scripts/"; esac; done
 cat > "$PL/scripts/setup.sh" <<'EOF'
 #!/usr/bin/env bash
+echo "codex: updated 0.40.0 -> 0.41.0 (codex update)"
 echo "Done:"
 echo "add-on serena: installed at its latest"
 echo
@@ -31,6 +32,8 @@ OUT=$(upd)
 check "it shows setup's Needs-you block, the failed install's line whole" "Needs you:
   add-on ponytail: the install FAILED (network down); to try again, run in the project: x" "$(grep -A1 '^Needs you:$' <<<"$OUT")"
 check "and not the rest of setup's report" 0 "$(grep -c '^Optional\.\|^add-on serena' <<<"$OUT")"
+# Issue 314: setup updates Codex when a newer one is out; the owner is told, not only on failure.
+check "it says setup's codex line" "codex: updated 0.40.0 -> 0.41.0 (codex update)" "$(grep '^codex: ' <<<"$OUT")"
 check "then the doctor runs and the update says done" '1:1' "$(grep -c '^doctor: ok$' <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"

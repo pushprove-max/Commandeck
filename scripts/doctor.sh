@@ -146,5 +146,9 @@ if [ "$PROFILE" = claude-openai ]; then
   if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else bad "${L#bad }"; fi
   L=$(il_notify_report)
   if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi
+  # Issue 314: the update check, then the update itself. A failed update is a warn, not a FAIL: update.sh rolls the whole
+  # plugin back on a FAIL, and an old Codex still runs.
+  while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_codex_update_report)
+  if L=$(il_codex_update); then [ -z "$L" ] || ok "$L"; else warn "$L"; fi
 fi
 exit $RC

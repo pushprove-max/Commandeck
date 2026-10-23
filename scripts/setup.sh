@@ -424,6 +424,9 @@ if [ "$PROFILE" = claude-openai ]; then
     { python3 "$HERE/codex-hook-trust.py" --list ${TA:+"$TA"} "$IL_CODEX" || true; } | sed 's/^/plan:   /'
   # A hook of a shape the script cannot hash is named on stderr; with trust-all it is another tool's, and setup goes on.
   else python3 "$HERE/codex-hook-trust.py" ${TA:+"$TA"} "$IL_CODEX" >/dev/null || [ -n "$TA" ]; fi
+  # Issue 314: Codex is updated here, before any pane opens (a stale one opens its panes on the update prompt). A failed
+  # update is kept in CUPD for "Needs you" below: NEED is reset after this step. `|| [ $? = 2 ]`: an unknown latest version ends no run.
+  if [ -n "$PLAN" ]; then il_codex_update plan || [ $? = 2 ]; else L=$(il_codex_update) && s=0 || s=$?; [ -z "$L" ] || echo "$L"; [ "$s" != 1 ] || CUPD=$L; fi
 fi
 ! V=$(pp_config_option dashboardBind) || BIND=$V
 ! V=$(pp_config_option dashboardPort) || PORT=$V
@@ -476,6 +479,7 @@ COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
+[ -z "${CUPD:-}" ] || NEED+=("$CUPD")
 case $CACHE_ON in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
 [ "$PROFILE" != claude-openai ] || [ -n "$TRUSTALL" ] || NEED+=("Codex hook trust: not answered yet, so a hook another tool rewrites opens Codex panes on the review menu; /commandeck:setup asks, or: setup.sh --trust-all-hooks on|off")
 [ -z "$NAME" ] || case $RCACHE_ON in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac

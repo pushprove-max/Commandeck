@@ -14,6 +14,18 @@ git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t c
 mkdir -p "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"
 printf '#!/usr/bin/env bash\necho "{\\"ok\\":true,\\"result\\":{}}"\n' > "$BIN/orca-ide"; chmod +x "$BIN/orca-ide"
 printf 'notify = ["%s/hooks/codex-notify.sh"]\nmodel = "other"\n' "$REAL" > "$CFG"
+# Issue 314: the doctor updates Codex when a newer one is out, so every run here gets a fake codex and curl first on PATH,
+# never the owner's Codex or the network. Installed 0.41.0 = the latest, so a case that wants an update lowers
+# $T/codex-version; `codex update` logs its argv to $T/codex-log, then runs the body in $T/codex-update.
+echo 0.41.0 > "$T/codex-version"; : > "$T/codex-update"
+cat > "$BIN/codex" <<EOF2
+#!/usr/bin/env bash
+case \$1 in
+  --version) echo "codex-cli \$(cat "$T/codex-version")" ;;
+  update) echo "\$*" >> "$T/codex-log"; . "$T/codex-update" ;;
+esac
+EOF2
+printf '#!/usr/bin/env bash\necho '"'"'{"tag_name":"rust-v0.41.0"}'"'"'\n' > "$BIN/curl"; chmod +x "$BIN/codex" "$BIN/curl"
 in_proj() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_SCRATCH -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_HOST_OS=Linux "$@"); }
 # lib <shell> [args] -- the shell runs with install-lib.sh loaded and the args as "$1"...
 lib() { in_proj bash -c '. "$0/paths.sh" && . "$0/install-lib.sh" && c=$1 && shift && eval "$c"' "$REAL/scripts" "$@" 2>&1; }

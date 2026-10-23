@@ -27,6 +27,7 @@ IL_CONFIG=$PP_MAIN/.claude/commandeck.json
 IL_CODEX=${CODEX_HOME:-$HOME/.codex}
 # A relative CODEX_HOME is the folder it names from here: the manifest key must name it from any later cwd.
 case $IL_CODEX in /*) ;; *) IL_CODEX=$(cd "$IL_CODEX" 2>/dev/null && pwd -P) || IL_CODEX=$PWD/${CODEX_HOME#./} ;; esac
+IL_NOUPDATE='check_for_update_on_startup = false # commandeck: no update prompt in launched panes'   # issue 314: the one line setup adds to the Codex config, uninstall takes out
 IL_OURS=/hooks/codex-dispatch.sh   # the one command the plugin's Codex entries run
 # An entry is the plugin's when its command STARTS as the template's does. A
 # hook of the owner's that only mentions the path (a comment, an argument) is
@@ -620,6 +621,55 @@ il_codex_trust_report() {
   else fix="turn on trust-all so each launch trusts them again (setup.sh --trust-all-hooks on), or review them with /hooks in a Codex pane"; fi
   echo "bad codex trust: $(grep -c . <<<"$err") hook(s) in $IL_CODEX would open each Codex pane on the review menu: $(printf '%s\n' "${err//"$IL_CODEX: "/}" | awk 'NR > 1 { printf "; " } { printf "%s", $0 }'). $fix"
 }
+# il_codex_update [plan] -- issue 314: Codex is updated here, outside any pane, never left on an old version that opens
+# its panes on the update prompt. Prints one `codex:` line (nothing when there is no codex); status 0 latest or updated,
+# 1 the update FAILED, 2 the installed or latest version is unknown. Codex's own `codex update` knows which installer
+# the user used. `plan` names the update and runs nothing. The update ends at TERM after 300 s and KILL 10 s later; its
+# output goes to a file, so a child that outlives the kill cannot hold a pipe open. Updated means a version read after
+# it, newer than before; a failure names the version read then, or why none was.
+il_codex_update() {
+  local i l n j o s t why now
+  command -v codex >/dev/null 2>&1 || return 0
+  i=$(il_codex_version) || { echo "codex: its version is unreadable (codex --version: $i); not updated"; return 2; }
+  j=$(curl -fsS --max-time 10 https://api.github.com/repos/openai/codex/releases/latest 2>&1) || true
+  l=$(jq -r '.tag_name // empty' <<<"$j" 2>/dev/null) || l=
+  l=${l#"${l%%[0-9]*}"}
+  n=${j:-no answer}
+  [ -n "$l" ] || { echo "codex: $i installed, latest unknown (${n##*$'\n'}); not updated"; return 2; }
+  [ "$(printf '%s\n' "$i" "$l" | sort -V | tail -1)" != "$i" ] || { echo "codex: $i, the latest"; return 0; }
+  [ "${1:-}" != plan ] || { echo "plan: would update Codex $i -> $l (codex update)"; return 0; }
+  o=$(mktemp)
+  timeout --kill-after=10 300 codex update </dev/null >"$o" 2>&1 && s=0 || s=$?
+  n=$(il_codex_version) && t=0 || t=1
+  if [ "$s$t" = 00 ] && [ "$(printf '%s\n' "$i" "$n" | sort -V | tail -1)" != "$i" ]; then rm -f "$o"; echo "codex: updated $i -> $n (codex update)"; return 0; fi
+  case $s in 124|137) why="no end in 300 s; stopped" ;; 0) why="it exited 0" ;; *) why=$(grep . "$o" | tail -1); why=${why:-exit $s} ;; esac
+  rm -f "$o"
+  if [ "$t" = 1 ]; then now="codex --version now: $n"; elif [ "$n" = "$i" ]; then now="Codex stays on $i"; else now="Codex is on $n"; fi
+  echo "codex: update $i -> $l FAILED ($why); $now. Run: codex update"; return 1
+}
+# il_codex_version -- the installed Codex's version, from `codex --version` within 10 s; else why not, status 1.
+il_codex_version() {
+  local v s
+  v=$(timeout --kill-after=2 10 codex --version </dev/null 2>/dev/null) && s=0 || s=$?
+  case $s in 0) ;; 124|137) echo "no answer in 10 s"; return 1 ;; *) echo "exit $s"; return 1 ;; esac
+  v=$(awk 'NR == 1 { print $NF }' <<<"$v")
+  [[ $v =~ ^[0-9]+\.[0-9]+ ]] || { echo "no version in its output"; return 1; }
+  echo "$v"
+}
+# il_codex_update_report -- the doctor's line on Codex's update check: "ok <why>" when check_for_update_on_startup is
+# false in the Codex config, else "warn <what is wrong and the fix>". A missing file is the default: on.
+il_codex_update_report() {
+  local v
+  v=$(python3 -c 'import sys, tomllib
+try: print(tomllib.load(open(sys.argv[1], "rb")).get("check_for_update_on_startup", True))
+except FileNotFoundError: print(True)
+except (OSError, ValueError): print("unreadable")' "$IL_CODEX/config.toml" 2>/dev/null)
+  case $v in
+    False) echo "ok codex update check: off (check_for_update_on_startup = false in $IL_CODEX/config.toml)" ;;
+    unreadable) echo "warn codex update check: unknown, $IL_CODEX/config.toml is not readable TOML" ;;
+    *) echo "warn codex update check: on in $IL_CODEX/config.toml, so a launched pane can open on Codex's update prompt (the launcher answers Skip); run: bash $(printf '%q' "$PP_SCRIPTS")/update.sh" ;;
+  esac
+}
 # il_notify_report -- the doctor's line on Codex's one notify command: "ok <why>"
 # when it calls this plugin's hook, straight or through the owner's wrapper,
 # else "warn <what is wrong and the fix>".
@@ -676,8 +726,29 @@ il_notify_set() {
   # translates %F, and the check below matches the English word.
   seen=$(LC_ALL=C stat -c '%F %i %.9Y' -- "$f" 2>/dev/null)
   cur=$(il_read "$f") || return 1
-  rest=$(grep -vE '^notify = \[".*/hooks/codex-notify\.sh"\]$' <<<"$cur" || true)
-  [ -z "$1" ] || grep -qE '^[[:space:]]*notify[[:space:]]*=' <<<"$rest" || rest=$(il_notify_line "$1")${rest:+$'\n'$rest}
+  # The plugin's notify and update-check lines come out, then (with a root) each goes back above the first table when the
+  # owner has no such key (issue 314). A line is the plugin's only as a root key, read by tomllib: taking it out takes
+  # that key out and nothing else, so the same text in an owner's multiline string stays. A file tomllib cannot read
+  # loses the lines as text and gets neither back: adding one cannot make it valid.
+  rest=$(python3 -c 'import re, sys, tomllib
+mark, add = sys.argv[1:]
+lines = sys.stdin.read().removesuffix("\n").split("\n")
+def load(ls):
+    try: return tomllib.loads("\n".join(ls))
+    except ValueError: return None
+d = load(lines)
+for i in reversed(range(len(lines))):
+    k = "check_for_update_on_startup" if lines[i] == mark else "notify" if re.fullmatch(r"notify = \[\".*/hooks/codex-notify\.sh\"\]", lines[i]) else None
+    if k is None: continue
+    t = lines[:i] + lines[i + 1:]
+    e = load(t)
+    if d is not None and e != {x: v for x, v in d.items() if x != k}: continue
+    lines, d = t, e
+if add and d is not None:
+    if "check_for_update_on_startup" not in d: lines.insert(0, mark)
+    if "notify" not in d: lines.insert(0, add)
+print("\n".join(lines))' "$IL_NOUPDATE" "${1:+$(il_notify_line "$1")}" <<<"$cur") \
+    || { echo "commandeck: $f could not be read with python3's tomllib; nothing was written" >&2; return 1; }
   [ "$rest" != "$cur" ] || return 0
   # Not the regular file read above (a link at either stat, another file, edited): refuse, and il_notify retries a link
   # at its target. Nothing there is a create. A change between this check and il_write's mv is still written over:

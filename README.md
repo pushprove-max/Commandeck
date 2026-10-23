@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.36.0-111111?style=flat-square" alt="Version 0.36.0">
+  <img src="https://img.shields.io/badge/version-0.38.0-111111?style=flat-square" alt="Version 0.38.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -97,7 +97,7 @@ These are the commands you type:
 | Command | Use it for |
 |---|---|
 | `/commandeck:setup` | First-time setup, and changing saved answers |
-| `/commandeck:doctor` | Read-only check of the wiring |
+| `/commandeck:doctor` | Check of the wiring; updates Codex when a newer one is out |
 | `/commandeck:update` | Repoint a project after a plugin update |
 | `/commandeck:uninstall` | Remove a project's wiring |
 | `/commandeck:handoff` | Save a checkpoint and restart the main session |

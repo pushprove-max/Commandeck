@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Sourced by seat.test.sh, seat-plan-marker.test.sh and seat-run.test.sh: a hand-written commandeck.json in a scratch
+# Sourced by the seat*.test.sh files: a hand-written commandeck.json in a scratch
 # project, an Orca stand-in with one pane, and the seat.sh helpers (seat_sh, settle, run, srun) and PASS/FAIL/check.
 # Three files, not one: one file of every case ran past the runner's 120 s per-file cap under load, and the owner
 # ruled that no file raises it.
@@ -34,18 +34,19 @@ case "\$*" in
     [ -e "$T/pane-up" ] && t='{"handle":"h1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT"}' || t=''
     x=\$(cat "$T/extra" 2>/dev/null); [ -z "\$x" ] || t=\${t:+\$t,}\$x
     echo "{\"ok\":true,\"result\":{\"terminals\":[\$t]}}" ;;
-  "terminal read"*) [ ! -e "$T/read-fails" ] || exit 1; [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
+  "terminal read"*) [ ! -e "$T/slow-read" ] || trap '' TERM; while [ -e "$T/slow-read" ]; do sleep 0.1; done; [ ! -e "$T/read-fails" ] || exit 1; [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
     jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
   "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
-  "terminal wait"*) while [ -e "$T/slow-idle" ]; do sleep 0.1; done; [ ! -e "$T/die-on-wait" ] || rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
+  "terminal wait"*) echo "\$*" >> "$T/waits"; while [ -e "$T/slow-idle" ]; do sleep 0.1; done; [ ! -e "$T/die-on-wait" ] || rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
   "orchestration send"*) echo "\$*" >> "$T/wakes"; echo '{"ok":true,"result":{}}' ;;
   "terminal set-pane-title"*) [ ! -e "$T/no-title" ] || { echo "unknown command" >&2; exit 1; }; while [ \$# -gt 0 ]; do [ "\$1" != --title ] || printf '%s\n' "\$2" >> "$T/titles"; shift; done; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-update"*) echo "\$*" >> "$T/updates"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
   "orchestration worker-start"*) [ -e "$T/no-dispatch" ] && { echo '{"ok":false,"error":{"message":"refused for the test"}}'; exit; }; echo '{"ok":true,"result":{}}' ;;
   "terminal send"*) [ ! -e "$T/send-fails" ] || { echo '{"ok":false,"error":{"message":"SEND-PROBE"}}'; exit; }
+    while [ \$# -gt 0 ]; do [ "\$1" != --text ] || { printf '%s\n' "\$2" >> "$T/sent"; [ "\$2" != 2 ] || { [ ! -e "$T/after-skip" ] || cp "$T/after-skip" "$T/screen"; [ ! -e "$T/skip-breaks-read" ] || touch "$T/read-fails"; }; }; shift; done
     [ -e "$T/no-dispatch" ] || { echo '{"ok":true,"result":{}}'; exit; }
-    while [ \$# -gt 0 ]; do [ "\$1" != --text ] || printf '%s\n' "\$2" >> "$T/sent"; shift; done; echo '{"ok":true,"result":{"stages":["turn_started"]}}' ;;
+    echo '{"ok":true,"result":{"stages":["turn_started"]}}' ;;
   "worktree ps --json") echo '{"result":{"worktrees":[]}}' ;;
   # A plan seat's first launch cuts its planning worktree (issue 316's first-launch probe).
   "worktree create"*) a="\$*"; a=\${a#*--name }; git -C "$PROJ" worktree add -q "$HOME/orca/workspaces/proj/\${a%% *}" && echo '{"ok":true,"result":{}}' ;;

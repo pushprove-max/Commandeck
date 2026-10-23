@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.38.0 -- 2026-10-23
+
+- Launched Codex panes no longer wait on Codex's "Update available" prompt. Setup writes `check_for_update_on_startup
+  = false` into the Codex home's `config.toml` (kept if the owner set the key; shown in the `--plan` preview; uninstall
+  takes the line out). Setup, `update.sh` and `doctor.sh` run `codex update` when a newer Codex is out and say so; a
+  failed or hung update (stopped after 300 s) is reported loudly, under "Needs you" in setup, and the run goes on with
+  the current version. A pane that still opens on the prompt is answered Skip within a bound and the answer is logged;
+  one that stays on it ends its launch `phase=failed`, naming it. `doctor.sh` reports the update check and the
+  installed and latest versions. Fixes #314.
+
 ## 0.36.0 -- 2026-10-23
 
 - Every seat can read GitHub, and a seat that cannot is not launched (issue 316). The cause was measured: the Codex

@@ -16,6 +16,19 @@ check "the doctor's startup measure leaves the owner's open decision open" null 
   "$(in_proj bash "$REAL/scripts/decision.sh" list 2>/dev/null | jq '.[] | select(.id == "doctor-test") | .answeredAt')"
 check "and main's queued messages where they are" 1 "$(grep -c 'stop this build' "$QD/main.jsonl" 2>/dev/null)"
 
+# --- issue 314: a doctor-only run updates Codex when a newer one is out, and reports the update check ---
+# Update check off in the Codex config; installed 0.40.0, latest 0.41.0 (fakes of fixtures/doctor-setup.sh).
+{ echo 'check_for_update_on_startup = false'; cat "$CFG"; } > "$T/cfg" && mv "$T/cfg" "$CFG"
+echo 0.40.0 > "$T/codex-version"; echo "echo 0.41.0 > $T/codex-version" > "$T/codex-update"; : > "$T/codex-log"
+in_proj timeout 60 bash "$REAL/scripts/doctor.sh" > "$T/doc" 2>&1; RC1=$?
+check "a doctor-only run updates Codex once and reports the check off and the update" "update:1:1" \
+  "$(paste -sd' ' "$T/codex-log"):$(grep -c '^ok   codex update check: off' "$T/doc"):$(grep -c '^ok   codex: updated 0.40.0 -> 0.41.0 (codex update)$' "$T/doc")"
+echo 0.40.0 > "$T/codex-version"; echo 'echo "installer broke" >&2; exit 1' > "$T/codex-update"; : > "$T/codex-log"
+in_proj timeout 60 bash "$REAL/scripts/doctor.sh" > "$T/doc" 2>&1; RC2=$?
+check "a failed update is a warn, not a FAIL: the exit code is the passing run's" "update:1:$RC1" \
+  "$(paste -sd' ' "$T/codex-log"):$(grep -c '^warn codex: update 0.40.0 -> 0.41.0 FAILED (installer broke); Codex stays on 0.40.0' "$T/doc"):$RC2"
+echo 0.41.0 > "$T/codex-version"; : > "$T/codex-update"
+
 # --- main's settings file against the orchestrator key, in the doctor's whole run ---
 # The project's file as doctor-options.test.sh leaves it before its Builder line: a claude profile, an old builder.model.
 mkdir -p "$HOME/.claude"

@@ -578,5 +578,109 @@ for gone in "the notify line" "the link's target, swapped for a fresh file" "the
     "$(grep -c '^notify = ' "$f"):$(grep -c '^model = ' "$f")"
 done
 
+# --- Issue 314: a launched Codex pane must never stop on the CLI's update prompt, and Codex is updated outside panes ---
+# Setup writes check_for_update_on_startup = false above the first table (a root key), next to the notify line and
+# issue 315's trust tables, all kept; an owner's own key stays, quoted or not (tomllib decides, not a grep).
+KEYTXT='check_for_update_on_startup = false # commandeck: no update prompt in launched panes'
+H314=$T/h314; mkdir -p "$H314/.codex"
+printf 'model = "m"\n\n[hooks.state."%s/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:0000"\nenabled = false\n' "$H314/.codex" > "$H314/.codex/config.toml"
+cp "$H314/.codex/config.toml" "$T/c314.orig"
+H=$H314 lib 'il_notify "$IL_ROOT"' >/dev/null 2>&1
+rd() { python3 -c 'import sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb")); print(d.get("check_for_update_on_startup"), d.get("model"), sorted(d.get("hooks", {})))' "$1" 2>&1; }
+check "update check: setup writes the key once above the first table, model and 315's trust table kept" "1:False m ['state']:same" \
+  "$(grep -cxF "$KEYTXT" "$H314/.codex/config.toml"):$(rd "$H314/.codex/config.toml"):$(diff <(grep -vE '^(notify|check_for_update_on_startup) ' "$H314/.codex/config.toml") "$T/c314.orig" >/dev/null && echo same)"
+H=$H314 lib 'il_notify "$IL_ROOT"' >/dev/null 2>&1
+check "update check: a second setup run does not double the key" 1 "$(grep -c '^check_for_update_on_startup' "$H314/.codex/config.toml")"
+H=$H314 lib "il_notify ''" >/dev/null 2>&1
+check "update check: uninstall takes out the plugin's lines and nothing else" same "$(cmp -s "$H314/.codex/config.toml" "$T/c314.orig" && echo same)"
+for form in plain quoted; do
+  H314b=$T/h314-$form; mkdir -p "$H314b/.codex"
+  case $form in
+    plain) printf 'check_for_update_on_startup = true\nnotify = ["x"]\nmodel = "m"\n' ;;
+    quoted) printf '"check_for_update_on_startup" = true\n"notify" = ["x"]\n\n[hooks.state."%s/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:0000"\n' "$H314b/.codex" ;;
+  esac > "$H314b/.codex/config.toml"
+  cp "$H314b/.codex/config.toml" "$T/c314-$form.orig"
+  H=$H314b lib 'il_notify "$IL_ROOT"' >/dev/null 2>&1
+  check "update check: an owner's own $form key is kept, none is added, the file still parses with True" "same:True" \
+    "$(cmp -s "$H314b/.codex/config.toml" "$T/c314-$form.orig" && echo same):$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["check_for_update_on_startup"])' "$H314b/.codex/config.toml" 2>&1)"
+done
+# Pass 1: the plugin's lines were filtered out of the whole text, so the same text inside an owner's multiline string
+# was cut from the owner's value. Only the root keys are the plugin's: the string survives setup and uninstall.
+H314m=$T/h314-ml; mkdir -p "$H314m/.codex"
+printf 'developer_instructions = """\n%s\nnotify = ["/x/hooks/codex-notify.sh"]\n"""\n' "$KEYTXT" > "$H314m/.codex/config.toml"
+cp "$H314m/.codex/config.toml" "$T/c314-ml.orig"
+H=$H314m lib 'il_notify "$IL_ROOT"' >/dev/null 2>&1
+ML=$(python3 -c 'import sys, tomllib
+a, b = (tomllib.load(open(f, "rb")) for f in sys.argv[1:])
+print(a["developer_instructions"] == b["developer_instructions"], a.get("check_for_update_on_startup"), "notify" in a)' "$H314m/.codex/config.toml" "$T/c314-ml.orig" 2>&1)
+H=$H314m lib "il_notify ''" >/dev/null 2>&1
+check "update check: the plugin's line text inside an owner's multiline string is kept by setup and uninstall" "True False True:same" \
+  "$ML:$(cmp -s "$H314m/.codex/config.toml" "$T/c314-ml.orig" && echo same)"
+
+# codex update: a fake codex (--version reads a file; update logs its argv, then runs update.sh) and a fake curl are
+# first on PATH; no network, no real Codex. $FK/short holds a timeout that shrinks the first duration to 1 s.
+export FK=$T/fk; mkdir -p "$FK/bin" "$FK/short"
+cat > "$FK/bin/codex" <<'EOF'
+#!/usr/bin/env bash
+case $1 in
+  --version) [ ! -e "$FK/version-hangs" ] || sleep 30; echo "codex-cli $(cat "$FK/version")" ;;
+  update) echo "$*" >> "$FK/log"; . "$FK/update.sh" ;;
+esac
+EOF
+cat > "$FK/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[ ! -e "$FK/curl-fails" ] || { echo "curl: (22) The requested URL returned error: 403" >&2; exit 22; }
+echo '{"tag_name":"rust-v0.41.0"}'
+EOF
+printf '#!/usr/bin/env bash\na=(); d=; for x in "$@"; do case $x in --kill-after=*) a+=(--kill-after=1) ;; [0-9]*) [ -n "$d" ] && a+=("$x") || { a+=(1); d=1; } ;; *) a+=("$x") ;; esac; done\nexec %s "${a[@]}"\n' "$(command -v timeout)" > "$FK/short/timeout"
+chmod +x "$FK"/bin/* "$FK/short/timeout"
+# upd314 <installed> <update.sh body> -- il_codex_update's line in $L, its status in $RC, the fake's argv log in $FK/log
+upd314() { echo "$1" > "$FK/version"; printf '%s\n' "$2" > "$FK/update.sh"; : > "$FK/log"; L=$(PATH=$FK/bin:$PATH lib 'il_codex_update'); RC=$?; }
+upd314 0.40.0 'echo 0.41.0 > "$FK/version"'
+check "codex update: a newer release runs codex update once and says updated 0.40.0 -> 0.41.0, status 0" "0:codex: updated 0.40.0 -> 0.41.0 (codex update):update" "$RC:$L:$(cat "$FK/log")"
+upd314 0.41.0 'echo no >> "$FK/log"'
+check "codex update: the latest runs nothing and says so, status 0" "0:codex: 0.41.0, the latest:" "$RC:$L:$(cat "$FK/log")"
+upd314 0.40.0 'echo "installer broke" >&2; exit 1'
+check "codex update: a failed update says FAILED with the installer's last line, status 1, Codex stays" "1:codex: update 0.40.0 -> 0.41.0 FAILED (installer broke); Codex stays on 0.40.0. Run: codex update" "$RC:$L"
+# An updater that ignores TERM: the run ends at --kill-after, under the test's own timeout (a missing --kill-after fails the case, it does not hang the suite).
+cat > "$T/c6.sh" <<'EOF'
+. "$1/paths.sh" && . "$1/install-lib.sh" || exit 9
+set -e; PLAN=
+eval "$(grep 'il_codex_update plan' "$2")"
+echo "next:${CUPD:-}"
+EOF
+echo 0.40.0 > "$FK/version"; echo "trap '' TERM; while :; do sleep 1; done" > "$FK/update.sh"
+OUT=$(PATH=$FK/short:$FK/bin:$PATH lib "$(command -v timeout) 20 bash $T/c6.sh \"\$PP_SCRIPTS\" $REAL/scripts/setup.sh" 2>&1); RC=$?
+check "codex update: an updater that ignores TERM is stopped within the bound, reported FAILED, and setup goes on" "0:1:2" \
+  "$RC:$(grep -c '^next:codex: update 0.40.0 -> 0.41.0 FAILED (no end in' <<<"$OUT"):$(grep -c 'Codex stays on 0.40.0' <<<"$OUT")"   # 2: setup's own echo, then CUPD
+echo 0.40.0 > "$FK/version"; : > "$FK/log"; L=$(PATH=$FK/bin:$PATH lib 'il_codex_update plan'); RC=$?
+check "codex update: plan mode names the update and runs nothing" "0:plan: would update Codex 0.40.0 -> 0.41.0 (codex update):" "$RC:$L:$(cat "$FK/log")"
+# Pass 1: an updater that exits 0 and leaves `codex --version` with no version (a broken install) said "updated 0.40.0 ->".
+# Success needs a version read after the update, newer than before; a failure never claims the old Codex still runs.
+upd314 0.40.0 ': > "$FK/version"'
+check "codex update: exit 0 with no readable version after it is FAILED, status 1, never 'updated' or 'stays on'" "1:1:0:0" \
+  "$RC:$(grep -c 'FAILED (it exited 0); codex --version now: ' <<<"$L"):$(grep -c 'updated' <<<"$L"):$(grep -c 'stays on' <<<"$L")"
+# Both version probes are bounded (10 s, 1 s under $FK/short): a hung `codex --version`, before or after the update,
+# ends the call reported, under this test's own 10 s.
+printf '. "$1/paths.sh" && . "$1/install-lib.sh" || exit 9\nil_codex_update\n' > "$T/c7.sh"
+echo 0.40.0 > "$FK/version"; touch "$FK/version-hangs"
+L=$(PATH=$FK/short:$FK/bin:$PATH lib "$(command -v timeout) 10 bash $T/c7.sh \"\$PP_SCRIPTS\"" 2>&1); RC=$?; rm -f "$FK/version-hangs"
+echo 'touch "$FK/version-hangs"' > "$FK/update.sh"
+L2=$(PATH=$FK/short:$FK/bin:$PATH lib "$(command -v timeout) 10 bash $T/c7.sh \"\$PP_SCRIPTS\"" 2>&1); RC2=$?; rm -f "$FK/version-hangs"
+check "codex update: a hung codex --version, before or after the update, is stopped and reported" "2:1:1:1" \
+  "$RC:$(grep -c 'no answer in 10 s' <<<"$L"):$RC2:$(grep -c 'FAILED (it exited 0); codex --version now: no answer in 10 s' <<<"$L2")"
+touch "$FK/curl-fails"; : > "$FK/log"
+OUT=$(PATH=$FK/bin:$PATH lib "set -e; PLAN=1; eval \"\$(grep 'il_codex_update plan' $REAL/scripts/setup.sh)\"; echo next" 2>&1); RC=$?
+check "setup --plan offline: the preview says latest unknown and goes on, running nothing" "0:1:1:" "$RC:$(grep -c 'latest unknown' <<<"$OUT"):$(grep -c '^next$' <<<"$OUT"):$(cat "$FK/log")"
+rm -f "$FK/curl-fails"
+echo 0.40.0 > "$FK/version"; echo 'echo "installer broke" >&2; exit 1' > "$FK/update.sh"
+OUT=$(PATH=$FK/bin:$PATH lib "PLAN=; eval \"\$(grep -E 'NEED\\[@\\]|il_codex_update plan|^NOTES=\\(\\) NEED=\\(\\)|CUPD' $REAL/scripts/setup.sh)\"" 2>&1)
+check "setup: a failed update is under Needs you in setup's report (the line sits after the NEED reset)" "Needs you:
+  codex: update 0.40.0 -> 0.41.0 FAILED (installer broke); Codex stays on 0.40.0. Run: codex update" "$(grep -A1 '^Needs you:' <<<"$OUT")"
+UL=$(grep -n 'il_codex_update' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1); PL=$(grep -nE 'orca-ide (worktree|terminal) create|open_pane "' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1)
+check "setup: the Codex update call sits above the first pane-making line" yes "$([ -n "$UL" ] && [ -n "$PL" ] && [ "$UL" -lt "$PL" ] && echo yes)"
+
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

@@ -62,6 +62,7 @@ back() {
 }
 OUT=$(bash "$HERE/setup.sh") || back "setup did not finish"
 # Setup lists a failed add-on install or update under Needs you: dropping it would hide the failure.
+grep '^codex: ' <<<"$OUT" || true
 awk '/^Needs you/ { on = 1 } on && /^$/ { exit } on' <<<"$OUT"
 bash "$HERE/doctor.sh" || back "the doctor found a break, above"
 echo "update: done"

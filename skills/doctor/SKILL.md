@@ -7,6 +7,7 @@ allowed-tools: Bash(bash *)
 # /commandeck:doctor
 
 Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh` in the project. It changes
-nothing. Show the owner every `FAIL` and `warn` line whole: each `FAIL` ends
+nothing, except one thing: when a newer Codex is out, it runs `codex update` and
+says so (a failed update is a `warn`). Show the owner every `FAIL` and `warn` line whole: each `FAIL` ends
 with the command that fixes it. Run a fix only when the owner says so, then
 run the doctor again. Exit 0 means every part of the workflow can run.
