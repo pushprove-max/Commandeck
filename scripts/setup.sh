@@ -4,7 +4,7 @@
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
-#          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]
+#          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]   (<tokens>: 140000, 140k)
 #          [--option <role key>=<value> ...] (a role's /plugin config key: builderModel=sonnet, planJudgeSolAgent=claude)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
@@ -97,6 +97,8 @@ need "$ASKED"
 . "$HERE/host-services.sh"
 . "$HERE/install-lib.sh"
 die() { echo "setup: $*" >&2; exit 1; }
+# toks <flag> <answer> -- a token count for the Builder clear line or the issue sizing: 140000, 140k or 140K (140000), off, or '' (the default).
+toks() { [[ $2 =~ ^(off|[1-9][0-9]*[kK]?)?$ ]] || die "$1 takes a number of tokens (140000 or 140k), or off, not '$2'. Nothing was changed"; [[ $2 == *[kK] ]] && echo "${2%[kK]}000" || echo "$2"; }
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
@@ -185,11 +187,11 @@ while [ $# -gt 0 ]; do
     --hosts) HOSTS=$2; shift 2 ;;
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     # The Builder's clear line and the issue sizing line: '' takes the default back (nothing saved).
-    --builder-clear-line) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--builder-clear-line takes a number of tokens, or off, not '$2'. Nothing was changed"; BCLEAR=$2; shift 2 ;;
+    --builder-clear-line) BCLEAR=$(toks --builder-clear-line "$2") || exit 1; shift 2 ;;
     # A role's /plugin config key (issue 312), checked below once every answer is in; project takes the default back.
     --option) [[ $2 =~ ^[A-Za-z]+=. ]] || die "--option takes <key>=<value>, not '$2'. Nothing was changed"
       GIVEN=$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '.[$k] = $v' <<<"$GIVEN"); shift 2 ;;
-    --issue-sizing) [[ $2 =~ ^(off|[1-9][0-9]*)?$ ]] || die "--issue-sizing takes a number of tokens, or off, not '$2'. Nothing was changed"; SIZING=$2; shift 2 ;;
+    --issue-sizing) SIZING=$(toks --issue-sizing "$2") || exit 1; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
     # The global CLAUDE.md template and the rules: this run's answer, never saved; no answer leaves the file alone.

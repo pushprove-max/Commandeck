@@ -257,6 +257,15 @@ check "a re-run keeps the project's Builder cap and clear line, and saves no mod
 check "an answer cleared to the default is dropped, the cap kept" '{"maxBuilders":1}' \
   "$(builder '{"version":1,"builder":{"clearLine":"300000","maxBuilders":1}}' '')"
 
+# Issue 311: the Builder clear line and the issue sizing take 140k, 140K or 140000 (a typed answer is passed as typed). No setup run.
+toks() { lib 'eval "$(grep "^toks()" "$0/setup.sh")"; die() { echo "$*" >&2; exit 1; }; (toks --builder-clear-line "$1") || echo REFUSED' "$1" 2>&1; }
+check "a clear line typed 140k is saved as 140000" 140000 "$(toks 140k)"
+check "a clear line typed 140K is saved as 140000" 140000 "$(toks 140K)"
+check "a clear line typed 140000 is saved as typed" 140000 "$(toks 140000)"
+check "off and the empty default pass as given" "off|" "$(toks off)|$(toks '')"
+check "a unit other than k is refused, the flag named" "REFUSED" "$(toks 140m | tail -1)"
+check "a bare k and a zero count are refused" "REFUSED REFUSED" "$(toks k | tail -1) $(toks 0k | tail -1)"
+
 # --- a routing file of the owner's own gains the plan seats it lacks, and uninstall takes back only those ---
 # A COMMANDECK_ROUTING file kept from before the plan seats had none, so no plan run could start. Setup adds each
 # role the plugin's defaults have and the file lacks; a role the file has, or the owner changes later, is theirs.

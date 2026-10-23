@@ -86,6 +86,13 @@ check "wake options: an answer is read, spaces dropped, and a window of 0 kept" 
 # the project's answer.
 check "setup asks the Builder effort right after the model, High recommended on Sonnet and Medium on Opus" '1:1' \
   "$(awk '/Ask "Builder model":/ {m = 1; next} m && /^ +Ask / {print ($0 ~ /Ask "Builder effort": High \(recommended\)/); exit}' "$REAL/skills/setup/SKILL.md"):$(grep -A1 -x '   On Opus:' "$REAL/skills/setup/SKILL.md" | grep -cxF '   Ask "Builder effort": Medium (recommended) | Low | High | Maximum')"
+# Issue 311: AskUserQuestion takes 2 to 4 options. "Worker cuts" and "Keep words" listed only None when nothing was saved,
+# the call failed with "Invalid tool parameters" and the agent answered None without asking. A saved name or a detected
+# command (<...>) may be absent, so the options that are always there must be two or more, and the line has at most four.
+check "every one-line Ask in setup's SKILL.md has 2 to 4 options, two of them always present" "" \
+  "$(awk -F'\n' '/^ *Ask "/ { o = $0; sub(/^ *Ask "[^"]*"[^|]*(: |:$)/, "", o); n = split(o, a, / \| /); f = 0
+    for (i = 1; i <= n; i++) if (a[i] !~ /^</) f++
+    if (n < 2 || n > 4 || f < 2) print $0 }' "$REAL/skills/setup/SKILL.md")"
 # claude plugin validate refuses a picker with no default among its options.
 check "every picker's labels are 1 to 64 characters and hold its default" true \
   "$(jq '[.userConfig[] | select(.options) | . as $o | (.options | all(length >= 1 and length <= 64)) and any($o.options[]; . == $o.default)] | all' "$M")"

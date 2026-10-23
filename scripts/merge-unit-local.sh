@@ -213,8 +213,8 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
     'BEGIN { n = split(have, h, " "); for (i = 1; i <= n; i++) seen[h[i]] = 1 }
      !seen[$0]++ { out = out (out == "" ? "" : ", ") $0 } END { print out }' || true)
 [ -z "$REFS" ] || TITLE="$TITLE ($REFS)"
-# The unit's work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief
-# (ruling r-20261022-213102-1-49d00b): the Builder edits its brief, and a quoted list or directive in it adds nothing.
+# The unit's work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief:
+# the Builder edits its brief, and a quoted list or directive in it adds nothing.
 ISSUES=$PP_MAIN/.claude/briefs/$UNIT-issues.json
 LISTED=$(jq -r '.[] | numbers | "#\(.)"' "$ISSUES" 2>/dev/null || true)
 # A "Closes: #n" line in the brief is carried into the squash message as "Closes #n" and closes that issue below.

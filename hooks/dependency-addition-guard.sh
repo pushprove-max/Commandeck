@@ -61,7 +61,7 @@ block() {
 SENDERS='gh|orca|orca-ide|git[[:space:]]+(commit|tag|notes|status|log|diff|show|add)|echo|printf|cat'
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || true
 ran() {
-  local M=$'\x01' CODE SEG
+  local M=$'\x01' CODE SEG RAW
   # Whether anything can run a word is asked of the reader's own output, never
   # of the raw text: it alone knows which `<<` opens a here-document, so one
   # named in a comment or a quoted string hides no line after it. What
@@ -71,24 +71,56 @@ ran() {
   # An end word that is not plain makes the whole command code (strip_odd_end).
   if declare -F strip_quoted >/dev/null && [ -z "$(strip_odd_end "$1")" ] && CODE=$(strip_quoted "$1" "$M") && [[ $CODE != *'`'* && $CODE != *'$('* ]] \
     && ! grep -qE "<<-?[[:space:]]*[^[:space:]$M<-]" <<<"${CODE//<<</ }"; then
+    RAW=$CODE
     CODE=$(sed -E "s/$M([^[:space:]$M])/\1/g; s/$M/ \$QUOTED /g" <<<"$CODE")
     while IFS= read -r SEG; do
       [[ $SEG =~ ^[[:space:]]*$ || $SEG =~ ^[[:space:]]*($SENDERS)([[:space:]]|$) ]] && continue
       # The plugin's own setup.sh saves its quoted answers (a test command) and runs none of them (issue 206).
       [[ $SEG =~ ^[[:space:]]*(bash|sh)[[:space:]]+([^[:space:]]+) ]] && own_setup "${BASH_REMATCH[2]}" && continue
-      whole "$1"; return
+      whole "$(no_bodies "$1" "$RAW")"; return
     done < <(sed -E 's/[0-9]*[<>]&[0-9-]*//g; s/&&|\|\||[;|&()]/\n/g' <<<"$CODE")
     printf '%s' "$CODE"
   else
     whole "$1"
   fi
 }
-# own_setup <path> -- the path, absolute or under ~, is this plugin's own setup.sh. A relative
-# path is not read: an earlier `cd` on the line could point it at another setup.sh.
+# own_setup <path> -- the path, absolute or under ~, is this plugin's own setup.sh: the one next to
+# this hook (the repo checkout), or one version folder of the plugin cache Claude Code installs into
+# (an update leaves the hook that fires and the setup.sh on the line in different folders, issue 311).
+# Judged on resolved paths, so a link out of that cache, or a cache-shaped folder anywhere else, is
+# not exempt. A relative path is not read: an earlier `cd` on the line could point it at another setup.sh.
 own_setup() {
-  local p=$1
+  local p=$1 r c
   [[ $p == '~/'* ]] && p=$HOME/${p:2}
-  [[ $p == /* ]] && [ -f "$p" ] && [ "$(realpath "$p" 2>/dev/null)" = "$(realpath "${BASH_SOURCE[0]%/*}/../scripts/setup.sh" 2>/dev/null)" ]
+  [[ $p == /* ]] && [ -f "$p" ] && r=$(realpath "$p" 2>/dev/null) || return 1
+  c=$(realpath "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/commandeck/commandeck" 2>/dev/null)
+  [ "$r" = "$(realpath "${BASH_SOURCE[0]%/*}/../scripts/setup.sh" 2>/dev/null)" ] \
+    || [[ -n $c && $r == "$c"/* && ${r#"$c"/} =~ ^[^/]+/scripts/setup\.sh$ ]]
+}
+# no_bodies <command> <reader output> -- the command without the here-document bodies that are data,
+# for a line with a command that is not a sender (issue 311). A body is data only when the whole
+# line that opens it has one fixed shape: `cd W &&` / `mkdir [-p] W &&` steps, then a sender, plain
+# words or `> file`, one `<<` with a quoted end word (nothing expands), plain words or `> file` to the
+# end. A plain word has no quote, bracket, brace, `;&|<>`, `$` or backtick. No parser guesses which
+# command reads the body: any other line (a shell, a group, a pipe, `>(`, a quoted argument) keeps
+# it, read as code; the worst case is a false block (past it: write the file, use --body-file). A
+# body written to a file and run later is a file, which this guard does not read from a Write either.
+# Trusted only when the reader, run on the result, prints what it printed on the command; else (a
+# `<<` inside a quote or comment) the command is returned whole.
+no_bodies() {
+  local T
+  T=$(awk -v senders="$SENDERS" '
+    BEGIN { q = "\047"; w = "[^][ \t" q "\"\\\\;&|(){}<>$`]+"; a = "([ \t]*>>?[ \t]*" w "|[ \t]+" w ")*"
+      shape = "^[ \t]*((cd|mkdir([ \t]+-p)?)[ \t]+" w "[ \t]*&&[ \t]*)*(" senders ")" a \
+        "[ \t]*<<-?[ \t]*(" q w q "|\"" w "\"|\\\\" w ")" a "[ \t]*$" }
+    nt { l = $0; if (dash[k]) sub(/^\t+/, "", l); if (l == tag[k]) { print; if (++k > nt) nt = 0 } else if (!drop[k]) print; next }
+    { print; s = $0
+      while (match(s, /<<-?[ \t]*(\047[^\047]+\047|"[^"]+"|\\[A-Za-z0-9_.-]+)/)) {
+        t = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        drop[++nt] = ($0 ~ shape)
+        dash[nt] = (t ~ /^<<-/); sub(/^<<-?[ \t]*/, "", t); gsub(/[\047"\\]/, "", t); tag[nt] = t }
+      k = 1 }' <<<"$1")
+  if [ "$(strip_quoted "$T" $'\x01')" = "$2" ]; then printf '%s' "$T"; else printf '%s' "$1"; fi
 }
 # The whole line as code: a quote mark is a word break, so `bash -c 'npm ci'`
 # reads as npm ci. A quoted folder with a space becomes $QUOTED, which blocks

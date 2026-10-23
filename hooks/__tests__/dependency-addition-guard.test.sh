@@ -137,6 +137,54 @@ check "an install after the plugin's setup on the same line still blocks" 2 \
 check "a quoted install run by bash -c beside the plugin's setup still blocks" 2 \
   "$(run "$(bash_p "bash $SETUP --plan; bash -c 'npm install lodash'")")"
 
+# Issue 311: after a plugin update the hook that fires and the setup.sh on the line sit in two different version
+# folders of the plugin cache, so the sibling-path check refused the owner's own preview and apply.
+# Only the cache under the Claude config folder is trusted: a cache-shaped path anywhere else is screened.
+PC=$TMP/home/.claude/plugins/cache/commandeck/commandeck EVIL=$TMP/evil/plugins/cache/commandeck/commandeck/0.25.3
+mkdir -p "$PC/0.25.2" "$PC/0.25.3/scripts" "$EVIL/scripts" "$PC/0.25.3/x/scripts"
+cp -R "${HOOK%/*}" "$PC/0.25.2/hooks"
+# The cache copy is the plugin's own setup.sh, as an install writes it; the look-alikes run their first argument.
+cp "$SETUP" "$PC/0.25.3/scripts/setup.sh"
+for s in "$EVIL/scripts" "$PC/0.25.3/x/scripts"; do printf '#!/bin/sh\nsh -c "$1"\n' > "$s/setup.sh"; done
+OLD_HOOK=$PC/0.25.2/hooks/dependency-addition-guard.sh
+run_old() { env -u CLAUDE_CONFIG_DIR HOME="$TMP/home" ${2:+CLAUDE_CONFIG_DIR="$2"} bash "$OLD_HOOK" >/dev/null 2>&1 <<<"$1"; echo $?; }
+ISSUE_ARGS="--profile claude-openai --scope machine --global-rules merge --global-claude merge --builder-model sonnet --builder-effort high --standard-context --builder-clear-line 140k --issue-sizing '' --plan-models opus,sonnet,sol,astra --plan-fast '' --name '' --persona '' --dashboard --bind 127.0.0.1 --hosts '' --test-command 'npm test' --full-suite off --no-strict --ponytail --cache-ttl 5m --auto-mode add --worker-skills-off '' --worker-plugins-off '' --max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd '' --no-codex-fast"
+check "issue 311's preview, hook and setup.sh in two version folders, is not blocked" 0 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")")"
+check "issue 311's apply, hook and setup.sh in two version folders, is not blocked" 0 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS")")"
+check "an install after the cache setup.sh on the same line still blocks" 2 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan && $INSTALL lodash")")"
+check "a cache-shaped setup.sh outside the Claude config folder still blocks" 2 \
+  "$(run_old "$(bash_p "bash $EVIL/scripts/setup.sh 'npm install lodash'")")"
+check "a setup.sh nested deeper than a version folder still blocks" 2 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/x/scripts/setup.sh $ISSUE_ARGS --plan")")"
+# The trusted cache follows CLAUDE_CONFIG_DIR, as Claude Code's own does; reached by a link it is the same folder.
+ln -s "$TMP/home/.claude" "$TMP/cfg"
+check "the preview passes when CLAUDE_CONFIG_DIR names the config folder by a link" 0 \
+  "$(run_old "$(bash_p "bash $TMP/cfg/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/cfg")"
+check "a cache outside CLAUDE_CONFIG_DIR still blocks" 2 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/evil")"
+ln -s "$EVIL" "$PC/0.25.4"
+check "a cache entry that links out of the cache still blocks" 2 \
+  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.4/scripts/setup.sh $ISSUE_ARGS --plan")")"
+
+# Issue 311, related: a here-document with a quoted end word is data whichever command shares the line.
+HD=$'use npm install lodash and yarn add left-pad\n'
+check "a heredoc body naming installs beside a cd is not blocked" 0 \
+  "$(run "$(bash_p "cd $TMP && cat > b.md <<'EOF'"$'\n'"${HD}EOF"$'\n'"gh issue create --body-file b.md")")"
+check "a dash heredoc body beside mkdir is not blocked" 0 \
+  "$(run "$(bash_p "mkdir -p $TMP/d && cat > b.md <<-'EOF'"$'\n'"${HD}EOF"$'\n'"gh issue create --body-file b.md")")"
+check "a real install after such a heredoc still blocks" 2 \
+  "$(run "$(bash_p "cd $TMP && cat > b.md <<'EOF'"$'\n'"${HD}EOF"$'\n'"$INSTALL left-pad")")"
+check "a << inside a quoted string hides no install after it" 2 \
+  "$(run "$(bash_p "ls && echo \"x <<'EOF'\""$'\n'"$INSTALL left-pad"$'\n'"EOF")")"
+# A body is data only when a sender reads it and sends it nowhere else: a shell, or a pipe on to one, runs it.
+for H in "bash <<'EOF'" "sh <<'EOF'" "cd $TMP && sh -s <<-'EOF'" "cat <<'EOF' | bash" "cat <<'EOF' > >(sh)" "python3 - <<\\EOF" \
+  "(bash; echo done) <<'EOF'" "(sh; printf done) <<'EOF'" "(bash; cat ) <<'EOF'" "bash -s -- \"report (cat adoption)\" <<'EOF'"; do
+  check "a heredoc body run by: $H still blocks" 2 "$(run "$(bash_p "$H"$'\n'"$INSTALL lodash"$'\n'"EOF")")"
+done
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

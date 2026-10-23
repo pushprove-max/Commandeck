@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.33.0 -- 2026-10-23
+
+- Setup's own preview and apply pass the dependency guard again (issue 311): the plugin's `setup.sh` is recognised in
+  any one version folder of the plugin cache, so a hook from one plugin version no longer blocks the `setup.sh` of
+  another. A here-document body that only mentions install commands is no longer blocked beside a `cd` or `mkdir`;
+  a body is skipped only on a line of one fixed shape (`cd`/`mkdir -p` steps, then a sender writing it out), so a body
+  that a shell, a group, a pipe or a quoted argument could run is still read as code.
+- Every one-line question in setup offers 2 to 4 options, so the question tool no longer drops "Worker cuts", "Keep
+  words", "Merge check" or "Relay voice"; a failed question call is named with its error, never answered as "None".
+- The Builder handoff line accepts `140k`, `140K` and `140000`.
+
 ## 0.32.0 -- 2026-10-22
 
 - The global rules now carry the reviewer rules (one full scope for every reviewer; a finding names file, line and the

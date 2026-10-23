@@ -12,7 +12,9 @@ run one script. Do not edit any settings or rules file yourself: `setup.sh`
 records what was there before it changes it and copies an owner's file beside
 it first, and an edit made around it cannot be undone by uninstall.
 
-Rule: a refused or failed question call is not an answer; ask the same thing again in plain text and never assume a default.
+Rule: a refused or failed question call is not an answer: say which question it was and the error (such as `Invalid tool parameters`), ask the same thing again in plain text, and never skip it or assume a default.
+
+Rule: a question has 2 to 4 options, or the call fails. Where only one answer is always there (no saved value, nothing detected), a second option takes the typed value: "Type my own", "Write my own", "Name some" or "Add one". Choosing it asks for the value in plain text, once; the picker's own text answer takes the value directly.
 
 Rule: every question goes through `AskUserQuestion`, with exactly the headers and options written here, recommended option first, and each option's one-line description as written. The recommended option's label ends in " (recommended)", as written below, in every question. While setup asks, the picker guard's decoy is off (`--questions begin` below), so a question has up to four options of its own. A typed value is a question too: its options are the likely values (the saved one first when there is one), and the picker's own free-text answer takes any other. Never print a list of follow-up questions in plain text. An answer setup cannot use as given is asked again as a picker that offers only the choices setup supports.
 
@@ -131,7 +133,7 @@ Ask them in this order, up to four questions per call.
    Larger."
    Then, one call:
    Ask "Builder clear line": 180K (recommended) | 150K | 250K | Off
-   - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000`; Off: `--builder-clear-line off`
+   - Past this much context the Builder finishes its step, writes a handoff and goes on in a fresh session of its pane: past it every turn re-reads a large cached context. `--builder-clear-line ''`, or `150000`, `250000` (a typed `140k`, `140K` or `140000` is sent as typed; setup reads all three); Off: `--builder-clear-line off`
    Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off
    - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
    Only with the Codex reviewer:
@@ -158,7 +160,7 @@ Ask them in this order, up to four questions per call.
    - None: no assistant pane. `--name '' --persona ''`
    - Chief of Staff: a pane that relays between you and the orchestrator, so you can talk to one place. `--name 'Chief of Staff'`
    A typed name is sent as `--name <n>`. With a relay:
-   Ask "Relay voice": Plain and brief (recommended) | <saved line, if any>
+   Ask "Relay voice": Plain and brief (recommended) | Write my own | <saved line, if any>
    - its one line on how it should sound. `--persona <text>`
    When a relay already exists, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh`. If it prints `relay: <n> commits behind main`:
    Ask "Relay": Rebase it (recommended) | Leave as is
@@ -170,7 +172,7 @@ Ask them in this order, up to four questions per call.
    - Off: no job, no port. `--no-dashboard`
    - On plus another name: the page also answers to a name such as a tailnet's, typed as the picker's own text answer (or the saved names). This one listens on the network (`0.0.0.0`), so say so; a name not on the list still gets a 403. `--dashboard --bind 0.0.0.0 --hosts <name>[,<name>]`
 9. What must pass before a merge?
-   Ask "Merge check": <detected command> (recommended) | None | <saved command, if any>
+   Ask "Merge check": <detected command> (recommended) | None | Type my own | <saved command, if any>
    - The one command that must pass before a merge, e.g. the project's test script. `--test-command '<cmd>'`
    - None: merges wait for review only. `--test-command ''`
    Detect it first (package.json `test` script, a Makefile `test` target), and offer it first. With none detected, None is the one marked "(recommended)".
@@ -201,12 +203,12 @@ Ask them in this order, up to four questions per call.
     - Take them out: offered only when `bash -c 'jq -e "[.entries[].autoMode // empty] | length > 0" ~/.commandeck/install/_machine.json >/dev/null 2>&1 && echo recorded; true'` prints "recorded". Removes the two lines setup added, for every project on this machine; your own entries stay. `--auto-mode remove`
     A list of yours without `"$defaults"` is left as it is (it replaces Claude Code's built-in list) and setup says how to keep that list.
     Then, what worker and Builder panes turn off on top of the plugin's own cuts (the plugin ships no names):
-    Ask "Worker cuts": None (recommended) | <saved lists, if any>
+    Ask "Worker cuts": None (recommended) | Name some | <saved lists, if any>
     - None: worker panes drop only the Stripe plugin and the three browser skills. `--worker-skills-off '' --worker-plugins-off ''`
-    - Your own, typed as the picker's own text answer: skill names (`<plugin>:<skill>` for a plugin's) and `plugin@marketplace` keys, separated by commas. Names with an @ go in `--worker-plugins-off <a>,<b>`, the rest in `--worker-skills-off <a>,<b>`. A plugin's own skills cannot be turned off one at a time: only the whole plugin.
-    Ask "Keep words": None (recommended) | <saved words, if any>
+    - Name some, or typed as the picker's own text answer: skill names (`<plugin>:<skill>` for a plugin's) and `plugin@marketplace` keys, separated by commas. Names with an @ go in `--worker-plugins-off <a>,<b>`, the rest in `--worker-skills-off <a>,<b>`. A plugin's own skills cannot be turned off one at a time: only the whole plugin.
+    Ask "Keep words": None (recommended) | Add one | <saved words, if any>
     - None: no word of yours; `--keep billing` and `--keep all` still work. A saved word left out is sent as `--keep-word <word>=`.
-    - Your own, typed as `<word>=<name>[,<name>...]`: `builder-launch.sh --keep <word>` brings those skills and plugins back for one unit. `--keep-word <word>=<names>`, once per word.
+    - Add one, or typed as the picker's own text answer, as `<word>=<name>[,<name>...]`: `builder-launch.sh --keep <word>` brings those skills and plugins back for one unit. `--keep-word <word>=<names>`, once per word.
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": All (recommended) | serena | agent-browser | None
     - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open; the ponytail plugin only when you have it and ponytail is on. Sends no `--addons`.
