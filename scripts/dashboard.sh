@@ -24,6 +24,8 @@
 # Knobs, read by --install and kept in the service: COMMANDECK_DASHBOARD_NAME
 # (the page's title), COMMANDECK_DASHBOARD_BIND (127.0.0.1; 0.0.0.0 serves the
 # LAN) and COMMANDECK_DASHBOARD_PORT (unset: the first free port from 8791).
+# A network bind serves HTTPS behind a login (dashboard_serve.py, issue 263): --install makes the certificate, and exits 5
+# until a password is stored (dashboard_serve.py set-password <user>, issue 255).
 # Test seams: COMMANDECK_DASHBOARD_DIR, plus paths.sh's COMMANDECK_* overrides.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
@@ -412,7 +414,9 @@ units() {
     [ -z "$had" ] || { jq -cn --slurpfile oa <(printf '%s' "$had") --slurpfile ca <(printf '%s' "$costs") '$oa[0] as $o | $ca[0] as $c
       | $o + ($c | with_entries(select(.value != null)))' > "$kept.$$" && mv -f "$kept.$$" "$kept"; }
   else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
-  jq -c --argjson k "$known" --slurpfile fina <(finished_builds) --slurpfile ca <(printf '%s' "$costs") \
+  # Issue 292: the owner's Builder cap (maxBuilders in /config); none, or no whole number, is unknown.
+  local cap; cap=$(pp_option maxBuilders 2>/dev/null); [[ $cap =~ ^[1-9][0-9]*$ ]] || cap=
+  jq -c --argjson k "$known" --argjson cap "${cap:-null}" --slurpfile fina <(finished_builds) --slurpfile ca <(printf '%s' "$costs") \
     --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" \
     '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {inFlight: (if $k then map(del(.rec) | ($c[.unit]? // null) as $x
         # A planning stage in the cost is drawn first on the Builder clock, which then starts with it.
@@ -421,6 +425,7 @@ units() {
               then .builder.stageHistory = [$x.stages[0] | {stage, from, to}] + .builder.stageHistory | .builder.startedAt = $x.stages[0].from
               else . end
           elif .plan then .plan.cost = $x else . end) else null end),
+      builderCap: $cap,
       finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end),
       # Issue 270: each unit in flight or finished in the last 7 days, by the cost its card shows, most costly first.
       costPerUnit: ([($c // {} | keys[] | {unit: ., inFlight: true}), ($fin // [] | .[] | select((.at // "") >= $s7) | {unit, inFlight: false, at})]
@@ -594,13 +599,14 @@ review_loop() {
   [ -s "$METRICS/unit-ledger.jsonl" ] || { nm unit-ledger "no unit ledger: no unit was merged since it was added"; echo null; return 0; }
   ok unit-ledger
   jq -Rnc --arg s "$(since7)" '[inputs | fromjson? // empty | select((.mergedAt // "") >= $s)
-    | {unit, mergedAt, rounds, goRounds, noGoRounds, fixRounds, verdict, findings, expensivePasses, gaps}] | sort_by(-(.rounds // -1))' \
+    | {unit, mergedAt, rounds, goRounds, noGoRounds, fixRounds, passKinds, reviewSeconds, verdict, findings, expensivePasses, gaps}] | sort_by(-(.rounds // -1))' \
     "$METRICS/unit-ledger.jsonl"
 }
 escapes() {
   [ -s "$METRICS/unit-ledger.jsonl" ] || { echo null; return 0; }
-  jq -Rnc '[inputs | fromjson? // empty | select(.escaped | type == "array")] | group_by(.unit)
-    | map({unit: .[0].unit, escaped: (map(.escaped[]) | unique)})' "$METRICS/unit-ledger.jsonl"
+  # One entry per unit and issue, with the class and where it was caught (issue 272); an older row has neither: null.
+  jq -Rnc '[inputs | fromjson? // empty | select(.escaped | type == "array") | . as $r | .escaped[]
+      | {unit: $r.unit, issue: ., class: ($r.class // null), caught: ($r.caught // null)}] | unique_by([.unit, .issue])' "$METRICS/unit-ledger.jsonl"
 }
 
 cost_role() {
@@ -867,6 +873,63 @@ limit() {
     "$(jq -c '.projects | map_values([.path, .workspaces])' "$RUN/parts/projects.json")"
 }
 
+# The Tests card (issue 269): the test runs going now on this machine (ps, lsof) and the finished ones from the Claude
+# session logs (dashboard_limit.py tests), both limited to this project's main checkout and worktrees.
+# A runner is a process whose first word is a shell or node and whose command names a test runner, so a `zsh -c`
+# wrapper that merely mentions one is not, nor a shell's -n or -c or node's -e, -p or --check (dashboard_limit.py's
+# test_segment holds the same rule for the session logs); of a parent and its child runner only the outermost is a row.
+# Ceiling: this machine only; a run's usual time matches by the logged command containing the running one.
+TEST_RE='run-shell-tests\.sh|npm (run )?test|\bnode\b.*--test\b|\.test\.sh'
+# The jq `who` of a working folder: the worktree unit, main, or null for a folder outside this project.
+TEST_WHO='def who: if .cwd == null then null
+      elif .cwd | startswith($ws + "/") then (.cwd | ltrimstr($ws + "/") | split("/")[0])
+      elif .cwd == $main or (.cwd | startswith($main + "/")) then "main"
+      else null end;'
+# tests_rows <ps text> <cwd text, lsof -Fn shape; empty to list every runner> <builder unit names, JSON array>
+tests_rows() {
+  jq -cn --arg ps "$1" --arg cwd "$2" --arg re "$TEST_RE" --arg ws "$PP_WORKSPACES" --arg main "$PP_MAIN" --argjson builders "$3" '
+    def secs: (split("-") | if length == 2 then [(.[0] | tonumber), .[1]] else [0, .[0]] end) as $d
+      | ($d[1] | split(":") | map(tonumber)) as $t
+      | $d[0] * 86400 + ($t | if length == 3 then .[0] * 3600 + .[1] * 60 + .[2] else .[0] * 60 + .[1] end);
+    '"$TEST_WHO"'
+    ($cwd | split("\n") | reduce .[] as $l ({}; if $l[0:1] == "p" then .cur = $l[1:] elif $l[0:1] == "n" and .cur then .[.cur] = $l[1:] else . end) | del(.cur)) as $at
+    | [$ps | split("\n")[] | capture("^\\s*(?<pid>[0-9]+)\\s+(?<ppid>[0-9]+)\\s+(?<et>[0-9:-]+)\\s+(?<command>.+)$")?] as $lines
+    | ($lines | map({key: .pid, value: .ppid}) | from_entries) as $par
+    | [$lines[] | select((.command | test("^(\\S*/)?(bash|sh|node|npm|npx)\\s")) and (.command | test($re))
+        and (.command | test("^(\\S*/)?(bash|sh)\\s+-[a-zA-Z]*[nc]|^(\\S*/)?(node|npx)\\s(.*\\s)?(-e|-p|--eval|--print|-c|--check)(\\s|=|$)") | not))] as $all
+    | ($all | map({key: .pid, value: true}) | from_entries) as $set
+    | def up($p): ($par[$p]) as $q | if $q == null or $q == "0" then false elif $set[$q] then true else up($q) end;
+    $all | map(select(up(.pid) | not)
+        | {pid: (.pid | tonumber), command: .command[0:120], full: .command, elapsedSec: (.et | secs), cwd: ($at[.pid] // null)}
+        | . + {who: who} | select($cwd == "" or .who != null) | del(.cwd) | . + {builder: (.who | IN($builders[]))})' 2>/dev/null
+}
+tests_panel() {
+  local plist='' cwd='' pids running=null fin=null builders d
+  builders=$(for d in "$PP_WORKSPACES"/*/; do d=${d%/}
+    [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$d/.claude/settings.local.json" 2>/dev/null)" = 1 ] && basename "$d"; done | jq -Rcn '[inputs]')
+  if plist=$(ps -axww -o pid=,ppid=,etime=,command= 2>/dev/null); then
+    pids=$(tests_rows "$plist" "" "$builders" | jq -r 'map(.pid) | join(",")')
+    # lsof exits 1 when a listed process ended meanwhile, with the rest still printed: only no output at all is a failure.
+    [ -z "$pids" ] || cwd=$(lsof -a -d cwd -Fn -p "$pids" 2>/dev/null) || true
+    if [ -n "$pids" ] && [ -z "$cwd" ]; then nm tests-ps "the folders of the runs could not be read (lsof)"
+    elif running=$(tests_rows "$plist" "$cwd" "$builders") && [ -n "$running" ]; then ok tests-ps
+    else running=null; nm tests-ps "the process list could not be read"; fi
+  else nm tests-ps "ps failed"; fi
+  if [ -d "$CLAUDE_DIR/projects" ] && fin=$(python3 "$HERE/dashboard_limit.py" tests "$CLAUDE_DIR/projects" "$REQS/test-runs.json" "$NOW" "$PP_MAIN" "$PP_WORKSPACES" 2>"$RUN/err-tests") && [ "$fin" != null ]; then ok tests-logs
+  else fin=null; nm tests-logs "$(head -1 "$RUN/err-tests" 2>/dev/null)"; fi
+  jq -cn --argjson run "$running" --argjson fin "${fin:-null}" --arg ws "$PP_WORKSPACES" --arg main "$PP_MAIN" '
+    '"$TEST_WHO"'
+    def usual($u): . as $r | [$u[]? | select(.cmd | contains($r.full))] | max_by(.n) | .sec;
+    # A run with no result past its time cap is stalled: 3 times its usual time when known, else run-shell-tests.sh'"'"'s
+    # 120 s a named file; any other run has no cap.
+    def cap: if .usualSec != null then .usualSec * 3
+      elif (.full | test("run-shell-tests\\.sh")) and ([.full | split(" ")[] | select(test("\\.test\\.[a-z]+$"))] | length) > 0
+      then ([.full | split(" ")[] | select(test("\\.test\\.[a-z]+$"))] | length) * 120 else null end;
+    ($fin.usual // []) as $u
+    | {running: (if $run == null then null else $run | map(. + {usualSec: usual($u)} | . + {capSec: cap} | . + {stalled: (.capSec != null and .elapsedSec > .capSec)} | del(.full)) end),
+       finished: ($fin.finished | if . == null then null else map(. + {who: who} | del(.cwd)) end)}'
+}
+
 # The Chief of Staff is the relay pane: its inbox's unread count and the oldest
 # unread message's age. `orchestration inbox` only lists; `check` is the verb
 # that marks messages read, so a collect never acks its mail.
@@ -903,6 +966,15 @@ seats() {
     | (.relay | objects) |= . + {context: ($rc | tonumber? // null), line: null}' <<<"$out"
 }
 
+# Main's compactions and unhealed carry failures over 24 h, and its last restart (issues 292, 300): the reader is
+# dashboard_limit.py main-events. A main with no session folder yet has no events.
+main_events() {
+  local out
+  if out=$(python3 "$HERE/dashboard_limit.py" main-events "$NOW" "$CLAUDE_DIR/projects/$PP_MAIN_SLUG" "$HOME/.claude/checkpoints/clear-hook.log" 2>"$RUN/err-main-events") \
+      && jq -e 'objects' >/dev/null 2>&1 <<<"$out"; then ok mainEvents; echo "$out"
+  else nm mainEvents "main's compactions and carry failures could not be read: $(head -1 "$RUN/err-main-events" 2>/dev/null)"; echo null; fi
+}
+
 # The active alerts from the parts already built this collect; the rules are
 # dashboard_alerts.jq. Each alert's start persists in the cache, so its id
 # holds across collects. An input not measured makes the record not measured,
@@ -930,10 +1002,15 @@ alerts_resolved() { jq -c 'arrays' "$CACHE/alerts-resolved.json" 2>/dev/null || 
 # part <key> <fn> -- one top-level group; a group that is not JSON stops the
 # publication, so a collector bug never ships as an empty card.
 part() {
-  local k=$1
+  local k=$1 t0=$SECONDS
   "$2" > "$RUN/v-$k" && jq -c --arg k "$k" '{($k): .}' "$RUN/v-$k" > "$RUN/parts/$k.json" 2>/dev/null \
     && [ "$(wc -l < "$RUN/parts/$k.json")" -eq 1 ] || { echo "dashboard: building $k failed" >&2; return 1; }
+  # Issue 292: how long each group took, whole seconds, for partSeconds below.
+  echo "$k $((SECONDS - t0))" >> "$RUN/part-seconds"
 }
+
+# The seconds each group of this collect took, so a slow collect names its slow group.
+part_seconds() { jq -Rn '[inputs | split(" ") | {(.[0]): (.[1] | tonumber)}] | add // {}' "$RUN/part-seconds" 2>/dev/null || echo '{}'; }
 
 # project <run dir> -- one project's parts and source records as one object
 # in <run dir>/project.json. The run directory is the caller's: it reads the
@@ -957,7 +1034,7 @@ project() {
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role && part reviewLoop review_loop && part escapes escapes \
     && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \
-    && part chiefOfStaff chief_of_staff && part seats seats || return 1
+    && part chiefOfStaff chief_of_staff && part seats seats && part mainEvents main_events && part tests tests_panel && part partSeconds part_seconds || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
   jq -cs --arg n "$PP_PROJECT" --arg p "$PP_MAIN" --arg w "$PP_WORKSPACES" '{($n): (add + {path: $p, workspaces: $w})}' "$RUN"/parts/*.json > "$RUN/project.json"
 }
@@ -1272,8 +1349,15 @@ uninstall() {
 }
 
 case "${1:-}" in
-  --install) install || { echo "dashboard: install FAILED" >&2; exit 1; }
-             echo "dashboard installed; open http://$([ "$BIND" = 0.0.0.0 ] && echo "<this host>.local" || { case $BIND in *:*) echo "[$BIND]" ;; *) echo "$BIND" ;; esac; }):$PORT/"; exit 0 ;;
+  --install) # Issues 263 and 255: a network bind is HTTPS behind a login (dashboard_serve.py), and a restart behind a login no one can pass serves nobody.
+             SCHEME=http
+             case $BIND in 127.0.0.1|localhost|::1) ;; *)
+               SCHEME=https
+               python3 "$HERE/dashboard_serve.py" has-password || { echo "dashboard: a network bind needs a login: run python3 $(printf '%q' "$HERE")/dashboard_serve.py set-password <user>, then run this again" >&2; exit 5; }
+               python3 "$HERE/dashboard_serve.py" make-cert || { echo "dashboard: install FAILED (certificate)" >&2; exit 1; } ;;
+             esac
+             install || { echo "dashboard: install FAILED" >&2; exit 1; }
+             echo "dashboard installed; open $SCHEME://$([ "$BIND" = 0.0.0.0 ] && echo "<this host>.local" || { case $BIND in *:*) echo "[$BIND]" ;; *) echo "$BIND" ;; esac; }):$PORT/"; exit 0 ;;
   --uninstall) uninstall; echo "dashboard uninstalled"; exit 0 ;;
   # launchd knows the job by its name without the prefix; systemd by its unit.
   --status) if hs_active "$([ "$(hs_os)" = Darwin ] && echo "$NAME" || echo "$UNIT")"; then echo "dashboard: running"; exit 0; fi

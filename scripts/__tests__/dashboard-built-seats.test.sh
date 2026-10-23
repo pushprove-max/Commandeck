@@ -51,6 +51,16 @@ check "an answer waiting on main's open picker is named on its own project's car
   "$(jq -c 'first(.[]) | .needsOwner.picker' "$T/out/run/project.json" 2>&1)"
 check "with no relay configured there is no relay card" '[true,false]' \
   "$(jq -c 'first(.[]) | [(.seats.main | type == "object"), (.seats | has("relay"))]' "$T/out/run/project.json" 2>&1)"
+check "issue 292: partSeconds names each group of the collect with the whole seconds it took" '[true,true,true]' \
+  "$(jq -c 'first(.[]) | .partSeconds | [has("seats"), has("units"), (to_entries | all(.value | type == "number" and . == floor))]' "$T/out/run/project.json" 2>&1)"
+check "issue 292: with no Builder cap in /config the units carry no cap" null "$(jq -c 'first(.[]) | .units.builderCap' "$T/out/run/project.json" 2>&1)"
+echo '{"builder": {"clearLine": "160000", "maxBuilders": 3}}' > "$MAIN/.claude/commandeck.json"
+dash
+check "issue 292: the Builder cap in /config (maxBuilders) is the units' builderCap, a whole number" 3 "$(jq -c 'first(.[]) | .units.builderCap' "$T/out/run/project.json" 2>&1)"
+echo '{"builder": {"clearLine": "160000", "maxBuilders": "many"}}' > "$MAIN/.claude/commandeck.json"
+dash
+check "and a cap that is no whole number is unknown, never a number" null "$(jq -c 'first(.[]) | .units.builderCap' "$T/out/run/project.json" 2>&1)"
+echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
 
 # Issue 291: a main run under another Claude config folder records it, and the collector reads that folder's
 # transcripts and task lists, never the home folder's.
@@ -74,10 +84,10 @@ hrow m2 $((NOW - 20)) >> "$(seatf "$MAIN")/m1.jsonl"
 printf '%s\n' '{"type":"user","toolUseResult":{"backgroundTaskId":"b1"}}' \
   '{"type":"assistant","message":{"id":"m9","usage":{"cache_read_input_tokens":160000,"input_tokens":20,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":5}}}}' >> "$BS"
 # The blocks' hourly mean is over the hours since the day file's start by the wall clock: a sample time.
-DNOW=$((W + 60)) dash; warm=$(jq -S 'first(.[]) | del(.guardBlocks.perHour)' "$T/out/run/project.json" 2>&1)
+DNOW=$((W + 60)) dash; warm=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds)' "$T/out/run/project.json" 2>&1)
 rm -rf "$T/out/cache"; mv "$T/cache-1" "$T/out/cache"
 rm -f "$T/out/cache"/{limit-requests,codex-requests,codex-requests-review}.json "$T/out/cache/demo"/{guard-blocks,session-summary}.json
-DNOW=$((W + 60)) dash; cold=$(jq -S 'first(.[]) | del(.guardBlocks.perHour)' "$T/out/run/project.json" 2>&1)
+DNOW=$((W + 60)) dash; cold=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds)' "$T/out/run/project.json" 2>&1)
 check "issue 299: the warm collect read what grew: two blocks, main's new request, the Builder's new context" '[2,200000,160025]' \
   "$(jq -c '[.guardBlocks.blocks, .seats.main.today.tokens, (.units.inFlight[] | select(.unit == "u-verdicts") | .builder.context)]' <<<"$warm")"
 check "issue 299: a warm collect shows what one with no reading state shows" "$cold" "$warm"

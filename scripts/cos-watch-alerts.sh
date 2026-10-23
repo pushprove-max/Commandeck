@@ -73,7 +73,8 @@ try:
 except OSError:
     pass  # the owner is told all the same; the newest seen stamp stands in for this tell
 for a in new:
-    print(json.dumps(a))
+    row = json.dumps(a)  # issue 290: cut at 1,500 characters, with a pointer
+    print(row if len(row) <= 1500 else row[:1500] + ' ...[cut; full row: the dashboard data.js alerts]')
 EOF
 }
 if [ "${1-}" = --seed ]; then poll --seed || { echo "cos-watch-alerts: cannot read $COS_DATA; nothing seeded" >&2; exit 1; }; exit 0; fi

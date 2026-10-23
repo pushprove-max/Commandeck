@@ -16,7 +16,8 @@ poll() {
   new=$(bash "$PP_SCRIPTS/decision.sh" list 2>/dev/null \
     | jq -c --rawfile seen "$SEEN" '($seen | split("\n")) as $s | .[] | select(.answeredAt == null and .waitsOn != "main") | .seen = "\(.id)@\(.askedAt)" | select(.seen | IN($s[]) | not)' 2>/dev/null)
   [ -n "$new" ] || return 1
-  printf '%s\n' "$new"
+  # Issue 290: a row is cut at 1,500 characters, with a pointer; the mark below comes from the whole row.
+  jq -r 'tojson | if length > 1500 then .[:1500] + " ...[cut; full row: decision.sh list]" else . end' <<<"$new"
   # Mark on fire, not on ask: a restart before the pane writes its mark would fire the same decision again.
   jq -r '.seen' <<<"$new" >> "$SEEN"
 }

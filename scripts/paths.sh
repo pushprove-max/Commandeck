@@ -56,6 +56,8 @@ fi
 pp_main_resolve || { echo "paths.sh: no project here: no git checkout found (tried: $PP_TRIED); run it in the project, or set COMMANDECK_MAIN" >&2
   return 1; }
 PP_MAIN_SLUG=$(pp_slug "$PP_MAIN")
+# Issue 309: the same checkout as the physical path, for a ruling logged under that spelling (/private/tmp for /tmp).
+PP_MAIN_P=$(cd "$PP_MAIN" 2>/dev/null && pwd -P) || PP_MAIN_P=$PP_MAIN
 PP_WORKSPACES_SLUG=$(pp_slug "$PP_WORKSPACES")
 PP_SCRATCH=${COMMANDECK_SCRATCH:-$HOME/.commandeck/scratch/$PP_MAIN_SLUG}
 # The Orca run this project's orchestrator is bound to; board.sh is its one
@@ -69,7 +71,7 @@ pp_owed_clear() {
   local at
   { flock -w 10 9 && IFS=$'\t' read -r at _ < "$PP_SCRATCH/cos-owed" && [ "$at" -lt "$1" ] && rm -f "$PP_SCRATCH/cos-owed"; } 9>>"$PP_SCRATCH/cos-owed.lock" 2>/dev/null
 }
-export PP_MAIN PP_WORKSPACES PP_MAIN_SLUG PP_WORKSPACES_SLUG PP_SCRATCH
+export PP_MAIN PP_MAIN_P PP_WORKSPACES PP_MAIN_SLUG PP_WORKSPACES_SLUG PP_SCRATCH
 PP_SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The same path as one shell word, for a command that is printed to be run.
 PP_SCRIPTS_Q=$(printf '%q' "$PP_SCRIPTS")
@@ -490,6 +492,9 @@ pp_inbox_actionable() {
     | .result.messages | if type == "array" and length < 500 then [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h))
       and wakes($k; $relay))] | sort_by(.created_at // "") else error end' 2>/dev/null
 }
+# pp_owner_bound -- issue 305: the text of a question on stdin names the owner or is a repeat-class stop-and-ask: it goes on
+# the owner's decision queue, not behind main's read. orca-wait.sh (main's drain) and cos-watch-inbox.sh (the relay's poll) both ask.
+pp_owner_bound() { grep -qiE 'owner|repeat.class|stop.and.ask'; }
 # Issue 324: the relay's (Chief-of-Staff's) messages always wake main and always print, whatever their type, with or
 # without a ruling id, and whatever wakeKinds says. The relay is its pane, any pane in $PP_WORKSPACES/Chief-of-Staff,
 # never a sender name. pp_relay_handles -- those panes' handles as a JSON array; [] when Orca does not answer.

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # unit-ledger.sh <unit> local [--append] -- print a merged unit's row, or with --append add it once per unit and
 # merge sha to <main>/.claude/metrics/unit-ledger.jsonl (issue 271).
-# unit-ledger.sh --escaped <unit> <issue> -- add {unit, escaped: [issue], recordedAt}: a defect the unit's review
-# passed and something later found (issue 272).
+# unit-ledger.sh --escaped <unit> <issue> --class <class> --caught <where> -- add {unit, escaped: [issue], class,
+# caught, recordedAt}: a defect the unit's review passed and something later found, the kind of finding it was and where
+# it was caught (issue 272). Both are required for a new row; an older row without them reads as unknown.
 #
 # The dashboard's review panels read what a unit's review loop cost and how it ended long after its worktree, round
 # files and panes are gone; seat-events.jsonl holds what each seat spent, never how the loop ended. The merge passes
@@ -34,10 +35,17 @@ append() {
 }
 
 if [ "${1-}" = --escaped ]; then
-  UNIT=${2-} N=${3-}
+  UNIT=${2-} N=${3-} CLASS= CAUGHT=
   [[ $UNIT =~ ^[A-Za-z0-9._-]+$ ]] || { echo "unit-ledger: invalid unit: $UNIT" >&2; exit 2; }
   [[ $N =~ ^[1-9][0-9]*$ ]] || { echo "unit-ledger: an escape is an issue number, not '$N'" >&2; exit 2; }
-  append "$(jq -cn --arg unit "$UNIT" --argjson n "$N" --arg at "$NOW" '{unit: $unit, escaped: [$n], recordedAt: $at}')" \
+  shift 3
+  while [ $# -gt 0 ]; do
+    case $1 in --class) CLASS=${2-} ;; --caught) CAUGHT=${2-} ;; *) echo "unit-ledger: unknown argument: $1" >&2; exit 2 ;; esac
+    shift; [ $# -eq 0 ] || shift
+  done
+  W='^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,79}$'
+  [[ $CLASS =~ $W && $CAUGHT =~ $W ]] || { echo "unit-ledger: an escape needs --class <the finding class> and --caught <where it was caught> (letters, digits, space . _ : / -)" >&2; exit 2; }
+  append "$(jq -cn --arg unit "$UNIT" --argjson n "$N" --arg c "$CLASS" --arg w "$CAUGHT" --arg at "$NOW" '{unit: $unit, escaped: [$n], class: $c, caught: $w, recordedAt: $at}')" \
     '.unit == $u and ([.escaped[]?] | any(. == $n))' --arg u "$UNIT" --argjson n "$N"
   case $? in 0) echo "recorded unit=$UNIT escaped=$N" ;; 3) echo "already recorded unit=$UNIT escaped=$N" ;; *) exit 1 ;; esac
   exit 0
@@ -45,7 +53,7 @@ fi
 
 UNIT=${1-} MODE=${3-}
 [[ $UNIT =~ ^[A-Za-z0-9._-]+$ ]] && [ "${2-}" = local ] && { [ -z "$MODE" ] || [ "$MODE" = --append ]; } \
-  || { echo "usage: unit-ledger.sh <unit> local [--append] | --escaped <unit> <issue>" >&2; exit 2; }
+  || { echo "usage: unit-ledger.sh <unit> local [--append] | --escaped <unit> <issue> --class <class> --caught <where>" >&2; exit 2; }
 SHA=${UNIT_LEDGER_MERGE_SHA:-} VERDICT=${UNIT_LEDGER_VERDICT:-}
 if [ "$MODE" = --append ] && { [ -z "$SHA" ] || [ -z "$VERDICT" ]; }; then
   echo "unit-ledger: refusing to append unit=$UNIT: no merge sha or no verdict was passed (UNIT_LEDGER_MERGE_SHA, UNIT_LEDGER_VERDICT)" >&2
@@ -68,7 +76,7 @@ done
 MERGED=$([ -z "$SHA" ] || git -C "$PP_MAIN" show -s --format=%ct "$SHA" 2>/dev/null)
 ROW=$(jq -Rnc --arg unit "$UNIT" --arg sha "$SHA" --arg verdict "$VERDICT" --arg merged "$MERGED" --arg first "$FIRST" \
   --arg rounds "${UNIT_LEDGER_ROUNDS:-}" --arg go "${UNIT_LEDGER_GO_ROUNDS:-}" --arg nogo "${UNIT_LEDGER_NO_GO_ROUNDS:-}" \
-  --arg rule "${UNIT_LEDGER_MERGE_RULE:-}" --argjson tokens "$TOKENS" --arg at "$NOW" '
+  --arg rule "${UNIT_LEDGER_MERGE_RULE:-}" --arg review "${UNIT_LEDGER_REVIEW:-}" --argjson tokens "$TOKENS" --arg at "$NOW" '
   def n: if test("^[0-9]+$") then tonumber else null end;
   def s: if . == "" then null else . end;
   [inputs | fromjson? // empty | select(.unit == $unit)] as $ev | ($merged | n) as $m | ($first | n) as $f
@@ -77,6 +85,7 @@ ROW=$(jq -Rnc --arg unit "$UNIT" --arg sha "$SHA" --arg verdict "$VERDICT" --arg
      wallHours: (if $m and $f then (($m - $f) / 360 | round) / 10 else null end),
      rounds: ($rounds | n), goRounds: ($go | n), noGoRounds: ($nogo | n), fixRounds: null, verdict: ($verdict | s),
      mergeRule: ($rule | s),
+     passKinds: (($review | if . == "" then null else fromjson end) | .passKinds), reviewSeconds: (($review | if . == "" then null else fromjson end) | .reviewSeconds),
      findings: null, expensivePasses: null,
      seats: [$ev[] | {round, role, model, tokens: (if .tokens then (.tokens.input // 0) + (.tokens.output // 0) else null end)}
        + (if .tokensReason then {tokensReason} else {} end)],

@@ -341,7 +341,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       # A question for the owner (it names the owner, or is a repeat-class stop-and-ask) goes on the owner's decision
       # queue at once, where the relay and the dashboard see it, not behind main's read (issue 305). Any other waits on main.
       wo=(--waits-on main)
-      if jq -r '[.subject // "", .body // ""] | join(" ")' <<<"$m" | grep -qiE 'owner|repeat.class|stop.and.ask'; then wo=()
+      if jq -r '[.subject // "", .body // ""] | join(" ")' <<<"$m" | pp_owner_bound; then wo=()
         echo "  next: it waits for the owner's answer, on the decision queue now; send it on: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
       else echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"; fi
       # Recorded like an owner's ask; a replayed message is the same id and adds nothing.

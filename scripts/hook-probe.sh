@@ -15,7 +15,9 @@ HOOK=$1 ARG=$2 TOOL=${4:-Bash}
 if [ "$TOOL" = Bash ]; then IN=$(jq -cn --arg c "$ARG" '{command: $c}')
 else IN=$(jq -c . <<<"$ARG" 2>/dev/null) || { echo "hook-probe: the tool_input for $TOOL is not JSON" >&2; exit 2; }; fi
 S=$(mktemp -d "${TMPDIR:-/tmp}/hook-probe.XXXXXX") || exit 2
+S=$(cd "$S" && pwd -P) || exit 2 # issue 308: a relative TMPDIR must not make the hook's HOME relative
 trap 'rm -rf "$S"' EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM # a signal still runs the EXIT trap above
 mkdir -p "$S/home" "$S/tmp"
 jq -cn --arg t "$TOOL" --argjson i "$IN" --arg s "probe-$$" --arg d "$PWD" \
   '{hook_event_name: "PreToolUse", tool_name: $t, tool_input: $i, session_id: $s, cwd: $d}' > "$S/payload"

@@ -51,7 +51,10 @@ TOP=$(git -C "${ROOT:-.}" rev-parse --show-toplevel 2>/dev/null) || exit 0
 H=${ORCA_TERMINAL_HANDLE:-}
 [ -n "$H" ] || exit 0
 OUT=$(timeout 10 orca-ide orchestration check --run "$RUN" --json 2>/dev/null) || exit 0
-N=$(jq -er --arg h "$H" '.result.messages | select(type == "array" and length > 0 and all(.[]; .from_handle == $h)) | length' <<<"$OUT" 2>/dev/null) || exit 0
+# Issue 319: its own sends carry the name it was given (chiefOfStaff.name) as well as its handle, in any case.
+NAME=$(jq -r '.chiefOfStaff.name // empty' "${COMMON%/.git}/.claude/commandeck.json" 2>/dev/null)
+N=$(jq -er --arg h "$H" --arg n "$NAME" '.result.messages | select(type == "array" and length > 0
+  and all(.[]; (.from_handle // "" | ascii_downcase) as $f | $f == ($h | ascii_downcase) or ($n != "" and $f == ($n | ascii_downcase)))) | length' <<<"$OUT" 2>/dev/null) || exit 0
 D=$(jq -er '.result.deliveryId | strings' <<<"$OUT" 2>/dev/null) || exit 0
 timeout 10 orca-ide orchestration check --run "$RUN" --ack "$D" --peek --json >/dev/null 2>&1 || exit 0
 jq -cn --arg n "$N" '{decision: "block", reason: "dropped Orca'"'"'s echo of this pane'"'"'s own \($n) message(s); no turn spent"}'

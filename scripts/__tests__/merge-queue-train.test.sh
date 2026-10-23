@@ -29,12 +29,17 @@ check "the check ran on the whole train, then on the first unit, then on the fir
 
 # A train never leaves an untested part of itself on main. The check is red on break.txt unless fix.txt is there too.
 jq --arg c "echo run >> $TMP/check-calls; [ ! -e break.txt ] || [ -e fix.txt ]" '.testCommand = $c' <<<"$CFG" > "$REPO/.claude/commandeck.json"
-# A unit that would refuse (no review proof) leaves the train before its check: the train is the first unit alone.
-mk na; mk nb; add na break.txt; add nb fix.txt; go na; : > "$TMP/check-calls"
+# Issue 306: a train runs no --dry-run pre-pass (the real merge's step 1 refuses the same things, with nothing merged).
+# A unit with no review proof is refused by its real merge, named; the unit before it, green alone, has merged. The
+# recording wrapper stands where the queue calls merge-unit-local.sh and counts every call that carries --dry-run.
+W=$REAL/scripts; mv "$W/merge-unit-local.sh" "$W/merge-unit-local.real.sh"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/mul-calls"\nexec bash "%s/merge-unit-local.real.sh" "$@"\n' "$TMP" "$W" > "$W/merge-unit-local.sh"; chmod +x "$W/merge-unit-local.sh"
+mk na; mk nb; go na; : > "$TMP/check-calls"; : > "$TMP/mul-calls"
 OUT=$(cd "$REPO" && bash "$QUEUE" --train "na@$(sha na)" "nb@$(sha nb)" 2>&1); RC=$?
-check "a unit whose dry run refuses leaves the train, named; the red unit before it is not merged" "1 0 0 1 1" \
-  "$RC $(git -C "$REPO" log --format=%s | grep -c '^feat(na)') $(git -C "$REPO" log --format=%s | grep -c '^feat(nb)') \
-$(grep -c '^merge-queue: STOPPED at nb (not merged: its dry run refused it' <<<"$OUT") $(grep -c '^merge-queue: train red at na' <<<"$OUT")"
+check "a train --train ua@<sha> ub@<sha> runs no --dry-run pass" 0 "$(grep -c -- '--dry-run' "$TMP/mul-calls")"
+check "a unit the real merge's step 1 refuses is named, and nothing of it is merged; the unit before it is" "1 1 0 1"   "$RC $(git -C "$REPO" log --format=%s | grep -c '^feat(na)') $(git -C "$REPO" log --format=%s | grep -c '^feat(nb)') \
+$(grep -c '^merge-queue: STOPPED at nb (not merged); log: ' <<<"$OUT")"
+mv "$W/merge-unit-local.real.sh" "$W/merge-unit-local.sh"
 # A green train whose first unit alone is red: the train's run on the combined tip does not stand for the first
 # unit's own tree, which the second unit changes in a file the check reads. The first unit's check runs and refuses
 # it, so a stop after it (a hold put on the second) never leaves main red.

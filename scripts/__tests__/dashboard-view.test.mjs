@@ -31,9 +31,9 @@ const onDisk = () => JSON.parse(fs.readFileSync(path.join(dir, 'layout.js'), 'ut
 // One page, as the browser opens it: layout.js read from the host's folder, then app.js. `store` is the
 // localStorage a page before it left (a reload). Every save goes to the real host; w.puts counts them and
 // w.reloads counts the page asking to reload itself (jsdom reports that as navigation it cannot do).
-function boot(store = {}, project = 'demo', clock = Date, at = '127.0.0.1') {
+function boot(store = {}, project = 'demo', clock = Date, at = '127.0.0.1', scheme = 'http') {
   const virtualConsole = new VirtualConsole();
-  const dom = new JSDOM(html, { url: `http://${at}:${port}/index.html?project=${project}`, virtualConsole });
+  const dom = new JSDOM(html, { url: `${scheme}://${at}:${port}/index.html?project=${project}`, virtualConsole });
   const w = dom.window;
   w.reloads = 0;
   w.puts = 0;
@@ -653,9 +653,9 @@ function phone() {
 
 test('issue 211: a phone has a bottom tab bar, each tab shows only its own panels, the current one marked', () => {
   const w = phone();
-  assert.deepEqual([...w.document.querySelectorAll('#tabs .tab-label')].map((l) => l.textContent), ['Units', 'Builds', 'Alerts', 'You', 'More']);
-  assert.deepEqual(tabOn(w), ['units'], 'the page opens on Units');
-  for (const [t, want] of [['builds', ['builds']], ['alerts', ['alerts']], ['you', ['needs']], ['units', ['units']]]) {
+  assert.deepEqual([...w.document.querySelectorAll('#tabs .tab-label')].map((l) => l.textContent), ['Home', 'Units', 'Builds', 'Tests', 'Alerts', 'You', 'More']);
+  assert.deepEqual(tabOn(w), ['main-chain'], 'the page opens on Home, which holds main against its remote');
+  for (const [t, want] of [['builds', ['builds']], ['alerts', ['alerts']], ['you', ['needs']], ['units', ['units']], ['home', ['main-chain']]]) {
     tabBtn(w, t).click();
     assert.deepEqual(tabOn(w), want, `${t} shows its own panels`);
     assert.equal(tabBtn(w, t).getAttribute('aria-current'), 'page');
@@ -672,6 +672,26 @@ test('issue 211: a phone has a bottom tab bar, each tab shows only its own panel
   assert.doesNotMatch(CSS, /(html|body)[^{]*\{[^}]*overflow-x: hidden/, 'nothing hides a sideways overflow');
 });
 
+test('issue 292: the page and its title are named for the project shown, until the data names itself', () => {
+  const w = fresh();
+  show(w, {});
+  assert.equal(w.document.title, 'demo Dashboard');
+  assert.equal(text(w.document.getElementById('title')), 'demo Dashboard');
+  w.DASH = { ...w.DASH, name: 'Studio' };
+  reshow(w);
+  assert.equal(w.document.title, 'Studio', 'a name the data carries wins');
+});
+
+test('issue 292: the units card says how many Builders work of the cap in /config, and says nothing with no cap', () => {
+  const w = fresh();
+  const inFlight = [builder(), builder({ unit: 'batch-r', agents: 'claude:idle' })];
+  show(w, { units: { inFlight, builderCap: 3 } });
+  assert.match(text(w.document.getElementById('units-foot')), /Builders working: 1 of the 3 the cap in \/config allows\./);
+  const none = fresh();
+  show(none, { units: { inFlight, builderCap: null } });
+  assert.doesNotMatch(text(none.document.getElementById('units-foot')), /Builders working/);
+});
+
 test('issue 211: More lists every other panel not hidden, shows the one picked alone, and closes on Escape', async () => {
   const w = phone();
   const sheet = w.document.getElementById('more-sheet');
@@ -682,9 +702,9 @@ test('issue 211: More lists every other panel not hidden, shows the one picked a
   tabBtn(w, 'more').click();
   assert.equal(sheet.hidden, false);
   assert.ok(sheet.contains(w.document.activeElement), 'the sheet takes focus');
-  assert.deepEqual(tiles().map((b) => b.dataset.card), ['main-chain', 'merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'cost-unit', 'review', 'guard-blocks',
+  assert.deepEqual(tiles().map((b) => b.dataset.card), ['merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'cost-unit', 'review', 'guard-blocks',
     'chief-of-staff', 'main-seat', 'agents'], 'every panel on no tab, less the one the owner hid and the relay seat this project has not');
-  assert.equal(tiles()[0].textContent, 'Main', 'a tile is its panel\'s title');
+  assert.equal(tiles()[0].textContent, 'Merge line', 'a tile is its panel\'s title');
   w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   assert.equal(sheet.hidden, true, 'Escape closes it');
   assert.equal(w.document.activeElement, tabBtn(w, 'more'), 'and gives focus back to More');
@@ -963,6 +983,28 @@ test('issue 294: Restart collector asks first, shows its progress by the host st
   assert.equal(far.document.getElementById('restart').hidden, true, 'another host: no button');
 });
 
+// Issue 263: on a network bind the dashboard is HTTPS behind a login. A page that reaches the owner that way is a
+// logged-in page: it answers and restarts like the machine's own page, and a write the host refuses with 401 (the
+// session ended, or a restart logged it out) sends the page to the login.
+test('issue 263: an https page has the answer buttons and the restart button, and a 401 sends it to /login', async () => {
+  const d = { id: 'ship-1999-01-01', question: 'Ship it?', proposedDefault: 'yes', options: ['yes', 'no'], source: 'AskUserQuestion',
+    askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  fs.writeFileSync(path.join(dir, 'layout.js'), 'window.DASH_LAYOUT = {"projects": {"demo": {}}, "rev": 1};\n');
+  const lan = boot({}, 'demo', Date, '192.0.2.7', 'https');
+  show(lan, { needsOwner: { decisions: [d] } });
+  assert.equal(lan.document.querySelectorAll('#decisions .answer button').length, 3, 'a logged-in page answers');
+  assert.equal(lan.document.getElementById('restart').hidden, false, 'and restarts');
+  const before = lan.reloads;
+  lan.fetch = () => Promise.resolve({ ok: false, status: 401, text: () => Promise.resolve('log in first'), json: () => Promise.resolve('log in first') });
+  lan.document.querySelector('#decisions .answer button').click();
+  await sleep(50);
+  assert.equal(lan.reloads, before + 1, 'a 401 to the answer leaves for /login');
+  lan.confirm = () => true;
+  lan.document.getElementById('restart').click();
+  await sleep(50);
+  assert.equal(lan.reloads, before + 2, 'a 401 to the restart leaves for /login');
+});
+
 // Issue 270: which units cost the most this week, Claude and Codex apart, each one's stages a click away.
 test('issue 270: Tokens per unit ranks the units by cost, splits Claude and Codex, and folds each one\'s stages', () => {
   const w = fresh();
@@ -980,13 +1022,13 @@ test('issue 270: Tokens per unit ranks the units by cost, splits Claude and Code
 });
 
 // Issues 271 and 272: which units' review loops ran long this week, and which merged units let a defect through.
-test('issues 271 and 272: the review card lists the unit with repeated NO-GOs first, and its escapes', () => {
+test('issues 271 and 272: the review card lists the unit with repeated NO-GOs first, and its escapes with class and where caught (a dash on an older row)', () => {
   const w = fresh();
   const row = (unit, rounds, noGo) => ({ unit, rounds, goRounds: 1, noGoRounds: noGo, fixRounds: null, verdict: 'CONVERGED-GO', gaps: ['fixRounds', 'findings'] });
-  show(w, { reviewLoop: [row('quick-1999-01-01', 1, 0), row('loopy-1999-01-01', 5, 4)], escapes: [{ unit: 'loopy-1999-01-01', escaped: [41, 43] }] });
+  show(w, { reviewLoop: [row('quick-1999-01-01', 1, 0), row('loopy-1999-01-01', 5, 4)], escapes: [{ unit: 'loopy-1999-01-01', issue: 41, class: 'lost-reply', caught: 'production' }, { unit: 'loopy-1999-01-01', issue: 43, class: null, caught: null }] });
   assert.deepEqual([...w.document.querySelectorAll('#review-list > li .uline')].map((u) => [...u.children].map(text)),
     [['loopy-1999-01-01', '5 rounds, 4 NO-GO · not measured: fixRounds, findings'], ['quick-1999-01-01', '1 round, 0 NO-GO · not measured: fixRounds, findings']]);
-  assert.deepEqual([...w.document.querySelectorAll('#escapes-list > li')].map(text), ['loopy-1999-01-01 escaped #41, #43']);
+  assert.deepEqual([...w.document.querySelectorAll('#escapes-list > li')].map(text), ['loopy-1999-01-01 escaped #41 · class lost-reply · caught production', 'loopy-1999-01-01 escaped #43 · class - · caught -']);
   const none = fresh();
   show(none, { reviewLoop: [], escapes: [] });
   assert.equal(text(none.document.querySelector('#review .card-note')), 'No unit merged in the last 7 days');
@@ -995,6 +1037,45 @@ test('issues 271 and 272: the review card lists the unit with repeated NO-GOs fi
   show(nothing, { reviewLoop: null, escapes: null });
   assert.equal(text(nothing.document.querySelector('#review .card-note')), 'Unit ledger not measured');
   assert.deepEqual([...nothing.document.querySelectorAll('#escapes-list > li')].map(text), []);
+});
+
+// Issue 271: where a unit's review rounds went, by pass kind, and how long it spent in review.
+test('issue 271: the review-loop panel shows GO/NO-GO per pass kind and time in review, and says so when a row has neither', () => {
+  const w = fresh();
+  const row = (unit, extra) => ({ unit, rounds: 5, goRounds: 1, noGoRounds: 4, verdict: 'CONVERGED-GO', gaps: [], ...extra });
+  show(w, { reviewLoop: [
+    row('timed-1999-01-01', { passKinds: { adversarial: { go: 0, noGo: 4 }, final: { go: 1, noGo: 0 } }, reviewSeconds: 1500 }),
+    row('older-1999-01-01', { passKinds: null, reviewSeconds: null, gaps: ['passKinds', 'reviewSeconds'] })], escapes: [] });
+  assert.deepEqual([...w.document.querySelectorAll('#review-list > li .uline')].map((u) => [...u.children].map(text)),
+    [['timed-1999-01-01', '5 rounds, 4 NO-GO · adversarial 0 GO/4 NO-GO, final 1 GO/0 NO-GO · 25 min in review'],
+     ['older-1999-01-01', '5 rounds, 4 NO-GO · not measured: passKinds, reviewSeconds']]);
+});
+
+// Issue 269: the test runs going now with their owner and elapsed time, a stalled one flagged, and the finished ones with totals.
+test('issue 269: the tests card shows a running test with its owner and elapsed time, a stalled one flagged, and finished runs with their totals; each unmeasured part says so', () => {
+  const w = fresh();
+  const run = (pid, who, over) => ({ pid, who, builder: who !== 'main', command: 'bash scripts/run-shell-tests.sh a.test.sh', elapsedSec: 754, usualSec: 600, capSec: 1800, stalled: false, ...over });
+  const done = (result, over) => ({ when: iso(NOW - 60000), start: iso(NOW - 120000), what: 'npm run test:unit', who: 'u-verdicts', took: 61, result, passed: 3, failed: 0, usual: null, ...over });
+  show(w, { tests: { running: [run(1, 'u-verdicts'), run(2, 'main', { elapsedSec: 400, usualSec: null, capSec: null }), run(3, 'u-slow', { elapsedSec: 300, usualSec: null, capSec: 120, stalled: true })],
+    finished: [done('passed'), done('failed', { passed: 4, failed: 2 }), done('unknown', { passed: null, failed: null })] } });
+  const jobs = [...w.document.querySelectorAll('#tests-body .job')].map(text);
+  assert.equal(jobs.length, 3);
+  assert.match(jobs[0], /u-verdicts.*run-shell-tests\.sh a\.test\.sh.*12:34 elapsed.*usually 10:00/s, 'owner, test and elapsed time');
+  assert.match(jobs[1], /main.*6:40 elapsed.*usual time not measured/s);
+  assert.match(jobs[2], /u-slow.*Stalled/s, 'past its cap with no result');
+  assert.doesNotMatch(jobs[0], /Stalled/);
+  assert.equal(text(w.document.querySelector('#tests-sub')), '3 running');
+  assert.deepEqual([...w.document.querySelectorAll('#tests-body table tr')].slice(1).map((r) => [...r.children].slice(1).map(text)),
+    [['u-verdicts', 'npm run test:unit', '3 passed', '1:01', ''], ['u-verdicts', 'npm run test:unit', '2 failed', '1:01', ''], ['u-verdicts', 'npm run test:unit', 'result unknown', '1:01', '']]);
+  const idle = fresh();
+  show(idle, { tests: { running: [], finished: [] } });
+  assert.match(text(idle.document.querySelector('#tests-body')), /No test is running\..*No test finished in the last 24 hours\./s);
+  const half = fresh();
+  show(half, { tests: { running: null, finished: null } });
+  assert.match(text(half.document.querySelector('#tests-body')), /Running tests not measured.*Finished runs not measured/s);
+  const none = fresh();
+  show(none, { tests: null });
+  assert.equal(text(none.document.querySelector('#tests .card-note')), 'Tests not measured');
 });
 
 // Issue 274: an alert that cleared left no trace on the card. The last 24 h of them sit in a closed list under it.

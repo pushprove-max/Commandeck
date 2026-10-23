@@ -120,15 +120,18 @@ mkdir -p "$MAIN/.claude/metrics"
 { for u in loopy:5:4:3 quick:1:0:1 old:7:6:9; do IFS=: read -r n r g d <<< "$u"
     jq -cn --arg u "$n" --argjson r "$r" --argjson g "$g" --argjson d "$d" '{unit: $u, mergeSha: ("c" * 40), mergedAt: (now - $d * 86400 | todate),
       rounds: $r, goRounds: 1, noGoRounds: $g, fixRounds: null, verdict: "CONVERGED-GO", findings: null, expensivePasses: null,
-      gaps: ["fixRounds", "findings", "expensivePasses"]}'; done
-  printf '%s\n' '{"unit":"loopy","escaped":[41],"recordedAt":"1999-01-02T00:00:00Z"}' '{"unit":"gone","escaped":[42],"recordedAt":"1999-01-02T00:00:00Z"}' \
-    '{"unit":"loopy","escaped":[43],"recordedAt":"1999-01-03T00:00:00Z"}' 'not json'; } > "$MAIN/.claude/metrics/unit-ledger.jsonl"
+      gaps: ["fixRounds", "findings", "expensivePasses"]} + (if $u == "loopy" then {passKinds: {adversarial: {go: 0, noGo: 4}, final: {go: 1, noGo: 0}}, reviewSeconds: 1500} else {} end)'; done
+  printf '%s\n' '{"unit":"loopy","escaped":[41],"class":"lost-reply","caught":"production","recordedAt":"1999-01-02T00:00:00Z"}' '{"unit":"gone","escaped":[42],"recordedAt":"1999-01-02T00:00:00Z"}' \
+    '{"unit":"loopy","escaped":[43],"class":"race","caught":"main","recordedAt":"1999-01-03T00:00:00Z"}' 'not json'; } > "$MAIN/.claude/metrics/unit-ledger.jsonl"
 dash
 check "issue 271: the units merged in 7 days, most rounds first; an older unit and the escape rows are left out" \
   '[["loopy",5,4,null,["fixRounds","findings","expensivePasses"]],["quick",1,0,null,["fixRounds","findings","expensivePasses"]]]' \
   "$(jq -c 'first(.[]) | [.reviewLoop[] | [.unit, .rounds, .noGoRounds, .fixRounds, .gaps]]' "$T/out/run/project.json" 2>&1)"
-check "issue 272: one escape entry per unit with its issues, a unit with no merged row included" \
-  '[{"unit":"gone","escaped":[42]},{"unit":"loopy","escaped":[41,43]}]' "$(jq -c 'first(.[]) | .escapes' "$T/out/run/project.json" 2>&1)"
+check "issue 271: a unit's GO/NO-GO per pass kind and its seconds in review reach the page, null on a row from before them" \
+  '[["loopy",{"adversarial":{"go":0,"noGo":4},"final":{"go":1,"noGo":0}},1500],["quick",null,null]]' \
+  "$(jq -c 'first(.[]) | [.reviewLoop[] | [.unit, .passKinds, .reviewSeconds]]' "$T/out/run/project.json" 2>&1)"
+check "issue 272: one escape entry per unit and issue with its class and where caught (null on an older row), a unit with no merged row included" \
+  '[{"unit":"gone","issue":42,"class":null,"caught":null},{"unit":"loopy","issue":41,"class":"lost-reply","caught":"production"},{"unit":"loopy","issue":43,"class":"race","caught":"main"}]' "$(jq -c 'first(.[]) | .escapes' "$T/out/run/project.json" 2>&1)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

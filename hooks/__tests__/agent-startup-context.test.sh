@@ -70,6 +70,9 @@ check "the relay applies denied steps only from a note the watcher names as from
 REL=$(ctx "$T/wt/Chief-of-Staff")
 check "the relay reads at most the last 600 characters of a watcher, and hands a big one-off read to a subagent" "1:1" \
   "$(grep -c 'at most the last 600 characters of a watcher' <<<"$REL"):$(grep -c 'more than about 10 KB.*subagent that answers in at most 40 lines' <<<"$REL")"
+# Issue 319: a timer check that reports nothing for the owner is not worth a reply (each reply replays the context).
+check "the relay ends a wake whose line says nothing for the owner with no text, after it starts the check again" 1 \
+  "$(grep -c 'nothing for the owner.*start cos-check.sh again, then end the turn with no text' <<<"$REL")"
 check "the relay's decision line passes an order with relay-order.sh" 1 "$(grep -c "scripts/relay-order.sh <id> '<the owner's words verbatim>'" <<<"$REL")"
 check "the relay searches the rulings log before a picker, and asks one question per picker" 1 \
   "$(grep -c 'Before a picker, search the rulings log .* for its topic.*One question per picker' <<<"$REL")"

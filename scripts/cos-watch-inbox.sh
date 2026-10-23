@@ -94,10 +94,10 @@ poll_n() { # rows to ask for
   coord=$(orca-ide orchestration run-list --json 2>/dev/null \
     | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || return 1
   orca-ide orchestration inbox --limit "$1" --json 2>/dev/null | python3 -c '
-import datetime, fcntl, json, os, re, sys, time
+import datetime, fcntl, json, os, re, subprocess, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
 limit = int(sys.argv[6])
-owedf, sentf, seenf = sys.argv[7:10]
+owedf, sentf, seenf, scripts, workspaces = sys.argv[7:12]
 try:
     d = json.load(sys.stdin)
 except ValueError:
@@ -137,7 +137,9 @@ if limit < 3840 and len(ms) >= limit and min(m.get("sequence") or 0 for m in ms)
 want = r"^cos\b|chief.of.staff|\bowner\b" + ("|" + re.escape(name) if name else "")
 # The Orca inbox holds every project on the machine: this pane relays its own run only.
 # A message to this pane (to_handle == me) is for the relay, whatever its run, type or subject (answer-worker.sh from main).
-mine = [m for m in ms if (m.get("sequence") or 0) > last and m.get("from_handle") != me
+# Issue 319: a send stamps the name it was given with --from (chiefOfStaff.name) in any case, not the handle: both are this pane own.
+own = {me.lower(), name.lower()} - {""}
+mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle") or "").lower() not in own
         and (m.get("to_handle") == me
              or (run and m.get("run_id") == run
                  and m.get("type") != "worker_done"  # worker reports go to main
@@ -172,12 +174,43 @@ if sent:  # main sent the relay something: its turn is not a silent stop, and a 
 # and handle without spaces, so no text of a message starts a line of its own that reads as a record of this watcher.
 safe = lambda s: re.sub(r"[^\w:.+-]", "_", str(s or ""))
 who = lambda m: "main" if coord and m.get("from_handle") == coord else safe(m.get("from_handle"))[:14]
-line = lambda m: " ".join((safe(m.get("created_at")), f"[from {who(m)}]", enc(m.get("subject")), "|", enc(m.get("body")), "\n"))
+# Issue 290: each wake replays the relay context, so one body is cut at 1,200 characters and the held dump at 1,500, with a pointer.
+cap = lambda s, n: s if len(s) <= n else s[:n] + " ...[cut; full text: orca-ide orchestration inbox]"
+line = lambda m: " ".join((safe(m.get("created_at")), f"[from {who(m)}]", enc(m.get("subject")), "|", enc(cap(str(m.get("body") or ""), 1200)), "\n"))
+def sh(*a, **k):
+    return subprocess.run(list(a), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, **k)
+def unit_of(m, units):
+    u = units.get(m.get("from_handle") or "") or (re.search(r"\(([^)]+)\)", m.get("subject") or "") or [None, ""])[1]
+    return u if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", u) else ""
+# Issue 305: an owner-bound question from a worker to main goes on the decision queue from this poll, while main is busy,
+# under the id main orca-wait.sh drain uses (<unit>-<message id>): either path records it once.
+units = None
+for m in ms:
+    subj, body = m.get("subject") or "", m.get("body") or ""
+    if not (coord and (m.get("sequence") or 0) > last and m.get("from_handle") != coord and m.get("type") in ("question", "escalation")
+            and m.get("to_handle") in ("run:" + run, coord) and m.get("id")
+            and ("turn complete" not in subj or re.search(r"turn complete: (QUESTION|BLOCKED)", subj))):
+        continue
+    try:
+        if sh("bash", "-c", ". \"$1/paths.sh\" && pp_owner_bound", "_", scripts, input=(subj + " " + body).encode()).returncode:
+            continue
+        if units is None:  # every pane that sits in a unit worktree, as orca-wait.sh maps them
+            tl = subprocess.run(["orca-ide", "terminal", "list", "--json"], capture_output=True, text=True, timeout=15).stdout
+            ts = json.loads(tl).get("result") or {}
+            ws = os.path.normpath(workspaces) + "/"
+            units = {t["handle"]: os.path.normpath(t.get("worktreePath") or "")[len(ws):].split("/")[0] for t in (ts if isinstance(ts, list) else ts.get("terminals") or [])
+                     if os.path.normpath(t.get("worktreePath") or "").startswith(ws)}
+        unit = unit_of(m, units)
+        if unit:
+            q = subj + ": " + re.sub(r"\s+", " ", body).strip()[:300]
+            sh("bash", os.path.join(scripts, "decision.sh"), "add", unit + "-" + re.sub(r"[^A-Za-z0-9._-]", "_", str(m["id"])), q, "none", unit + " asks")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass  # main drain still records it
 mine.sort(key=lambda m: m["sequence"])
 fyi = [m for m in mine if m.get("to_handle") != me and re.match(r"\s*fyi\b", m.get("subject") or "", re.I)]
 wake = [m for m in mine if m not in fyi]
 held = held + "".join(line(m) + "\n" for m in fyi)
-out = owed + "".join(line(m) + "\n" for m in wake) + ("HELD FYI NOTES (did not wake you):\n" + held + "\n" if held and (wake or owed) else "")
+out = owed + "".join(line(m) + "\n" for m in wake) + ("HELD FYI NOTES (did not wake you):\n" + cap(held, 1500) + "\n" if held and (wake or owed) else "")
 # The one step: the place and the notes are one file, so both move or neither
 # does, and a save that fails leaves them as they were with nothing shown.
 # A batch for the pane is saved as pending before it is shown and cleared
@@ -204,6 +237,6 @@ try:
 except OSError as e:
     sys.exit(f"cos-watch-inbox: the batch was not shown or not marked shown ({e}); the next poll shows it")
 sys.exit(0)
-' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent" "$COS_KEY.inbox-seen-ids"
+' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES"
 }
 cos_wait 20 poll

@@ -171,7 +171,10 @@
   const finishedBuilds = (units) => (units && Array.isArray(units.finishedBuilds) ? units.finishedBuilds.filter((f) => f && typeof f.unit === 'string' && f.unit && typeof f.sha === 'string' && f.sha) : null);
   // Issue 240: the owner answers on this machine's own page only (dashboard_serve.py takes an answer from a loopback
   // client alone); every other host's page, the phone's, shows the question read-only.
-  const LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname);
+  // Issue 263: a page served over https is behind the host's login, and that host takes an answer from any logged-in client.
+  const LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname) || window.location.protocol === 'https:';
+  // A write the host refuses with 401 (the session ended) sends the page to the host's login.
+  const loggedIn = (r) => { if (r && r.status === 401) window.location.assign('/login'); return r; };
   // One asking of a decision: decision.sh reopen keeps the id and moves askedAt, and that is a new question.
   const asking = (d) => `${d.id} ${d.askedAt}`;
   const answered = new Map(); // asking -> the host's word on its answer, until a snapshot drops that asking
@@ -185,7 +188,7 @@
     const post = (answer) => {
       for (const c of box.querySelectorAll('button, input')) c.disabled = true;
       window.fetch('answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: asked, id: d.id, askedAt: d.askedAt, answer }) })
-        .then((r) => (r.ok ? r.json().then((j) => {
+        .then(loggedIn).then((r) => (r.ok ? r.json().then((j) => {
           if (j.picker) pickerOpen.add(d.id);
           return `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}${j.picker ? "; main's picker for it was open: pick or press Esc in main's pane" : ''}`;
         })
@@ -229,7 +232,7 @@
         if (ask && !window.confirm(ask)) return;
         b.disabled = true;
         window.fetch('unsent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: u.key, action }) })
-          .then((r) => (r.ok ? `${label}: done, the list follows on the next refresh` : `${label}: the host said ${r.status}`))
+          .then(loggedIn).then((r) => (r.ok ? `${label}: done, the list follows on the next refresh` : `${label}: the host said ${r.status}`))
           .catch(() => `${label}: the host could not be reached`)
           .then((s) => { said.textContent = s; b.disabled = false; });
       });
@@ -368,12 +371,63 @@
     put(byId('review-list'), (Array.isArray(rows) ? rows : []).slice().sort((a, b) => (num(b.rounds) ?? -1) - (num(a.rounds) ?? -1)).map((r) => {
       const li = h('li');
       const gaps = Array.isArray(r.gaps) && r.gaps.length ? ` · not measured: ${r.gaps.join(', ')}` : '';
-      li.append(uline(r.unit, `${n(r.rounds, 'round')}, ${num(r.noGoRounds) ?? '?'} NO-GO${gaps}`));
+      const kinds = r.passKinds && typeof r.passKinds === 'object' ? ` · ${Object.entries(r.passKinds).map(([k, v]) => `${k} ${v.go} GO/${v.noGo} NO-GO`).join(', ')}` : '';
+      const inReview = num(r.reviewSeconds) === null ? '' : ` · ${Math.round(r.reviewSeconds / 60)} min in review`;
+      li.append(uline(r.unit, `${n(r.rounds, 'round')}, ${num(r.noGoRounds) ?? '?'} NO-GO${kinds}${inReview}${gaps}`));
       return li;
     }));
     put(byId('escapes-list'), !Array.isArray(escapes) ? []
-      : escapes.length ? escapes.map((e) => h('li', null, `${e.unit} escaped ${(Array.isArray(e.escaped) ? e.escaped : []).map((i) => `#${i}`).join(', ')}`))
+      : escapes.length ? escapes.map((e) => h('li', null, `${e.unit} escaped #${e.issue} · class ${e.class || '-'} · caught ${e.caught || '-'}`))
         : [h('li', 'empty', 'No escaped issue tagged')]);
+  }
+  // Issue 269: the test runs going now on this machine and the finished ones of the last day. Only what the collector
+  // measured shows: a usual time needs 3 runs of the command, so a run without one says so.
+  function testJob(r) {
+    const el = num(r.elapsedSec), us = num(r.usualSec);
+    const job = h('div', r.stalled ? 'job stalled' : 'job'), top = h('div', 'row'), who = h('div');
+    who.append(h('span', 'who', r.who || 'unknown'), ' ', h('code', 'what', r.command));
+    top.append(who);
+    if (r.builder) top.append(badge('Builder'));
+    if (r.stalled) top.append(badge('Stalled', 'crit'));
+    const meta = h('div', 'meta');
+    meta.append(h('span', null, el === null ? 'elapsed not measured' : `${took(el)} elapsed`),
+      h('span', null, us === null ? 'usual time not measured (needs 3 runs)' : `usually ${took(us)}`));
+    job.append(top, meta);
+    return job;
+  }
+  function renderTests(t) {
+    const run = t && Array.isArray(t.running) ? t.running : null;
+    const fin = t && Array.isArray(t.finished) ? t.finished : null;
+    note('tests', t ? '' : 'Tests not measured');
+    sub('tests-sub', run === null ? '' : `${run.length} running`);
+    const body = [];
+    if (t) {
+      body.push(h('h3', null, 'Running'));
+      if (run === null) body.push(h('p', 'nm', 'Running tests not measured'));
+      else if (!run.length) body.push(h('p', 'empty', 'No test is running.'));
+      else body.push(...run.map(testJob));
+      body.push(h('h3', null, 'Finished, last 24 hours'));
+      if (fin === null) body.push(h('p', 'nm', 'Finished runs not measured'));
+      else if (!fin.length) body.push(h('p', 'empty', 'No test finished in the last 24 hours.'));
+      else {
+        const table = h('table', 'tests-table'), head = h('tr');
+        head.append(...['When', 'Who', 'What', 'Result', 'Took', 'Usual'].map((c) => h('th', null, c)));
+        table.append(head);
+        for (const f of fin.slice(0, 30)) {
+          const result = f.result === 'failed' ? badge(num(f.failed) ? `${f.failed} failed` : 'failed', 'crit')
+            : f.result === 'unknown' ? h('span', null, 'result unknown')
+              : h('span', null, num(f.passed) !== null ? `${f.passed} passed` : 'passed');
+          const what = h('td', 'what', String(f.what).slice(0, 70)), row = h('tr'), res = h('td');
+          what.title = f.what;
+          res.append(result);
+          row.append(h('td', null, hm(new Date(parseTime(f.when)))), h('td', null, f.who), what, res,
+            h('td', 'num', num(f.took) === null ? '' : took(f.took)), h('td', 'num', num(f.usual) === null ? '' : took(f.usual)));
+          table.append(row);
+        }
+        body.push(table);
+      }
+    }
+    put(byId('tests-body'), body);
   }
   // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
   const STAGE_MIN_PCT = 12;
@@ -548,7 +602,8 @@
     put(byId('units-bar'), [mbar(cols.map((s) => [(100 * size(s)) / total, STAGE_TONE[s]]), 'h14')]);
     legend(byId('units-legend'), cols.map((s) => [STAGE_TONE[s], STAGE_LABEL[s], String(size(s))]));
     byId('stages').style.setProperty('--cols', cols.map((s) => (size(s) ? 'minmax(0, 2fr)' : 'minmax(70px, 0.6fr)')).join(' '));
-    byId('units-foot').textContent = 'A unit is marked stale after a day with no sign.';
+    const working = workingBuilders(units).used, cap = Number.isInteger(units && units.builderCap) ? units.builderCap : null;
+    byId('units-foot').textContent = `A unit is marked stale after a day with no sign.${working !== null && cap !== null ? ` Builders working: ${working} of the ${cap} the cap in /config allows.` : ''}`;
     flag('units', lists['waiting-main'].length + lists.stale.length > 0 || Boolean(q('#units .stage-time.crit')));
     // issue 211: the phone's step chips, counted as the columns are; app.css shows only the chosen stage under 760 px.
     put(byId('unit-steps'), [...STAGES, 'all'].map((s) => {
@@ -1573,11 +1628,13 @@
     const now = Date.now();
     looks = new Set();
     const d = view(snapshot);
-    if (typeof d.name === 'string' && d.name) { byId('title').textContent = d.name; document.title = d.name; }
+    const title = typeof d.name === 'string' && d.name ? d.name : project ? `${project} Dashboard` : '';
+    if (title) { byId('title').textContent = title; document.title = title; }
     renderNeeds(d.needsOwner, now, d.githubP1);
     renderUnits(d.units, now);
     renderCostUnit(d.units && d.units.costPerUnit);
     renderReview(d.reviewLoop, d.escapes);
+    renderTests(d.tests);
     renderBuilds(d.units, now, d.github);
     renderMergeLine(d.github, d.units, d.sources);
     renderHeld(d.github, d.units, d.sources);
@@ -1677,7 +1734,7 @@
     restartWatch = { cycle: alive ? alive.cycleStartedAt : null, updated: data ? data.updatedAt : null, waiting: false };
     restartSay('restarting...');
     window.fetch('restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .then((r) => (r.ok ? null : r.json().then((t) => restartFailed(String(t)), () => restartFailed(`the host answered ${r.status}`))),
+      .then(loggedIn).then((r) => (r.ok ? null : r.json().then((t) => restartFailed(String(t)), () => restartFailed(`the host answered ${r.status}`))),
         () => restartFailed('the host did not answer'));
   });
 
@@ -1865,7 +1922,7 @@
       s.onerror = () => { s.remove(); done(false); };
       document.head.append(s);
     };
-    window.fetch('layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(answer).catch(() => done(false));
+    window.fetch('layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(loggedIn).then(answer).catch(() => done(false));
   };
   const keep = (key, value) => { mem.set(key, value); store((s) => s.setItem(key, JSON.stringify(value))); sendLayout(); };
   const saveOrder = () => keep(ORDER_KEY, cards().map((c) => c.id));
@@ -2074,7 +2131,7 @@
 
   // issue 211: under 760 px a bottom tab bar picks the panels shown (app.css hides the rest); wider, the bar is
   // hidden and every panel shows as before. More offers every other panel not hidden, as tiles.
-  const TABS = { units: ['units'], builds: ['builds'], alerts: ['alerts'], you: ['needs'] };
+  const TABS = { home: ['main-chain'], units: ['units'], builds: ['builds'], tests: ['tests'], alerts: ['alerts'], you: ['needs'] };
   const tabBar = byId('tabs'), sheet = byId('more-sheet');
   function showTab(tab, one) {
     document.body.dataset.tab = tab;
@@ -2104,7 +2161,7 @@
     showTab('more', t.dataset.card);
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
-  showTab('units');
+  showTab('home');
   byId('unit-steps').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-step]');
     if (!b) return;

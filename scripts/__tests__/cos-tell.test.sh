@@ -37,7 +37,7 @@ case "\$1 \$2" in
 esac
 EOF
 chmod +x "$T/bin/orca-ide"
-E=(env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" PATH="$T/bin:$PATH")
+E=(env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" PATH="$T/bin:$PATH")
 note() { (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "$1" "$2" 2>&1); }
 watch() { (cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-inbox.sh" term_cos 2>&1); }
 
@@ -59,6 +59,18 @@ touch "$T/need-from"
 OUT=$(cd "$T/p" && env -u ORCA_TERMINAL_HANDLE "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "unit u4 merged" "u4" 2>&1); RC=$?
 check "cos-tell.sh --note from a service env: sent with --from and accepted" "0:1" "$RC:$(grep -c '"subject":"unit u4 merged"' "$T/store.jsonl")"
 rm -f "$T/need-from"
+
+# Issue 319: the relay's own sends carry the name it was given (chiefOfStaff.name), in whatever case. Sent as Relay or as
+# relay, neither wakes the relay; one from another name still does.
+mkdir -p "$T/p/.claude"; echo '{"chiefOfStaff":{"name":"relay"}}' > "$T/p/.claude/commandeck.json"
+watch >/dev/null
+# The stub stamps every send as main; the rows are stored as Orca stamps a send made with --from <name>.
+for f in Relay relay stranger; do jq -cn --arg f "$f" --argjson n "$(( $(wc -l < "$T/store.jsonl") + 1 ))" \
+  '{sequence: $n, run_id: "run_1", from_handle: $f, to_handle: "run:run_1", subject: "cos: sent as \($f)", body: "x", type: "status", created_at: "2026-10-15T10:00:00Z"}' >> "$T/store.jsonl"; done
+OUT=$(watch)
+check "sends with --from Relay and --from relay both do not wake the relay" "0 0" "$(grep -c 'sent as Relay' <<<"$OUT") $(grep -c 'sent as relay' <<<"$OUT")"
+check "a send from another name still wakes it" 1 "$(grep -c 'sent as stranger' <<<"$OUT")"
+rm -f "$T/p/.claude/commandeck.json"
 
 # A typed send Orca took no input for (a paired phone holding the pane's keyboard) said "Sent" or a bare "Send failed".
 mkdir -p "$T/ws/Chief-of-Staff"; touch "$T/cos-pane"
@@ -299,6 +311,51 @@ OUT=$(watch); F=$(sed -n 's/.*whole text: \([^ ]*\)$/\1/p' <<<"$OUT")
 check "a wake with 30 queued messages prints one line under 1,500 characters, naming the count and the file" "1 yes 1" \
   "$(grep -c . <<<"$OUT") $([ "${#OUT}" -lt 1500 ] && echo yes) $(grep -c 'cos-watch-inbox woke: 30 records' <<<"$OUT")"
 check "and the file holds all thirty" 30 "$(grep -c 'cos: report number' "$F" 2>/dev/null)"
+
+# Issue 290: each wake replays the relay's whole context, so one record is capped, with a pointer to the full text.
+# Read from the saved wake file: a stdout test would pass without the cap (over 600 bytes stdout is already a pointer).
+wakefile() { find "$T/home/.commandeck/chief-of-staff" -name "*.cos-watch-$1-wake-*.txt" -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1; }
+clearwakes() { find "$T/home/.commandeck/chief-of-staff" -name '*-wake-*.txt' -delete 2>/dev/null; }
+BIG=$(head -c 3000 /dev/zero | tr '\0' x)
+clearwakes; watch >/dev/null
+jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg b "$BIG" \
+  '{sequence: $n, run_id: "run_1", from_handle: "term_main", to_handle: "run:run_1", subject: "cos: long report", body: $b, type: "status", created_at: "2026-10-15T10:00:00Z"}' >> "$T/store.jsonl"
+watch >/dev/null; WF=$(wakefile inbox)
+check "the wake file for an inbox body over 1,200 characters holds it capped with a pointer" "yes 1" \
+  "$([ "$(wc -c < "$WF")" -lt 1500 ] && echo yes) $(grep -c 'full text: orca-ide orchestration inbox' "$WF")"
+# Held FYI notes print above a wake, and past 1,500 characters they too are cut.
+clearwakes
+for i in $(seq 1 12); do jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg b "$(head -c 500 /dev/zero | tr '\0' y)" \
+  '{sequence: $n, run_id: "run_1", from_handle: "term_main", to_handle: "run:run_1", subject: "FYI note", body: $b, type: "status", created_at: "2026-10-15T10:00:00Z"}' >> "$T/store.jsonl"; done
+row term_main run:run_1 status "cos: wakes with the held notes"
+watch >/dev/null; WF=$(wakefile inbox)
+check "the held FYI dump over 1,500 characters is cut with a pointer" "yes 1" \
+  "$([ "$(sed -n '/^HELD FYI NOTES/,$p' "$WF" | wc -c)" -lt 1800 ] && echo yes) $(sed -n '/^HELD FYI NOTES/,$p' "$WF" | grep -c 'full text: orca-ide orchestration inbox')"
+clearwakes
+(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/decision.sh" add dlong "$BIG" none 'source' >/dev/null 2>&1)
+(cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-decisions.sh" >/dev/null 2>&1); WF=$(wakefile decisions)
+check "a decision row over 1,500 is capped in its wake file" "yes 1" \
+  "$([ "$(wc -c < "$WF")" -lt 1700 ] && echo yes) $(grep -c 'full row: decision.sh list' "$WF")"
+printf 'window.DASH = {"alerts": [{"id": "big-1792000900", "severity": "crit", "text": "%s"}]};\n' "$BIG" > "$T/home/.commandeck/dashboard/data.js"
+alertwatch >/dev/null; WF=$(wakefile alerts)
+check "an alert row over 1,500 is capped in its wake file" "yes 1" \
+  "$([ "$(wc -c < "$WF")" -lt 1700 ] && echo yes) $(grep -c 'full row: the dashboard' "$WF")"
+
+# Issue 305: a Builder's question to main that names the owner reaches the decision queue from the relay's own poll,
+# with main busy and not draining; the id is the one main's orca-wait.sh drain uses (<unit>-<message id>), so either
+# path records it once. An ordinary question waits on main, and records nothing here.
+watch >/dev/null
+ask() { jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg id "$1" --arg t "$2" --arg s "$3" --arg b "$4" \
+  '{id: $id, sequence: $n, run_id: "run_1", from_handle: "term_u305", to_handle: "run:run_1", subject: $s, body: $b, type: $t, created_at: "2026-10-15T10:00:00Z"}' >> "$T/store.jsonl"; }
+ask q1 question "question (u305)" "Stop and ask the owner: ship the old format or the new one?"
+ask q2 question "question (u305)" "Which helper file should hold the parser?"
+ask q3 question "claude turn complete: VERDICT: GO (u305)" "the owner may like it"
+watch >/dev/null
+check "a Builder's owner-bound question to main reaches the decision queue with main not draining" "u305-q1" \
+  "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/decision.sh" list | jq -r '.[] | select(.answeredAt == null and (.id | startswith("u305"))) | .id' | paste -sd' ' -)"
+watch >/dev/null
+check "and a second poll of the same message adds no second decision" 1 \
+  "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/decision.sh" list | jq '[.[] | select(.id == "u305-q1")] | length')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

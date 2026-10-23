@@ -183,9 +183,15 @@ check "with the missing items copied under one unresolved Queue heading" "1 1 1"
 check "and logged as carried automatically" 1 "$(grep -c 'carried automatically into the checkpoint' "$CPD/clear-hook.log")"
 check "the restarted checkpoint carries everything the old one had" 0 \
   "$(python3 "$ROOT/scripts/checkpoint-context.py" carry "$CPD/old.md" "$CPD/sid.md" >/dev/null; echo $?)"
-# Issue 300: a carry the hook made itself heals itself, so nothing alerts on its log line: no watcher or dashboard
-# script reads it, and the relay's alert watcher, polled with that line in the log, prints nothing.
-check "no script outside the hooks reads the carried-automatically line" "" "$(cd "$ROOT" && grep -rl 'carried automatically' scripts dashboard 2>/dev/null)"
+# Issue 283: the stop line's cp_bytes is measured before the carry appends the missing items, so the carry's success
+# logs the size the restart takes. The report reads the last stop-hook line naming the checkpoint.
+CPB=$(wc -c < "$CPD/sid.md" | tr -d ' ')
+LAST=$(grep "stop-hook: .*cp=$CPD/sid.md " "$CPD/clear-hook.log" | tail -1 | sed -n 's/.* cp_bytes=\([0-9]*\).*/\1/p')
+FIRST=$(grep "stop-hook: ctx=.*cp=$CPD/sid.md " "$CPD/clear-hook.log" | tail -1 | sed -n 's/.* cp_bytes=\([0-9]*\).*/\1/p')
+check "the last stop-hook line naming the checkpoint holds its size after the carry, which grew" "yes yes" \
+  "$([ "$LAST" = "$CPB" ] && echo yes) $([ "$CPB" -gt "$FIRST" ] && echo yes)"
+# Issue 300: a carry the hook made itself heals itself, so the relay's alert watcher, polled with that line in the log,
+# prints nothing.
 mkdir -p "$BOX/home/.commandeck/dashboard"; printf 'window.DASH = {"alerts": []};\n' > "$BOX/home/.commandeck/dashboard/data.js"
 check "the relay's alert watcher prints nothing for it" "" "$(cd "$BOX/repo" && HOME="$BOX/home" COMMANDECK_MAIN="$BOX/repo" COMMANDECK_SCRATCH="$BOX" COMMANDECK_WATCH_ONCE=1 bash "$ROOT/scripts/cos-watch-alerts.sh" 2>&1)"
 # An unreadable file in the chain is an item of its own: the first stop blocks, the second copies it with the

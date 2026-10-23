@@ -31,13 +31,19 @@ Local records can contain code, prompts, paths and your decisions:
 | `~/.claude/hook-fire-log/` | Hook timing and action summaries. |
 | `<reviewer-home>/builder-pass-prompts/` | Exact prompts used as review evidence. |
 
-The dashboard is unauthenticated HTTP. Loopback is the default. Network mode
-exposes its snapshots and layout controls to reachable clients; host and
-same-origin checks are not user authentication or encryption. Keep it on a
-network you trust. Hooks and reviewer evidence deter mistakes, but a process
+The dashboard on loopback, the default, is unauthenticated HTTP. A network bind
+serves HTTPS behind a single-user login: an scrypt password hash, a
+self-signed certificate, a five-failure lockout, and sessions that end on
+restart. The certificate is not issued by an authority, so the first visit needs
+your trust, and the login protects against other people on the network, not
+against a process with your filesystem access. Host and same-origin checks are
+not user authentication. Hooks and reviewer evidence deter mistakes, but a process
 with your filesystem access can forge local records. The literal-secret
 warning is a narrow pattern check, not a full secret scanner.
 
 Do not publish logs or reports without reviewing them. Report vulnerabilities
 privately through this repository's Security tab, as described in
 [`SECURITY.md`](../SECURITY.md). Only the latest release is supported there.
+
+How Orca's Auto permission mode meets the guard hooks, and what it leaves
+unchanged, is in [`auto-permission-mode.md`](auto-permission-mode.md).

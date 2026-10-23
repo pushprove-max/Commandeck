@@ -122,5 +122,16 @@ cp "$T/rul-sp-workers.jsonl" "$T/rul-sp.jsonl"
 check "tick 1: owner 45 min ago, Builders now" "owner quiet 45 min" "$(qs "$T/p" "$T/p//workspaces")"
 grep -v "\"cwd\":\"$T/p\"," "$T/rul-sp-workers.jsonl" > "$T/rul-sp.jsonl"
 check "tick 2: the owner's row removed, workspaces respelled: Builders alone read unknown" "owner quiet unknown" "$(qs "$T/p" "$T/p/./workspaces")"
+# Issue 309: main given by a link, the owner's prompt logged under the folder the link points to (/private/tmp for /tmp).
+ln -s "$T/p" "$T/plink"
+jq -cn --arg u "$NOW" --arg c "$T/p" '{utc: $u, cwd: $c, source: "prompt"}' > "$T/rul-link.jsonl"
+check "owner quiet reads a ruling logged under /private/tmp spelling" "owner quiet 0 min" \
+  "$(cd "$T/p" && "${E[@]}" COMMANDECK_MAIN="$T/plink" COMMANDECK_RULING_LOG="$T/rul-link.jsonl" bash "$REAL/scripts/cos-check.sh" term_cos 2>&1 | tail -1 | grep -o 'owner quiet.*')"
+# Issue 319: with every watcher up, nothing missed and no held note, a wake has nothing for the owner: the line says to
+# end the turn silently, so the relay does not spend a reply on a clean check.
+printf '11 bash /x/scripts/cos-watch-decisions.sh\n12 /x/scripts/cos-watch-limit.sh\n13 /x/scripts/cos-watch-alerts.sh\n14 /x/scripts/cos-watch-inbox.sh\n' > "$T/pids"
+echo 14 > "$KEY.cos-watch-inbox.pid"
+printf 'm1\nm2\n' > "$KEY.inbox-seen-ids"; printf '9 enc\n' > "$KEY.inbox-seq"
+check "nothing down, missed or held: prints the end-silently line only" "cos-check: nothing for the owner: end silently; re-arm" "$(cc)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

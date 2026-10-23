@@ -106,9 +106,9 @@ decoy() {
   jq -e '.answeredAt == null' <<<"$1" >/dev/null || return 1
   [ -e "$RULINGS" ] || return 1
   local r
-  r=$(jq -s --argjson d "$1" --arg main "$PP_MAIN" '
+  r=$(jq -s --argjson d "$1" --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" '
       [.[] | select(.source == "ask" and .question == $d.question and (.utc // "") >= $d.askedAt
-                    and ((.cwd // "") == $main or ((.cwd // "") | startswith($main + "/"))))]
+                    and ((.cwd // "") as $c | any($main, $mainp; . as $m | $c == $m or ($c | startswith($m + "/")))))]
       | sort_by(.utc) | last | .void == true' "$RULINGS" 2>/dev/null) \
     || refuse "$1" "and the ruling log $RULINGS is unreadable, so a decoy retry cannot be confirmed"
   [ "$r" = true ]

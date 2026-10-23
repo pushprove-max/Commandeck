@@ -175,6 +175,7 @@ Ask them in this order, up to four questions per call.
    - On, this machine only: a local web page of builds and costs, served by a background job, reachable from this machine only. `--dashboard --bind 127.0.0.1 --hosts ''`
    - Off: no job, no port. `--no-dashboard`
    - On plus another name: the page also answers to a name such as a tailnet's, typed as the picker's own text answer (or the saved names). This one listens on the network (`0.0.0.0`), so say so; a name not on the list still gets a 403. `--dashboard --bind 0.0.0.0 --hosts <name>[,<name>]`
+     It serves HTTPS behind a login. Tell the owner to run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/dashboard_serve.py set-password <user>` once (8 characters or more; they type it, you do not); setup stops with exit 5 until a password is stored.
 9. What must pass before a merge?
    Ask "Merge check": <detected command> (recommended) | None | Type my own | <saved command, if any>
    - The one command that must pass before a merge, e.g. the project's test script. `--test-command '<cmd>'`

@@ -43,16 +43,35 @@ a `POST /unsent` ({key, action}: retry, delivered or drop), taken from the same 
 which the collector shows too: main reads it only after that picker is answered in its pane. The project's
 folder is read from the collector's own data.js, never from the request.
 A `POST /restart` from the same clients runs `dashboard.sh --restart`, once a minute at most (issue 294).
+
+The login (issue 263), on only when the bind is not loopback (a loopback bind serves as above, with no login): the
+server speaks HTTPS only, every route but GET/HEAD/POST /login needs a session or a trusted device (a page without
+one is sent to /login with 302, a write is refused with 401), and `/answer`, `/unsent` and `/restart` then take any
+logged-in client, not loopback alone. One user, an scrypt hash in dashboard-auth.json (env COMMANDECK_DASHBOARD_AUTH,
+default ~/.commandeck/dashboard-auth.json, outside the served folder) and the self-signed certificate in
+dashboard-tls/ beside it. Command line, run by the owner:
+  dashboard_serve.py make-cert [--force]    the certificate, once (825 days)
+  dashboard_serve.py set-password <user>    the password (asked twice, 8 characters or more); ends every session, keeps devices
+  dashboard_serve.py has-password           exits 0 when a password is stored, 1 when not
+  dashboard_serve.py devices                trusted devices: id, label, created
+  dashboard_serve.py revoke <id>|all        end a device (`all`: every device and every session)
+Sessions live in memory (a restart logs them out); a trusted device lasts a year and survives a restart.
 """
 import fcntl
 import functools
+import getpass
+import hashlib
+import hmac
+import http.cookies
 import http.server
+import io
 import ipaddress
 import json
 import os
 import re
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -418,8 +437,152 @@ OWN = {_HOST, _HOST.split(".")[0], _HOST.split(".")[0] + ".local"}
 OWN |= {n.strip().lower() for n in os.environ.get("COMMANDECK_DASHBOARD_HOSTS", "").split(",") if n.strip()}
 
 
+# Issue 263: the login. The store and the certificate sit beside each other, outside the served folder.
+AUTH = os.environ.get('COMMANDECK_DASHBOARD_AUTH') or os.path.expanduser('~/.commandeck/dashboard-auth.json')
+TLS = os.path.join(os.path.dirname(AUTH), 'dashboard-tls')
+CERT, KEY = os.path.join(TLS, 'cert.pem'), os.path.join(TLS, 'key.pem')
+# The only routes a caller without a login may use. Every other method and path is behind authed().
+PUBLIC = frozenset({('GET', '/login'), ('HEAD', '/login'), ('POST', '/login')})
+NO_PASSWORD = 'no dashboard password: run dashboard_serve.py set-password <user>'
+# scrypt N=2^14, r=8, p=5: an OWASP password-storage configuration (16 MiB, inside hashlib.scrypt's default cap).
+SCRYPT = {'n': 2 ** 14, 'r': 8, 'p': 5}
+USER = re.compile(r'^[A-Za-z0-9._-]{1,40}$')
+MIN_PASSWORD = 8
+SESSION_TTL, DEVICE_TTL = 43200, 31536000  # the cookies' max-age, enforced here as well
+LOCK_AFTER, LOCK_WINDOW = 5, 900  # failed logins, and the seconds they count over and the lockout lasts
+MAX_LOGIN_BODY = 4096
+# One lock holds the lockout check, the scrypt compare and the failure record together, so parallel attempts cannot
+# pass the count. Sessions: sha256(cookie) -> {exp, epoch, device}; memory only, so a restart logs them out.
+LOGIN = threading.Lock()
+SESSIONS = {}
+FAILS = []
+LOCKED = [0.0]
+LOGIN_PAGE = b'''<!doctype html><meta charset=utf-8><title>Commandeck dashboard login</title>
+<form id=f><p><input name=user placeholder=user autocomplete=username required>
+<p><input name=password type=password placeholder=password autocomplete=current-password required>
+<p><label><input name=trust type=checkbox> Trust this device</label> <input name=label placeholder="device label" maxlength=40>
+<p><button>Log in</button> <span id=m></span></form>
+<script>f.onsubmit = async e => {
+  e.preventDefault(); const d = new FormData(f);
+  const r = await fetch('/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user: d.get('user'), password: d.get('password'), trust: !!d.get('trust'), label: d.get('label')})});
+  if (r.ok) location = '/'; else m.textContent = await r.text();
+};</script>
+'''
+
+
+def sha(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def read_store():
+    try:
+        with open(AUTH) as f:
+            store = json.load(f)
+        return store if isinstance(store, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def change_store(fn):
+    """Every read-modify-write of the store, here and in the CLI, runs under one flock and is written temp-then-rename,
+    mode 0600; returns what fn(store) returns."""
+    os.makedirs(os.path.dirname(AUTH), mode=0o700, exist_ok=True)
+    with os.fdopen(os.open(AUTH + '.lock', os.O_CREAT | os.O_RDWR, 0o600)) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        store = read_store()
+        store.setdefault('epoch', 0)
+        store.setdefault('devices', {})
+        out = fn(store)
+        tmp = '%s.%d.tmp' % (AUTH, os.getpid())
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+            json.dump(store, f)
+        os.replace(tmp, AUTH)
+    return out
+
+
+def device_ok(device, now):
+    """A trusted device is good for DEVICE_TTL from its creation, however long its cookie is kept."""
+    try:
+        made = datetime.strptime(device['created'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        return now < made.timestamp() + DEVICE_TTL
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def password_ok(store, user, password):
+    """Always one scrypt, so a wrong user costs what a wrong password does; both compares are constant-time."""
+    try:
+        salt, want = bytes.fromhex(store['salt']), bytes.fromhex(store['hash'])
+        got = hashlib.scrypt(password.encode(), salt=salt, dklen=len(want), **{k: store[k] for k in SCRYPT})
+        return hmac.compare_digest(got, want) & hmac.compare_digest(user.encode(), str(store.get('user')).encode())
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def cookie(name, value, ttl):
+    return '%s=%s; HttpOnly; Secure; SameSite=Strict; Path=/; max-age=%d' % (name, value, ttl)
+
+
+def ask(prompt):
+    return getpass.getpass(prompt) if sys.stdin.isatty() else sys.stdin.readline().rstrip('\n')
+
+
+def cli_make_cert(force):
+    if os.path.exists(CERT) and not force:  # not an error: dashboard.sh --install runs this every time
+        print('certificate kept: %s (--force makes a new one)' % CERT)
+        return
+    host = re.sub(r'[^A-Za-z0-9-]', '', socket.gethostname().split('.')[0]) or 'localhost'
+    os.makedirs(TLS, mode=0o700, exist_ok=True)
+    old = os.umask(0o077)
+    try:
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '825',
+                        '-keyout', KEY, '-out', CERT, '-subj', '/CN=%s.local' % host,
+                        '-addext', 'subjectAltName=DNS:%s.local,DNS:localhost,IP:127.0.0.1' % host],
+                       check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        sys.exit('openssl could not make the certificate: %s' % (getattr(e, 'stderr', None) or e))
+    finally:
+        os.umask(old)
+    print('certificate for %s.local, localhost and 127.0.0.1 in %s (825 days)' % (host, TLS))
+
+
+def cli_set_password(user):
+    if not USER.match(user):
+        sys.exit('usage: dashboard_serve.py set-password <user>   (letters, digits, . _ -; up to 40)')
+    pw = ask('password: ')
+    if len(pw) < MIN_PASSWORD:
+        sys.exit('the password must be at least %d characters' % MIN_PASSWORD)
+    if ask('again: ') != pw:
+        sys.exit('the two passwords differ')
+    salt = os.urandom(16)
+    # The epoch moves, so every session ends, including ones made from a device; the devices stay (`revoke all` ends them).
+    change_store(lambda s: s.update(user=user, salt=salt.hex(), epoch=s['epoch'] + 1, **SCRYPT,
+                                    hash=hashlib.scrypt(pw.encode(), salt=salt, dklen=32, **SCRYPT).hex()))
+    print('password set for %s' % user)
+
+
+def cli_devices():
+    for i, d in sorted(read_store().get('devices', {}).items(), key=lambda x: str(x[1].get('created'))):
+        print('%s\t%s\t%s' % (i, d.get('label'), d.get('created')))
+
+
+def cli_revoke(which):
+    def revoke(store):
+        if which == 'all':
+            store.update(devices={}, epoch=store['epoch'] + 1)  # the epoch ends sessions made without a device too
+        elif which in store['devices']:
+            del store['devices'][which]
+        else:
+            return False
+        return True
+    if not change_store(revoke):
+        sys.exit('no such device: %s' % which)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     loopback_only = True
+    login_on = False  # set from the bind: on a network bind every route but /login needs a login
 
     def foreign(self):
         site = self.headers.get("Sec-Fetch-Site")
@@ -454,7 +617,58 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-cache')
         super().end_headers()
 
+    def public(self):
+        return self.login_on and (self.command, urlsplit(self.path).path) in PUBLIC
+
+    def authed(self):
+        """A live session (unexpired, made under the store's current epoch, and its device, if any, still trusted) or a
+        trusted device cookie that has not outlived DEVICE_TTL. The store is read per request, so a revoke or a new
+        password takes effect on the next one."""
+        store, now = read_store(), time.time()
+        devices = store.get('devices') if isinstance(store.get('devices'), dict) else {}
+        if not store.get('hash'):
+            return False
+        try:
+            jar = http.cookies.SimpleCookie(self.headers.get('Cookie', ''))
+        except http.cookies.CookieError:
+            return False
+        if 'pp_session' in jar:
+            s = SESSIONS.get(sha(jar['pp_session'].value))
+            if s and now < s['exp'] and s['epoch'] == store.get('epoch') and (
+                    s['device'] is None or (isinstance(devices.get(s['device']), dict) and device_ok(devices[s['device']], now))):
+                return True
+        if 'pp_device' in jar:
+            h = sha(jar['pp_device'].value)
+            return any(isinstance(d, dict) and d.get('sha') == h and device_ok(d, now) for d in devices.values())
+        return False
+
+    def gate(self, head=False):
+        """With the login on: the login page for a public route, 302 to it for a page, 401 for a write; True when the
+        request is answered here."""
+        if not self.login_on:
+            return False
+        if self.public():
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(LOGIN_PAGE)))
+            self.end_headers()
+            if not head:
+                self.wfile.write(LOGIN_PAGE)
+            return True
+        if self.authed():
+            return False
+        if self.command in ('GET', 'HEAD'):
+            self.send_response(302)
+            self.send_header('Location', '/login')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+        else:
+            self.reply(401, 'log in first')
+        return True
+
     def do_GET(self):
+        if self.gate():
+            return
         if self.foreign():
             self.send_error(403, "the dashboard answers its own page only")
         else:
@@ -463,7 +677,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def own_page(self):
-        """A loopback client, under a loopback Host name, from this page's own Origin, with a JSON body."""
+        """A loopback client, under a loopback Host name, from this page's own Origin, with a JSON body. With the login
+        on, any client that is logged in (the caller has checked) from this page's own https Origin."""
         host = self.headers.get('Host', '')
         try:
             name = urlsplit('//' + host).hostname or ''
@@ -471,8 +686,65 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             near = ip.is_loopback or bool(getattr(ip, 'ipv4_mapped', None) and ip.ipv4_mapped.is_loopback)
         except ValueError:
             near = False
-        return (near and name in LOOPBACK and not self.foreign()
-                and self.headers.get('Origin') == 'http://' + host and self.headers.get('Content-Type') == 'application/json')
+        return ((self.login_on or (near and name in LOOPBACK)) and not self.foreign()
+                and self.headers.get('Origin') == ('https://' if self.login_on else 'http://') + host
+                and self.headers.get('Content-Type') == 'application/json')
+
+    def login(self):
+        """POST /login {user, password, trust, label}. The lockout check, the scrypt compare and the failure record
+        happen under one lock; no password or token reaches a log or a reply body."""
+        if not self.own_page():
+            return self.send_error(403)
+        length = self.headers.get('Content-Length', '')
+        if not length.isdigit() or int(length) > MAX_LOGIN_BODY:
+            return self.send_error(413)
+        try:
+            body = json.loads(self.rfile.read(int(length)))
+        except ValueError:
+            return self.send_error(400)
+        label = body.get('label', '') if isinstance(body, dict) else None
+        if not (isinstance(body, dict) and isinstance(body.get('user'), str) and isinstance(body.get('password'), str)
+                and isinstance(body.get('trust'), bool) and isinstance(label, str) and len(label) <= 40 and label.isprintable()):
+            return self.send_error(400)
+        with LOGIN:
+            now = time.time()
+            store = read_store()
+            if not store.get('hash'):
+                return self.reply(503, NO_PASSWORD)
+            if now < LOCKED[0]:
+                return self.reply(429, 'too many failed logins: try again in 15 minutes')
+            if not password_ok(store, body['user'], body['password']):
+                FAILS[:] = [t for t in FAILS if now - t < LOCK_WINDOW] + [now]
+                if len(FAILS) >= LOCK_AFTER:
+                    LOCKED[0], FAILS[:] = now + LOCK_WINDOW, []
+                return self.reply(401, 'wrong user or password')
+            FAILS.clear()
+            cookies, device, epoch = [], None, store.get('epoch')
+            if body['trust']:
+                token, device = secrets.token_urlsafe(32), secrets.token_hex(6)
+                created = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+                def add(s):
+                    # A set-password or revoke-all since the check above means the password checked may be the old one.
+                    if s['epoch'] != epoch:
+                        return None
+                    s['devices'][device] = {'sha': sha(token), 'label': label or 'device', 'created': created}
+                    return epoch
+                if change_store(add) is None:
+                    return self.reply(401, 'the password changed: log in again')
+                cookies.append(cookie('pp_device', token, DEVICE_TTL))
+            session = secrets.token_urlsafe(32)
+            for k in [k for k, v in SESSIONS.items() if v['exp'] <= now]:
+                del SESSIONS[k]
+            SESSIONS[sha(session)] = {'exp': now + SESSION_TTL, 'epoch': epoch, 'device': device}
+            cookies.append(cookie('pp_session', session, SESSION_TTL))
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', '2')
+        for c in cookies:
+            self.send_header('Set-Cookie', c)
+        self.end_headers()
+        self.wfile.write(b'ok')
 
     def reply(self, code, value):
         out = json.dumps(value).encode()
@@ -509,6 +781,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             print('dashboard: restart FAILED: could not start dashboard.sh: %s' % e, file=sys.stderr, flush=True)
 
     def do_POST(self):
+        if self.public():
+            return self.login()
+        if self.gate():
+            return
         if self.path == '/restart' and self.own_page():
             return self.restart()
         if self.path not in ('/answer', '/unsent') or not self.own_page():
@@ -613,12 +889,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.reply(200, {'action': a['action']})
 
     def do_HEAD(self):
+        if self.gate(head=True):
+            return
         if self.foreign():
             self.send_error(403, "the dashboard answers its own page only")
         else:
             super().do_HEAD()
 
     def do_PUT(self):
+        if self.gate():
+            return
         length = self.headers.get('Content-Length', '')
         # A JSON content type makes a browser ask first (a preflight this server never answers), so another
         # site's page cannot send this from the owner's browser.
@@ -694,10 +974,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-if __name__ == "__main__":
-    port, bind, directory = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+def serve(port, bind, directory):
     Handler.loopback_only = bind in ("127.0.0.1", "localhost", "::1")
+    Handler.login_on = not Handler.loopback_only
     # An IPv6 address (::1, ::) needs an IPv6 socket; the default is IPv4 only.
     family = socket.AF_INET6 if ":" in bind else socket.AF_INET
-    server = type("Server", (http.server.ThreadingHTTPServer,), {"address_family": family})
-    server((bind, port), functools.partial(Handler, directory=directory)).serve_forever()
+    attrs = {"address_family": family}
+    if Handler.login_on:
+        if not (os.path.exists(CERT) and os.path.exists(KEY)):
+            sys.exit("no certificate: run dashboard_serve.py make-cert")
+        Handler.timeout = 30  # a client that stalls (or never finishes the TLS handshake) frees its thread
+
+        def quiet(self, request, client_address):
+            # A client that cannot finish the TLS handshake (plain HTTP, a scanner) or goes quiet is noise, not a fault.
+            if not isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError, TimeoutError)):
+                http.server.ThreadingHTTPServer.handle_error(self, request, client_address)
+        attrs.update(request_queue_size=128, handle_error=quiet)  # the default queue of 5 drops a burst of TLS connections
+    server = type("Server", (http.server.ThreadingHTTPServer,), attrs)((bind, port), functools.partial(Handler, directory=directory))
+    if Handler.login_on:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(CERT, KEY)
+        # The handshake runs in each request's own thread: done at accept(), one silent client would stop the whole server.
+        server.socket = ctx.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    cmd, args = (sys.argv[1:2] or [""])[0], sys.argv[2:]
+    if cmd == "make-cert":
+        cli_make_cert("--force" in args)
+    elif cmd == "set-password" and len(args) == 1:
+        cli_set_password(args[0])
+    elif cmd == "has-password":
+        sys.exit(0 if read_store().get("hash") else 1)
+    elif cmd == "devices":
+        cli_devices()
+    elif cmd == "revoke" and len(args) == 1:
+        cli_revoke(args[0])
+    elif cmd.isdigit() and len(args) == 2:
+        serve(int(cmd), args[0], args[1])
+    else:
+        sys.exit("usage: dashboard_serve.py <port> <bind> <directory> | make-cert [--force] | set-password <user> | has-password | devices | revoke <id>|all")

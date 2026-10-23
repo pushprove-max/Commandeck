@@ -7,6 +7,12 @@
 # on a copy of the squashed tree; a red check undoes the squash.
 # Self-test: bash scripts/__tests__/merge-unit-local.test.sh; the reuse of a tested tree: bash scripts/__tests__/merge-queue.test.sh
 set -euo pipefail
+# Issue 310: when this script lives in a git checkout that is a main worktree on main, that checkout is the project, wherever
+# the merge is run from. Anywhere else (an installed copy) the cwd rules. SELF is absolute: every re-exec below uses it.
+SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}
+if SELF_TOP=$(git -C "${SELF%/*}" rev-parse --show-toplevel 2>/dev/null) \
+   && [ "$(git -C "$SELF_TOP" rev-parse --path-format=absolute --git-dir)" = "$(git -C "$SELF_TOP" rev-parse --path-format=absolute --git-common-dir)" ] \
+   && [ "$(git -C "$SELF_TOP" branch --show-current)" = main ]; then cd "$SELF_TOP"; fi
 # Two Builders finishing minutes apart would rebase and squash onto the same
 # index of the ONE main checkout. Serialise them: the second caller waits, then
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
@@ -34,7 +40,7 @@ case "${1:-}" in --help|-h) usage; exit 0 ;; "") usage >&2; exit 2 ;; esac
 # empty the first one's log. The detached run is handed its queue entry (MERGE_UNIT_LOCAL_QUEUE) and holds it by pid.
 QFILE=${MERGE_UNIT_LOCAL_QUEUE:-}
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -x -- --dry-run >/dev/null \
-   && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"; then
+   && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "${SELF%/*}/paths.sh"; then
   REQ=$(printf '%s\n' "$@" | grep -x -A1 -- --auto | sed -n 2p || true)
   [[ ${REQ:-HEAD} =~ ^([0-9a-f]{7,40}|HEAD)$ ]] && REQ=$(git -C "$PP_WORKSPACES/$1" rev-parse --verify -q "${REQ:-HEAD}^{commit}" 2>/dev/null) || REQ=
   if [ -n "$REQ" ] && [ -z "$QFILE" ]; then
@@ -43,7 +49,7 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! pri
     QFILE=$(git -C "$PP_MAIN" rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.queue/$1@$REQ
   fi
   if pp_main_foreground; then
-    MERGE_UNIT_LOCAL_QUEUE=$QFILE pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$0" "$@" || exit
+    MERGE_UNIT_LOCAL_QUEUE=$QFILE pp_detach "$PP_SCRATCH/merge-$1.log" "merge-unit-local.sh $1" bash "$SELF" "$@" || exit
     # shortcut: a detached run that leaves the queue before this line is re-entered under its wrapper's pid, which
     # refuses only this unit at this sha until that wrapper has sent main its result; fine while merges take seconds+.
     [ -z "$QFILE" ] || { echo $! > "$QFILE.$$" && mv -f "$QFILE.$$" "$QFILE"; }; exit
@@ -52,7 +58,7 @@ fi
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
   # -o: a child the merge leaves running (a test command's) must not keep the lock after the merge ends (issue 301).
   exec env MERGE_UNIT_LOCAL_LOCK=1 MERGE_UNIT_LOCAL_QUEUE="$QFILE" flock -o \
-    "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$0" "$@"
+    "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$SELF" "$@"
 fi
 UNIT=$1; shift
 DRY_RUN=0 AUTO=""
@@ -69,7 +75,7 @@ ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a g
 [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
   || fail "step 1 preconditions" "run from the main checkout, not a linked worktree"
 [ "$(git branch --show-current)" = main ] || fail "step 1 preconditions" "main checkout must be on branch main"
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+HERE=${SELF%/*}
 # The project is the checkout the merge runs in, not the one the plugin lives in.
 COMMANDECK_MAIN=$ROOT . "$HERE/paths.sh"
 # Issue 317: while this merge holds main it writes its state beside the lock (pp_merge_active reads it, so does the
@@ -280,9 +286,16 @@ in_brief() {
 }
 # Each entry of the evidence's list is one whole path: "- <path>" or "- `<path>`", nothing else on the line.
 CUT_PATHS=$(sed -E 's/^[[:space:]]*[-*+][[:space:]]+//; s/[[:space:]]+$//; s/^`([^`]+)`$/\1/' <<<"$CUT_LIST")
+# Issue 326: a directory named in backticks with its trailing slash (`dir/`), in the brief or in a plan the brief names,
+# lists every file under it. The plan is read as committed at the fork point, so a unit cannot authorise its own
+# deletion by editing it.
+PLAN_TEXT=$(grep -ohE '`\.claude/plans/[A-Za-z0-9._-]+\.md`' "$BRIEF" 2>/dev/null | tr -d '`' | sort -u \
+  | while IFS= read -r plan; do git show "$BASE:$plan" 2>/dev/null; done || true)
+NAMED_DIRS=$({ cat "$BRIEF"; printf '%s\n' "$PLAN_TEXT"; } | grep -ohE '`[^` ]+/`' | tr -d '`' | sort -u || true)
 while IFS= read -r deleted; do
   [ -n "$deleted" ] || continue
   if in_brief "$deleted"; then echo "step 4 deletion: $deleted (named in the brief)"
+  elif awk -v p="$deleted" 'length($0) > 1 && index(p, $0) == 1 { f = 1 } END { exit !f }' <<<"$NAMED_DIRS"; then echo "step 4 deletion: $deleted (under a directory the brief or a plan it names lists)"
   elif grep -qxF -- "$deleted" <<<"$CUT_PATHS"; then echo "step 4 deletion: $deleted (named in the evidence's Files deleted list)"
   else fail "step 4 merge" "the squash deletes $deleted, which the brief never names; the rebase probably replayed stale content"
   fi
@@ -506,7 +519,15 @@ if [ "$DRY_RUN" = 0 ]; then
   GO_ROUNDS=$(grep -cx 'VERDICT: GO' <<<"$ENDS" || true) NO_GO_ROUNDS=$(grep -cx 'VERDICT: NO-GO' <<<"$ENDS" || true)
   [ $((GO_ROUNDS + NO_GO_ROUNDS)) = "${#REPORTS[@]}" ] || GO_ROUNDS="" NO_GO_ROUNDS=""
   RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
-  COMMANDECK_MAIN=$ROOT UNIT_LEDGER_MERGE_SHA=$MERGE_SHA \
+  # GO and NO-GO per pass kind (the round file's Pass: line), and the seconds in review (its Timing: line, the pass's
+  # start and end). A round with no verdict, a kind this list does not know, or no Timing leaves that part null, never 0.
+  REVIEW=$(for f in ${REPORTS[@]+"${REPORTS[@]}"}; do echo "$(sed -n 's/^Pass: *//p' "$f" | head -1)|$(tail -n 1 "$f")|$(sed -n 's/^Timing: *//p' "$f" | head -1)"; done \
+    | jq -Rnc 'def t: sub("\\.[0-9]+Z$"; "Z") | fromdate; [inputs | split("|")] as $r
+      | {passKinds: (if $r == [] or any($r[]; (.[0] | IN("adversarial", "review", "final") | not) or (.[1] | IN("VERDICT: GO", "VERDICT: NO-GO") | not)) then null
+           else reduce $r[] as $x ({}; .[$x[0]] |= ({go: 0, noGo: 0} + .) | .[$x[0]][if $x[1] == "VERDICT: GO" then "go" else "noGo" end] += 1) end),
+         reviewSeconds: (if $r == [] or any($r[]; .[2] | test("^\\S+Z \\S+Z$") | not) then null
+           else [$r[] | .[2] | split(" ") | (.[1] | t) - (.[0] | t)] | add end)}' 2>/dev/null || true)
+  COMMANDECK_MAIN=$ROOT UNIT_LEDGER_MERGE_SHA=$MERGE_SHA UNIT_LEDGER_REVIEW=$REVIEW \
     UNIT_LEDGER_VERDICT=$(if [ "${#REPORTS[@]}" = 0 ]; then echo NO-ROUNDS; else echo CONVERGED-GO; fi) \
     UNIT_LEDGER_ROUNDS=${#REPORTS[@]} UNIT_LEDGER_GO_ROUNDS=$GO_ROUNDS UNIT_LEDGER_NO_GO_ROUNDS=$NO_GO_ROUNDS \
     UNIT_LEDGER_MERGE_RULE=$RULE bash "$HERE/unit-ledger.sh" "$UNIT" local --append \

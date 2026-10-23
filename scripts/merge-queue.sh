@@ -3,12 +3,12 @@
 # one at a time, stopping at the first failure, merged (a step after its commit
 # failed) or not. <unit>@<sha> merges with --auto <sha>: only while
 # the unit's tip is still the commit its gate passed.
-# --train (issue 307): every unit given as <unit>@<sha>. A unit whose dry run refuses
-# leaves the train. The rest are squashed in order on a scratch copy of main, the
+# --train (issue 307): every unit given as <unit>@<sha>. The units are squashed in order on a scratch copy of main, the
 # project's check runs once on the combined tip, and on green each unit merges in
 # order as it would alone: its own check runs unless its closing pass's run stands
 # (issue 307's rule), never on the train's run, which tested a tree it is not; a unit
-# merged with a later step failed (3, 5) does not stop it. On red the train is bisected to the
+# merged with a later step failed (3, 5) does not stop it. A unit the real merge refuses stops the queue there, named,
+# with nothing of it merged (issue 306: the train runs no dry-run pass). On red the train is bisected to the
 # first unit that turns it red: the units before it merge, it is named, and the ones
 # after it wait.
 # Logs: <scratch>/merge-<unit>.log, <scratch>/merge-train.log (paths.sh PP_SCRATCH)
@@ -68,17 +68,6 @@ if [ "$TRAIN" = 1 ]; then
   trap 'git -C "$ROOT" worktree remove --force "$COPY/tree" >/dev/null 2>&1; pp_rm_rf "$COPY"; git -C "$ROOT" worktree prune' EXIT
   git -C "$ROOT" worktree add -q --detach "$COPY/tree" main >/dev/null 2>&1 || { echo "merge-queue: could not make the train's scratch copy of main" >&2; exit 1; }
   pp_link_node_modules "$ROOT" "$COPY/tree"
-  # A dry run of each unit first: one that would refuse leaves the train before it is built, so a known refusal
-  # never stops the train with an untested part of it on main.
-  OK=() DROPPED=0
-  for arg in "$@"; do
-    log=$PP_SCRATCH/merge-${arg%@*}.log # appended, as in queue()
-    if "$HERE/merge-unit-local.sh" "${arg%@*}" --dry-run --auto "${arg#*@}" >> "$log" 2>&1; then OK+=("$arg"); continue; fi
-    echo "merge-queue: STOPPED at ${arg%@*} (not merged: its dry run refused it, so it left the train); log: $log" >&2
-    tail -n 3 "$log" >&2; DROPPED=1
-  done
-  [ "${#OK[@]}" -gt 0 ] || exit 1
-  set -- "${OK[@]}"
   # One commit per unit, each the squash of the unit's sha on the ones before it: STEP[k] is the tree main will
   # hold once the first k units merge.
   STEP=("$(git -C "$COPY/tree" rev-parse HEAD)")
@@ -98,7 +87,7 @@ if [ "$TRAIN" = 1 ]; then
     echo "merge-train: the combined tip of $N unit(s) is green${CHECK_CMD:+ ($CHECK_CMD)}; merging each in order"
     queue "$@" || exit 1
     echo "merge-queue: all $N unit(s) in the train merged"
-    [ "$LATE$DROPPED" = 00 ] || exit 1
+    [ "$LATE" = 0 ] || exit 1
     exit 0
   fi
   # Red: the first k whose combined tip is red. LO is green (0, main itself), HI red.

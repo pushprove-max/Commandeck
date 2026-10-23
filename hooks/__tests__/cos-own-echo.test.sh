@@ -44,6 +44,16 @@ OUT=$(hook "$T/ws/Chief-of-Staff")
 check "a batch all of this pane's own is dropped, naming the count" 'block:2' \
   "$(jq -r '.decision' <<<"$OUT" 2>/dev/null):$(jq -r '.reason' <<<"$OUT" 2>/dev/null | grep -o 'own [0-9]*' | cut -d' ' -f2)"
 check "and acknowledged once, by its delivery, in the run the prompt names" 1 "$(calls '--run run_abc123 --ack dl_1 --peek')"
+# Issue 319: the relay's sends carry the name it was given (chiefOfStaff.name), in whatever case, not its handle: a
+# relay sending as "relay" woke itself for each send while its filter held "Relay".
+mkdir -p "$T/p/.claude"; echo '{"chiefOfStaff":{"name":"relay"}}' > "$T/p/.claude/commandeck.json"
+printf 'Relay\nrelay\n' > "$T/batch"
+OUT=$(hook "$T/ws/Chief-of-Staff")
+check "a send from the relay's own name in another case is its own echo" 'block:2 1' \
+  "$(jq -r '.decision' <<<"$OUT" 2>/dev/null):$(jq -r '.reason' <<<"$OUT" 2>/dev/null | grep -o 'own [0-9]*' | cut -d' ' -f2) $(calls '--ack dl_1 --peek')"
+printf 'Relay\nterm_main\n' > "$T/batch"
+check "a batch with the relay's name and another pane's message passes" ':0' "$(hook "$T/ws/Chief-of-Staff"):$(calls '--ack')"
+rm -f "$T/p/.claude/commandeck.json"
 printf 'term_cos\nterm_main\n' > "$T/batch"
 check "a batch with one message from another pane passes, unacknowledged" ':0' "$(hook "$T/ws/Chief-of-Staff"):$(calls '--ack')"
 printf 'term_cos\n' > "$T/batch"

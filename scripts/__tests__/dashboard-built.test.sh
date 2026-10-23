@@ -51,6 +51,26 @@ check "an empty registry: the home project is not collected" '[]' "$(off EMPTY)"
 check "no registry yet: the home project is collected, as before" '["demo"]' "$(off)"
 check "a registry listing the home project: it is collected" '["demo"]' "$(off "$MAIN")"
 
+# Issue 292, the switch from another collector (docs/dashboard.md, "Switching from another collector"): a registry that
+# names only another project leaves home out until --register adds it; then a decision only in this plugin's ledger
+# wakes the relay's decision watcher, and an alert only in the new data.js its alert watcher, each told once.
+OTHER=$T/other; git init -q -b main "$OTHER" && git -C "$OTHER" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first \
+  && git -C "$OTHER" remote add origin https://github.com/example/other.git
+check "a registry naming only another project leaves home out" '["other"]' "$(off "$OTHER")"
+cutenv() { env -u CODEX_HOME PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" COMMANDECK_DASHBOARD_DIR="$T/out2" COMMANDECK_MAIN="$MAIN" COMMANDECK_SCRATCH="$T/cut-scr" "$@"; }
+mkdir -p "$T/cut-scr"
+cutenv bash "$SOURCE/scripts/dashboard.sh" --register "$MAIN" >/dev/null 2>&1
+cutenv DASH_NOW="$(date +%s)" bash "$SOURCE/scripts/dashboard.sh" >"$T/out2.log" 2>&1
+check "--register of home puts home in .projects beside the other project" '["demo","other"]' \
+  "$(sed 's/^window.DASH = //; s/;$//' "$T/out2/data.js" | jq -c '.projects | keys')"
+cutenv bash -c "cd \"\$COMMANDECK_MAIN\" && bash \"$SOURCE/scripts/decision.sh\" add gate-1 'Cutover gate?' wait test" >"$T/gate.log" 2>&1
+printf 'window.DASH = {"alerts": [{"id": "gate-alert-1791000000", "project": "demo", "severity": "warn", "text": "gate alert"}]};\n' > "$T/out2/data.js"
+watched() { cutenv COMMANDECK_WATCH_ONCE=1 bash -c "cd \"\$COMMANDECK_MAIN\" && bash \"$SOURCE/scripts/$1\" ${2:-}" 2>&1; }
+check "a decision only in the new ledger wakes the decision watcher, once" "1 0" \
+  "$(watched cos-watch-decisions.sh | grep -c '"id":"gate-1"') $(watched cos-watch-decisions.sh | grep -c gate-1)"
+check "an alert only in the new data.js wakes the alert watcher, and wakes nothing once told" "1 0" \
+  "$(watched cos-watch-alerts.sh | grep -c gate-alert-1791000000) $(watched cos-watch-alerts.sh --seed >/dev/null; watched cos-watch-alerts.sh | grep -c gate-alert)"
+
 # Issue 203: a 5-minute Builder at its prompt, waiting on something open, gets a keep-alive WARM just before its own
 # cache lapses (225-300 s after its last request, on a 60 s tick), while a ping costs less than the rewrite it saves; a
 # Builder idle on its own background job is waiting, not QUIET; and QUIET comes at 225 s on a 5-minute cache, while the

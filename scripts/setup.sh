@@ -431,7 +431,7 @@ fi
 ! V=$(pp_config_option dashboardBind) || BIND=$V
 ! V=$(pp_config_option dashboardPort) || PORT=$V
 if [ -n "$PLAN" ]; then
-  if [ -n "$DASHBOARD" ]; then echo "plan: would register this project with the dashboard and install its job ($DASH_JOB), serving http://${BIND:-127.0.0.1}:${PORT:-<a free port>}/"
+  if [ -n "$DASHBOARD" ]; then echo "plan: would register this project with the dashboard and install its job ($DASH_JOB), serving $(case ${BIND:-127.0.0.1} in 127.0.0.1|localhost|::1) echo http ;; *) echo https ;; esac)://${BIND:-127.0.0.1}:${PORT:-<a free port>}/"
   elif jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1; then echo "plan: would take this project off the dashboard"; fi
   [ -e "$WATCH_JOB" ] || echo "plan: would install the main-watch job ($WATCH_JOB), which wakes this session when a build needs it"
 elif [ -n "$DASHBOARD" ]; then

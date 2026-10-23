@@ -39,12 +39,14 @@ NOTES=$({ flock -w 10 9 || exit 0; f=$COS_KEY.inbox-seq; [ -f "$f" ] && IFS= rea
 # checkouts can sit anywhere around main (inside it, beside it, under a workspaces set there), so no prefix test:
 # both sides go through pnorm, as the resolver keeps inner // and /./ in main and workspaces.
 QUIET=$(tail -n 500 "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}" 2>/dev/null \
-  | jq -nRr --arg main "$PP_MAIN" --arg ws "$PP_WORKSPACES" "$PP_PNORM"'[($main | pnorm), ($ws + "/Chief-of-Staff" | pnorm)] as $own
+  | jq -nRr --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" --arg ws "$PP_WORKSPACES" "$PP_PNORM"'[($main | pnorm), ($mainp | pnorm), ($ws + "/Chief-of-Staff" | pnorm)] as $own
       | [inputs | fromjson? | select(.void != true) | select(.cwd // "" | pnorm | IN($own[])) | .utc // empty]
     | last | if . then "\((now - fromdateiso8601) / 60 | floor) min" else "unknown" end' 2>/dev/null)
 DOWN=${DOWN:- none}
 LINE="cos-check: watchers down: ${DOWN# } | missed messages: $MISSED | held FYI notes: $(grep -c '^[0-9]' <<<"$NOTES") (above, now cleared) | owner quiet ${QUIET:-unknown}"
 if [ -n "$NOTES" ] && [ $(( ${#NOTES} + ${#LINE} )) -lt 600 ]; then printf '%s\n' "$NOTES"
 elif [ -n "$NOTES" ]; then LINE=${LINE/(above, now cleared)/(too long to print; whole text: $ARCH)}; fi
+# Issue 319: a clean check has nothing for the owner; the wake says so, and the relay ends its turn without text.
+[ "$DOWN" = " none" ] && [ "$MISSED" = 0 ] && [ -z "$NOTES" ] && LINE="cos-check: nothing for the owner: end silently; re-arm"
 printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LINE" >> "$COS_KEY.cos-check.log"
 echo "$LINE"

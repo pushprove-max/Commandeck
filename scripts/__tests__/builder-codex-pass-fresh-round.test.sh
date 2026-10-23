@@ -13,6 +13,16 @@ printf 'Different fix r2: an older note.\nDifferent fix r3: the named fix broke 
 printf '\n## Main-only (deferred)\nthe settings.json entry for the new hook: main edits that file.\n\n## Later heading\nnot deferred.\n' >> "$B/$U-evidence.md"
 L=$(git -C "$W" rev-parse --absolute-git-dir)/builder-pass.lock
 
+# Issue 271: the round file holds when the pass began and ended, read from its reviewers' session records: the
+# earliest start and the latest end, so the merge can add up the time spent in review.
+SESS=$(ls "$CODEX_HOME"/sessions/2026/10/14/rollout-*-thr-1-*.jsonl)
+check "the round file holds the pass's start and end from session_proof, the earliest start and latest end of its reviewers" \
+  "$(jq -rs '[.[] | select(.type == "session_meta") | .timestamp] | min' $SESS) $(jq -rs '[.[] | select(.payload.type? == "task_complete") | .timestamp] | max' $SESS)" \
+  "$(sed -n 's/^Timing: //p' "$B/$U-r1-reports.md")"
+check "and the line follows Pass:, once" "Pass: adversarial|1" \
+  "$(grep -m1 '^Pass:' "$B/$U-r1-reports.md")|$(grep -c '^Timing: ' "$B/$U-r1-reports.md")"
+check "and sits right after it" "Timing" "$(grep -A1 -m1 '^Pass:' "$B/$U-r1-reports.md" | tail -1 | cut -d: -f1)"
+
 # the owner's extra rounds for one unit, with no edit to the tracked settings file.
 printf 'echo six\n' > "$W/a.sh"
 p6() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-6 bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err"); echo $?; }
@@ -56,6 +66,9 @@ check "the hand-off stands alone: brief, evidence, the findings, main's rulings 
 # time. The findings say what to fix; the brief stays reachable by path for the finding that needs it.
 check "the hand-off does not order the brief or the evidence file read whole at start; both stay reachable by path" "0 0 1 1" \
   "$(grep -ci 'read the brief whole' "$H7") $(grep -ci 'read the evidence file whole' "$H7") $(grep -c "Open it only when a finding needs it: $B/$U.md\$" "$H7") $(grep -c "update it before the next pass: $B/$U-evidence.md\$" "$H7")"
+# Issue 286: the brief template's state-swap rule is in the hand-off too, as a fix round reads only the hand-off.
+check "the fix hand-off asks for the existing cases rerun with a trusted state swapped in, and the result recorded in the evidence file" 1 \
+  "$(grep -cF 'A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.' "$H7")"
 check "the launch after a passing --check is not refused: the guard test is committed with no mutation note" "0 1" \
   "$(git -C "$W" log -1 --format=%B | grep -c 'Mutation-verified') $(git -C "$W" ls-files x.guard.test.ts | wc -l | tr -d ' ')"
 helper_done 7

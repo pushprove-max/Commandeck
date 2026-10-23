@@ -59,5 +59,16 @@ for os in Darwin Linux; do COMMANDECK_HOST_OS=$os bash "$T/plugin/scripts/dashbo
 check "issue 294: --restart kicks the job by its label on macOS and restarts its unit on Linux" \
   "launchctl kickstart -k gui/$(id -u)/com.commandeck.dashboard|systemctl --user --no-block restart commandeck-dashboard.service" \
   "$(paste -sd'|' "$T/managed")"
+# Issues 263 and 255: a network bind is HTTPS behind a login. Installing it with no password stored would restart the
+# dashboard behind a login no one can pass, so --install refuses (exit 5) and installs nothing; with one stored it makes
+# the certificate and prints the https address. A loopback install (above) needs neither.
+: > "$T/managed"; rm -rf "$HOME/.commandeck/dashboard-tls" "$HOME/.commandeck/dashboard-auth.json"
+OUTP=$(COMMANDECK_DASHBOARD_BIND=0.0.0.0 COMMANDECK_HOST_OS=Darwin COMMANDECK_DASHBOARD_DIR=$T/inst2 bash "$T/plugin/scripts/dashboard.sh" --install 2>&1); RC=$?
+check "issue 255: a network bind with no password stored exits 5, names set-password, and installs nothing" "5:1:0" \
+  "$RC:$(grep -c 'dashboard_serve.py set-password' <<<"$OUTP"):$(wc -c < "$T/managed" | tr -d ' ')"
+printf 'eightchr\neightchr\n' | python3 "$T/plugin/scripts/dashboard_serve.py" set-password max >/dev/null 2>&1
+OUTP=$(COMMANDECK_DASHBOARD_BIND=0.0.0.0 COMMANDECK_HOST_OS=Darwin COMMANDECK_DASHBOARD_DIR=$T/inst2 bash "$T/plugin/scripts/dashboard.sh" --install 2>&1); RC=$?
+check "issue 263: with a password stored, --install makes the certificate and prints the https address" "0:1:1" \
+  "$RC:$([ -s "$HOME/.commandeck/dashboard-tls/cert.pem" ] && echo 1):$(grep -c 'open https://<this host>.local:' <<<"$OUTP")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

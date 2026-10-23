@@ -19,11 +19,20 @@
       project name to its folders: `today` then holds, per project, the day's
       cost of the sessions run in those folders. Every other figure is the
       account's.
+  dashboard_limit.py tests <projects-dir> <cache-file> <now-epoch> <folder>...
+      The Tests card's finished runs (issue 269) and each command's usual time, from the transcripts' Bash calls that
+      ran a test runner in the folders; `null` when they cannot be read whole. Its cache is <cache-file>, apart from
+      the limit card's.
   dashboard_limit.py units <now-epoch> <cache-dir> <projects-dir> <codex-sessions-dir>
       Each Builder's cost by stage, from its worktree's own sessions; the units
       ([{unit, worktree, stages}]) on stdin, {unit: {stages, total} or null} out.
   dashboard_limit.py seats <now-epoch> <cache-dir> <projects-dir> <clear-hook-log> <main-checkout> [<relay-worktree>]
       Main's and the relay's day, 7-day daily average and restarts today, from their own sessions.
+  dashboard_limit.py main-events <now-epoch> <main-projects-folder> <clear-hook-log>
+      Main's compactions and unhealed carry failures over 24 h, and its last restart, for the alerts.
+  dashboard_limit.py restarts <clear-hook-log> [--since <iso>] [--until <iso>] [--transcripts <dir>]
+      Restarts per day, the median checkpoint bytes, the median post-restart context and the checkpoint's share of it
+      (an estimate), from the <session id>.resumed-from records beside the log.
 
 Every figure comes from that reading or from Claude Code's own transcripts; a
 figure with no source is null, never 0 or an estimate. Dollars are list-price
@@ -34,11 +43,14 @@ the chart draws from that file.
 """
 import contextlib
 import fcntl
+import glob
 import hashlib
 import json
 import os
 import platform
 import re
+import shlex
+import statistics
 import subprocess
 import sys
 import time
@@ -541,6 +553,189 @@ def requests(projects, cache_path, since, now, folders=False):
     if not whole:
         return None
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
+
+
+# Issue 269, the Tests card's finished runs: each Bash call that ran a test runner, paired with its result, read from
+# the same transcripts requests() walks, and kept in a cache of its own (the limit card's is untouched).
+# A call is a run only when it starts, after an optional `cd <dir> && ` and VAR=value words, with one of: `npm test`,
+# `npm run test*`, `bash <file>.test.sh`, a test wrapper (run-shell-tests.sh), or `node --test`. Any other call is not
+# measured, however it is spelled. The run (group "run") ends at the first unquoted separator or redirect.
+TEST_COMMAND = re.compile(
+    r"""\s*(?:cd \S+ && )?(?:\w+=\S* )*(?P<run>(?:npm test|npm run test[\w:.-]*|(?:bash|sh) \S*\.test\.sh"""
+    r"""|(?:(?:bash|sh) )?\S*run-shell-tests\.sh|node --test)(?=[\s;&|<>]|$)"""
+    r"""(?:'[^']*'|"[^"]*"|(?!\s+(?:\d*|&)>)[^;&|\n'"<>])*)""")
+# The rest of the call's words up to the first unquoted separator. A help, version, dry-run, check, print or eval
+# word anywhere in them means the call prints information and runs no test. shortcut: npm's abbreviations (`--usag`)
+# and glommed shorthands (`-sv`) are not read; upgrade if one is ever seen.
+TEST_ARGS = re.compile(r"""(?:'[^']*'|"[^"]*"|[<>]+[|&]?|&>>?|[^;&|\n'"<>])*""")
+TEST_NOT_A_RUN = re.compile(r"--?(?:help|version|versions|usage|dry-run|if-present|check|print|eval|[hvVcpe?])(?:=.*)?")
+# What after the run hides its exit: a pipe, `||`, `;`, a newline or a lone `&` (`&&` stops at the first failure).
+TEST_EXIT_MASK = re.compile(r"[|;\n]|(?<!&)&(?!&)")
+TEST_REDIRECT = re.compile(r"\s*(?:\d*>>?\s*&?|&>>?\s*)[^\s;&|]+")
+# A background run's completion: the task notification Claude Code logs in place of a tool result.
+TEST_NOTE = re.compile(r"<task-notification>.*?</task-notification>", re.S)
+
+
+def test_segment(cmd):
+    """The test run a Bash command starts (TEST_COMMAND), else None. Ceiling: only the first run of a chain is named."""
+    m = TEST_COMMAND.match(cmd)
+    if not m:
+        return None
+    try:
+        words = shlex.split(m.group(0) + TEST_ARGS.match(cmd, m.end()).group(0))
+    except ValueError:  # quoting shlex cannot close: not measured rather than guessed
+        return None
+    if any(TEST_NOT_A_RUN.fullmatch(w) for w in words):
+        return None
+    return m.group("run").strip()[:300]
+
+
+def exit_masked(cmd):
+    """Whether the Bash call's exit status may not be its run's: a pipe, `||`, `;`, a newline or a lone `&` after it."""
+    m = TEST_COMMAND.match(cmd)
+    return bool(m and TEST_EXIT_MASK.search(TEST_REDIRECT.sub("", cmd[m.end():])))
+
+
+def test_counts(out):
+    """(passed, failed) from the runner's own summary lines, summed over every suite a call ran: node's `pass N` and
+    `fail N`, a shell test file's `N passed, M failed` and run-shell-tests.sh's `N passed, M failed, K parked`; else
+    nulls."""
+    sh = re.findall(r"^(\d+) passed, (\d+) failed(?:, \d+ parked)?", out, re.M)
+    node = [re.findall(r"^(?:# |ℹ )%s (\d+)" % k, out, re.M) for k in ("pass", "fail")]
+    if not (sh or node[0] or node[1]):
+        return None, None
+    return sum(int(p) for p, _ in sh) + sum(map(int, node[0])), sum(int(f) for _, f in sh) + sum(map(int, node[1]))
+
+
+def test_result(is_error, passed, failed, masked):
+    """failed on a failing exit or any failure the runner printed; passed on printed counts or an exit nothing could
+    mask; else unknown, never a guessed pass."""
+    if is_error or (failed or 0) > 0:
+        return "failed"
+    return "passed" if passed is not None or not masked else "unknown"
+
+
+def output_tail(path):
+    """The last 64 KB of a background run's output file, or "" once the file is gone."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - 65536))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def finish_run(pending, runs, path, tool_id, t, body, is_error):
+    start, where, cmd, _, masked = pending.pop(tool_id)
+    passed, failed = test_counts(body)
+    runs.append([t, round(max(0, t - start)), where, cmd, test_result(is_error, passed, failed, masked), passed, failed, start, path])
+
+
+def test_line(r, pending, runs, path):
+    """One transcript line into the file's pending runs: a runner call waits there; its result completes a run, or for
+    a background call its task notification (the first of the records that repeat it)."""
+    t, content = epoch(r.get("timestamp")), (r.get("message") or {}).get("content")
+    if t is None:
+        return
+    text = r.get("content") if isinstance(r.get("content"), str) else content
+    if isinstance(text, str):
+        for note in TEST_NOTE.findall(text):
+            tid, code = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", note), re.search(r"\(exit code (\d+)\)", note)
+            status = re.search(r"<status>(\w+)</status>", note)
+            p = pending.get(tid.group(1)) if tid else None
+            if not p or not p[3]:
+                continue
+            if code is None and not (status and status.group(1) in ("completed", "failed")):
+                pending.pop(tid.group(1))  # killed or stopped: the run never finished
+                continue
+            out = re.search(r"<output-file>([^<]+)</output-file>", note)
+            finish_run(pending, runs, path, tid.group(1), t, output_tail(out.group(1)) if out else "",
+                       code.group(1) != "0" if code else status.group(1) == "failed")
+        return
+    for c in content if isinstance(content, list) else []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("type") == "tool_use" and c.get("name") == "Bash":
+            inp = c.get("input") or {}
+            full = inp.get("command") if isinstance(inp.get("command"), str) else ""
+            cmd = test_segment(full)
+            if cmd:
+                # A background call's tool result only says it started; its task notification completes it.
+                pending[c.get("id")] = [t, r.get("cwd"), cmd, bool(inp.get("run_in_background")), exit_masked(full)]
+        elif c.get("type") == "tool_result" and c.get("tool_use_id") in pending and not pending[c["tool_use_id"]][3]:
+            body = c.get("content")
+            if isinstance(body, list):
+                body = "".join(b.get("text", "") for b in body if isinstance(b, dict))
+            finish_run(pending, runs, path, c["tool_use_id"], t, body if isinstance(body, str) else "", bool(c.get("is_error")))
+
+
+def test_runs(projects, cache_path, now, roots):
+    """The last day's finished test runs run in `roots`, and each command's usual time; None when the transcripts
+    cannot be read whole. Usual time = median seconds of the same command over the week, from 3 runs."""
+    if not os.path.isdir(projects):
+        return None
+    since = now - WEEK
+    # The cache is keyed to this file's bytes: a run is classified once, when read, so any change to the parser
+    # must read the week's transcripts again rather than keep what an older one cached.
+    with open(__file__, "rb") as f:
+        version = hashlib.sha256(f.read()).hexdigest()
+    unread = []
+    with locked(cache_path):
+        try:
+            with open(cache_path) as f:
+                cache = json.load(f)
+            if cache["version"] != version:
+                raise ValueError("cache from another version of this script")
+            offsets, files, runs = cache["offsets"], cache["files"], cache["runs"]
+        except (OSError, ValueError, KeyError, TypeError):
+            offsets, files, runs = {}, {}, []
+        live = {}
+        for root, _, names in os.walk(projects, onerror=unread.append):
+            for name in names:
+                path = os.path.join(root, name)
+                try:
+                    if not name.endswith(".jsonl") or os.stat(path).st_mtime < since:
+                        continue
+                    size, off = os.stat(path).st_size, offsets.get(path, 0)
+                    pending = files.get(path)
+                    if pending is None or size < off:  # a file rewritten in place is read again from its start
+                        off, pending = 0, {}
+                        runs = [r for r in runs if r[8] != path]
+                    with open(path, "rb") as f:
+                        f.seek(off)
+                        for line in f:
+                            if not line.endswith(b"\n"):
+                                break  # a half-written last line waits for the next call
+                            off += len(line)
+                            keys = [k.encode() for k in pending if isinstance(k, str)]
+                            if (b'"tool_use"' in line and b'"name":"Bash"' in line) \
+                                    or (keys and (b'"tool_result"' in line or b"<task-notification>" in line) and any(k in line for k in keys)):
+                                try:
+                                    r = json.loads(line)
+                                except ValueError:
+                                    continue
+                                if isinstance(r, dict):
+                                    test_line(r, pending, runs, path)
+                    live[path], files[path] = off, pending
+                except OSError as e:
+                    unread.append(e)
+        runs = [r for r in runs if r[0] >= since]
+        tmp = f"{cache_path}.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump({"version": version, "offsets": live, "files": {p: files[p] for p in live}, "runs": runs}, f)
+        os.replace(tmp, cache_path)
+    if unread:
+        print(f"dashboard_limit: {len(unread)} transcript path(s) could not be read, so test runs are unknown: {unread[0]}", file=sys.stderr)
+        return None
+    took = {}
+    for r in runs:
+        if under(r[2], roots):  # another project's `npm test` is another suite
+            took.setdefault(r[3], []).append(r[1])
+    usual = {c: round(statistics.median(v)) for c, v in took.items() if len(v) >= 3}
+    return {"finished": [{"when": iso(r[0]), "start": iso(r[7]), "cwd": r[2], "what": r[3], "took": r[1], "result": r[4],
+                          "passed": r[5], "failed": r[6], "usual": usual.get(r[3])}
+                         for r in sorted(runs, key=lambda r: -r[0]) if r[0] >= now - 86400 and under(r[2], roots)][:100],
+            "usual": [{"cmd": c, "sec": s, "n": len(took[c])} for c, s in usual.items()]}
 
 
 CODEX_TAIL = 262144  # a session file is read 256 KB at a time from its end: token_count events are frequent
@@ -1163,6 +1358,131 @@ def seats(now, cache_dir, projects, log, main, relay=None):
     return out
 
 
+def first_context(path):
+    """The first assistant usage of a transcript summed as hooks/lib/context-size.sh sums it (output left out), or None."""
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    u = json.loads(line).get("message", {}).get("usage")
+                except (ValueError, AttributeError):
+                    continue
+                if isinstance(u, dict):
+                    return sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    except OSError:
+        pass
+    return None
+
+
+def restarts(log, since=None, until=None, transcripts=None):
+    """Issue 283: how often main restarts and how much of its first context the checkpoint is, {restarts, perDay, ...}.
+
+    A restart is a <session id>.resumed-from record beside the log (hooks/resume-context.sh): its mtime the restart
+    time, its first line the checkpoint resumed from. A record whose <session id>.jsonl is not under `transcripts`
+    (default: any project folder) is another project's and counts in `skipped`. Checkpoint bytes are the last
+    cp_bytes= the hook logged for that checkpoint before the restart (the line after an automatic carry is the size
+    the restart takes); post-restart context is the session's first usage. The share is bytes / 4 over that context,
+    an estimate: four bytes to a token. A stop line never marks a restart: equal since_restart_min values do not.
+    """
+    lines = []
+    try:
+        with open(log, errors="replace") as f:
+            for line in f:
+                m = re.match(r"(\S+) stop-hook: (?:.* )?cp=(\S+) cp_bytes=(\d+)", line)
+                try:
+                    if m:
+                        lines.append((datetime.fromisoformat(m[1]).timestamp(), m[2], int(m[3])))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    lo, hi = (datetime.fromisoformat(x).timestamp() if x else None for x in (since, until))
+    per_day, sizes, contexts, shares, skipped = {}, [], [], [], 0
+    for rec in sorted(glob.glob(os.path.join(os.path.dirname(log), "*.resumed-from"))):
+        sid = os.path.basename(rec)[: -len(".resumed-from")]
+        paths = glob.glob(os.path.join(transcripts, sid + ".jsonl")) if transcripts else glob.glob(os.path.expanduser("~/.claude/projects/*/" + sid + ".jsonl"))
+        try:
+            at = os.path.getmtime(rec)
+            with open(rec, errors="replace") as f:
+                cp = f.readline().strip()
+        except OSError:
+            continue
+        if (lo is not None and at < lo) or (hi is not None and at > hi):
+            continue
+        if not paths:
+            skipped += 1
+            continue
+        day = datetime.fromtimestamp(at).strftime("%Y-%m-%d")
+        per_day[day] = per_day.get(day, 0) + 1
+        before = [b for t, c, b in lines if c == cp and t <= at]
+        ctx = first_context(paths[0])
+        if before:
+            sizes.append(before[-1])
+        if ctx:
+            contexts.append(ctx)
+        if before and ctx:
+            shares.append(before[-1] / 4 / ctx * 100)
+    med = lambda v: round(statistics.median(v), 2) if v else None
+    return {"restarts": sum(per_day.values()), "perDay": dict(sorted(per_day.items())), "skipped": skipped,
+            "medianCheckpointBytes": med(sizes), "medianContext": med(contexts), "medianSharePct": med(shares), "estimate": True}
+
+
+def main_events(now, proj, log):
+    """Issues 292, 300: main's last 24 h as {compactions, carryFailed, resumedAt}, for the alerts in dashboard_alerts.jq.
+
+    A compaction is a compact_boundary row in a transcript under `proj` (the main checkout's projects folder). A carry
+    failure is a `carry-over check failed for <cp>` line of the hook log with no later `carried automatically into the
+    checkpoint <cp>` line, or a `could not copy` line: the hook did not heal it. The log is machine-wide and in local
+    time, so a checkpoint counts only when its session has a transcript under `proj`. resumedAt is the newest
+    <session id>.resumed-from record of such a session, main's last restart. An unreadable file raises OSError.
+    """
+    since = now - 86400
+    comp = []
+    for name in (os.listdir(proj) if os.path.isdir(proj) else []):
+        path = os.path.join(proj, name)
+        if not name.endswith(".jsonl") or os.path.getmtime(path) < since:
+            continue
+        with open(path, errors="replace") as f:
+            for line in f:
+                if '"compact_boundary"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                at = epoch(r.get("timestamp")) if isinstance(r, dict) and r.get("subtype") == "compact_boundary" else None
+                if at is not None and at >= since:
+                    meta = r.get("compactMetadata") or {}
+                    comp.append({"sid": r.get("sessionId") or name[:-6], "at": iso(at), "trigger": meta.get("trigger"), "preTokens": meta.get("preTokens")})
+    ours = lambda cp: os.path.exists(os.path.join(proj, os.path.basename(cp)[:-3] + ".jsonl"))
+    failed, healed = {}, set()
+    try:
+        with open(log, errors="replace") as f:
+            for line in f:
+                m = re.match(r"(\S+) stop-hook: (?:carry-over check failed for (\S+) against |could not copy \d+ missing items into (\S+?);|\d+ items carried automatically into the checkpoint (\S+))", line)
+                try:
+                    at = datetime.fromisoformat(m[1]).timestamp() if m else None
+                except ValueError:
+                    at = None
+                if at is None or at < since:
+                    continue
+                if m[4]:
+                    healed.add(m[4])
+                elif m[2]:
+                    failed[m[2]] = at
+                    healed.discard(m[2])
+                else:
+                    failed[m[3]] = at
+                    healed.discard(m[3])
+    except FileNotFoundError:
+        pass
+    resumed = [os.path.getmtime(p) for p in glob.glob(os.path.join(os.path.dirname(log), "*.resumed-from"))
+               if os.path.exists(os.path.join(proj, os.path.basename(p)[:-len(".resumed-from")] + ".jsonl"))]
+    return {"compactions": sorted(comp, key=lambda c: c["at"]),
+            "carryFailed": [{"at": iso(at), "cp": cp} for cp, at in sorted(failed.items(), key=lambda x: x[1]) if cp not in healed and ours(cp)],
+            "resumedAt": iso(max(resumed)) if resumed else None}
+
+
 def main(argv):
     if argv[1:] == ["fetch"]:
         return fetch()
@@ -1172,6 +1492,18 @@ def main(argv):
     if len(argv) == 6 and argv[1] == "units":
         # units <now> <cache dir> <Claude projects folder> <Codex sessions folder>; the units on stdin.
         json.dump(unit_costs(json.load(sys.stdin), float(argv[2]), argv[3], argv[4], argv[5] or None), sys.stdout)
+        return 0
+    if len(argv) == 5 and argv[1] == "main-events":
+        # main-events <now> <main project folder> <hook log>
+        json.dump(main_events(float(argv[2]), argv[3], argv[4]), sys.stdout)
+        return 0
+    if len(argv) >= 3 and argv[1] == "restarts":
+        # restarts <hook log> [--since <iso>] [--until <iso>] [--transcripts <dir>]
+        opts = dict(zip(argv[3::2], argv[4::2]))
+        json.dump(restarts(argv[2], opts.get("--since"), opts.get("--until"), opts.get("--transcripts")), sys.stdout)
+        return 0
+    if len(argv) >= 6 and argv[1] == "tests":
+        json.dump(test_runs(argv[2], argv[3], float(argv[4]), argv[5:]), sys.stdout)
         return 0
     if len(argv) in (7, 8) and argv[1] == "seats":
         json.dump(seats(float(argv[2]), argv[3], argv[4], argv[5], argv[6], argv[7] if len(argv) > 7 else None), sys.stdout)

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.40.0 -- 2026-10-23
+
+Built from the plugin issue batch of 2026-10-23: #308, #310, #306, #309, #286, #279, #298, #319, #290, #305, #263, #255,
+#272, #271, #269, #283, #300, #292, #326 and #249 (a measurement only). Nothing here is closed by this entry.
+
+- Fixes: `hook-probe.sh` gives a hook an absolute `HOME` under a relative `TMPDIR` and removes its scratch folder on
+  INT and TERM (#308); `merge-unit-local.sh` runs from another repository or by a relative path (#310); the merge train
+  runs no dry-run pass, the real merge's step 1 refuses a unit instead (#306); a ruling logged under the other spelling
+  of main's path is found (#309); the relay ignores its own sends under `--from` in any case and clean `cos-check`
+  readings say so (#319); the merge's deletion check lets a whole directory go when the brief or a plan it names lists it once as `dir/`, the plan read as committed at the fork point (#326); the relay's wake text is capped with a pointer to the full row (#290); a Builder's owner-bound
+  question reaches the decision queue from the relay's poll (#305).
+- Review loop: the fix hand-off asks for the existing cases rerun with a trusted state swapped in (#286); the round
+  file records the pass kind and its start and end, and the dashboard shows GO and NO-GO per pass kind and the minutes
+  in review (#271); an escape row records its finding class and where it was caught (#272).
+- Dashboard: a Tests card of test runs going now and finished ones, with a stall flag (#269); a login over HTTPS for a
+  network bind, and `--install` refuses a network bind with no password stored (#263, #255); `mainEvents` with a
+  `main-compact-*` alert and a `carry-failed-*` alert the relay wakes on, both ending at main's next restart (#300);
+  the `restarts` report in `dashboard_limit.py` (restarts per day, median checkpoint bytes, median post-restart context,
+  the checkpoint's share of it) and the stop hook logging the checkpoint's size after an automatic carry (#283); a Home
+  phone tab, the project name as the page title, the Builder cap on the Units card, per-group collect seconds, and
+  "Switching from another collector" in `docs/dashboard.md` (#292).
+- A search log: `hooks/search-log.sh` and `scripts/search-log-report.py` record each search a session makes and report
+  how often one is followed by a read of the file it found (#298). `docs/auto-permission-mode.md` evaluates Orca's Auto
+  mode against the plugin's guards (#279).
+
 ## 0.39.2 -- 2026-10-23
 
 - The seat tests no longer need Codex installed on the machine that runs them: their shared fixture puts a stand-in

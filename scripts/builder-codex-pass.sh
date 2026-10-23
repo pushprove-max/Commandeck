@@ -1146,7 +1146,7 @@ done
 # shortcut: a change to a file that was already untracked is not seen; sandbox the session when Claude Code can.
 [ "$BY" != claude ] || { [ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] && [ "$(tree)" = "$BEFORE" ]; } \
   || die "the Claude reviewer changed the worktree during the $KIND pass; restore it and run the pass again"
-TIDS=() BODY="" VERDICT="VERDICT: GO"
+TIDS=() T_BEGAN=() T_ENDED=() BODY="" VERDICT="VERDICT: GO"
 for i in "${!FOCI[@]}"; do
   K=$((i + 1)) RAW=$RUN-$BY-$((i + 1)).json
   TID=$(reviewer_id "$K")
@@ -1157,14 +1157,19 @@ for i in "${!FOCI[@]}"; do
   [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || VERDICT="VERDICT: NO-GO"
   # Line 1 is the verdict and line 2 the pass kind; $( ) dropped the trailing newline, so a verdict-only reply has no third.
   SAID=$(tail -n +3 <<<"$PROOF")
+  read -r _ _ _ _ T_B T_E _ <<<"$(sed -n 2p <<<"$PROOF")"
+  T_BEGAN+=("$T_B") T_ENDED+=("$T_E")
   [ "${#FOCI[@]}" = 1 ] || SAID="Reviewer $K of ${#FOCI[@]} (${FOCI[i]%%:*}):"$'\n'$SAID
   TIDS+=("$TID") BODY+=${BODY:+$'\n\n'}$SAID
 done
 HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
 # A red suite is the pass's NO-GO with no reviewer's word needed.
 [ -z "$SUITE_RED" ] || { VERDICT="VERDICT: NO-GO" BODY+=${BODY:+$'\n\n'}"The full suite is red on $SHA: $SUITE_RED"; }
+# Issue 271: the pass began with its first reviewer and ended with its last; "-" is a time a record did not give ("-" sorts first).
+TIMING="$(printf '%s\n' "${T_BEGAN[@]}" | sort | sed -n 1p) $(printf '%s\n' "${T_ENDED[@]}" | sort | sed -n '$p')"
+[[ " ${T_ENDED[*]} " != *" - "* ]] || TIMING="${TIMING% *} -"
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
-  printf 'Pass: %s\n%s%s\n%s\n\n%s\n' "$KIND" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+  printf 'Pass: %s\nTiming: %s\n%s%s\n%s\n\n%s\n' "$KIND" "$TIMING" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
 
@@ -1200,7 +1205,8 @@ REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n
   printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
   where "the findings say what to fix. Open it only when a finding needs it"
   printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
-  printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n\n' "$N" "$((N + 1))"
+  printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n' "$N" "$((N + 1))"
+  printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n\n'
   printf '## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
   [ -z "$OPEN" ] || printf '\n## Open decisions (HOLD)\n\n%s\n\nDo not fix a finding tagged [HOLD <id>] or one that touches these questions: send it to main as a question with the id, and fix the rest.\n' "$OPEN"
   # Issues 261 and 303: a class back in two passes in a row is fixed as a class, once, not input by input.

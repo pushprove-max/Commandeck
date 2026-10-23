@@ -46,6 +46,7 @@ in `.claude/commandeck.json`:
 | `read-tracker.sh` | Nudges shell-only source searching when configured code navigation is unused. |
 | `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each; also active for planning seats without strict mode, and for Builders at the second such turn. |
 | `script-over-reads.sh` | Advises using a script after five same-kind files from one directory. |
+| `search-log.sh` | Logs one local row per Read, Grep, shell search and code-server call: tool, a 12-hex query fingerprint (never the query), paths, result size, emptiness and the search a later call followed within the next 3 logged calls. `scripts/search-log-report.py` prints per-tool numbers; the log is `COMMANDECK_SEARCH_LOG` or `search-log.jsonl` in the scratch folder. |
 | `git-ignore-warn.sh` | Warns when a written file is ignored and would not ship, except deliberate scratch paths. |
 | `new-test-file-guard.sh` | Advises extending an existing test when another file already tests the imported subject. |
 | `staged-index-warn.sh` | Reports indexed files whose working copies differ after a suite; this is not proof of which bytes the test read. |

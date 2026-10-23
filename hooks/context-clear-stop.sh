@@ -86,6 +86,8 @@ if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
         $0 == head { on = 1 }
         END { if (on) dump(); else if (!done) { print ""; print head; dump() } }' "$cp" > "$cp.new.$$" && mv "$cp.new.$$" "$cp"; then
       echo "$(date +%FT%T) stop-hook: $n items carried automatically into the checkpoint $cp" >> "$HOME/.claude/checkpoints/clear-hook.log"
+      # Issue 283: the stop line's cp_bytes was measured before the carry; this one is the size the restart takes.
+      echo "$(date +%FT%T) stop-hook: cp=$cp cp_bytes=$(wc -c < "$cp" | tr -d ' ') after carry" >> "$HOME/.claude/checkpoints/clear-hook.log"
       rm -f "$cp.carry.$$"
     else
       rm -f "$cp.carry.$$" "$cp.new.$$"

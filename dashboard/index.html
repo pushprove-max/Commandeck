@@ -195,6 +195,13 @@
     <ul id="cost-unit-list" class="list"></ul>
   </section>
 
+  <section id="tests" class="card" data-size="2" data-sources="tests-ps tests-logs" data-max-age="120">
+    <header class="card-head"><h2>Tests running now</h2></header>
+    <p class="sub"><span id="tests-sub"></span><span class="age"></span></p>
+    <p class="card-note" hidden></p>
+    <div id="tests-body"></div>
+  </section>
+
   <section id="review" class="card" data-size="1" data-sources="unit-ledger">
     <header class="card-head"><h2>Review loop, 7 days</h2></header>
     <p class="sub"><span>most rounds first</span><span class="age"></span></p>
@@ -254,8 +261,10 @@
 <footer id="sources-foot" class="foot"></footer>
 <!-- The phone's tab bar (issue 211); app.css shows it under 760 px only. -->
 <nav id="tabs" aria-label="Sections">
+  <button type="button" data-tab="home"><span class="tab-label">Home</span></button>
   <button type="button" data-tab="units"><span class="tab-label">Units</span><span class="tab-badge" data-badge="units"></span></button>
   <button type="button" data-tab="builds"><span class="tab-label">Builds</span><span class="tab-badge" data-badge="builds"></span></button>
+  <button type="button" data-tab="tests"><span class="tab-label">Tests</span></button>
   <button type="button" data-tab="alerts"><span class="tab-label">Alerts</span><span class="tab-badge" data-badge="alerts"></span></button>
   <button type="button" data-tab="you"><span class="tab-label">You</span><span class="tab-badge" data-badge="you"></span></button>
   <button type="button" data-tab="more"><span class="tab-label">More</span></button>

@@ -64,15 +64,21 @@ check "no merge sha and no verdict: --append refuses on one line and writes noth
 ERR=$(UNIT_LEDGER_MERGE_SHA=$SHA ul ship-1999-01-03 local --append 2>&1 >/dev/null); RC=$?
 check "a merge sha with no verdict refuses too" "1 1" "$([ "$RC" != 0 ] && echo 1) $(lines)"
 
-# Issue 272: an escape is a row of its own; a unit with no merged row is tagged all the same.
-ul --escaped "$U" 41 >/dev/null; RC=$?
+# Issue 272: an escape is a row of its own, with the finding class and where it was caught; a unit with no merged row is
+# tagged all the same.
+ul --escaped "$U" 41 --class lost-reply --caught production >/dev/null; RC=$?
 check "--escaped appends one row" "0 2 $U|[41]" "$RC $(lines) $(tail -1 "$LEDGER" | jq -r '"\(.unit)|\(.escaped | tojson)"')"
-ul --escaped "$U" 41 >/dev/null; RC=$?
-check "the same unit and issue again adds nothing" "0 2" "$RC $(lines)"
-ul --escaped ship-1999-01-04 41 >/dev/null
+check "an escape records its finding class and where it was caught" "lost-reply production" "$(tail -1 "$LEDGER" | jq -r '"\(.class) \(.caught)"')"
+ul --escaped "$U" 41 --class other --caught main >/dev/null; RC=$?
+check "the same unit and issue again adds nothing, whatever class it names" "0 2" "$RC $(lines)"
+ul --escaped ship-1999-01-04 41 --class lost-reply --caught main >/dev/null
 check "another unit, with no merged row, is tagged with the same issue" "3 ship-1999-01-04" "$(lines) $(tail -1 "$LEDGER" | jq -r .unit)"
-ERR=$(ul --escaped "$U" abc 2>&1 >/dev/null); RC=$?
+ERR=$(ul --escaped "$U" abc --class lost-reply --caught main 2>&1 >/dev/null); RC=$?
 check "a non-number is refused on one line and writes nothing" "1 1 3" "$([ "$RC" != 0 ] && echo 1) $(grep -c . <<<"$ERR") $(lines)"
+for bad in "" "--class lost-reply" "--caught main" "--class lost-reply --caught"; do
+  ERR=$(ul --escaped "$U" 42 $bad 2>&1 >/dev/null); RC=$?
+  check "a new escape without both --class and --caught ('$bad') is refused on one line and writes nothing" "2 1 3" "$RC $(grep -c . <<<"$ERR") $(lines)"
+done
 check "every line is JSON" 0 "$(jq -e . "$LEDGER" >/dev/null 2>&1; echo $?)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

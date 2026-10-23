@@ -2,6 +2,9 @@
 # and the real pass script run under a stub Codex. Sourced, with REAL, PASS, FAIL and check set by the caller.
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 TMP=$(cd "$TMP" && pwd -P)
+# Issue 310: the merge runs in the checkout its script lives in when that is a main worktree on main (CI is one), and
+# these tests mean the cwd rules of an installed copy: they run the plugin from a folder with no git behind it.
+REAL_SRC=$REAL REAL=$TMP/real; mkdir -p "$REAL"; (cd "$REAL_SRC" && tar --exclude=.git -cf - .) | tar -xf - -C "$REAL"
 # An empty HOME: no Codex plugin, no model list, no signed-in CLI.
 export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
 # Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.

@@ -60,5 +60,18 @@ jq -cn --arg m "$T/p" --arg s "$S2" '{main: $m, unit: "u2", how: "merged", at: "
 D push-ask >/dev/null 2>&1
 check "a listed merge whose check is not green: refused, no new row" "1 1" "$? $(pushes)"
 
+# Issue 309: a ruling logged under the other spelling of main (/tmp against /private/tmp) is the same checkout. The
+# project is given by a link; the voided decoy pick is logged under the folder the link points to.
+ln -s "$T/p" "$T/plink"
+DL() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/plink" COMMANDECK_RULING_LOG="$T/rulings-link.jsonl" bash "$REAL/scripts/decision.sh" "$@"); }
+DL add decoyp-1999-01-01 'Ship the linked release?' yes main >/dev/null
+jq -cn --arg c "$T/p" '{source: "ask", question: "Ship the linked release?", utc: "2999-01-01T00:00:00Z", cwd: $c, void: true}' > "$T/rulings-link.jsonl"
+DL add decoyp-1999-01-01 'Ship the linked release?' yes main >/dev/null 2>&1
+check "a decoy retry logged under the symlinked spelling of main is found" 0 "$?"
+DL add decoys-1999-01-01 'Ship the sub release?' yes main >/dev/null
+jq -cn --arg c "$T/p/sub" '{source: "ask", question: "Ship the sub release?", utc: "2999-01-01T00:00:00Z", cwd: $c, void: true}' >> "$T/rulings-link.jsonl"
+DL add decoys-1999-01-01 'Ship the sub release?' yes main >/dev/null 2>&1
+check "and one logged from a folder inside main is found too" 0 "$?"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
