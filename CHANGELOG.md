@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.39.0 -- 2026-10-23
+
+- A review finding now blocks the merge only when normal use would hit the bug (owner ruling of 2026-10-23, over
+  0.29.0's every-finding rule). A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a
+  one-line known gap in the evidence file and does not block. The reviewer prompt in `builder-codex-pass.sh` asks for
+  such findings under a `KNOWN GAPS:` line with no level and no class tag, and a pass with only known gaps ends GO;
+  a GO beside a tagged finding is still a NO-GO. The global rules, the Builder brief template and `docs/review-loop.md`
+  state the same rule. Fixes #325.
+
 ## 0.38.0 -- 2026-10-23
 
 - Launched Codex panes no longer wait on Codex's "Update available" prompt. Setup writes `check_for_update_on_startup

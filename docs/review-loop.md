@@ -33,9 +33,13 @@ changed session prompt, or an incompatible change to this script's required
 review text can still refuse it. Follow the refusal; a new unit reviewed
 from pass 1 is the recovery it names.
 
-Findings are graded P0 to P3. Every finding, P0 to P3, refuses the merge. The
-Builder fixes it and the next `review` runs as the closing pass, until a
-closing pass ends GO with no finding named. A finding main lists under
+Findings are graded P0 to P3. A review finding blocks the merge only when
+normal use would hit the bug. A finding that needs an agent deliberately
+bypassing a guard, or an odd setup, is a one-line known gap in the evidence
+file and does not block: the reviewer lists it under `KNOWN GAPS:` with no
+level or class tag, and a pass with only known gaps ends GO. The Builder fixes
+a blocking finding and the next `review` runs as the closing pass, until a
+closing pass ends GO with no blocking finding named. A finding main lists under
 "Cleared findings" in its rulings file is handed to the next reviewer as out
 of scope; it never turns a NO-GO into a merge.
 

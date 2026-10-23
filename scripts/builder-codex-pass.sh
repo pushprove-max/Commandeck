@@ -23,8 +23,9 @@
 #     the same commit. A first pass of one reviewer counts only where the size
 #     rule allowed it: the merge counts the commit that pass read itself
 #     (build_size).
-#     Every finding, P0 to P3, blocks the merge: the pass under merge ends GO
-#     and names none. With no closing pass (reviewLoop.closingPass no), a
+#     A finding blocks the merge only when normal use would hit the bug (issue 325): the pass under merge
+#     ends GO and names no such finding. A bypass or odd-setup finding is a known gap, a plain line with
+#     no level and no class tag, which the gate below does not count. With no closing pass (reviewLoop.closingPass no), a
 #     narrowed pass's GO merges when narrowed passes read every commit after
 #     the last first pass. The proof's first line ends with the rule: closing
 #     GO, first-pass GO or no closing pass.
@@ -99,7 +100,7 @@ pass_waits() {
 # asks for JSON against a schema only that plugin's own review command
 # attaches; FORMAT replaces that block's content, so the prompt carries one
 # output instruction, and every other block goes out as the plugin wrote it.
-FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. Every finding, P0 to P3, blocks the merge. Your last line must be exactly VERDICT: GO when you list no finding, otherwise exactly VERDICT: NO-GO. A GO reply names no level, P0 to P3, anywhere.'
+FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. A review finding blocks the merge only when normal use would hit the bug. A finding that needs an agent deliberately bypassing a guard, or an odd setup, does not block: list it after a line that reads exactly KNOWN GAPS:, one plain line each (- <title> -- <file>:<line> -- what it needs), with no severity level and no class tag. Your last line must be exactly VERDICT: GO when you list no blocking finding (known gaps alone are GO), otherwise exactly VERDICT: NO-GO. A GO reply names no level, P0 to P3, anywhere.'
 # A pass is proved by this prompt, whole. A build whose earlier passes were sent another
 # (the plugin was updated mid-build) is refused, and the refusal ends with the one way on.
 UPDATED='If the plugin was updated during this build, its earlier passes were sent the earlier prompt and count no longer: move the build to a new unit (a new worktree made from this branch) and review that from pass 1'
@@ -326,8 +327,8 @@ verdict = lines[-1].strip()
 # reads "- ", so every reader of the report sees "- [P3]". The gate below does not depend on it.
 lines = [re.sub(r"^(\s*)((?:[-*+]|\d+[.)])\s+)?[*_`]*\[[*_`]*(P[0-3])[*_`]*\][*_`]*",
                 lambda m: f"{m[1]}{'- ' if m[2] else ''}[{m[3]}]", l) for l in lines]
-# A GO beside any finding is not a GO: every finding, P0 to P3, blocks the merge. Nor is one beside the refusal
-# line, quoted or not: a lost GitHub read may sit above it.
+# A GO beside a tagged finding is not a GO. A known gap (issue 325) carries no level and no class tag, so it is no finding here.
+# Nor is a GO beside the refusal line, quoted or not: a lost GitHub read may sit above it.
 if any(re.search(finding, l) or refusal in l for l in lines[:-1]):
     verdict = "VERDICT: NO-GO"
 said = said or verdict[9:]
@@ -553,9 +554,9 @@ if [ "${1:-}" = --verify ]; then
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
     read -r READ K OF_THIS OF_ROUND BEGAN _ WAS_READ SINCE _ <<<"$(sed -n 2p <<<"$PROOF")"
-    # Every finding, P0 to P3, blocks the merge, and session_proof reads a GO beside any finding as NO-GO.
+    # A finding normal use would hit blocks the merge, and session_proof reads a GO beside any tagged finding as NO-GO.
     # A finding main cleared is handed to the next reviewer as out of scope; it never turns a NO-GO into a merge.
-    [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: every finding, P0 to P3, blocks the merge, and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
+    [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: a finding normal use would hit blocks the merge, and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
     case $READ in
       # session_proof has just bound this pass to the tip, so nothing was committed after it.
       final) NOW="closing pass" RULE="closing GO" ;;
@@ -834,7 +835,7 @@ if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCO
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
 fi
 # Issues 260 and 266: a narrowed GO after a closing pass merges nothing, and the final after it read the same tip
-# again. Every finding blocks the merge, so after any closing pass the review is the closing pass.
+# again. A finding normal use would hit blocks the merge, so after any closing pass the review is the closing pass.
 if [ "$KIND" = review ]; then
   read -r C_TID C_SAID <<<"$(awk '$1 == "@" && $3 == "final" { print $8, $2, $11 }' <<<"$PASSES" | sort | tail -1 | cut -d' ' -f2-)"
   if [ -n "${C_TID:-}" ]; then

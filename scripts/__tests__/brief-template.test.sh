@@ -48,9 +48,17 @@ check "and that review is the closing pass whose GO merges" 'is the closing pass
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
 check "main's class rule: one retry path, tested state by state" "$RETRY"
 BODY=$SAVED
-# Issue 323 (owner's merge rule, 2026-10-22): a P2/P3 left open at merge shipped known bugs, so every finding blocks.
-check "every finding, P0 to P3, blocks the merge, and only a GO naming no finding closes" "Every finding, P0 to P3, blocks the merge"
-check "no finding is left open at merge" "There is no narrowed-pass exit and no finding left open at merge."
+# Issue 325 (owner ruling of 2026-10-23, over issue 323's every-finding rule): only a bug normal use
+# would hit blocks the merge; a bypass or odd-setup finding is a one-line known gap. One wording in the template and the global rules.
+KG='A review finding blocks the merge only when normal use would hit the bug'
+GAP='A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a one-line known gap in the evidence file and does not block.'
+check "only a bug normal use would hit blocks the merge, and only a GO naming no blocking finding closes" "$KG"
+check "a bypass or odd-setup finding is a known gap that does not block" "$GAP"
+check "no blocking finding is left open at merge" "There is no narrowed-pass exit and no blocking finding left open at merge."
+SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/global-rules.md" | sed -E 's/ +/ /g')
+check "the global rules carry the same two sentences" "$KG"
+check "the global rules: a bypass or odd-setup finding is a known gap" "$GAP"
+BODY=$SAVED
 # The cache-budget hook refuses a foreground wait over 270 s, so the owner-answer wait is 240 s waits, resumed.
 check "the owner-answer wait fits the cache budget: 240 s waits resumed up to 9 minutes" "\`check --wait --timeout-ms 240000\`, resumed until 9 minutes in all"
 if grep -qi 'P2/P3 only' "$T"; then FAIL=$((FAIL+1)); echo "FAIL the template still lets a P2/P3-only pass merge"; else PASS=$((PASS+1)); echo "ok   no P2/P3-only exit"; fi

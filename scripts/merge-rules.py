@@ -143,6 +143,8 @@ MADE_FROM = {
     "7c87d0bb": ("42145c44",),
     # 0.29.0 main-session.md: every review finding blocks the merge (issue 322)
     "e6963680": ("2bb3342e",), "70e51fcc": ("45c2952e",),
+    # 0.39.0 global-rules.md: a finding blocks the merge only when normal use would hit the bug (issue 325)
+    "13e9906d": ("c8e23316",),
 }
 
 

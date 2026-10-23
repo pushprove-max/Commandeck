@@ -100,6 +100,19 @@ check "a green suite that changed tracked files: no pass line, the round ends NO
   "$(grep -c '^Suite: [0-9a-f]* pass ' "$B/$U-r18-reports.md") $(grep -c '^Suite: [0-9a-f]* changed ' "$B/$U-r18-reports.md") \
 $(tail -1 "$B/$U-r18-reports.md" | grep -cx 'VERDICT: NO-GO') $(verify)"
 cfg 'del(.fullSuiteBeforeFinal)'
+# Issue 325 (owner ruling of 2026-10-23): only a bug normal use would hit blocks the merge. A bypass or
+# odd-setup finding is a plain known-gap line (no level, no class tag), so a closing GO that names one still merges;
+# a finding normal use hits stays a NO-GO, known gaps beside it or not.
+printf 'echo nineteen\n' > "$W/a.sh"
+STUB_REPLY=$'KNOWN GAPS:\n- GAP-PROBE -- a.sh:1 -- needs an agent that edits the guard by hand\nVERDICT: GO' pass 19 review
+check "a closing GO that names only a known gap ends GO, merges, and the report keeps the gap" "1 0 1 1" \
+  "$(tail -1 "$B/$U-r19-reports.md" | grep -cx 'VERDICT: GO') $(verify) $(grep -c '^- GAP-PROBE' "$B/$U-r19-reports.md") $(grep -c '^KNOWN GAPS:' "$B/$U-r19-reports.md")"
+printf 'echo twenty\n' > "$W/a.sh"
+STUB_REPLY=$'- [P2] (class: probe) NORMAL-PROBE -- a.sh:1 -- plain use breaks -- bash a.sh\nKNOWN GAPS:\n- GAP-PROBE -- a.sh:1 -- odd setup\nVERDICT: GO' pass 20 review
+check "a normal-use finding beside a known gap is a NO-GO round and is refused" "1 2" \
+  "$(tail -1 "$B/$U-r20-reports.md" | grep -cx 'VERDICT: NO-GO') $(verify)"
+check "the reviewer's prompt states the rule: normal use blocks, bypass and odd setup go under KNOWN GAPS:" "1 0" \
+  "$(grep -c 'blocks the merge only when normal use would hit the bug.*KNOWN GAPS:' "$B/$U-r20-prompt-1.md") $(grep -c 'Every finding, P0 to P3, blocks the merge' "$B/$U-r20-prompt-1.md")"
 check "a pass before any ledger carries no decisions block" 0 "$(input 17 | grep -c 'decisions that name this unit')"
 
 

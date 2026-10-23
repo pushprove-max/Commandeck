@@ -351,8 +351,8 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       why="" nogo="" rep=""
       if [ "$(jq -r --arg u "$unit" 'index($u) != null' <<<"$3")" = true ]; then why="its driver acts on this; see the driver line below"
       elif [ "$dirty" != 0 ]; then why="$dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, which no Codex pass read"
-      # The pass writes its own verdict line last. After a NO-GO the next step is a fix round: every finding, P0 to
-      # P3, blocks the merge. This line only advises; the merge checks.
+      # The pass writes its own verdict line last. After a NO-GO the next step is a fix round: a finding normal use
+      # would hit blocks the merge. This line only advises; the merge checks.
       elif [ -n "$round" ] && [ "$(grep '^VERDICT:' "$round" | tail -1)" = "VERDICT: NO-GO" ]; then nogo=1
       elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && [ ! -f "$SCRATCH/main-watch/gate-$unit" ]; then
         why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"

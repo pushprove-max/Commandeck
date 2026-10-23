@@ -143,14 +143,16 @@ merge refuses a round file the script did not write, or one older than the tip.
    pass prints which); fix everything it finds together.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
-   when main changed this brief or its rulings since the last pass. Every finding, P0 to P3, blocks the
-   merge: fix it, red first, and repeat until one ends `VERDICT: GO` with no finding named. A `review`
+   when main changed this brief or its rulings since the last pass. A review finding blocks the merge only
+   when normal use would hit the bug: fix it, red first, and repeat until one ends `VERDICT: GO` with no
+   blocking finding named. A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a
+   one-line known gap in the evidence file and does not block. A `review`
    that prints `final in place of review` (after any closing pass that ended NO-GO, or after a commit on a
    closing GO) is the closing pass: its GO merges, and no separate final follows.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
-   branch once more. Its GO, naming no finding, is the one the merge takes. Any finding there, P0 to P3,
+   branch once more. Its GO, naming no blocking finding, is the one the merge takes. Any blocking finding there
    goes back to step 2 as a fix round, whose next `review` runs as the closing pass. There is no
-   narrowed-pass exit and no finding left open at merge.
+   narrowed-pass exit and no blocking finding left open at merge.
 
 Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
 it runs the launch's own checks (the round cap, main's rulings acknowledged, an

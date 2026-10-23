@@ -55,6 +55,10 @@ for pair in 953565b7:e2240999 b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb33
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"
 done
+# Issue 325: the global rules' review-finding rule was reworded; an owner who kept their own wording of the old one stays out of it.
+GR() { python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/global-rules.md" "$@" | ids | grep -c '^13e9906d'; }
+check "reworded 13e9906d: in by default, out under keep mine of c8e23316, in again with --keep 13e9906d" "1 0 1" \
+  "$(GR) $(GR --drop c8e23316) $(GR --drop c8e23316 --keep 13e9906d)"
 
 # A duplicate is the same text once case and spacing are set aside, nothing more (main's ruling): a path, a code
 # span, a flag or a sign changes what a rule says, so a near-match keeps the plugin's rule.

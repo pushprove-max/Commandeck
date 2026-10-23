@@ -25,10 +25,13 @@
   and says why.
 - A reviewer reads the diff and the brief first, drafts its findings, and only
   then reads the author's evidence, which would anchor the review if read first.
-- Every review finding, P0 to P3, blocks the merge and goes back to a fix
-  round. Done is a closing pass that ends GO with no finding named; nothing is
-  left open at merge. Only a finding outside the unit's scope becomes a
-  follow-up issue; never merge an in-scope finding to file it later.
+- A review finding blocks the merge only when normal use would hit the bug,
+  and goes back to a fix round. A finding that needs an agent deliberately
+  bypassing a guard, or an odd setup, is a one-line known gap in the evidence
+  file and does not block. Done is a closing pass that ends GO with no
+  blocking finding named; no blocking finding is left open at merge. Only a
+  finding outside the unit's scope becomes a follow-up issue; never merge an
+  in-scope blocking finding to file it later.
 - No redundant steps: before adding a step to the build, merge, review or push
   flow (a check, a test run, a review pass, a record, a wait, a confirmation),
   name what it catches that no existing step does. If you cannot, don't add
