@@ -1400,7 +1400,7 @@ def restarts(log, since=None, until=None, transcripts=None):
     per_day, sizes, contexts, shares, skipped = {}, [], [], [], 0
     for rec in sorted(glob.glob(os.path.join(os.path.dirname(log), "*.resumed-from"))):
         sid = os.path.basename(rec)[: -len(".resumed-from")]
-        paths = glob.glob(os.path.join(transcripts, sid + ".jsonl")) if transcripts else glob.glob(os.path.expanduser("~/.claude/projects/*/" + sid + ".jsonl"))
+        paths = glob.glob(os.path.join(transcripts, sid + ".jsonl")) if transcripts else glob.glob(os.path.join(config_dir() or os.path.expanduser("~/.claude"), "projects", "*", sid + ".jsonl"))
         try:
             at = os.path.getmtime(rec)
             with open(rec, errors="replace") as f:
