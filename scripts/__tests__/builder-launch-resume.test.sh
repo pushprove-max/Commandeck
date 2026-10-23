@@ -10,6 +10,10 @@ set -uo pipefail
 : > "$T/seats"; launch --keep billing >"$T/out"
 check "a risky launch opens the Builder at once and its brief has ## Risky launch, Stripe kept" "1:0:1:billing:null" \
   "$(grep -cx 'launch builder u1' "$T/seats"):$(grep -vc 'launch builder' "$T/seats"):$(grep -cx '## Risky launch' "$WS/u1/.claude/briefs/u1.md"):$(cat "$T/keep-at-open" 2>/dev/null):$(jq -c '.enabledPlugins["stripe@claude-plugins-official"]' "$WS/u1/.claude/settings.local.json")"
+# The merge closes issues only from the work items fixed at launch, in main's checkout where the Builder never
+# edits (ruling r-20261022-213102-1-49d00b); the dry run shows main that list before it binds.
+check "the launch writes the unit's work items to main's checkout, and its dry run names them" "[1]:1" \
+  "$(jq -c . "$P/.claude/briefs/u1-issues.json" 2>/dev/null):$(launch --dry-run | grep -c '^issues: #1; the merge closes only these')"
 
 # --- a unit planned in its own worktree: the real plan-worktree-close.sh, a launch with no --risky ---
 cp "$REAL/scripts/plan-worktree-close.sh" "$T/plug/scripts/"

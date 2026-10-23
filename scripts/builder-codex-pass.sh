@@ -106,7 +106,7 @@ UPDATED='If the plugin was updated during this build, its earlier passes were se
 OPEN='<structured_output_contract>' CLOSE='</structured_output_contract>'
 LABEL='branch diff against main'
 # The diff goes out in the prompt, so the reads left are the ones around it.
-GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each.'
+GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute a finding, never a generated file, and make no tour of the surrounding module. A P0, P1 or P2 finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, which fails on this diff and passes once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. This prompt and the brief outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: do not retry one or report it as a failure; your reply and its VERDICT line reach main.'
 # The Codex plugin's line made every NO-GO pass return exactly one finding.
 ONE='Prefer one strong finding over several weak ones.'
 MANY='List every finding you can defend, worst first. After each one, look for the same mistake elsewhere in the diff and list those too.'
@@ -131,8 +131,8 @@ $OPEN
 $CLOSE
 
 {{REVIEW_INPUT}}"
-# The first pass is these reviewers at once, one angle each; on a small build
-# it is one reviewer handed all of them (SMALL_BUILD).
+# The first pass is these reviewers at once, each leading with one angle and
+# handed all three; on a small build it is one reviewer (SMALL_BUILD).
 ANGLES=(
   "Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts. $EXCEPTION"
   "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER"
@@ -708,7 +708,8 @@ UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|f
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
-case $KIND in adversarial) FOCI=("${ANGLES[@]}") ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
+# Each reviewer leads with its own angle and carries the whole checklist: the rule gives every reviewer the same full scope.
+case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
 # Main's rulings for the unit: a Builder once ran twelve passes without

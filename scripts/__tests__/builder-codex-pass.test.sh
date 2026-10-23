@@ -30,6 +30,10 @@ pass 1 adversarial
 check "a first pass has no earlier pass to count a round from" 0 "$(grep -c '^Changed since' "$TMP/out")"
 check "a launch brief with ## Risky launch is a risky launch: three reviewers on a small build" 1 \
   "$(grep -c '^Reviewers: 3 (.*, a risky launch;' "$B/$U-r1-reports.md")"
+# Every reviewer gets the full checklist (global rules, "Working and review"): an angle left to one reviewer
+# goes unchecked when that reviewer misses it.
+check "each of the three reviewers' prompts carries all three angles" "1 1 1 1 1 1 1 1 1" \
+  "$(for p in 1 2 3; do for a in 1 2 3; do grep -c "Angle $a of 3, " "$B/$U-r1-prompt-$p.md"; done; done | paste -sd' ' -)"
 
 # A round of one comment line: the pass names the file and its count, and says no code changed.
 printf '# fixed: the finding\n' >> "$W/a.sh"

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.32.0 -- 2026-10-22
+
+- The global rules now carry the reviewer rules (one full scope for every reviewer; a finding names file, line and the
+  failing input, and a P0-P2 finding a failing test; read the diff and brief before the evidence), no `ponytail` tag in
+  comments, one unit per worktree split by code area, stop and reconcile on an unknown worktree, commit or process,
+  no duplicate agent, and the planning rules (freshness pass, integration surface and siblings, review questions
+  before code, evidence as you go, the anti-over-engineering gate, acceptance names the test file and cases).
+- The Codex and Claude review prompt tells the reviewer to read cold, keep to the diff and its callers, attach a
+  failing test to a P0-P2 finding, and follow the brief over the startup file. Each of a first pass's three
+  reviewers leads with its own angle and is handed all three, so no angle rests on one reviewer.
+- The Builder brief template maps the code with 3-4 read-only helpers before the first edit and gives an editing
+  helper its own child worktree. `AGENT_STARTUP.md` adds: own your scope, fix every copy of a bug pattern, never work
+  round a refusing check, confirm an irreversible action.
+- A `Closes: #n` line in the batch brief is carried into the merge commit as `Closes #n`, and the merge closes the
+  issue. The merge closes only the unit's work items: the list `builder-launch.sh` prints in its dry run and writes at
+  launch to main's checkout (`.claude/briefs/<unit>-issues.json`), never a parse of the brief at merge time. Any other
+  issue brief text names to close (a quoted example included, however it is quoted), and every issue of a unit
+  launched without that list, is printed as a by-hand `gh issue close` under NOT CLOSED, and the merge ends with code 3.
+
 ## 0.31.0 -- 2026-10-22
 
 - Main's shell suite is green again after the 320/321b, 322 and 323 merges met: three tests fixed, no product change.

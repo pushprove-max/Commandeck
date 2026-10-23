@@ -3,7 +3,7 @@
 `$PLUGIN` is the installed plugin folder. After setup, `PLUGIN="$HOME/.commandeck/plugin"` works (see [Install](install.md)).
 
 A build's first pass reads the whole branch. It is three reviewers at once,
-one angle each, unless the commit is under 200 changed lines, or the number set at setup (insertions plus
+each leading with one angle and told all three, unless the commit is under 200 changed lines, or the number set at setup (insertions plus
 deletions against `main`) and the build was not launched with `--risky`; then
 it is one reviewer told all three angles. The pass prints which rule chose,
 and the merge counts the lines again and refuses a one-reviewer first pass

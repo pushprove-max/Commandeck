@@ -63,6 +63,9 @@ check "its unit ledger row is a converged GO under the closing GO rule" "CONVERG
 # the commit does not name stays open and is named. Issue 227: main-watch's item task about the unit's seat is
 # closed by the merge, another unit's is left open.
 mk w "feat(w): the unit (#5)"; printf '# w\n\n## The issues\n\n1. #5: one\n2. #6: two\n' > "$COMMANDECK_WORKSPACES/w/.claude/briefs/w.md"
+# The work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief.
+issues() { mkdir -p "$REPO/.claude/briefs"; printf '%s\n' "$2" > "$REPO/.claude/briefs/$1-issues.json"; }
+issues w '[5,6]'
 printf 'handle=t_w\ntask=task_w\nunit=w\nrole=builder\nlaunched=%s\n' "$LA" > "$COMMANDECK_SCRATCH/seat-w-builder.txt"
 mkdir -p "$COMMANDECK_SCRATCH/main-watch"
 printf 'posted=1\ntask=task_item_w\n' > "$COMMANDECK_SCRATCH/main-watch/item-seat-t_w-task_w"
@@ -78,8 +81,36 @@ check "the unit's item task is completed, another unit's is not" "1 0" \
 mk mv $'feat(mv): the unit\n\nMutation-verified: an old note from before issue 323'; go mv
 check "a commit with an old Mutation-verified: line merges, and the merge message drops it" "0 0" \
   "$(merge mv) $(git -C "$REPO" log -1 --format=%B | grep -c 'Mutation-verified')"
+# A "Closes: #n" line in the batch brief is carried into the merge commit and closes that issue, though no commit
+# subject names it.
+mk cl "feat(cl): the unit"
+# Brief text closes only the unit's work items, the list fixed at launch: a quoted example (a ``` block inside a
+# ```` block, a quoted "The issues" list, an HTML comment) or a plain line naming another issue closes nothing, however
+# it is quoted; each is left to close by hand (NOT CLOSED, code 3). "Close as shipped" closes a work item the commit
+# does not name.
+printf '# cl\n\n## The issues\n\n1. #8: one\n2. #9: two\n3. #10: three\n\nCloses: #8, #9, #13\n\n## Close as shipped\n\n- #10\n\n## Examples\n\n````markdown\n```\nCloses: #11\n```\n## The issues\n1. #11: example only\n## Close as shipped\n- #12\n````\n\n<!--\nCloses: #14\n-->\n' > "$COMMANDECK_WORKSPACES/cl/.claude/briefs/cl.md"
+issues cl '[8,9,10]'
+go cl; : > "$TMP/gh-calls"
+check "a brief's Closes: line gives the merge commit a Closes line per work item it names" "3 Closes #8 Closes #9" \
+  "$(merge cl) $(git -C "$REPO" log -1 --format=%b | grep . | paste -sd' ' -)"
+check "and the merge closes each of those issues, and the work item under Close as shipped" "1 1 1" \
+  "$(grep -c '^issue close 8 ' "$TMP/gh-calls") $(grep -c '^issue close 9 ' "$TMP/gh-calls") $(grep -c '^issue close 10 ' "$TMP/gh-calls")"
+check "an issue that is not a work item is not closed, quoted or not, and is named and left to close by hand" "0 0 0 0 #11 #12 #13 #14 11 12 13 14" \
+  "$(for n in 11 12 13 14; do grep -c "^issue close $n " "$TMP/gh-calls"; done | paste -sd' ' -) $(grep '^step 4 issues: not closed:' "$TMP/out" | grep -oE '#[0-9]+' | sort | paste -sd' ' -) $(grep -oE '^NOT CLOSED: gh issue close [0-9]+' "$TMP/out" | grep -oE '[0-9]+$' | sort -n | paste -sd' ' -)"
+# One retry path, whatever the state came from: #20 is named by the commit, a Closes: line and Close as shipped, and
+# is on the launch list. Between two dry runs one piece of that state is removed; #20 is still closed, or, with no
+# launch list, still printed as a by-hand close: never dropped without a word.
+mk ct "feat(ct): the unit (#20)"; CTB=$COMMANDECK_WORKSPACES/ct/.claude/briefs/ct.md
+ctb() { printf '# ct\n\n## The issues\n\n1. #20: one\n%s' "$1" > "$CTB"; }
+ctb $'\nCloses: #20\n\n## Close as shipped\n\n- #20\n'; issues ct '[20]'; go ct
+tick() { merge ct --dry-run > /dev/null; { grep -c '^step 4 issues: would close #20$' "$TMP/out"; grep -c '^NOT CLOSED: gh issue close 20 ' "$TMP/out"; } | paste -sd: -; }
+T0=$(tick); ctb $'\n## Close as shipped\n\n- #20\n'; T1=$(tick); ctb $'\nCloses: #20\n'; T2=$(tick); ctb ''; T3=$(tick)
+rm "$REPO/.claude/briefs/ct-issues.json"; T4=$(tick); ctb $'\nCloses: #20\n\n## Close as shipped\n\n- #20\n'; T5=$(tick)
+check "with each piece of state removed, #20 is still closed, or with no launch list left to close by hand" \
+  "1:0 1:0 1:0 1:0 0:1 0:1" "$T0 $T1 $T2 $T3 $T4 $T5"
+check "and a merge with no launch list says why it closes nothing itself" 1 "$(grep -c '^step 4 issues: no work-item list at .*ct-issues.json' "$TMP/out")"
 # A dry run closes nothing; a close GitHub refuses ends the merge with code 3 and the command that closes it.
-mk x "feat(x): the unit (#7)"; printf '# x\n\n## The issues\n\n1. #7: one\n' > "$COMMANDECK_WORKSPACES/x/.claude/briefs/x.md"
+mk x "feat(x): the unit (#7)"; printf '# x\n\n## The issues\n\n1. #7: one\n' > "$COMMANDECK_WORKSPACES/x/.claude/briefs/x.md"; issues x '[7]'
 go x; : > "$TMP/gh-calls"
 check "a dry run closes no issue, and says which it would" "0 0 1" "$(merge x --dry-run) $(grep -c . "$TMP/gh-calls") $(grep -c 'would close #7' "$TMP/out")"
 : > "$TMP/gh-fails"

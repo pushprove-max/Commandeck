@@ -268,8 +268,13 @@ echo "advisor: $RULE" >&2
 if [ "$RAISE" = 1 ]; then echo "effort: $EFFORT, raised by main: $WHY" >&2; else echo "effort: $DEFAULT (the setup default)" >&2; fi
 [ -z "$SKIPPED" ] || echo "$SKIPPED" >&2
 # The dashboard's "Issue by issue" list is read from the brief (brief-issues.sh): said here, before a build starts with an empty one.
-[ "$DRY" = 0 ] || [ "$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))" != '[]' ] \
-  || echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
+# The same list, fixed at launch, is the only one the merge closes issues from (ruling r-20261022-213102-1-49d00b).
+ISSUES=$(bash "$HERE/brief-issues.sh" <(printf '%s\n' "$T"))
+if [ "$DRY" = 1 ] && [ "$ISSUES" = '[]' ]; then
+  echo "issues: this brief names no work item, so the dashboard will list none for the build. Start the batch file as templates/_batch-brief-template.md does: a section '## The issues' with one numbered line per item ('1. #12: title')." >&2
+elif [ "$DRY" = 1 ]; then
+  echo "issues: $(jq -r 'map(if type == "number" then "#\(.)" else . end) | join(", ")' <<<"$ISSUES"); the merge closes only these, from the list the launch writes to main's checkout; fix the batch's '## The issues' list if one is wrong" >&2
+fi
 if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run ${FROZEN:+--plan "$FROZEN"} >&2 || true; exit 0; fi
 
 pp_sync_main "$PP_MAIN" || exit 1
@@ -313,5 +318,6 @@ printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 [ -z "$SKIPPED" ] || printf '%s\n' "$SKIPPED" >> "$WT/.claude/briefs/$UNIT-evidence.md"
 # Main's own copy: the pass script reads the stated limits from it, never from the Builder's.
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
-  || { echo "could not keep main's copy of the brief for $UNIT" >&2; exit 1; }
+  && printf '%s\n' "$ISSUES" > "$PP_MAIN/.claude/briefs/$UNIT-issues.json" \
+  || { echo "could not keep main's copy of the brief and its work items for $UNIT" >&2; exit 1; }
 open_builder

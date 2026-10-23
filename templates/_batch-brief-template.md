@@ -5,6 +5,10 @@
 2. <an item with no issue: its title>
    Size: ...
 
+A line that starts with `Closes:` and lists issues (`Closes: #12, #13`) closes them at the merge: the merge commit
+carries each as `Closes #12`, and the merge closes the issue on GitHub. It closes only issues of the numbered list
+above, as the launch read it (its dry run prints the list); leave the line out for an issue the unit only advances.
+
 ## The batch (done criteria)
 
 One paragraph per item above, by its number: what is built, and what done

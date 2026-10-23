@@ -41,6 +41,11 @@ any other line is refused.
   searches or looks up is `Explore` (Haiku); one that edits, runs, tests or
   judges is `general-purpose` (Sonnet). Every helper prompt carries every fact
   and limit the helper needs.
+- Map the code before the first edit: send 3-4 read-only `Explore` helpers in
+  one turn, one per area the change touches (callers, siblings, tests), unless
+  the brief already carries the map. A helper that must edit works in its own
+  child worktree (the Agent tool's worktree isolation); apply its diff here with
+  `git apply` and remove that worktree.
 - Every helper prompt, Explore included, carries three caps: at most 15 lines,
   an answer by the 20th tool call with what it has, and one `NOT FOUND: <what
   it searched, where>` line for anything it did not find. Before sending a

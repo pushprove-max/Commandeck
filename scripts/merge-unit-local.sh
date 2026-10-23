@@ -150,24 +150,29 @@ rm -f "$VERR"
 echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
-# The unit's issues, closed at its merge (issue 239): each one the brief lists that the commit message names (#N),
-# and each one under the brief's "Close as shipped" heading. One the message does not name stays open and is named.
-# A close GitHub refuses is printed last as NOT CLOSED with its command, and the script ends with code 3.
+# The unit's issues, closed at its merge (issue 239): each work item (the launch list, $ISSUES) that the commit message
+# names (#N), is on a brief's "Closes:" line or under its "Close as shipped" heading. A work item none of them names
+# stays open and is named. Any other issue they name, and with no launch list every one, is never closed here: it is
+# named and joins NOT CLOSED, as a close GitHub refuses does, printed last with its command; the script ends with code 3.
 NOT_CLOSED="" POST_FAILED=""
 close_issues() { # [--dry-run]
-  local listed shipped named n ver c left=""
-  listed=$(bash "$HERE/brief-issues.sh" "$BRIEF" 2>/dev/null | jq -r '.[] | numbers' 2>/dev/null || true)
-  shipped=$(awk '/^#+[[:space:]].*[Cc]lose as shipped/ { on = 1; next } /^#/ { on = 0 } on' "$BRIEF" | grep -oE '#[0-9]+' | tr -d '#' || true)
+  local listed shipped named n ver c left="" off=""
+  listed=$(tr -d '#' <<<"$LISTED")
+  shipped=$({ grep -E '^Closes:' "$BRIEF"; awk '/^#+[[:space:]].*[Cc]lose as shipped/ { on = 1; next } /^#/ { on = 0 } on' "$BRIEF"; } | grep -oE '#[0-9]+' | tr -d '#' || true)
   named=$(grep -oE '#[0-9]+' <<<"$TITLE" | tr -d '#' || true)
   ver=$(jq -r '.version // empty' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null || jq -r '.version // empty' "$ROOT/package.json" 2>/dev/null || true)
   c="Fixed in $(git rev-parse --short=8 HEAD)${ver:+ ($ver)}; ships with the next push."
-  for n in $(printf '%s\n' $listed $shipped | awk 'NF && !s[$0]++'); do
-    if ! printf '%s\n' $named $shipped | grep -x -- "$n" >/dev/null; then left+=" #$n"
+  [ -r "$ISSUES" ] || echo "step 4 issues: no work-item list at $ISSUES (builder-launch.sh writes it at launch), so the merge closes no issue itself"
+  for n in $(printf '%s\n' $listed $shipped $([ -r "$ISSUES" ] || echo $named) | awk 'NF && !s[$0]++'); do
+    if ! printf '%s\n' $listed | grep -x -- "$n" >/dev/null; then off+=" #$n"; NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'
+    elif ! printf '%s\n' $named $shipped | grep -x -- "$n" >/dev/null; then left+=" #$n"
     elif [ "${1:-}" = --dry-run ]; then echo "step 4 issues: would close #$n"
     elif (cd "$ROOT" && gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
     else NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
   done
-  [ -z "$left" ] || echo "step 4 issues: left open:$left (the brief lists them; the commit message does not name them)"
+  [ -z "$left" ] || echo "step 4 issues: left open:$left (work items the commit message and the brief do not name to close)"
+  [ -z "$off" ] || echo "step 4 issues: not closed:$off (named to close, but not on the launch list of work items; close by hand if shipped)"
+  [ "${1:-}" != --dry-run ] || printf '%s' "$NOT_CLOSED"
 }
 # Every way out once the commit stands ends here, a failed step and a command
 # that stops the script included: the merge is done and stays done, so the
@@ -178,7 +183,7 @@ merged_end() {
   trap - EXIT
   [ "$rc" = 0 ] || { echo "MERGED as $(git rev-parse --short=8 HEAD), but a step after the merge commit failed (above): do not merge $UNIT again; finish that step by hand" >&2; rc=3; }
   if [ -n "$NOT_CLOSED" ]; then
-    echo "MERGED, but GitHub did not close $(grep -c . <<<"$NOT_CLOSED") issue(s); close them by hand:" >&2
+    echo "MERGED, but the merge did not close $(grep -c . <<<"$NOT_CLOSED") issue(s) (refused by GitHub, or not on the launch list, above); close those shipped by hand:" >&2
     printf '%s' "$NOT_CLOSED" >&2; rc=3
   fi
   [ "$rc" != 0 ] || [ -z "$POST_FAILED" ] || { echo "MERGED, but a post-merge line was refused or its step failed (step 4 post-merge, above); the merge stands" >&2; rc=5; }
@@ -208,6 +213,13 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
     'BEGIN { n = split(have, h, " "); for (i = 1; i <= n; i++) seen[h[i]] = 1 }
      !seen[$0]++ { out = out (out == "" ? "" : ", ") $0 } END { print out }' || true)
 [ -z "$REFS" ] || TITLE="$TITLE ($REFS)"
+# The unit's work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief
+# (ruling r-20261022-213102-1-49d00b): the Builder edits its brief, and a quoted list or directive in it adds nothing.
+ISSUES=$PP_MAIN/.claude/briefs/$UNIT-issues.json
+LISTED=$(jq -r '.[] | numbers | "#\(.)"' "$ISSUES" 2>/dev/null || true)
+# A "Closes: #n" line in the brief is carried into the squash message as "Closes #n" and closes that issue below.
+CLOSES=$(grep -E '^Closes:' "$BRIEF" | grep -oE '#[0-9]+' | grep -xF -- "$LISTED" | awk '!s[$0]++' || true)
+CLOSE_BODY=""; [ -z "$CLOSES" ] || CLOSE_BODY=$(sed 's/^/Closes /' <<<"$CLOSES")
 # A squash that deletes a file neither the brief nor the evidence's "Files
 # deleted" list names is a botched rebase, not a unit: a unit told to cut
 # "everything but X" can name its cuts only once it has made them. The size
@@ -378,7 +390,7 @@ if [ "$DRY_RUN" = 0 ]; then
   no_holds "step 4 merge"
   # --auto's gate holds too, read again under the same lock: a hold or question added during the check counts.
   [ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 4 merge" "--auto: held since the gate passed: $HELD"
-  if ! git commit -q -m "$TITLE" {LEDGER_FD}<&-; then
+  if ! git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} {LEDGER_FD}<&-; then
     git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
   fi
