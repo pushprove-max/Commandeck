@@ -55,7 +55,7 @@ refuse() { # <what>
   local unit=$(sed -n 's/^unit=//p' "$STATE") sha=$(sed -n 's/^sha=//p' "$STATE") stage=$(sed -n 's/^stage=//p' "$STATE") log=$(sed -n 's/^log=//p' "$STATE")
   echo "BLOCKED: $1. The merge of $unit (reviewed ${sha:0:8}) is running detached as pid $PID, stage $stage, and holds main's checkout; its log: $log" >&2
   echo "It detaches on purpose and keeps running after the shell call that started it ended, so a half-merged tree is the merge at work, not leftovers. Wait for the end of its log or the message it sends main; do not stash, reset or check out under it, and do not run it again." >&2
-  echo "If it is hung: kill $PID. Its lock is then stale and main is yours." >&2
+  echo "If it is hung: \`kill $PID\`. Its lock is then stale and main is yours." >&2
   exit 2
 }
 # at <folder> <path> -- the folder <path> names from <folder>: ? when the words cannot tell, empty when it does not exist.
@@ -236,7 +236,7 @@ if [ "$TOOL" = Bash ]; then
   [ -z "$HELD" ] || [[ $COMMAND != *[\$\`]* ]] || refuse "a \$ or a backtick in a command in main's checkout while a merge holds it (a string bash evaluates can run the command it holds); type the value"
   [[ $P == *git* ]] || [ -n "$HELD" ] || exit 0
   . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
-  type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Reinstall the plugin and retry." >&2; exit 2; }
+  type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Reinstall it with \`claude plugin install commandeck@commandeck\` and retry." >&2; exit 2; }
   # A shell given a string runs that string: it is read, its quotes taken out, as the commands after a ;.
   SH='(^|[^[:alnum:]_.-])(eval|(ba|z|da|k)?sh([[:space:]]+-[a-z]+)*[[:space:]]+-[a-z]*c[a-z]*)([[:space:]]|$)'
   if [[ $P =~ $SH ]]; then CMD=$(sed -E "s/$SH/\\1;\\5/g" <<<"$P")

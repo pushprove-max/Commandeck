@@ -61,6 +61,21 @@ printf 'model = "x"\nservice_tier = "fast"\n' > "$CODEX_HOME/config.toml"
 jq '.roles["codex-reviewer"].model = "gpt-9.9-probe"' "$REAL/config/routing.json" > "$TMP/routing.json"
 # Signed in, and answers the pass's one-word sign-in probe (codex exec).
 printf '#!/bin/sh\n[ "$*" = "login status" ] || [ "$1" = exec ]\n' > "$TMP/cli/codex"; chmod +x "$TMP/cli/codex"
+# Issue 316: a pass reads GitHub on the host before any reviewer starts. Its gh answers that read (the repo, each
+# Closes: issue with no links, and no pull request) apart from the merge's gh-calls. The repo's origin is itself, so
+# the merge's fetch of origin's main finds main where it is.
+git -C "$REPO" remote add origin "$REPO"
+cat > "$TMP/cli/gh" <<'GH'
+#!/bin/sh
+case "$1 $2" in
+  "repo view") echo '{"nameWithOwner":"o/proj"}' ;;
+  "issue view") echo "{\"title\":\"issue $3\",\"state\":\"OPEN\",\"labels\":[],\"body\":\"\",\"comments\":[]}" ;;
+  "pr view") echo "no pull requests found for branch" >&2; exit 1 ;;
+  api*) case "$*" in */comments*) echo '[]' ;; *) echo '{"body_html":"","html_url":"https://github.com/o/proj/issues/0"}' ;; esac ;;
+  *) exit 1 ;;
+esac
+GH
+chmod +x "$TMP/cli/gh"
 mk() { # <unit> [subject]: a Builder worktree with one commit, its brief and its evidence
   local w=$COMMANDECK_WORKSPACES/$1
   git -C "$REPO" worktree add -q "$w" -b "builder/$1"
