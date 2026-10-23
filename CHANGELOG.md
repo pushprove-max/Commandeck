@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.40.1 -- 2026-10-23
+
+- Fixes: the restarts reader finds a session's transcript under `CLAUDE_CONFIG_DIR` when it is set, not only under
+  `~/.claude` (#291); the setup-gate test counts the 3 `search-log.sh` hooks 0.40.0 registered.
+
 ## 0.40.0 -- 2026-10-23
 
 Built from the plugin issue batch of 2026-10-23: #308, #310, #306, #309, #286, #279, #298, #319, #290, #305, #263, #255,
