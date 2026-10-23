@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.1 -- 2026-10-23
+
+- CI is green again after the 316/314/325 merges. The merge test's fixture gives the repo an origin and a `gh` that
+  answers the GitHub reads a review pass makes on the host (the issues a brief closes, and no pull request), and the
+  two merge-lock guard refusals name the command to run instead (`kill <pid>`, and the plugin reinstall).
+
 ## 0.39.0 -- 2026-10-23
 
 - A review finding now blocks the merge only when normal use would hit the bug (owner ruling of 2026-10-23, over
