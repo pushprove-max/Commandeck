@@ -8,20 +8,16 @@
   - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
   - an edit to project code -> a batch brief, then `builder-launch.sh <unit> <brief>`
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
-- **Main plans with the owner, advises and only orchestrates**: every
-  implementation and review runs as a visible CLI in its own Orca worktree.
-  Main writes only intents, briefs, findings and config; reads worker_done
-  payloads and diff summaries, never worktrees or whole source files (serena
-  for symbols); routes findings, never fixes them.
-- **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with
-  one foreground `bash scripts/orca-wait.sh`. A wake that leaves nothing for the owner to do or decide ends the
-  turn with no text to the owner.
+- **Main plans with the owner, advises and only orchestrates**: every implementation and review runs as a visible
+  CLI in its own Orca worktree. Main writes only intents, briefs, findings and config; reads worker_done payloads
+  and diff summaries, never worktrees or whole source files (serena for symbols); routes findings, never fixes them.
+- **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with one foreground `bash scripts/orca-wait.sh`.
+  A wake that leaves nothing for the owner to do or decide ends the turn with no text to the owner.
 - **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask the owner "Write a plan first?"
-  (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for
-  word: "If the mattpocock-skills plugin is installed and one of its skills fits this unit (for example TDD for new
-  logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses what the plan names." A plan is never a
-  build order: with no build word from the owner, STOP at the plan file. A build order is the owner's yes that names
-  this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one,
+  (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
+  and one of its skills fits this unit (for example TDD for new logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses
+  what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
+  owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one,
   nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
 - **Every question for the owner goes to the relay pane** (the worktree ending in
   `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
@@ -34,14 +30,13 @@
   whose last pass ended NO-GO never merges: it gets a fix round.
 - **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
   needs the detail.
+- **Mark a memory no longer needed `status: archived`, never delete it**: the next start moves it out of MEMORY.md.
 - **Also standing (Details)**: heads-up items, stated limits, checklist, announcements, re-asks, helpers, effort, tooling.
 
 ## Main never compacts: write the checkpoint, the hook restarts main
 
-THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
-line", or a batch ends: finish the
-step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
-`templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
+THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K line", or a batch ends: finish the step, write
+`~/.claude/checkpoints/<session_id>.md` in one Write from `templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
 
 ## Details (not injected)
 

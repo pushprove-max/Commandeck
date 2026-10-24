@@ -48,6 +48,11 @@ check "a worktrees folder given by a link's spelling lists the worktree Orca nam
 (cd "$T/proj" && COMMANDECK_RULING_LOG="$T/rulings.jsonl" bash "$HERE/scripts/decision.sh" add d1 "Ship it?" yes chat >/dev/null 2>&1)
 OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_RULING_LOG="$T/rulings.jsonl" COMMANDECK_AWARENESS_DIR="$T/aw4" bash "$HERE/hooks/agent-awareness.sh")
 check "main-watch down and an open decision both print" "1 1" "$(case "$OUT" in *'MAIN-WATCH NOT RUNNING'*) echo 1 ;; *) echo 0 ;; esac) $(case "$OUT" in *'Open decisions for the owner: d1'*) echo 1 ;; *) echo 0 ;; esac)"
+OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_RULING_LOG="$T/rulings.jsonl" COMMANDECK_AWARENESS_DIR="$T/aw4" bash "$HERE/hooks/agent-awareness.sh")
+check "and again next turn with nothing changed" 1 "$(case "$OUT" in *'Open decisions for the owner: d1'*) echo 1 ;; *) echo 0 ;; esac)"
+# An open decision is no reason to reprint the unchanged rest every wake: it prints alone, and the banner says so.
+check "but alone: the unchanged worktree list is not reprinted, and the banner says the rest is unchanged" "0 1" \
+  "$(case "$OUT" in *'Ours [ours]'*) echo 1 ;; *) echo 0 ;; esac) $(case "$OUT" in *'the rest is unchanged'*) echo 1 ;; *) echo 0 ;; esac)"
 
 # Per seat: main's row carries the banner, every other seat's is empty.
 ROWS=$(bash "$HERE/scripts/startup-size.sh" --per-prompt 2>/dev/null | awk -F'\t' '$2 == "agent-awareness.sh" { printf "%s=%s ", $1, ($3 > 0) }')

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""instruction-lint.py [--repo DIR] [--memory-dir DIR] [--global FILE]
+"""instruction-lint.py [--repo DIR] [--memory-dir DIR] [--global FILE] [--active-index]
 
 Deterministic first pass over a project's instruction files, for the doctor.
 Prints one `file:line kind detail` row per flag and exits 1 when it flags
@@ -23,12 +23,18 @@ Kinds:
 
 Every row ends with `rule: <file>#<heading>`, where the rule is written down.
 
+--active-index does not lint: it keeps MEMORY.md, the index Claude Code loads at every start, to the active memories.
+A memory whose frontmatter says `status: archived` has its index line moved to MEMORY-archive.md in the same folder
+(one pointer line stays in MEMORY.md, so orphan-memory still reaches the file); a line whose memory is active again
+moves back. It writes only when something moves.
+
 Limit: a mechanical first pass. duplicate-subject matches only an identical bold
 lead or heading, so two rules that disagree under different wording or headings
 are never flagged; a reader finds those.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -39,8 +45,12 @@ HEADING = re.compile(r"^#{2,4}\s+(.+)")
 OPEN_CONFLICT = re.compile(r"\bOPEN conflict\b", re.IGNORECASE)
 INDEX_LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
 MD_NAME = re.compile(r"[\w.-]+\.md")
-PATHS_FRONTMATTER = re.compile(r"\A---\n(?:.*\n)*?paths:", re.MULTILINE)
+PATHS = re.compile(r"^paths:", re.MULTILINE)
 MAX_LINES, MAX_MEMORY_BYTES = 200, 25_600
+ARCHIVE, ARCHIVE_POINTER = "MEMORY-archive.md", "- [Archived memories](MEMORY-archive.md): not loaded at start"
+ARCHIVED = re.compile(r"^status:[ \t]*[\"']?archived[\"']?[ \t]*$", re.MULTILINE)
+# A profile's own folder (Orca), else the home one: the folder Claude Code reads memory and CLAUDE.md from.
+CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 RULE = "docs/commands.md#rules-audit"
 # shortcut: only the --option form; a bare backticked key (`wakeKinds`) is not told from any other code word. Upgrade when an old key slips through.
@@ -84,11 +94,48 @@ def subject(line):
     return s if s and (heading or len(s.split()) >= 2) else None
 
 
+def frontmatter(text):
+    # Line 1 `---` to the first later `---` line, nothing between included; no closing line is no frontmatter.
+    # A body that shows a field, then a `---` rule, says nothing about the file.
+    lines = text.splitlines()
+    if lines[:1] != ["---"] or "---" not in lines[1:]:
+        return ""
+    return "".join(l + "\n" for l in lines[1 : lines.index("---", 1)])
+
+
 def default_memory_dir(repo):
     # Claude Code names the folder by the path with every character that is not a letter or a digit a dash.
     common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
     main = common[: -len("/.git")] if common.endswith("/.git") else common
-    return Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", main) / "memory"
+    return CONFIG_DIR / "projects" / re.sub(r"[^A-Za-z0-9]", "-", main) / "memory"
+
+
+def active_index(memory_dir):
+    index, archive = memory_dir / "MEMORY.md", memory_dir / ARCHIVE
+    if not index.is_file():
+        return
+    gone = {p.name for p in memory_dir.glob("*.md") if p.name not in ("MEMORY.md", ARCHIVE) and ARCHIVED.search(frontmatter(p.read_text()))}
+    old_index = index.read_text().splitlines()
+    old_archive = archive.read_text().splitlines() if archive.is_file() else []
+    # ./old.md is old.md, as the lint's dead-index check reads it.
+    is_gone = lambda line: any(os.path.normpath(t) in gone for t in INDEX_LINK.findall(line)[:1])
+    lines = [l for l in old_index if l != ARCHIVE_POINTER]
+    # A line in both files is a start stopped between the writes below: it is kept once, in the file it belongs to.
+    keep = [l for l in lines if not is_gone(l)] + [l for l in old_archive if not is_gone(l) and l not in lines]
+    moved = [l for l in lines if is_gone(l) and l not in old_archive] + [l for l in old_archive if is_gone(l)]
+    new_index = keep + ([ARCHIVE_POINTER] if moved else [])
+    # A line is written to its new file before it leaves its old one, so a failed or stopped write loses none and the
+    # next start finishes the move. MEMORY.md is never removed; an emptied archive is.
+    both = old_archive + [l for l in moved if l not in old_archive]
+    for path, old, new in ((archive, old_archive, both), (index, old_index, new_index), (archive, both, moved)):
+        if new == old:
+            continue
+        if new or path == index:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text("".join(l + "\n" for l in new))
+            os.replace(tmp, path)
+        else:
+            path.unlink()
 
 
 def lint(repo, memory_dir, global_file):
@@ -113,7 +160,7 @@ def lint(repo, memory_dir, global_file):
 
     # Loaded in every session; a rules file with `paths:` loads only when a matching file is read.
     for path, shown in instruction:
-        if shown in ("AGENT_STARTUP.md", ".claude/main-session.md") or PATHS_FRONTMATTER.match(path.read_text()):
+        if shown in ("AGENT_STARTUP.md", ".claude/main-session.md") or PATHS.search(frontmatter(path.read_text())):
             continue
         count = len(path.read_text().splitlines())
         if count > MAX_LINES:
@@ -144,7 +191,7 @@ def lint(repo, memory_dir, global_file):
     else:
         rows.extend(f"{path}:1 orphan-memory" for path in memory)
     for path in memory:
-        for n, line in enumerate(path.read_text().splitlines(), 1):
+        for n, line in enumerate(frontmatter(path.read_text()).splitlines(), 2):
             if re.match(r"description:\s*\"?SUPERSEDED", line):
                 rows.append(f"{path}:{n} superseded-memory")
 
@@ -171,10 +218,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", type=Path)
     ap.add_argument("--memory-dir", type=Path)
-    ap.add_argument("--global", dest="global_file", type=Path, default=Path.home() / ".claude/CLAUDE.md")
+    ap.add_argument("--active-index", action="store_true")
+    ap.add_argument("--global", dest="global_file", type=Path, default=CONFIG_DIR / "CLAUDE.md")
     args = ap.parse_args()
     repo = args.repo or Path(git(".", "rev-parse", "--show-toplevel"))
-    rows = lint(repo, args.memory_dir or default_memory_dir(repo), args.global_file)
+    memory_dir = args.memory_dir or default_memory_dir(repo)
+    if args.active_index:
+        active_index(memory_dir)
+        return 0
+    rows = lint(repo, memory_dir, args.global_file)
     for row in rows:
         print(row)
     return 1 if rows else 0

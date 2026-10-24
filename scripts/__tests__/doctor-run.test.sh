@@ -11,7 +11,9 @@ set -uo pipefail
 QD=$(in_proj bash -c '. "$0" && echo "$PP_SCRATCH/queue"' "$REAL/scripts/paths.sh")
 mkdir -p "$QD" && echo '{"at":"x","type":"status","subject":"answer","body":"stop this build"}' > "$QD/main.jsonl"
 in_proj bash "$REAL/scripts/decision.sh" add doctor-test 'May this build ship?' no chat >/dev/null 2>&1
-in_proj bash "$REAL/scripts/startup-size.sh" >/dev/null 2>&1; in_proj bash "$REAL/scripts/startup-size.sh" --per-prompt >/dev/null 2>&1
+# The one doctor run of these files that measures (the fixture skips it): both modes, through the doctor.
+in_proj env COMMANDECK_DOCTOR_SIZE= timeout 60 bash "$REAL/scripts/doctor.sh" > "$T/doc" 2>&1
+check "the doctor measures the hooks' output" 1 "$(grep -c '^ok   hook output: session start and per prompt are under 10240 bytes$' "$T/doc")"
 check "the doctor's startup measure leaves the owner's open decision open" null \
   "$(in_proj bash "$REAL/scripts/decision.sh" list 2>/dev/null | jq '.[] | select(.id == "doctor-test") | .answeredAt')"
 check "and main's queued messages where they are" 1 "$(grep -c 'stop this build' "$QD/main.jsonl" 2>/dev/null)"

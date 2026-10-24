@@ -340,6 +340,8 @@ il_record "$IL_PROJECT" merge "$PSET"
 il_record "$IL_PROJECT" own "$WF"
 # Main's model and effort keys are written into the main checkout's local settings at either scope (il_main_model).
 il_record "$IL_PROJECT" merge "$PP_MAIN/.claude/settings.local.json"
+# Main's lean lists go into a file only main reads (il_main_lean).
+il_record "$IL_PROJECT" merge "$PP_MAIN/$IL_MAIN_LEAN_FILE"
 if [ "$PROFILE" = claude-openai ]; then
   il_record "$IL_PROJECT" merge "$IL_AGENTS"
   il_record "$IL_MACHINE" merge "$IL_CODEX/hooks.json" "$IL_CODEX/config.toml"
@@ -477,6 +479,10 @@ il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc 
   | with_entries(select(.value != ""))')" "$GIVEN"
 # Main's model and effort (orchestratorModel, orchestratorEffort) go into the main checkout's own settings file.
 COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json"
+# And its lean lists: the ponytail rules and the add-on plugins main never uses are off in main's session only, in
+# its own file; the cuts an earlier setup wrote into main's settings.local.json (which every worktree reads) come out.
+il_main_lean "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json" off
+il_main_lean "$IL_PROJECT" "$PP_MAIN/$IL_MAIN_LEAN_FILE"
 [ -z "$STATUS" ] || il_status_set "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$STATUS"
 [ -z "${IL_PROFILE_LOCK_FD:-}" ] || { exec {IL_PROFILE_LOCK_FD}<&-; IL_PROFILE_LOCK_FD=; }
 
@@ -496,6 +502,7 @@ for f in "${OWN[@]}"; do
     *) NOTES+=("$f: yours loads instead of the plugin's whole version (to change that: $flag replace or merge)") ;;
   esac
 done
+NOTES+=("main lean: start main with claude --settings $PP_MAIN/$IL_MAIN_LEAN_FILE to leave ponytail, ui-themes and mattpocock-skills out of main's session; workers never read that file")
 [ -e "$PP_MAIN/.claude/paved-road.md" ] || NOTES+=("paved road: no .claude/paved-road.md; start it from $IL_ROOT/templates/paved-road.md")
 [ "$RULES" != merge ] || NOTES+=("rules: sessions leave out the plugin's rules your CLAUDE.md and .claude/rules/ already state word for word$(n=$(jq '[.[] | select(. == "keep-mine")] | length' <<<"$DROPS"); [ "$n" = 0 ] || echo ", and the $n you keep your own wording for")")
 

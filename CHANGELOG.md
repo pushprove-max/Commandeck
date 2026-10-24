@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.45.0 -- 2026-10-24
+
+Built from the plugin issue batch of 2026-10-24: main-seat context cuts (part C). Nothing here is closed by this entry.
+
+- Main can start leaner. Setup writes the ponytail rules and skill and the `ui-themes` and `mattpocock-skills` plugins
+  off into `.claude/main-session.settings.json`, which git never sees, and prints the line to start main with:
+  `claude --settings <that file>`. Workers never read it. It is not main's `.claude/settings.local.json`, which Claude
+  Code applies over every worktree session's own: a cut an earlier setup wrote there comes out on the next setup run,
+  and the doctor warns while it is there. A key you already set stays as it is and is named, uninstall takes out only
+  what setup added, and the doctor warns when a key it turned off is on again.
+- Main's injected card (`templates/main-session.md` above its Details heading) is at most 40 lines, and
+  `startup-size.sh` fails past that. The resumed checkpoint is cut to 3,000 bytes, with a last line naming the full file.
+- The awareness banner prints an open decision, a dead main-watch or the cage warning alone when the rest of the block
+  is unchanged. MEMORY.md at main's session start holds the active memories only: a memory marked `status: archived`
+  moves its index line to `MEMORY-archive.md` (`instruction-lint.py --active-index`), which now also finds the memory
+  folder of a profile under `CLAUDE_CONFIG_DIR`.
+
 ## 0.44.1 -- 2026-10-24
 
 - The README version badge was left on 0.43.0 after the 0.44.0 release. `ci/version-check.sh` now fails whenever the

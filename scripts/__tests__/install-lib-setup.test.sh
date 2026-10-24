@@ -64,6 +64,53 @@ check "main model: uninstall puts the owner's values back" "$OWN" "$(mm "$KEYS" 
 mm "$KEYS" >/dev/null; jq '.effortLevel = "max"' "$MS" > "$T/x" && mv "$T/x" "$MS"
 check "main model: uninstall leaves an effort the owner changed since, and puts back the model" '{"model":"sonnet","effortLevel":"max"}' "$(mm '{}' off)"
 
+# Main's lean lists (il_main_lean): the ponytail rules and the add-on plugins main never uses are off in the file it is
+# given and nowhere else; a key the owner holds stays theirs; uninstall puts the file back as it was.
+ML=$T/main-lean.json; USR=$H/.claude/settings.json; PSET=$PROJ/.claude/settings.json
+mkdir -p "$H/.claude" "$PROJ/.claude"; echo '{"theme": "dark"}' > "$USR"; echo '{"permissions": {}}' > "$PSET"
+sha() { sha256sum "$1" | cut -c1-16; }
+# ml [off] -- setup's (or uninstall's) call, the file recorded in the project's manifest first as setup records it.
+ml() { lib 'il_record "$IL_PROJECT" merge "$1" && il_main_lean "$IL_PROJECT" "$1" $2' "$ML" "${1:-}"; }
+# mlrestore -- what uninstall does after taking setup's keys out: the recorded file back to what it was.
+mlrestore() { ml off >/dev/null; lib 'il_restore "$IL_PROJECT"' >/dev/null; }
+fresh() { rm -f "$ML" "$(lib 'echo $IL_PROJECT')"; }
+fresh; BEFORE=$(sha "$USR")$(sha "$PSET"); ml >/dev/null
+check "main lean: ponytail and the add-on plugins are off in main's local settings" '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ponytail@ponytail":false,"ui-themes@ui-themes":false},"skillOverrides":{"ponytail":"off"}}' "$(jq -cS . "$ML")"
+check "main lean: the user settings file and the project's settings.json are byte for byte as before" "$BEFORE" "$(sha "$USR")$(sha "$PSET")"
+AFTER=$(sha "$ML"); ml >/dev/null
+check "main lean: a rerun changes nothing" "$AFTER" "$(sha "$ML")"
+fresh
+jq -n '{skillOverrides: {ponytail: "on"}, enabledPlugins: {"other@x": true, "ui-themes@ui-themes": true}, keep: 1}' > "$ML"; OWNML=$(jq -cS . "$ML")
+OUT=$(ml); ml >/dev/null
+check "main lean: an owner skillOverrides.ponytail and their own plugin entries are the same after setup and a rerun" '"on" true true' \
+  "$(jq -r '[.skillOverrides.ponytail, .enabledPlugins["other@x"], .enabledPlugins["ui-themes@ui-themes"]] | map(tojson) | join(" ")' "$ML")"
+check "main lean: the keys it left alone are named, and the ones it set are not" '1 0' "$(grep -c 'skillOverrides.ponytail is already set' <<<"$OUT") $(grep -c 'enabledPlugins.other' <<<"$OUT")"
+check "main lean: the keys setup did add still come in beside the owner's" false "$(jq '.enabledPlugins["ponytail@ponytail"]' "$ML")"
+mlrestore
+check "main lean: uninstall puts an owner's file back byte for byte" "$OWNML" "$(jq -cS . "$ML")"
+fresh; ml >/dev/null; mlrestore
+check "main lean: uninstall removes the file setup made, none being there before" absent "$([ -e "$ML" ] && echo present || echo absent)"
+fresh; echo '{"x": 1}' > "$ML"; ml >/dev/null; jq '.skillOverrides.ponytail = "mine"' "$ML" > "$T/x" && mv "$T/x" "$ML"; ml off >/dev/null
+check "main lean: uninstall leaves a value the owner changed since" '"mine"' "$(jq -c .skillOverrides.ponytail "$ML")"
+# What each pane runs on, not what a file holds: in a worktree Claude Code applies main's settings.local.json over the
+# worktree's own (il_shadow_report), so a cut written there would reach every worker and the relay. Setup's calls, on
+# an install whose earlier setup wrote the cuts into main's settings.local.json.
+MLOC=$PROJ/.claude/settings.local.json MFILE=$PROJ/$(lib 'echo $IL_MAIN_LEAN_FILE')
+setup_lean() { lib 'il_record "$IL_PROJECT" merge "$1" "$2" && il_main_lean "$IL_PROJECT" "$1" off && il_main_lean "$IL_PROJECT" "$2"' "$MLOC" "$MFILE"; }
+# runs <file>... -- the plugins and skill the pane runs on: each file over the ones before it.
+runs() { cat "$@" | jq -rs 'reduce .[] as $f ({}; . * $f) | [.enabledPlugins["ponytail@ponytail", "ui-themes@ui-themes", "mattpocock-skills@claude-plugins-official"], .skillOverrides.ponytail] | map(tojson) | join(" ")'; }
+fresh; echo '{"enabledPlugins": {"ponytail@ponytail": true, "ui-themes@ui-themes": true, "mattpocock-skills@claude-plugins-official": true}}' > "$USR"
+echo '{"x": 1}' > "$MLOC"; lib 'il_record "$IL_PROJECT" merge "$1" && il_main_lean "$IL_PROJECT" "$1"' "$MLOC" >/dev/null; setup_lean >/dev/null
+echo '{}' > "$T/worktree-local.json"
+check "main lean: a worker pane, main's local file applied last, keeps ponytail, ui-themes, mattpocock-skills and the ponytail skill" 'true true true null' \
+  "$(runs "$USR" "$T/worktree-local.json" "$MLOC")"
+check "main lean: main started with --settings on its own file runs without them" 'false false false "off"' "$(runs "$USR" "$MLOC" "$MFILE")"
+check "main lean: the cuts are in main's own file, and the owner's key in main's settings.local.json stays" \
+  '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ponytail@ponytail":false,"ui-themes@ui-themes":false},"skillOverrides":{"ponytail":"off"}} {"x":1}' \
+  "$(jq -cS . "$MFILE") $(jq -cS . "$MLOC")"
+check "main lean: git never sees main's own file" 1 "$(lib 'printf "%s\n" "${IL_STATE[@]}"' | grep -cxF "$(lib 'echo $IL_MAIN_LEAN_FILE')")"
+fresh; rm -f "$USR" "$PSET" "$MLOC" "$MFILE"; rmdir "$PROJ/.claude" 2>/dev/null
+
 # --- issue 207: a wrapper that already calls the stable link is no question, even before setup re-points the link ---
 H2=$T/h2; mkdir -p "$H2/.codex" "$H2/.commandeck" "$T/v1/hooks"; echo old > "$T/v1/hooks/codex-notify.sh"; ln -s "$T/v1" "$H2/.commandeck/plugin"
 printf 'notify = ["bash", "%s"]\n' "$T/wrap.sh" > "$H2/.codex/config.toml"

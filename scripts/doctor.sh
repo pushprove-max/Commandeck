@@ -36,7 +36,10 @@ else
   if [ -z "$GONE" ]; then ok "hooks: every registered hook file is there and can run"
   else bad "hooks: missing or not executable: ${GONE}-- reinstall the plugin"; fi
 fi
-if OUT=$(bash "$HERE/startup-size.sh" 2>&1) && OUT2=$(bash "$HERE/startup-size.sh" --per-prompt 2>&1); then
+# COMMANDECK_DOCTOR_SIZE=skip: the doctor's tests, where running every hook as every seat was half of each run;
+# doctor-run.test.sh runs it.
+if [ "${COMMANDECK_DOCTOR_SIZE:-}" = skip ]; then :
+elif OUT=$(bash "$HERE/startup-size.sh" 2>&1) && OUT2=$(bash "$HERE/startup-size.sh" --per-prompt 2>&1); then
   ok "hook output: session start and per prompt are under 10240 bytes"
 else bad "hook output: over the 10240-byte line, where the model sees only a preview: $(printf '%s\n%s' "$OUT" "${OUT2:-}" | tail -3 | paste -sd' ' -)"; fi
 if LINT=$(python3 "$HERE/instruction-lint.py" --repo "$PP_MAIN" 2>&1); then ok "instruction files"
@@ -59,6 +62,16 @@ else
     h=$(jq -r --arg k "$([ "$f" = model ] && echo model || echo effortLevel)" '.[$k] // empty' "$PP_MAIN/.claude/settings.local.json" 2>/dev/null)
     [ "$h" = "$w" ] || warn "main: $(pp_role_key orchestrator "$f") is $w in /plugin config, but $PP_MAIN/.claude/settings.local.json sets ${h:-none}, and main runs on the file's; rerun /commandeck:setup"
   done
+  # Main's lean lists (il_main_lean): a key setup turned off in main's own file that no longer holds that value, and a
+  # cut an earlier setup left in main's settings.local.json, which every worktree session reads over its own.
+  f=$PP_MAIN/$IL_MAIN_LEAN_FILE
+  while IFS= read -r k; do warn "main: setup turned $k off in $f, but it no longer is, so main's session loads it again; rerun /commandeck:setup"
+  done < <(jq -r --argjson h "$(jq -c . "$f" 2>/dev/null || echo '{}')" --arg p "$f" '(.entries[$p].mainLean // {}) as $m | $m | paths(type != "object")
+    | select(. as $q | ($h | getpath($q)) != ($m | getpath($q))) | join(".")' "$IL_PROJECT" 2>/dev/null)
+  f=$PP_MAIN/.claude/settings.local.json
+  while IFS= read -r k; do warn "main: an earlier setup turned $k off in $f, which every worktree session reads too, so worker and relay panes lose it; rerun /commandeck:setup to move it to $PP_MAIN/$IL_MAIN_LEAN_FILE"
+  done < <(jq -r --argjson h "$(jq -c . "$f" 2>/dev/null || echo '{}')" --arg p "$f" '(.entries[$p].mainLean // {}) as $m | $m | paths(type != "object")
+    | select(. as $q | ($h | getpath($q)) == ($m | getpath($q))) | join(".")' "$IL_PROJECT" 2>/dev/null)
   # Issue 327: Claude Code leaves the task tools, and their reminders, out on newer models unless this is set (docs:
   # tools-reference "Task tool availability"; env-vars CLAUDE_CODE_ENABLE_TODO_TOOLS). Main tracks work in the Orca task list.
   if [ "${CLAUDE_CODE_ENABLE_TODO_TOOLS-}" = 1 ] || [ "$(jq -r '.env.CLAUDE_CODE_ENABLE_TODO_TOOLS // empty' "$PP_MAIN/.claude/settings.local.json" 2>/dev/null)" = 1 ]; then

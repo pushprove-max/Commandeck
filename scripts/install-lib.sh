@@ -49,7 +49,7 @@ IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin a
 # session itself (a build's papers, main's to-do), writes during ordinary
 # running. The one list: setup hides these from git, the doctor reports one
 # git tracks, and uninstall takes out the lines setup's manifest recorded.
-IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
+IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/main-session.settings.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
   .claude/metrics/unit-ledger.jsonl .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock .claude/briefs/ .claude/routing-log todo/main-todo.md
   .claude/workflows/test-audit.js)   # setup's copy holds this machine's paths (il_test_audit)
 
@@ -430,10 +430,10 @@ il_cache_ttl_report() {
 # il_options_report -- the doctor's line for each /config option (issue 245): the value its readers take, and where it
 # comes from: /config, the project's file (the dashboard's: this machine's), or the default.
 il_options_report() {
-  local k s
+  local k s v
   for k in $(jq -r '.userConfig | keys_unsorted[]' "$IL_ROOT/.claude-plugin/plugin.json"); do
-    s=$(pp_option "$k" source); [ "$s" != default ] || s="the default"
-    echo "ok option $k: $(pp_option "$k" | sed 's/^$/none/') (from $s)"
+    IFS=$'\t' read -r s v < <(pp_option "$k" both); [ "$s" != default ] || s="the default"
+    echo "ok option $k: ${v:-none} (from $s)"
   done
 }
 # il_plugin_options <user settings> <answers> [<given answers>] -- setup's answers into /config's options (issue 245),
@@ -489,6 +489,35 @@ il_main_model() {
     && jq .doc <<<"$w" | il_write "$f" \
     && il_set "$m" --arg p "$f" --argjson s "$s" --argjson w "$(jq -c .was <<<"$w")" \
       'if $s == {} then del(.entries[$p].mainModel, .entries[$p].mainModelWas) else .entries[$p].mainModel = $s | .entries[$p].mainModelWas = $w end'
+}
+# IL_MAIN_LEAN -- what main's session turns off to keep its start lean: the ponytail rules and skill (workers keep
+# them) and the add-on plugins main never uses (config/addons.tsv). Written into IL_MAIN_LEAN_FILE, which only a
+# session started with `claude --settings <it>` reads. Never into main's settings.local.json: Claude Code applies that
+# file over every worktree session's own (docs: settings, "Where Claude Code keeps the local file in a git
+# repository"), so a cut there reaches every worker and the relay.
+IL_MAIN_LEAN_FILE=.claude/main-session.settings.json
+IL_MAIN_LEAN='{"enabledPlugins": {"ponytail@ponytail": false, "ui-themes@ui-themes": false, "mattpocock-skills@claude-plugins-official": false}, "skillOverrides": {"ponytail": "off"}}'
+# il_main_lean <manifest> <settings file> [off] -- IL_MAIN_LEAN written into that file, key by key. A key the owner
+# already holds, with any value, stays and is named (nothing is replaced, so nothing is kept but what setup added:
+# mainLean in the manifest). A rerun keeps its own keys; off (uninstall) takes out those still holding setup's value.
+il_main_lean() {
+  local m=$1 f=$2 doc r w want=$IL_MAIN_LEAN
+  [ "${3:-}" != off ] || want='{}'
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  r=$(jq -c --arg p "$f" '.entries[$p].mainLean // {}' "$m" 2>/dev/null) || r='{}'
+  [ "$r$want" != '{}{}' ] || return 0
+  w=$(jq -c --argjson r "$r" --argjson want "$want" 'def leaves: [paths(type != "object")];
+    . as $d | ($r | leaves | map(select(. as $p | ($d | getpath($p)) == ($r | getpath($p))))) as $mine
+    | ($want | leaves) as $wp
+    | ($wp | map(select(. as $p | (($d | getpath($p)) == null) or ($p | IN($mine[]))))) as $take
+    | (delpaths($mine - $take) | reduce ($mine | map(.[0]) | unique[]) as $k (.; if .[$k] == {} then del(.[$k]) else . end)) as $base
+    | {doc: (reduce $take[] as $p ($base; setpath($p; $want | getpath($p)))),
+       set: (reduce $take[] as $p ({}; setpath($p; $want | getpath($p)))),
+       skip: (($wp - $take) | map(join(".")))}' <<<"$doc") || return 1
+  jq -r '.skip[] | "note: \(.) is already set in main'"'"'s settings, which beats setup'"'"'s lean list; left as it is"' <<<"$w"
+  jq .doc <<<"$w" | il_write "$f" \
+    && il_set "$m" --arg p "$f" --argjson s "$(jq -c .set <<<"$w")" \
+      'if $s == {} then del(.entries[$p].mainLean) else .entries[$p].mainLean = $s end'
 }
 # il_profile_files <manifest> -- every Claude Code user settings file setup wrote to, one a line, by the manifest:
 # CLAUDE_CONFIG_DIR today may not be the profile it was then.

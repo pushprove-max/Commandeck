@@ -11,7 +11,7 @@ REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
-export HOME=$T/home; mkdir -p "$HOME"
+export HOME=$T/home; mkdir -p "$HOME"; unset CLAUDE_CONFIG_DIR # the caller's profile is never read
 # project <dir> <config json> -- a checkout with that commandeck.json and nothing else of the plugin's.
 project() { git init -q -b main "$1" && git -C "$1" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first; mkdir -p "$1/.claude/rules"; jq -n "{version: 1, profile: \"claude\"} + ($2)" > "$1/.claude/commandeck.json"; }
 commit() { git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm "$2"; }
@@ -176,6 +176,29 @@ K6=$(cd "$P6" && PATH=$T/bin6:$PATH ORCA_TERMINAL_HANDLE=term_new env -u CLAUDE_
   timeout -s KILL 3 bash "$REAL/hooks/agent-startup-context.sh" </dev/null 2>/dev/null)
 check "a hook killed after the drain took a queued message has printed it" "1:gone" \
   "$(grep -c 'the queued body' <<<"$K6"):$([ -e "$S6/queue/main.jsonl" ] || [ -e "$S6/queue/main.jsonl.taking" ] || echo gone)"
+
+# F18: main's start keeps MEMORY.md (the index Claude Code loads) to the active memories; a memory marked
+# `status: archived` moves to MEMORY-archive.md. A worker's start leaves the index alone.
+mem_dir() { printf '%s/projects/%s/memory' "$1" "$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')"; }
+PM=$T/proj-mem; project "$PM" '{}'
+MD=$(mem_dir "$HOME/.claude" "$PM"); mkdir -p "$MD"
+printf -- '---\nname: live\n---\nlive\n' > "$MD/live.md"; printf -- '---\nname: old\nstatus: archived\n---\nold\n' > "$MD/old.md"
+printf -- '# Memory\n- [Live](live.md): active\n- [Old](old.md): archived one\n' > "$MD/MEMORY.md"
+git -C "$PM" worktree add -q "$T/wt/mem" && ctx "$T/wt/mem" >/dev/null
+check "a worker's session start does not touch MEMORY.md" 2 "$(grep -c '(live.md)\|(old.md)' "$MD/MEMORY.md")"
+ctx "$PM" >/dev/null; A=$(cat "$MD/MEMORY.md" "$MD/MEMORY-archive.md"); ctx "$PM" >/dev/null
+check "main's session start leaves MEMORY.md linking the active file and the archive line only, the archive linking the archived one" "1:0:1:1" \
+  "$(grep -c '(live.md)' "$MD/MEMORY.md"):$(grep -c '(old.md)' "$MD/MEMORY.md"):$(grep -c '(MEMORY-archive.md)' "$MD/MEMORY.md"):$(grep -c '(old.md)' "$MD/MEMORY-archive.md")"
+check "and a second start changes neither file" "$A" "$(cat "$MD/MEMORY.md" "$MD/MEMORY-archive.md")"
+printf -- '---\nname: old\n---\nold\n' > "$MD/old.md"; ctx "$PM" >/dev/null
+check "a memory made active again goes back into MEMORY.md, and the archive line goes with the last one" "1:0" \
+  "$(grep -c '(old.md)' "$MD/MEMORY.md"):$(grep -c 'MEMORY-archive' "$MD/MEMORY.md")$([ -e "$MD/MEMORY-archive.md" ] && echo x)"
+# Under an Orca profile the memory folder is the profile's, not the home one.
+PROF=$T/profile; MP=$(mem_dir "$PROF" "$PM"); mkdir -p "$MP"; cp "$MD/live.md" "$MP/"; printf -- '---\nstatus: archived\n---\n' > "$MP/old.md"
+printf -- '- [Live](live.md): a\n- [Old](old.md): b\n' > "$MP/MEMORY.md"; printf -- '---\nstatus: archived\n---\n' > "$MD/old.md"; printf -- '- [Old](old.md): b\n' > "$MD/MEMORY.md"
+(cd "$PM" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN CLAUDE_CONFIG_DIR="$PROF" bash "$REAL/hooks/agent-startup-context.sh" </dev/null >/dev/null 2>&1)
+check "under CLAUDE_CONFIG_DIR the index in that profile's projects folder is the one rewritten" "0:1" \
+  "$(grep -c '(old.md)' "$MP/MEMORY.md"):$(grep -c '(old.md)' "$MD/MEMORY.md")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

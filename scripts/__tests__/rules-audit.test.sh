@@ -68,5 +68,69 @@ rm -f "$R/CHANGELOG.md"
 echo '- [gone](gone.md)' > "$T/mem/MEMORY.md"
 check "a MEMORY.md line linking a missing file is flagged dead-index" "$T/mem/MEMORY.md:1 dead-index gone.md $RULE" "$(audit)"
 
+# --active-index moves an archived memory's line to MEMORY-archive.md; the file stays reachable, so it is no orphan.
+rm -rf "$T/mem"; mkdir "$T/mem"; printf -- '---\nstatus: archived\n---\nold\n' > "$T/mem/old.md"; printf -- '- [Old](old.md): x\n' > "$T/mem/MEMORY.md"
+bash "$REAL/scripts/rules-audit.sh" --active-index --repo "$R" --memory-dir "$T/mem"
+check "after --active-index, the archived file is not flagged orphan-memory" "" "$(audit | grep 'orphan-memory')"
+
+# MEMORY.md runs this at every start of main: a line that leaves one file is written to the other first, so a write
+# that fails half way (here MEMORY.md's temp file cannot be made) loses no memory, and the next start finishes it.
+ai() { bash "$REAL/scripts/rules-audit.sh" --active-index --repo "$R" --memory-dir "$T/mem" 2>/dev/null; }
+PTR='- [Archived memories](MEMORY-archive.md): not loaded at start'
+rm -rf "$T/mem"; mkdir "$T/mem"; printf -- '---\nname: old\n---\nactive again\n' > "$T/mem/old.md"
+printf -- '%s\n' "$PTR" > "$T/mem/MEMORY.md"; printf -- '- [Old](old.md): x\n' > "$T/mem/MEMORY-archive.md"; mkdir "$T/mem/MEMORY.md.tmp"
+ai
+check "a memory made active again whose MEMORY.md write fails is still linked from one of the two files" 1 \
+  "$(cat "$T/mem/MEMORY.md" "$T/mem/MEMORY-archive.md" 2>/dev/null | grep -cxF -- '- [Old](old.md): x')"
+rmdir "$T/mem/MEMORY.md.tmp"; ai
+check "and the next start puts it back in MEMORY.md and removes the emptied archive" "- [Old](old.md): x:no archive" \
+  "$(cat "$T/mem/MEMORY.md"):$([ -e "$T/mem/MEMORY-archive.md" ] && echo archive || echo no archive)"
+# A start stopped between the two writes leaves a line in both files: the next start keeps it once, where it belongs.
+printf -- '---\nstatus: archived\n---\nb\n' > "$T/mem/b.md"
+printf -- '- [Old](old.md): x\n- [B](b.md): y\n%s\n' "$PTR" > "$T/mem/MEMORY.md"; printf -- '- [B](b.md): y\n- [Old](old.md): x\n' > "$T/mem/MEMORY-archive.md"
+ai
+check "a line in both files after a stopped start is kept once: the active one in MEMORY.md, the archived one in the archive" \
+  "- [Old](old.md): x|$PTR|- [B](b.md): y" "$(cat "$T/mem/MEMORY.md" "$T/mem/MEMORY-archive.md" | paste -sd'|' -)"
+
+# Only the frontmatter says a memory is archived: a body that shows `status: archived` and then a `---` rule is active.
+rm -rf "$T/mem"; mkdir "$T/mem"; printf -- '- [Live](live.md): x\n' > "$T/mem/MEMORY.md"
+printf -- '---\nname: Live\nstatus: active\n---\nExample:\n```yaml\nstatus: archived\n```\n---\nkept\n' > "$T/mem/live.md"
+ai
+check "a memory whose body shows status: archived after its frontmatter stays in MEMORY.md, and no archive is made" \
+  "- [Live](live.md): x:no archive" "$(cat "$T/mem/MEMORY.md"):$([ -e "$T/mem/MEMORY-archive.md" ] && echo archive || echo no archive)"
+# The same bound for the lint's frontmatter fields: a body `description: SUPERSEDED` line is not the memory's description.
+printf -- '---\nname: Live\ndescription: a rule\n---\nWrite it as:\ndescription: SUPERSEDED by x\n' > "$T/mem/live.md"
+check "a description: SUPERSEDED line in a memory's body is not flagged superseded-memory" "" "$(audit | grep superseded-memory)"
+mkdir -p "$R/.claude/rules"; { printf -- '---\ndescription: a rule\n---\npaths:\n'; for i in $(seq 300); do echo "line $i"; done; } > "$R/.claude/rules/a.md"
+check "a 300-line rules file with paths: in its body, not its frontmatter, is flagged over-200-lines" \
+  ".claude/rules/a.md:201 over-200-lines 304 lines $RULE" "$(audit | grep over-200-lines)"
+rm -rf "$R/.claude/rules"
+# The frontmatter is line 1 `---` to the next `---` line, whatever lies between (nothing included), with CRLF or no
+# final newline; with no closing line there is none. Each memory below is archived only if its name says so.
+FM_CASES=(
+  'empty-active' '---\n---\nExample:\n```yaml\nstatus: archived\n```\n---\n'
+  'crlf-archived' '---\r\nstatus: archived\r\n---\r\nold\r\n'
+  'eof-archived' '---\nstatus: archived\n---'
+  'unclosed-active' '---\nname: x\nstatus: archived\n'
+  'late-active' '\n---\nstatus: archived\n---\n'
+)
+rm -rf "$T/mem"; mkdir "$T/mem"; : > "$T/mem/MEMORY.md"
+for ((i = 0; i < ${#FM_CASES[@]}; i += 2)); do
+  printf -- "${FM_CASES[i+1]}" > "$T/mem/${FM_CASES[i]}.md"; printf -- '- [x](%s.md): x\n' "${FM_CASES[i]}" >> "$T/mem/MEMORY.md"
+done
+ai
+check "each frontmatter bound case is archived only when its frontmatter says so" \
+  "crlf-archived.md eof-archived.md" "$(grep -o '[a-z]*-[a-z]*\.md' "$T/mem/MEMORY-archive.md" | paste -sd' ' -)"
+mkdir -p "$R/.claude/rules"; { printf -- '---\n---\npaths:\n---\n'; for i in $(seq 300); do echo "line $i"; done; } > "$R/.claude/rules/a.md"
+check "a 300-line rules file with an empty frontmatter and paths: in its body is flagged over-200-lines" \
+  ".claude/rules/a.md:201 over-200-lines 304 lines $RULE" "$(audit | grep over-200-lines)"
+rm -rf "$R/.claude/rules"
+
+# A link the lint finds (./old.md is old.md in the same folder) is the same link here.
+rm -rf "$T/mem"; mkdir "$T/mem"; printf -- '---\nstatus: archived\n---\nold\n' > "$T/mem/old.md"; printf -- '- [Old](./old.md): x\n' > "$T/mem/MEMORY.md"
+ai
+check "a MEMORY.md line linking ./old.md, an archived memory, moves to the archive" "$PTR|- [Old](./old.md): x" \
+  "$(cat "$T/mem/MEMORY.md" "$T/mem/MEMORY-archive.md" 2>/dev/null | paste -sd'|' -)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

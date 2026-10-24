@@ -85,6 +85,9 @@ LINKED=0 MAIN=0 COS=0
 # The dashboard's limit panel reads the login of main's newest session: its Claude config folder (issue 226).
 [ "$MAIN" = 1 ] && ( . "${BASH_SOURCE[0]%/*}/lib/project.sh" && f=$(pp_run_file) && mkdir -p "${f%/*}" \
   && printf '%s\n' "${CLAUDE_CONFIG_DIR:-}" > "${f%/*}/claude-config-dir" ) 2>/dev/null
+# MEMORY.md is what Claude Code loads at start: main's holds the active memories only (archived ones move to
+# MEMORY-archive.md). A worker's session never touches it.
+[ "$MAIN" = 1 ] && timeout 10 python3 "$PLUGIN/scripts/instruction-lint.py" --active-index --repo "$REPO_ROOT" >/dev/null 2>&1
 # Main's persona leads its context; the first line of main-session.md is its
 # one home, and resume-context.sh reads the same line.
 [ "$MAIN" = 1 ] && head -1 "$MAIN_ONLY"

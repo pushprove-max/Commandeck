@@ -1028,10 +1028,10 @@ pp_role_enabled() {
 # default. builderModel's and builderEffort's manifest default is "project", read as no answer: the /config dialog
 # may save a default untouched, and a fixed one would hide the project's answer.
 pp_option() {
-  local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config r fl rc
+  local f=$PP_MAIN/.claude/commandeck.json p d= v src=/config r rk fl rc
   # A role key (issue 312): its checked value, else routing's field; where it is from as for every other key.
-  for r in $(jq -r '.roles | keys[]' "$(pp_routing)" 2>/dev/null); do for fl in $PP_ROLE_FIELDS; do
-    [ "$(pp_role_key "$r" "$fl")" = "$1" ] || continue
+  for r in $(jq -r '.roles | keys[]' "$(pp_routing)" 2>/dev/null); do rk=$(pp_role_key "$r" ""); for fl in $PP_ROLE_FIELDS; do
+    [ "$rk${fl^}" = "$1" ] || continue
     pp_config_option "$1" >/dev/null || src=default
     rc=0; v=$(pp_role_option "$r" "$fl" 2>/dev/null) || rc=$?
     case $rc in
@@ -1039,8 +1039,7 @@ pp_option() {
            elif ($f | startswith("first")) then .first[$f[5:] | ascii_downcase] else .[$f] end | values | tostring' "$(pp_routing)") ;;
       2) v="$(pp_config_option "$1") (refused: not a value it takes)" ;;
     esac
-    if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
-    return 0
+    pp_option_out "${2:-}"; return 0
   done; done
   case $1 in
     maxBuilders) p=.builder.maxBuilders ;;
@@ -1068,8 +1067,11 @@ pp_option() {
     # Issue 333: the seats that may decide for the owner; anything else is the default (the relay alone).
     autoDecideSeats) case $v in chiefOfStaff|chiefOfStaff,main|off) ;; *) src=default v=$d ;; esac ;;
   esac
-  if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
+  pp_option_out "${2:-}"
 }
+# pp_option_out <mode> -- pp_option's answer from its locals; "both" (source, tab, value) is one lookup where the
+# doctor's line per option took two, each a dozen processes.
+pp_option_out() { case $1 in source) echo "$src" ;; both) printf '%s\t%s\n' "$src" "$v" ;; *) echo "$v" ;; esac; }
 # Issue 315: Codex opens a pane on its "hooks need review" menu when any hook in its home is untrusted, and a tool
 # update rewrites its own hook. pp_codex_retrust [<launch command>] trusts the home again right before a Codex launch
 # (the plugin's hooks; every hook when the owner answered yes to setup's trust-all question). The home is the one the

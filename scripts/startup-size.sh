@@ -5,6 +5,7 @@
 # output is held under that line: exit 1 names the hook that crossed it.
 #   (default)     every SessionStart hook in hooks/hooks.json, run as each of
 #                 the four seats (or the one --role names).
+#                 It also fails main-session.md's injected part (above its Details heading) past 40 lines.
 #   --per-prompt  every UserPromptSubmit hook on a sample prompt, and their sum:
 #                 what rides in on every turn, held under the same line.
 # What is measured is the hooks' real output for the project this runs in
@@ -33,6 +34,11 @@ git -C "$T/main" worktree add -q "$T/unit" -b unit 2>/dev/null
 git -C "$T/main" worktree add -q "$T/Chief-of-Staff" -b cos 2>/dev/null
 
 over=0
+# Main's injected card (templates/main-session.md above its Details heading) is one screen. COMMANDECK_CARD_FILE: the test's file.
+if [ "$EVENT" = SessionStart ]; then
+  card=$(awk '/^## Details \(not injected\)/ {exit} 1' "${COMMANDECK_CARD_FILE:-$PLUGIN/templates/main-session.md}" | wc -l | tr -d ' ')
+  [ "$card" -le 40 ] || { echo "startup-size: main-session.md's injected part is $card lines, over 40" >&2; over=1; }
+fi
 # agent-awareness.sh prints a state once and remembers it: each seat gets an
 # empty memory of its own, never the owner's, so every seat is measured whole.
 measure() { # role

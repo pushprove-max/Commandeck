@@ -18,9 +18,10 @@ f7c75c86 8361fb71 8ade2fb3 f6e2fbb0 2848b779 48b02596 a4d1bca5 6743a4ac 5f6ba6aa
 # The rules kept are new since 0.7.1, so no owner has a wording of them to keep: plan before every build, its full
 # text below Details a second unit, the worker-memory note below Details a third, and 0.18.0's denied
 # self-modification rule a fourth, 0.20.0's NO-GO-merges-on-the-owner's-word rule a fifth, and 0.21.0's do-not list,
-# status line, two-NO-GOs and picker rules four more, and 0.23.0's merge gate and no-redundant-steps rules two more.
+# status line, two-NO-GOs and picker rules four more, and 0.23.0's merge gate and no-redundant-steps rules two more,
+# and two rules added since (this count was not updated then), and 0.45.0's archive-a-memory rule one more.
 check "an owner who kept their own wording for every 0.7.1 main rule gets only the rule added since" \
-  "11 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
+  "14 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
 check "the relay rule an owner kept their own wording for in 0.7.1 stays out" 0 \
   "$(MS --drop 34ec1023 | grep -c 'goes to the relay pane')"
 check "a rule reworded alone stays out under its 0.7.1 id" 0 \
@@ -38,7 +39,7 @@ check "keep both for a rule made from two loads it, though keep mine was saved f
 # Main writes each planner's spec from the planning rule, so that rule is where a planner hears to name a fitting
 # mattpocock-skills skill (the owner's, 2026-10-17); it stays one rule. An owner who kept their own wording of the
 # planning rule before (871dfc54) does not get the reworded one too.
-check "the planning rule names the skills line, inside the same rule" "1:36" \
+check "the planning rule names the skills line, inside the same rule" "1:38" \
   "$(MS | awk '/^- \*\*/ { p = /Plan before every build/ } p' | grep -c 'If the mattpocock-skills plugin'):$(MS --units | wc -l | tr -d ' ')"
 check "an owner who kept their own planning rule does not get the reworded one" 0 \
   "$(MS --drop 871dfc54 | grep -c 'If the mattpocock-skills plugin')"

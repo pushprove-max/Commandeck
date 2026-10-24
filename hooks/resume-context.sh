@@ -126,6 +126,8 @@ aged=""
 [ ! -s "$cp.aged-out.md" ] || aged="## items past the ten-generation carry walk: $cp.aged-out.md ($(grep -c . "$cp.aged-out.md") lines; not loaded, Read it when one comes up)"
 left=$(( 10239 - $(bytes "$aged") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
 room=$(( left - $(bytes "$board_ptr") - prompts_ptr ))
+# The resumed checkpoint is a summary, not a copy: past 3,000 bytes it is cut, and its last line names the file.
+[ "$room" -le 3000 ] || room=3000
 if [ "$(bytes "$ckpt")" -gt "$room" ]; then
   cut="the checkpoint past $KEPT"
   rest=$(grep '^## ' "$cp" | grep -vE "$KEEP_RE" | cut -c4- | paste -sd ';' - | sed 's/;/; /g')

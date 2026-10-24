@@ -8,6 +8,9 @@ T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 export HOME=$T/home
+# The doctor's hook-output measure runs every hook as every seat, half of each doctor run: doctor-run.test.sh's one
+# case turns it back on.
+export COMMANDECK_DOCTOR_SIZE=skip
 PROJ=$T/proj BIN=$T/bin CFG=$T/home/.codex/config.toml LINK=$T/home/.commandeck/plugin/hooks/codex-notify.sh
 mkdir -p "$HOME/.codex" "$HOME/.commandeck" "$BIN" && ln -s "$REAL" "$HOME/.commandeck/plugin"
 git init -q -b main "$PROJ" && git -C "$PROJ" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first

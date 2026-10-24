@@ -14,9 +14,9 @@
 # AND ONLY WHEN IT CHANGED. The state is identical across most consecutive
 # prompts, so re-printing it is the same paragraph every turn -- which is how a
 # banner stops being read. The assembled text is hashed and reprinted only when
-# it differs from the last turn's, EXCEPT the over-budget cage warning, which
-# prints every turn it is true because it is the one line that must not be
-# skimmed past. COMMANDECK_AWARENESS_DIR relocates the record for the self-test.
+# it differs from the last turn's. The lines that must not be skimmed past (main-watch down, an open decision, the
+# over-budget cage warning) print every turn they are true, alone when the rest is unchanged.
+# COMMANDECK_AWARENESS_DIR relocates the record for the self-test.
 set +e
 [ -t 0 ] || IFS= read -r -d '' INPUT
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "${INPUT-}" UserPromptSubmit
@@ -31,7 +31,10 @@ if [ "$($GIT rev-parse --git-dir 2>/dev/null)" \
 fi
 
 out=""
-ALWAYS=0
+# Lines that must show on every turn they are true. They also join the block, but an unchanged block is not
+# reprinted for them: only these lines are (one open decision used to reprint the whole block every wake).
+must=""
+always() { out+="$1"; must+="$1"; }
 
 # 1) Unpushed local commits -- a worker that committed shows up here.
 up=$($GIT rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
@@ -70,7 +73,7 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   late=""
   for n in wts:worktrees live:panes tasks:tasks; do [ ! -e "$OT/${n%%:*}.late" ] || late+=" ${n#*:}"; done
   if [ -n "$late" ]; then
-    out+="Orca state NOT CHECKED (no answer in 20s):$late -- the lists below may be missing live work\n\n"; ALWAYS=1
+    always "Orca state NOT CHECKED (no answer in 20s):$late -- the lists below may be missing live work\n\n"
   fi
   # Orca lists every repo's worktrees; only this project's are main's to verify.
   # Both sides as text with no // or /. parts (pnorm): any spelling of the folder lists its worktrees.
@@ -152,19 +155,19 @@ fi
 # will, so this prints on every prompt until it runs again.
 wait
 if [ "$(<"$OT/mw.rc")" != 0 ]; then
-  out+="$(<"$OT/mw")\n\n"; ALWAYS=1
+  always "$(<"$OT/mw")\n\n"
 fi
 # The owner's open asks print every turn: an answer given in chat closes nothing on
 # the dashboard's Needs Owner card until main records it.
 led=$(<"$OT/led")
 open=$(jq -r 'map(select(.answeredAt == null and .waitsOn == null) | .id) | join(", ")' <<<"$led" 2>/dev/null)
 if [ -n "$open" ]; then
-  out+="Open decisions for the owner: $open\n  when they answer: bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh answer <id> '<answer>'\n\n"; ALWAYS=1
+  always "Open decisions for the owner: $open\n  when they answer: bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh answer <id> '<answer>'\n\n"
 fi
 # A Builder's question waits on main, not the owner: answer-worker.sh answers it and closes its row.
 mine=$(jq -r 'map(select(.answeredAt == null and .waitsOn == "main") | "\(.id) (\(.source))") | join(", ")' <<<"$led" 2>/dev/null)
 if [ -n "$mine" ]; then
-  out+="Builder questions waiting on you: $mine\n  answer: bash ${BASH_SOURCE[0]%/*}/../scripts/answer-worker.sh <unit> '<text>' <id>\n\n"; ALWAYS=1
+  always "Builder questions waiting on you: $mine\n  answer: bash ${BASH_SOURCE[0]%/*}/../scripts/answer-worker.sh <unit> '<text>' <id>\n\n"
 fi
 
 # 2b) Dependency-aware ready/blocked view (beads-lite). Orca's task-list is a
@@ -279,29 +282,31 @@ if [ "$(hs_os)" != Darwin ] && [ -n "$scope" ] && [ -r "$scope/memory.stat" ]; t
   done
   boxed=$(( boxed / 1073741824 ))
   total=$(( cur + boxed ))
-  warn=""; [ "$total" -ge 28 ] && { warn=" -- OVER 28 GB in use: dispatch nothing until a pane closes"; ALWAYS=1; }
-  out+="Orca cage: ${cur} GB process memory (+${cache} GB reclaimable cache) of ${max}, ${panes:-?} agent pane(s); ${nboxes} boxed pane(s) hold ${boxed} GB outside the cage, ${total} GB together; ceiling 12 GB on an editing seat, 8 GB read-only, stop at 28 GB${warn}\n"
+  warn=""; [ "$total" -ge 28 ] && warn=" -- OVER 28 GB in use: dispatch nothing until a pane closes"
+  cage="Orca cage: ${cur} GB process memory (+${cache} GB reclaimable cache) of ${max}, ${panes:-?} agent pane(s); ${nboxes} boxed pane(s) hold ${boxed} GB outside the cage, ${total} GB together; ceiling 12 GB on an editing seat, 8 GB read-only, stop at 28 GB${warn}\n"
+  if [ -n "$warn" ]; then always "$cage"; else out+="$cage"; fi
 fi
 
 [ -n "$out" ] || exit 0
 
-if [ "$ALWAYS" = 0 ]; then
-  STATE_DIR="${COMMANDECK_AWARENESS_DIR:-$HOME/.cache/commandeck/agent-awareness}"
-  if mkdir -p "$STATE_DIR" 2>/dev/null; then
-    STATE="$STATE_DIR/$(pwd | sha1sum | cut -c1-40)"
-    # HASH THE CAGE LINE WITHOUT ITS NUMBERS. Its GB figures move a little on
-    # every prompt, so hashing the raw text made this whole block reprint on
-    # EVERY turn and the once-per-state rule never fired once in practice --
-    # 1.3K tokens a turn for a paragraph that had not changed. The printed text
-    # still carries the real numbers, and the over-28 GB warning sets ALWAYS=1,
-    # so the one line that must not be missed is still exempt.
-    # A driver's log tail changes on every prompt while a loop runs, so the
-    # driver rows are hashed without it; the stage word stays in the hash.
-    NOW=$(printf '%b' "$out" | sed -E '/^Orca cage:/ s/[0-9]+/N/g; /^  (loop|drive|chain|run)-/ s/ \| .*$//' | sha1sum | cut -c1-40)
-    [ -f "$STATE" ] && read -r PREV < "$STATE"
-    [ "${PREV:-}" = "$NOW" ] && exit 0
-    printf '%s\n' "$NOW" > "$STATE" 2>/dev/null
+STATE_DIR="${COMMANDECK_AWARENESS_DIR:-$HOME/.cache/commandeck/agent-awareness}"
+if mkdir -p "$STATE_DIR" 2>/dev/null; then
+  STATE="$STATE_DIR/$(pwd | sha1sum | cut -c1-40)"
+  # HASH THE CAGE LINE WITHOUT ITS NUMBERS. Its GB figures move a little on
+  # every prompt, so hashing the raw text made this whole block reprint on
+  # EVERY turn and the once-per-state rule never fired once in practice --
+  # 1.3K tokens a turn for a paragraph that had not changed. The printed text
+  # still carries the real numbers, and the over-28 GB warning is a `must`
+  # line, so the one line that must not be missed still prints every turn.
+  # A driver's log tail changes on every prompt while a loop runs, so the
+  # driver rows are hashed without it; the stage word stays in the hash.
+  NOW=$(printf '%b' "$out" | sed -E '/^Orca cage:/ { s/ -- OVER .*$//; s/[0-9]+/N/g; }; /^  (loop|drive|chain|run)-/ s/ \| .*$//' | sha1sum | cut -c1-40)
+  [ -f "$STATE" ] && read -r PREV < "$STATE"
+  if [ "${PREV:-}" = "$NOW" ]; then
+    [ -z "$must" ] || printf '## Dispatched-work state (the rest is unchanged since the last prompt)\n%b' "$must"
+    exit 0
   fi
+  printf '%s\n' "$NOW" > "$STATE" 2>/dev/null
 fi
 
 printf '## Dispatched-work state (agent-awareness hook)\n%b' "$out"

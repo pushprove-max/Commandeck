@@ -39,7 +39,9 @@ check "it declares no hooks and no commands yet" "null null" "$(jq -c '.hooks, .
 # recommended answer shows the owner one thing in /config while setup recommends another.
 # A role key (issue 312) is read by pp_role_option for every role and field routing.json has; its name is built.
 READ=$(cd "$REAL" && { grep -rhoE 'pp_(config_)?option [A-Za-z]+' scripts hooks --include='*.sh' --exclude-dir=__tests__ | awk '{print $2}'
-  bash -c '. scripts/paths.sh && for r in $(jq -r ".roles | keys[]" config/routing.json); do for f in $PP_ROLE_FIELDS; do pp_role_key "$r" "$f"; done; done'; } | sort -u)
+  bash -c '. scripts/paths.sh && for r in $(jq -r ".roles | keys[]" config/routing.json); do for f in $PP_ROLE_FIELDS; do pp_role_key "$r" "$f"; done; done'
+  # The hooks module reads its option as options.<key> (hooks/autodecide.tsx).
+  grep -ohE 'options\.[A-Za-z]+' hooks/*.tsx | sed 's/^options\.//'; } | sort -u)
 for k in $(jq -r '.userConfig | keys[]' "$M"); do
   check "option $k has a reader" 1 "$(grep -cx "$k" <<<"$READ")"
 done
@@ -71,7 +73,7 @@ maxBuilders|"none"|-
 wakeKinds|"worker_done,escalation,question,decision_gate,merge_ready"|-
 wakeWindowSeconds|60|-
 EOF
-check "the set is the ten options of the plan's question 9, the Builder cap (issue 256), 25 role keys (issue 312) and the two wake options (issue 318)" 38 "$(jq '.userConfig | length' "$M")"
+check "the set is the ten options of the plan's question 9, the Builder cap (issue 256), 25 role keys (issue 312) and the two wake options (issue 318) and the auto-decide seats option (issue 333)" 39 "$(jq '.userConfig | length' "$M")"
 # Issue 318: a settings file from before 0.27.0 has neither wake key and takes the defaults; a kinds list naming no
 # kind would never wake main, and a window that is not whole seconds cannot be compared, so both take the default.
 wopt() { (cd "$TMP" && CLAUDE_CONFIG_DIR=$TMP/cfg COMMANDECK_MAIN=$TMP COMMANDECK_OPTIONS=$1 bash -c '. "$0/scripts/paths.sh" && echo "$(pp_option wakeKinds) $(pp_option wakeWindowSeconds)"' "$REAL"); }
