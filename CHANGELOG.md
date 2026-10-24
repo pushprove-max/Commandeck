@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.44.1 -- 2026-10-24
+
+- The README version badge was left on 0.43.0 after the 0.44.0 release. `ci/version-check.sh` now fails whenever the
+  badge differs from `.claude-plugin/plugin.json`, whatever else changed.
+
 ## 0.44.0 -- 2026-10-24
 
 Built from the plugin issue batch of 2026-10-24: #332 and #333.
