@@ -9,19 +9,14 @@
 # What counts as the plugin: the folders in PLUGIN below. What does not: the
 # files at the top of the repository (README.md, CHANGELOG.md and the like),
 # ci/ and .github/. A test under hooks/ or scripts/ counts: it ships.
-# It also fails, whatever changed, when the README's version badge differs
-# from plugin.json.
-# Exit 0 nothing to say, 1 the version or the badge must change, 2 no base to compare with.
+# Exit 0 nothing to say, 1 the version must change, 2 no base to compare with.
 # Self-test: bash scripts/__tests__/version-check.test.sh
 set -euo pipefail
 PLUGIN=(.claude-plugin/ config/ dashboard/ hooks/ scripts/ skills/ templates/)
 BASE=${1:-origin/main}
 cd "$(git rev-parse --show-toplevel)"
 FROM=$(git merge-base "$BASE" HEAD 2>/dev/null) || { echo "version-check: nothing named $BASE to compare with here; fetch the main branch first" >&2; exit 2; }
-# The README badge is hardcoded text, so a release that raises plugin.json alone leaves the repository page on the old number.
-BADGE=$(sed -n 's|.*img.shields.io/badge/version-\([0-9][0-9.]*\)-.*|\1|p' README.md 2>/dev/null | head -1)
 NOW=$(jq -r '.version // empty' .claude-plugin/plugin.json)
-[ -z "$BADGE" ] || [ "$BADGE" = "$NOW" ] || { echo "version-check: the README badge says $BADGE but plugin.json says $NOW; set the badge (README.md, src and alt) to $NOW" >&2; exit 1; }
 CHANGED=$({ git diff --name-only "$FROM" -- "${PLUGIN[@]}"; git ls-files --others --exclude-standard -- "${PLUGIN[@]}"; } | sort -u)
 [ -n "$CHANGED" ] || { echo "version-check: no plugin file changed against $BASE"; exit 0; }
 version_at() { git show "$1:.claude-plugin/plugin.json" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true; }

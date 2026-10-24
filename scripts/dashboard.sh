@@ -189,7 +189,7 @@ plan_seats() {
        | ([.[0], .[7]] | map(tonumber? // empty) | min) as $f
        | select($b == "" or $f < ($b | fromdateiso8601)) | ($e[.[2]] // {}) as $r
        | {role: .[1], task: .[2], from: (.[0] | tonumber | todate), first: $f, wt: .[4],
-          model: (.[6] | seat_model) // $r.model // null,
+          model: ((.[6] | seat_model) // $r.model // null),
           effort: (.[6] | seat_effort),
           session: (if .[5] != "" then .[5] else $r.session // null end), completedAt: ($r.completedAt // null)}]
     | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\(max_by(.from) | .wt)", from: (map(.first) | min | todate), seats: map(del(.first, .wt))} end'

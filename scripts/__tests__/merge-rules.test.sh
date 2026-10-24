@@ -19,9 +19,9 @@ f7c75c86 8361fb71 8ade2fb3 f6e2fbb0 2848b779 48b02596 a4d1bca5 6743a4ac 5f6ba6aa
 # text below Details a second unit, the worker-memory note below Details a third, and 0.18.0's denied
 # self-modification rule a fourth, 0.20.0's NO-GO-merges-on-the-owner's-word rule a fifth, and 0.21.0's do-not list,
 # status line, two-NO-GOs and picker rules four more, and 0.23.0's merge gate and no-redundant-steps rules two more,
-# and two rules added since (this count was not updated then), and 0.45.0's archive-a-memory rule one more.
+# and 0.44.0's rule that a reply the duplicate-agent guard blocks is never dropped and 0.45.0's archive-a-memory rule two more.
 check "an owner who kept their own wording for every 0.7.1 main rule gets only the rule added since" \
-  "14 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
+  "13 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
 check "the relay rule an owner kept their own wording for in 0.7.1 stays out" 0 \
   "$(MS --drop 34ec1023 | grep -c 'goes to the relay pane')"
 check "a rule reworded alone stays out under its 0.7.1 id" 0 \
@@ -51,7 +51,7 @@ check "an owner who kept their own AGENT_STARTUP planning step does not get the 
 # out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
 # Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
 ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
-for pair in 953565b7:e2240999 b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb3342e 70e51fcc:45c2952e; do
+for pair in 953565b7:e2240999 b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb3342e 70e51fcc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
   new=${pair%:*} old=${pair#*:}
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"

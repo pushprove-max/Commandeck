@@ -53,15 +53,5 @@ g checkout -q third
 check "a version main took meanwhile from another branch fails" 1 "$(vc)"
 check "and says it is main's" 1 "$(grep -c 'version is still 1\.3\.0' "$T/out")"
 
-# A release raised plugin.json and the CHANGELOG but left the README badge on the old number, so the repository page
-# showed the old version.
-g checkout -q -b badge main
-badge() { echo "<img src=\"https://img.shields.io/badge/version-$1-111111?style=flat-square\" alt=\"Version $1\">" > "$T/r/README.md"; }
-badge 1.2.0; g add -A && g commit -q -m badge
-check "a README badge behind plugin.json fails even with no plugin change" 1 "$(vc)"
-check "and names both numbers" 1 "$(grep -c 'badge says 1\.2\.0.*plugin.json says 1\.3\.0' "$T/out")"
-badge 1.3.0; g add -A && g commit -q -m badge-fixed
-check "a README badge matching plugin.json passes" 0 "$(vc)"
-
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

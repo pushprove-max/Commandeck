@@ -177,13 +177,8 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   2026-09-27 and lowered 2026-10-10, each by an owner ruling.) Every linked
   worktree, the Chief-of-Staff pane included, is exempt in both hooks.
 - Checkpoint: WRITING IT IS MAIN'S WHOLE JOB HERE; the restart is automatic.
-  Content: live units with pane handles and task ids, what each is waiting on
-  and the exact next command, rulings not yet in memory, the queue, gotchas,
-  what was ruled out, how to verify, what closed since the last checkpoint;
-  older checkpoints' open items carried by a `Carries open items of: <file>`
-  line, never copied; under 5KB; the id is the transcript file name under
-  `~/.claude/projects/<project>/`. The owner can start the same handoff below the line
-  with `/handoff` (`skills/handoff`).
+  Its fields, its 5KB cap and its id are in templates/checkpoint.md. The owner can start the same handoff
+  below the line with /handoff (skills/handoff).
 - Restart: a keystroke aimed at main's own pane lands in a different Claude pane
   instead (probe, 2026-09-12), hence never `/clear`.
   `hooks/context-clear-stop.sh` opens a NEW pane, types the resume

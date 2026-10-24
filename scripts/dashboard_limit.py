@@ -455,6 +455,31 @@ def reuses(cache, since):
         and isinstance(held, (int, float)) and held <= since
 
 
+def remember_started(cache_dir, times):
+    """Merge {transcript path: first line time, or None to forget it} into limit-started.json beside the request cache.
+
+    Every entry whose transcript still exists stays, so projects sharing one transcript root and one cache never
+    evict each other. A write that fails or is lost costs one started() open in a later cycle, never a wrong number.
+    """
+    path = os.path.join(cache_dir, "limit-started.json")
+    try:
+        with open(path) as f:
+            memo = json.load(f)
+        if not isinstance(memo, dict):
+            raise ValueError("not a memo")
+    except (OSError, ValueError):
+        memo = {}
+    memo.update(times)
+    memo = {p: t for p, t in memo.items() if t is not None and os.path.exists(p)}
+    tmp = f"{path}.{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(memo, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def requests(projects, cache_path, since, now, folders=False):
     """Each distinct API request's row from Claude Code's transcripts (subagents included) since `since`.
 
@@ -480,7 +505,7 @@ def requests(projects, cache_path, since, now, folders=False):
             return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         offsets, seen, where, alias, file = {}, {}, {}, {}, {}
-    live, unread, unlisted = {}, False, []
+    live, unread, unlisted, firsts = {}, False, [], {}
     # A folder that cannot be listed hides its transcripts: the same short count.
     for root, _, files in os.walk(projects, onerror=unlisted.append):
         for name in files:
@@ -505,7 +530,10 @@ def requests(projects, cache_path, since, now, folders=False):
                 live[path] = off  # nothing appended since the last read: not opened
                 continue
             if st.st_size < off:
-                off = 0  # rewritten in place: request ids are keys, so a re-read never double counts
+                # Rewritten in place: request ids are keys, so a re-read never double counts. Limit: the rows of the lines
+                # the rewrite dropped stay cached (they are spend), so one can still count as the session's first call
+                # and a warm rebuildUsd may differ from a cold read after a rewrite.
+                off = 0
             # Line by line: the Linux service caps the collector at 256 MB.
             try:
                 f = open(path, "rb")
@@ -514,12 +542,25 @@ def requests(projects, cache_path, since, now, folders=False):
             except OSError:
                 unread = True  # the other transcripts are still read, for the next call
                 continue
+            # A read from 0 (new, or rewritten smaller) notes the transcript's first line time for seats(), so
+            # started() need not open it again. shortcut: a file rewritten to the same or a larger size is missed
+            # here as it is above; key the memo by inode if that ever happens.
+            first = off == 0
+            if first:
+                firsts[path] = None
             with f:
                 f.seek(off)
                 for line in f:
                     if not line.endswith(b"\n"):
                         break  # a half-written last line waits for the next call
                     off += len(line)
+                    if first and b'"timestamp"' in line:
+                        try:
+                            t = epoch(json.loads(line).get("timestamp"))
+                        except (ValueError, AttributeError):
+                            t = None
+                        if t is not None:
+                            firsts[path], first = t, False
                     if b'"usage"' not in line:
                         continue
                     try:
@@ -550,6 +591,8 @@ def requests(projects, cache_path, since, now, folders=False):
                    "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen},
                    "cycle": CYCLE, "complete": whole, "covered": since, "root": projects}, f)
     os.replace(tmp, cache_path)
+    if firsts:
+        remember_started(os.path.dirname(cache_path), firsts)
     if not whole:
         return None
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
@@ -1400,11 +1443,25 @@ def seats(now, cache_dir, projects, log, main, relay=None):
             # A session's first call in the requests read is its first call only if its transcript began today too: one
             # resumed from before the read is no restart. One unpriced first call, or a transcript that cannot be read,
             # leaves the mean unknown: the other sessions' alone would read as every session's.
-            begun = []
+            begun, learned = [], {}
+            try:
+                with open(os.path.join(cache_dir, "limit-started.json")) as f:
+                    memo = json.load(f)
+                if not isinstance(memo, dict):
+                    raise ValueError("not a memo")
+            except (OSError, ValueError):
+                memo = {}
             for s, r in first.items():
-                t = started(os.path.join(folder, s + ".jsonl")) if r[0] >= midnight else None
+                p = os.path.join(folder, s + ".jsonl")
+                t = None
+                if r[0] >= midnight:
+                    t = memo.get(p) if os.path.exists(p) else None  # a deleted transcript's start is unknown
+                    if t is None:
+                        t = learned[p] = started(p)
                 if r[0] >= midnight and (t is None or t >= midnight):
                     begun.append(None if t is None else price(r))
+            if any(t is not None for t in learned.values()):
+                remember_started(cache_dir, learned)
             out[name]["rebuildUsd"] = round(sum(begun) / len(begun), 4) if begun and None not in begun else None
         else:
             runs = {}

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.45.1 -- 2026-10-24
+
+Turns CI green on main: seven shell tests were red (part C's release fixed the option reader and count meanwhile).
+
+- The dashboard's plan cards work under jq 1.7 (the CI runner's): one object value in `scripts/dashboard.sh` needed
+  parentheses, and every plan card came out empty on Linux.
+- The collector reads each transcript once per cycle again. A session's start time (for `rebuildUsd`) is noted in the
+  one read `requests()` makes and kept in `limit-started.json` beside the request cache, so projects sharing one
+  transcript root do not evict each other and a truncated transcript is read again from its start.
+- The relay-pane Details rule, reworded in 0.44.0, keeps an owner's own wording of the old rule, as every reworded rule does
+  (`MADE_FROM`); so does the Checkpoint rule, which now points to `templates/checkpoint.md` for its fields, its 5KB cap
+  and its id.
+- Tests: the hook count is 48 and the merge-rules count of plugin rules kept is 13 (part C's 14 did not match its own
+  template); `scripts/context-overhead.sh` is listed as a script that removes its own `mktemp`
+  folder with a raw `rm -rf`.
+- `ci/version-check.sh` no longer checks the README badge; `scripts/__tests__/plugin.test.sh` does, on every push.
+
 ## 0.45.0 -- 2026-10-24
 
 Built from the plugin issue batch of 2026-10-24: main-seat context cuts (part C). Nothing here is closed by this entry.

@@ -496,3 +496,43 @@ test('builder_summary_matches_the_old_functions', (t) => {
     if (i === 6) assert.deepEqual(JSON.parse(got[3]), { ttl: 300, ctx: 95012, at: Date.parse('2026-10-18T10:00:30Z') / 1000, ended: true });
   }
 });
+
+// rebuildUsd needs the time each main transcript began (limit-started.json beside the request cache). It is noted in
+// the one read requests() makes, kept for every live transcript, and dropped when a transcript is rewritten smaller.
+const seatsRun = (c, now, cache = c.cache, main = '/w') => py(c, `print(json.dumps(m.seats(${now}, ${JSON.stringify(cache)}, ${JSON.stringify(path.join(c.d, 'proj'))}, ${JSON.stringify(path.join(c.home, 'clear-hook.log'))}, ${JSON.stringify(main)})))`, now);
+const lineAt = (id, ts) => claude.line(id).replace(iso(NOW - 7200), iso(ts));
+
+// red-first: the third collect re-opened every main transcript for its start time
+test('started_memo_shared_by_projects', (t) => {
+  const c = makeCtx(t);
+  putFile(c, path.join(c.d, 'proj/-w/sw.jsonl'), lineAt(1, NOW - 3600), 'w', NOW - 3600);
+  putFile(c, path.join(c.d, 'proj/-u/su.jsonl'), lineAt(2, NOW - 3600).replace('"cwd":"/w"', '"cwd":"/u"'), 'w', NOW - 3600);
+  seatsRun(c, NOW + 60);
+  seatsRun(c, NOW + 120, c.cache, '/u');
+  assert.deepEqual(seatsRun(c, NOW + 180).opens, {}, 'collecting /w, /u, /w opens no unchanged transcript');
+});
+
+// red-first: a new transcript was opened by requests() and again by started()
+test('new_transcript_read_once', (t) => {
+  const c = cliCtx(t);
+  cycle(c, NOW);
+  const fresh = path.join(c.d, 'proj/-w/new.jsonl');
+  putFile(c, fresh, lineAt(77, NOW - 600), 'w', NOW - 300);
+  const second = cycle(c, NOW + 60);
+  assert.ok((second.opens[fresh] ?? 0) <= 1, `the new transcript is opened ${second.opens[fresh]} times`);
+  assert.deepEqual(second.view, cycle(c, NOW + 60, path.join(c.d, 'cold-cache')).view, 'the warm cycle equals a cold read');
+});
+
+// pin (it passes without the memo). Catches: a start-time memo entry kept across a truncation, which would still say
+// the session began yesterday. The rows a truncation drops stay cached (they are spend), so this covers the memo only.
+test('truncated_transcript_replaces_started_memo', (t) => {
+  const c = makeCtx(t);
+  const p = path.join(c.d, 'proj/-w/t.jsonl');
+  // Its first line (yesterday) is no request: the rows a truncation drops stay in the request cache, so only the memo differs.
+  putFile(c, p, JSON.stringify({ type: 'user', timestamp: iso(NOW - DAY) }) + '\n' + lineAt(2, NOW - 3600), 'w', NOW - 3600);
+  assert.equal(JSON.parse(seatsRun(c, NOW + 60).out).main.rebuildUsd, null, 'a session begun yesterday is no restart');
+  putFile(c, p, lineAt(2, NOW - 3600), 'w', NOW - 1800);
+  const warm = JSON.parse(seatsRun(c, NOW + 120).out).main.rebuildUsd;
+  assert.equal(typeof warm, 'number');
+  assert.equal(warm, JSON.parse(seatsRun(c, NOW + 120, coldDir(c)).out).main.rebuildUsd, 'warm equals a cold read');
+});

@@ -2,6 +2,7 @@
 
 Fixed shape (ruling 2026-09-12): every field filled or "none". What is
 not here is lost at /clear; the Orca task list and the unit ledger survive.
+Under 5KB. The file name is the session id, the transcript's file name under `~/.claude/projects/<project>/`.
 
 ## Goal
 <one line: the batch, the standing rulings that bind it>
