@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.44.0 -- 2026-10-24
+
+Built from the plugin issue batch of 2026-10-24: #332 and #333.
+
+- Rules audit (#332): `scripts/rules-audit.sh` runs the deterministic rules check (`instruction-lint.py`) over the
+  always-loaded files and also `templates/`, `.claude/briefs/`, `docs/` and `hooks/*.sh`. New kinds: `unknown-option`
+  (`--option <key>=` that `userConfig` does not have), `retired-name` (names in `config/retired.tsv`, with what replaced
+  them) and `dead-ref` (a backticked rule path not on disk). Every row ends with `rule: <where the rule is written>`.
+  CI runs the audit, and setup's closing report prints the finding count as a warning.
+- Auto-decide (#333): `/autodecide on|off|status` lets the relay pane decide for the owner while they are away. It
+  survives a restart, shows a band and a status-line entry with the decision count, blocks the question picker (a
+  failed guard lets it through), adds the rules to the system prompt and keeps a decision log. `relay-order.sh --auto`
+  logs, records (`<words> (auto-decided)`) and tells main in one step; main checks such a message against the ledger
+  row alone, so a retried send still lands after `off`. `autoDecideSeats` (`/plugin`) picks the seats; `autoDecideNever` in `.claude/commandeck.json` adds
+  to the never-decide list and is kept by setup. The setup-added auto-mode relay line names auto-decided answers, and an
+  update replaces the old line. CI runs `claude plugin test .`. The owner reverses an auto-decision with an ordinary
+  `relay-order.sh` order (the auto answer stays in the row's history), the same `--auto` call again resumes a failed
+  send to main, and a second run in the same minute gets its own log.
+- `run-shell-tests.sh` runs each test with none of the caller's `COMMANDECK_` variables but CI's two and its own: the
+  merge check runs in main's environment, whose pane folder sent `relay-order.test.sh`'s stub messages to the queue.
+
 ## 0.43.0 -- 2026-10-24
 
 Built from the plugin issue batch of 2026-10-24: #331, #334 and #335. Nothing here is closed by this entry.

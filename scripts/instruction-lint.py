@@ -16,12 +16,19 @@ Kinds:
                      lines: it loads in every session and is followed less well the longer it is
                      (AGENT_STARTUP.md and main-session.md are left out: startup-size.sh holds them)
   memory-over-limit  MEMORY.md past 200 lines or 25 KB: what is past that is not loaded
+  unknown-option     `--option <key>=` in an instruction file, template, brief, doc or hook with a key that is
+                     not a userConfig key of .claude-plugin/plugin.json
+  retired-name       a name listed in config/retired.tsv, with what replaced it
+  dead-ref           a backticked templates/, docs/, scripts/, hooks/ or .claude/rules/ path that is not on disk
+
+Every row ends with `rule: <file>#<heading>`, where the rule is written down.
 
 Limit: a mechanical first pass. duplicate-subject matches only an identical bold
 lead or heading, so two rules that disagree under different wording or headings
 are never flagged; a reader finds those.
 """
 import argparse
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -34,6 +41,12 @@ INDEX_LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
 MD_NAME = re.compile(r"[\w.-]+\.md")
 PATHS_FRONTMATTER = re.compile(r"\A---\n(?:.*\n)*?paths:", re.MULTILINE)
 MAX_LINES, MAX_MEMORY_BYTES = 200, 25_600
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+RULE = "docs/commands.md#rules-audit"
+# shortcut: only the --option form; a bare backticked key (`wakeKinds`) is not told from any other code word. Upgrade when an old key slips through.
+OPTION_USE = re.compile(r"--option[ =]([A-Za-z]\w*)=")
+REF = re.compile(r"`((?:templates|docs|scripts|hooks|\.claude/rules)/[^`\s]+)`")
+NOT_A_PATH = re.compile(r"[<>*{}$\[\]|]|\.\.\.")
 
 
 def git(repo, *args):
@@ -45,6 +58,19 @@ def repo_files(repo):
     found = [repo / n for n in names]
     found += sorted((repo / ".claude/rules").glob("*.md"))
     return [p for p in found if p.is_file()]
+
+
+def text_files(repo):
+    # Where rules and commands are written down, beyond the always-loaded files; CHANGELOG.md never.
+    # Tests are left out: their fixtures name paths and options that do not exist, on purpose.
+    globs = ["templates/**/*.md", ".claude/briefs/*.md", "docs/**/*.md", "hooks/**/*.sh"]
+    return sorted(p for g in globs for p in repo.glob(g) if p.is_file() and "__tests__" not in p.parts)
+
+
+def retired():
+    path = PLUGIN_ROOT / "config/retired.tsv"
+    rows = [l.split("\t", 1) for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")] if path.is_file() else []
+    return [(r[0], r[1] if len(r) > 1 else "") for r in rows]
 
 
 def subject(line):
@@ -121,7 +147,24 @@ def lint(repo, memory_dir, global_file):
         for n, line in enumerate(path.read_text().splitlines(), 1):
             if re.match(r"description:\s*\"?SUPERSEDED", line):
                 rows.append(f"{path}:{n} superseded-memory")
-    return rows
+
+    # Rules and commands live in more files than the always-loaded ones: these three kinds read them all.
+    known = set(json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text()).get("userConfig", {}))
+    names = retired()
+    seen = {p for p, _ in instruction}
+    for path, shown in instruction + [(p, str(p.relative_to(repo))) for p in text_files(repo) if p not in seen]:
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            for m in OPTION_USE.finditer(line):
+                if m.group(1) not in known:
+                    rows.append(f"{shown}:{n} unknown-option {m.group(1)}")
+            for name, replacement in names:
+                if name in line:
+                    rows.append(f"{shown}:{n} retired-name {name}" + (f", now: {replacement}" if replacement else ""))
+            for ref in REF.findall(line):
+                ref = re.sub(r"(?::\d+)?(?:#.*)?$", "", ref.rstrip(".,;:)"))
+                if not NOT_A_PATH.search(ref) and not (repo / ref).exists():
+                    rows.append(f"{shown}:{n} dead-ref {ref}")
+    return [f"{row} rule: {RULE}" for row in rows]
 
 
 def main():

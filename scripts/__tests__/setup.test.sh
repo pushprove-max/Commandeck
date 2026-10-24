@@ -22,5 +22,15 @@ check "no option's value is read as --install-missing" '' "$GRANTED"
 GRANTED=$(set -- --profile claude --install-missing; eval "$PRE"; echo "$INSTALL")
 check "a real --install-missing after a value is still the owner's yes" 1 "$GRANTED"
 
+# Issue 333: setup rebuilds commandeck.json from what it carries over. The owner's never-decide list is theirs and
+# setup asks nothing about it, so a re-run (and update.sh, which runs setup) must carry it over as saved.
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+IL_CONFIG=$T/commandeck.json; echo '{"version":1,"autoDecideNever":["touching the billing config","a new vendor"],"workerSkillsOff":["x"]}' > "$IL_CONFIG"
+eval "$(grep '^CUTS=' "$SETUP")"
+check "an autoDecideNever list in commandeck.json is carried over by a setup re-run, beside the worker cuts" \
+  '["touching the billing config","a new vendor"]:["x"]' "$(jq -c .autoDecideNever <<<"$CUTS"):$(jq -c .workerSkillsOff <<<"$CUTS")"
+echo '{"version":1}' > "$IL_CONFIG"; eval "$(grep '^CUTS=' "$SETUP")"
+check "with none saved, none is invented" '{}' "$CUTS"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

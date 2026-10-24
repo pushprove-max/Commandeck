@@ -32,6 +32,9 @@ jobs:
         run: |
           npm install -g @anthropic-ai/claude-code@2.1.302
           claude plugin validate .
+      # The hooks module's own tests, run by the engine itself (the same pinned CLI).
+      - name: Plugin test
+        run: claude plugin test .
       # The checkout brings one commit; the check compares with the main branch, so that is fetched
       # here. A push to main itself is compared with main as it was before the push.
       - name: Version check
@@ -47,6 +50,9 @@ jobs:
       # Over 10240 bytes a hook's print reaches the session as a 2 KB preview: every seat's print stays under it.
       - name: Startup print size
         run: bash scripts/startup-size.sh
+      # A template, doc or hook that names a retired name, an unknown option or a missing file misleads the next agent.
+      - name: Rules audit
+        run: bash scripts/rules-audit.sh --repo .
   # The Mac's own /bin/bash is 3.2, which the Ubuntu job never meets: these two
   # files start every hook and setup.sh under it, and run-hook.test.sh runs
   # `/bin/bash -n` over every shell file in the tree. Homebrew's Bash runs the tests.

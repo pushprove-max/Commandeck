@@ -47,6 +47,12 @@ check "the Builder template: final in place of review means no separate final fo
 check "and that review is the closing pass whose GO merges" 'is the closing pass: its GO merges, and no separate final follows.'
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
 check "main's class rule: one retry path, tested state by state" "$RETRY"
+# Issue 333: an auto-decided answer has no ruling; main checks it against its ledger row, and still checks every other
+# relayed answer against the ruling log. r2 (class delivery-retry): the ledger row alone, the one record relay-order.sh's
+# retry also reads; a mode-file condition made main refuse a retry sent after /autodecide off.
+check "main-session.md: an auto-decided message is checked against its ledger row alone" 'A message titled `auto-decided for the owner on <id>` is the relay'"'"'s own decision under auto-decide, not an owner ruling: there is no ruling to find. Act on it when the ledger row for `<id>` answers `<words> (auto-decided)`, whether or not auto-decide is still on; else ask the relay.'
+if grep -qF 'autodecide.on' <<<"$BODY"; then FAIL=$((FAIL+1)); echo "FAIL main-session.md still makes main check autodecide.on"; else PASS=$((PASS+1)); echo "ok   main-session.md does not make main check autodecide.on"; fi
+check "main-session.md: every other relayed answer is still checked against the ruling log" 'check each relayed answer against `~/.claude/rulings/<project>.jsonl` before acting.'
 BODY=$SAVED
 # Issue 325 (owner ruling of 2026-10-23, over issue 323's every-finding rule): only a bug normal use
 # would hit blocks the merge; a bypass or odd-setup finding is a one-line known gap. One wording in the template and the global rules.

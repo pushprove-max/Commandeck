@@ -314,14 +314,14 @@ il_cuts() {
 # leave changes nothing, in the file or the manifest (the manifest serves every project on this machine);
 # remove takes out only the lines setup recorded, and the list too when setup made it.
 il_auto_mode() {
-  local m=$1 f=$2 doc new how rec
+  local m=$1 f=$2 doc new how rec stale
   case $3 in
     leave) return 0 ;;
     add)
       doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
       new=$(jq -cn --arg h "$(jq -r '.homepage // empty' "$IL_ROOT/.claude-plugin/plugin.json")" --arg l "$IL_LINK" '[
         "Trusted repo: \($h) (the Commandeck workflow plugin). Its scripts and hooks under \($l) are this workflow'"'"'s own tools, run by every pane.",
-        "Key internal services: Orca panes on this machine. The relay pane (the worktree ending in /Chief-of-Staff) passes the owner'"'"'s answers to main word for word; main checks each against the owner'"'"'s ruling log before acting."]')
+        "Key internal services: Orca panes on this machine. The relay pane (the worktree ending in /Chief-of-Staff) passes the owner'"'"'s answers to main word for word; main checks each against the owner'"'"'s ruling log before acting; while auto-decide is on it also sends its own decisions, titled auto-decided, which main checks against the decisions ledger instead."]')
       how=$(jq -r '(.autoMode.environment // null) as $e | if $e == null then "new" elif ($e | type) == "array" and any($e[]; . == "$defaults") then "append" else "refuse" end' <<<"$doc" 2>/dev/null) \
         || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
       if [ "$how" = refuse ]; then
@@ -331,11 +331,13 @@ il_auto_mode() {
       # A line the owner revoked (scripts/revoke.sh) stays out.
       rec=$(il_profile_record "$m" "$f"); [ -n "$rec" ] || rec='{"revoked": {}}'
       jq -r --argjson r "$rec" '.[] | select(IN($r.revoked.autoMode // [] | .[]))' <<<"$new" | while IFS= read -r l; do il_choice_note "auto-mode $l"; done
+      # A line recorded by an earlier version and no longer in the set (the relay line, reworded) is replaced, not kept beside the new one.
+      stale=$(jq -c --argjson o "$(jq -c --arg p "$f" '.entries[$p].autoMode.added // []' "$m" 2>/dev/null || echo '[]')" '$o - .' <<<"$new")
       new=$(jq -c --argjson d "$doc" --argjson r "$rec" '$d.autoMode.environment as $e | . - ($e // []) - ($r.revoked.autoMode // [])' <<<"$new")
-      [ "$new" != '[]' ] || return 0
+      [ "$new" != '[]' ] || [ "$stale" != '[]' ] || return 0
       il_record "$m" merge "$f" || return 1
-      doc=$(jq --argjson n "$new" --argjson r "$rec" "$IL_CHOICES"'.autoMode.environment = ((.autoMode.environment // ["$defaults"]) + $n) | choices($r)' <<<"$doc") && il_write "$f" <<<"$doc" \
-        && il_set "$m" --arg p "$f" --argjson n "$new" --arg how "$how" '.entries[$p].autoMode = {created: ((.entries[$p].autoMode.created // false) or $how == "new"), added: ((.entries[$p].autoMode.added // []) + $n)}' ;;
+      doc=$(jq --argjson n "$new" --argjson x "$stale" --argjson r "$rec" "$IL_CHOICES"'.autoMode.environment = ((.autoMode.environment // ["$defaults"]) - $x + $n) | choices($r)' <<<"$doc") && il_write "$f" <<<"$doc" \
+        && il_set "$m" --arg p "$f" --argjson n "$new" --argjson x "$stale" --arg how "$how" '.entries[$p].autoMode = {created: ((.entries[$p].autoMode.created // false) or $how == "new"), added: (((.entries[$p].autoMode.added // []) - $x) + $n)}' ;;
     remove)
       rec=$(jq -c --arg p "$f" '.entries[$p].autoMode // empty' "$m" 2>/dev/null); [ -n "$rec" ] || return 0
       doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
@@ -578,6 +580,17 @@ il_profile_repair_report() {
         ($v.statusLine // empty | "the status line \(if .keep == null then "(removed)" else "(kept: your own)" end)"),
         ($v.options // {} | to_entries[] | .key as $p | .value | to_entries[] | "option \($p) \(.key) \(if .value.keep == null then "(removed)" else "(kept: \(.value.keep | tojson))" end)")]
         | select(length > 0) | "ok profile settings: \($f): chosen with /commandeck:revoke, a launch does not put setup'"'"'s value back: \(join(", "))")' "$IL_MACHINE" 2>/dev/null || true
+}
+# il_rules_audit_line <project> -- setup's closing warning: the rules audit's finding count in that project, nothing when there is none.
+# The audit exits 1 on a finding and 2 and up when it did not run; neither stops setup, which runs under set -e.
+il_rules_audit_line() {
+  local out rc=0 s="see bash $(printf '%q' "$IL_ROOT/scripts")/rules-audit.sh"
+  out=$(python3 "$IL_ROOT/scripts/instruction-lint.py" --repo "$1" 2>/dev/null) || rc=$?
+  case $rc in
+    0) ;;
+    1) echo "rules audit: $(grep -c . <<<"$out") findings (a warning; $s)" ;;
+    *) echo "rules audit: did not run (exit $rc; $s)" ;;
+  esac
 }
 # il_status_was <manifest> <user settings> -- the status line in that file now, before setup sets its own. The first
 # one setup replaces in each profile's file is the owner's; a second answer must not take the first for it.

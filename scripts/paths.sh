@@ -1046,6 +1046,7 @@ pp_option() {
     maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=lite ;;
+    autoDecideSeats) p=.autoDecideSeats d=chiefOfStaff ;;
     trustAllHooks) p=.trustAllHooks d=false ;;
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
@@ -1064,6 +1065,8 @@ pp_option() {
     wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
     # Issue 330: a level. Anything else, an old saved true/false included, takes the default (no old-value mapping).
     ponytail) case $v in off|lite|full|ultra) ;; *) src=default v=$d ;; esac ;;
+    # Issue 333: the seats that may decide for the owner; anything else is the default (the relay alone).
+    autoDecideSeats) case $v in chiefOfStaff|chiefOfStaff,main|off) ;; *) src=default v=$d ;; esac ;;
   esac
   if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
 }

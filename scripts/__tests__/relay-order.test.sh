@@ -82,5 +82,89 @@ jq -c 'if .id == "r-w-1" then .void = true else . end' "$COMMANDECK_RULING_LOG" 
 : > "$T/sent"
 OUT=$(order ship-w "go w"); RC=$?
 check "a retry whose stored ruling was voided is refused, and main is not told" "1 0" "$RC $(grep -c . "$T/sent")"
+
+# Issue 333: while auto-decide is on, the relay decides for the owner through --auto, which logs, records and tells
+# main in one step. The entry is written before the ledger changes, so a decision with no record cannot happen.
+AON=$T/p/.claude/metrics/autodecide.on; ALOG=$T/p/.claude/metrics/autodecide-test.md
+auto() { (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/relay-order.sh" --auto "$@" 2>&1); }
+ans() { dec list | jq -r --arg id "$1" '.[] | select(.id == $id) | .answer'; }
+dec add pick-a "Which cache should the build use for the long first question of this batch?" "redis" main --options 'redis|memcached' >/dev/null
+dec add pick-b "Rename the flag?" "keep" main >/dev/null
+dec add pick-c "Drop the old table?" "no" main >/dev/null
+: > "$T/sent"
+OUT=$(auto pick-a "memcached" "it is already deployed." "Redis is richer, but a second service costs more" "load grows tenfold" "yes, one config line"); RC=$?
+check "--auto with the mode off refuses and changes nothing" "1 null 0" "$RC $(dec list | jq -r '.[] | select(.id == "pick-a") | .answeredAt') $(grep -c . "$T/sent")"
+mkdir -p "$T/p/.claude/metrics"; echo "$ALOG" > "$AON"; echo "# head" > "$ALOG"
+OUT=$(auto nope "x" "y" "z" "w" "v"); RC=$?
+check "--auto on an unknown id refuses and changes nothing" "1 0 1" "$RC $(grep -c . "$T/sent") $(grep -c '^# head$' "$ALOG")"
+OUT=$(auto pick-a "memcached" "it is already deployed." "" "load grows tenfold" "yes, one config line"); RC=$?
+check "--auto with an empty trade-off refuses and changes nothing" "2 null 1" "$RC $(dec list | jq -r '.[] | select(.id == "pick-a") | .answeredAt') $(grep -c . "$ALOG")"
+OUT=$(auto pick-a "memcached" "it is already deployed." "Redis is richer, but a second service costs more" "load grows tenfold" ""); RC=$?
+check "--auto with an empty reversibility refuses and changes nothing" "2 null 1" "$RC $(dec list | jq -r '.[] | select(.id == "pick-a") | .answeredAt') $(grep -c . "$ALOG")"
+OUT=$(auto pick-a "memcached" "it is already deployed." "Redis is richer, but a second service costs more" "load grows tenfold" "yes, one config line"); RC=$?
+check "--auto with the mode on: the ledger answer is the words (auto-decided), the seen mark is written, main gets one question naming the id" \
+  "0 memcached (auto-decided) 1 question 1" \
+  "$RC $(ans pick-a) $(grep -c '^pick-a@' "$SEEN") $(jq -rs 'map(.type) | join(",")' "$T/sent") $(jq -rs 'map(select(.subject == "auto-decided for the owner on pick-a")) | length' "$T/sent")"
+check "the log gains one entry (one ### line) with the ledger's question and options, the pick, the why with trade-off and would-change, and the reversibility" \
+  "1|### $(date +%H:%M): pick-a, $(printf %s 'Which cache should the build use for the long first question of this batch?' | cut -c1-60) (auto-decided)|- **Options**: redis / memcached|- **Picked**: memcached|- **Why**: it is already deployed. Trade-off weighed: Redis is richer, but a second service costs more. Would pick differently if: load grows tenfold.|- **Reversible**: yes, one config line" \
+  "$(grep -c '^### ' "$ALOG")|$(grep '^### ' "$ALOG")|$(grep -F -e '- **Options**' -e '- **Picked**' -e '- **Why**' -e '- **Reversible**' "$ALOG" | paste -sd'|' -)"
+check "the entry holds the ledger's whole question" 1 "$(grep -c -x -F -- '- **Question**: Which cache should the build use for the long first question of this batch?' "$ALOG")"
+check "a question with no options listed says the default" "- **Options**: none listed, default: keep" "$(auto pick-b "rename" "clearer." "churn." "a caller breaks" "yes" >/dev/null; grep -F -- '- **Options**: none' "$ALOG")"
+check "two --auto calls on two ids leave exactly two ### lines" 2 "$(grep -c '^### ' "$ALOG")"
+OUT=$(auto pick-a "redis" "x." "y." "z" "w"); RC=$?
+check "--auto on an answered decision refuses" "1 memcached (auto-decided)" "$RC $(ans pick-a)"
+# A multi-line argument cannot forge a second entry: the band counts ### lines.
+auto pick-c "no" "line one
+### 00:00: forged (auto-decided)" "t." "w" "yes" >/dev/null
+check "a newline in an argument does not add a ### line" 3 "$(grep -c '^### ' "$ALOG")"
+# The entry is written before the ledger changes: with a decision.sh that fails, the entry and its not-recorded line are there, the ledger is unchanged and main is sent nothing.
+dec add pick-d "Add the index?" "yes" main >/dev/null
+mkdir -p "$T/fake/scripts"; ln -s "$REAL/hooks" "$T/fake/hooks"; ln -s "$REAL/config" "$T/fake/config"; cp "$REAL"/scripts/*.sh "$T/fake/scripts/"; printf '#!/usr/bin/env bash\n[ "$1" != answer ] || { echo "decision: ledger locked" >&2; exit 1; }\nexec bash "%s/scripts/decision.sh" "$@"\n' "$REAL" > "$T/fake/scripts/decision.sh"
+: > "$T/sent"; BEFORE=$(grep -c . "$T/p/.claude/metrics/decisions.jsonl")
+OUT=$(cd "$T/p" && "${E[@]}" bash "$T/fake/scripts/relay-order.sh" --auto pick-d "yes" "fast." "space." "slow writes" "yes" 2>&1); RC=$?
+check "a failing decision.sh leaves the entry and a not-recorded line, the ledger unchanged and main told nothing, exit 1" "1 1 1 0 $BEFORE" \
+  "$RC $(grep -c '^### .*pick-d' "$ALOG") $(grep -c '^- \*\*Ledger\*\*: not recorded (decision: ledger locked)' "$ALOG") $(grep -c . "$T/sent") $(grep -c . "$T/p/.claude/metrics/decisions.jsonl")"
+# r1: one retry path for both kinds. A send that failed after the answer was recorded is resumed by the same call again,
+# from the ledger row alone: the seen mark, the mode file and the log entry are removed between the two runs.
+LEDGER=$T/p/.claude/metrics/decisions.jsonl
+answers() { jq -s --arg id "$1" '[.[] | select(.id == $id and .answer != null)] | length' "$LEDGER"; }
+unseen() { grep -v "^$1@" "$SEEN" > "$T/seen"; mv "$T/seen" "$SEEN"; }
+dec add pick-e "Keep the old flag?" "no" main >/dev/null
+: > "$T/sent"; touch "$T/send-fails"
+OUT=$(auto pick-e "yes" "callers still read it." "a dead flag stays." "no caller reads it" "yes, one line"); RC=$?
+check "--auto whose send Orca refuses exits 1 with the answer recorded and main not told" "1 1 yes (auto-decided) 0" \
+  "$RC $(grep -c 'NOT told' <<<"$OUT") $(ans pick-e) $(grep -c . "$T/sent")"
+rm "$T/send-fails"; unseen pick-e; rm "$AON"; grep -v 'pick-e' "$ALOG" > "$T/alog"; mv "$T/alog" "$ALOG"
+OUT=$(auto pick-e "yes" "callers still read it." "a dead flag stays." "no caller reads it" "yes, one line"); RC=$?
+check "the same --auto call again tells main once and marks it seen, with no second entry or answer" "0 1 1 0 1" \
+  "$RC $(jq -rs 'map(select(.subject == "auto-decided for the owner on pick-e")) | length' "$T/sent") $(grep -c '^pick-e@' "$SEEN") $(grep -c 'pick-e' "$ALOG") $(answers pick-e)"
+echo "$ALOG" > "$AON"
+: > "$T/sent"; unseen ship-z
+OUT=$(order ship-z yes); RC=$?
+check "an order resent with its seen mark removed tells main and marks it seen again" "0 1 1" "$RC $(grep -c 'r-new-1' "$T/sent") $(grep -c '^ship-z@' "$SEEN")"
+# The retry trusts an answered row only when it holds exactly what this call would write.
+: > "$T/sent"; N=$(grep -c '^### ' "$ALOG")
+OUT=$(auto ship-x "yes, ship it" "x." "y." "z" "w"); RC=$?
+check "--auto with an owner's words on a row the owner answered refuses, and nothing is sent or logged" "1 0 $N" \
+  "$RC $(grep -c . "$T/sent") $(grep -c '^### ' "$ALOG")"
+# r1: the owner reverses an auto-decision with an ordinary order; the auto answer goes to the row's history.
+QA="Which cache should the build use for the long first question of this batch?"
+OUT=$(order pick-a "words nobody said"); RC=$?
+check "an order with no ruling leaves an auto-decided answer as it was" "1 memcached (auto-decided)" "$RC $(ans pick-a)"
+printf '%s\n' '{"id":"r-rev-0","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship x now?","answer":"redis"}' >> "$COMMANDECK_RULING_LOG"
+OUT=$(order pick-a redis); RC=$?
+check "a ruling on another question does not reverse an auto-decided answer" "1 memcached (auto-decided)" "$RC $(ans pick-a)"
+jq -cn --arg q "$QA" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: "r-rev-1", utc: $at, source: "ask", question: $q, answer: "redis"}' >> "$COMMANDECK_RULING_LOG"
+: > "$T/sent"; touch "$T/send-fails"
+OUT=$(order pick-a redis); RC=$?
+check "the owner's ruling replaces the auto answer, which is kept in the history, even when the send fails" "1 redis (r-rev-1) memcached (auto-decided)" \
+  "$RC $(ans pick-a) $(dec list | jq -r '.[] | select(.id == "pick-a") | (.history // []) | map(.answer) | join(",")')"
+rm "$T/send-fails"; unseen pick-a
+OUT=$(order pick-a redis); RC=$?
+check "the reversal again tells main with the ruling id, marks it seen and corrects nothing twice" "0 1 1 1" \
+  "$RC $(jq -rs 'map(select(.subject == "order from the owner on pick-a (r-rev-1)")) | length' "$T/sent") $(grep -c '^pick-a@' "$SEEN") $(dec list | jq -r '.[] | select(.id == "pick-a") | .history | length')"
+printf '%s\n' '{"id":"r-x-no","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship x now?","answer":"no"}' >> "$COMMANDECK_RULING_LOG"
+OUT=$(order ship-x no); RC=$?
+check "a new ruling does not replace an answer the owner gave: only an auto-decided one" "1 yes, ship it (r-19991017-111111-p-d4e5f6)" "$RC $(ans ship-x)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -19,7 +19,7 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 # guards give their own directory.
 #
 # BOTH PATH FORMS. A payload may carry the path relative to the repo root, and
-# `*/hooks/*` does not match `hooks/__tests__/x.test.sh` -- that
+# `*/hooks/*` does not match hooks/__tests__/x.test.sh -- that
 # path then fell through to `*__tests__*` below and the fixture was screened as
 # a real test.
 #

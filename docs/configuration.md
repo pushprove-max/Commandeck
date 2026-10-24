@@ -53,9 +53,15 @@ fills those models in, and asks for a type when a call names none.
 Use setup to change answers. Its project keys include `profile`, `testCommand`,
 `strictHooks`, `serena`, `standardContext`, `builder.clearLine`, `issueSizing`,
 `chiefOfStaff`, `ponytail`, `trustAllHooks`, `cacheTtl`, `autoMode`, `workerSkillsOff`,
-`workerPluginsOff`, `keeps` and `reviewLoop`. Role settings are `/plugin` keys
+`workerPluginsOff`, `keeps`, `reviewLoop` and `autoDecideNever` (your own list of decisions
+that auto-decide never makes for you; setup never asks for it and keeps it on a re-run). Role settings are `/plugin` keys
 only: 0.26.0 reads no `builder.model`, `builder.effort`, `planModels`,
 `planFast`, `codexModels` or `codexFast` an older setup saved there.
+
+`autoDecideSeats` is a `/plugin` key: `chiefOfStaff` (default), `chiefOfStaff,main` or `off`. It names the seats
+that have `/autodecide`, the band and the rules; a seat not listed never reads the mode. A change applies to the
+next session. With both seats listed, they share one mode: `/autodecide on` or `off` in one seat shows in the other
+seat's band and status line within 5 seconds.
 
 Review-loop keys are `maxRounds`, `closingPass`, `smallBuild`, `maxReviewMinutes`,
 `maxTestPercent` and `maxUsd`. Setup saves tuned numeric answers as strings.

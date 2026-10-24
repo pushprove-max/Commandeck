@@ -40,6 +40,10 @@ check "level: a /config off beats the project's ultra" "off|/config" "$(O ponyta
 # Issue 330: each of the four levels is read as it is; a project value that is no level, an old saved boolean
 # included, takes the default rather than passing for a level (a saved false must not read as off).
 for l in off lite full ultra; do check "level: a /config $l is read as $l" "$l|/config" "$(conf "{\"ponytail\": \"$l\"}"; O ponytail)"; done
+# Issue 333: the seats that decide for the owner. Only the three choices are read; the relay alone is the default.
+check "seats: with no answer anywhere, the relay alone" "chiefOfStaff|default" "$(conf '{}'; O autoDecideSeats)"
+check "seats: a /config chiefOfStaff,main is read as it is" "chiefOfStaff,main|/config" "$(conf '{"autoDecideSeats": "chiefOfStaff,main"}'; O autoDecideSeats)"
+check "seats: a value that is no choice reads as the default" "chiefOfStaff|default" "$(conf '{"autoDecideSeats": "everyone"}'; O autoDecideSeats)"
 cp "$P" "$T/P.keep"; conf '{}'
 for v in false:lite true:lite '"bogus":lite'; do
   jq --argjson v "${v%:*}" '.ponytail = $v' "$T/P.keep" > "$P"

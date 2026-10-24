@@ -54,7 +54,12 @@ export TMPDIR
 # paths.sh takes the project from these two before the folder a test runs in:
 # inherited from the caller's session, they would point a fixture's script at a real project.
 # CLAUDE_CONFIG_DIR the same for the owner's settings file, where the /config options are (issue 245).
-unset CLAUDE_PROJECT_DIR COMMANDECK_MAIN CLAUDE_CONFIG_DIR
+# Every other COMMANDECK_ variable the session or main-watch set too (main's pane folder, scratch, seat): the merge
+# check runs in main's environment, and a test must see what CI gives it. Kept: CI's two and this runner's own.
+unset CLAUDE_PROJECT_DIR CLAUDE_CONFIG_DIR
+for v in $(compgen -e COMMANDECK_); do
+  case $v in COMMANDECK_FOREGROUND|COMMANDECK_SHELL_TEST_*|COMMANDECK_TEST_NODE_MODULES|COMMANDECK_BREW_PREFIX) ;; *) unset "$v" ;; esac
+done
 TMPDIR=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
 
 ONLY_OWN_LANE=0

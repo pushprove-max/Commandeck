@@ -1,11 +1,12 @@
 {
   "name": "commandeck",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
   "repository": "https://github.com/pushprove-max/Commandeck",
   "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "orchestratorModel": {
       "type": "string",
@@ -228,6 +229,13 @@
       "description": "The ponytail skill's smallest-change coding rules in worker panes. off: none. lite: build what was asked, name the smaller option. full: the smallest complete change. ultra: also push back on parts the need does not justify.",
       "options": ["off", "lite", "full", "ultra"],
       "default": "lite"
+    },
+    "autoDecideSeats": {
+      "type": "string",
+      "title": "Auto-decide seats",
+      "description": "The seats that may decide for the owner when /autodecide is on. chiefOfStaff: the relay pane. chiefOfStaff,main: the relay and main. off: no seat has the command. A seat not listed never reads the mode.",
+      "options": ["chiefOfStaff", "chiefOfStaff,main", "off"],
+      "default": "chiefOfStaff"
     },
     "promptCacheTtl": {
       "type": "string",

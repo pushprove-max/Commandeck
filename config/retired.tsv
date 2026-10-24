@@ -1,0 +1,3 @@
+# <name>	<what replaced it>: a name the CHANGELOG retired. instruction-lint.py flags it in any instruction file, template, brief, doc or hook.
+--no-ponytail	--ponytail off|lite|full|ultra
+file-open-findings.sh	nothing: the merge no longer files open findings

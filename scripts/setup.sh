@@ -122,7 +122,8 @@ DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADD
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
 # The owner's worker cuts (worktree-setup.sh writes them): carried over as saved, and each answer below changes one.
-CUTS=$(jq -c '{workerSkillsOff, workerPluginsOff, keeps} | with_entries(select(.value != null))' "$IL_CONFIG" 2>/dev/null || true); [ -n "$CUTS" ] || CUTS='{}'
+# autoDecideNever (issue 333) rides with them: the owner's own never-decide list, which setup asks nothing about.
+CUTS=$(jq -c '{workerSkillsOff, workerPluginsOff, keeps, autoDecideNever} | with_entries(select(.value != null))' "$IL_CONFIG" 2>/dev/null || true); [ -n "$CUTS" ] || CUTS='{}'
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
 # default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.
@@ -646,4 +647,5 @@ if [ -n "$STATUS" ]; then echo "Status line: set to ${ST}; the one before it com
 else echo "Status line: left as it is (${ST:-none set}). To set one: bash $(printf '%q' "$HERE")/setup.sh --status-line '<command>'; the one before it is recorded and comes back at uninstall."; fi
 echo
 echo "To change an answer later: /commandeck:setup asks again, or run setup.sh with only that flag (each one left out keeps its answer)."
+il_rules_audit_line "$PP_MAIN"
 echo "check it: bash $(printf '%q' "$HERE")/doctor.sh    undo it: bash $(printf '%q' "$HERE")/uninstall.sh"

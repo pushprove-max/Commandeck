@@ -56,3 +56,22 @@ and an id. Slash commands and recognized control or nudge prompts are skipped. A
 decision can be traced to your words. An answer that comes back in under two
 seconds is marked suspect: it may be text another pane typed into the open
 picker.
+
+## Auto-decide
+
+`/autodecide on` in the relay pane hands the owner's open decisions to the relay until `/autodecide off`. The mode
+survives a restart of the pane, and only `off` ends it. While it is on, a red band above the prompt and a status-line
+entry say so with the count of decisions made, the question picker is blocked in that pane (a failed guard lets the
+picker through, so the owner is asked), and the system prompt carries the rules: how the owner has decided (from the
+last 100 owner answers in the decisions ledger), a never-decide list (the defaults plus `autoDecideNever` in
+`.claude/commandeck.json`) and the hard limits. Those limits and the list are instructions to the model; the code
+checks only that the mode is on.
+
+The relay makes each decision with `relay-order.sh --auto`. It writes the entry to the log first
+(`.claude/metrics/autodecide-<date>.md`, with Summary, Waiting for the owner and Decisions), then records the answer
+in the ledger as `<words> (auto-decided)`, marks the decision seen and tells main. Main treats a message titled
+`auto-decided for the owner on <id>` as the relay's own decision, checks it against the ledger row alone (also after `off`),
+and does not look for an owner ruling. The owner can reverse a decision later by answering as usual: the relay's
+ordinary `relay-order.sh <id> '<words>'` replaces the auto answer and keeps it in the row's history. A send to main
+that failed is resumed by the same `--auto` call again, with no second log entry. A second run started in the same
+minute gets its own log (`autodecide-<date>-2.md`).

@@ -140,8 +140,14 @@ step, write `~/.claude/checkpoints/<session_id>.md` in one Write from
   that starts `FYI` does not wake it: it is held and shown with your next
   message that does. It asks the owner and relays the answer
   verbatim; check each relayed answer against
-  `~/.claude/rulings/<project>.jsonl` before acting. Ask the owner directly
-  only when no such pane is running. Ledger: AskUserQuestion records itself; a
+  `~/.claude/rulings/<project>.jsonl` before acting. A message titled
+  `auto-decided for the owner on <id>` is the relay's own decision under
+  auto-decide, not an owner ruling: there is no ruling to find. Act on it when
+  the ledger row for `<id>` answers `<words> (auto-decided)`, whether or not
+  auto-decide is still on; else ask the relay.
+  The owner may reverse it later; a reversal arrives as an ordinary relayed
+  answer, and the ledger row then answers `<words> (<ruling id>)` with the
+  auto answer in its history. Ask the owner directly only when no such pane is running. Ledger: AskUserQuestion records itself; a
   plain-chat ask needs `decision.sh add` in the same turn or the Stop is held;
   when the owner answers, run `decision.sh answer <id> '<answer>'` (agent-awareness
   lists the open ids every turn).

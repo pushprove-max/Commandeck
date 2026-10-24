@@ -98,5 +98,16 @@ check "a parked file and an own-lane file are skipped with their reasons, and a 
 check "--own-lane runs only the own-lane file" lane "$(cat "$RAN")"
 git -C "$R" checkout -q -- .
 
+# The merge check runs in main's environment, which main-watch and the session give a real pane folder, scratch and
+# seat: relay-order.test.sh, green in a Builder's pane, went red at merge (its stub pane was looked for in main's
+# checkout). A test sees only the COMMANDECK_ variables CI gives it and the runner's own, as in CI.
+printf '#!/usr/bin/env bash\necho "pane=${COMMANDECK_MAIN_PANE_DIR-} scratch=${COMMANDECK_SCRATCH-} seat=${COMMANDECK_SEAT-} nm=${COMMANDECK_TEST_NODE_MODULES-} fg=$COMMANDECK_FOREGROUND" >> "$RAN"\n' \
+  > "$R/scripts/__tests__/touched.test.sh"
+: > "$RAN"; (cd "$R" && COMMANDECK_MAIN_PANE_DIR=/real/main COMMANDECK_SCRATCH=/real/scratch COMMANDECK_SEAT=main \
+  COMMANDECK_TEST_NODE_MODULES=/ci/nm timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh >/dev/null 2>&1)
+check "a test inherits no session or main-watch COMMANDECK_ variable; CI's and the runner's reach it" \
+  "pane= scratch= seat= nm=/ci/nm fg=1" "$(cat "$RAN")"
+git -C "$R" checkout -q -- .
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
