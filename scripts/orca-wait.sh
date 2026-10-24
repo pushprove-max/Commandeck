@@ -507,6 +507,7 @@ checked() {  # checked <rc> <stdout> -- 0: use the output; 1: re-bound, ask agai
     fi
     echo "orca-wait: check refused (${code:-see stderr}) and run-use $RUN FAILED" >&2
   fi
+  pp_wake_log orca-wait "${ORCA_TERMINAL_HANDLE:-main}" "inbox check" refused "${code:-rc $1}"
   echo "orca-wait: check failed rc=$1 code=${code:--}: $(printf '%s' "$2" | jq -r '.error.message // empty' 2>/dev/null) $(tr '\n' ' ' < "$ERRF")" >&2
   exit 4
 }
@@ -587,6 +588,6 @@ drain || exit 3
 DG=$SCRATCH/main-watch/digest
 DN=$(awk 'END { print NR }' "$DG" 2>/dev/null); DS=$(cat "$DG.seen" 2>/dev/null); [ "${DS:-0}" -le "${DN:-0}" ] 2>/dev/null || DS=0
 [ "${DN:-0}" -le "${DS:-0}" ] || { echo "digest: $((DN - ${DS:-0})) routine items since the last wake (landed merges, repeated heads-ups): $DG"; echo "$DN" > "$DG.seen"; }
-[ "$TOTAL" -gt 0 ] && { state_block; exit 0; }
+[ "$TOTAL" -gt 0 ] && { pp_wake_log orca-wait "${ORCA_TERMINAL_HANDLE:-main}" "inbox: $TOTAL message(s)" woke; state_block; exit 0; }
 echo "orca-wait: nothing was queued."
 exit 1

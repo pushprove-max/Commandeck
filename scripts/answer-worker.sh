@@ -89,21 +89,25 @@ idle() {
   pane_is_busy "$H" || rc=$?
   [ "$rc" = 1 ]
 }
+# wake <result> -- the wake log's line for this answer (the owner's view of what main sent a worker).
+wake() { pp_wake_log answer-worker "$H" "answer ${TAG}" "$@"; }
 log_state
 if idle; then
   WAY="typed into the pane"
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
-    || { echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+    || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+  wake sent
 else
   # A Builder blocked in `orchestration ask` returns only on a reply to its question's id (host 33cdf11c).
   WAY="sent to the pane's inbox${QID:+ as a reply to $QID}"
   if [ -n "$QID" ]; then
     orca-ide orchestration reply --id "$QID" --body "$MSG" --json >/dev/null \
-      || { echo "answer-worker: the inbox reply to $QID failed; the answer was not delivered" >&2; exit 1; }
+      || { wake refused "inbox reply to $QID failed"; echo "answer-worker: the inbox reply to $QID failed; the answer was not delivered" >&2; exit 1; }
   else
     orca-ide orchestration send --to "$H" --type status --subject "answer from main" --body "$MSG" --json >/dev/null \
-      || { echo "answer-worker: the inbox send to $H failed; the answer was not delivered" >&2; exit 1; }
+      || { wake refused "inbox send failed"; echo "answer-worker: the inbox send to $H failed; the answer was not delivered" >&2; exit 1; }
   fi
+  wake sent
 fi
 
 LEFT=$WAIT
@@ -116,7 +120,8 @@ while :; do
     if idle; then
       WAY="typed into the pane once its turn ended with the inbox message unread"
       orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
-        || { echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+        || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+      wake sent
       LEFT=$WAIT; sleep 2; continue
     fi
   fi

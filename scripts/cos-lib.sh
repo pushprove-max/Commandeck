@@ -21,6 +21,7 @@ cos_wait() {
     if "$@" > "$f"; then
       if [ "$(wc -c < "$f")" -le 600 ]; then cat "$f"
       else echo "$n woke: $(grep -c . "$f") records, $(wc -c < "$f" | tr -d ' ') bytes; whole text: $f"; fi
+      pp_wake_log "$n" chief-of-staff "$(grep -c . "$f") line(s)" woke
       exit 0
     fi
     rm -f "$f"

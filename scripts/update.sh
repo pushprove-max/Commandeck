@@ -19,6 +19,9 @@ die() { echo "update: $*" >&2; exit 1; }
 V=$(jq -r '.version // "(none)"' "$IL_CONFIG" 2>/dev/null) || V="(unreadable)"
 [ "$V" = "$IL_VERSION" ] || die "$IL_CONFIG is config version $V, and this plugin knows version $IL_VERSION only. Nothing was changed. It does not migrate a config: uninstall with the plugin version that wrote it, then set up again."
 [ -s "$IL_PROJECT" ] || die "no install manifest for $PP_MAIN ($IL_PROJECT); run setup.sh instead"
+# From the copy below to the way back: a revoke or a launch's repair in another pane meanwhile waits, so the way back
+# never puts back a profile file or a manifest from before it. Setup runs under this lock (it is handed the fd).
+il_profile_lock 60 || die "the install folder $IL_DIR stayed locked (a launch's repair or a revoke); nothing was changed, run this again"
 
 echo "commandeck $(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json") at $IL_ROOT (was at $(jq -r '.root // "?"' "$IL_PROJECT"))"
 awk '/^## / { n++ } n == 1' "$IL_ROOT/CHANGELOG.md"
@@ -60,9 +63,17 @@ back() {
   echo "update: FAILED ($1). Every file is back as it was before the update; the two jobs were restarted by the failed run and may need: bash $(jq -r '.root // "<old plugin folder>"' "$IL_PROJECT")/scripts/setup.sh" >&2
   exit 1
 }
-OUT=$(bash "$HERE/setup.sh") || back "setup did not finish"
+OUT=$(IL_PROFILE_LOCK_FD=$IL_PROFILE_LOCK_FD IL_RELAY_PANE=$KEEP/relay-pane bash "$HERE/setup.sh") || back "setup did not finish"
 # Setup lists a failed add-on install or update under Needs you: dropping it would hide the failure.
 grep '^codex: ' <<<"$OUT" || true
 awk '/^Needs you/ { on = 1 } on && /^$/ { exit } on' <<<"$OUT"
 bash "$HERE/doctor.sh" || back "the doctor found a break, above"
+# No way back from here: let go, then open the new relay's pane setup left to this (its launch repair takes the lock).
+exec {IL_PROFILE_LOCK_FD}<&-
+if [ -s "$KEEP/relay-pane" ]; then
+  IFS=$'\t' read -r COS NAME S_PANE < "$KEEP/relay-pane"
+  . "$HERE/codex-helpers.sh"
+  if PANE=$(open_pane "path:$COS" "$NAME" claude 2>/dev/null) || [ $? = 3 ]; then echo "Relay: opened $NAME's pane ($PANE)."
+  else echo "update: Relay: $NAME has no pane yet; run: $S_PANE"; fi
+fi
 echo "update: done"

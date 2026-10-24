@@ -20,7 +20,9 @@ echo run_t > "$T/sc/current-run"
 cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
-  "orchestration send") printf '%s\n' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"; echo '{"ok":true}' ;;
+  # refuse: Orca takes no send (the request is recorded all the same).
+  "orchestration send") printf '%s\n' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"
+    [ ! -e "$T/refuse" ] || { echo '{"ok":false,"error":{"message":"refused by the stub"}}'; exit 1; }; echo '{"ok":true}' ;;
   "orchestration inbox") cat "$T/inbox.json" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
   *) echo '{"ok":true,"result":{}}' ;;
 esac
@@ -178,6 +180,19 @@ check "claude: a question in the first of a record's two text blocks sends one m
 check "claude: a question in its own record, the reply's next block in another of the same message: one message" 1 "$(sends 'claude turn complete: QUESTION (u1)')"
 : > "$T/sends"; raw '{"type":"assistant","uuid":"q4","message":{"id":"m4","content":['"$Q"']}}' '{"type":"assistant","uuid":"q5","message":{"id":"m5","content":['"$A"']}}'
 check "claude: a question in an earlier reply, the latest without one: nothing sent" 0 "$(sends)"
+
+# Issue 331: a turn-complete report Orca takes writes one sent line to main's run; a refused one writes one refused line.
+WLJ=$T/sc/wake-log.jsonl
+logged() { jq -rs 'map("\(.from):\(.to):\(.result)") | join(",")' "$WLJ" 2>/dev/null; }
+for h in claude:worker-notify codex:codex-notify; do
+  n=${h%%:*} from=${h#*:}
+  rm -f "$WLJ" "$T/refuse"; : > "$T/sends"; $n term_free $'QUESTION: Which branch should I use?\n' >/dev/null
+  check "$n: a report Orca takes writes one sent line to main's run" "$from:run:run_t:sent" "$(logged)"
+  rm -f "$WLJ"; touch "$T/refuse"; $n term_free $'QUESTION: Which branch is it?\n' >/dev/null
+  check "$n: a refused report writes one refused line carrying Orca's reason" "$from:run:run_t:refused:1" \
+    "$(logged):$(grep -c 'refused by the stub' "$WLJ")"
+done
+rm -f "$T/refuse"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

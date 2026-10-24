@@ -223,5 +223,19 @@ OUT=$(in_proj env COMMANDECK_ROUTING="$T/routing.json" timeout 60 bash "$REAL/sc
 check "a seat whose own environment cannot read GitHub fails alone, though another seat of its agent and mode reads" "1:1:1" \
   "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-astra): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
 
+# Issue 334: an Orca launch overwrote a profile's settings file and the session-start repair put setup's parts back:
+# the doctor says so, naming the file, when, and what.
+mkdir -p "$HOME/.commandeck/install"
+jq -n --arg f "$T/profile/settings.json" '{version: 1, entries: {($f): {kind: "merge", repaired: {at: "2026-10-24T09:00:00Z", keys: ["statusLine", "options"]}}}}' > "$HOME/.commandeck/install/_machine.json"
+check "after a session-start repair the doctor names the profile file, the repair time and statusLine, and says a hand edit is undone and the command that revokes" \
+  "ok profile settings: $T/profile/settings.json was overwritten at a launch and repaired at 2026-10-24T09:00:00Z (statusLine, options); a hand edit of setup's status line, options, auto-mode lines or permission rules is undone at the next launch: remove one, or keep your own value, with /commandeck:revoke" "$(lib il_profile_repair_report)"
+# The owner's choices made with /commandeck:revoke are named, repaired or not: each of the four kinds.
+jq -n --arg f "$T/profile/settings.json" '{version: 1, entries: {($f): {kind: "merge", revoked: {added: ["Bash(a:*)", "Bash(b:*)"],
+  autoMode: ["line one"], statusLine: {keep: null}, options: {"p@m": {k: {keep: "third"}, j: {keep: null}}}}}}}' > "$HOME/.commandeck/install/_machine.json"
+check "a profile file with the owner's choices has a line naming each" \
+  "ok profile settings: $T/profile/settings.json: chosen with /commandeck:revoke, a launch does not put setup's value back: Bash(a:*), Bash(b:*), 1 auto-mode line, the status line (removed), option p@m k (kept: \"third\"), option p@m j (removed)" "$(lib il_profile_repair_report)"
+rm -f "$HOME/.commandeck/install/_machine.json"
+check "a profile file never repaired has no line" "" "$(lib il_profile_repair_report)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

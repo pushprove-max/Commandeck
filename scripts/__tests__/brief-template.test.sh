@@ -60,7 +60,7 @@ check "the global rules carry the same two sentences" "$KG"
 check "the global rules: a bypass or odd-setup finding is a known gap" "$GAP"
 BODY=$SAVED
 # The cache-budget hook refuses a foreground wait over 270 s, so the owner-answer wait is 240 s waits, resumed.
-check "the owner-answer wait fits the cache budget: 240 s waits resumed up to 9 minutes" "\`check --wait --timeout-ms 240000\`, resumed until 9 minutes in all"
+check "the owner-answer wait fits the cache budget: 240 s waits resumed up to 9 minutes" "\`check --wait --timeout-ms 240000 --ack <the deliveryId your last read returned>\`, resumed until 9 minutes in all"
 if grep -qi 'P2/P3 only' "$T"; then FAIL=$((FAIL+1)); echo "FAIL the template still lets a P2/P3-only pass merge"; else PASS=$((PASS+1)); echo "ok   no P2/P3-only exit"; fi
 # Issues 254 and 255: the gate merges a unit unless main holds it, and main's post-merge lines go under the last
 # heading, which the merge reads to the end: the template's own section is empty. Issue 306 R10: no rung line.
@@ -85,5 +85,15 @@ R=${T%/templates/*}
 LEFT=$(cd "$R" && grep -l -i -E 'red[- ]proof|Mutation-verified|mutation[- ]note' templates/* hooks/*.sh scripts/*.sh 2>/dev/null | paste -sd' ' -)
 if [ -z "$LEFT" ]; then PASS=$((PASS+1)); echo "ok   no template, prompt, pass or merge check mentions red proofs or a mutation line (issue 323)"
 else FAIL=$((FAIL+1)); echo "FAIL red proofs or a mutation line still in: $LEFT"; fi
+# Issue 335: a Builder's question to main had no address and no wait on its own reply. Both templates name the one script,
+# and neither names the old ways (a bare send, or the ask that cannot address a pane).
+ST="$R/templates/AGENT_STARTUP.md"
+BAD=$(grep -l -E 'orchestration ask|send --type question|--to main' "$T" "$ST" | paste -sd' ' -)
+if [ -z "$BAD" ] && grep -q 'ask-main.sh' "$T" && grep -q 'ask-main.sh' "$ST"; then PASS=$((PASS+1)); echo "ok   the brief and AGENT_STARTUP.md both name ask-main.sh for a question to main, and neither names orchestration ask, send --type question or --to main for it"
+else FAIL=$((FAIL+1)); echo "FAIL a template still names the old way, or lacks ask-main.sh: ${BAD:-none}"; fi
+# A wait without --ack returns the oldest batch again at once, old mail first.
+NOACK=$(grep -o 'check --wait[^`]*' "$T" | grep -v -- '--ack' | paste -sd' ' -)
+if [ -z "$NOACK" ]; then PASS=$((PASS+1)); echo "ok   every check --wait in the Builder brief carries --ack"
+else FAIL=$((FAIL+1)); echo "FAIL a check --wait in the brief has no --ack: $NOACK"; fi
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

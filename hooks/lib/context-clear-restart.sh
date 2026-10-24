@@ -62,6 +62,7 @@ sent=$(orca-ide terminal send --terminal "$new" \
   --text "resume from the checkpoint $cp (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from $cp; the old pane $old closes now." \
   --enter --json 2>>"$log")
 if ! printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1; then
+  pp_wake_log context-restart "$new" "resume prompt" refused "$(printf '%s' "$sent" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)"
   echo "$(date +%FT%T) restart: resume prompt REFUSED by $new ($(printf '%s' "$sent" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)); old pane $old LEFT UP" >>"$log"
   # Only a closed replacement re-arms the retry (as a failed create does);
   # left open, it would stand as a second main beside the retry's pane.
@@ -73,8 +74,12 @@ if ! printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1; then
   fi
   exit 1
 fi
+pp_wake_log context-restart "$new" "resume prompt" sent
 # The /handoff request (context-clear-stop.sh) is spent only now that a new main holds the prompt.
 rm -f "${cp%.md}.handoff"
+# `main` names the new pane from here, before the old one closes: a send in the gap, or after a drain that never
+# ran, goes to the live pane and not the closed one.
+pp_handle_record main "$new"
 echo "$(date +%FT%T) restart: new pane $new resumed from $cp; closing $old" >>"$log"
 res=$(orca-ide terminal close --terminal "$old" --json 2>&1)
 printf '%s' "$res" | jq -e '.ok' >/dev/null 2>&1 \

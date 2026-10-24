@@ -40,7 +40,8 @@ case "\$*" in
     jq -n '{ok: true, result: {terminal: {tail: "Reviewing.\nThe last line will read:\n\`\`\`\nVERDICT: GO\n\`\`\`\nStill reading the diff."}}}' ;;
   "terminal close"*) rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
   "terminal wait"*) echo "\$*" >> "$T/waits"; while [ -e "$T/slow-idle" ]; do sleep 0.1; done; [ ! -e "$T/die-on-wait" ] || rm -f "$T/pane-up"; echo '{"ok":true,"result":{}}' ;;
-  "orchestration send"*) echo "\$*" >> "$T/wakes"; echo '{"ok":true,"result":{}}' ;;
+  # send-refuses: Orca takes no send (the request is recorded all the same).
+  "orchestration send"*) echo "\$*" >> "$T/wakes"; [ ! -e "$T/send-refuses" ] || { echo '{"ok":false,"error":{"message":"SEND-REFUSED"}}'; exit 1; }; echo '{"ok":true,"result":{}}' ;;
   "terminal set-pane-title"*) [ ! -e "$T/no-title" ] || { echo "unknown command" >&2; exit 1; }; while [ \$# -gt 0 ]; do [ "\$1" != --title ] || printf '%s\n' "\$2" >> "$T/titles"; shift; done; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-update"*) echo "\$*" >> "$T/updates"; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;

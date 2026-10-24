@@ -1005,14 +1005,18 @@ chief_of_staff() {
 # relay's the Chief-of-Staff worktree's; with no relay configured there is no relay key. Each carries its live
 # context beside its clear line; the relay pane has no clear line (context-line.sh exempts it).
 seats() {
-  local relay='' out
+  local relay='' out wk
   [ -z "$(jq -r '.chiefOfStaff.name // empty' "$PP_PROJECT_DIR/.claude/commandeck.json" 2>/dev/null)" ] || relay=$PP_WORKSPACES/Chief-of-Staff
   if out=$(python3 "$HERE/dashboard_limit.py" seats "$NOW" "$REQS" "$CLAUDE_DIR/projects" "$HOME/.claude/checkpoints/clear-hook.log" \
       "$PP_MAIN" ${relay:+"$relay"} 2>"$RUN/err-seats") && jq -e 'objects' >/dev/null 2>&1 <<<"$out"; then ok seats
   else nm seats "main's and the relay's figures could not be read: $(head -1 "$RUN/err-seats" 2>/dev/null)"; echo null; return 0; fi
-  jq -c --arg mc "$(context_size "$(pp_session_log "$PP_MAIN")")" --arg ml "$(pp_clear_line)" \
+  # Issue 331: the wake log's last hour, with the failed ones by result.
+  wk=$(jq -sc --argjson now "$NOW" '[.[] | objects | select((.at // "" | try fromdateiso8601 catch 0) > $now - 3600)]
+    | {hour: length, failed: ([.[] | select(.result | IN("no_turn", "refused", "no_pane", "unreadable", "blocked", "gave_up"))]
+      | group_by(.result) | map({(.[0].result): length}) | add // {})}' < <(cat "$PP_SCRATCH/wake-log.jsonl" 2>/dev/null) 2>/dev/null) || wk=null
+  jq -c --arg mc "$(context_size "$(pp_session_log "$PP_MAIN")")" --arg ml "$(pp_clear_line)" --argjson wk "${wk:-null}" \
     --arg rc "$([ -z "$relay" ] || context_size "$(pp_session_log "$relay")")" '
-    (.main | objects) |= . + {context: ($mc | tonumber? // null), line: ($ml | tonumber? // null)}
+    (.main | objects) |= . + {context: ($mc | tonumber? // null), line: ($ml | tonumber? // null), wakes: $wk}
     | (.relay | objects) |= . + {context: ($rc | tonumber? // null), line: null}' <<<"$out"
 }
 

@@ -67,6 +67,7 @@ WHAT=${ASK%%:*}; WHAT=${WHAT:-$VERDICT}
 OUT=$(orca-ide orchestration send --run "$RUN" --to "run:$RUN" --type question \
   --subject "codex turn complete${WHAT:+: $WHAT} (${ORCA_WORKTREE_ID##*/})" \
   --body "$MSG" --json 2>&1)
-if printf '%s' "$OUT" | jq -e '.ok' >/dev/null 2>&1; then [ -z "$SEEN" ] || printf '%s\n' "$MARK" > "$SEEN"
-else HOOK_FIRE_ADVISE=1; echo "codex-notify: Orca refused the report: $OUT" >&2; fi
+. "$HERE/lib/wake-log.sh" 2>/dev/null
+if printf '%s' "$OUT" | jq -e '.ok' >/dev/null 2>&1; then [ -z "$SEEN" ] || printf '%s\n' "$MARK" > "$SEEN"; hook_wake_log codex-notify "run:$RUN" "codex turn complete${WHAT:+: $WHAT}" sent
+else HOOK_FIRE_ADVISE=1; hook_wake_log codex-notify "run:$RUN" "codex turn complete${WHAT:+: $WHAT}" refused "${OUT:0:200}"; echo "codex-notify: Orca refused the report: $OUT" >&2; fi
 exit 0

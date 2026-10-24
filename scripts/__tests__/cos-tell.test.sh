@@ -54,6 +54,9 @@ touch "$T/live-only"
 OUT=$(note "unit u3 merged" "u3"); RC=$?
 check "a send Orca does not confirm as stored exits 1 and says so" "1:1" "$RC:$(grep -c 'NOT sent: Orca did not confirm a stored message' <<<"$OUT")"
 rm -f "$T/live-only"
+# Issue 331: each note leaves one line in the wake log with its result (the first two stored, the third not confirmed).
+check "a note Orca stores writes one sent line, one it does not confirm one refused line" "sent,sent,refused" \
+  "$(jq -rs '[.[] | select(.from == "cos-tell") | .result] | join(",")' "$T/scratch/wake-log.jsonl")"
 # Issue 321: a service (the dashboard's) has no terminal, and Orca refused its every note for want of a sender.
 touch "$T/need-from"
 OUT=$(cd "$T/p" && env -u ORCA_TERMINAL_HANDLE "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "unit u4 merged" "u4" 2>&1); RC=$?
@@ -79,6 +82,8 @@ check "a typed send Orca accepts says sent" "0:Sent to the Chief of Staff" "$(OU
 touch "$T/refuse"; OUT=$(type_to hello); RC=$?
 check "a typed send Orca took no input for exits 1 and names the refusal and the way round it" "1:1" \
   "$RC:$(grep -c 'NOT sent: Orca took no input in the relay pane (accepted:false); a paired phone may hold its keyboard' <<<"$OUT")"
+check "and the typed sends write a sent line, then a refused line" "sent,refused" \
+  "$(jq -rs '[.[] | select(.from == "cos-tell" and .reason == "dictation") | .result] | join(",")' "$T/scratch/wake-log.jsonl")"
 rm "$T/refuse" "$T/cos-pane"
 
 # Main put a release question to the owner as a `question` with a plain subject;

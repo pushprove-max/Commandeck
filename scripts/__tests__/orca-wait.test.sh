@@ -41,6 +41,22 @@ check "a worker's status note prints under held notes" 1 "$(sed -n '/^held notes
 check "the summary names hidden.jsonl, which is empty: the note is held and the heartbeat excluded" "1 0" \
   "$(grep -c "all but heartbeats are kept in $HID" <<<"$OUT") $(grep -c . "$HID" 2>/dev/null || true)"
 check "no heartbeat in hidden.jsonl" 0 "$(grep -c m5 "$HID" 2>/dev/null || true)"
+# Issue 331: an exit with items writes one woke line; a wait that finds nothing writes none; a failed check writes refused.
+WLJ=$T/sc/wake-log.jsonl
+check "an exit with items writes one woke line" "orca-wait:woke" "$(jq -rs 'map(select(.from == "orca-wait") | "\(.from):\(.result)") | join(",")' "$WLJ" 2>/dev/null)"
+printf '{"ok":true,"result":{"messages":[]}}\n' > "$T/batch.json"; WLN=$(wc -l < "$WLJ" | tr -d ' ')
+(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" >/dev/null 2>&1)
+check "a wait that finds nothing writes no line" "$WLN" "$(wc -l < "$WLJ" | tr -d ' ')"
+mkdir -p "$T/bin-down"; printf '#!/usr/bin/env bash\necho "{\\"ok\\":false,\\"error\\":{\\"code\\":\\"boom\\",\\"message\\":\\"orca is down\\"}}"; exit 1\n' > "$T/bin-down/orca-ide"; chmod +x "$T/bin-down/orca-ide"
+(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin-down:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" >/dev/null 2>&1)
+check "a check Orca refuses writes one refused line carrying its code" "refused:boom" "$(tail -1 "$WLJ" | jq -r '"\(.result):\(.error)"')"
+{ msg m1 term_cos question "turn complete" "Owner says proceed"
+  msg m2 term_w question "turn complete" "the owner ruled r-19991017-101010-1-a1b2c3"
+  msg m3 term_cos status "relay note" "plain words from the relay"
+  msg m4 term_w status "progress (wt-x)" "just chatter"
+  msg m5 term_w heartbeat "alive" ""; } | jq -sc '{ok: true, result: {deliveryId: "d1", messages: .}}' > "$T/batch.json"
 # Issue 324: wakeKinds turned down to worker_done never silences the relay; the worker's note is still held.
 OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
   COMMANDECK_SCRATCH="$T/sc" COMMANDECK_OPTIONS='{"wakeKinds":"worker_done"}' ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)

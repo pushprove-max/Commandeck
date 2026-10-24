@@ -151,6 +151,16 @@ CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_plugin_options "$1" "{\"ponytail\
 check "profiles: pre-filled options keep the file's bytes before them, for update's rollback" "sha256:$(sha256sum < "$T/pb.before" | cut -d' ' -f1):same" \
   "$(jq -r --arg p "$PB" '.entries[$p].prior' "$MM"):$(cmp -s "$H/.commandeck/install/blobs/$(sha256sum < "$T/pb.before" | cut -d' ' -f1)" "$T/pb.before" && echo same)"
 rm -rf "$H/.commandeck"
+# Issue 334: two records, two jobs. `options` is uninstall's (only the keys setup added where /config had none); `optionsWant`
+# is the repair's (every value setup wrote, an explicit --option answer over the owner's value included).
+fresh; mkdir -p "${MM%/*}"; echo '{"version": 1, "entries": {}}' > "$MM"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"k": "old"}}}}' > "$PB"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_plugin_options "$1" "{\"ponytail\": \"lite\"}" "{\"k\": \"new\"}"' "$PB" >/dev/null
+check "il_plugin_options records an explicit replacement in optionsWant and not in options" '{"ponytail":"lite"}:{"k":"new","ponytail":"lite"}' \
+  "$(jq -c --arg p "$PB" '.entries[$p].options["commandeck@commandeck"]' "$MM"):$(jq -cS --arg p "$PB" '.entries[$p].optionsWant["commandeck@commandeck"]' "$MM")"
+CLAUDE_CONFIG_DIR=${PB%/settings.json} lib 'il_plugin_options_out "$IL_MACHINE" "$1"' "$PB"
+check "uninstall then leaves k=new and removes only the keys setup added" '{"k":"new"}' "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$PB")"
+rm -rf "$H/.commandeck"
 # A file that is there but cannot be read is not an empty one (class unreadable-state-loss): taking it for {} wrote
 # setup's few keys over the owner's whole file. Every read-then-write step refuses it and writes nothing.
 fresh; prof_setup "$PB"; cp "$PB" "$T/pb.set"; chmod 000 "$PB"
@@ -680,7 +690,6 @@ check "setup: a failed update is under Needs you in setup's report (the line sit
   codex: update 0.40.0 -> 0.41.0 FAILED (installer broke); Codex stays on 0.40.0. Run: codex update" "$(grep -A1 '^Needs you:' <<<"$OUT")"
 UL=$(grep -n 'il_codex_update' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1); PL=$(grep -nE 'orca-ide (worktree|terminal) create|open_pane "' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1)
 check "setup: the Codex update call sits above the first pane-making line" yes "$([ -n "$UL" ] && [ -n "$PL" ] && [ "$UL" -lt "$PL" ] && echo yes)"
-
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

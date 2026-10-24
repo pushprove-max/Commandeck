@@ -281,7 +281,8 @@ stopped_nudge() {
   # Recorded before the send, as builder_watch's nudges are: a send that fails is not retried.
   echo "STOPPED $3 $NOW" >> "$hist"
   orca-ide terminal send --terminal "$2" --text "Signal STOPPED: you ended your turn with no DONE line or verdict. If you are waiting on an answer, say what in one line and end your turn; this is not an answer. Otherwise continue the batch." --enter >/dev/null 2>&1 \
-    || echo "main-watch: nudge to $2 for $1 failed" >&2
+    && pp_wake_log main-watch "$2" "nudge STOPPED $1" sent \
+    || { echo "main-watch: nudge to $2 for $1 failed" >&2; pp_wake_log main-watch "$2" "nudge STOPPED $1" refused; }
   return 0
 }
 
@@ -324,7 +325,8 @@ builder_watch() {
         [ "${n:-0}" -lt "$(jq -r .maxPings <<<"$sig")" ] || continue
         echo "$since $anchor" >> "$hist.warm"
         orca-ide terminal send --terminal "$h" --text "Signal WARM: keep-alive while you wait. Reply with one . and end your turn." --enter >/dev/null 2>&1 \
-          || echo "main-watch: nudge to $h for $u failed" >&2
+          && pp_wake_log main-watch "$h" "nudge WARM $u" sent \
+          || { echo "main-watch: nudge to $h for $u failed" >&2; pp_wake_log main-watch "$h" "nudge WARM $u" refused; }
         continue
       fi
       case $kind in
@@ -335,7 +337,8 @@ builder_watch() {
       # Recorded before the send: a nudge that fails is not retried, so one episode never sends twice.
       if ! grep -qxF -- "${kind} $since" "$hist" 2>/dev/null; then
         echo "${kind} $since" >> "$hist"
-        orca-ide terminal send --terminal "$h" --text "$text" --enter >/dev/null 2>&1 || echo "main-watch: nudge to $h for $u failed" >&2
+        orca-ide terminal send --terminal "$h" --text "$text" --enter >/dev/null 2>&1 && pp_wake_log main-watch "$h" "nudge $kind $u" sent \
+          || { echo "main-watch: nudge to $h for $u failed" >&2; pp_wake_log main-watch "$h" "nudge $kind $u" refused; }
       fi
       n=$(grep -nxF -- "${kind} $since" "$hist" | head -1 | cut -d: -f1)
       if [ "${n:-0}" -ge 3 ] || { [ "$lim" -gt 0 ] && [ $((NOW - since)) -gt $((lim * 3)) ]; }; then
@@ -361,6 +364,7 @@ flush() {
   fi
   if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type "$type" \
        --subject "$subj" --body "$body" --json; then
+    pp_wake_log main-watch "run:$RUN" "flush $n item(s)" sent
     for i in "${!DUE_KEY[@]}"; do printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"; done
     # A heads-up relay is inbox only: nothing is ever typed for it.
     [ "$RELAY" = 0 ] || return 0
@@ -373,6 +377,7 @@ flush() {
   else
     local s; s=$(printf '%s, ' "${DUE_SUBJ[@]#main-watch: }")
     echo "main-watch: send refused for $n item(s): $OP_ERR" >&2
+    pp_wake_log main-watch "run:$RUN" "flush $n item(s)" refused "$OP_ERR"
     # A refused relay retries next tick from its saved text, still untyped.
     [ "$RELAY" = 0 ] || return 0
     note "${s%, }: send refused: $OP_ERR" "${DUE_KEY[@]}"
@@ -496,7 +501,9 @@ mail_wake() {
   a=$(pp_inbox_actionable "$RUN" "${MAIN_H:-}") || return 0
   [ "$a" != '[]' ] || return 0
   [ ! -e "$ST/wake" ] || return 0
-  case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
+  # Issue 331: a listing with no pane for main arms the wake too, so wake() logs no_pane and the 10-minute alert can fire;
+  # otherwise mail waiting for a main that is gone left no trace.
+  case $MAIN_STATE in idle|done) ;; none) { [ -z "$MAIN_H" ] && [ "$LISTED" = 1 ]; } || return 0 ;; *) return 0 ;; esac
   # A task id nothing knows reads as open in wake(), which then re-checks the inbox itself.
   printf '0\nmail\n%s\n' "$RUN" > "$ST/wake"
 }
@@ -508,7 +515,9 @@ tell_relay() {
   orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type status \
     --subject "cos: main-watch: main has not read finished work" \
     --body "$(wc -w <<<"$tasks" | tr -d ' ') item(s) wait unread in main's inbox for run $RUN: $1. Fix: $2." --json \
-    && printf '%s\n' "$tasks" > "$ST/wake-told"
+    && { printf '%s\n' "$tasks" > "$ST/wake-told"; pp_wake_log main-watch "run:$RUN" "tell relay: $1" sent; return 0; }
+  pp_wake_log main-watch "run:$RUN" "tell relay: $1" refused "${OP_ERR:-}"
+  return 1
 }
 # relay_picker <terminal list json> -- an open picker blocks the relay pane itself, and its mail waits behind it
 # (issue 232). While the relay's screen shows a prompt and messages to it wait unread, $ST/relay-picker.json holds
@@ -527,6 +536,24 @@ relay_picker() {
   else
     rm -f "$f"
   fi
+}
+# wake_result <result> [error] -- the pane wake's one outcome: written to the wake log, and the failing streak kept. A
+# failure writes $ST/wake-streak as "<start> <result>" (the start stays while the same failure repeats; another one
+# restarts it); only turn_started deletes it. Inbox mail (flush, its reposts) and held are not a woken pane: they neither
+# start nor clear a streak. A streak of 10 minutes tells the relay once ($ST/wake-alert).
+wake_result() {
+  local r=$1 start= res=
+  pp_wake_log main-watch "${MAIN_H:-main}" wake "$@"
+  case $r in
+    turn_started) rm -f "$ST/wake-streak" "$ST/wake-alert"; return 0 ;;
+    held) return 0 ;;
+  esac
+  read -r start res < "$ST/wake-streak" 2>/dev/null || true
+  if [ "$res" != "$r" ] || [ -z "$start" ]; then start=$NOW; echo "$start $r" > "$ST/wake-streak"; rm -f "$ST/wake-alert"; fi
+  if [ $((NOW - start)) -ge 600 ] && [ ! -e "$ST/wake-alert" ]; then
+    tell_relay "main has not been woken for $(((NOW - start) / 60)) minutes ($r)" "restart main" && : > "$ST/wake-alert"
+  fi
+  return 0
 }
 wake() {
   [ -e "$ST/wake" ] || return 0
@@ -561,14 +588,15 @@ wake() {
     fi
     echo "main-watch: wake not proven after $WAKE_TRIES tries; the items re-post in 5 minutes" >&2
     tell_relay "main did not wake after $WAKE_TRIES typed wakes" "restart main"
+    wake_result gave_up "after $WAKE_TRIES typed wakes"
     rm -f "$ST/wake"; return 0
   fi
   main_now
-  [ -n "$MAIN_H" ] || { echo "main-watch: no main pane to wake" >&2; return 0; }
+  [ -n "$MAIN_H" ] || { echo "main-watch: no main pane to wake" >&2; wake_result no_pane "no live pane in $MAIN_AT"; return 0; }
   case $MAIN_STATE in idle|done) ;; *) return 0 ;; esac
   screen=$(orca-ide terminal read --terminal "$MAIN_H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null) \
-    || { echo "main-watch: main's screen is unreadable; no wake typed" >&2; return 0; }
-  ! grep -qiE "$PROMPT_BLOCKED" <<<"$screen" || { tell_relay "main's pane shows an open question or permission prompt" "answer the prompt in main's pane"; return 0; }
+    || { echo "main-watch: main's screen is unreadable; no wake typed" >&2; wake_result unreadable "terminal read failed"; return 0; }
+  ! grep -qiE "$PROMPT_BLOCKED" <<<"$screen" || { tell_relay "main's pane shows an open question or permission prompt" "answer the prompt in main's pane"; wake_result blocked "open prompt in main's pane"; return 0; }
   text="main-watch: items are waiting in your Orca inbox for run $RUN; read them and handle each."
   # The recovery is built here, outside the stored reason arm_diag truncates, and
   # the command ends the line so it can be copied whole. It is offered only when
@@ -581,11 +609,13 @@ wake() {
   [ -z "$diag" ] || text="main-watch: Orca did not take these for run $RUN, so they are NOT in your inbox: $diag. Each retries every tick.$([ "$open" = 0 ] || echo ' Other items are waiting in your Orca inbox.')$fix"
   # Issue 318: Orca's nudge that started a turn inside the window holds this wake, untried; a diagnostic is typed anyway.
   local claimed=$NOW
-  pp_wake_claim "$NOW" || { [ -n "$diag" ] || return 0; claimed=; }
+  pp_wake_claim "$NOW" || { [ -n "$diag" ] || { wake_result held "Orca's own nudge holds the claim"; return 0; }; claimed=; }
   r=$(orca-ide terminal send --terminal "$MAIN_H" --text "$text" --enter --wait-submit 10 --json 2>/dev/null)
   if jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' <<<"$r" >/dev/null 2>&1; then
     rm -f "$ST/wake" "$ST/wake-told"
+    wake_result turn_started
   else
+    wake_result no_turn "$(jq -r '.error.message // "no turn_started in the receipt"' <<<"$r" 2>/dev/null || echo "no receipt")"
     # No turn: the claim is given back for the next try or nudge, unless a nudge took a newer one meanwhile.
     [ -z "$claimed" ] || pp_wake_release "$claimed"
     [ "${tries:-0}" != 0 ] || echo "$NOW" > "$ST/wake-first"
@@ -1269,7 +1299,17 @@ heads_up_post() {
   done
 }
 
+# trim_log -- launchd holds the watcher's own log open, so it is cut in place (same inode) and not renamed: past 1 MiB
+# it keeps its last 512 KiB.
+trim_log() {
+  local f=$SCRATCH/scratchpad/$NAME.log
+  [ -e "$f" ] && [ "$(wc -c < "$f")" -gt 1048576 ] || return 0
+  tail -c 524288 "$f" > "$f.cut" && cat "$f.cut" > "$f"
+  rm -f "$f.cut"
+}
+
 tick() {
+  trim_log
   claude_dir
   # Before the run lookup: a leak is reaped whether or not main can be told.
   reap_brokers
@@ -1352,9 +1392,21 @@ tick() {
   fi
 }
 
+# The long-lived loop's stderr drops a line identical to the one before and says how many it dropped when a new line
+# comes, so a failure that repeats every tick does not fill the log. --once keeps plain stderr.
+FILT=
+if [ "${1:-}" != --once ]; then
+  exec 2> >(awk '$0 == last && NR > 1 { n++; next } { if (n) printf "(repeated %d times)\n", n; n = 0; last = $0; print; fflush() }
+    END { if (n) printf "(repeated %d times)\n", n }' >&2)
+  FILT=$!
+fi
+TICKN=0
 while :; do
   ! restart_due || restart_later
   tick
   [ "${1:-}" = --once ] && break
+  # Test seam: end the loop after this many ticks.
+  TICKN=$((TICKN + 1)); [ -z "${COMMANDECK_MAIN_WATCH_MAX_TICKS:-}" ] || [ "$TICKN" -lt "$COMMANDECK_MAIN_WATCH_MAX_TICKS" ] || break
   sleep "$TICK"
 done
+[ -z "$FILT" ] || { exec 2>&-; wait "$FILT" 2>/dev/null || true; }

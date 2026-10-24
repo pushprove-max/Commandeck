@@ -1113,9 +1113,21 @@ if [ "$BY" = codex ]; then
     [ ! -e "$SOCKS/no-session" ] || kill "${PIDS[@]}" 2>/dev/null ) &
   WATCH=$!
 fi
+# A pass that waits silently reads as a hung one: say it started, then once a minute that it runs.
+echo "pass $N: ${#FOCI[@]} reviewer(s) started"
+( T0=$SECONDS
+  while sleep "${COMMANDECK_PASS_TICK:-60}"; do
+    L="pass $N: reviewers running, $(((SECONDS - T0) / 60)) min"
+    if [ "$BY" = codex ]; then
+      for i in "${!FOCI[@]}"; do L+=", reviewer $((i + 1)) session $([ -n "$(reviewer_session "$((i + 1))")" ] && echo found || echo 'not yet')"; done
+    fi
+    echo "$L"
+  done ) &
+TICKER=$!
 FAILED="" NOJSON=""
 for i in "${!PIDS[@]}"; do wait "${PIDS[i]}" || FAILED+=" $((i + 1))"; done
 [ -z "$WATCH" ] || { pkill -P "$WATCH" 2>/dev/null || true; kill "$WATCH" 2>/dev/null || true; }
+pkill -P "$TICKER" 2>/dev/null || true; kill "$TICKER" 2>/dev/null || true
 # reviewer_id <k> -- the session of reviewer k: Claude's is the id this pass gave it, Codex's the thread it returned.
 reviewer_id() {
   if [ "$BY" = claude ]; then echo "${SIDS[$1 - 1]}"; else jq -r '.threadId // empty' "$RUN-codex-$1.json" 2>/dev/null || true; fi

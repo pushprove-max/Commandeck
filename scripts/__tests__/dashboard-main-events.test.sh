@@ -59,5 +59,15 @@ check "a carried checkpoint with no restart for 5 min raises checkpoint-rejected
   '["checkpoint-rejected-demo-m1","checkpoint-rejected-demo-m6"]' "$(rejected "$OUT")"
 touch "$CPD/m3.resumed-from"
 check "a restart after the carry ends it" '[]' "$(rejected "$(collect)")"
+
+# Issue 331: main's card carries the wakes of the last hour and the ones that failed, by result; older ones are not counted.
+WLJ=$(env -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$MAIN" bash -c '. "$0/scripts/paths.sh" && printf %s "$PP_SCRATCH"' "$SOURCE")/wake-log.jsonl
+mkdir -p "${WLJ%/*}"
+wk() { jq -nc --arg at "$(iso $1)" --arg r "$2" '{at: $at, from: "main-watch", to: "term_main", reason: "wake", result: $r, error: ""}' >> "$WLJ"; }
+: > "$WLJ"; wk $((NOW - 7200)) refused; wk $((NOW - 3000)) sent; wk $((NOW - 2000)) turn_started; wk $((NOW - 1000)) no_pane; wk $((NOW - 600)) refused; wk $((NOW - 100)) no_pane
+check "main's wakes: the hour's count, and its failures by result" '{"hour":5,"failed":{"no_pane":2,"refused":1}}' \
+  "$(jq -c '.projects.demo.seats.main.wakes' <<<"$(collect)")"
+rm -f "$WLJ"
+check "with no wake log it counts none" '{"hour":0,"failed":{}}' "$(jq -c '.projects.demo.seats.main.wakes' <<<"$(collect)")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

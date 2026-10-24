@@ -49,7 +49,8 @@ check "settings wire the gate to Bash" 0 "$(jq -en --arg m "$GATE_MATCHER" '"Bas
 # the project has serena.
 check "settings run the gate on every tool, Read included" 0 "$(jq -en --arg m "$GATE_MATCHER" '"Read" | test("^(" + $m + ")$")' >/dev/null && echo 0 || echo 1)"
 mkdir -p "$BOX/bin"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ORCA_LOG"\n' > "$BOX/bin/orca-ide"; chmod +x "$BOX/bin/orca-ide"
+# A file named orca-refuse makes the send fail, as an Orca that refuses it does.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ORCA_LOG"\n[ ! -e "%s/orca-refuse" ] || exit 1\n' "$BOX" > "$BOX/bin/orca-ide"; chmod +x "$BOX/bin/orca-ide"
 # A stand-in for the claude process: it starts the named MCP servers as its
 # children, then runs the hook as another. It runs under a copy of bash named
 # claude, so its comm reads "claude" on Linux AND macOS, where a script's comm
@@ -68,7 +69,7 @@ sleep 0.3
 kill $(jobs -p) 2>/dev/null
 exit $rc
 FAKE
-export ORCA_LOG="$BOX/orca.log" ERR="$BOX/err" HOOK COMMANDECK_RUN=run_t
+export ORCA_LOG="$BOX/orca.log" ERR="$BOX/err" HOOK COMMANDECK_RUN=run_t COMMANDECK_SCRATCH="$BOX/sc"
 first_call() { # session dir servers...
   jq -cn --arg sid "$1" --arg log "$BOX/log.jsonl" '{session_id:$sid, transcript_path:$log, tool_name:"Read", tool_input:{file_path:"/x"}}' > "$BOX/in-$1"
   local sid=$1 dir=$2; shift 2
@@ -80,6 +81,15 @@ S="mcp-$$-"; rm -f /tmp/claude-mcp-checked-"$S"*; : > "$ORCA_LOG"
 check "worker with neither server: first call refused" 2 "$(first_call "${S}a" "$BOX/lw")"
 check "the refusal names serena" 1 "$(grep -c 'serena is not running' "$ERR")"
 check "worker with serena passes" 0 "$(first_call "${S}b" "$BOX/lw" serena)"
+rm -f /tmp/claude-mcp-checked-"$S"*
+# Issue 331: the missing-server escalation Orca takes writes one sent line; one Orca refuses writes one refused line.
+WLJ=$BOX/sc/wake-log.jsonl
+logged() { jq -rs 'map("\(.from):\(.to):\(.result)") | join(",")' "$WLJ" 2>/dev/null; }
+# The first refusal tells nobody: the gate looks again on the same call repeated, and tells main on that second look.
+rm -f "$WLJ"; first_call "${S}c" "$BOX/lw" >/dev/null; first_call "${S}c" "$BOX/lw" >/dev/null
+check "the escalation Orca accepts writes one sent line to main's run" "pane-budget-gate:run:run_t:sent" "$(logged)"
+rm -f "$WLJ" /tmp/claude-mcp-checked-"$S"*; touch "$BOX/orca-refuse"; first_call "${S}d" "$BOX/lw" >/dev/null; first_call "${S}d" "$BOX/lw" >/dev/null; rm -f "$BOX/orca-refuse"
+check "and one it refuses writes one refused line" "pane-budget-gate:run:run_t:refused" "$(logged)"
 rm -f /tmp/claude-mcp-checked-"$S"*
 
 # No pane of any role is refused for its number of turns

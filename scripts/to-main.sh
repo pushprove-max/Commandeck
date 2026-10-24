@@ -4,8 +4,9 @@
 # The pane is looked up by its worktree at send time (pp_pane_of), never taken
 # from a saved handle: a restart gives the pane a new one, and a send to the old
 # handle is lost. With no live pane the message is queued, and the pane's next
-# session shows it first (inbox-drain.sh, at session start). Exit 0: sent;
-# 3: queued, said on stderr; 1: the send failed.
+# session shows it first (inbox-drain.sh, at session start). A send Orca refuses because the
+# pane closed after the lookup is looked up once more, then queued. The sent line ends with the
+# message id (ask-main.sh waits on it). Exit 0: sent; 3: queued, said on stderr; 1: the send failed.
 # A message the Chief of Staff sends main is the owner's, and owed a reply to the
 # relay: marked in $PP_SCRATCH/cos-owed until main sends one (cos-tell.sh --note)
 # or the relay's watcher flags main's turn ending without it (cos-watch-inbox.sh);
@@ -26,22 +27,39 @@ if [ "${1:-}" = --unit ]; then
   KEY=unit-$2 WT=$PP_WORKSPACES/$2 WHO="the Builder of $2"; shift 2
 fi
 [ $# = 3 ] || { echo "usage: to-main.sh [--unit <unit>] <type> <subject> <body>" >&2; exit 2; }
-H=$(pp_seat_pane "$KEY" "$WT")
-if [ -z "$H" ]; then
+queue() {
   mkdir -p "$PP_SCRATCH/queue" && jq -cn --arg at "$(date +%FT%T)" --arg t "$1" --arg s "$2" --arg b "$3" '{at: $at, type: $t, subject: $s, body: $b}' >> "$PP_SCRATCH/queue/$KEY.jsonl" \
     || { echo "to-main: $WHO is not running, and the message could not be queued: it is lost" >&2; exit 1; }
   echo "to-main: $WHO is not running; message queued ($PP_SCRATCH/queue/$KEY.jsonl), shown first when it starts again" >&2
+  pp_wake_log to-main "$KEY" "$1: ${2:0:60}" queued
   owed "$2"; exit 3
-fi
+}
+H=$(pp_seat_pane "$KEY" "$WT")
+[ -n "$H" ] || queue "$@"
 # A service caller (the dashboard's) has no pane: it sends as main's or the coordinator's (pp_sender, issue 321).
 FROM=$(pp_sender) || FROM=
-OUT=$(orca-ide orchestration send ${FROM:+--from "$FROM"} --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null)
-jq -e '.ok' >/dev/null 2>&1 <<<"$OUT" \
-  || { echo "to-main: the send to $WHO ($H) failed: $(jq -r '.error.message // tostring' 2>/dev/null <<<"$OUT" || head -c 300 <<<"$OUT"); the message was not delivered" >&2; exit 1; }
+send() { OUT=$(orca-ide orchestration send ${FROM:+--from "$FROM"} --to "$H" --type "$1" --subject "$2" --body "$3" --json 2>/dev/null); }
+sent() { jq -e '.ok' >/dev/null 2>&1 <<<"$OUT"; }
+# Orca's code for a pane that closed after the lookup.
+gone() { [ "$(jq -r '.error.code // empty' 2>/dev/null <<<"$OUT")" = terminal_not_found ]; }
+send "$@"
+# Look once more and retry on a different live pane; none left means queued, not lost.
+if ! sent && gone; then
+  H2=$(pp_seat_pane "$KEY" "$WT")
+  if [ -n "$H2" ] && [ "$H2" != "$H" ]; then H=$H2; send "$@"; fi
+  if ! sent && gone; then queue "$@"; fi
+fi
+sent \
+  || { ERR=$(jq -r '.error.message // tostring' 2>/dev/null <<<"$OUT" || head -c 300 <<<"$OUT")
+       echo "to-main: the send to $WHO ($H) failed: $ERR; the message was not delivered" >&2
+       pp_wake_log to-main "$H" "$1: ${2:0:60}" refused "${ERR:0:200}"; exit 1; }
+MID=$(jq -r '.result.message.id // empty' 2>/dev/null <<<"$OUT"); MID=${MID:+ id $MID}
 owed "$2"
 # A pane with its own question or permission prompt open reads nothing until that prompt is answered there.
 if orca-ide terminal read --terminal "$H" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null | grep -Eq "$PROMPT_BLOCKED"; then
-  echo "to-main: sent to $WHO ($H), but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"
+  pp_wake_log to-main "$H" "$1: ${2:0:60}" sent_blocked
+  echo "to-main: sent to $WHO ($H)$MID, but its pane shows an open question or permission prompt: it reads this only after that prompt is answered in its own pane"
 else
-  echo "to-main: sent to $WHO ($H)"
+  pp_wake_log to-main "$H" "$1: ${2:0:60}" sent
+  echo "to-main: sent to $WHO ($H)$MID"
 fi

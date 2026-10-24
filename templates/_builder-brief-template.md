@@ -75,8 +75,8 @@ any other line is refused.
   a runner that died with no result means rerun the needed file alone, never a
   second wait. It knows a `<n> passed, <n> failed` last line and node:test's
   summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
-  wait`: its first output line is the runner pid. `orca-ide orchestration ask`
-  takes `--timeout-ms 240000`, and is resumed with the message id it returns.
+  wait`: its first output line is the runner pid. `bash {scripts}/ask-main.sh`
+  waits 240 s at most per call, and is resumed with the message id it prints.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product
@@ -116,16 +116,20 @@ any other line is refused.
 - A documented command you write or change (a README line, a usage line) runs
   once from a scratch project outside this repository before you ask for
   review. The evidence file lists each one with its result.
-- A question for main is one `orca-ide orchestration send --type question`.
-  Main answers with `answer-worker.sh`, which reaches you whether you wait on
-  your inbox or have ended your turn. When the answer reaches you another way,
-  stop your own command still waiting on that question at once. While you keep working, read your inbox with
+- A question for main is one `bash {scripts}/ask-main.sh <subject> <body>`: it sends
+  to main's live pane (queued when main is down) and waits for the reply to that
+  question, 240 s at most per call (run it with the Bash `timeout` set to 270000) and 9 minutes in all. It prints `no answer yet:
+  resume with ask-main.sh --resume <id>` (exit 3) when the slice ends: build what
+  the answer cannot change, then resume it. Main answers with `answer-worker.sh`,
+  which reaches you whether you wait on your inbox or have ended your turn. When
+  the answer reaches you another way, stop your own command still waiting on that
+  question at once. While you keep working, read your inbox with
   `orca-ide orchestration check --terminal <your handle> --ack <the deliveryId your last read returned> --json`
   (no `--ack` on the first read; without it every read returns the same oldest batch) before each pass and
   whenever a background run reports back.
-- A question to the owner, yours or main's, goes as `orchestration send --type question`, never the blocking
+- A question to the owner, yours or main's, goes to main with `ask-main.sh`, never the blocking
   `ask`. When main says an owner question is open that would change the fix in progress, build only what the
-  answer cannot change, then wait for main's answer with `check --wait --timeout-ms 240000`, resumed until 9
+  answer cannot change, then wait for main's answer with `check --wait --timeout-ms 240000 --ack <the deliveryId your last read returned>`, resumed until 9
   minutes in all (one wait over 270 s is refused by the cache-budget hook); a question that cannot change the fix never holds it.
 - Never commit by hand, never push. The pass script below commits exactly what
   {reviewer} reviews; main merges.

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.42.1-111111?style=flat-square" alt="Version 0.42.1">
+  <img src="https://img.shields.io/badge/version-0.43.0-111111?style=flat-square" alt="Version 0.43.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -102,6 +102,15 @@ These are the commands you type:
 | `/commandeck:uninstall` | Remove a project's wiring |
 | `/commandeck:handoff` | Save a checkpoint and restart the main session |
 | `/commandeck:worktreereview <unit>` | HTML time, token and cost report for a build |
+| `/commandeck:revoke` | Take out one of setup's settings in an Orca profile, or keep your own value |
+
+Under Orca, each launch copies your home settings file over the profile's
+settings file. Commandeck then puts setup's settings back: the status line,
+plugin options, auto-mode lines and permission rules. If you edit one of these
+by hand in the profile's file, the next launch undoes the edit. Use
+`/commandeck:revoke` to take one out for good. For the status line or an
+option, you can also use it to keep your own value. `/commandeck:revoke undo`
+takes a choice back: setup's value returns at the next launch.
 
 Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
 

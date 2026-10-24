@@ -21,6 +21,7 @@ and event checks:
 | `worker-ask-guard.sh` | Blocks worker pickers that would never reach you; main and the relay can ask, with a decoy first option outside setup. |
 | `write-existing-file-guard.sh` | Warns when a large edit mostly repeats existing lines, so the edit can stay small. |
 | `agent-startup-context.sh` | Loads instructions for the seat; does not block. |
+| `profile-settings.sh` | At a launch (session start, or `--resume`), puts setup's settings (status line, plugin options, auto-mode and permission entries) back into the active profile's settings file when Orca's copy of the home file overwrote it. A hand edit of these is undone at the next launch. A choice made with `/commandeck:revoke` holds: a value taken out, or your own status line or option kept. Runs only with `CLAUDE_CONFIG_DIR` set to a profile setup recorded; never writes the home file; does not block. |
 | `resume-context.sh` | Loads a pending main checkpoint, board and run binding once; does not block. |
 | `agent-awareness.sh` | Reminds main about dispatched work and unfinished state; does not block. |
 | `context-line.sh` | Prompts main to checkpoint at its clear line and Builders to write a fresh-session handoff; does not block. |

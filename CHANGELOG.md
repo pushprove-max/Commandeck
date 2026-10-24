@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.43.0 -- 2026-10-24
+
+Built from the plugin issue batch of 2026-10-24: #331, #334 and #335. Nothing here is closed by this entry.
+
+- Builder questions (#335): `ask-main.sh <subject> <body>` asks main and waits for the answer in slices of at most
+  240 seconds, up to 9 minutes, then says to end the turn (main's answer is typed into the pane). It reads only the
+  reply to its own question, acknowledges the batch it read, and `--resume <id>` waits again after a slice. The
+  Builder brief and the startup text name it in place of `orchestration ask`. `to-main.sh` prints the message id on
+  its sent line, and a send Orca refuses because the pane closed after the lookup is looked up once more, then queued
+  (exit 3) and shown first when main starts. The restart helper records the new main's handle before it closes the old
+  pane, and a recorded handle that is no longer live falls back to the pane in main's checkout (or
+  `COMMANDECK_MAIN_PANE_DIR`). `builder-codex-pass.sh` prints a line every minute while the reviewers run.
+- Profile settings (#334): setup's changes to the settings file (the status line, the plugin options and the auto-mode
+  and permission rules it added) are put back into the active profile's file at every session start, for the profile
+  `CLAUDE_CONFIG_DIR` names, when a launch overwrote that file. A value or rule the owner changed or removed since is kept. Setup never
+  writes the shared home file when `CLAUDE_CONFIG_DIR` is set, and uninstall removes only what setup added. The doctor
+  names a profile file that was repaired, and when.
+- Wake log (#331): every attempt to wake main, the relay or a Builder writes one line (`at`, `from`, `to`, `reason`,
+  `result`, `error`) to `wake-log.jsonl` in the project's scratch folder (rotated at 1 MiB). main-watch's results are
+  `turn_started`, `no_turn`, `no_pane`, `unreadable`, `blocked`, `held` and `gave_up`; the senders write `sent`,
+  `sent_blocked`, `refused` or `queued`, and the inbox waiters `woke`. The same failure for 10 minutes tells the relay
+  once. The watcher's log drops a repeated line and keeps its last 512 KiB. The main card shows the wakes of the last
+  hour and the failed ones by result; the doctor fails when the watcher cannot find main's pane.
+
 ## 0.42.1 -- 2026-10-23
 
 - Ponytail (#330): a saved `ponytail: true` or `false` is no longer read as `lite` or `off`; like any value that is

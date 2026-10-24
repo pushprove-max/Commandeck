@@ -1173,6 +1173,11 @@
     fact(dl, 'Restarted at', (Array.isArray(s.restartTimes) ? s.restartTimes : []).map((t) => clock(parseTime(t))).join(', ') || 'none', true);
     // A restart rebuilds the context in one first call: null with no session begun today, or an unpriced first call.
     if ('rebuildUsd' in s) fact(dl, 'Rebuild after a restart', num(s.rebuildUsd) === null ? nm() : money(s.rebuildUsd));
+    // Issue 331: the wakes sent in the last hour, and the ones that failed, by result.
+    if (s.wakes && num(s.wakes.hour) !== null) {
+      const failed = Object.entries(s.wakes.failed || {}).map(([k, n]) => `${k} ${n}`).join(', ');
+      fact(dl, 'Wakes, 1 h', `${s.wakes.hour}${failed ? ` · failed: ${failed}` : ''}`);
+    }
     if (s.sideRuns !== undefined) fact(dl, 'Side runs today', s.sideRuns && num(s.sideRuns.count) !== null
       ? `${s.sideRuns.count} run${s.sideRuns.count === 1 ? '' : 's'} · ${num(s.sideRuns.usd) === null ? 'dollars not measured' : money(s.sideRuns.usd)}` : nm());
     const w = s.week;

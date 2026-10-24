@@ -56,7 +56,8 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 
 - `orca-ide orchestration check --terminal <your handle> --json`: your inbox.
 - `orca-ide orchestration send --to <handle> --type <type> --subject .. --body ..`
-- `orca-ide orchestration ask`: a question for main. Workers ask main, never
+- `bash scripts/ask-main.sh <subject> <body>`: a question for main, waited on
+  (`--resume <id>` after a `no answer yet` line). Workers ask main, never
   the owner; main asks the owner through the Chief of Staff pane.
 - `orca-ide terminal read --terminal <handle> --screen`: what a pane shows.
 - Main only: `bash scripts/board.sh` (state of every unit and pane),

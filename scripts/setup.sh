@@ -320,6 +320,9 @@ for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json"
 done
 
 # --- the manifest, before the first change ---
+# Every write below to a profile's settings file or a manifest holds il_profile_lock, so a launch's repair in another
+# pane waits and does not write from a stale read. Let go before the panes it opens, whose launches repair.
+[ -n "$PLAN" ] || { mkdir -p "$IL_DIR" && il_profile_lock 60; } || die "the install folder $IL_DIR stayed locked (a launch's repair or a revoke); nothing was changed, run setup again"
 # At project scope the rules go where git never looks (IL_STATE): they name this machine's plugin folder.
 SETTINGS=$PP_MAIN/.claude/settings.local.json SM=$IL_PROJECT
 [ "$SCOPE" = project ] || { SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json; SM=$IL_MACHINE; }
@@ -474,6 +477,7 @@ il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc 
 # Main's model and effort (orchestratorModel, orchestratorEffort) go into the main checkout's own settings file.
 COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json"
 [ -z "$STATUS" ] || il_status_set "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$STATUS"
+[ -z "${IL_PROFILE_LOCK_FD:-}" ] || { exec {IL_PROFILE_LOCK_FD}<&-; IL_PROFILE_LOCK_FD=; }
 
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
@@ -546,6 +550,11 @@ if [ -n "$NAME" ]; then
     else PANE=$(bash "$HERE/cos-tell.sh" --handle 2>/dev/null) && echo "Relay: its pane is $PANE." || STEPS=("$S_PANE"); fi
   elif ! pp_worktree_new Chief-of-Staff 2>/dev/null; then STEPS=("$S_WT" "$S_SET" "$S_PANE")
   elif ! bash "$HERE/worktree-setup.sh" "$COS" >/dev/null 2>&1; then STEPS=("$S_SET" "$S_PANE")
+  # Run by update.sh, which holds il_profile_lock to its way back (setup's let-go above does not free it): a pane opened
+  # now starts its launch repair under that lock, and the repair gives up after 30 s. The update opens it once it lets go.
+  elif [ -n "${IL_RELAY_PANE:-}" ]; then
+    printf '%s\t%s\t%s\n' "$COS" "$NAME" "$S_PANE" > "$IL_RELAY_PANE"
+    echo "Relay: created $NAME's worktree $COS; its pane opens when the update is done."
   # 3 is a live pane of that name already there: nothing new was opened, and it is the relay's.
   elif . "$HERE/codex-helpers.sh" && { PANE=$(open_pane "path:$COS" "$NAME" claude 2>/dev/null) || [ $? = 3 ]; }; then
     echo "Relay: created $NAME's worktree $COS and opened its pane ($PANE)."

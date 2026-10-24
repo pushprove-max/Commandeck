@@ -58,7 +58,7 @@ fi
 # A handle whose check has not yet answered stays on the to-check list ($F.unchecked) until one does.
 U=$F.unchecked
 OLD=$( { cat "$U" 2>/dev/null; grep -vxF -- "$NOW" "$F" 2>/dev/null | tail -4; } | awk 'NF && !seen[$0]++')
-[ -z "$NOW" ] || { { grep -vxF -- "$NOW" "$F" 2>/dev/null | tail -4; echo "$NOW"; } > "$F.new" && mv "$F.new" "$F"; }
+[ -z "$NOW" ] || pp_handle_record "$KEY" "$NOW"
 [ -z "$OLD" ] || printf '%s\n' "$OLD" > "$U"
 # Four checks of 5 s at most stay inside the startup hook's 30 s; the rest wait on the list for a later start.
 n=0

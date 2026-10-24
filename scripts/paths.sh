@@ -392,6 +392,20 @@ pp_seat_done() {
 # on the seat's final reply (the Stop hook) and on every message it sent (pp_seat_inbox), whoever the message went to.
 PP_FAIL_RE='QUESTION:|BLOCKED|(^|\n)[ \t]*\**VERDICT:'
 pp_failed_text() { jq -Rse --arg re "$PP_FAIL_RE" 'test($re)' <<<"$1" >/dev/null 2>&1; }
+# pp_wake_log <from> <to> <reason> <result> [error] -- one JSON line per attempt to wake main or the relay, appended to
+# $PP_SCRATCH/wake-log.jsonl by every waker. Results: turn_started, no_turn (typed, no turn), sent (inbox mail Orca took),
+# sent_blocked (sent, but the pane shows an open prompt), refused, queued, no_pane, unreadable (screen read failed), blocked
+# (open prompt, nothing typed), held (Orca's own nudge holds the claim; not a failure), gave_up, woke (a waiter exited with
+# items). Past 1 MiB the file moves to .1 (one kept). Never fails its caller: a log that cannot be written is no reason to
+# stop a wake.
+pp_wake_log() {
+  local f=$PP_SCRATCH/wake-log.jsonl
+  mkdir -p "$PP_SCRATCH" 2>/dev/null || return 0
+  [ ! -e "$f" ] || [ "$(wc -c < "$f")" -le 1048576 ] || mv -f "$f" "$f.1" 2>/dev/null
+  jq -nc --arg at "$(date -u +%FT%TZ)" --arg from "$1" --arg to "$2" --arg reason "$3" --arg result "$4" --arg error "${5:-}" \
+    '{at: $at, from: $from, to: $to, reason: $reason, result: $result, error: $error}' >> "$f" 2>/dev/null || true
+  return 0
+}
 # pp_seat_clear <record> [recipient handle...] -- succeeds when the inbox answered in full and the seat reported no
 # failure since its prompt: the one test pp_seat_done and the Stop hook's PLAN-DONE request share.
 pp_seat_clear() {
@@ -872,16 +886,26 @@ pp_pane_of() {
 # the seat is down. A Builder whose recorded pane is gone, or that no session start
 # recorded, has the pane its launch names in its seat record (seat.sh); other
 # panes in its worktree (a design co-author) are never taken for it. Only main,
-# alone in its checkout, falls back to pp_pane_of, for a session that began before
-# the record.
+# alone in its checkout, falls back to pp_pane_of in main's pane folder
+# (COMMANDECK_MAIN_PANE_DIR, else the worktree), for a session that began before
+# the record or whose recorded pane has closed (a handoff the new pane's own start
+# has not yet recorded).
 pp_seat_pane() {
-  local hs; hs=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
+  local hs h=; hs=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
   [ "$1" = main ] || hs="$hs $(sed -n 's/^handle=//p' "$PP_SCRATCH/seat-${1#unit-}-builder.txt" 2>/dev/null | tail -1)"
-  [ -n "${hs// /}" ] || { [ "$1" != main ] || pp_pane_of "$2"; return 0; }
-  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg hs "$hs" \
+  [ -z "${hs// /}" ] || h=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg hs "$hs" \
     "$PP_PNORM"'($wt | pnorm) as $wt | [(.result | if type == "array" then . else (.terminals // []) end)[]?
       | select((.worktreePath | pnorm) == $wt and .connected != false and .orphaned != true) | .handle] as $live
-      | first($hs | splits(" +") | select(. != "" and IN($live[]))) // empty' 2>/dev/null
+      | first($hs | splits(" +") | select(. != "" and IN($live[]))) // empty' 2>/dev/null)
+  [ -n "$h" ] || [ "$1" != main ] || h=$(pp_pane_of "${COMMANDECK_MAIN_PANE_DIR:-$2}")
+  [ -z "$h" ] || printf '%s\n' "$h"
+}
+# pp_handle_record <key> <handle> -- the pane that now answers to <key> (main, unit-<unit>), newest last; the 4 before
+# it are kept, because an older handle's mail was shown by a session since. The one write of handles/<key>:
+# session start (inbox-drain.sh) and a handoff (context-clear-restart.sh) both call it.
+pp_handle_record() {
+  local f=$PP_SCRATCH/handles/$1
+  mkdir -p "${f%/*}" && { grep -vxF -- "$2" "$f" 2>/dev/null | tail -4; echo "$2"; } > "$f.new" && mv "$f.new" "$f"
 }
 # pp_worktree_new <name> -- a new Orca worktree of this project at
 # $PP_WORKSPACES/<name>, on local main and not Orca's origin/main default. The

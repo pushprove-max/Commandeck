@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "entries": {
+    "@PROFILE@/settings.json": {
+      "prior": "sha256:c6d0e5d2050f0ee7302185ceb8ad378a6d8841f25c268d819ee21094ca32cd07",
+      "kind": "merge",
+      "statusLine": {
+        "was": {
+          "type": "command",
+          "command": "owner-home"
+        },
+        "set": {
+          "type": "command",
+          "command": "plugin-line"
+        }
+      },
+      "added": [
+        "Bash(orca-ide orchestration:*)",
+        "Bash(orca-ide terminal:*)",
+        "Bash(orca-ide worktree:*)",
+        "Bash(bash @ROOT@/scripts/*)",
+        "Bash(bash @HOME@/.commandeck/plugin/scripts/*)"
+      ],
+      "autoMode": {
+        "created": true,
+        "added": [
+          "Trusted repo: https://github.com/pushprove-max/Commandeck (the Commandeck workflow plugin). Its scripts and hooks under @HOME@/.commandeck/plugin are this workflow's own tools, run by every pane.",
+          "Key internal services: Orca panes on this machine. The relay pane (the worktree ending in /Chief-of-Staff) passes the owner's answers to main word for word; main checks each against the owner's ruling log before acting."
+        ]
+      },
+      "options": {
+        "commandeck@commandeck": {
+          "ponytail": "lite"
+        }
+      }
+    }
+  }
+}

@@ -146,17 +146,20 @@ il_allow() {
   jq -cn --arg r "$1" --arg l "$IL_LINK" '["Bash(orca-ide orchestration:*)", "Bash(orca-ide terminal:*)", "Bash(orca-ide worktree:*)", "Bash(bash \($r)/scripts/*)", "Bash(bash \($l)/scripts/*)"]'
 }
 # il_allow_set <manifest> <settings file> <rules json> -- the plugin's rules in
-# the file become exactly <rules>; the ones it added before are in the manifest.
+# the file become exactly <rules>, less the ones revoked there (scripts/revoke.sh); the ones it added before are in
+# the manifest, revoked ones included.
 il_allow_set() {
-  local m=$1 f=$2 new=$3 old j added doc
+  local m=$1 f=$2 new=$3 old rv j added doc
   # No file, or an empty one, is an empty object: jq prints nothing for no input.
   doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   old=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -c --arg p "$f" '.entries[$p].added // []') || return 1
+  rv=$( { cat "$m" 2>/dev/null || echo '{}'; } | jq -c --arg p "$f" '.entries[$p].revoked.added // []') || return 1
+  jq -r --argjson rv "$rv" '.[] | select(IN($rv[]))' <<<"$new" | while IFS= read -r j; do il_choice_note "rule $j"; done
   # Only what the owner did not already have is the plugin's to take back out.
   added=$(jq -c --argjson old "$old" --argjson new "$new" '$new - ((.permissions.allow // []) - $old)' <<<"$doc" 2>/dev/null) || added=$new
-  j=$(jq --argjson old "$old" --argjson new "$new" '
+  j=$(jq --argjson old "$old" --argjson new "$new" --argjson rv "$rv" '
       ((.permissions.allow // []) - $old) as $rest
-      | .permissions.allow = $rest + ($new - $rest)
+      | .permissions.allow = $rest + ($new - $rest - $rv)
       | if .permissions.allow == [] then del(.permissions.allow) else . end
       | if .permissions == {} then del(.permissions) else . end' <<<"$doc" 2>/dev/null) \
     || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
@@ -325,10 +328,13 @@ il_auto_mode() {
         echo "auto mode: the environment list in $f has no \"\$defaults\", so it replaces Claude Code's built-in list; left as it is. To keep the built-in rules and add this plugin's lines, add \"\$defaults\" to the list and run setup again"
         return 0
       fi
-      new=$(jq -c --argjson d "$doc" '$d.autoMode.environment as $e | . - ($e // [])' <<<"$new")
+      # A line the owner revoked (scripts/revoke.sh) stays out.
+      rec=$(il_profile_record "$m" "$f"); [ -n "$rec" ] || rec='{"revoked": {}}'
+      jq -r --argjson r "$rec" '.[] | select(IN($r.revoked.autoMode // [] | .[]))' <<<"$new" | while IFS= read -r l; do il_choice_note "auto-mode $l"; done
+      new=$(jq -c --argjson d "$doc" --argjson r "$rec" '$d.autoMode.environment as $e | . - ($e // []) - ($r.revoked.autoMode // [])' <<<"$new")
       [ "$new" != '[]' ] || return 0
       il_record "$m" merge "$f" || return 1
-      doc=$(jq --argjson n "$new" '.autoMode.environment = ((.autoMode.environment // ["$defaults"]) + $n)' <<<"$doc") && il_write "$f" <<<"$doc" \
+      doc=$(jq --argjson n "$new" --argjson r "$rec" "$IL_CHOICES"'.autoMode.environment = ((.autoMode.environment // ["$defaults"]) + $n) | choices($r)' <<<"$doc") && il_write "$f" <<<"$doc" \
         && il_set "$m" --arg p "$f" --argjson n "$new" --arg how "$how" '.entries[$p].autoMode = {created: ((.entries[$p].autoMode.created // false) or $how == "new"), added: ((.entries[$p].autoMode.added // []) + $n)}' ;;
     remove)
       rec=$(jq -c --arg p "$f" '.entries[$p].autoMode // empty' "$m" 2>/dev/null); [ -n "$rec" ] || return 0
@@ -434,20 +440,33 @@ il_options_report() {
 # key's value, as the owner gave them now. What it adds where there was none is recorded in the machine's manifest, by
 # file and key, for il_plugin_options_out: a value it replaced was the owner's, and uninstall leaves the key.
 il_plugin_options() {
-  local add doc g=${3:-'{}'}
+  local add want doc g=${3:-'{}'} a=$2 rec rv k
   # No file yet is an empty one: a role key (issue 312) has no home but this file.
   doc=$(il_read "$1") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  # An option the owner chose with revoke.sh is left out, this run's own answer too: only revoke.sh writes or clears
+  # that list.
+  rec=$(il_profile_record "$IL_MACHINE" "$1"); [ -n "$rec" ] || rec='{"revoked": {}}'
+  rv=$(jq -c --argjson r "$rec" "$PP_OPTS_KEY"' key as $p | {p: $p, k: ($r.revoked.options[$p] // {} | keys)}' <<<"$doc") || return 1
+  while IFS= read -r k; do il_choice_note "option $(jq -r .p <<<"$rv") $k"; done \
+    < <(jq -r --argjson rv "$rv" --argjson g "$g" '. + $g | keys[] | select(IN($rv.k[]))' <<<"$a")
+  a=$(jq -c --argjson rv "$rv" 'with_entries(select(.key | IN($rv.k[]) | not))' <<<"$a") \
+    && g=$(jq -c --argjson rv "$rv" 'with_entries(select(.key | IN($rv.k[]) | not))' <<<"$g") || return 1
+  set -- "$1" "$a" "$g"
   [ "$(jq -c --argjson g "$g" '. + $g' <<<"$2")" != '{}' ] || return 0
   # A "project" picker answer is none (issue 293): setup's answer replaces it.
   jq -r --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' (.pluginConfigs[key].options // {}) as $o | $a | to_entries[] | .key as $k | select(($g | has($k) | not) and $o[.key] != null and $o[.key] != "project" and $o[.key] != .value)
     | "note: \(.key) is \($o[.key]) in /config, which beats this answer (\(.value)); change it with /config"' <<<"$doc"
   [ -z "${IL_PLAN:-}" ] || { echo "plan: would add this setup's answers to /config's options where it has none, and this run's --option answers over theirs ($1)"; return 0; }
   add=$(jq -c --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' key as $p | (.pluginConfigs[$p].options // {}) as $o | {($p): ($a + $g | with_entries(select($o[.key] == null or $o[.key] == "project")))}' <<<"$doc") || return 1
+  # optionsWant: every value setup writes, those added and this run's own answers over the owner's. The profile
+  # repair (il_profile_repair) puts them back; `options` stays what uninstall takes out.
+  want=$(jq -c --argjson add "$add" --argjson g "$g" "$PP_OPTS_KEY"' key as $p | {($p): (($add[$p] // {}) + $g)}' <<<"$doc") || return 1
   # Recorded before it is written: update's rollback deletes a recorded file with no prior as one setup made.
   il_record "$IL_MACHINE" merge "$1" || return 1
-  doc=$(jq --argjson a "$2" --argjson g "$g" "$PP_OPTS_KEY"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {} | with_entries(select(.value != "project"))) + $g)' <<<"$doc") \
+  doc=$(jq --argjson a "$2" --argjson g "$g" --argjson r "$rec" "$PP_OPTS_KEY$IL_CHOICES"' key as $p | .pluginConfigs[$p].options = ($a + (.pluginConfigs[$p].options // {} | with_entries(select(.value != "project"))) + $g) | choices($r)' <<<"$doc") \
     && il_write "$1" <<<"$doc" || return 1
-  il_set "$IL_MACHINE" --arg f "$1" --argjson n "$add" '.entries[$f].options = ((.entries[$f].options // {}) * $n)'
+  il_set "$IL_MACHINE" --arg f "$1" --argjson n "$add" --argjson w "$want" \
+    '.entries[$f].options = ((.entries[$f].options // {}) * $n) | .entries[$f].optionsWant = ((.entries[$f].optionsWant // {}) * $w)'
 }
 # il_main_model <manifest> <settings file> [off] -- main's model and effort: the orchestratorModel and
 # orchestratorEffort keys, as that file's model and effortLevel. The value each replaced is kept (mainModelWas). An
@@ -472,6 +491,94 @@ il_main_model() {
 # il_profile_files <manifest> -- every Claude Code user settings file setup wrote to, one a line, by the manifest:
 # CLAUDE_CONFIG_DIR today may not be the profile it was then.
 il_profile_files() { [ ! -s "$1" ] || jq -r '.entries | keys[] | select(endswith("/settings.json"))' "$1"; }
+# il_profile_lock [<wait s>] -- the one lock of every read-modify-write of a profile settings file setup recorded and of
+# the manifests: the launch repair, revoke.sh, and setup's and uninstall's writes. Every pane on a profile shares its
+# file and the machine's manifest, so a write from a stale read undoes another pane's change. Held on the manifests'
+# folder, not a lock file, so no lock state can go missing while a manifest is there; held to the end of the process.
+# Taken once per process: a second flock on a new open would wait on itself. No folder (nothing installed) is no lock.
+il_profile_lock() {
+  [ -z "${IL_PROFILE_LOCK_FD:-}" ] || return 0
+  [ -d "$IL_DIR" ] && exec {IL_PROFILE_LOCK_FD}<"$IL_DIR" || return 1
+  flock -w "${1:-30}" "$IL_PROFILE_LOCK_FD" || { exec {IL_PROFILE_LOCK_FD}<&-; IL_PROFILE_LOCK_FD=; echo "commandeck: $IL_DIR stayed locked for ${1:-30} s" >&2; return 1; }
+}
+# il_profile_record <manifest> <profile settings file> -- the manifest's record of what setup put in that file, one
+# line of JSON, or nothing. A manifest from before optionsWant has the options in `options`, and one from before status
+# lines were kept per file its status line at the top (il_status_out).
+il_profile_record() {
+  jq -c --arg p "$2" --arg s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" '.statusLine as $top | .entries[$p] // empty
+    | .statusLine //= (if $p == $s then $top else null end) | .optionsWant = ((.options // {}) * (.optionsWant // {}))
+    | .revoked //= {}' "$1" 2>/dev/null
+}
+# IL_CHOICES -- jq's choices($r): the owner's choices made with scripts/revoke.sh ($r.revoked, $r il_profile_record's
+# line) applied to a settings doc. The one rule of every writer of the four kinds: il_auto_mode add, il_plugin_options,
+# il_status_set, il_profile_repair and revoke.sh (il_allow_set leaves a revoked rule out through `added`). A revoked
+# rule or auto-mode line comes out. A removed status line or option comes out where it holds setup's value, the status
+# line back to the one before setup's; a value of the owner's own stays. A kept value is written. Setup's value is the
+# one revoke.sh saved with the choice, else the record's, so the take-out needs no other part of the record.
+IL_CHOICES='def choices($r): ($r.revoked // {}) as $rv
+  | (if ((try .permissions.allow catch null) | type) == "array" then .permissions.allow -= ($rv.added // []) else . end)
+  | (if ((try .autoMode.environment catch null) | type) == "array" then .autoMode.environment -= ($rv.autoMode // []) else . end)
+  | (if $rv | has("statusLine") | not then .
+     elif $rv.statusLine.keep != null then .statusLine = $rv.statusLine.keep
+     else .statusLine as $c | ($rv.statusLine | if has("was") then .was else $r.statusLine.was end) as $w
+       | if $c != null and $c != $w and any($rv.statusLine.set, $r.statusLine.set; . == $c)
+         then (if $w == null then del(.statusLine) else .statusLine = $w end) else . end end)
+  | reduce (($rv.options // {}) | to_entries[] | .key as $p | .value | to_entries[] | {p: $p, k: .key, c: .value}) as $o (.;
+      (try .pluginConfigs[$o.p].options[$o.k] catch null) as $v
+      | if $o.c.keep != null then .pluginConfigs[$o.p].options[$o.k] = $o.c.keep
+        elif $v != null and any($o.c.set, $r.optionsWant[$o.p][$o.k]; . == $v) then del(.pluginConfigs[$o.p].options[$o.k])
+        else . end);'
+# il_choice_note <what> -- setup's line for a value it left out because the owner chose it with revoke.sh; <what> is
+# the value as revoke.sh names it.
+il_choice_note() { echo "$1: chosen with /commandeck:revoke, so setup left its own value out; /commandeck:revoke undo $1 brings it back at the next launch"; }
+# il_profile_repair <manifest> <profile settings file> -- Orca copies ~/.claude/settings.json over a profile's file at a
+# launch, and with it goes what setup put there: the status line (statusLine.set), /config's options (optionsWant), the
+# auto-mode lines (autoMode.added) and the permission rules (added). Run at a launch, this puts each back where the
+# file lacks it or holds another value. The owner's choices (`revoked`, written only by scripts/revoke.sh) win: a rule
+# or auto-mode line there is not put back; a status line or option there is the owner's kept value ({keep: <value>})
+# or none ({keep: null}). The copy can hold setup's values (the home file is setup's too), so each of those is taken
+# out of it by choices (IL_CHOICES), as revoke.sh takes it out. It never reads a removal from the file, so a hand edit
+# of these is undone at the next launch. The first record (the undo point) is not touched, so uninstall removes exactly what it did. Writes nothing,
+# and stamps nothing, when nothing changed. The read, the write and the stamp hold il_profile_lock; one that cannot
+# take it writes nothing, and the next launch repairs.
+il_profile_repair() {
+  local m=$1 f=$2 rec doc out
+  [ -d "$IL_DIR" ] || return 0
+  il_profile_lock 30 || return 1
+  rec=$(il_profile_record "$m" "$f"); [ -n "$rec" ] || return 0
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  # Setup's values the owner did not choose otherwise go back, then the owner's choices; the stamp names what changed.
+  out=$(jq -c --argjson r "$rec" "$IL_CHOICES"'
+    def arr: if type == "array" then . else [] end;
+    . as $d | (try .autoMode.environment catch null) as $e | (try .permissions.allow catch null) as $al | $r.revoked as $rv
+    | (if ($rv | has("statusLine") | not) and $r.statusLine.set != null then .statusLine = $r.statusLine.set else . end)
+    | reduce ($r.optionsWant | to_entries[] | .key as $p | .value | to_entries[] | .key as $k
+        | select(($rv.options[$p] // {}) | has($k) | not) | {p: $p, k: $k, v: .value}) as $o (.;
+        if (try .pluginConfigs[$o.p].options[$o.k] catch null) != $o.v then .pluginConfigs[$o.p].options[$o.k] = $o.v else . end)
+    | (($r.autoMode.added // []) - ($rv.autoMode // []) - ($e | arr)) as $a
+    | if $a != [] and ($e == null or (($e | type) == "array" and any($e[]; . == "$defaults")))
+      then .autoMode.environment = (($e // ["$defaults"]) + $a) else . end
+    | (($r.added // []) - ($rv.added // []) - ($al | arr)) as $pa
+    | if $pa != [] and ($al == null or ($al | type) == "array") then .permissions.allow = (($al // []) + $pa) else . end
+    | choices($r) | . as $n
+    | {doc: $n, keys: [[["statusLine", "statusLine"], ["options", "pluginConfigs"], ["autoMode", "autoMode"], ["permissions", "permissions"]][]
+        | select($d[.[1]] != $n[.[1]]) | .[0]]}' <<<"$doc" 2>/dev/null) \
+    || { echo "commandeck: $f is not JSON; left as it is" >&2; return 1; }
+  [ "$(jq '.keys | length' <<<"$out")" != 0 ] || return 0
+  jq .doc <<<"$out" | il_write "$f" \
+    && il_set "$m" --arg p "$f" --arg at "$(date -u +%FT%TZ)" --argjson k "$(jq -c .keys <<<"$out")" '.entries[$p].repaired = {at: $at, keys: $k}'
+}
+# il_profile_repair_report -- the doctor's lines on profile files an Orca launch overwrote, and on the owner's choices
+# made in them with scripts/revoke.sh, "ok <what happened>".
+il_profile_repair_report() {
+  jq -r '.entries | to_entries[]
+    | (select(.value.repaired) | "ok profile settings: \(.key) was overwritten at a launch and repaired at \(.value.repaired.at) (\(.value.repaired.keys | join(", "))); a hand edit of setup'"'"'s status line, options, auto-mode lines or permission rules is undone at the next launch: remove one, or keep your own value, with /commandeck:revoke"),
+      (select((.value.revoked // {}) != {}) | .key as $f | .value.revoked as $v | [($v.added // [])[],
+        (($v.autoMode // []) | length | select(. > 0) | "\(.) auto-mode line\(if . > 1 then "s" else "" end)"),
+        ($v.statusLine // empty | "the status line \(if .keep == null then "(removed)" else "(kept: your own)" end)"),
+        ($v.options // {} | to_entries[] | .key as $p | .value | to_entries[] | "option \($p) \(.key) \(if .value.keep == null then "(removed)" else "(kept: \(.value.keep | tojson))" end)")]
+        | select(length > 0) | "ok profile settings: \($f): chosen with /commandeck:revoke, a launch does not put setup'"'"'s value back: \(join(", "))")' "$IL_MACHINE" 2>/dev/null || true
+}
 # il_status_was <manifest> <user settings> -- the status line in that file now, before setup sets its own. The first
 # one setup replaces in each profile's file is the owner's; a second answer must not take the first for it.
 il_status_was() {
@@ -480,12 +587,16 @@ il_status_was() {
   d=$(il_read "$2") || return 1; w=$(jq -c '.statusLine // null' <<<"$d" 2>/dev/null) || w=
   il_set "$1" --arg p "$2" --argjson was "${w:-null}" '.entries[$p].statusLine = {was: $was}'
 }
-# il_status_set <manifest> <user settings> <command> -- setup's status line into the file, and recorded as set.
+# il_status_set <manifest> <user settings> <command> -- setup's status line into the file, and recorded as set. One the
+# owner chose with revoke.sh is left as the choice has it.
 il_status_set() {
-  local st
+  local st rec set
   st=$(il_read "$2") || return 1; [ -n "${st//[[:space:]]/}" ] || st='{}'
-  st=$(jq --arg c "$3" '.statusLine = {type: "command", command: $c}' <<<"$st") && il_write "$2" <<<"$st" \
-    && il_set "$1" --arg p "$2" --argjson set "$(jq -c .statusLine <<<"$st")" '.entries[$p].statusLine.set = $set'
+  rec=$(il_profile_record "$1" "$2"); [ -n "$rec" ] || rec='{"revoked": {}}'
+  set=$(jq -cn --arg c "$3" '{type: "command", command: $c}')
+  ! jq -e '.revoked | has("statusLine")' <<<"$rec" >/dev/null || il_choice_note status-line
+  st=$(jq --argjson s "$set" --argjson r "$rec" "$IL_CHOICES"'(if $r.revoked | has("statusLine") then . else .statusLine = $s end) | choices($r)' <<<"$st") \
+    && il_write "$2" <<<"$st" && il_set "$1" --arg p "$2" --argjson set "$set" '.entries[$p].statusLine.set = $set'
 }
 # il_status_out <manifest> <user settings> -- the status line setup set goes back to the one before it; one the owner
 # set since is the owner's. A manifest from before status lines were kept per file has one top-level record: today's

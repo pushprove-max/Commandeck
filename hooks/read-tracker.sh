@@ -88,7 +88,8 @@ PY
   [ -z "$LINE" ] || [ -z "$IDS" ] || timeout 10 orca-ide orchestration $LINE \
     --subject "$(basename "$DIR"): $MCP_UNUSED_AFTER shell searches, no serena or codebase-memory call" \
     --body "Worker $(basename "$DIR") (pane ${ORCA_TERMINAL_HANDLE:-unknown}, session $MCP_KEY) has run $MCP_UNUSED_AFTER source searches and no MCP call." \
-    $IDS --json >/dev/null 2>&1 || true
+    $IDS --json >/dev/null 2>&1 && R=sent || R=refused
+  [ -z "$LINE" ] || [ -z "$IDS" ] || { . "${BASH_SOURCE[0]%/*}/lib/wake-log.sh" 2>/dev/null; hook_wake_log read-tracker main "$MCP_UNUSED_AFTER shell searches, no MCP call" "$R"; }
   echo "MCP UNUSED: $MCP_UNUSED_AFTER shell searches and not one serena or codebase-memory call. Use serena find_symbol / find_referencing_symbols and codebase-memory search_graph / trace_path for code; if they are missing from this session, stop and say so. Main has been told." >&2
   return 2
 }

@@ -26,6 +26,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 const cwd = args[args.indexOf("--cwd") + 1], promptFile = args[args.indexOf("--prompt-file") + 1];
+// STUB_SLEEP: seconds the reviewer takes, so a pass can be seen waiting on it.
+await new Promise((r) => setTimeout(r, Number(process.env.STUB_SLEEP || 0) * 1000));
 const id = `${process.env.STUB_THREAD}-${promptFile.match(/-prompt-(\d+)\.md$/)[1]}`;
 const reply = process.env.STUB_REPLY || "Clean.\nVERDICT: GO";
 const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"]).toString().trim();

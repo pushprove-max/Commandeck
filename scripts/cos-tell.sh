@@ -19,7 +19,8 @@ if [ "${1:-}" = --note ]; then
   FROM=$(pp_sender) || FROM=
   OUT=$(orca-ide orchestration send --run "$RUN" ${FROM:+--from "$FROM"} --to "run:$RUN" --type status --subject "$2" --body "$3" --json 2>&1)
   jq -e '.ok == true and ([.. | strings | select(test("^msg_"))] | length > 0) and (tostring | test("not durable") | not)' <<<"$OUT" >/dev/null 2>&1 \
-    || { echo "cos-tell: NOT sent: Orca did not confirm a stored message to run:$RUN: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+    || { pp_wake_log cos-tell "run:$RUN" "note: ${2:0:60}" refused "$(head -c 200 <<<"$OUT")"; echo "cos-tell: NOT sent: Orca did not confirm a stored message to run:$RUN: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+  pp_wake_log cos-tell "run:$RUN" "note: ${2:0:60}" sent
   # The owner's message to main has its reply (to-main.sh), when main sent this: a worker's note is not one,
   # and neither is this note to a message marked while it was being sent.
   [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef "$PP_MAIN" ] && pp_owed_clear "$SENT"
@@ -33,7 +34,9 @@ TEXT=${*:-$(cat)}
 OUT=$(orca-ide terminal send --terminal "$HANDLE" --text "[dictated] $TEXT" --enter --json 2>&1)
 # accepted:false: Orca took the request and typed nothing (a paired phone can hold the pane's keyboard).
 if jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$OUT"; then
+  pp_wake_log cos-tell "$HANDLE" dictation refused "accepted:false"
   echo "cos-tell: NOT sent: Orca took no input in the relay pane (accepted:false); a paired phone may hold its keyboard. Main's notes go with --note, which does not type" >&2; exit 1
 fi
-jq -e '.ok == true' >/dev/null 2>&1 <<<"$OUT" || { echo "cos-tell: NOT sent: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+jq -e '.ok == true' >/dev/null 2>&1 <<<"$OUT" || { pp_wake_log cos-tell "$HANDLE" dictation refused "$(head -c 200 <<<"$OUT")"; echo "cos-tell: NOT sent: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
+pp_wake_log cos-tell "$HANDLE" dictation sent
 echo "Sent to the Chief of Staff"

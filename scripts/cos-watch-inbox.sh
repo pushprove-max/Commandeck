@@ -86,13 +86,15 @@ main_silent() {
   } 9>>"$PP_SCRATCH/cos-owed.lock"
   return 0
 }
+# poll_failed -- Orca gave no inbox or run: the wake log says so once per outage (a poll is every 20 s), and not again until a poll reads.
+poll_failed() { [ -e "$COS_KEY.poll-failing" ] || { pp_wake_log cos-watch-inbox chief-of-staff "inbox poll" refused "$1"; : > "$COS_KEY.poll-failing"; }; }
 poll_n() { # rows to ask for
-  local run coord
+  local run coord rc
   run=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   # No answer is not "no orchestrator": a note judged without the run's record
   # would be passed over and marked read, so the poll tries again instead.
   coord=$(orca-ide orchestration run-list --json 2>/dev/null \
-    | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || return 1
+    | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || { poll_failed "run-list gave no answer"; return 1; }
   orca-ide orchestration inbox --limit "$1" --json 2>/dev/null | python3 -c '
 import datetime, fcntl, json, os, re, subprocess, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
@@ -238,5 +240,8 @@ except OSError as e:
     sys.exit(f"cos-watch-inbox: the batch was not shown or not marked shown ({e}); the next poll shows it")
 sys.exit(0)
 ' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES"
+  rc=$?
+  if [ "$rc" = 1 ]; then poll_failed "the inbox read failed"; else rm -f "$COS_KEY.poll-failing"; fi
+  return "$rc"
 }
 cos_wait 20 poll

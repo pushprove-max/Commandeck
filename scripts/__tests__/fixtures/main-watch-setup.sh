@@ -41,7 +41,9 @@ case "\$1 \$2" in
     n=\$(( \$(wc -l < "$F/tasks") + 1 )); echo "task_new\$n pending" >> "$F/tasks"
     echo "{\"ok\":true,\"result\":{\"task\":{\"id\":\"task_new\$n\"}}}" ;;
   # With live-inbox, a send also lands unread in inbox.jsonl (created at COMMANDECK_NOW), which the inbox read answers.
+  # refuse-sends: Orca takes no send (the request is recorded all the same).
   "orchestration send") printf '%s' "\$*" | tr '\n' ' ' >> "$T/sends"; echo >> "$T/sends"
+    [ ! -e "$F/refuse-sends" ] || { echo '{"ok":false,"error":{"message":"refused by the fake"}}'; exit 1; }
     if [ -e "$F/live-inbox" ]; then while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --type) ty=\$2 ;; --subject) su=\$2 ;; esac; shift; done
       jq -nc --arg to "\$to" --arg f "\${fr:-}" --arg t "\$ty" --arg s "\$su" --argjson at "\${COMMANDECK_NOW:-0}" \
         '{id: "s\(\$at)", to_handle: \$to, from_handle: \$f, type: \$t, subject: \$s, read: 0, created_at: (\$at | todate)}' >> "$F/inbox.jsonl"; fi
@@ -51,7 +53,9 @@ case "\$1 \$2" in
     if [ -e "$F/no-turn" ]; then echo '{"ok":true,"result":{"stages":["typed","submitted"]}}'
     else echo '{"ok":true,"result":{"stages":["typed","submitted","turn_started"]}}'; fi ;;
   # screen-<handle> and inbox-<handle> are one pane's own; screen and inbox are main's.
-  "terminal read") if [ -e "$F/screen-\$4" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen-\$4"
+  # read-fail: the read is refused (no tail), as when a pane closes under the watcher.
+  "terminal read") if [ -e "$F/read-fail" ]; then echo '{"ok":false}'; exit 1
+    elif [ -e "$F/screen-\$4" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen-\$4"
     elif [ -e "$F/screen" ]; then jq -Rn '{result:{terminal:{tail:[inputs],latestCursor:"0"}}}' < "$F/screen"
     else echo '{"result":{"terminal":{"tail":[],"latestCursor":"0"}}}'; fi ;;
   # With no-identity, Orca names no pane's agent (agentIdentity null), as it lists main's panes on some hosts.

@@ -624,7 +624,8 @@ collect)
      && { ! pp_main_foreground || pp_waited_on "$H" "" "$V"$'\n'"$OUT"; }; then
     orca-ide orchestration send --run "$SEND_RUN" --to "run:$SEND_RUN" --type question \
       --subject "seat $ROLE $UNIT: ${V#VERDICT: }" --body "$V" --json >/dev/null \
-      || echo "seat: could not wake main for $ROLE $UNIT" >&2
+      && pp_wake_log seat "run:$SEND_RUN" "seat $ROLE $UNIT: ${V#VERDICT: }" sent \
+      || { pp_wake_log seat "run:$SEND_RUN" "seat $ROLE $UNIT: ${V#VERDICT: }" refused; echo "seat: could not wake main for $ROLE $UNIT" >&2; }
   fi
   [ -n "$V" ] || { echo "no VERDICT yet on $H (pane kept open)"; exit 3; }
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac

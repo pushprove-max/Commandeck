@@ -30,6 +30,8 @@ OWNER=$(jq -r '.project // empty' "$IL_PROJECT" 2>/dev/null || true)
 [ -z "$OWNER" ] || [ "$(pp_norm "$OWNER")" = "$(pp_norm "$PP_MAIN")" ] \
   || { echo "uninstall: the install record $IL_PROJECT belongs to the project at $OWNER, not to $PP_MAIN. Nothing was changed; run this in $OWNER to take that project out." >&2; exit 1; }
 
+# The whole run holds il_profile_lock: a launch's repair in another pane waits, and does not put back what this takes out.
+[ ! -d "$IL_DIR" ] || il_profile_lock 60 || { echo "uninstall: the install folder $IL_DIR stayed locked (a launch's repair or a revoke); nothing was changed, run this again" >&2; exit 1; }
 if [ -s "$IL_PROJECT" ]; then
   bash "$HERE/main-watch.sh" --uninstall >/dev/null
   # Only a registration setup made: a line the owner put there first stays.

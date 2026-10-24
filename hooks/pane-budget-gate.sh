@@ -114,6 +114,9 @@ if [ -n "$SID" ] && [ ! -e "$MCP_CHECKED" ]; then
       --subject "$UNIT: $MISSING missing from the worker pane" \
       --body "Worker $UNIT (pane ${ORCA_TERMINAL_HANDLE:-unknown}, session $SID) started without $MISSING: no server process under claude pid $CLAUDE_PID." \
       --json >/dev/null 2>&1 || TOLD="Main has been told. Stop and wait"
+    . "${BASH_SOURCE[0]%/*}/lib/wake-log.sh" 2>/dev/null
+    case $TOLD in "Main has been told"*) R=sent ;; *) R=refused ;; esac
+    hook_wake_log pane-budget-gate "run:${RUN:-none}" "$UNIT: $MISSING missing" "$R"
     echo "BLOCKED: $WHY, on a second look. $TOLD for main's answer. Do not work around it with rg or sed." >&2
     exit 2
   fi

@@ -107,8 +107,14 @@ main_collect() { (export COMMANDECK_RUN=run-1 CLAUDECODE=1; unset COMMANDECK_FOR
 sends() { grep -c 'orchestration send' "$T/wakes" 2>/dev/null || true; }
 rlaunch plan-author "$T/pr-spec.md"; echo PLAN-DONE > "$T/screen"; rm -f "$HOME/.commandeck/scratch/"*/waiting-h1; : > "$T/wakes"
 main_collect; check "collect sends nothing for a finish no wait claimed" '0:0' "$?:$(sends)"
-rlaunch plan-author "$T/pr-spec.md"; echo PLAN-DONE > "$T/screen"; rwait plan-author; : > "$T/wakes"
+wakelog() { jq -rs 'map("\(.from):\(.to):\(.result)") | join(",")' "$HOME"/.commandeck/scratch/*/wake-log.jsonl 2>/dev/null; }
+rlaunch plan-author "$T/pr-spec.md"; echo PLAN-DONE > "$T/screen"; rwait plan-author; : > "$T/wakes"; rm -f "$HOME"/.commandeck/scratch/*/wake-log.jsonl
 main_collect; check "a finish a wait claimed is sent once" '0:1' "$?:$(sends)"
+# Issue 331: the collect that wakes main writes one sent line to main's run; a send Orca refuses writes one refused line.
+check "a collect that wakes main writes one sent line to the run" "seat:run:run-1:sent" "$(wakelog)"
+rlaunch plan-author "$T/pr-spec.md"; echo PLAN-DONE > "$T/screen"; rwait plan-author; : > "$T/wakes"; rm -f "$HOME"/.commandeck/scratch/*/wake-log.jsonl
+touch "$T/send-refuses"; main_collect; rm -f "$T/send-refuses"
+check "and a send Orca refuses writes one refused line" "seat:run:run-1:refused" "$(wakelog)"
 rlaunch plan-author "$T/pr-spec.md"; idle plan-author PLAN-DONE; echo PLAN-DONE > "$T/screen"; rwait plan-author; said run:run-1 'Plan written: pr' 'PLAN-DONE' $(($(date +%s) + 1)); : > "$T/wakes"
 main_collect; check "collect sends nothing for a finish the seat reported itself" '0:0' "$?:$(sends)"
 # A report of a type wakeKinds holds (status), unread, has not reached main: the finish is still owed, and collect

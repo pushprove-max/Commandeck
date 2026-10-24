@@ -22,7 +22,10 @@ case "\$1 \$2" in
   "orchestration send") [ ! -e "$T/send-fail" ] || { cat "$T/send-fail"; exit 1; }
     [ ! -e "$T/need-from" ] || [[ " \$* " == *" --from "* ]] || { echo '{"ok":false,"error":{"message":"Could not determine the sender terminal"}}'; exit 1; }
     while [ \$# -gt 0 ]; do case \$1 in --to) to=\$2 ;; --from) fr=\$2 ;; --subject) s=\$2 ;; --type) ty=\$2 ;; --body) b=\$2 ;; esac; shift; done
-    jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" --arg to "\$to" --arg f "\${fr:-}" '{subject: \$s, type: \$t, body: \$b, to_handle: \$to, from_handle: \$f, read: 0, created_at: (now | todate)}' >> "$T/inbox-\$to"; echo '{"ok":true}' ;;
+    # send-fail-<handle>: Orca refuses a send to that pane; on-fail then runs, as a restart between the lookup and the retry.
+    [ ! -e "$T/send-fail-\$to" ] || { [ ! -e "$T/on-fail" ] || bash "$T/on-fail"; cat "$T/send-fail-\$to"; exit 1; }
+    jq -cn --arg s "\$s" --arg t "\$ty" --arg b "\$b" --arg to "\$to" --arg f "\${fr:-}" '{subject: \$s, type: \$t, body: \$b, to_handle: \$to, from_handle: \$f, read: 0, created_at: (now | todate)}' >> "$T/inbox-\$to"
+    if [ -e "$T/msg-id" ]; then echo '{"ok":true,"result":{"message":{"id":"msg_t1"}}}'; else echo '{"ok":true}'; fi ;;
   "orchestration inbox") cat "$T"/inbox-* 2>/dev/null | jq -s '{ok: true, result: {messages: .}}' ;;
   "orchestration check") h=\$4; [ ! -e "$T/fail-\$h" ] || exit 1; [ ! -e "$T/hang" ] && [ ! -e "$T/hang-\$h" ] || sleep 10; jq -s '{ok: true, result: {messages: .}}' "$T/inbox-\$h" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; rm -f "$T/inbox-\$h" ;;
   "terminal read") jq -Rn --arg h "\$4" '{ok: true, result: {terminal: {handle: \$h, tail: [inputs]}}}' "$T/screen-\$4" 2>/dev/null || exit 1 ;;
@@ -189,6 +192,50 @@ rm -f "$T"/inbox-*; touch "$T/need-from"
 check "to-main.sh question from a service env: sent with --from and accepted" "to-main: sent to main (term_20):term_20" \
   "$(cd "$T/p" && env -u ORCA_TERMINAL_HANDLE "${E[@]}" bash "$REAL/scripts/to-main.sh" question q1 b 2>&1):$(jq -r .from_handle "$T/inbox-term_20" 2>/dev/null)"
 rm -f "$T/need-from"
+# A question to main is waited on by its message id (ask-main.sh): the sent line carries it.
+rm -f "$T"/inbox-*; touch "$T/msg-id"
+check "a delivered send prints the message id on its sent line" "to-main: sent to main (term_20) id msg_t1" "$(send idq)"
+rm -f "$T/msg-id" "$T"/inbox-*
+# A pane that closed after the lookup: Orca refuses with terminal_not_found. The send is looked up once more.
+GONE='{"ok":false,"error":{"code":"terminal_not_found","message":"Terminal term_gone has no live pane or durable Run/Dispatch mailbox."}}'
+rm -rf "$T/scratch/queue"; main_is term_gone; start term_gone >/dev/null; echo "$GONE" > "$T/send-fail-term_gone"
+OUT=$(send closed); RC=$?
+check "send with no live main is queued, not lost: exit 3 and the queue holds the message once" "3:1" \
+  "$RC:$(grep -c 'body of closed' "$T/scratch/queue/main.jsonl" 2>/dev/null)"
+# The new main appeared between the lookup and the retry: the retry goes to it.
+rm -rf "$T/scratch/queue" "$T"/inbox-*
+printf '%s\n' "jq -n --arg p '$T/p' '{result: {terminals: [{handle: \"term_new\", worktreePath: \$p, agentIdentity: \"claude\"}]}}' > '$T/list.json'; echo term_new >> '$T/scratch/handles/main'" > "$T/on-fail"
+OUT=$(send moved); RC=$?
+check "a refusal for a closed pane retries on the new live main" "0:to-main: sent to main (term_new):1" \
+  "$RC:$OUT:$(grep -c 'body of moved' "$T/inbox-term_new" 2>/dev/null)"
+rm -f "$T/on-fail" "$T/send-fail-term_gone" "$T"/inbox-*
+# Any other refusal is a failure, not a closed pane.
+rm -rf "$T/scratch/queue"; main_is term_busy; start term_busy >/dev/null
+echo '{"ok":false,"error":{"code":"invalid_argument","message":"bad subject"}}' > "$T/send-fail-term_busy"
+send other >/dev/null; RC=$?
+check "another refusal still exits 1 and queues nothing" "1:no" "$RC:$([ -e "$T/scratch/queue/main.jsonl" ] && echo yes || echo no)"
+rm -f "$T/send-fail-term_busy"
+# A recorded handle that is no longer live (a handoff whose new pane has not started its own drain) does not hide the live main.
+echo term_dead > "$T/scratch/handles/main"; main_is term_live
+check "a dead recorded handle falls back to the live pane in main's checkout" "to-main: sent to main (term_live)" "$(send fallback)"
+# Main running in another checkout: the fallback looks in COMMANDECK_MAIN_PANE_DIR, as main-watch does.
+mkdir -p "$T/other"; jq -n --arg p "$T/other" '{result: {terminals: [{handle: "term_elsewhere", worktreePath: $p, agentIdentity: "claude"}]}}' > "$T/list.json"
+check "a dead recorded handle falls back to the live pane in COMMANDECK_MAIN_PANE_DIR" "to-main: sent to main (term_elsewhere)" \
+  "$(cd "$T/p" && "${E[@]}" COMMANDECK_MAIN_PANE_DIR="$T/other" bash "$REAL/scripts/to-main.sh" status elsewhere "body" 2>&1)"
+
+# Issue 331: each send leaves one line in the wake log with its result, so a message that never woke main can be found.
+WLJ=$T/scratch/wake-log.jsonl
+logged() { jq -rs 'map("\(.from):\(.result)") | join(",")' "$WLJ" 2>/dev/null; }
+rm -f "$WLJ" "$T"/inbox-*; main_is term_w; start term_w >/dev/null; send logsent >/dev/null
+check "a delivered send writes one sent line" "to-main:sent" "$(logged)"
+rm -f "$WLJ"; printf 'Which release?\n> 1. 0.18.0\nEnter to select, Esc to cancel\n' > "$T/screen-term_w"; send logblocked >/dev/null
+check "a pane with an open prompt writes sent_blocked" "to-main:sent_blocked" "$(logged)"
+rm -f "$WLJ" "$T/screen-term_w"; echo '{"ok":false,"error":{"message":"terminal term_w is not accepting input"}}' > "$T/send-fail"; send logrefused >/dev/null
+check "a refused send writes one refused line carrying Orca's reason" "to-main:refused:terminal term_w is not accepting input" \
+  "$(logged):$(jq -rs 'last | .error' "$WLJ")"
+rm -f "$WLJ" "$T/send-fail"; main_is ''; send logqueued >/dev/null
+check "no live main writes one queued line" "to-main:queued" "$(logged)"
+main_is term_w
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

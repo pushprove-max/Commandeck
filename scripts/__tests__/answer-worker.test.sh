@@ -65,6 +65,12 @@ check "a mid-turn pane given u1-msg_q1 is answered by orchestration reply --id m
 : > "$T/replies"
 OUT=$(answer term_b "pick three" msg_q1); RC=$?
 check "a bare msg_ id names the reply too" "0:1" "$RC:$(grep -c '^msg_q1 ' "$T/replies")"
+# Issue 331: each answer leaves one line in the wake log, to the Builder's handle, so an answer that never reached it shows.
+WLN=$(wc -l < "$T/scratch/wake-log.jsonl" 2>/dev/null | tr -d ' ')
+OUT=$(answer term_b "pick two again" u1-msg_q1); RC=$?
+check "an inbox reply writes one line to the Builder's handle" "1:answer-worker:term_b:sent" \
+  "$(( $(wc -l < "$T/scratch/wake-log.jsonl" | tr -d ' ') - WLN )):$(tail -1 "$T/scratch/wake-log.jsonl" | jq -r '"\(.from):\(.to):\(.result)"')"
+: > "$T/replies"
 # Green pins: the fallback and the queued report the reply must not break.
 : > "$T/replies"; : > "$T/inbox"
 OUT=$(answer term_b "pick four"); RC=$?

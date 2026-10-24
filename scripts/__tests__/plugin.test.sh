@@ -110,7 +110,7 @@ for d in "$REAL"/skills/*/; do
   check "skills/$n description plus when_to_use is at most 1,536 characters" ok \
     "$([ "$(awk '/^---$/ {k++; next} k == 1 && /^(description|when_to_use): / {sub(/^[a-z_]+: /, ""); c += length($0)} END {print c + 0}' "$d/SKILL.md")" -le 1536 ] && echo ok || echo long)"
 done
-for n in setup update uninstall handoff worktreereview; do
+for n in setup update uninstall handoff worktreereview revoke; do
   check "skills/$n sets disable-model-invocation: a side-effect skill Claude could start by itself is the failure" 1 \
     "$(grep -c '^disable-model-invocation: true$' "$REAL/skills/$n/SKILL.md")"
 done
@@ -119,8 +119,8 @@ done
 # a Signal WARM line, and a worker's ask and its wait for main's answer to an owner question each fit under the prompt
 # cache (issue 214).
 BT=$REAL/templates/_builder-brief-template.md
-check "the Builder template carries the helper caps, the reuse rule, the WARM reply, the 240 s ask and the 240 s owner-answer wait" "1 1 1 1 2" \
-  "$(for p in '20th tool call' 'NOT FOUND: <what' 'already answered part of it' 'Signal WARM' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
+check "the Builder template carries the helper caps, the reuse rule, the WARM reply, the 240 s ask and the 240 s owner-answer wait" "1 1 1 1 1 1" \
+  "$(for p in '20th tool call' 'NOT FOUND: <what' 'already answered part of it' 'Signal WARM' 'question, 240 s at most per call' 'timeout-ms 240000'; do grep -c -- "$p" "$BT"; done | paste -sd' ' -)"
 # A helper is a built-in type (Explore or general-purpose): a plugin agent folder would be one more set of agents to keep.
 check "the plugin ships no agents/ folder" no "$([ -e "$REAL/agents" ] && echo yes || echo no)"
 # Every key merge-unit-local.sh reads from .claude/commandeck.json must survive setup's rebuild of that file

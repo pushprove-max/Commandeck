@@ -39,6 +39,8 @@ check "main gets the order as a question, with the ruling id" "question 1 1" \
   "$(jq -r .type "$T/sent" 2>/dev/null) $(grep -c 'r-19991017-111111-p-d4e5f6' "$T/sent" 2>/dev/null) $(jq -r .body "$T/sent" 2>/dev/null | grep -cx 'yes, ship it')"
 check "the decision is marked seen once, and one line is printed" "1 0 1" \
   "$(grep -c '^ship-x@' "$SEEN" 2>/dev/null) $RC $(grep -c . <<<"$OUT")"
+# Issue 331: the order goes through to-main.sh, which writes the one line to the wake log.
+check "an order relayed to main writes one sent line" "sent" "$(jq -rs '[.[] | select(.from == "to-main") | .result] | join(",")' "$T/scratch/wake-log.jsonl" 2>/dev/null)"
 : > "$T/sent"; cp "$T/p/.claude/metrics/decisions.jsonl" "$T/ledger-before"
 OUT=$(order nope "yes, ship it"); RC=$?
 check "an unknown decision exits 1 and changes nothing" "1 0 same 1" \

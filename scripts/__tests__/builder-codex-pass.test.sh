@@ -141,5 +141,12 @@ opts '{"codexReviewerModel": "opus"}'
 check "a reviewer model the key does not take is refused naming the key" "1" "$(pre >/dev/null; grep -c 'codexReviewerModel' "$TMP/err")"
 rm -f "$HOME/.claude/settings.json"
 
+# Issue 335: a pass that waits on its reviewers in silence reads as a hung one. It says it started, then that it runs.
+printf 'echo five\n' > "$W/a.sh"
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' STUB_THREAD=thr-6 STUB_SLEEP=4 COMMANDECK_PASS_TICK=1 \
+  bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err")
+check "a pass whose fake reviewer runs several ticks prints the start line and at least two progress lines" "1 1" \
+  "$(grep -c '^pass 6: 1 reviewer(s) started$' "$TMP/out") $([ "$(grep -c '^pass 6: reviewers running, 0 min, reviewer 1 session' "$TMP/out")" -ge 2 ] && echo 1 || echo 0)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -1210,6 +1210,18 @@ test("main's card shows working now, rebuild cost, the hourly spark and the week
   assert.equal(w.document.querySelector('#main-seat .hourly i:last-child').style.height, '100%', 'the busiest hour is full height');
 });
 
+test("main's card shows the wakes of the last hour and the ones that failed; a clean hour shows the count alone; no figure shows no fact", () => {
+  const w = fresh();
+  show(w, { seats: { main: seat({ wakes: { hour: 7, failed: { no_pane: 3, refused: 1 } } }), relay: relaySeat() } });
+  assert.equal(seatFacts(w, 'main-seat')['Wakes, 1 h'], '7 · failed: no_pane 3, refused 1');
+  w.refresh();
+  show(w, { seats: { main: seat({ wakes: { hour: 2, failed: {} } }) } });
+  assert.equal(seatFacts(w, 'main-seat')['Wakes, 1 h'], '2');
+  w.refresh();
+  show(w, { seats: { main: seat({ wakes: null }) } });
+  assert.equal('Wakes, 1 h' in seatFacts(w, 'main-seat'), false);
+});
+
 test('the relay card shows side runs today and no rebuild cost', () => {
   const w = fresh();
   show(w, { seats: { main: seat(), relay: relaySeat() } });

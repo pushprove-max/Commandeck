@@ -120,6 +120,11 @@ if [ -n "$PROFILE" ]; then
   ok "serena hooks (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG" 2>/dev/null)"
   if MW=$(bash "$HERE/main-watch.sh" --status 2>&1); then ok "main-watch"
   else bad "main-watch: not running, so nothing wakes the orchestrator; run: bash $(printf '%q' "$HERE")/main-watch.sh --install"; fi
+  # Issue 331: the watcher's latest wake of main found no pane (the pane runs in another checkout, or is down).
+  # "Since" is the first of the unbroken run of no_pane wakes.
+  NP=$(jq -rs '[.[] | objects | select(.from == "main-watch" and .reason == "wake")] | reverse | . as $r
+    | ([range(0; length)] | map(select($r[.].result != "no_pane")) | first // length) as $n | if $n == 0 then empty else $r[$n - 1].at end' "$PP_SCRATCH/wake-log.jsonl" 2>/dev/null)
+  [ -z "$NP" ] || bad "main-watch cannot find main's pane since $NP; set COMMANDECK_MAIN_PANE_DIR if main runs in another checkout"
   # The pass runs on the reviewer's agent key (codexReviewerAgent), which may differ from the profile.
   if ! PASS=$(pp_pass 2>&1); then bad "review pass: ${PASS#REFUSED: }"
   elif ERR=$(COMMANDECK_PASS=$PASS bash "$HERE/builder-codex-pass.sh" --preflight 2>&1 >/dev/null); then ok "review pass ($PASS)"
@@ -143,6 +148,7 @@ fi
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_auto_mode_report)
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_cache_ttl_report)
 while IFS= read -r L; do if [ "${L%% *}" = ok ]; then ok "${L#ok }"; else warn "${L#warn }"; fi; done < <(il_shadow_report)
+while IFS= read -r L; do ok "${L#ok }"; done < <(il_profile_repair_report)
 if [ "$PROFILE" = claude-openai ]; then
   N=$(il_codex_count "$IL_ROOT") ALL=$(il_codex_count)
   if [ "$N" = 5 ] && [ "$ALL" = 5 ]; then ok "codex hooks: five entries in $IL_CODEX/hooks.json run this plugin"
