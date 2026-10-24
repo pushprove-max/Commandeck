@@ -62,7 +62,7 @@ planAuthorFast|false|Ask "Fast tier", one multi-select question (`multiSelect: t
 maxReviewRounds|"none"|Ask "Review rounds": No cap
 closingPass|true|Ask "Closing pass": Runs
 fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
-ponytail|true|Ask "Ponytail": On
+ponytail|"lite"|Ask "Ponytail": Lite
 promptCacheTtl|"5m"|Ask "Prompt cache": 5m for main and workers
 relayPromptCacheTtl|"1h"|Ask "Relay prompt cache": 1h
 dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only

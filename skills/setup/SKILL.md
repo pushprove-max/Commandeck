@@ -190,9 +190,11 @@ Ask them in this order, up to four questions per call.
     - Off: only the safety hooks (lost work, wrong commits). `--no-strict`
     - On: also search before reading, and one test run per change. `--strict`
 11. The ponytail skill?
-    Ask "Ponytail": On (recommended) | Off
-    - On: the ponytail skill (/ponytail), smallest-change coding rules; costs nothing until asked for. `--ponytail`
-    - Off: not installed; a copy an earlier setup installed is removed. `--no-ponytail`
+    Ask "Ponytail": Lite (recommended) | Off | Full | Ultra
+    - Lite: the ponytail skill (/ponytail), smallest-change coding rules at the lite level (build what was asked, name the smaller option); costs nothing until asked for. `--ponytail lite`
+    - Full: the smallest complete change. `--ponytail full`
+    - Ultra: also pushes back on parts the need does not justify. `--ponytail ultra`
+    - Off: not installed; a copy an earlier setup installed is removed; the Builder brief names no ponytail line. `--ponytail off`
     Then, how long Claude keeps a conversation's prompt cache:
     Ask "Prompt cache": 5m for main and workers (recommended) | Leave as is
     - 5m for main and workers: Main, Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too. On real sessions a 5-minute cache cost about 5% less for main and 6 to 17% less for worker panes: they seldom pause long enough for a 1-hour cache to pay. Saved in `.claude/settings.json` and each worktree's `.claude/settings.local.json`. `--cache-ttl 5m`

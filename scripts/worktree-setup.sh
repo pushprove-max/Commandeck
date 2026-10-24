@@ -194,9 +194,10 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 #     this run's only beside the summary hook, so an owner's own leaf is neither deleted, claimed nor swapped.
 CUTS=$(jq -c '{s: [.workerSkillsOff[]? | strings], p: [.workerPluginsOff[]? | strings], k: (.keeps | if type == "object" then . else {} end)}' "$PROJECT/.claude/commandeck.json" 2>/dev/null) || CUTS='{"s":[],"p":[],"k":{}}'
 PONY=0
-[ "$(PP_MAIN=$PROJECT pp_option ponytail)" = true ] \
+LEVEL=$(PP_MAIN=$PROJECT pp_option ponytail)
+[ "$LEVEL" != off ] \
   && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1 && PONY=1
-jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "cat \"$SUMMARY\"" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
+jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "echo \"Ponytail level: $LEVEL\"; cat \"$SUMMARY\"" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
   def keeps($w): ($keep | split(",") | index($w)) != null;
   ["anthropic-skills:computer-use", "anthropic-skills:built-in-browser", "anthropic-skills:chrome-browser"] as $m1
   | "stripe@claude-plugins-official" as $stripe

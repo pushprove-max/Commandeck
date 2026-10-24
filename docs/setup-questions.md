@@ -20,7 +20,7 @@ setup asks, the picker guard's stray-keypress option is off.
 | Merge check | the command that must pass before a merge, or none |
 | Full suite | on (recommended when the whole suite takes under about 10 minutes) or off: one full run of the test command per build, beside the closing review pass; a red run is a NO-GO (`--full-suite on\|off`) |
 | Strict hooks | off or on (see [Hooks](hooks.md)) |
-| Ponytail | on (the skill is installed) or off |
+| Ponytail | lite (the default), full or ultra (the skill is installed, and Builders run at that level), or off (`--ponytail off\|lite\|full\|ultra`) |
 | Prompt cache | 5m for main and worker panes (`promptCacheTtl` and `subagentPromptCacheTtl` in `.claude/settings.json`, `CLAUDE_CODE_PROMPT_CACHE_TTL` in each worktree's `settings.local.json`; a value you set stays), 1h for the relay pane (its worktree's `settings.local.json`, its other settings kept), each with Leave as is (writes nothing) |
 | Auto mode | add two lines to the auto-mode classifier's list in `~/.claude/settings.json` (kept with `"$defaults"`; they apply in every project on this machine), leave it as is (writes nothing), or take setup's lines out; a list of yours without `"$defaults"` is never touched |
 | Add-ons | All (the default), serena, agent-browser, or None; the script can select any name from `config/addons.tsv` (see [Add-ons](add-ons.md)) |

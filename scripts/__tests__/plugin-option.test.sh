@@ -3,7 +3,7 @@
 # project, so it beats the one this project saved; with none, the project's saved answer (the dashboard's: this
 # machine's file) runs as it did before 0.22.0, and with neither, the reader's old default; a role key (issue 312) reads
 # /config alone. What this pins, for one
-# boolean (ponytail), one picker (builderEffort) and one number (dashboardPort): each source present or absent, the
+# picker with a validated value (ponytail, a level), one picker (builderEffort) and one number (dashboardPort): each source present or absent, the
 # source named, the readers taking the /config answer, another plugin's options and the project's own settings files
 # never read, a /config answer the reader would not take refused, and setup's pre-fill writing only missing keys
 # and the answers given this run.
@@ -22,21 +22,30 @@ O() { L "echo \"\$(pp_option $1)|\$(pp_option $1 source)\""; }
 conf() { jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {options: $o}, "other@elsewhere": {options: {ponytail: true, builderEffort: "max"}}}}' > "$S"; }
 echo '{"version": 1, "profile": "claude"}' > "$P"; echo '{}' > "$S"
 
-check "boolean: with no answer anywhere, the reader's old default" "false|default" "$(O ponytail)"
+check "level: with no answer anywhere, lite" "lite|default" "$(O ponytail)"
 check "picker: with no answer anywhere, the routing file's own, as the doctor shows it" "high|default" "$(O builderEffort)"
 check "number: with no answer anywhere, none (setup's first free port)" "|default" "$(O dashboardPort)"
-check "another plugin's options are never read" "false|default" "$(conf '{}'; O ponytail)"
+check "another plugin's options are never read" "lite|default" "$(conf '{}'; O ponytail)"
 
 # The format 0.21.0 deployed: the answers in the project file, the dashboard's in the machine file.
-jq '. + {ponytail: true, builder: {effort: "medium"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
-check "boolean: the project's saved answer, with no /config one" "true|$P" "$(O ponytail)"
+jq '. + {ponytail: "ultra", builder: {effort: "medium"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
+check "level: the project's saved answer, with no /config one" "ultra|$P" "$(O ponytail)"
 # A role key (issue 312) reads no answer from the project's file: builder.effort there is an older setup's, not read.
 check "picker: a role key's project answer is not read, routing's own runs" "high|default" "$(O builderEffort)"
 check "number: the machine's saved port, with no /config one" "8795|$M" "$(O dashboardPort)"
 check "and the Builder's launch takes routing's effort, not the project's" high "$(L 'pp_route_json builder | jq -r .effort')"
 
-conf '{"ponytail": false, "builderEffort": "low", "dashboardPort": 8800}'
-check "boolean: a /config false beats the project's true" "false|/config" "$(O ponytail)"
+conf '{"ponytail": "off", "builderEffort": "low", "dashboardPort": 8800}'
+check "level: a /config off beats the project's ultra" "off|/config" "$(O ponytail)"
+# Issue 330: each of the four levels is read as it is; the booleans an earlier setup saved in the project file read as
+# off / lite; a project value that is no level takes the default rather than passing for a level.
+for l in off lite full ultra; do check "level: a /config $l is read as $l" "$l|/config" "$(conf "{\"ponytail\": \"$l\"}"; O ponytail)"; done
+cp "$P" "$T/P.keep"; conf '{}'
+for v in false:off true:lite '"bogus":lite'; do
+  jq --argjson v "${v%:*}" '.ponytail = $v' "$T/P.keep" > "$P"
+  check "level: the project's saved ${v%:*} reads as ${v#*:}" "${v#*:}" "$(O ponytail | cut -d'|' -f1)"
+done
+cp "$T/P.keep" "$P"; conf '{"ponytail": "off", "builderEffort": "low", "dashboardPort": 8800}'
 check "picker: the /config answer runs" "low|/config" "$(O builderEffort)"
 check "number: the /config port beats the machine's" "8800|/config" "$(O dashboardPort)"
 check "the Builder's launch takes the /config effort" low "$(L 'pp_route_json builder | jq -r .effort')"
@@ -208,14 +217,14 @@ check "uninstall would take out only the key that had no value" '{"fixerFirstMod
 rm "$S"; echo '{"version": 1, "entries": {}}' > "$M"; L 'il_plugin_options "$HOME/.claude/settings.json" "{}" "{\"builderModel\": \"sonnet\"}"' >/dev/null
 check "pre-fill with no user settings file creates it for a given answer, recorded as setup's" '{"builderModel":"sonnet"}|{"builderModel":"sonnet"}' \
   "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$S" 2>&1)|$(jq -c --arg s "$S" '.entries[$s].options["commandeck@commandeck"]' "$M")"
-echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/dev/null
-check "the plugin's key is the one it is enabled under" '{"ponytail":false}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
-check "and that is the one read" "false|/config" "$(O ponytail)"
+echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": \"off\"}"' >/dev/null
+check "the plugin's key is the one it is enabled under" '{"ponytail":"off"}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
+check "and that is the one read" "off|/config" "$(O ponytail)"
 # A disabled install's options left in settings are not the running plugin's: reader and pre-fill take the enabled key.
 echo '{"enabledPlugins":{"commandeck@a-old":false,"commandeck@commandeck":true},"pluginConfigs":{"commandeck@a-old":{"options":{"fullSuiteBeforeFinal":false}},"commandeck@commandeck":{"options":{"fullSuiteBeforeFinal":true}}}}' > "$S"
 check "a disabled install's /config answer is not read over the enabled one's" "true|/config" "$(O fullSuiteBeforeFinal)"
-L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": false}"' >/dev/null
-check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"ponytail":false}|{"fullSuiteBeforeFinal":false}' \
+L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": \"off\"}"' >/dev/null
+check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"ponytail":"off"}|{"fullSuiteBeforeFinal":false}' \
   "$(jq -cS '.pluginConfigs["commandeck@commandeck"].options, .pluginConfigs["commandeck@a-old"].options' "$S" | paste -sd'|' -)"
 
 # Uninstall takes out only what pre-fill added, while it still holds setup's value: the owner's /config answers stay.

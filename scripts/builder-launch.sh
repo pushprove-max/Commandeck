@@ -236,6 +236,10 @@ T=${T//'{reviewer}'/"${BY^}"}
 T=${T//'{pass-script}'/"builder-codex-pass.sh"}
 T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
+# The ponytail option's level; off drops the line.
+PONYLEVEL=$(pp_option ponytail) || exit 2
+if [ "$PONYLEVEL" = off ]; then T=${T/'{ponytail}'$'\n'/}
+else T=${T//'{ponytail}'/"- \`/ponytail $PONYLEVEL\`: the smallest complete change."}; fi
 # Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 [ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}

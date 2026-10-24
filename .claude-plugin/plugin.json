@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -223,10 +223,11 @@
       "default": true
     },
     "ponytail": {
-      "type": "boolean",
+      "type": "string",
       "title": "Ponytail",
-      "description": "Worker panes run the ponytail skill's smallest-change coding rules.",
-      "default": true
+      "description": "The ponytail skill's smallest-change coding rules in worker panes. off: none. lite: build what was asked, name the smaller option. full: the smallest complete change. ultra: also push back on parts the need does not justify.",
+      "options": ["off", "lite", "full", "ultra"],
+      "default": "lite"
     },
     "promptCacheTtl": {
       "type": "string",

@@ -15,7 +15,7 @@ any other line is refused.
 {design}
 ## How to work
 
-- `/ponytail full`: the smallest complete change.
+{ponytail}
 - Auto memory is off in this pane. If the work hinges on a ruling or fact the brief does not state, send main the
   question, then keep working on what the answer cannot affect; never guess it. A review finding that contradicts
   an owner ruling is not fixed: ask main, naming the ruling id.

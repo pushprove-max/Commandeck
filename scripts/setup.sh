@@ -9,7 +9,7 @@
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
-#          [--addons <name>[,<name>...]|none] [--ponytail|--no-ponytail] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
+#          [--addons <name>[,<name>...]|none] [--ponytail off|lite|full|ultra] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
 #   or: setup.sh --questions begin|end
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
@@ -33,7 +33,7 @@
 # paths), or ~/.claude/settings.json for every project. An owner's file setup
 # changes is copied beside it first (<file>.commandeck-bak-<date>). Every add-on
 # (or those --addons names) is installed or updated to its latest by its
-# config/addons.tsv command; the rest are printed. The ponytail skill is installed unless --no-ponytail.
+# config/addons.tsv command; the rest are printed. The ponytail skill is installed unless --ponytail off.
 # --cache-ttl 5m writes the prompt-cache lifetime of main and every worker pane (and subagents) as 5 minutes,
 # into the project's .claude/settings.json and each worktree's settings.local.json; leave writes nothing, and keeps
 # what an earlier run wrote. --relay-cache-ttl 1h does the same for the relay pane's worktree; leave writes
@@ -52,7 +52,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --ponytail --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -116,7 +116,7 @@ BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing)
 BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clearLine) else {} end' "$IL_CONFIG" 2>/dev/null || true); [ -n "$BUILDER" ] || BUILDER='{}'
 # This run's --option answers, {key: value}: each is saved over the key's value.
 GIVEN='{}'
-OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail) CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
+OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail | sed "s/^true$/lite/; s/^false$/off/") CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
 FULL=$(old .fullSuiteBeforeFinal) TRUSTALL=$(old .trustAllHooks)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
@@ -208,8 +208,7 @@ while [ $# -gt 0 ]; do
                   DROPS=$(jq -c --arg i "$2" --arg v "$([ "$1" = --rules-drop ] && echo keep-mine || echo keep-both)" '.[$i] = $v' <<<"$DROPS") ;; esac; shift 2 ;;
     # The add-ons to install or update this run (config/addons.tsv names), never saved; with none given, every one.
     --addons) ADDONS=${2//,/ } ADDONS_SET=1; [ "$2" != none ] || ADDONS=; shift 2 ;;
-    --ponytail) PONYTAIL=true; shift ;;
-    --no-ponytail) PONYTAIL=false; shift ;;
+    --ponytail) case $2 in off|lite|full|ultra) PONYTAIL=$2 ;; *) die "--ponytail takes off, lite, full or ultra, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --cache-ttl) case $2 in 5m|leave) CACHE=$2 ;; *) die "--cache-ttl takes 5m or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --relay-cache-ttl) case $2 in 1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
@@ -348,12 +347,12 @@ case $GCLAUDE$GRULES in *install*|*block*|*merge*) il_record "$IL_MACHINE" merge
 PONY=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/ponytail PONY_OURS=
 if il_has "$IL_MACHINE" "$PONY/SKILL.md" || { [ ! -e "$PONY" ] && [ ! -L "$PONY" ] \
   && ! jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; }; then
-  PONY_OURS=1; [ "$PONYTAIL" = false ] || il_record "$IL_MACHINE" own "$PONY/SKILL.md" "$PONY/LICENSE"
+  PONY_OURS=1; [ "$PONYTAIL" = off ] || il_record "$IL_MACHINE" own "$PONY/SKILL.md" "$PONY/LICENSE"
 fi
 # No --addons answer: every add-on, each run, so each is updated to its latest. The ponytail plugin only when the
 # owner has it on and wants ponytail: beside a ponytail skill it would load the same rules twice.
 if [ -z "$ADDONS_SET" ]; then
-  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != false ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
+  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != off ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
   # Installing serena turns its hooks on, as --addons serena does, unless an earlier or given answer says otherwise.
   SERENA=${SERENA:-true}
 fi
@@ -385,7 +384,7 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $own == {} then {} else {ownFiles: $own} end)
   + (if $rules == "" then {} else {rules: $rules} end)
   + (if $md == {} then {} else {mergeDecisions: $md} end)
-  + {ponytail: ($pony != "false")}
+  + {ponytail: ($pony | if . == "" then "lite" else . end)}
   + (if $cache == "" then {} else {cacheTtl: $cache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
   + (if $full == "" then {} else {fullSuiteBeforeFinal: ($full == "true")} end)
@@ -456,7 +455,7 @@ for f in "${OWN[@]}"; do
   # shellcheck disable=SC2086 # --drop/--keep and ids of 8 hex digits each
   il_own "$IL_PROJECT" "$PP_MAIN/$f" "$IL_ROOT/templates/${f#.claude/}" "$c" $D
 done
-if [ "$(pp_config_option ponytail || echo "$PONYTAIL")" = false ]; then
+if [ "$(pp_config_option ponytail || echo "$PONYTAIL")" = off ]; then
   if [ -n "$PONY_OURS" ] && [ -e "$PONY/SKILL.md" ]; then
     if [ -n "$PLAN" ]; then echo "plan: would remove the ponytail skill an earlier setup installed ($PONY)"
     else rm -f "$PONY/SKILL.md" "$PONY/LICENSE"; rmdir "$PONY" 2>/dev/null || true; fi
@@ -469,7 +468,7 @@ fi
 il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --argjson rl "$RL" \
   --arg full "$FULL" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
   {maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
-   closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony != "false"),
+   closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony | if . == "" then "lite" else . end),
    promptCacheTtl: $cache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
   | with_entries(select(.value != ""))')" "$GIVEN"
 # Main's model and effort (orchestratorModel, orchestratorEffort) go into the main checkout's own settings file.
@@ -606,7 +605,7 @@ done
 echo "serena (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG")"
 echo "full suite before the final review: $([ "$FULL" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
 [ "$PROFILE" != claude-openai ] || echo "trust every hook in the Codex home before each Codex launch: $([ "$TRUSTALL" = true ] && echo on || echo off) (setup.sh --trust-all-hooks on|off)"
-if [ "$PONYTAIL" = false ]; then echo "ponytail skill: off (--ponytail turns it on)"
+if [ "$PONYTAIL" = off ]; then echo "ponytail skill: off (--ponytail lite, full or ultra turns it on)"
 elif [ -n "$PONY_OURS" ]; then echo "ponytail skill: installed ($PONY)"
 else echo "ponytail skill: the one already on this machine was left as it is"; fi
 # Read back from the file, so an owner's own value shows as what it is.

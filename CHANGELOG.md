@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.42.0 -- 2026-10-23
+
+- Ponytail (#330): the ponytail option is a level, `off`, `lite`, `full` or `ultra`, and `lite` is the default. Set it
+  in `/plugin` config or with setup's `--ponytail off|lite|full|ultra`; `--no-ponytail` is gone. Builders run the
+  saved level (`/ponytail <level>` in the brief, no line when off), and the worktree hook prints it. A project that
+  saved `ponytail: true` or `false` reads it as `lite` or `off`.
+
 ## 0.41.0 -- 2026-10-23
 
 Built from the plugin issue batch of 2026-10-23: #292, #293, #327, #328 and #329. Nothing here is closed by this entry.

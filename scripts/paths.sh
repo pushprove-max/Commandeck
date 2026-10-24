@@ -1021,7 +1021,7 @@ pp_option() {
   case $1 in
     maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
-    fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=false ;;
+    fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=lite ;;
     trustAllHooks) p=.trustAllHooks d=false ;;
     promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
@@ -1038,6 +1038,8 @@ pp_option() {
   case $1 in
     wakeKinds) v=${v//[[:space:]]/}; [[ ,$v, =~ ,(worker_done|escalation|question|decision_gate|merge_ready|status|dispatch|handoff), ]] || src=default v=$d ;;
     wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
+    # Issue 330: a level. The boolean an earlier setup saved in the project file reads as off (false) or lite (true).
+    ponytail) case $v in false) v=off ;; true) v=lite ;; off|lite|full|ultra) ;; *) src=default v=$d ;; esac ;;
   esac
   if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
 }

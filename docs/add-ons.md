@@ -4,7 +4,7 @@ Setup's default is to attempt the add-ons listed in `config/addons.tsv`.
 Commands with installers install or update to latest; no version is pinned.
 Entries that say to see an upstream installer page need manual installation.
 The full Ponytail plugin is attempted by default only if already enabled and
-the setup Ponytail answer is on. The bundled Ponytail skill is separate,
+the setup Ponytail answer is not off. The bundled Ponytail skill is separate,
 on by default and never overwrites an existing copy.
 
 Selecting specific add-ons or None limits **that setup run**. The selection

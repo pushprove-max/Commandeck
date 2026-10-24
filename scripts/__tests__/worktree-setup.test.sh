@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # worktree-setup.test.sh -- the settings profile worktree-setup.sh writes for a worktree, a relay pane's and a
-# Builder's, on a hand-written commandeck.json (no setup run). What this pins: the owner wants ponytail at
-# full for every role, the relay pane included (2026-10-16), so an earlier run's "off" is taken back out; the
+# Builder's, on a hand-written commandeck.json (no setup run). What this pins: the owner wants ponytail on
+# (a level, lite by default: issue 330) for every role, the relay pane included (2026-10-16), so an earlier run's "off" is taken back out; the
 # typescript-lsp plugin is gone, so no profile names it; and the summary line reads as words.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
-export HOME=$T/home; mkdir -p "$HOME"
+export HOME=$T/home; mkdir -p "$HOME"; unset CLAUDE_CONFIG_DIR # the owner's settings are $HOME/.claude's, not the caller's
 P=$T/proj; git init -q -b main "$P" && git -C "$P" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 mkdir -p "$P/.claude" && echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"
 run() { (cd "$1" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH bash "$REAL/scripts/worktree-setup.sh" "$@" </dev/null); }
@@ -75,7 +75,23 @@ mkdir -p "$HOME/.claude"; echo '{"enabledPlugins":{"ponytail@ponytail":true}}' >
 echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"
 run "$T/wt/w6" >/dev/null 2>&1; run "$T/wt/w7" --builder >/dev/null 2>&1; run "$T/wt/w6" >/dev/null 2>&1
 check "ponytail on: a worker and a Builder carry the summary hook once, and the plugin off" '[false,1]:[false,1]' "$(jq -c "$SUMHOOK" "$(f w6)"):$(jq -c "$SUMHOOK" "$(f w7)")"
-check "the summary hook prints the summary file" "$(cat "$REAL/templates/ponytail/SUMMARY.md")" "$(bash -c "$(jq -r '.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))' "$(f w6)")")"
+check "the summary hook prints the level (a saved true is lite), then the summary file" "$(printf 'Ponytail level: lite\n%s' "$(cat "$REAL/templates/ponytail/SUMMARY.md")")" "$(bash -c "$(jq -r '.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))' "$(f w6)")")"
+# Issue 330: ponytail is a level. off drops the hook as false did; every other level carries it as true did, and says
+# its level; none saved is lite; a /config answer beats the project's. Plugin on in the owner's settings throughout.
+LV='[.enabledPlugins["ponytail@ponytail"], ([.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))] | length), ([.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))][0] // "" | capture("Ponytail level: (?<l>[a-z]+)").l? // "")] | join(",")'
+lvl() { git -C "$P" worktree add -q "$T/wt/lv$1"; mkdir -p "$T/wt/lv$1/.claude"; run "$T/wt/lv$1" >/dev/null 2>&1; jq -r "$LV" "$(f lv$1)"; }
+for l in off lite full ultra; do
+  echo "{\"version\": 1, \"profile\": \"claude\", \"ponytail\": \"$l\"}" > "$P/.claude/commandeck.json"
+  case $l in off) want=",0," ;; *) want="false,1,$l" ;; esac
+  check "ponytail $l: the hook is $([ "$l" = off ] && echo absent || echo "there, saying $l")" "$want" "$(lvl $l)"
+done
+echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"
+check "ponytail with no answer saved: lite" "false,1,lite" "$(lvl default)"
+jq '. + {pluginConfigs: {"commandeck@commandeck": {options: {ponytail: "ultra"}}}}' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
+check "a /config ultra beats the project's off" "false,1,ultra" "$(lvl config)"
+jq 'del(.pluginConfigs)' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
+echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"
 # The owner's own startup command, in the same group as the summary hook, is not ours to delete on a rerun.
 git -C "$P" worktree add -q "$T/wt/w10"; mkdir -p "$T/wt/w10/.claude"
 echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"cat \"/plugin/templates/ponytail/SUMMARY.md\""},{"type":"command","command":"./owner-startup.sh"}]}]}}' > "$(f w10)"
