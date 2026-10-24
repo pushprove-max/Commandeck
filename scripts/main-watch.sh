@@ -54,6 +54,9 @@ WAITING_S=120   # 2 min in a state that is neither working nor done
 HOLD_S=3600     # 1 h at most that a Builder waiting on its helpers is held unposted (#41)
 TICK=${COMMANDECK_MAIN_WATCH_TICK_S:-60}
 REPOST=${COMMANDECK_MAIN_WATCH_REPOST_S:-300}
+# Where main's pane runs: this checkout, unless main is an orchestrator in another project's checkout that drives
+# this repo's units. Without it that main is never found, and every finished seat is posted to no one.
+MAIN_AT=${COMMANDECK_MAIN_PANE_DIR:-$PP_MAIN}
 SCRATCH=$PP_SCRATCH
 ST=$SCRATCH/main-watch
 WS=$PP_WORKSPACES
@@ -71,7 +74,7 @@ claude_dir
 
 # The job has no shell of its own: where the install was told the records are
 # (paths.sh reads these) goes into the job, or it watches the default folders.
-KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME CLAUDE_CONFIG_DIR)
+KEEP_ENV=(COMMANDECK_SCRATCH COMMANDECK_WORKSPACES COMMANDECK_ROUTING CODEX_HOME CLAUDE_CONFIG_DIR COMMANDECK_MAIN_PANE_DIR)
 # others_job -- the job is named after the checkout's folder alone. Prints the
 # other checkout, still on disk, that the job file of this name watches; its
 # job is neither replaced nor removed from here.
@@ -447,7 +450,7 @@ arm_diag() {
 resolve_main() {
   COORD=$(pp_run_coord "$RUN") || COORD='?'
   COORD_LIVE=$(jq -r --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $c)] | length' <<<"$2" 2>/dev/null)
-  MAIN_H=$(jq -r --arg m "$PP_MAIN" --arg c "$COORD" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
+  MAIN_H=$(jq -r --arg m "$MAIN_AT" --arg c "$COORD" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
     | select((.worktreePath | pnorm) == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
   MAIN_STATE=$(jq -rn --argjson ps "$1" --argjson ts "$2" --arg h "$MAIN_H" '
     ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
@@ -551,7 +554,7 @@ wake() {
   if [ "${tries:-0}" -ge "$WAKE_TRIES" ] 2>/dev/null; then
     # Main's session log written since the first try is a main at work again (a new session, a restart): the
     # relay is not told to restart a pane that healed itself (issue 238).
-    local at; at=$(pp_session_log_at "$PP_MAIN")
+    local at; at=$(pp_session_log_at "$MAIN_AT")
     if [ "$at" != null ] && [ "$at" -gt "$(cat "$ST/wake-first" 2>/dev/null || echo "$NOW")" ]; then
       echo "main-watch: wake not proven, but main's session log moved since the first try; nothing told" >&2
       rm -f "$ST/wake"; return 0

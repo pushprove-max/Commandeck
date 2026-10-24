@@ -72,3 +72,8 @@ still apply. Other useful overrides are `COMMANDECK_MAIN`,
 primary checkout from inside a linked worktree. The dashboard/report collector
 also reads `COMMANDECK_CODEX_REVIEW_HOME`, default `~/.codex-review`, for review
 spend; it does not itself change where reviewer processes run.
+
+If main runs in another project's checkout and drives this repo's units from
+there, install the watcher with `COMMANDECK_MAIN_PANE_DIR` set to that checkout
+(`COMMANDECK_MAIN_PANE_DIR=<path> scripts/main-watch.sh --install`). Without it
+the watcher finds no main pane, and no finished seat ever wakes main.

@@ -49,4 +49,12 @@ for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/pro
   || fail "main's pane listed with agentIdentity null and the run's coordinator live elsewhere: task-create and send did not carry --from term_coord (refused: $(cat "$T/refused" 2>/dev/null))"
 ! grep -q -- '--terminal term_coord' "$T/typed" || fail "the coordinator outside the main checkout was typed into"
 
+# Main is another project's orchestrator driving this repo's units: COMMANDECK_MAIN_PANE_DIR names its checkout, so
+# that coordinator is main and is woken. Without it every finished seat was posted and no pane was ever woken.
+H=80000; drained; rm -f "$S/main-watch/item-"* "$S/main-watch/wake" "$F/no-identity" "$F/need-from"; : > "$T/typed"
+echo term_coord > "$F/coord"; state term_coord idle; export COMMANDECK_MAIN_PANE_DIR=/elsewhere
+for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/procs"; tick $H; rm -f "$F/procs"
+tick $((H + 60)); tick $((H + 120)); unset COMMANDECK_MAIN_PANE_DIR
+grep -q -- '--terminal term_coord' "$T/typed" || fail "main in another checkout, named by COMMANDECK_MAIN_PANE_DIR, was not woken ($(tail -n 3 "$T/stderr"))"
+
 echo "PASS main-watch-wake-sources.test.sh"
