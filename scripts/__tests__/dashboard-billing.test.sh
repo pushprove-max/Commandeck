@@ -112,5 +112,18 @@ check "no account record: the reading and retry note go, the history is kept asi
 check "a Mac with a non-default folder: not measured, and says why" "1 config folder" \
   "$(cd "$ROOT/scripts" && HOME="$T/home" CLAUDE_CONFIG_DIR="$T/cfgB" COMMANDECK_HOST_OS=Darwin python3 -B dashboard_limit.py fetch >/dev/null 2>"$T/why"
      echo "$? $(grep -o 'config folder' "$T/why")")"
+# The limit card's cost is the account's, not one project's: requests from two projects are one total (the strip's
+# own figure is per project by design). Green pin, noon today so the requests are today's.
+NOON=$(date -d 'today 12:00' +%s); AT=$(date -u -d "@$((NOON - 60))" +%Y-%m-%dT%H:%M:%SZ)
+mkdir -p "$T/two/cache"
+for q in p1 p2; do mkdir -p "$T/two/projects/$q"
+  jq -cn --arg q "$q" --arg t "$AT" '{type: "assistant", timestamp: $t, cwd: "/\($q)", uuid: "u-\($q)", requestId: "r-\($q)",
+    message: {id: "m-\($q)", model: "claude-haiku-5-5", usage: {input_tokens: 100000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}}' > "$T/two/projects/$q/s.jsonl"; done
+jq -cn --arg r "$(date -u -d "@$((NOON + 3 * 86400))" +%Y-%m-%dT%H:%M:%SZ)" '{seven_day: {utilization: 10, resets_at: $r}}' > "$T/two/usage.json"
+check "requests from two projects: limit.cost.today is their combined cost" "2 0.02" \
+  "$(cd "$ROOT/scripts" && HOME="$T/home" python3 -B -c '
+import sys, dashboard_limit as d
+d.build("fresh", sys.argv[1] + "/usage.json", int(sys.argv[2]), sys.argv[1] + "/cache", sys.argv[1] + "/projects")' "$T/two" "$NOON" 2>&1 \
+    | jq -r '"\(.requests) \(.cost.today * 1e6 | round / 1e6)"')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -993,7 +993,8 @@ REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HE
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; }
-log_codex codex-start
+# The row names the model and effort the pass runs on (the dashboard's launch roster); jq quotes them, so no value breaks the row.
+log_codex codex-start ",$(jq -nr --arg m "$MODEL" --arg e "${EFFORT:-}" '"\"model\":\($m | tojson),\"effort\":\(if $e == "" then null else $e end | tojson)"')"
 # The pass's own temp folder: a short path, since a socket path past 104 bytes is invalid.
 SOCKS=$(mktemp -d "${TMPDIR:-/tmp}/pp-pass.XXXXXX") || die "cannot make a temp directory for the pass"
 BROKERS=()

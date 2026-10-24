@@ -27,8 +27,8 @@ printf '%s\n' "$(lt $((NOW - 120))) restart: new pane h2 resumed from $CPD/m1.md
   "$(lt $((NOW - 60))) restart: new pane h3 resumed from $CPD/m1.md; closing h2" > "$CPD/clear-hook.log"
 echo '{"builder": {"clearLine": "160000"}, "chiefOfStaff": {"name": "Relay"}}' > "$MAIN/.claude/commandeck.json"
 dash
-check "main's card: context against its line, today's tokens and cost, the 7-day daily average, two restarts a minute apart" \
-  '[100000,200000,100000,0.01,28571,0.0029,2,60]' \
+check "main's card: context against its line, today's tokens and cost, the average of the seven days before today (the 3-day-old request over 7), two restarts a minute apart" \
+  '[100000,200000,100000,0.01,14286,0.0014,2,60]' \
   "$(jq -c 'first(.[]) | .seats.main | [.context, .line, .today.tokens, .today.usd, .avg7.tokens, .avg7.usd, .restarts, .restartGapSec]' "$T/out/run/project.json" 2>&1)"
 check "main's restart times are today's two" 2 "$(jq -c 'first(.[]) | .seats.main.restartTimes | length' "$T/out/run/project.json" 2>&1)"
 check "the relay's card: its own session today, no line, no restarts" '[100000,null,100000,0.01,0,null]' \

@@ -11,6 +11,9 @@
 # pane that has ended its turn never reads its inbox; typed text reaches that
 # pane, but only queues behind a wait. So the pane's state picks the way: an
 # inbox message to a pane that is mid-turn, typed text to one that is not.
+# The inbox message is a reply to the question's id when <question-id> holds one
+# (orchestration reply --id): a worker blocked in `orchestration ask` returns only
+# on a reply to its own question, never on a new message. With no id it is a send.
 # Either way the answer counts as delivered only when its text is in the
 # pane's session log (exit 0). An inbox message to a pane still mid-turn when
 # the wait ends is queued, not read yet (exit 2); anything else exits 1, NOT
@@ -27,15 +30,19 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 H=${1:?usage: answer-worker.sh <terminal-handle|unit> <text> [<question-id>]}; H=${H#terminal:}
 TEXT=${2:?usage: answer-worker.sh <terminal-handle|unit> <text> [<question-id>]}
 Q=${3:-}
+# The reply goes to the Orca id inside <unit>-msg_<id> (a bare msg_<id> works too).
+QID=; case $Q in *msg_*) QID=msg_${Q##*msg_} ;; esac
 # close_asks -- answer the unit's question waiting on main in the decisions ledger (orca-wait.sh
 # recorded it): the answer has left main, read or queued.
 close_asks() {
-  local u=${U:-} ids
+  local u=${U:-} ids q=$Q
   [ -n "$u" ] || case ${WT:-} in "$PP_WORKSPACES"/*) u=${WT#"$PP_WORKSPACES"/}; u=${u%%/*} ;; esac
   [ -n "$u" ] || return 0
-  ids=$(bash "$HERE/decision.sh" list 2>/dev/null | jq -r --arg s "$u asks" --arg q "$Q" \
+  # The ledger keeps <unit>-msg_<id> (orca-wait.sh): a bare msg_<id> names the same question.
+  case $q in msg_*) q=$u-$q ;; esac
+  ids=$(bash "$HERE/decision.sh" list 2>/dev/null | jq -r --arg s "$u asks" --arg q "$q" \
     '.[] | select(.answeredAt == null and .waitsOn == "main" and .source == $s and ($q == "" or .id == $q)) | .id')
-  if [ -z "$ids" ]; then [ -z "$Q" ] || echo "answer-worker: no open question $Q from $u in the ledger; nothing closed" >&2; return 0; fi
+  if [ -z "$ids" ]; then [ -z "$q" ] || echo "answer-worker: no open question $q from $u in the ledger; nothing closed" >&2; return 0; fi
   if [ "$(wc -l <<<"$ids")" -gt 1 ]; then
     echo "answer-worker: $u has questions $(paste -sd' ' - <<<"$ids") open; none closed. Close the one this answered: bash $HERE/decision.sh answer <id> '<answer>'" >&2
     return 0
@@ -88,9 +95,15 @@ if idle; then
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
     || { echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
 else
-  WAY="sent to the pane's inbox"
-  orca-ide orchestration send --to "$H" --type status --subject "answer from main" --body "$MSG" --json >/dev/null \
-    || { echo "answer-worker: the inbox send to $H failed; the answer was not delivered" >&2; exit 1; }
+  # A Builder blocked in `orchestration ask` returns only on a reply to its question's id (host 33cdf11c).
+  WAY="sent to the pane's inbox${QID:+ as a reply to $QID}"
+  if [ -n "$QID" ]; then
+    orca-ide orchestration reply --id "$QID" --body "$MSG" --json >/dev/null \
+      || { echo "answer-worker: the inbox reply to $QID failed; the answer was not delivered" >&2; exit 1; }
+  else
+    orca-ide orchestration send --to "$H" --type status --subject "answer from main" --body "$MSG" --json >/dev/null \
+      || { echo "answer-worker: the inbox send to $H failed; the answer was not delivered" >&2; exit 1; }
+  fi
 fi
 
 LEFT=$WAIT
@@ -99,7 +112,7 @@ while :; do
   [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; exit 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
   # inbox: the answer is typed in then, once, and waited for afresh.
-  if [ "$WAY" = "sent to the pane's inbox" ]; then
+  if [[ $WAY == "sent to the pane's inbox"* ]]; then
     if idle; then
       WAY="typed into the pane once its turn ended with the inbox message unread"
       orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
@@ -111,6 +124,6 @@ while :; do
   sleep 2; LEFT=$((LEFT - 2))
 done
 # Still mid-turn: the answer sits in its inbox, read at the pane's next check. Not a failure, and not read either.
-[ "$WAY" = "sent to the pane's inbox" ] && { close_asks; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Do not send it again." >&2; exit 2; }
+[[ $WAY == "sent to the pane's inbox"* ]] && { close_asks; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Do not send it again." >&2; exit 2; }
 echo "answer-worker: NOT delivered: the answer was $WAY, but its tag $TAG is not in $H's session log (${LOG:-no log found for $WT}) after ${WAIT}s." >&2
 exit 1

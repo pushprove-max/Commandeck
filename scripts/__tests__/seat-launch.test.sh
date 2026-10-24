@@ -4,9 +4,8 @@
 # is refused; a unit planned in <unit>-plan opens there; and the maxBuilders cap counts other units' live Builders.
 set -uo pipefail
 . "$(dirname "$0")/fixtures/seat-setup.sh"
-# The state these cases had from the ones now in seat-plan-marker.test.sh, by the same setup lines: the project's
-# Builder default effort, pu's planning worktree with its plan, and the judge spec.
-jq '.builder = {effort: "high"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"
+# The state these cases had from the ones now in seat-plan-marker.test.sh, by the same setup lines:
+# pu's planning worktree with its plan, and the judge spec.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 echo PLAN-DONE > "$T/screen"; mkdir -p "$PWT/.claude/plans"; echo 'the plan' > "$PWT/.claude/plans/pu.md"
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"

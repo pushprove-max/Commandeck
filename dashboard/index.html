@@ -45,11 +45,13 @@
     <div id="builds-list"></div>
   </section>
 
-  <section id="needs" class="card" data-size="1" data-sources="decisions">
+  <section id="needs" class="card" data-size="1" data-sources="decisions github-p1 github-proposed">
     <header class="card-head"><h2>Needs <span data-owner>the owner</span></h2></header>
     <p class="sub"><span>decisions waiting on an answer</span><span class="age"></span></p>
     <p class="card-note" hidden></p>
     <dl id="needs-facts" class="facts"></dl>
+    <div class="group"><h3>Open P1 issues</h3><div id="p1-issues"></div></div>
+    <div class="group"><h3>Proposed decisions on GitHub</h3><div id="proposed-issues"></div></div>
     <div class="group"><h3>Waiting on <span data-owner>the owner</span> <span class="count" data-count="decisions"></span></h3><ol id="decisions" class="decisions"></ol></div>
   </section>
 
@@ -88,6 +90,14 @@
         <summary tabindex="0">Standing worktrees <span class="count" data-count="permanent"></span></summary>
         <ul class="unit-list" data-list="permanent"></ul>
       </details>
+      <details id="parked" class="unclassified" hidden>
+        <summary tabindex="0">Parked, no worktree <span class="count" data-count="parked"></span></summary>
+        <ul class="unit-list" data-list="parked"></ul>
+      </details>
+      <details id="merged-since" class="unclassified" hidden>
+        <summary tabindex="0">Merged since the last push <span class="count" data-count></span></summary>
+        <ul id="merged-since-list" class="unit-list"></ul>
+      </details>
       <details id="unclassified" class="unclassified" hidden>
         <summary tabindex="0">Stage not known yet <span class="count" data-count="unclassified"></span></summary>
         <ul class="unit-list" data-list="unclassified"></ul>
@@ -110,6 +120,7 @@
     <p class="card-note" hidden></p>
     <p id="held-alarm" class="alarm" hidden></p>
     <p id="held-flow" class="prog-note"></p>
+    <p id="held-priority" class="prog-note"></p>
     <div id="held-spark"></div>
     <div id="held-list" class="miles"></div>
     <p class="legend more">P0 to P3 come from the priority labels. A Builder holds an issue its brief lists.</p>

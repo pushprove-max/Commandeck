@@ -26,6 +26,8 @@
 - **Every question for the owner goes to the relay pane** (the worktree ending in
   `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
   record each ask with `decision.sh add` in the same turn.
+- **A reply the duplicate-agent guard blocks is never dropped**: retry it after that seat's turn ends, or send it as
+  an orchestration reply, even when the seat's default already matches.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
   included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
 - **main-watch merges a unit whose DONE passes its gate**; offer a merge only for one it held or refused. A build

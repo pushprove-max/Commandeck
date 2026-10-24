@@ -59,6 +59,11 @@ else
     h=$(jq -r --arg k "$([ "$f" = model ] && echo model || echo effortLevel)" '.[$k] // empty' "$PP_MAIN/.claude/settings.local.json" 2>/dev/null)
     [ "$h" = "$w" ] || warn "main: $(pp_role_key orchestrator "$f") is $w in /plugin config, but $PP_MAIN/.claude/settings.local.json sets ${h:-none}, and main runs on the file's; rerun /commandeck:setup"
   done
+  # Issue 327: Claude Code leaves the task tools, and their reminders, out on newer models unless this is set (docs:
+  # tools-reference "Task tool availability"; env-vars CLAUDE_CODE_ENABLE_TODO_TOOLS). Main tracks work in the Orca task list.
+  if [ "${CLAUDE_CODE_ENABLE_TODO_TOOLS-}" = 1 ] || [ "$(jq -r '.env.CLAUDE_CODE_ENABLE_TODO_TOOLS // empty' "$PP_MAIN/.claude/settings.local.json" 2>/dev/null)" = 1 ]; then
+    warn "main: CLAUDE_CODE_ENABLE_TODO_TOOLS=1 turns the harness task-list tools and their reminders on for main on every model, and main tracks work in the Orca task list; remove it from main's environment and $PP_MAIN/.claude/settings.local.json"
+  else ok "main: task-list reminders are on only for the models Claude Code lists (tools reference, Task tool availability); to switch them off on one of those, deny TaskCreate, TaskUpdate, TaskGet and TaskList in main's permissions"; fi
   if V=$(. "$IL_ROOT/hooks/lib/project.sh" && pp_builder_clear_line "$PP_MAIN" 2>&1); then ok "builder clear line: $V (tokens of context, or off; setup.sh --builder-clear-line)"; else bad "builder clear line: $V"; fi
   if V=$(pp_issue_sizing 2>&1); then ok "issue sizing: $V (tokens to read, or off; setup.sh --issue-sizing)"; else bad "issue sizing: $V"; fi
   # The merge check runs on a copy that links main's node_modules (merge-unit-local.sh).

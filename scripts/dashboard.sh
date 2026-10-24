@@ -166,6 +166,10 @@ seat_role() {
     | max_by(.[0] | tonumber) // empty | .[1] as $r | ($lanes[$r] // empty) + "\t" + $r'
 }
 
+# The --model and --effort a seat record's cmd= line launched with (Codex's model_reasoning_effort too), null when absent.
+SEAT_FLAGS_JQ='def seat_model: (capture("--model[ =](?<m>[^ ;[]+)") | .m) // null;
+  def seat_effort: (capture("--effort[ =](?<l>[a-z]+)|model_reasoning_effort=\"?(?<c>[a-z]+)") | .l // .c) // null;'
+
 # plan_seats <unit> [before-iso] -- the unit's planning, read from its plan seats' records (seat.sh launch; never
 # deleted), so it outlives the planning worktree, <unit> or <unit>-plan before 0.18.0: {worktree (the newest record's), from (the first launch, a relaunched seat's first= too), seats: [{role, task, from, model, effort,
 # session, completedAt}]}, or null. Model and effort are the record's command's (--model, --effort, Codex's
@@ -179,16 +183,25 @@ plan_seats() {
     [ ! -f "$f" ] || awk '{ i = index($0, "="); if (i) v[substr($0, 1, i - 1)] = substr($0, i + 1) }
       END { print v["launched"] "\t" v["role"] "\t" v["task"] "\t" v["unit"] "\t" v["worktree"] "\t" v["session"] "\t" v["cmd"] "\t" v["first"] }' "$f"
   done | jq -Rn --arg u "$1" --arg b "${2:-}" --arg ws "$PP_WORKSPACES" \
-    --slurpfile ev <(jq -cR 'fromjson? | objects | select(.taskId | type == "string")' "$METRICS/seat-events.jsonl" 2>/dev/null) '
+    --slurpfile ev <(jq -cR 'fromjson? | objects | select(.taskId | type == "string")' "$METRICS/seat-events.jsonl" 2>/dev/null) "$SEAT_FLAGS_JQ"'
     ($ev | map({key: .taskId, value: .}) | from_entries) as $e
     | [inputs | split("\t") | select(length == 8 and .[3] == $u and (.[4] == $u or .[4] == "\($u)-plan") and (.[0] | test("^[0-9]+$")))
        | ([.[0], .[7]] | map(tonumber? // empty) | min) as $f
        | select($b == "" or $f < ($b | fromdateiso8601)) | ($e[.[2]] // {}) as $r
        | {role: .[1], task: .[2], from: (.[0] | tonumber | todate), first: $f, wt: .[4],
-          model: ((.[6] | capture("--model[ =](?<m>[^ ;[]+)") | .m) // $r.model // null),
-          effort: ((.[6] | capture("--effort[ =](?<l>[a-z]+)|model_reasoning_effort=\"?(?<c>[a-z]+)") | .l // .c) // null),
+          model: (.[6] | seat_model) // $r.model // null,
+          effort: (.[6] | seat_effort),
           session: (if .[5] != "" then .[5] else $r.session // null end), completedAt: ($r.completedAt // null)}]
     | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\(max_by(.from) | .wt)", from: (map(.first) | min | todate), seats: map(del(.first, .wt))} end'
+}
+
+# launch_roster <unit> <the Builder card's json> -- issue 292: what this unit's current round launched as: the Builder's
+# own seat record (model, effort), then each reviewer pass of its highest round (dashboard_builders.jq passes). A Builder
+# with neither record has [].
+launch_roster() {
+  local cmd=
+  [ ! -f "$PP_SCRATCH/seat-$1-builder.txt" ] || cmd=$(sed -n 's/^cmd=//p' "$PP_SCRATCH/seat-$1-builder.txt" | tail -1)
+  jq -cn --arg c "$cmd" --argjson b "$2" "$SEAT_FLAGS_JQ"'[if $c == "" then empty else {role: "builder", model: ($c | seat_model), effort: ($c | seat_effort)} end] + ($b.passes // [])'
 }
 
 # seat_actual <worktree> -- what the seat really runs: the model, effort and advisor on the last
@@ -255,7 +268,7 @@ terminal_list() {
 # whole machine's worktrees, so every lookup is by path, never by name: two
 # projects may each have a unit of one name.
 units() {
-  local ps='' u wt ag st branch dirty diff age seat s run open='' role sr rd bj bl rows b v vr f po pj
+  local ps='' u wt ag st branch dirty diff age seat s run open='' role sr rd bj bl rows b v vr f po pj rs
   if ps=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) && jq -e . >/dev/null 2>&1 <<<"$ps"; then ok orca
   else ps=''; nm orca "orca-ide worktree ps failed"; fi
   # Per worktree, the lane of each working pane's role: its recorded launch
@@ -306,7 +319,7 @@ units() {
       st='"waiting-main"'; age=$(seat_age "$wt" "$ps")
     fi
     # A live seat record's role sets the stage through ROLE_LANES; a seat role leaves it as read.
-    sr=null
+    sr=null rs=null
     if [ -z "$seat" ] && [ -n "$open" ]; then
       IFS=$'\t' read -r s role <<<"$(seat_role "$u" "$wt" "$open" "$ps")" || true
       [ -z "$role" ] || { st=$(jq -Rc . <<<"$s"); sr=$(jq -Rc . <<<"$role"); age=$(seat_age "$wt" "$ps"); }
@@ -374,10 +387,11 @@ units() {
       fi
       # Its planning, launched before its first stage, though the planning worktree is gone.
       pj=$(plan_seats "$u" "$(jq -r '.stageHistory[0].from // empty' <<<"$b" 2>/dev/null)")
+      rs=$(launch_roster "$u" "$b") || rs=null
     fi
     jq -cn --arg u "$u" --argjson branch "$branch" --argjson dirty "$dirty" --argjson diff "$diff" --argjson ag "$ag" \
-      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" --argjson pj "${pj:-null}" \
-      '{unit: $u, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj, plan: $pj}' \
+      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" --argjson pj "${pj:-null}" --argjson rs "$rs" \
+      '{unit: $u, worktree: true, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj, plan: $pj, seats: $rs}' \
       | jq -c --argjson seat "$(seat_actual "$wt")" '. + {seat: $seat}'
   done > "$RUN/in-flight.jsonl"
   if [ -e "$RUN/builder-bad" ]; then nm builder-logs "a Builder event log could not be read"; else ok builder-logs; fi
@@ -416,16 +430,23 @@ units() {
   else costs=null; nm unit-cost "Builder costs could not be read: $(head -1 "$RUN/err-unit-cost" 2>/dev/null)"; fi
   # Issue 292: the owner's Builder cap (maxBuilders in /config); none, or no whole number, is unknown.
   local cap; cap=$(pp_option maxBuilders 2>/dev/null); [[ $cap =~ ^[1-9][0-9]*$ ]] || cap=
+  # Issue 292: the finished builds whose merge commit main has and its upstream lacks (the range next_push reads); null
+  # with no upstream or no readable range.
+  local pushed
+  pushed=$(git -C "$PP_MAIN" rev-list '@{upstream}..HEAD' 2>/dev/null | jq -Rcn '[inputs]') && [ -n "$pushed" ] || pushed=null
   jq -c --argjson k "$known" --argjson cap "${cap:-null}" --slurpfile fina <(finished_builds) --slurpfile ca <(printf '%s' "$costs") \
-    --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" \
-    '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {inFlight: (if $k then map(del(.rec) | ($c[.unit]? // null) as $x
+    --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" --argjson pushed "$pushed" --slurpfile pka <(parked_units "$open") \
+    '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {inFlight: (if $k then (map(del(.rec) | ($c[.unit]? // null) as $x
         # A planning stage in the cost is drawn first on the Builder clock, which then starts with it.
         | if .builder then .builder.cost = $x
             | if $x.stages[0].stage? == "planning" and (.builder.stageHistory | type == "array")
               then .builder.stageHistory = [$x.stages[0] | {stage, from, to}] + .builder.stageHistory | .builder.startedAt = $x.stages[0].from
               else . end
-          elif .plan then .plan.cost = $x else . end) else null end),
+          elif .plan then .plan.cost = $x else . end) as $rows
+        # A parked unit (parked_units) joins after the stage stamps and costs: it has neither.
+        | $rows + ($pka[0] | map(select(.unit as $u | all($rows[]; .unit != $u))))) else null end),
       builderCap: $cap,
+      mergedSincePush: (if $pushed == null or $fin == null then null else $fin | map(select(.sha as $h | $pushed | index([$h]))) end),
       finishedBuilds: (if $fin == null then null else $fin | map(. + {cost: ($kept[.unit] // null)}) end),
       # Issue 270: each unit in flight or finished in the last 7 days, by the cost its card shows, most costly first.
       costPerUnit: ([($c // {} | keys[] | {unit: ., inFlight: true}), ($fin // [] | .[] | select((.at // "") >= $s7) | {unit, inFlight: false, at})]
@@ -433,8 +454,27 @@ units() {
         | sort_by(-(.total.usd // 0)))}' "$RUN/in-flight.json"
 }
 
+# parked_units <open task ids json> -- issue 292: the units whose Builder pane and worktree are gone but whose Orca task is
+# still open, read from the seat records as seat_role reads them: one row {unit, worktree: false, stage: null, role,
+# task} per unit, from its newest record naming an open task. A unit with its own worktree (or its planning one) is a
+# card already. No run, or no open-task read, is no parked unit.
+parked_units() {
+  local f u rows
+  [ -n "$1" ] || { echo '[]'; return 0; }
+  rows=$(for f in "$PP_SCRATCH"/seat-*.txt; do
+    [ ! -f "$f" ] || awk '{ i = index($0, "="); if (i) v[substr($0, 1, i - 1)] = substr($0, i + 1) }
+      END { print v["unit"] "\t" v["launched"] "\t" v["role"] "\t" v["task"] }' "$f"
+  done | jq -Rn --argjson open "$1" '[inputs | split("\t") | select(length == 4 and .[0] != "" and .[2] != "" and (.[1] | test("^[0-9]+$"))
+      and (.[3] as $t | any($open[]; . == $t)))] | group_by(.[0]) | map(max_by(.[1] | tonumber) | {unit: .[0], worktree: false, stage: null, role: .[2], task: .[3]}) | .[]')
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    u=$(jq -r .unit <<<"$f")
+    [ -e "$PP_WORKSPACES/$u/.git" ] || [ -e "$PP_WORKSPACES/$u-plan/.git" ] || echo "$f"
+  done <<<"$rows" | jq -cs .
+}
+
 # Finished builds: the lines this checkout's own merges appended (merge-unit-local.sh), one per unit name with the
-# later line winning, newest first, 100 at most. A line counts when it names this checkout's real path, a unit and a
+# later line winning, newest first, no cap (issue 292; the file grows a line a build). A line counts when it names this checkout's real path, a unit and a
 # commit: another checkout of the same folder name shares the file and none of the list. Each line is read alone, so
 # one that is torn or is not a build is dropped, and an empty record is no finished build. No record that can be read is not measured (null): nothing was
 # merged here by the plugin yet. The file is named by this project's own name, never by the page.
@@ -445,7 +485,7 @@ finished_builds() {
         and (.unit | type) == "string" and (.unit | test("^[A-Za-z0-9._-]+$")) and (.sha | type) == "string" and (.sha | test("^[0-9a-f]{40,64}$")))
       | {unit, how: (.how | strings // null), at: (.at | strings // null), sha}' \
       "$f" 2>/dev/null \
-    | jq -cs 'reduce .[] as $r ({}; .[$r.unit] = $r) | [.[]] | sort_by(.at) | reverse | .[:100]' 2>/dev/null) || out=
+    | jq -cs 'reduce .[] as $r ({}; .[$r.unit] = $r) | [.[]] | sort_by(.at) | reverse' 2>/dev/null) || out=
   echo "${out:-[]}"
 }
 
@@ -477,24 +517,29 @@ origin_repo() {
     | sed -nE 's#^(https://([^/@]+@)?|ssh://git@|git@)github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/?$#\3#p' | sed 's/\.git$//'
 }
 
-# The project's open GitHub issues labelled P1 (the exact label), counted in the repository of its GitHub origin,
+# The project's open GitHub issues labelled P1 (the exact label), listed in the repository of its GitHub origin,
 # or with none the one gh resolves from this checkout: a GH_REPO or GH_HOST of the caller's would name one
-# repository for every project. A count that cannot be had (no gh, not
+# repository for every project. A list that cannot be had (no gh, not
 # signed in, no GitHub remote, no network, no answer in 8 s, an answer that is not a list of issues) is null, never 0,
 # and the reason is the collector's own words: nothing gh prints reaches the snapshot. gh writes to a file, so a
 # process it leaves behind cannot hold the collector on a pipe.
-# shortcut: the first 1000 open P1 issues are counted, page the list when a project can hold more.
-github_p1() {
+# shortcut: the first 1000 open issues of a label are listed, page the list when a project can hold more.
+github_p1() { labelled_issues P1 github-p1; }
+# Issue 292: the open issues labelled proposed-decision, read the same way.
+github_proposed() { labelled_issues proposed-decision github-proposed; }
+# labelled_issues <label> <source name> -- the open issues with the exact label as {count, top (the five lowest
+# numbers), all}, each {number, title, url}; null with the source's reason when they cannot be read.
+labelled_issues() {
   local n rc why repo
   repo=$(origin_repo)
   env -u GH_REPO -u GH_HOST ${repo:+GH_REPO=$repo} GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout -k 2 8 \
-    gh issue list --state open --label P1 --limit 1000 --json labels > "$RUN/gh-p1" 2>/dev/null </dev/null; rc=$?
-  if [ "$rc" -eq 0 ] && n=$(jq -e 'if type == "array" and all(.[]; type == "object" and (.labels | type) == "array" and all(.labels[]; type == "object"))
-      then map(select(any(.labels[]; .name == "P1"))) | length else error("not a list of issues") end' "$RUN/gh-p1" 2>/dev/null) \
-     && [[ $n =~ ^[0-9]+$ ]]; then ok github-p1; echo "$n"
+    gh issue list --state open --label "$1" --limit 1000 --json number,title,url,labels > "$RUN/gh-$2" 2>/dev/null </dev/null; rc=$?
+  if [ "$rc" -eq 0 ] && n=$(jq -ce --arg l "$1" 'if type == "array" and all(.[]; type == "object" and (.labels | type) == "array" and all(.labels[]; type == "object"))
+      then map(select(any(.labels[]; .name == $l)) | {number, title, url}) | sort_by(.number) | {count: length, top: .[:5], all: .} else error("not a list of issues") end' "$RUN/gh-$2" 2>/dev/null); then
+    ok "$2"; echo "$n"
   else
     case $rc in 0) why="gh's answer was not a list of issues" ;; 124|137) why="gh gave no answer in 8 s" ;; *) why="gh issue list failed (exit $rc)" ;; esac
-    nm github-p1 "$why"; echo null
+    nm "$2" "$why"; echo null
   fi
 }
 
@@ -518,9 +563,9 @@ gh_prs() {
           elif .status != "COMPLETED" then "run" else ({SUCCESS: "pass", NEUTRAL: "skip", SKIPPED: "skip", STALE: "skip"}[.conclusion // ""] // "fail") end)}]})'
 }
 # Open issues with their milestone and priority (the lowest P0 to P3 label).
-# shortcut: the first 200 open issues are read; page the list when a project can hold more.
+# shortcut: the first 1000 open issues are read (the host's limit); page the list when a project can hold more.
 gh_issues() {
-  gh_read issue list --state open --limit 200 --json number,title,url,labels,milestone,createdAt \
+  gh_read issue list --state open --limit 1000 --json number,title,url,labels,milestone,createdAt \
     | jq -c 'map({number, title, url, createdAt, milestone: (.milestone.title // null), priority: ([.labels[].name | select(test("^P[0-3]$"))] | sort | .[0] // null)})'
 }
 gh_milestones() {
@@ -555,7 +600,9 @@ github_panes() {
     --slurpfile c <(printf '%s' "${closed:-null}") --argjson now "$NOW" \
     'def at($k): [.[][$k] | strings | fromdateiso8601];
      def day: strflocaltime("%Y-%m-%d");
-     {repo: (if $repo == "" then null else "https://github.com/" + $repo end), prs: $prs, issues: $issues, milestones: $milestones, runs: $runs,
+     {repo: (if $repo == "" then null else "https://github.com/" + $repo end), prs: $prs, issues: $issues,
+      # Open issues by their lowest priority label; "none" for an issue with no P0 to P3 label.
+      byPriority: ($issues | if . == null then null else group_by(.priority // "none") | map({key: (.[0].priority // "none"), value: length}) | from_entries end), milestones: $milestones, runs: $runs,
       # Opened and closed in the last 24 h, and per local day over 7 days, oldest first; at the 1000 limit a count is a floor.
       flow: (if $o[0] == null or $c[0] == null then null else ($o[0] | at("createdAt")) as $op | ($c[0] | at("closedAt")) as $cl
         | {opened24h: [$op[] | select(. >= $now - 86400)] | length, closed24h: [$cl[] | select(. >= $now - 86400)] | length,
@@ -588,7 +635,8 @@ main_chain() {
     commits=$(jq -Rcn '[inputs | split("\t") | {sha: .[0], subject: (.[1:] | join("\t"))}]' <<<"$commits")
   else commits=null; nm git-main "git log in $PP_MAIN failed"; fi
   unpushed=$(git -C "$PP_MAIN" rev-list --count '@{upstream}..HEAD' 2>/dev/null) || unpushed=null
-  jq -cn --argjson c "$commits" --argjson u "$unpushed" '{commits: $c, unpushed: $u}'
+  # Issue 292: the newest finished build (finished_builds is newest first), or null with none.
+  jq -cn --argjson c "$commits" --argjson u "$unpushed" --slurpfile f <(finished_builds) '{commits: $c, unpushed: $u, lastMerge: (($f[0] // [])[0] | if . then {unit, at} else null end)}'
 }
 
 since7() { iso $((NOW - 7 * 86400)); }
@@ -904,9 +952,10 @@ tests_rows() {
         | . + {who: who} | select($cwd == "" or .who != null) | del(.cwd) | . + {builder: (.who | IN($builders[]))})' 2>/dev/null
 }
 tests_panel() {
-  local plist='' cwd='' pids running=null fin=null builders d
+  local plist='' cwd='' pids running=null fin=null builders d bpaths=()
   builders=$(for d in "$PP_WORKSPACES"/*/; do d=${d%/}
     [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$d/.claude/settings.local.json" 2>/dev/null)" = 1 ] && basename "$d"; done | jq -Rcn '[inputs]')
+  while IFS= read -r d; do bpaths+=("$PP_WORKSPACES/$d"); done < <(jq -r '.[]' <<<"$builders")
   if plist=$(ps -axww -o pid=,ppid=,etime=,command= 2>/dev/null); then
     pids=$(tests_rows "$plist" "" "$builders" | jq -r 'map(.pid) | join(",")')
     # lsof exits 1 when a listed process ended meanwhile, with the rest still printed: only no output at all is a failure.
@@ -915,7 +964,7 @@ tests_panel() {
     elif running=$(tests_rows "$plist" "$cwd" "$builders") && [ -n "$running" ]; then ok tests-ps
     else running=null; nm tests-ps "the process list could not be read"; fi
   else nm tests-ps "ps failed"; fi
-  if [ -d "$CLAUDE_DIR/projects" ] && fin=$(python3 "$HERE/dashboard_limit.py" tests "$CLAUDE_DIR/projects" "$REQS/test-runs.json" "$NOW" "$PP_MAIN" "$PP_WORKSPACES" 2>"$RUN/err-tests") && [ "$fin" != null ]; then ok tests-logs
+  if [ -d "$CLAUDE_DIR/projects" ] && fin=$(python3 "$HERE/dashboard_limit.py" tests "$CLAUDE_DIR/projects" "$REQS/test-runs.json" "$NOW" "$PP_MAIN" "$PP_WORKSPACES" --builders ${bpaths[@]+"${bpaths[@]}"} 2>"$RUN/err-tests") && [ "$fin" != null ]; then ok tests-logs
   else fin=null; nm tests-logs "$(head -1 "$RUN/err-tests" 2>/dev/null)"; fi
   jq -cn --argjson run "$running" --argjson fin "${fin:-null}" --arg ws "$PP_WORKSPACES" --arg main "$PP_MAIN" '
     '"$TEST_WHO"'
@@ -926,7 +975,8 @@ tests_panel() {
       elif (.full | test("run-shell-tests\\.sh")) and ([.full | split(" ")[] | select(test("\\.test\\.[a-z]+$"))] | length) > 0
       then ([.full | split(" ")[] | select(test("\\.test\\.[a-z]+$"))] | length) * 120 else null end;
     ($fin.usual // []) as $u
-    | {running: (if $run == null then null else $run | map(. + {usualSec: usual($u)} | . + {capSec: cap} | . + {stalled: (.capSec != null and .elapsedSec > .capSec)} | del(.full)) end),
+    | {testSecToday: ($fin.testSecToday // null), builderShare: ($fin.builderShare // null),
+       running: (if $run == null then null else $run | map(. + {usualSec: usual($u)} | . + {capSec: cap} | . + {stalled: (.capSec != null and .elapsedSec > .capSec)} | del(.full)) end),
        finished: ($fin.finished | if . == null then null else map(. + {who: who} | del(.cwd)) end)}'
 }
 
@@ -1031,10 +1081,18 @@ project() {
   # The external pwd asks the OS; Bash's own keeps the case as typed.
   local ws
   ws=$(cd "$PP_WORKSPACES" 2>/dev/null && env pwd -P) && PP_WORKSPACES=$ws
-  part units units && part needsOwner needs_owner && part githubP1 github_p1 && part github github_panes && part nextPush next_push \
+  # Issue 292: the two slow groups that touch no cache the others use run beside the rest. Each writes only its own
+  # files in $RUN (and measures' ledger, under subagent-usage.sh's lock); a failure of either fails the collect below.
+  local pm pg rc=0
+  part measures measures & pm=$!
+  part guardBlocks guard_blocks & pg=$!
+  part units units && part needsOwner needs_owner && part githubP1 github_p1 && part githubProposed github_proposed && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role && part reviewLoop review_loop && part escapes escapes \
-    && part todos todos && part agents bg_agents && part measures measures && part guardBlocks guard_blocks \
-    && part chiefOfStaff chief_of_staff && part seats seats && part mainEvents main_events && part tests tests_panel && part partSeconds part_seconds || return 1
+    && part todos todos && part agents bg_agents \
+    && part chiefOfStaff chief_of_staff && part seats seats && part mainEvents main_events && part tests tests_panel || rc=1
+  wait "$pm" || rc=1
+  wait "$pg" || rc=1
+  [ "$rc" = 0 ] && part partSeconds part_seconds || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
   jq -cs --arg n "$PP_PROJECT" --arg p "$PP_MAIN" --arg w "$PP_WORKSPACES" '{($n): (add + {path: $p, workspaces: $w})}' "$RUN"/parts/*.json > "$RUN/project.json"
 }

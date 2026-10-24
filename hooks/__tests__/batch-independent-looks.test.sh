@@ -53,5 +53,17 @@ sibling_wait() {
 }
 check "a sibling landing 200 ms in ends the wait by 400 ms, with no nudge" "quiet by-400ms" "$(sibling_wait)"
 
+# Issue 327: every nudge replays in main's context on each later turn, so a session hears it once. Main only hears it on the
+# strict tier, so the fixture project turns strictHooks on: without it main is silent and silence would prove nothing.
+MP=$(mktemp -d); git init -q "$MP"; mkdir -p "$MP/.claude"; echo '{"strictHooks": true}' > "$MP/.claude/commandeck.json"
+trap 'rm -rf /tmp/claude-batch-bil$$-* "$TR" "$MP"' EXIT
+as_main() { (cd "$MP" && unset COMMANDECK_SEAT COMMANDECK_BUILDER COMMANDECK_HOOK_TIER && "$@"); }
+streak3() { turn ls >/dev/null; turn ls >/dev/null; turn ls; }
+check "with strictHooks on, main's first streak of 3 single looks nudges" nudge "$(as_main bash -c "$(declare -f turn streak3 fresh); HOOK=$HOOK; export BATCH_SIBLING_MS BATCH_STREAK_THRESHOLD; fresh; streak3")"
+check "a second streak of 3 in the same session prints nothing" nudge/quiet \
+  "$(as_main bash -c "$(declare -f turn streak3 fresh); HOOK=$HOOK; export BATCH_SIBLING_MS BATCH_STREAK_THRESHOLD; fresh; echo \"\$(streak3)/\$(streak3)\"")"
+check "a new session's first streak still nudges" nudge/quiet/nudge \
+  "$(as_main bash -c "$(declare -f turn streak3 fresh); HOOK=$HOOK; export BATCH_SIBLING_MS BATCH_STREAK_THRESHOLD; fresh; a=\$(streak3); b=\$(streak3); fresh; echo \"\$a/\$b/\$(streak3)\"")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

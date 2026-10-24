@@ -242,12 +242,39 @@
     return li;
   }
 
-  function renderNeeds(n, now, githubP1) {
+  // Issue 292: a labelled-issue list: the five lowest numbers, each title linked to its issue, then a show-all.
+  // Anything but {count, top, all} is a read that failed.
+  function issueList(id, x) {
+    const box = byId(id);
+    const ok = x && Number.isInteger(x.count) && Array.isArray(x.top) && Array.isArray(x.all);
+    if (!ok) { put(box, [h('p', 'empty', 'not measured')]); return; }
+    const row = (i) => {
+      const li = h('li');
+      const href = ghUrl(i.url);
+      const a = href ? link(href, 't') : h('span', 't');
+      a.append(h('span', 'inum', `#${i.number}`), ` ${i.title}`);
+      li.append(a);
+      return li;
+    };
+    const kids = [h('ul', 'issue-top', null)];
+    kids[0].append(...x.top.map(row));
+    if (!x.top.length) kids[0].append(h('li', 'empty', 'None open'));
+    if (x.all.length > x.top.length) {
+      const det = h('details');
+      const ul = h('ul');
+      ul.append(...x.all.map(row));
+      det.append(h('summary', null, `Show all ${x.count}`), ul);
+      kids.push(det);
+    }
+    put(box, kids);
+  }
+
+  function renderNeeds(n, now, githubP1, githubProposed) {
     n = n || {};
     const who = ownerName(n);
     for (const el of document.querySelectorAll('[data-owner]')) el.textContent = who;
     // The project's open GitHub issues labelled P1; anything but a whole count is unknown.
-    const issues = Number.isInteger(githubP1) && githubP1 >= 0 ? githubP1 : null;
+    const issues = githubP1 && Number.isInteger(githubP1.count) && githubP1.count >= 0 ? githubP1.count : null;
     const rows = Array.isArray(n.decisions) ? n.decisions.filter((d) => d && d.answeredAt == null) : null;
     // A Builder's question to main (waitsOn "main") is listed apart and never counted as the owner's.
     const open = rows && rows.filter((d) => d.waitsOn !== 'main');
@@ -257,6 +284,8 @@
     dl.replaceChildren();
     fact(dl, `Waiting on ${who}`, open === null ? nm() : [strong(open.length), ' open ', open.length ? null : badge('nothing waiting', 'ok')]);
     fact(dl, 'Open P1 on GitHub', issues === null ? nm() : strong(issues));
+    issueList('p1-issues', githubP1);
+    issueList('proposed-issues', githubProposed);
     q('[data-count="decisions"]').textContent = open ? String(open.length) : 'not measured';
     const asked = (d) => {
       const t = parseTime(d.askedAt);
@@ -402,6 +431,8 @@
     sub('tests-sub', run === null ? '' : `${run.length} running`);
     const body = [];
     if (t) {
+      // Issue 292: test seconds today, and the part of the Builders' clock they took (null without a Builder session today).
+      if (num(t.testSecToday) !== null) body.push(h('p', 'meta', `Test time today ${span(t.testSecToday)}, ${num(t.builderShare) === null ? 'Builder share not measured' : `${Math.round(100 * t.builderShare)}% of the Builders' clock`}`));
       body.push(h('h3', null, 'Running'));
       if (run === null) body.push(h('p', 'nm', 'Running tests not measured'));
       else if (!run.length) body.push(h('p', 'empty', 'No test is running.'));
@@ -431,7 +462,7 @@
   }
   // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
   const STAGE_MIN_PCT = 12;
-  function unitCard(u, now) {
+  function unitCard(u, now, asks = []) {
     const signals = isBuilder(u) && Array.isArray(u.builder.signals) ? u.builder.signals.filter(Boolean) : [];
     const quiet = signals.some((s) => s.kind === 'quiet');
     const li = h('li', `unit${quiet ? ' quiet' : ''}`);
@@ -443,7 +474,7 @@
       s.effort ? `${s.effort} effort` : 'effort not recorded', s.completedAt ? 'done' : 'running'].join(', ')).join(' · ') : seatText(u, seatLabel(u)));
     if (raisedBy(u)) seatSpan.title = `effort raised by main: ${u.builder.raised.reason}`;
     head.append(h('p', 'unit-name', u.unit),
-      h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
+      h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : u.worktree === false ? 'Parked' : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
       seatSpan);
     li.append(head);
     // A unit's planning worktree shows its time from the first plan seat's launch, its cost and its cost by stage.
@@ -468,7 +499,23 @@
     if (isBuilder(u) && !Array.isArray(u.builder.signals)) badges.append(badge('Signals not measured', 'muted'));
     for (const s of signals) if (s.kind !== 'quiet') badges.append(badge(SIGNAL_LABELS[s.kind] || 'Signal', 'warn'));
     if (isStale(u)) badges.append(badge('stale', 'crit'));
+    if (u.worktree === false) badges.append(badge('No worktree', 'muted'));
     li.append(badges);
+    // What the current round launched as: the Builder's own record, then each reviewer pass (issue 292). A record with
+    // no flag says so; none at all draws no line.
+    if (Array.isArray(u.seats) && u.seats.length) {
+      const p = h('p', 'launched', 'launched as ');
+      u.seats.filter(Boolean).forEach((s, i) => {
+        const e = h('span', null, `${s.model ? modelName(s.model) : 'model not recorded'}, ${s.effort ? `${s.effort} effort` : 'effort not recorded'}`);
+        e.title = String(s.role);
+        p.append(...(i ? [' · ', e] : [e]));
+      });
+      li.append(p);
+    }
+    // Why the unit stopped: its open questions to main (decision.sh --waits-on main; the source is "<unit> asks").
+    for (const a of asks.filter((d) => d && d.source === `${u.unit} asks`)) li.append(h('p', 'stop-note', a.question));
+    // A parked unit has no worktree to measure: its name, its seat and what it waits on are all there is.
+    if (u.worktree === false) return li;
 
     const facts = h('dl', 'ufacts');
     const fact4 = (term, value, cls) => { const d = h('div', cls); d.append(h('dt', null, term)); const dd = h('dd'); dd.append(...[].concat(value)); d.append(dd); facts.append(d); };
@@ -577,15 +624,17 @@
     return li;
   }
 
-  function renderUnits(units, now) {
+  function renderUnits(units, now, decisions) {
     const lists = {};
-    for (const s of [...STAGES, 'stale', 'permanent', 'unclassified']) lists[s] = [];
+    for (const s of [...STAGES, 'stale', 'permanent', 'unclassified', 'parked']) lists[s] = [];
     const known = Boolean(units) && Array.isArray(units.inFlight);
     note('units', known ? '' : 'Units in flight not measured');
     // A unit that has waited on main a day or more folds into one counted row.
-    const group = (u) => (u.stage === 'waiting-main' && isStale(u) ? 'stale'
+    // No worktree (a Builder pane that is gone, its task still open) is parked, never in a stage.
+    const group = (u) => (u.worktree === false ? 'parked' : u.stage === 'waiting-main' && isStale(u) ? 'stale'
       : STAGES.includes(u.stage) ? u.stage : SEATS.has(u.stage) ? 'permanent' : 'unclassified');
-    for (const u of (units && units.inFlight) || []) lists[group(u)].push(unitCard(u, now));
+    const asks = Array.isArray(decisions) ? decisions.filter((d) => d && d.answeredAt == null && d.waitsOn === 'main') : [];
+    for (const u of (units && units.inFlight) || []) lists[group(u)].push(unitCard(u, now, asks));
     // A column's count is everything in its step, the folded rows included.
     const size = (s) => lists[s].length + (s === 'waiting-main' ? lists.stale.length : 0);
     for (const [s, kids] of Object.entries(lists)) {
@@ -596,6 +645,18 @@
     byId('stale-units').hidden = lists.stale.length === 0;
     byId('unclassified').hidden = lists.unclassified.length === 0;
     byId('permanent').hidden = lists.permanent.length === 0;
+    byId('parked').hidden = lists.parked.length === 0;
+    // Builds merged after the upstream's tip: what the next push sends.
+    const merged = units && Array.isArray(units.mergedSincePush) ? units.mergedSincePush : [];
+    put(byId('merged-since-list'), merged.map((m) => {
+      const li = h('li', 'unit merged'), t = parseTime(m.at);
+      li.dataset.unit = m.unit;
+      li.append(h('p', 'unit-name', m.unit), h('p', 'meta', Number.isFinite(t) ? `merged ${ago((now - t) / 1000)} ago` : 'Merge time not measured'),
+        h('p', 'meta mono', String(m.sha || '').slice(0, 8)));
+      return li;
+    }));
+    byId('merged-since').hidden = merged.length === 0;
+    byId('merged-since').querySelector('[data-count]').textContent = String(merged.length);
     // The compact view: one bar, a colour per step. A step with no unit is a narrow column.
     const cols = STAGES;
     const total = cols.reduce((a, s) => a + size(s), 0) || 1;
@@ -868,11 +929,14 @@
     flag('builds', Boolean(builders) && builders.some((u) => u.stage === 'waiting-main' || (Array.isArray(u.builder.signals) && u.builder.signals.length)));
   }
 
-  function renderChain(m) {
+  function renderChain(m, now) {
     m = m || {};
     const dl = byId('chain-facts');
     dl.replaceChildren();
     fact(dl, 'Unpushed', num(m.unpushed) === null ? nm() : [strong(m.unpushed), ' commits ', m.unpushed > 0 ? badge('not pushed', 'warn') : null]);
+    // The newest finished build (dashboard.sh main_chain); "none yet" is a measured nothing, not a failed read.
+    const lm = m.lastMerge, lt = lm ? parseTime(lm.at) : NaN;
+    if ('lastMerge' in m) fact(dl, 'Last merge', lm ? `${lm.unit}${Number.isFinite(lt) ? `, ${ago((now - lt) / 1000)} ago` : ''}` : 'none yet');
     put(byId('commits'), Array.isArray(m.commits) ? m.commits.map((c) => {
       const li = h('li');
       li.append(h('span', 'mono sha', c.sha), h('span', null, c.subject));
@@ -950,6 +1014,8 @@
   // An urgent issue (P0 or P1) that nobody holds is called out at the top.
   function renderHeld(g, units, sources) {
     renderFlow(g && g.flow);
+    const bp = g && g.byPriority && typeof g.byPriority === 'object' ? Object.entries(g.byPriority).filter(([, v]) => Number.isInteger(v)) : null;
+    byId('held-priority').textContent = bp ? `By priority: ${bp.sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k} ${v}`).join(' · ')}` : 'Priority counts not measured';
     const issues = g && Array.isArray(g.issues) ? g.issues.filter((i) => i && Number.isInteger(i.number)) : null;
     const alarm = byId('held-alarm');
     if (!issues) { ghMissing('held', sources, ['github-issues'], 'Issues'); sub('held-sub', ''); alarm.hidden = true; put(byId('held-list'), []); return; }
@@ -1091,18 +1157,38 @@
   }
 
   // Main's and the relay's own cards (issue 224). `absent`: no relay is configured, so its card is not shown.
-  function renderSeat(id, s, absent) {
+  function renderSeat(id, s, absent, account) {
     const card = byId(id), dl = byId(`${id}-facts`);
     if (absent) card.dataset.absent = ''; else delete card.dataset.absent;
     dl.replaceChildren();
+    for (const old of card.querySelectorAll('.hourly')) old.remove();
     if (!s) { fact(dl, 'Context', nm()); return; }
     const ctx = num(s.context), line = num(s.line), gap = num(s.restartGapSec);
     const spend = (t) => (t && num(t.tokens) !== null && num(t.usd) !== null ? `${tokens(t.tokens)} tokens · ${money(t.usd)}${t.partial ? ' or more' : ''}` : nm());
     fact(dl, 'Context', ctx === null ? nm() : line === null ? tokens(ctx) : `${tokens(ctx)} of ${tokens(line)}`);
     fact(dl, 'Today', spend(s.today));
     fact(dl, '7-day daily average', spend(s.avg7));
+    if (typeof s.live === 'boolean') fact(dl, 'Working now', s.live ? 'yes' : 'no');
     fact(dl, 'Restarts today', `${num(s.restarts) ?? 0}${gap === null ? '' : `, every ${ago(gap)} on average`}`);
     fact(dl, 'Restarted at', (Array.isArray(s.restartTimes) ? s.restartTimes : []).map((t) => clock(parseTime(t))).join(', ') || 'none', true);
+    // A restart rebuilds the context in one first call: null with no session begun today, or an unpriced first call.
+    if ('rebuildUsd' in s) fact(dl, 'Rebuild after a restart', num(s.rebuildUsd) === null ? nm() : money(s.rebuildUsd));
+    if (s.sideRuns !== undefined) fact(dl, 'Side runs today', s.sideRuns && num(s.sideRuns.count) !== null
+      ? `${s.sideRuns.count} run${s.sideRuns.count === 1 ? '' : 's'} · ${num(s.sideRuns.usd) === null ? 'dollars not measured' : money(s.sideRuns.usd)}` : nm());
+    const w = s.week;
+    if (w && num(w.sessions) !== null) fact(dl, 'Week', `${w.sessions} session${w.sessions === 1 ? '' : 's'}${num(w.unmeasuredSessions) ? ` (${w.unmeasuredSessions} not measured)` : ''}, ${num(w.input) === null ? 'tokens not measured' : `${tokens(w.input)} in, ${tokens(w.output)} out`}`);
+    // Which account the spend is billed to: the limit card's label (no e-mail), when the collector read one.
+    if (typeof account === 'string' && account) fact(dl, 'Account', account);
+    if (Array.isArray(s.hourly) && s.hourly.length) {
+      const top = Math.max(1, ...s.hourly.map((v) => num(v) || 0)), spark = h('div', 'hourly');
+      spark.title = 'tokens an hour, last 12 hours';
+      for (const v of s.hourly) {
+        const i = h('i');
+        if (num(v) === null) { i.className = 'nm'; i.title = 'not measured'; } else i.style.height = `${(100 * v) / top}%`;
+        spark.append(i);
+      }
+      dl.after(spark);
+    }
     flag(id, ctx !== null && line !== null && ctx > line);
   }
 
@@ -1141,15 +1227,24 @@
     return { load, cpus, per };
   }
 
-  function renderCost(roles) {
-    if (!Array.isArray(roles)) {
+  // Main's and the relay's own sessions write no seat-event row, so their week comes from the seats group; a seat with no
+  // session in 7 days adds no row.
+  const seatRoles = (seats) => [['relay', 'Chief of Staff session'], ['main', 'Main session']].flatMap(([k, role]) => {
+    const w = seats && seats[k] && seats[k].week;
+    return w && num(w.sessions) > 0 ? [{ role, seats: w.sessions, unmeasuredSeats: w.unmeasuredSessions, input: w.input, cachedInput: w.cachedInput, output: w.output }] : [];
+  });
+  function renderCost(roles, seats) {
+    // No seat-event ledger yet (no worker has finished) leaves the workers unmeasured, never the seats' own measured weeks.
+    const ledger = Array.isArray(roles);
+    roles = (ledger ? roles : []).concat(seatRoles(seats));
+    if (!ledger && !roles.length) {
       note('cost-role', 'Seat events not measured');
       put(byId('role-top'), []);
       put(byId('role-bars'), []);
       put(byId('cost-role-rows'), []);
       byId('cache-tile').textContent = '';
     } else {
-      note('cost-role', roles.length ? '' : 'No seat finished in the last 7 days');
+      note('cost-role', !ledger ? 'Seat events not measured' : roles.length ? '' : 'No seat finished in the last 7 days');
       const hit = (r) => (num(r.input) > 0 && num(r.cachedInput) !== null ? (r.cachedInput / r.input) * 100 : null);
       const top6 = [...roles].sort((a, b) => (num(b.input) ?? -1) - (num(a.input) ?? -1)).slice(0, 6);
       const max6 = Math.max(1, ...top6.map((r) => num(r.input) || 0));
@@ -1170,7 +1265,7 @@
       }));
       const sumOf = (k) => (roles.some((r) => num(r[k]) === null) ? null : roles.reduce((a, r) => a + r[k], 0));
       const all = hit({ input: sumOf('input'), cachedInput: sumOf('cachedInput') });
-      byId('cache-tile').textContent = all === null ? 'Cache hit rate not measured' : `Cache hit rate, 7 days: ${Math.round(all)}% of input tokens`;
+      byId('cache-tile').textContent = !ledger || all === null ? 'Cache hit rate not measured' : `Cache hit rate, 7 days: ${Math.round(all)}% of input tokens`;
       put(byId('cost-role-rows'), roles.map((r) => tr([h('td', null, r.role), cell(r.seats), cell(r.unmeasuredSeats), cell(r.input, tokens), cell(r.cachedInput, tokens), cell(hit(r), (v) => `${Math.round(v)}%`), cell(r.output, tokens)])));
     }
   }
@@ -1561,6 +1656,7 @@
     const { builders, used } = workingBuilders(d.units);
     const per = hostInfo.per;
     const al = Array.isArray(d.alerts) ? d.alerts : null;
+    const p1 = d.githubP1 && Number.isInteger(d.githubP1.count) ? d.githubP1.count : null;
     const crit = al ? al.filter((a) => a && a.severity === 'crit').length : 0;
     const lim = (label, x) => {
       const u = num(x && x.usedPct), g = num(x && x.goalPct), under = num(x && x.underPts);
@@ -1581,6 +1677,7 @@
     put(byId('summary'), [
       measure('Alerts', al ? al.length : null, !al ? 'nm' : crit ? 'crit' : al.length ? 'warn' : 'ok', al ? `${crit} critical` : null, 'alerts'),
       measure(`Waiting on ${ownerName(n)}`, dec, dec ? 'warn' : dec === 0 ? 'ok' : 'nm', dec === null ? null : `${dec} open decisions`, 'needs'),
+      measure('Open P1', p1, p1 === null ? 'nm' : p1 ? 'warn' : 'ok', null, 'needs'),
       measure('Builds running', used, used === null ? 'nm' : 'ok', builders ? `of ${builders.length} Builders` : null, 'builds'),
       ...(api ? [
         measure('API spend, week', spent === null ? null : wholeDollars(spent), spent === null ? 'nm' : aUnder !== null && aUnder < 0 ? 'crit' : aUnsure ? 'warn' : 'ok',
@@ -1630,8 +1727,8 @@
     const d = view(snapshot);
     const title = typeof d.name === 'string' && d.name ? d.name : project ? `${project} Dashboard` : '';
     if (title) { byId('title').textContent = title; document.title = title; }
-    renderNeeds(d.needsOwner, now, d.githubP1);
-    renderUnits(d.units, now);
+    renderNeeds(d.needsOwner, now, d.githubP1, d.githubProposed);
+    renderUnits(d.units, now, d.needsOwner && d.needsOwner.decisions);
     renderCostUnit(d.units && d.units.costPerUnit);
     renderReview(d.reviewLoop, d.escapes);
     renderTests(d.tests);
@@ -1639,12 +1736,12 @@
     renderMergeLine(d.github, d.units, d.sources);
     renderHeld(d.github, d.units, d.sources);
     renderNextPush(d.nextPush, d.github, d.sources, now);
-    renderChain(d.mainChain);
+    renderChain(d.mainChain, now);
     renderCos(d.chiefOfStaff);
-    renderSeat('main-seat', d.seats && d.seats.main, false);
+    renderSeat('main-seat', d.seats && d.seats.main, false, d.limit && d.limit.accountLabel);
     renderSeat('relay-seat', d.seats && d.seats.relay, !(d.seats && 'relay' in d.seats));
     const hostInfo = renderHost(d.host);
-    renderCost(d.costPerRole);
+    renderCost(d.costPerRole, d.seats);
     renderTodos(d.todos);
     renderAgents(d.agents);
     renderAlerts(d.alerts, d.sources && d.sources.alerts, now);

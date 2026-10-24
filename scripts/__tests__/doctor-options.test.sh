@@ -28,6 +28,15 @@ echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"codexReviewerAge
 check "the doctor checks the review pass on the reviewer's agent key, not the profile's" "1 0" \
   "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 > "$T/doc"; grep -c 'review pass' "$T/doc") $(grep -c 'puts the reviewer on' "$T/doc")"
 rm -f "$HOME/.claude/settings.json"
+# Issue 327: main tracks work in the Orca task list, so the harness's task-list reminders are paid for nothing. The doctor
+# warns when main's settings turn the task tools on for every model, and otherwise says how they stay off.
+echo '{"env": {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"}}' > "$PROJ/.claude/settings.local.json"
+check "with CLAUDE_CODE_ENABLE_TODO_TOOLS=1 in main's settings env the doctor warns and names the fix" 1 \
+  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | grep -c '^warn main: .*CLAUDE_CODE_ENABLE_TODO_TOOLS=1.*remove it')"
+rm -f "$PROJ/.claude/settings.local.json"
+OUT=$(in_proj env -u CLAUDE_CODE_ENABLE_TODO_TOOLS timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
+check "without it the doctor prints the ok line, and no warning" "1:0" \
+  "$(grep -c '^ok   main: task-list reminders .*deny TaskCreate' <<<"$OUT"):$(grep -c '^warn main: .*TODO_TOOLS' <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

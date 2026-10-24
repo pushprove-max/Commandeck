@@ -29,8 +29,10 @@ ids() { jq -c '[.alerts[].id | select(startswith("host-") | not) | sub("-[0-9]{9
 OUT=$(collect)
 check "mainEvents: the compaction, the unhealed carries; not the healed one nor another project's" \
   '1 ["m2","m3","m5"]' "$(jq -r '.projects.demo.mainEvents | "\(.compactions | length) \([.carryFailed[].cp | split("/")[-1] | sub("\\.md$"; "")] | sort | tojson)"' <<<"$OUT")"
-check "alerts: one for the compaction, one each for m2 and m3; m1 healed and m5 not yet stranded raise none" \
-  '["carry-failed-demo-m2","carry-failed-demo-m3","main-compact-demo-m1xxxxxx"]' "$(ids "$OUT")"
+check "mainEvents.carried lists m1 with its 2 items and no restart" '[["m1.md",2,null]]' \
+  "$(jq -c '[.projects.demo.mainEvents.carried[] | [(.cp | split("/")[-1]), .items, .restartedAt]]' <<<"$OUT")"
+check "alerts: one for the compaction, one each for m2 and m3, and the rejected checkpoint m1 (carried 2 h ago, main never restarted); m5 not yet stranded raises none" \
+  '["carry-failed-demo-m2","carry-failed-demo-m3","checkpoint-rejected-demo-m1","main-compact-demo-m1xxxxxx"]' "$(ids "$OUT")"
 # The relay's watcher wakes on them: its wake text holds the two carry failures and not the healed one. Once the
 # pane has told the owner (--seed marks every open id seen) the same alerts wake nothing.
 watch() { (cd "$MAIN" && HOME=$HOME PATH="$BIN:$PATH" COMMANDECK_MAIN="$MAIN" COMMANDECK_SCRATCH="$T/scr" COMMANDECK_DASHBOARD_DIR="$T/out3" COMMANDECK_WATCH_ONCE=1 bash "$SOURCE/scripts/cos-watch-alerts.sh" "$@" 2>&1); }
@@ -42,7 +44,20 @@ check "and wakes nothing for the same alerts once told" "" "$(watch)"
 # Main restarts (a session of this project resumes from a checkpoint): the events before it have recovered.
 echo "$CPD/m3.md" > "$CPD/m3.resumed-from"
 OUT=$(collect)
-check "a restart after them ends all three alerts" '[]' "$(ids "$OUT")"
+check "a restart after them ends all four alerts" '[]' "$(ids "$OUT")"
 check "and mainEvents names the restart" true "$(jq '.projects.demo.mainEvents.resumedAt != null' <<<"$OUT")"
+# A carried checkpoint is rejected only while main stays unrestarted, and not yet stranded inside 120 s. Main's last
+# restart is set before all of them, then after. The alert rule reads the clock at render (dashboard.sh), so the two ages keep a wide margin around the 120 s line.
+for s in m6 m7; do echo '{"type":"user"}' > "$PD/$s.jsonl"; done
+N2=$(date +%s)
+printf '%s\n' "$(lt $((N2 - 300))) stop-hook: 1 items carried automatically into the checkpoint $CPD/m6.md" \
+  "$(lt $((N2 - 30))) stop-hook: 1 items carried automatically into the checkpoint $CPD/m7.md" >> "$CPD/clear-hook.log"
+touch -d "@$((NOW - 30000))" "$CPD/m3.resumed-from"
+rejected() { jq -c '[.alerts[].id | select(startswith("checkpoint-rejected-")) | sub("-[0-9]{9,}$"; "")] | sort' <<<"$1"; }
+OUT=$(collect)
+check "a carried checkpoint with no restart for 5 min raises checkpoint-rejected; one 30 s old raises nothing" \
+  '["checkpoint-rejected-demo-m1","checkpoint-rejected-demo-m6"]' "$(rejected "$OUT")"
+touch "$CPD/m3.resumed-from"
+check "a restart after the carry ends it" '[]' "$(rejected "$(collect)")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

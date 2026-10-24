@@ -1118,3 +1118,187 @@ test('issue 276: a focused answer box keeps its text and focus while a refresh a
   show(w, { needsOwner: { decisions: [b] } });
   assert.doesNotMatch(text(w.document.getElementById('decisions')), /First\?/, 'its decision gone from the open list, the row goes too');
 });
+
+// Green pin (issue 292): the 7-day limit card plots its history. Only the 5-hour label was checked, so a plot that lost
+// its points would have passed.
+test('three history readings plot three points with their percentages', () => {
+  const w = fresh();
+  const start = NOW - 3 * 86400000, DAY = 86400000;
+  show(w, { limit: { billing: 'subscription', usedPct: 55, goalPct: 40, windowStart: iso(start), resetsAt: iso(start + 7 * DAY), timeLeftSec: 4 * 86400,
+    history: [{ at: iso(start + DAY), pct: 10 }, { at: iso(start + 2 * DAY), pct: 30 }, { at: iso(NOW - 1000), pct: 55 }] } });
+  const line = w.document.querySelector('#limit-chart .actual-line');
+  assert.equal((line.getAttribute('d').match(/H/g) || []).length, 2, 'a stepped line through three readings has two steps');
+  assert.match(text(w.document.querySelector('#limit-chart .end-label.used')), /^55% used$/);
+  assert.match(text(w.document.getElementById('limit-graph-title')), /^Use across the week \(Claude 3 samples/);
+});
+
+// Issue 292: the Units board shows what the unit's current round launched as, why a unit stopped for main, units with no
+// worktree, what merged since the last push, and the last merge on main's card.
+test('a Builder card in round 2 with u.seats shows launched as with both seats, each role as its title', () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [builder({ round: 2, seats: [{ role: 'builder', model: 'claude-sonnet-5-5', effort: 'high' },
+    { role: 'codex-reviewer', pass: 'review', model: 'gpt-6.1-sol', effort: 'medium' }] }), builder({ unit: 'bare', seats: [{ role: 'builder', model: null, effort: null }] }), builder({ unit: 'none', seats: [] })] } });
+  const line = (u) => w.document.querySelector(`#units li.unit[data-unit="${u}"] .launched`);
+  assert.equal(text(line('batch-g')), 'launched as Sonnet 5.5, high effort · gpt-6.1-sol, medium effort');
+  assert.deepEqual([...line('batch-g').querySelectorAll('span')].map((s) => s.title), ['builder', 'codex-reviewer']);
+  assert.equal(text(line('bare')), 'launched as model not recorded, effort not recorded', 'a record with no flags says so');
+  assert.equal(line('none'), null, 'no record, no line');
+});
+
+test("a unit's open question to main shows on its card as a stop note, and on no other card", () => {
+  const w = fresh();
+  const ask = (unit, q) => ({ id: `${unit}-1`, question: q, proposedDefault: 'none', source: `${unit} asks`, askedAt: iso(NOW - 60000), answeredAt: null, answer: null, waitsOn: 'main' });
+  show(w, { units: { inFlight: [builder(), builder({ unit: 'other' })] }, needsOwner: { decisions: [ask('batch-g', 'Which of the two?'), { ...ask('other', 'Answered one?'), answeredAt: iso(NOW) }] } });
+  const note = (u) => w.document.querySelector(`#units li.unit[data-unit="${u}"] .stop-note`);
+  assert.match(text(note('batch-g')), /Which of the two\?/);
+  assert.equal(note('other'), null, 'an answered question is not a stop note');
+});
+
+test('a unit with worktree false shows under Parked, not in a stage', () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [builder(), { unit: 'pk', worktree: false, stage: null, role: 'builder', task: 'task_7' }] } });
+  const parked = w.document.getElementById('parked');
+  assert.equal(parked.hidden, false);
+  assert.deepEqual([...parked.querySelectorAll('li.unit')].map((li) => li.dataset.unit), ['pk']);
+  assert.equal(text(parked.querySelector('[data-count="parked"]')), '1');
+  assert.equal(w.document.getElementById('unclassified').hidden, true, 'not in Stage not known yet');
+  assert.match(text(parked.querySelector('li.unit')), /No worktree/);
+  w.refresh();
+  show(w, { units: { inFlight: [builder()] } });
+  assert.equal(parked.hidden, true, 'none parked: no block');
+});
+
+test('the merged-since-push card lists the builds merged after the upstream, newest first', () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [], mergedSincePush: [{ unit: 'm-two', at: iso(NOW - 3600000), sha: 'b'.repeat(40) }, { unit: 'm-one', at: null, sha: 'a'.repeat(40) }] } });
+  const box = w.document.getElementById('merged-since');
+  assert.equal(box.hidden, false);
+  assert.deepEqual([...box.querySelectorAll('li.unit')].map((li) => li.dataset.unit), ['m-two', 'm-one']);
+  assert.match(text(box.querySelector('li.unit')), /merged 60 min ago/);
+  assert.match(text(box.querySelectorAll('li.unit')[1]), /Merge time not measured/);
+  w.refresh();
+  show(w, { units: { inFlight: [], mergedSincePush: [] } });
+  assert.equal(w.document.getElementById('merged-since').hidden, true, 'none merged since the push: no block');
+});
+
+test('the main card shows the last merge', () => {
+  const w = fresh();
+  show(w, { mainChain: { commits: [], unpushed: 0, lastMerge: { unit: 'm-two', at: iso(NOW - 7200000) } } });
+  const lastMerge = () => [...w.document.querySelectorAll('#chain-facts dt')].filter((d) => text(d) === 'Last merge').map((d) => text(d.nextElementSibling));
+  assert.deepEqual(lastMerge(), ['m-two, 2 h ago']);
+  w.refresh();
+  show(w, { mainChain: { commits: [], unpushed: 0, lastMerge: null } });
+  assert.deepEqual(lastMerge(), ['none yet']);
+});
+
+// Issue 292: main's and the relay's cards carry working now, the rebuild cost of a restart, the last twelve hours, the
+// account the spend is billed to, the relay's side runs and the week; the role totals count both seats' weeks.
+const seatFacts = (w, id) => Object.fromEntries([...w.document.querySelectorAll(`#${id}-facts dt`)].map((dt) => [text(dt), text(dt.nextElementSibling)]));
+const relaySeat = () => { const r = seat({ live: false, sideRuns: { count: 2, usd: 0.02 } }); delete r.rebuildUsd; return r; }; // the collector writes no rebuildUsd for the relay
+const week = { sessions: 3, unmeasuredSessions: 1, input: 900000, cachedInput: 800000, output: 50000 };
+const seat = (over = {}) => ({ context: 100000, line: 200000, today: { tokens: 1000, usd: 0.5, partial: false }, avg7: { tokens: 2000, usd: 1, partial: false },
+  restarts: 1, restartGapSec: null, restartTimes: [], live: true, rebuildUsd: 0.05, hourly: [0, 5, 10, 0, 0, 0, 0, 0, 0, 0, 20, 40], week, ...over });
+
+test("main's card shows working now, rebuild cost, the hourly spark and the week", () => {
+  const w = fresh();
+  show(w, { seats: { main: seat(), relay: relaySeat() } });
+  const f = seatFacts(w, 'main-seat');
+  assert.equal(f['Working now'], 'yes');
+  assert.equal(f['Rebuild after a restart'], '$0.05');
+  assert.match(f.Week, /3 sessions \(1 not measured\)/);
+  assert.equal(w.document.querySelectorAll('#main-seat .hourly i').length, 12, 'twelve hourly bars');
+  assert.equal(w.document.querySelector('#main-seat .hourly i:last-child').style.height, '100%', 'the busiest hour is full height');
+});
+
+test('the relay card shows side runs today and no rebuild cost', () => {
+  const w = fresh();
+  show(w, { seats: { main: seat(), relay: relaySeat() } });
+  const f = seatFacts(w, 'relay-seat');
+  assert.equal(f['Working now'], 'no');
+  assert.equal(f['Side runs today'], '2 runs · $0.02');
+  assert.equal('Rebuild after a restart' in f, false);
+});
+
+test('a populated main seat with limit.accountLabel shows Account on main\'s card; a null label shows no Account fact', () => {
+  const w = fresh();
+  show(w, { seats: { main: seat() }, limit: { accountLabel: 'a…@example.org' } });
+  assert.equal(seatFacts(w, 'main-seat').Account, 'a…@example.org');
+  w.refresh();
+  show(w, { seats: { main: seat() }, limit: { accountLabel: null } });
+  assert.equal('Account' in seatFacts(w, 'main-seat'), false);
+});
+
+test('main with one session this week and no seat-event row shows its role row with that session\'s tokens; a seat with no session adds none', () => {
+  const w = fresh();
+  show(w, { costPerRole: [], seats: { main: seat({ week: { sessions: 1, unmeasuredSessions: 0, input: 100000, cachedInput: 90000, output: 5000 } }), relay: seat({ week: { ...week, sessions: 0 } }) } });
+  const rows = [...w.document.querySelectorAll('#cost-role-rows tr')].map((tr) => [...tr.children].map(text));
+  assert.deepEqual(rows.map((r) => r[0]), ['Main session']);
+  assert.equal(rows[0][1], '1', 'one seat');
+});
+
+test('with no seat-event ledger yet, main\'s measured week still shows its role row, beside the not-measured note', () => {
+  const w = fresh();
+  show(w, { costPerRole: null, seats: { main: seat({ week: { sessions: 1, unmeasuredSessions: 0, input: 100000, cachedInput: 90000, output: 5000 } }) } });
+  const rows = [...w.document.querySelectorAll('#cost-role-rows tr')].map((tr) => [...tr.children].map(text));
+  assert.deepEqual(rows.map((r) => r[0]), ['Main session']);
+  assert.equal(text(w.document.querySelector('#cost-role .card-note')), 'Seat events not measured');
+  assert.equal(text(w.document.getElementById('cache-tile')), 'Cache hit rate not measured', 'the workers\' part is missing, so no total rate');
+});
+
+test('the Tests card shows the Builder share of the Builders\' clock and the test time today', () => {
+  const w = fresh();
+  show(w, { tests: { running: [], finished: [], testSecToday: 5400, builderShare: 0.1 } });
+  assert.match(text(w.document.getElementById('tests-body')), /Test time today 1h 30m, 10% of the Builders' clock/);
+  w.refresh();
+  show(w, { tests: { running: [], finished: [], testSecToday: 5400, builderShare: null } });
+  assert.match(text(w.document.getElementById('tests-body')), /Test time today 1h 30m, Builder share not measured/);
+});
+
+// Issue 292: Needs lists the open P1 issues and the proposed decisions: the five lowest numbers, then a show-all.
+const labelled = (n, label) => { const all = Array.from({ length: n }, (_, i) => ({ number: 41 + i, title: `${label} issue ${41 + i}`, url: `${REPO}/issues/${41 + i}` })); return { count: n, top: all.slice(0, 5), all }; };
+const listed = (w, id) => ({ top: [...w.document.querySelectorAll(`#${id} .issue-top li`)].map(text), all: [...w.document.querySelectorAll(`#${id} details li`)].map(text),
+  hrefs: [...w.document.querySelectorAll(`#${id} .issue-top a`)].map((a) => a.href), open: w.document.querySelector(`#${id} details`) });
+
+test('Needs lists five P1 issues and a show-all', () => {
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [] }, githubP1: labelled(7, 'P1'), github: { repo: REPO } });
+  const l = listed(w, 'p1-issues');
+  assert.equal(l.top.length, 5);
+  assert.match(l.top[0], /^#41 P1 issue 41$/);
+  assert.deepEqual(l.hrefs.slice(0, 2), [`${REPO}/issues/41`, `${REPO}/issues/42`], 'each title is linked to its issue');
+  assert.equal(l.all.length, 7, 'the show-all holds every issue');
+  assert.match(text(l.open.querySelector('summary')), /Show all 7/);
+  assert.equal(seatFacts(w, 'needs')['Open P1 on GitHub'], '7');
+});
+
+test('Needs lists five proposed decisions, each title linked to its issue url, and a show-all that opens all seven', () => {
+  const w = fresh();
+  show(w, { needsOwner: { decisions: [] }, githubProposed: labelled(7, 'proposed'), github: { repo: REPO } });
+  const l = listed(w, 'proposed-issues');
+  assert.equal(l.top.length, 5);
+  assert.deepEqual(l.hrefs, [41, 42, 43, 44, 45].map((n) => `${REPO}/issues/${n}`));
+  assert.equal(l.all.length, 7);
+  w.refresh();
+  show(w, { needsOwner: { decisions: [] }, githubProposed: labelled(2, 'proposed') });
+  assert.equal(listed(w, 'proposed-issues').open, null, 'two or fewer: no show-all');
+  w.refresh();
+  show(w, { needsOwner: { decisions: [] }, githubProposed: null });
+  assert.match(text(w.document.getElementById('proposed-issues')), /not measured/, 'a read that failed says so');
+});
+
+test('the strip shows the open P1 count', () => {
+  const w = fresh();
+  show(w, { githubP1: labelled(7, 'P1') });
+  const m = [...w.document.querySelectorAll('#summary .measure')].find((x) => text(x.querySelector('.measure-label')) === 'Open P1');
+  assert.ok(m, 'a tile for it');
+  assert.equal(text(m.querySelector('.measure-value')), '7');
+});
+
+test('the Issues card shows counts by priority', () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [] }, github: { ...GH, byPriority: { P1: 2, P2: 1, none: 1 } } });
+  assert.equal(text(w.document.getElementById('held-priority')), 'By priority: P1 2 · P2 1 · none 1');
+  w.refresh();
+  show(w, { units: { inFlight: [] }, github: { ...GH, byPriority: null } });
+  assert.equal(text(w.document.getElementById('held-priority')), 'Priority counts not measured');
+});

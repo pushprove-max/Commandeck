@@ -198,6 +198,11 @@ summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; font-weigh
 .unit-head .state { font-weight: 600; color: var(--tone); display: inline-flex; align-items: center; gap: 6px; }
 .unit-head .state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--tone); }
 .unit-head .seat { color: var(--muted); font-size: 12px; }
+.hourly { display: flex; align-items: flex-end; gap: 2px; height: 28px; margin-top: 8px; }
+.hourly i { flex: 1; background: var(--accent); min-height: 1px; border-radius: 1px; }
+.hourly i.nm { background: var(--line); height: 100%; }
+.launched, .stop-note { margin: 4px 0 0; font-size: 12px; }
+.launched { color: var(--muted); }
 .ufacts { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 6px 0 2px; }
 .ufacts div { display: flex; align-items: baseline; gap: 5px; }
 .ufacts dt { color: var(--muted); font-size: 12px; }
@@ -416,7 +421,7 @@ body.look-only .card:not([data-look]) { display: none; }
   #unit-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
   #unit-steps button { min-height: 44px; padding: 0 12px; background: var(--chip); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font: inherit; cursor: pointer; }
   #unit-steps button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent-ink); border-color: #2f5a94; }
-  body:not([data-step="all"]) #stages > .stage:not(.step-on), body:not([data-step="all"]) #permanent, body:not([data-step="all"]) #unclassified { display: none; }
+  body:not([data-step="all"]) #stages > .stage:not(.step-on), body:not([data-step="all"]) #permanent, body:not([data-step="all"]) #unclassified, body:not([data-step="all"]) #parked, body:not([data-step="all"]) #merged-since { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; transition: none; animation: none; } }
 /* A Builder's time and cost (#94): the top line, the figures under each stage, the compact stage list, the table. */
@@ -436,3 +441,7 @@ body.look-only .card:not([data-look]) { display: none; }
 .costs th, .costs td { text-align: right; padding: 2px 6px; border-bottom: 1px solid var(--line); }
 .costs th:first-child, .costs td:first-child { text-align: left; }
 .costs tr.total td { font-weight: 600; }
+
+#p1-issues ul, #proposed-issues ul { list-style: none; margin: 0; padding: 0; }
+#p1-issues li, #proposed-issues li { padding: 2px 0; overflow-wrap: anywhere; }
+#p1-issues .inum, #proposed-issues .inum { color: var(--muted, inherit); margin-right: 4px; }

@@ -36,6 +36,11 @@ LONG=$(ctx "$P2")
 check "a 20 KB rule file: the print stays under 10,240 bytes, and the file is one pointer line" "yes 1 0" \
   "$([ "$(printf '%s\n' "$LONG" | LC_ALL=C wc -c)" -lt 10240 ] && echo yes) $(grep -c "^\[left out to fit the 10,240-byte startup print: Read $P2/.claude/main-session.md" <<<"$LONG") $(grep -c 'house rule 1:' <<<"$LONG")"
 
+# Issue 328: a reply the duplicate-agent guard blocks is retried, never dropped. The rule sits above the Details heading,
+# the part sessions load (MS): under Details no session loads it.
+check "main-session's loaded part carries the rule that a reply the duplicate-agent guard blocks is never dropped" 1 \
+  "$(MS | tr '\n' ' ' | grep -c 'A reply the duplicate-agent guard blocks is never dropped.*retry it after that seat.s turn ends, or send it as  *an orchestration reply')"
+
 # --- the plugin by its stable link; the owner's own files ---
 P=$T/proj; project "$P" '{ownFiles: {".claude/main-session.md": "replace"}, rules: "merge"}'
 mkdir -p "$HOME/.commandeck" && ln -s "$REAL" "$HOME/.commandeck/plugin"

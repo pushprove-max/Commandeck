@@ -36,9 +36,9 @@ case "\$1 \$2" in
       {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"},
       {"__typename":"CheckRun","name":"e2e","status":"IN_PROGRESS","conclusion":""},
       {"__typename":"StatusContext","context":"deploy","state":"PENDING"}]}]' ;;
-  "issue list") case "\$*" in *created:*) cat "$T/gh-created.json"; exit ;; *closed:*) cat "$T/gh-closed.json"; exit ;; esac
-    echo '[{"number":12,"title":"Export times out","url":"https://github.com/example/demo/issues/12","createdAt":"2026-10-01T00:00:00Z",
-    "labels":[{"name":"bug"},{"name":"P2"},{"name":"P1"}],"milestone":{"title":"2.4 Exports"}}]' ;;
+  "issue list") case "\$*" in *created:*) cat "$T/gh-created.json"; exit ;; *closed:*) cat "$T/gh-closed.json"; exit ;;
+      *"--label P1 "*) cat "$T/gh-p1.json"; exit ;; *"--label proposed-decision "*) cat "$T/gh-pd.json"; exit ;; esac
+    cat "$T/gh-issues.json" ;;
   "api repos/{owner}/{repo}/milestones?state=open&per_page=100") echo '[{"title":"2.4 Exports","due_on":"2026-10-17T07:00:00Z","open_issues":5,"closed_issues":7}]' ;;
   "run list") echo '[{"conclusion":"success","status":"completed","createdAt":"2026-10-14T10:00:00Z","workflowName":"ci"}]' ;;
   *) exit 1 ;;
@@ -46,6 +46,11 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/orca-ide"
 chmod +x "$BIN"/*
+echo '[{"number":12,"title":"Export times out","url":"https://github.com/example/demo/issues/12","createdAt":"2026-10-01T00:00:00Z",
+  "labels":[{"name":"bug"},{"name":"P2"},{"name":"P1"}],"milestone":{"title":"2.4 Exports"}}]' > "$T/gh-issues.json"
+# Seven open issues of a label, numbers out of order: the dashboard lists the five lowest and keeps all seven.
+seven() { jq -cn --arg l "$1" '[44, 41, 47, 42, 45, 43, 46] | map({number: ., title: "Issue \(.)", url: "https://github.com/example/demo/issues/\(.)", labels: [{name: $l}]})'; }
+seven P1 > "$T/gh-p1.json"; seven proposed-decision > "$T/gh-pd.json"
 # Issue 273's reads: issues opened 2 h, 30 h and 3 days ago, one closed an hour ago.
 jq -cn '[2, 30, 72] | map({number: ., createdAt: (now - . * 3600 | todate), closedAt: null})' > "$T/gh-created.json"
 jq -cn '[{number: 9, createdAt: "1999-01-01T00:00:00Z", closedAt: (now - 3600 | todate)}]' > "$T/gh-closed.json"
@@ -73,6 +78,12 @@ check "the next push is the two commits the upstream lacks, newest first, with t
   '{"upstream":"origin/main","behind":0,"ahead":2,"subjects":["Bump the lint config","Stream the export"],"refs":[[],[12]],"lines":[[0,1],[2,0]]}' \
   "$(j "$T/one" '.nextPush | {upstream, behind, ahead, subjects: [.commits[].subject], refs: [.commits[].refs], lines: [.commits[] | [.added, .deleted]]}')"
 # Issue 273: the Issues card's 24-hour line and 7-day sparkline, from issues created and closed in the last 7 days.
+# Issue 292: the P1 and proposed-decision lists, as counted previews: the five lowest numbers, then all of them.
+check "seven P1 issues give count 7, the five lowest numbers in top, all seven in all" '[7,[41,42,43,44,45],7,"Issue 41"]' \
+  "$(j "$T/one" '.githubP1 | [.count, [.top[].number], (.all | length), .top[0].title]')"
+check "seven open proposed-decision issues give count 7, the five lowest numbers in top, all seven in all" '[7,[41,42,43,44,45],7,"https://github.com/example/demo/issues/41"]' \
+  "$(j "$T/one" '.githubProposed | [.count, [.top[].number], (.all | length), .top[0].url]')"
+check "the issue read asks for 1000" 1 "$(grep -c '^issue list --state open --limit 1000 --json number,title,url,labels,milestone,createdAt$' "$T/gh.calls")"
 check "issue 273: opened and closed in 24 h, and per local day over 7 days" '[1,1,7,3,1,false]' \
   "$(j "$T/one" '.github.flow | [.opened24h, .closed24h, (.daily | length), (.daily | map(.opened) | add), (.daily | map(.closed) | add), .incomplete]')"
 check "issue 273: each read asks for 7 days, at most 1000" 2 "$(grep -cE '^issue list --state (all|closed) --search (created|closed):>=[0-9-]{10} --json number,createdAt,closedAt --limit 1000$' "$T/gh.calls")"
@@ -83,6 +94,9 @@ mv "$T/gh-created.bak" "$T/gh-created.json"
 check "issue 273: the 7 local days run on across a DST change, one bucket a day" \
   '["2026-10-26","2026-10-27","2026-10-28","2026-10-29","2026-10-30","2026-10-31","2026-11-01"]' \
   "$(DNOW=1793593800 TZ=America/New_York collect "$T/dst" >/dev/null; j "$T/dst" '[.github.flow.daily[].day]')"
+echo '[{"number":1,"title":"a","url":"u","createdAt":"2026-10-01T00:00:00Z","labels":[{"name":"P1"}]},{"number":2,"title":"b","url":"u","createdAt":"2026-10-01T00:00:00Z","labels":[{"name":"P1"},{"name":"P2"}]},
+  {"number":3,"title":"c","url":"u","createdAt":"2026-10-01T00:00:00Z","labels":[{"name":"P2"}]},{"number":4,"title":"d","url":"u","createdAt":"2026-10-01T00:00:00Z","labels":[{"name":"bug"}]}]' > "$T/gh-issues.json"
+check "issues P1, P1, P2 and one unlabelled give byPriority P1 2, P2 1, none 1" '{"P1":2,"P2":1,"none":1}' "$(collect "$T/prio" >/dev/null; j "$T/prio" .github.byPriority)"
 check "every gh call is a read" "" "$(grep -vE '^(pr list|issue list|run list|api repos/\{owner\}/\{repo\}/milestones\?state=open&per_page=100)( |$)' "$T/gh.calls")"
 
 # gh not signed in exits 4. No copy was cached in this dashboard folder, so each pane is null with the reason.
@@ -98,7 +112,7 @@ rm -f "$T/gh-exit" "$T/gh.calls"
 g remote set-url origin "$T/origin.git"
 check "with no GitHub origin the project is still collected" 0 "$(collect "$T/three")"
 check "the panes say there is no GitHub origin" '[null,"no GitHub origin"]' "$(j "$T/three" '[.github.repo, .sources["github-issues"].error]')"
-check "and gh was not asked for them" 0 "$(grep -cvE '^issue list --state open --label P1 ' "$T/gh.calls")"
+check "and gh was asked only for the P1 and proposed-decision lists" 0 "$(grep -cvE '^issue list --state open --label (P1|proposed-decision) ' "$T/gh.calls")"
 
 # A session records its folder as the OS gives it, a link resolved (and on a Mac, its letter case): the workspace
 # folder a link names is recorded as the folder itself, so the costs read from those sessions match it.

@@ -77,7 +77,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 SAVING = threading.Lock()
@@ -603,7 +603,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Plain HTTP to a network address carries no Sec-Fetch-Site, and a page
         # that asks for no referrer names none: another site's <script> tag
         # then looks like this. The dashboard's own page always names itself.
-        if site is None and not page and urlsplit(self.path).path not in ("/", "/index.html"):
+        # A project's address /p/<name>/ is a page too: it holds nothing and only sends the browser on.
+        path = urlsplit(self.path).path
+        if site is None and not page and path not in ("/", "/index.html") and not path.startswith("/p/"):
             return True
         # Served to the network: any other name is one another site pointed at
         # this address (DNS rebinding). An address cannot be rebound.
@@ -671,10 +673,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if self.foreign():
             self.send_error(403, "the dashboard answers its own page only")
+        elif urlsplit(self.path).path.startswith('/p/'):
+            self.project_page(urlsplit(self.path).path[3:])
         else:
             if urlsplit(self.path).path == '/data.js':
                 resend(self.directory)
             super().do_GET()
+
+    def project_page(self, rest):
+        """GET /p/<name>/: the page with that project open. Only a name data.js lists is sent on, matched on the raw
+        path (an encoded slash or dot never reaches the file handler, which would serve the root page for /p/../)."""
+        name = rest[:-1] if rest.endswith('/') else None
+        dash = snapshot(self.directory)
+        if not (name and PROJECT.match(name) and isinstance(dash, dict) and isinstance(dash.get('projects'), dict) and name in dash['projects']):
+            return self.send_error(404, "no such project on this dashboard")
+        self.send_response(302)
+        self.send_header('Location', '../../index.html?project=' + quote(name))
+        self.send_header('Content-Length', '0')
+        self.end_headers()
 
     def own_page(self):
         """A loopback client, under a loopback Host name, from this page's own Origin, with a JSON body. With the login

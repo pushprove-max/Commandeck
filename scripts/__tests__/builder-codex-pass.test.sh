@@ -30,6 +30,9 @@ pass 1 adversarial
 check "a first pass has no earlier pass to count a round from" 0 "$(grep -c '^Changed since' "$TMP/out")"
 check "a launch brief with ## Risky launch is a risky launch: three reviewers on a small build" 1 \
   "$(grep -c '^Reviewers: 3 (.*, a risky launch;' "$B/$U-r1-reports.md")"
+# Issue 292: the dashboard's "launched as" line reads the model and effort the pass really ran from this row.
+check "the pass's codex-start row carries the reviewer's resolved model and effort" "gpt-6.1-sol $(jq -r '.roles["codex-reviewer"].effort' "$TMP/routing.json")" \
+  "$(jq -rs 'map(select(.event == "codex-start" and .pass == "adversarial")) | last | "\(.model) \(.effort)"' "$W/.claude/builder-events.jsonl")"
 # Every reviewer gets the full checklist (global rules, "Working and review"): an angle left to one reviewer
 # goes unchecked when that reviewer misses it.
 check "each of the three reviewers' prompts carries all three angles" "1 1 1 1 1 1 1 1 1" \

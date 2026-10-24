@@ -52,6 +52,16 @@ jq '.builder = {effort: "medium"}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; rm -
 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" >"$T/out" 2>&1
 check "a Builder launched with /config's effort high, the project's file saying medium, opens with --effort high" '0:1' \
   "$?:$(grep '^cmd=' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt | tail -1 | grep -cE -- ' --effort high( |$)')"
+# Green pins (issue 293): high is routing's own default, so the case above would pass with the /config key ignored.
+cfg_effort() { echo "{\"pluginConfigs\": {\"commandeck@commandeck\": {\"options\": {\"builderEffort\": \"$1\"}}}}" > "$HOME/.claude/settings.json"
+  jq --arg e "$2" '.builder = {effort: $e}' "$CFG" > "$T/cfg" && mv "$T/cfg" "$CFG"; rm -f "$T/pane-up"; }
+cmd_effort() { grep '^cmd=' "$HOME/.commandeck/scratch/"*/seat-seat-builder-builder.txt | tail -1 | grep -oE -- '--effort [a-z]+'; }
+cfg_effort max medium
+COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" >"$T/out" 2>&1
+check "a Builder launched with /config's effort max, the project's file saying medium, opens with --effort max" '0:--effort max' "$?:$(cmd_effort)"
+cfg_effort medium low
+COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md" --effort high >"$T/out" 2>&1
+check "/config effort medium, the project's file saying low and a launch pin --effort high: the cmd= line has --effort high" '0:--effort high' "$?:$(cmd_effort)"
 rm "$HOME/.claude/settings.json"
 
 # dispatch-task.sh types its own pointer to a Codex pane Orca will not bind. The seat's log is found by the tag in the

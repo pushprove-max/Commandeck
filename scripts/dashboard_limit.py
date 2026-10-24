@@ -669,12 +669,15 @@ def test_line(r, pending, runs, path):
             finish_run(pending, runs, path, c["tool_use_id"], t, body if isinstance(body, str) else "", bool(c.get("is_error")))
 
 
-def test_runs(projects, cache_path, now, roots):
+def test_runs(projects, cache_path, now, roots, builders=()):
     """The last day's finished test runs run in `roots`, and each command's usual time; None when the transcripts
-    cannot be read whole. Usual time = median seconds of the same command over the week, from 3 runs."""
+    cannot be read whole. Usual time = median seconds of the same command over the week, from 3 runs.
+    `testSecToday` is today's test seconds; `builderShare` the part of the Builder sessions' span today (their
+    transcripts' first to last line, from midnight, summed) spent in test runs under a `builders` folder, else None."""
     if not os.path.isdir(projects):
         return None
     since = now - WEEK
+    midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     # The cache is keyed to this file's bytes: a run is classified once, when read, so any change to the parser
     # must read the week's transcripts again rather than keep what an older one cached.
     with open(__file__, "rb") as f:
@@ -686,9 +689,9 @@ def test_runs(projects, cache_path, now, roots):
                 cache = json.load(f)
             if cache["version"] != version:
                 raise ValueError("cache from another version of this script")
-            offsets, files, runs = cache["offsets"], cache["files"], cache["runs"]
+            offsets, files, runs, spans = cache["offsets"], cache["files"], cache["runs"], cache["spans"]
         except (OSError, ValueError, KeyError, TypeError):
-            offsets, files, runs = {}, {}, []
+            offsets, files, runs, spans = {}, {}, [], {}
         live = {}
         for root, _, names in os.walk(projects, onerror=unread.append):
             for name in names:
@@ -701,12 +704,25 @@ def test_runs(projects, cache_path, now, roots):
                     if pending is None or size < off:  # a file rewritten in place is read again from its start
                         off, pending = 0, {}
                         runs = [r for r in runs if r[8] != path]
+                        spans[path] = [None, None, None]
+                    span = spans.setdefault(path, [None, None, None])  # first and last line time, and the session's folder
                     with open(path, "rb") as f:
                         f.seek(off)
                         for line in f:
                             if not line.endswith(b"\n"):
                                 break  # a half-written last line waits for the next call
                             off += len(line)
+                            i = line.find(b'"timestamp":"')
+                            # To the closing quote: a stamp with no milliseconds is shorter than the usual 24 bytes.
+                            at = epoch(line[i + 13:line.find(b'"', i + 13)].decode("ascii", "replace")) if i >= 0 else None
+                            if at is not None:
+                                span[0] = span[0] if span[0] is not None else at
+                                span[1] = at
+                            if span[2] is None and (m := re.search(rb'"cwd":"((?:[^"\\]|\\.)*)"', line)):
+                                try:
+                                    span[2] = json.loads(b'"' + m[1] + b'"')
+                                except ValueError:
+                                    pass
                             keys = [k.encode() for k in pending if isinstance(k, str)]
                             if (b'"tool_use"' in line and b'"name":"Bash"' in line) \
                                     or (keys and (b'"tool_result"' in line or b"<task-notification>" in line) and any(k in line for k in keys)):
@@ -722,7 +738,7 @@ def test_runs(projects, cache_path, now, roots):
         runs = [r for r in runs if r[0] >= since]
         tmp = f"{cache_path}.{os.getpid()}"
         with open(tmp, "w") as f:
-            json.dump({"version": version, "offsets": live, "files": {p: files[p] for p in live}, "runs": runs}, f)
+            json.dump({"version": version, "offsets": live, "files": {p: files[p] for p in live}, "runs": runs, "spans": {p: spans[p] for p in live}}, f)
         os.replace(tmp, cache_path)
     if unread:
         print(f"dashboard_limit: {len(unread)} transcript path(s) could not be read, so test runs are unknown: {unread[0]}", file=sys.stderr)
@@ -732,7 +748,12 @@ def test_runs(projects, cache_path, now, roots):
         if under(r[2], roots):  # another project's `npm test` is another suite
             took.setdefault(r[3], []).append(r[1])
     usual = {c: round(statistics.median(v)) for c, v in took.items() if len(v) >= 3}
-    return {"finished": [{"when": iso(r[0]), "start": iso(r[7]), "cwd": r[2], "what": r[3], "took": r[1], "result": r[4],
+    # A run that began before midnight counts its seconds from midnight, as the Builders' clock does.
+    today = [(r, round(max(0, r[0] - max(r[7], midnight)))) for r in runs if r[0] >= midnight and under(r[2], roots)]
+    span = sum(max(0, sp[1] - max(sp[0], midnight)) for sp in spans.values() if sp[1] is not None and sp[1] >= midnight and under(sp[2], builders))
+    return {"testSecToday": sum(sec for _, sec in today),
+            "builderShare": sum(sec for r, sec in today if under(r[2], builders)) / span if builders and span > 0 else None,
+            "finished": [{"when": iso(r[0]), "start": iso(r[7]), "cwd": r[2], "what": r[3], "took": r[1], "result": r[4],
                           "passed": r[5], "failed": r[6], "usual": usual.get(r[3])}
                          for r in sorted(runs, key=lambda r: -r[0]) if r[0] >= now - 86400 and under(r[2], roots)][:100],
             "usual": [{"cmd": c, "sec": s, "n": len(took[c])} for c, s in usual.items()]}
@@ -1318,13 +1339,17 @@ def seats(now, cache_dir, projects, log, main, relay=None):
 
     A seat's sessions are its checkout's projects folder: main's is the main checkout's (the one unit_costs leaves
     out), the relay's the Chief-of-Staff worktree's. Today runs from host-local midnight; the 7-day average is the
-    last 7 x 24 h over 7. A restart is a clear-hook.log line of a completed one (context-clear-restart.sh) whose
+    seven days before today over 7 (today is not in it: Today is compared with it). Also, per seat: `live` (a request in
+    the last 10 minutes), `hourly` (the last 12 hours' tokens), `week` (sessions and their tokens over the last 7 x 24 h),
+    main's `rebuildUsd` (the mean cost of the first call of each session begun today: what a restart costs to rebuild)
+    and the relay's `sideRuns` (the sub-agent runs it made today, {count, usd}). A restart is a clear-hook.log line of a completed one (context-clear-restart.sh) whose
     checkpoint, <session id>.md, is one of the seat's sessions; its `.restarted` stamp keeps only a checkpoint's
     last restart, so the log is the one source. None for a seat whose sessions cannot all be read: with the whole
     tree read once, any transcript that cannot be read.
     """
     midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week = now - 7 * 86400
+    before = midnight - 7 * 86400
     done = []
     try:
         with open(log, errors="replace") as f:
@@ -1340,21 +1365,54 @@ def seats(now, cache_dir, projects, log, main, relay=None):
     figures = lambda rs: (lambda t: {"tokens": t["input"] + t["output"], "usd": t["usd"], "partial": t["partial"]})(tally(rs, 0))
     out = {}
     # One read of the whole transcript tree, shared with the units and the limit card (issue 299).
-    every = [] if gone(projects) else requests(projects, os.path.join(cache_dir, "limit-requests.json"), min(week, midnight), now, True)
+    every = [] if gone(projects) else requests(projects, os.path.join(cache_dir, "limit-requests.json"), min(week, before), now, True)
     for name, wt in (("main", main), ("relay", relay)):
         if not wt:
             continue
         folder = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", wt))
-        rows = [] if gone(folder) else None if every is None else [r for r, _, f in every if (f or "").startswith(folder + os.sep)]
-        if rows is None:
+        mine = [] if gone(folder) else None if every is None else [(r, f[len(folder) + 1:]) for r, _, f in every if (f or "").startswith(folder + os.sep)]
+        if mine is None:
             out[name] = None
             continue
-        wk = figures([r for r in rows if week <= r[0] <= now])
+        # A transcript is <session id>.jsonl, or under <session id>/ for a sub-agent's (a sidechain with a context of its own).
+        rows = [r for r, _ in mine]
+        sess = lambda rel: re.sub(r"\.jsonl$", "", rel.split(os.sep)[0])
+        wk = figures([r for r in rows if before <= r[0] < midnight])
+        sessions = {}
+        for r, rel in mine:
+            if week <= r[0] <= now:
+                sessions.setdefault(sess(rel), []).append(r)
+        whole = [rs for rs in sessions.values() if all(isinstance(n, int) for r in rs for x in [r] + r[7:] for n in x[2:7])]
+        t = tally([r for rs in whole for r in rs], 0)
         times = sorted(at for at, sid in done if midnight <= at <= now and os.path.exists(os.path.join(folder, sid + ".jsonl")))
         out[name] = {"today": figures([r for r in rows if midnight <= r[0] <= now]),
                      "avg7": {"tokens": round(wk["tokens"] / 7), "usd": round(wk["usd"] / 7, 4), "partial": wk["partial"]},
+                     "live": any(now - 600 <= r[0] <= now for r in rows),
+                     "hourly": [figures([r for r in rows if now - (12 - i) * 3600 <= r[0] < now - (11 - i) * 3600])["tokens"] for i in range(12)],
+                     "week": {"sessions": len(sessions), "unmeasuredSessions": len(sessions) - len(whole),
+                              "input": t["input"] if whole else None, "cachedInput": t["cached"] if whole else None, "output": t["output"] if whole else None},
                      "restarts": len(times), "restartGapSec": round((times[-1] - times[0]) / (len(times) - 1)) if len(times) > 1 else None,
                      "restartTimes": [iso(t) for t in times]}
+        if name == "main":
+            first = {}
+            for r, rel in sorted(((r, rel) for r, rel in mine if os.sep not in rel), key=lambda e: e[0][0]):
+                first.setdefault(sess(rel), r)
+            # A session's first call in the requests read is its first call only if its transcript began today too: one
+            # resumed from before the read is no restart. One unpriced first call, or a transcript that cannot be read,
+            # leaves the mean unknown: the other sessions' alone would read as every session's.
+            begun = []
+            for s, r in first.items():
+                t = started(os.path.join(folder, s + ".jsonl")) if r[0] >= midnight else None
+                if r[0] >= midnight and (t is None or t >= midnight):
+                    begun.append(None if t is None else price(r))
+            out[name]["rebuildUsd"] = round(sum(begun) / len(begun), 4) if begun and None not in begun else None
+        else:
+            runs = {}
+            for r, rel in mine:
+                if os.sep in rel and r[0] >= midnight:
+                    runs.setdefault(rel, []).append(r)
+            costs = [price(r) for rs in runs.values() for r in rs]
+            out[name]["sideRuns"] = {"count": len(runs), "usd": None if None in costs else round(sum(costs), 4)}
     return out
 
 
@@ -1369,6 +1427,22 @@ def first_context(path):
                     continue
                 if isinstance(u, dict):
                     return sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    except OSError:
+        pass
+    return None
+
+
+def started(path):
+    """A transcript's first line time (its first line with a timestamp), or None when it cannot be read."""
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    t = epoch(json.loads(line).get("timestamp"))
+                except (ValueError, AttributeError):
+                    continue
+                if t is not None:
+                    return t
     except OSError:
         pass
     return None
@@ -1428,13 +1502,15 @@ def restarts(log, since=None, until=None, transcripts=None):
 
 
 def main_events(now, proj, log):
-    """Issues 292, 300: main's last 24 h as {compactions, carryFailed, resumedAt}, for the alerts in dashboard_alerts.jq.
+    """Issues 292, 300: main's last 24 h as {compactions, carryFailed, carried, resumedAt}, for the alerts in dashboard_alerts.jq.
 
     A compaction is a compact_boundary row in a transcript under `proj` (the main checkout's projects folder). A carry
     failure is a `carry-over check failed for <cp>` line of the hook log with no later `carried automatically into the
     checkpoint <cp>` line, or a `could not copy` line: the hook did not heal it. The log is machine-wide and in local
-    time, so a checkpoint counts only when its session has a transcript under `proj`. resumedAt is the newest
-    <session id>.resumed-from record of such a session, main's last restart. An unreadable file raises OSError.
+    time, so a checkpoint counts only when its session has a transcript under `proj`. carried lists each checkpoint the
+    hook carried automatically ({cp, at, items, restartedAt}: the first restart after it, else null): a rejected
+    checkpoint whose main was never restarted. resumedAt is the newest <session id>.resumed-from record of such a
+    session, main's last restart. An unreadable file raises OSError.
     """
     since = now - 86400
     comp = []
@@ -1455,19 +1531,20 @@ def main_events(now, proj, log):
                     meta = r.get("compactMetadata") or {}
                     comp.append({"sid": r.get("sessionId") or name[:-6], "at": iso(at), "trigger": meta.get("trigger"), "preTokens": meta.get("preTokens")})
     ours = lambda cp: os.path.exists(os.path.join(proj, os.path.basename(cp)[:-3] + ".jsonl"))
-    failed, healed = {}, set()
+    failed, healed, carried = {}, set(), {}
     try:
         with open(log, errors="replace") as f:
             for line in f:
-                m = re.match(r"(\S+) stop-hook: (?:carry-over check failed for (\S+) against |could not copy \d+ missing items into (\S+?);|\d+ items carried automatically into the checkpoint (\S+))", line)
+                m = re.match(r"(\S+) stop-hook: (?:carry-over check failed for (\S+) against |could not copy \d+ missing items into (\S+?);|(\d+) items carried automatically into the checkpoint (\S+))", line)
                 try:
                     at = datetime.fromisoformat(m[1]).timestamp() if m else None
                 except ValueError:
                     at = None
                 if at is None or at < since:
                     continue
-                if m[4]:
-                    healed.add(m[4])
+                if m[5]:
+                    healed.add(m[5])
+                    carried[m[5]] = (at, int(m[4]))
                 elif m[2]:
                     failed[m[2]] = at
                     healed.discard(m[2])
@@ -1478,7 +1555,10 @@ def main_events(now, proj, log):
         pass
     resumed = [os.path.getmtime(p) for p in glob.glob(os.path.join(os.path.dirname(log), "*.resumed-from"))
                if os.path.exists(os.path.join(proj, os.path.basename(p)[:-len(".resumed-from")] + ".jsonl"))]
+    restarts_at = sorted(resumed)
     return {"compactions": sorted(comp, key=lambda c: c["at"]),
+            "carried": [{"cp": cp, "at": iso(at), "items": n, "restartedAt": next((iso(r) for r in restarts_at if r > at), None)}
+                        for cp, (at, n) in sorted(carried.items(), key=lambda x: x[1][0]) if ours(cp)],
             "carryFailed": [{"at": iso(at), "cp": cp} for cp, at in sorted(failed.items(), key=lambda x: x[1]) if cp not in healed and ours(cp)],
             "resumedAt": iso(max(resumed)) if resumed else None}
 
@@ -1503,7 +1583,9 @@ def main(argv):
         json.dump(restarts(argv[2], opts.get("--since"), opts.get("--until"), opts.get("--transcripts")), sys.stdout)
         return 0
     if len(argv) >= 6 and argv[1] == "tests":
-        json.dump(test_runs(argv[2], argv[3], float(argv[4]), argv[5:]), sys.stdout)
+        rest = argv[5:]
+        cut = rest.index("--builders") if "--builders" in rest else len(rest)
+        json.dump(test_runs(argv[2], argv[3], float(argv[4]), rest[:cut], rest[cut + 1:]), sys.stdout)
         return 0
     if len(argv) in (7, 8) and argv[1] == "seats":
         json.dump(seats(float(argv[2]), argv[3], argv[4], argv[5], argv[6], argv[7] if len(argv) > 7 else None), sys.stdout)

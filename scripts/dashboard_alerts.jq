@@ -72,7 +72,7 @@ def builder_warmup_input: 3300000;
           | [.builder.cache24h | {tokens: .}] | rate
           | select(. != null and . < 95) | a("cache-builder-\($p)/\($u)"; "warn"; "\($p): Builder \($u) cache hit rate over the last 24 h is \(. | r)%, under 95%"; "read the Builder's session for a changed prefix or restarts")),
         # Main is meant to restart before it compacts, and a carry the hook could not heal strands its restart (issues 292,
-        # 300). Each ends at main's next restart (resumedAt); a failure under 120 s old is not stranded yet, the restart
+        # 300). Each ends at main's next restart (resumedAt, or restartedAt for a carried checkpoint); a failure under 120 s old is not stranded yet, the restart
         # helper takes seconds. One key per session or checkpoint, so each is told, not folded into the first.
         ($v.mainEvents // {} | (.resumedAt // null | if . == null then null else ts end) as $rs
           | ((.compactions // [])[] | select($rs == null or (.at | ts) > $rs)
@@ -80,6 +80,10 @@ def builder_warmup_input: 3300000;
                 + {since: (.at | ts)}),
             ((.carryFailed // [])[] | select(($rs == null or (.at | ts) > $rs) and $now - (.at | ts) > 120)
               | a("carry-failed-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's checkpoint \(.cp | split("/")[-1]) failed the carry-over check and the hook did not carry its items"; "restate the dropped items in the checkpoint, then restart main")
+                + {since: (.at | ts)}),
+            # The hook carried the items itself (host 48151d13), but main never restarted: its rejected checkpoint stands.
+            ((.carried // [])[] | select(.restartedAt == null and $now - (.at | ts) > 120)
+              | a("checkpoint-rejected-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's checkpoint \(.cp | split("/")[-1]) failed the carry-over check: its items were carried automatically but main was not restarted"; "restart main by hand")
                 + {since: (.at | ts)})),
         # Collector stale: a project's input serving its last good read.
         ($v.sources // {} | to_entries[] | select(.value.status == "stale")

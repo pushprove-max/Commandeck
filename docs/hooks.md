@@ -44,7 +44,7 @@ in `.claude/commandeck.json`:
 | `bash-guardrails.sh` | Blocks Node test runs without the 4 GB heap cap and refuses unsupported heredoc end words so commands remain inspectable. In a Builder it also refuses, in every tier, an inline Python, Perl or Node script that writes a tracked file: that edit goes through Edit. |
 | `pane-budget-gate.sh` | Holds workers for missing configured code-server startup or a handoff after the pane budget is exhausted. |
 | `read-tracker.sh` | Nudges shell-only source searching when configured code navigation is unused. |
-| `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each; also active for planning seats without strict mode, and for Builders at the second such turn. |
+| `batch-independent-looks.sh` | Advises batching after three turns with one read-only call each, once in a session (the advice stays in the context); also active for planning seats without strict mode, and for Builders at the second such turn. |
 | `script-over-reads.sh` | Advises using a script after five same-kind files from one directory. |
 | `search-log.sh` | Logs one local row per Read, Grep, shell search and code-server call: tool, a 12-hex query fingerprint (never the query), paths, result size, emptiness and the search a later call followed within the next 3 logged calls. `scripts/search-log-report.py` prints per-tool numbers; the log is `COMMANDECK_SEARCH_LOG` or `search-log.jsonl` in the scratch folder. |
 | `git-ignore-warn.sh` | Warns when a written file is ignored and would not ship, except deliberate scratch paths. |

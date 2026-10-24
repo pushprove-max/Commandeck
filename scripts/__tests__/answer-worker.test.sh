@@ -27,17 +27,22 @@ case "\$1 \$2" in
   "worktree ps") jq -n --arg s "\$(cat "$T/state")" --argjson two "\$([ -e "$T/two" ] && echo true || echo false)" \
     '{result: {worktrees: [{path: "$T/ws/u1", agents: ([{paneKey: "t1:l1", agentType: "claude", state: \$s}] + if \$two then [{paneKey: "t1:l2", agentType: "codex", state: "working"}] else [] end)}]}}' ;;
   "terminal send") while [ \$# -gt 0 ]; do case \$1 in --text) t=\$2 ;; esac; shift; done
+    echo typed >> "$T/typed"
     [ -e "$T/deaf" ] || jq -cn --arg t "\$t" '{type: "user", message: {role: "user", content: \$t}, timestamp: "2026-10-15T10:05:00Z", sessionId: "s1"}' >> "$LOG"
     echo '{"ok":true}' ;;
   "orchestration check") if [ -e "$T/asked" ]; then echo '{"ok":true,"result":{"messages":[]}}'; else touch "$T/asked"
     jq -n '{ok: true, result: {deliveryId: "d1", messages: [{id: "msg_q1", from_handle: "term_b", type: "question", subject: "question (u1)", body: "which option?"}]}}'; fi ;;
   "orchestration task-update") echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
   "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; esac; shift; done; printf '%s\n' "\$b" >> "$T/inbox"; echo '{"ok":true}' ;;
+  "orchestration reply") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; --id) i=\$2 ;; esac; shift; done; printf '%s %s\n' "\$i" "\$b" >> "$T/replies"
+    # a waiting ask reads its reply at once: the reply lands in the pane's log while $T/reads exists
+    [ -e "$T/reads" ] && jq -cn --arg t "\$b" '{type: "user", message: {role: "user", content: \$t}, timestamp: "2026-10-15T10:05:00Z", sessionId: "s1"}' >> "$LOG"
+    echo '{"ok":true}' ;;
   *) echo '{"ok":true}' ;;
 esac
 EOF
 chmod +x "$T/bin/orca-ide"
-answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
   COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
 
 # A Builder's question, as main's wait shows it: recorded in the decisions ledger as waiting on main.
@@ -52,6 +57,24 @@ check "main's answer closes it" '"use the second option"' "$(tail -1 "$LED" | jq
 check "an answer to a mid-turn pane reports queued, not read yet, apart from a failure" "2:1:0" \
   "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT")"
 check "and waits in its inbox for its next check" 1 "$(grep -c '\] use the second option$' "$T/inbox")"
+# Issue 329: a Builder blocked in `orchestration ask` returns only on a reply to its question's id, never on a new send.
+: > "$T/inbox"; : > "$T/replies"; : > "$T/typed"; touch "$T/reads"
+OUT=$(answer term_b "pick two" u1-msg_q1); RC=$?
+check "a mid-turn pane given u1-msg_q1 is answered by orchestration reply --id msg_q1, no send, no typing, and confirmed" "0:1:0:0:1" \
+  "$RC:$(grep -c '^msg_q1 \[answer-.*\] pick two$' "$T/replies"):$(wc -l < "$T/inbox" | tr -d ' '):$(wc -l < "$T/typed" | tr -d ' '):$(grep -c "sent to the pane's inbox as a reply to msg_q1" <<<"$OUT")"
+: > "$T/replies"
+OUT=$(answer term_b "pick three" msg_q1); RC=$?
+check "a bare msg_ id names the reply too" "0:1" "$RC:$(grep -c '^msg_q1 ' "$T/replies")"
+# Green pins: the fallback and the queued report the reply must not break.
+: > "$T/replies"; : > "$T/inbox"
+OUT=$(answer term_b "pick four"); RC=$?
+check "a mid-turn pane given no id is sent the answer as before, with no reply and none named" "2:0:1:0" \
+  "$RC:$(wc -l < "$T/replies" | tr -d ' '):$(wc -l < "$T/inbox" | tr -d ' '):$(grep -c 'as a reply' <<<"$OUT")"
+rm "$T/reads"; : > "$T/replies"
+OUT=$(answer term_b "pick five" u1-msg_q1); RC=$?
+check "a reply to a pane still mid-turn after the wait exits 2, queued, not NOT delivered" "2:1:0" \
+  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT")"
+: > "$T/inbox"
 # Two questions open from one unit: an answer closes only the one it names, never the other as answered.
 for q in q2 q3; do (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" \
   bash "$REAL/scripts/decision.sh" add "u1-msg_$q" "question $q" none 'u1 asks' --waits-on main >/dev/null); done
@@ -61,6 +84,9 @@ check "an answer naming no question, with two open, closes neither and names bot
   "$(open):$(grep -c 'u1-msg_q2.*u1-msg_q3' <<<"$OUT")"
 answer term_b "yes, delete it" u1-msg_q3 >/dev/null
 check "an answer naming its question closes that one only" "u1-msg_q2" "$(open)"
+# The bare msg_ form names the reply, so it must close the ledger's <unit>-msg_ question too, or it stays on the dashboard.
+OUT=$(answer term_b "keep it" msg_q2)
+check "an answer naming a bare msg_ id closes the unit's <unit>-msg_ question" ":0" "$(open):$(grep -c 'no open question' <<<"$OUT")"
 
 # Past its done marker, beside its reviewer, Orca still says working: the Builder's own log says its turn is over.
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"All built.\nU-DONE"}]},"timestamp":"2026-10-15T10:01:00Z","sessionId":"s1"}' \
@@ -106,7 +132,7 @@ esac
 EOF
 chmod +x "$T/bin2/orca-ide"
 : > "$T/typed2"; : > "$T/inbox2"; touch -d '2 hours ago' "$P2/a.jsonl" # B's log is the newer one, as --current reads it
-OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
   ANSWER_WORKER_WAIT=2 PATH="$T/bin2:$PATH" bash "$REAL/scripts/answer-worker.sh" term_pa "take option two" 2>&1); RC=$?
 check "an answer to planner A reads A's log: A is mid-turn, so it goes to A's inbox, not typed in" "2:1:0" \
   "$RC:$(wc -l < "$T/inbox2" | tr -d ' '):$(wc -l < "$T/typed2" | tr -d ' ')"

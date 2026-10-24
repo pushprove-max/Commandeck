@@ -20,6 +20,8 @@ worked.
 | Dashboard returns 403 | Open its own page at the loopback address, or use a configured network name/IP. Cross-site requests are refused. |
 | Relay is silent | Check the stored relay name, project run, all four watchers and `cos-check.sh`. FYI notes wait for a waking message. |
 | Worker waits on an unseen picker | Workers must send questions through Orca to main; only main and the relay have owner-facing pickers. |
+| The doctor warns that `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set for main | Remove it from main's environment and `.claude/settings.local.json`: it turns the harness task-list tools and their reminders on for every model, and main tracks work in the Orca task list. |
+| Main's context grows faster than expected | `bash "$PLUGIN/scripts/context-overhead.sh" <checkout>` replays one scripted main session through the plugin's hooks and prints the bytes each attaches. A Bash hook that prints on a call with nothing to act on shows there. |
 | Worktree settings have no effect | Read the doctor's shadow warnings and main's settings.local.json. Start a fresh session after fixing precedence. |
 | Handoff leaves the old pane open | Read `~/.claude/checkpoints/clear-hook.log` and the next prompt's HANDOFF NOT DONE line. Fix checkpoint freshness/carry-over or Orca takeover before retrying. |
 | Update fails after rewriting files | Read its rollback message. Recorded files are restored, but jobs may need old setup rerun and add-ons may already have updated. |

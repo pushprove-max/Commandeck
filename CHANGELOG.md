@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.41.0 -- 2026-10-23
+
+Built from the plugin issue batch of 2026-10-23: #292, #293, #327, #328 and #329. Nothing here is closed by this entry.
+
+- Dashboard (#292): the Units card says how each Builder's seats were launched (model and effort, the reviewer of the
+  current round included), shows a Builder's open question to main as a stop note, lists a unit whose task is open and
+  whose worktree is gone under Parked, lists the units merged since the last push, and keeps every finished build; the
+  main card shows the last merge. Needs lists the open `P1` issues and the `proposed-decision` issues (five lowest
+  numbers, linked, and a show-all), the strip counts open P1 issues, and the Issues card counts open issues by
+  priority. The main and relay seat cards show whether the seat is working now, 12 hours of tokens, its seven-day
+  totals, the cost of rebuilding its context, the relay's helper runs and the account; the role cost table gets a row
+  for each. The Tests card shows the share of the Builders' clock spent in tests. The seven-day average counts the seven
+  days before today. A checkpoint whose carry-over was made but never followed by a restart raises
+  `checkpoint-rejected-*`. `/p/<name>/` sends the browser to that project's page. A project's subagent ledger and hook
+  fire log are read beside its other groups.
+- Fixes: `answer-worker.sh` answers a waiting `orchestration ask` with `orchestration reply --id` (#329); the main
+  session's rules say a reply the duplicate-agent guard blocks is never dropped (#328); the batching nudge is said once
+  a session, and the doctor warns when `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set for main (#327); the reviewer pass
+  records the model and effort it used (#292).
+- New: `scripts/context-overhead.sh` replays one scripted main session through the plugin's hooks and prints the bytes
+  each attaches (#327).
+
 ## 0.40.1 -- 2026-10-23
 
 - Fixes: the restarts reader finds a session's transcript under `CLAUDE_CONFIG_DIR` when it is set, not only under

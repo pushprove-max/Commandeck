@@ -96,22 +96,23 @@ bash "$PLUGIN/scripts/dashboard.sh" --import <folder>
 |---|---|
 | Alerts | Current project and machine warnings, with source freshness; the last 24 hours' cleared alerts, folded. Main compacting before it restarted, and a checkpoint whose carry-over the stop hook could not heal, each raise one until main's next restart. |
 | Builds in progress | Active builds and their progress. |
-| Needs the owner | Open decisions, questions and high-priority findings. |
-| Main | Branch state against its remote and recent commits. |
-| Units | Planning, Building, In review, Fixing and Waiting on main, with seat activity and cost. |
+| Needs the owner | Open decisions and questions; the open GitHub issues labelled `P1` and those labelled `proposed-decision`, each as the five lowest numbers linked to the issue and a show-all for the rest (up to 1000 issues read). The summary strip counts the open P1 issues. |
+| Main | Branch state against its remote and recent commits; the last merged unit and when. |
+| Units | Planning, Building, In review, Fixing and Waiting on main, with seat activity and cost. A Builder's card says how its seats were launched (model and effort, the Builder and the current round's reviewer) and shows a Builder's open question to main as a stop note. A unit with an open task whose worktree is gone is listed under Parked. Units merged since the last push are listed apart, and finished builds have no cap. |
 | Merge line | Open GitHub pull requests and their checks. |
-| Who holds what | GitHub issues grouped by milestone and the unit holding each; issues opened and closed in 24 hours, and a 7-day sparkline. |
+| Who holds what | GitHub issues grouped by milestone and the unit holding each; open issues by priority; issues opened and closed in 24 hours, and a 7-day sparkline. |
 | Next push | Local main commits ahead of origin/main and related checks. |
 | 7-day limit | Account usage windows where available, history and list-price spend; API billing uses a spend view. |
 | Main's to-do list | The project's `todo/main-todo.md`. |
 | Host | Machine load and swap readings. |
-| Tokens per role, 7 days | Input/output totals across roles and models. |
+| Tokens per role, 7 days | Input/output totals across roles and models, with a row for the main and relay sessions. |
 | Tokens per unit, 7 days | Each unit's cost, Claude and Codex apart, with its stages. |
 | Review loop, 7 days | Merged units' review rounds, most first, and the issues tagged as review escapes. |
-| Tests running now | Test runs going now on this machine in the project's checkout and worktrees (from `ps`): who started each, elapsed time and usual time, `Stalled` past its cap; and the last 24 hours' finished runs with passed/failed totals (from Claude session logs). A run needs a `run-shell-tests.sh`, `npm test`, `.test.sh` or `node --test` command; cap is 3 times the usual time (from 3 runs), else 120 s a named test file. |
+| Tests running now | Test runs going now on this machine in the project's checkout and worktrees (from `ps`): who started each, elapsed time and usual time, `Stalled` past its cap; and the last 24 hours' finished runs with passed/failed totals (from Claude session logs); the share of the Builders' working clock spent in tests today. A run needs a `run-shell-tests.sh`, `npm test`, `.test.sh` or `node --test` command; cap is 3 times the usual time (from 3 runs), else 120 s a named test file. |
 | Recent guard blocks | Recent blocking hook events and counts. |
 | Chief of Staff's inbox | Relay messages for the project. |
 | Main's background agents | Main's running helper agents. |
+| Main and Chief of Staff seats | Whether the seat is working now, its last 12 hours of tokens, its seven-day totals, the cost of rebuilding its context after a restart (main), the helper runs it started today (Chief of Staff), and the account it runs under. |
 
 Panels can be reordered, resized, folded and hidden. Needs a look filters for
 warnings and pending work. Layouts are kept per project in browser storage
@@ -133,6 +134,13 @@ bash "$PLUGIN/scripts/setup.sh" --dashboard --bind 0.0.0.0 --hosts <dashboard-na
 Replace the name with the one the other device uses for this machine. This
 changes the machine's shared dashboard service. Use the printed port. Unknown
 DNS names are refused, but IP access and the machine's own names are allowed.
+
+Each project also has its own address, `/p/<name>/`, which sends the browser to the page with that project open
+(`index.html?project=<name>`). Only a project name the collector lists is sent on; any other path under `/p/` is
+refused. The address sits behind the same login as the page.
+
+The collector builds a project's two slowest groups (the subagent ledger and the hook fire log) beside the rest, and
+`partSeconds` in `data.js` names how long each group took.
 
 To see how much of a restarted main's first context its checkpoint takes, run the
 restarts report. It reads the `<session id>.resumed-from` records beside the stop

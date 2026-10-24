@@ -28,6 +28,9 @@ check "a warmed-up Builder under 95% cached raises a warning naming it and its a
   '["p: Builder low cache hit rate over the last 24 h is 80%, under 95%. Action: read the Builder'"'"'s session for a changed prefix or restarts"]' \
   "$(jq -c '[.alerts[] | select(.id | startswith("cache-builder-")) | .text]' <<<"$OUT")"
 check "a Builder whose session log failed to read is not measured" 1 "$(jq '[.missing[] | select(. == "p: Builder unread 24 h cache hit rate")] | length' <<<"$OUT")"
+# Issue 292: a parked unit (worktree false, no stage, no builder) is read by every unit rule and trips none.
+OUT=$(units '[{"unit": "pk", "worktree": false, "stage": null, "role": "builder", "task": "task_7"}]')
+check "a parked unit raises no alert and adds no unmeasured input to the empty list's" "0 $(jq '.missing | length' <<<"$(units '[]')")" "$(jq -r '"\(.alerts | length) \(.missing | length)"' <<<"$OUT")"
 # Every alert names what to do about it: one fixture fires every rule, so a new rule with no action fails here.
 iso() { jq -nr --argjson d "$1" 'now - $d | floor | todate'; }
 NOW=$(date +%s)
@@ -42,9 +45,10 @@ ALL=$(jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s
         \"builder\": {\"signals\": [{\"kind\": \"stalled\", \"since\": $NOW}], \"cache24h\": {\"input\": 4000000, \"cachedInput\": 3200000}}}]},
       \"needsOwner\": {\"decisions\": [{\"id\": \"q1\", \"askedAt\": \"$(iso 7200)\", \"question\": \"which?\"}],
         \"unsent\": [{\"id\": \"q0\", \"to\": \"main\", \"state\": \"gave-up\", \"reason\": \"its main folder /x is gone\", \"firstAt\": \"$(iso 60)\"}]},
+      \"mainEvents\": {\"carried\": [{\"cp\": \"/x/m1.md\", \"at\": \"$(iso 600)\", \"items\": 2, \"restartedAt\": null}]},
       \"sources\": {\"builder-logs\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}}}}]" \
   --argjson srcs "[{\"projects\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}]" --argjson preva '[{}]')
-check "the all-rules fixture fires each of the 15 rules, and every alert's text names its action" "15 15" \
+check "the all-rules fixture fires each of the 16 rules, and every alert's text names its action" "16 16" \
   "$(jq '[.alerts[].id | sub("-[0-9]+$"; "")] | unique | length' <<<"$ALL") $(jq '[.alerts[] | select(.text | test("[.] Action: [a-z]"))] | length' <<<"$ALL")"
 # Issue 295: an answer main never got is the owner's order lost. The host gave up on it, or it has failed for 10 min:
 # a critical alert naming why. One failing for under 10 min is still the host's to retry, and raises none.

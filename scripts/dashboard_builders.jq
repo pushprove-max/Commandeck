@@ -65,6 +65,9 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 | {
     lastAt: (if $last == null then null else $last | todate end),
     round: ($cs | last | .round // null),
+    # The reviewers the unit's highest round launched, the newest row of each pass (a row from before the model and effort
+    # were written has them null): the launch roster's Codex side.
+    passes: (($cs | map(.round | numbers) | max) as $hi | [$cs[] | select(.round == $hi)] | group_by(.pass) | map(last | {role: "codex-reviewer", pass, model: (.model // null), effort: (.effort // null)})),
     stage: (if ($openCodex | length) > 0 then "review" elif ($ce | length) > 0 then "fixing" else "building" end),
     steps: (
       [$ss | to_entries[] | .key as $i | .value as $s | ($sr | map(select(.type == $s.type)) | .[
