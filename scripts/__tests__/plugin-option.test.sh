@@ -37,11 +37,11 @@ check "and the Builder's launch takes routing's effort, not the project's" high 
 
 conf '{"ponytail": "off", "builderEffort": "low", "dashboardPort": 8800}'
 check "level: a /config off beats the project's ultra" "off|/config" "$(O ponytail)"
-# Issue 330: each of the four levels is read as it is; the booleans an earlier setup saved in the project file read as
-# off / lite; a project value that is no level takes the default rather than passing for a level.
+# Issue 330: each of the four levels is read as it is; a project value that is no level, an old saved boolean
+# included, takes the default rather than passing for a level (a saved false must not read as off).
 for l in off lite full ultra; do check "level: a /config $l is read as $l" "$l|/config" "$(conf "{\"ponytail\": \"$l\"}"; O ponytail)"; done
 cp "$P" "$T/P.keep"; conf '{}'
-for v in false:off true:lite '"bogus":lite'; do
+for v in false:lite true:lite '"bogus":lite'; do
   jq --argjson v "${v%:*}" '.ponytail = $v' "$T/P.keep" > "$P"
   check "level: the project's saved ${v%:*} reads as ${v#*:}" "${v#*:}" "$(O ponytail | cut -d'|' -f1)"
 done

@@ -1038,8 +1038,8 @@ pp_option() {
   case $1 in
     wakeKinds) v=${v//[[:space:]]/}; [[ ,$v, =~ ,(worker_done|escalation|question|decision_gate|merge_ready|status|dispatch|handoff), ]] || src=default v=$d ;;
     wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
-    # Issue 330: a level. The boolean an earlier setup saved in the project file reads as off (false) or lite (true).
-    ponytail) case $v in false) v=off ;; true) v=lite ;; off|lite|full|ultra) ;; *) src=default v=$d ;; esac ;;
+    # Issue 330: a level. Anything else, an old saved true/false included, takes the default (no old-value mapping).
+    ponytail) case $v in off|lite|full|ultra) ;; *) src=default v=$d ;; esac ;;
   esac
   if [ "${2:-}" = source ]; then echo "$src"; else echo "$v"; fi
 }

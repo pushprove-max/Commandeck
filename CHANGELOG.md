@@ -1,11 +1,16 @@
 # Changelog
 
+## 0.42.1 -- 2026-10-23
+
+- Ponytail (#330): a saved `ponytail: true` or `false` is no longer read as `lite` or `off`; like any value that is
+  not a level, it takes the default, `lite`.
+
 ## 0.42.0 -- 2026-10-23
 
 - Ponytail (#330): the ponytail option is a level, `off`, `lite`, `full` or `ultra`, and `lite` is the default. Set it
   in `/plugin` config or with setup's `--ponytail off|lite|full|ultra`; `--no-ponytail` is gone. Builders run the
   saved level (`/ponytail <level>` in the brief, no line when off), and the worktree hook prints it. A project that
-  saved `ponytail: true` or `false` reads it as `lite` or `off`.
+  saved `ponytail: true` or `false` takes the default (see 0.42.1).
 - main-watch: `COMMANDECK_MAIN_PANE_DIR` names the checkout main's pane runs in, for a main that drives this repo's
   units from another project. Without it that main was never found, and no finished seat woke it.
 

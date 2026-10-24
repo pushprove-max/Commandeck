@@ -41,7 +41,7 @@ check "Leave as is writes no TTL anywhere" 'null:null:null' "$(tenv plain):$(ten
 # --- a worker pane's starting context: Stripe and the browser skills off, no auto memory, ponytail as a summary ---
 # What this pins: main and the relay keep everything; a worker and a Builder drop what a build never uses, a --keep
 # list brings parts back, the keep is remembered across a rerun, and a leaf the owner set by hand is never ours to delete.
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 for w in w1 w2 w3 w4 w5 w6 w7 w8 w9; do git -C "$P" worktree add -q "$T/wt/$w"; done
 f() { echo "$T/wt/$1/.claude/settings.local.json"; }
 CUTS='[.enabledPlugins["stripe@claude-plugins-official"], .skillOverrides["anthropic-skills:computer-use"], .skillOverrides["anthropic-skills:built-in-browser"], .skillOverrides["anthropic-skills:chrome-browser"], .autoMemoryEnabled]'
@@ -72,10 +72,10 @@ check "--print-settings prints the file a rerun leaves, the stored keep read" "$
 # Ponytail: the hook prints the summary where the plugin is on in the owner's user settings and setup's answer is yes.
 SUMHOOK='[.enabledPlugins["ponytail@ponytail"], ([.hooks.SessionStart[]?.hooks[]?.command | select(test("/templates/ponytail/SUMMARY[.]md\"$"))] | length)]'
 mkdir -p "$HOME/.claude"; echo '{"enabledPlugins":{"ponytail@ponytail":true}}' > "$HOME/.claude/settings.json"
-echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "lite"}' > "$P/.claude/commandeck.json"
 run "$T/wt/w6" >/dev/null 2>&1; run "$T/wt/w7" --builder >/dev/null 2>&1; run "$T/wt/w6" >/dev/null 2>&1
 check "ponytail on: a worker and a Builder carry the summary hook once, and the plugin off" '[false,1]:[false,1]' "$(jq -c "$SUMHOOK" "$(f w6)"):$(jq -c "$SUMHOOK" "$(f w7)")"
-check "the summary hook prints the level (a saved true is lite), then the summary file" "$(printf 'Ponytail level: lite\n%s' "$(cat "$REAL/templates/ponytail/SUMMARY.md")")" "$(bash -c "$(jq -r '.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))' "$(f w6)")")"
+check "the summary hook prints the level (a saved lite), then the summary file" "$(printf 'Ponytail level: lite\n%s' "$(cat "$REAL/templates/ponytail/SUMMARY.md")")" "$(bash -c "$(jq -r '.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))' "$(f w6)")")"
 # Issue 330: ponytail is a level. off drops the hook as false did; every other level carries it as true did, and says
 # its level; none saved is lite; a /config answer beats the project's. Plugin on in the owner's settings throughout.
 LV='[.enabledPlugins["ponytail@ponytail"], ([.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))] | length), ([.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))][0] // "" | capture("Ponytail level: (?<l>[a-z]+)").l? // "")] | join(",")'
@@ -91,7 +91,7 @@ jq '. + {pluginConfigs: {"commandeck@commandeck": {options: {ponytail: "ultra"}}
 echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 check "a /config ultra beats the project's off" "false,1,ultra" "$(lvl config)"
 jq 'del(.pluginConfigs)' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
-echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "lite"}' > "$P/.claude/commandeck.json"
 # The owner's own startup command, in the same group as the summary hook, is not ours to delete on a rerun.
 git -C "$P" worktree add -q "$T/wt/w10"; mkdir -p "$T/wt/w10/.claude"
 echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"cat \"/plugin/templates/ponytail/SUMMARY.md\""},{"type":"command","command":"./owner-startup.sh"}]}]}}' > "$(f w10)"
@@ -104,10 +104,10 @@ run "$T/wt/w6" --keep all >/dev/null 2>&1
 check "--keep all takes both ponytail leaves out" '[null,0]' "$(jq -c "$SUMHOOK" "$(f w6)")"
 run "$T/wt/Chief-of-Staff" >/dev/null 2>&1
 check "the relay keeps the plugin: no key, no hook" '[null,0]' "$(jq -c "$SUMHOOK" "$T/wt/Chief-of-Staff/.claude/settings.local.json")"
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 run "$T/wt/w7" --builder >/dev/null 2>&1
 check "setup's answer no: the plugin and the hook an earlier run wrote are gone" '[null,0]' "$(jq -c "$SUMHOOK" "$(f w7)")"
-echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"; echo '{}' > "$HOME/.claude/settings.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "lite"}' > "$P/.claude/commandeck.json"; echo '{}' > "$HOME/.claude/settings.json"
 run "$T/wt/w8" >/dev/null 2>&1; run "$T/wt/w9" --builder >/dev/null 2>&1
 check "a skill-only install (plugin not on): neither the hook nor the key" '[null,0]:[null,0]' "$(jq -c "$SUMHOOK" "$(f w8)"):$(jq -c "$SUMHOOK" "$(f w9)")"
 
@@ -118,11 +118,11 @@ check "a skill-only install (plugin not on): neither the hook nor the key" '[nul
 SKS='[.skillOverrides | to_entries[] | "\(.key)=\(.value)"] | sort'
 EPS='[.enabledPlugins | to_entries[] | select(.key | test("@m$|^stripe@|^design@")) | "\(.key)=\(.value)"] | sort'
 M1='"anthropic-skills:built-in-browser=off","anthropic-skills:chrome-browser=off","anthropic-skills:computer-use=off"'
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 for w in w11 w12 w13; do git -C "$P" worktree add -q "$T/wt/$w"; mkdir -p "$T/wt/$w/.claude"; done
 run "$T/wt/w13" >/dev/null 2>&1
 check "no owner list (the format 0.16.0 deployed): the skill cuts are the move-1 three and no other name" "[$M1]" "$(jq -c "$SKS" "$(f w13)")"
-echo '{"version": 1, "profile": "claude", "ponytail": false, "workerSkillsOff": ["own:a", "own:b"], "workerPluginsOff": ["p1@m", "p2@m", "design@synced"], "keeps": {"tools": {"skills": ["own:b", "anthropic-skills:chrome-browser"], "plugins": ["p2@m"]}}}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "workerSkillsOff": ["own:a", "own:b"], "workerPluginsOff": ["p1@m", "p2@m", "design@synced"], "keeps": {"tools": {"skills": ["own:b", "anthropic-skills:chrome-browser"], "plugins": ["p2@m"]}}}' > "$P/.claude/commandeck.json"
 echo '{"skillOverrides": {"mine:skill": "off"}}' > "$(f w11)"
 run "$T/wt/w11" >/dev/null 2>&1; run "$T/wt/w12" --keep tools >/dev/null 2>&1
 check "a list produces exactly its leaves beside the move-1 cuts and the owner's own entry" \
@@ -132,7 +132,7 @@ check "a keep word brings back its skills and plugins, a move-1 skill included, 
   '["anthropic-skills:built-in-browser=off","anthropic-skills:computer-use=off","own:a=off"]:["design@synced=false","p1@m=false","stripe@claude-plugins-official=false"]' \
   "$(jq -c "$SKS" "$(f w12)"):$(jq -c "$EPS" "$(f w12)")"
 check "the --print-settings view matches what a run leaves" "$(jq -S . "$(f w12)" | cksum)" "$(run "$T/wt/w12" --print-settings 2>/dev/null | jq -S . | cksum)"
-echo '{"version": 1, "profile": "claude", "ponytail": false, "workerSkillsOff": ["own:a"]}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "workerSkillsOff": ["own:a"]}' > "$P/.claude/commandeck.json"
 run "$T/wt/w11" >/dev/null 2>&1
 check "a rerun after the lists shrink removes the dropped leaves; the owner's entry and the business plugin stay" \
   "[$M1,\"mine:skill=off\",\"own:a=off\"]:[\"design@synced=false\",\"stripe@claude-plugins-official=false\"]" \
@@ -147,21 +147,21 @@ check "the relay carries none of the owner's cuts, and a leaf an earlier run wro
 OWN='[(.skillOverrides // {} | to_entries[] | select(.key | startswith("own:"))), (.enabledPlugins // {} | to_entries[] | select(.key | endswith("@m"))) | "\(.key)=\(.value)"] | sort'
 for w in w14 w15 w16 w17; do git -C "$P" worktree add -q "$T/wt/$w"; mkdir -p "$T/wt/$w/.claude"; done
 echo '{"enabledPlugins":{"p@m":false,"q@m":true},"skillOverrides":{"own:c":"on","own:d":"off"}}' > "$(f w14)"
-echo '{"version": 1, "profile": "claude", "ponytail": false, "workerSkillsOff": ["own:c", "own:d", "own:e"], "workerPluginsOff": ["p@m", "q@m", "r@m"]}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "workerSkillsOff": ["own:c", "own:d", "own:e"], "workerPluginsOff": ["p@m", "q@m", "r@m"]}' > "$P/.claude/commandeck.json"
 run "$T/wt/w14" >/dev/null 2>&1; run "$T/wt/w15" >/dev/null 2>&1
 check "an owner's own leaf for a listed name is left as it is; an unset name is cut" \
   '["own:c=on","own:d=off","own:e=off","p@m=false","q@m=true","r@m=false"]' "$(jq -c "$OWN" "$(f w14)")"
 jq '.skillOverrides["own:e"] = "on" | .enabledPlugins["r@m"] = true' "$(f w15)" > "$T/x" && mv "$T/x" "$(f w15)"
 run "$T/wt/w15" >/dev/null 2>&1
 check "a cut the owner turned back on by hand stays on on a rerun" '["own:c=off","own:d=off","own:e=on","p@m=false","q@m=false","r@m=true"]' "$(jq -c "$OWN" "$(f w15)")"
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 run "$T/wt/w14" >/dev/null 2>&1; run "$T/wt/w15" >/dev/null 2>&1
 check "once the lists are gone, only the owner's own leaves remain, each with its value" \
   '["own:c=on","own:d=off","p@m=false","q@m=true"]:["own:e=on","r@m=true"]' "$(jq -c "$OWN" "$(f w14)"):$(jq -c "$OWN" "$(f w15)")"
 # A keep word brings back a plugin another step cuts by default (a business plugin, memoir, ponytail), not only the
 # owner's listed ones: otherwise the word cannot give the unit the plugin set it promises.
 echo '{"enabledPlugins":{"ponytail@ponytail":true}}' > "$HOME/.claude/settings.json"
-echo '{"version": 1, "profile": "claude", "ponytail": true, "workerPluginsOff": ["design@synced", "ponytail@ponytail"], "keeps": {"tools": {"plugins": ["design@synced", "ponytail@ponytail", "memoir@memoir"]}}}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "lite", "workerPluginsOff": ["design@synced", "ponytail@ponytail"], "keeps": {"tools": {"plugins": ["design@synced", "ponytail@ponytail", "memoir@memoir"]}}}' > "$P/.claude/commandeck.json"
 KP='[.enabledPlugins["design@synced"], .enabledPlugins["memoir@memoir"], .enabledPlugins["ponytail@ponytail"], ([.hooks.SessionStart[]?.hooks[]?.command | select(test("SUMMARY"))] | length), .enabledPlugins["operations@synced"]]'
 run "$T/wt/w16" --keep tools >/dev/null 2>&1; run "$T/wt/w17" --builder --keep tools >/dev/null 2>&1; run "$T/wt/w17" --builder >/dev/null 2>&1
 check "a keep word turns its business plugin, memoir and ponytail back on for a worker and a Builder; the rest stay off" \
@@ -174,32 +174,32 @@ echo '{}' > "$HOME/.claude/settings.json"
 # claimed, so a list that drops it cannot turn the plugin back on.
 for w in w18 w19; do git -C "$P" worktree add -q "$T/wt/$w"; mkdir -p "$T/wt/$w/.claude"; echo '{"enabledPlugins":{"ponytail@ponytail":false}}' > "$(f $w)"; done
 PT='[.enabledPlugins["ponytail@ponytail"], .env.COMMANDECK_OWNER_CUTS]'
-echo '{"version": 1, "profile": "claude", "ponytail": false, "workerPluginsOff": ["ponytail@ponytail"]}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "workerPluginsOff": ["ponytail@ponytail"]}' > "$P/.claude/commandeck.json"
 run "$T/wt/w18" >/dev/null 2>&1
 check "an owner's own ponytail off for a listed name is left as it is and not stored" '[false,null]' "$(jq -c "$PT" "$(f w18)")"
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"
 run "$T/wt/w18" >/dev/null 2>&1; run "$T/wt/w19" >/dev/null 2>&1
 check "once the list is gone, and with no list at all, the owner's ponytail off stays" '[false,null]:[false,null]' "$(jq -c "$PT" "$(f w18)"):$(jq -c "$PT" "$(f w19)")"
 # The swap is the same claim: an owner's own ponytail leaf in this file is not swapped, so it is never the run's.
 git -C "$P" worktree add -q "$T/wt/w20"; mkdir -p "$T/wt/w20/.claude"; echo '{"enabledPlugins":{"ponytail@ponytail":true}}' > "$(f w20)"
 echo '{"enabledPlugins":{"ponytail@ponytail":true}}' > "$HOME/.claude/settings.json"
-echo '{"version": 1, "profile": "claude", "ponytail": true}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "lite"}' > "$P/.claude/commandeck.json"
 run "$T/wt/w19" >/dev/null 2>&1; run "$T/wt/w20" >/dev/null 2>&1
 check "setup's answer yes leaves an owner's own ponytail leaf, off or on, and adds no summary" '[false,0]:[true,0]' "$(jq -c "$SUMHOOK" "$(f w19)"):$(jq -c "$SUMHOOK" "$(f w20)")"
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"; echo '{}' > "$HOME/.claude/settings.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"; echo '{}' > "$HOME/.claude/settings.json"
 run "$T/wt/w19" >/dev/null 2>&1
 check "and a later answer no still leaves the owner's off" '[false,0]' "$(jq -c "$SUMHOOK" "$(f w19)")"
 # Every other name the run deletes before it reads the owner's leaves (a move-1 skill, Stripe, memoir) is never
 # claimed for a list either, so a list that drops it leaves that step's own cut in place.
 git -C "$P" worktree add -q "$T/wt/w21"
-echo '{"version": 1, "profile": "claude", "ponytail": false, "workerSkillsOff": ["anthropic-skills:computer-use"], "workerPluginsOff": ["stripe@claude-plugins-official", "memoir@memoir"]}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "workerSkillsOff": ["anthropic-skills:computer-use"], "workerPluginsOff": ["stripe@claude-plugins-official", "memoir@memoir"]}' > "$P/.claude/commandeck.json"
 FX='[.env.COMMANDECK_OWNER_CUTS, .skillOverrides["anthropic-skills:computer-use"], .enabledPlugins["stripe@claude-plugins-official"], .enabledPlugins["memoir@memoir"]]'
 run "$T/wt/w21" >/dev/null 2>&1; a=$(jq -c "$FX" "$(f w21)")
-echo '{"version": 1, "profile": "claude", "ponytail": false}' > "$P/.claude/commandeck.json"; run "$T/wt/w21" >/dev/null 2>&1
+echo '{"version": 1, "profile": "claude", "ponytail": "off"}' > "$P/.claude/commandeck.json"; run "$T/wt/w21" >/dev/null 2>&1
 check "a list naming a move-1 skill, Stripe or memoir stores none of them, and a shrink keeps each step's cut" \
   '[null,"off",false,false]:[null,"off",false,false]' "$a:$(jq -c "$FX" "$(f w21)")"
 # A hand-edited keep word that is not an object once stopped the run before the lean-pane step.
-echo '{"version": 1, "profile": "claude", "ponytail": false, "keeps": {"tools": "x"}}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "keeps": {"tools": "x"}}' > "$P/.claude/commandeck.json"
 echo '{}' > "$(f w13)"; run "$T/wt/w13" --keep tools >/dev/null 2>&1; rc=$?
 check "a keep word that is not an object is ignored and the run still cuts" "0:[$M1]" "$rc:$(jq -c "$SKS" "$(f w13)")"
 # A keep word gives back the owner's own leaf for a plugin step 8 cuts, not nothing: a deleted false would turn the
@@ -207,7 +207,7 @@ check "a keep word that is not an object is ignored and the run still cuts" "0:[
 for w in w22 w23 w24; do git -C "$P" worktree add -q "$T/wt/$w"; mkdir -p "$T/wt/$w/.claude"; done
 echo '{"enabledPlugins":{"design@synced":false,"memoir@memoir":true}}' > "$(f w22)"
 echo '{"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"450000"},"enabledPlugins":{"design@synced":false,"memoir@memoir":false}}' > "$(f w24)"
-echo '{"version": 1, "profile": "claude", "ponytail": false, "keeps": {"tools": {"plugins": ["design@synced", "memoir@memoir"]}}}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "keeps": {"tools": {"plugins": ["design@synced", "memoir@memoir"]}}}' > "$P/.claude/commandeck.json"
 DM='[.enabledPlugins["design@synced"], .enabledPlugins["memoir@memoir"], .enabledPlugins["operations@synced"]]'
 run "$T/wt/w22" --keep tools >/dev/null 2>&1; a=$(jq -c "$DM" "$(f w22)"); run "$T/wt/w22" --keep tools >/dev/null 2>&1
 check "a keep word leaves the owner's own off and on for a kept plugin, on every rerun; the rest stay off" \
@@ -222,7 +222,7 @@ check "a file with no stored cuts (an earlier version's): every off is the owner
 # The move-1 cuts (the browser skills, Stripe) follow the same rule: a keep word, --keep billing or --keep all takes
 # out only the leaves the run stored as its own, and the owner's own leaf for one of them is left as it is.
 for w in w25 w26 w27; do git -C "$P" worktree add -q "$T/wt/$w"; mkdir -p "$T/wt/$w/.claude"; done
-echo '{"version": 1, "profile": "claude", "ponytail": false, "keeps": {"tools": {"skills": ["anthropic-skills:chrome-browser"], "plugins": ["stripe@claude-plugins-official"]}}}' > "$P/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "ponytail": "off", "keeps": {"tools": {"skills": ["anthropic-skills:chrome-browser"], "plugins": ["stripe@claude-plugins-official"]}}}' > "$P/.claude/commandeck.json"
 MV='[.skillOverrides["anthropic-skills:chrome-browser"], .enabledPlugins["stripe@claude-plugins-official"], .skillOverrides["anthropic-skills:computer-use"]]'
 echo '{"skillOverrides":{"anthropic-skills:chrome-browser":"off"},"enabledPlugins":{"stripe@claude-plugins-official":false}}' > "$(f w25)"
 run "$T/wt/w25" --keep tools >/dev/null 2>&1; a=$(jq -c "$MV" "$(f w25)"); run "$T/wt/w25" --keep tools >/dev/null 2>&1
