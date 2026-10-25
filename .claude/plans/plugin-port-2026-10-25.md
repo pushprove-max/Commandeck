@@ -465,7 +465,13 @@ Decision G9-2. The plugin's relay has no order file today (`relay-order.sh` send
 order file is written only when the Chief of Staff adds anything. Test: cos-order-check.test.sh "an order file
 without the owner's-words section is flagged".
 
-### G10 -- the units mod: issue 349 (host `c7aaf716`, then `84118aa9`: the v2 layout, the stall mechanic removed)
+### G10 -- the units mod: issue 349 (host `c7aaf716`, then `84118aa9`: the v2 layout, the stall mechanic removed, then `8fb27eff`: issues built)
+
+Port from host `8fb27eff`, not `84118aa9` alone (owner order 2026-10-25, "the mod isn't tracking the issues built"):
+once the Build step is done every issue counts as built (`builtOf`), and the stage key is whatever the plugin's
+dashboard writes (`scripts/dashboard.sh`, `dashboard_builders.jq`; the host writes `review`, not `reviewing`), in
+both STAGES and stepsOf's `late` map. Port its test "issues built count the evidence while building and every issue
+once the build is done".
 
 The owner approved the second layout and ordered the whole stall mechanic removed (issue 349's comments of
 2026-10-25, re-read: no stall mark, no stall toast, no `stallMinutes` option; show only what is known, never an empty
