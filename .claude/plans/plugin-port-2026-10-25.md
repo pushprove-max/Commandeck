@@ -539,7 +539,7 @@ Decision G11-1. Nothing is tagged or published in this unit: the merge is local,
 push. The backfill creates public tags and releases, so it is run by main after the push, on the owner's go. Test:
 release-notes.test.sh "backfill --plan lists every version oldest first and creates nothing".
 
-### G13 -- shell tests run on the PC (main's order, owner ruling r-20261025-163319-1-38ab5f; host `c032363b` #2992 and its later fixes)
+### G13 -- shell tests run on the PC (main's order, owner ruling; host `c032363b` and its later fixes)
 
 - New `scripts/peer-offload.sh` (the host's `peer-runtime.sh` `pr_stage` and `pr_offload`, current host version):
   `pr_offload <command>...` stages this checkout's HEAD on the peer named in `~/.config/devenv/peer` (a bundle on
@@ -1117,8 +1117,8 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
 - 2026-10-25, revision 3 (fix round 4, Sol's pass-4 finding, class offload-retry): G13 says a run that started on
   the PC and lost its connection fails with nothing run here; What can go wrong row "retry (offload)".
 
-- 2026-10-25, revision 2 (main's orders during fix round 2): G13 added (the PC test hand-off, owner ruling
-  r-20261025-163319-1-38ab5f). G4's Break gate (the `Mutation-verified:` check before pass 1) dropped by main's
+- 2026-10-25, revision 2 (main's orders during fix round 2): G13 added (the PC test hand-off, owner
+  ruling). G4's Break gate (the `Mutation-verified:` check before pass 1) dropped by main's
   answer, option B: Builders write no red or mutation proofs, and the issue-323 check stays. G14 added (main's order:
   port host `12396351`, new code checked against the plan, a redesign reviewed alone first). G7 Ask 4 rewritten to the
   fix-round-2 design (the wait token and its claim), which had replaced the open-state-file check.

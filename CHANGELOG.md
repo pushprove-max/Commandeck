@@ -2,7 +2,7 @@
 
 ## 0.47.0 -- 2026-10-25
 
-Part A1 of the plugin-port batch: ten fixes to the review loop, the report path, the answer path and the Chief of Staff
+Ten fixes to the review loop, the report path, the answer path and the Chief of Staff
 hooks. Each paragraph that closes an issue says so.
 
 - Shell tests run on the PC. In a Mac linked worktree whose `~/.config/devenv/chain-host` is `pc`,
@@ -69,7 +69,7 @@ hooks. Each paragraph that closes an issue says so.
 
 ## 0.46.0 -- 2026-10-24
 
-Parts D, E and F of the open-issues batch, the autodecide port and added work: fewer messages to main, stricter review
+Parts D, E and F of the batch of open issues, the autodecide port and added work: fewer messages to main, stricter review
 ordering rules, a shorter checklist, safer pane and worktree closes, a cheaper closing run, fewer waits in main's
 foreground, four launch and fix-round fixes, a data design for every build, and no plan or model question to the owner.
 A paragraph that closes an issue says so.
@@ -1022,7 +1022,7 @@ Built from the plugin issue batch of 2026-10-23: #308, #310, #306, #309, #286, #
 ## 0.8.0 -- 2026-10-16
 
 - No script can remove a main checkout any more. `dashboard.sh --project` run by hand
-  with no DASH_NOW removed the folder it was given (how ~/repos/Commandeck was lost);
+  with no DASH_NOW removed the folder it was given (how a main checkout was lost);
   every computed removal now refuses a checkout, a git folder, HOME or `/`, and the
   merge refuses a unit folder that is not a linked worktree.
 - A fix round the Builder's pane never took is now told to main, with Orca's own answer,
