@@ -9,7 +9,7 @@ set -uo pipefail
 
 printf 'echo built\n' > "$W/a.sh"
 # A pass of the real script, from the Builder's worktree; prints its exit code. Env words after the kind are the pass's.
-try() { local n=$1 k=$2; shift 2
+try() { local n=$1 k=$2; shift 2; sites "$n"
   (cd "$W" && env TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-$n "$@" bash "$PASS_SH" "$U" "$n" "$k" >"$TMP/out" 2>"$TMP/err"); echo $?; }
 CL='COMMANDECK_OPTIONS={"codexReviewerAgent": "claude"}'
 # The reviewer stand-ins write a mark when they run: the Codex companion leaves a session record, the claude stub a log.
@@ -70,6 +70,11 @@ jq '.roles["codex-reviewer"].shellEnv = {GH_TOKEN: "seat-token"}' "$TMP/routing.
 mv "$TMP/cli/gh" "$TMP/cli/gh-real"
 printf '#!/bin/sh\n[ "${GH_TOKEN:-}" = seat-token ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }\nexec "%s" "$@"\n' "$TMP/cli/gh-real" > "$TMP/cli/gh"; chmod +x "$TMP/cli/gh"
 check "the pull request state of the unit branch is handed in, read with the reviewer's own token" "0:1" "$(try 2 review GH_TOKEN=bad-token):$(grep -c '"state":"OPEN"' "$B/$U-r2-prompt-1.md")"
+# A batch brief names its work items under "The issues", often with no Closes: line: the reviewer, told to read them,
+# cannot from its sandbox, so they are handed in too (a pass once ended BLOCKED on gh issue view of one).
+rm -f "$B/$U-r2-reports.md"; printf '\n## The issues\n\n1. #7: t\n' >> "$B/$U.md"
+check "a brief with no Closes: line hands in the work items its The issues list names, whole" "0:1:1" \
+  "$(try 2 review):$(grep -c 'ISSUE-7-BODY' "$B/$U-r2-prompt-1.md"):$(grep -c 'LINKED-8-BODY' "$B/$U-r2-prompt-1.md")"
 mv "$TMP/cli/gh-real" "$TMP/cli/gh"; mv "$TMP/routing.keep" "$COMMANDECK_ROUTING"
 
 # A reviewer that lost GitHub ends its reply on that line: the reply is not a verdict. No fence is parsed: only the last

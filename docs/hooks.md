@@ -32,6 +32,7 @@ and event checks:
 | `ruling-log.sh` | Records the owner's answers with ids (typed prompts only from main's checkout and the Chief-of-Staff worktree) and flags suspiciously fast picker answers; does not block. |
 | `cos-own-echo.sh` | Acknowledges the relay's own message echoes so they do not cause another turn. In main's checkout, drops Orca's nudge when no actionable message (`wakeKinds`) is unread, or while the wake window is open, or when main already woke inside that window (one wake claim, shared with `main-watch.sh`), and prints the silent-wake line on each wake it passes. |
 | `cos-inbox-waiter-stop.sh` | Holds the relay's stop until all four watchers and `cos-check.sh` are alive. |
+| `cos-unfinished-stop.sh` | Holds a stop once when the Chief of Staff's reply (main's, when no Chief of Staff runs) leaves its own work undone ("haven't filed it", "want me to ..."). |
 | `opus-orchestrator-autonomy.sh` | Loads main's autonomy instructions and blocks an Opus orchestrator stop asking to continue already authorized work. |
 
 The strict tier is off by default. Setup saves the answer as `strictHooks`

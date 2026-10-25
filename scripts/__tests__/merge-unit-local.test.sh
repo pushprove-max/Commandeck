@@ -46,7 +46,7 @@ check "a Builder's ledger row sums the tokens of every session its record names"
 H0=$(git -C "$REPO" rev-parse HEAD)
 mk t; go t; STUB_REPLY=$'- [P2] (class: probe) A small thing -- t.txt:1 -- say it plainly -- cat t.txt\nVERDICT: NO-GO' pass t 2 final
 check "a closing NO-GO with P2s only does not merge, and main is unchanged" "1 1 0 $H0" \
-  "$(merge t) $(grep -c '^FAILED step 3 proof' "$TMP/out") $(grep -c '^DONE unit=t' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
+  "$(merge t) $(grep -c '^FAILED step 1 proof' "$TMP/out") $(grep -c '^DONE unit=t' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
 mk t3; go t3; STUB_REPLY=$'- [P3] (class: probe) A nit -- t3.txt:1 -- say it plainly -- cat t3.txt\nVERDICT: NO-GO' pass t3 2 final
 check "a closing NO-GO with a P3 only does not merge, and main is unchanged" "1 0 $H0" \
   "$(merge t3) $(grep -c '^DONE unit=t3' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
@@ -265,5 +265,22 @@ check "run from another repository's root, the checkout's own script merges its 
 mk s2; go s2; echo s2 > "$TMP/unit"
 check "run by a relative path from the checkout's parent folder, the unit merges" "0 1" \
   "$(cd "$TMP" && bash "proj/scripts/merge-unit-local.sh" s2 > "$TMP/out" 2>&1; echo $?) $(git -C "$REPO" log --format=%s | grep -c '^feat(s2)')"
+
+# Issue 352: the proof is one predicate, run at the end of step 1 and again at step 3. A unit whose last pass is narrowed
+# (its GO merges nothing) is refused at step 1, before the rebase rewrites the branch: main moved, so a rebase would have.
+NW=$COMMANDECK_WORKSPACES/nr
+mk nr; STUB_REPLY=$'- [P2] (class: probe) a thing -- nr.txt:1 -- say it plainly -- cat nr.txt\nVERDICT: NO-GO' pass nr 1 adversarial
+echo more >> "$NW/nr.txt"; git -C "$NW" commit -qam "fix: the finding"; STUB_REPLY='VERDICT: GO' pass nr 2 review
+echo moved > "$REPO/moved1.txt"; git -C "$REPO" add moved1.txt; git -C "$REPO" commit -qm "main moves"
+NRH=$(git -C "$NW" rev-parse HEAD); HM=$(git -C "$REPO" rev-parse HEAD)
+check "a narrowed-only proof is refused at step 1, the branch is not rebased, and main is unchanged" "1 1 0 $NRH $HM" \
+  "$(merge nr) $(grep -c '^FAILED step 1 proof: .*the branch is untouched' "$TMP/out") $(grep -c '^STEP 2 rebase' "$TMP/out") $(git -C "$NW" rev-parse HEAD) $(git -C "$REPO" rev-parse HEAD)"
+# A reviewed commit followed by a commit that only rebuilds a generated file keeps the review, before and after the rebase.
+printf '{"generatedFiles": ["gen.txt"]}\n' > "$REPO/.claude/commandeck.json"
+mk gt; go gt; echo gen > "$COMMANDECK_WORKSPACES/gt/gen.txt"; git -C "$COMMANDECK_WORKSPACES/gt" add gen.txt; git -C "$COMMANDECK_WORKSPACES/gt" commit -qm "chore: rebuild generated"
+echo moved > "$REPO/moved2.txt"; git -C "$REPO" add moved2.txt; git -C "$REPO" commit -qm "main moves again"
+check "a reviewed commit followed by a generated-only commit passes both proof steps and merges" "0 1 1" \
+  "$(merge gt) $(grep -c '^DONE unit=gt merged=local' "$TMP/out") $(grep -c 'rule: generated-only tail' "$TMP/out")"
+rm -f "$REPO/.claude/commandeck.json"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

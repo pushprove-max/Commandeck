@@ -328,7 +328,10 @@ builder_watch() {
     # A record the origin run placed is that run's to watch, as in the seat loop.
     [ -f "$r" ] && ! grep -q '^origin=' "$r" || continue
     u=$(sed -n 's/^unit=//p' "$r" | head -1); h=$(sed -n 's/^handle=//p' "$r" | head -1)
-    [ -n "$u" ] && [ -n "$h" ] && [ -f "$WS/$u/.claude/builder-events.jsonl" ] || continue
+    [ -n "$u" ] && [ -n "$h" ] || continue
+    # Before the event-log and state checks: a pass that ends while the Builder keeps working wakes main too.
+    report_wake "$WS/$u" "$u"
+    [ -f "$WS/$u/.claude/builder-events.jsonl" ] || continue
     # Episodes are per pane: a replacement pane's first signal is its first, not the old pane's third.
     hist=$ST/builder-$u-$h
     # A pane that is not mid-turn is main-watch's own item, not a signal. WARM alone also acts on done and idle: Orca
@@ -875,6 +878,107 @@ proc_warn() {
 # digest <line> -- a routine item (issue 253): one line in the digest file orca-wait.sh counts; no message, no wake.
 digest() { printf '%s %s\n' "$NOW" "$1" >> "$ST/digest"; }
 
+# REPORT DELIVERY (issue 353). A pass that ends while the Builder keeps working, or whose Builder stops without a marker,
+# used to reach main only through the Builder's own words. Every finished round file now gets one stamp and one post.
+
+# newest_round <worktree> <unit> -- sets NR_FILE and NR_N to the unit's highest-numbered round file (r10 beats r9);
+# both empty when there is none.
+newest_round() {
+  local f n
+  NR_FILE= NR_N=0
+  for f in "$1/.claude/briefs/$2"-r*-reports.md; do
+    n=${f%-reports.md}; n=${n##*-r}
+    [[ $n =~ ^[0-9]+$ ]] && [ "$n" -gt "$NR_N" ] && { NR_N=$n; NR_FILE=$f; }
+  done
+  [ -n "$NR_FILE" ] || NR_N=
+}
+
+# round_line <round file> -- "<verdict> (<kind>)" for a finished round file ("GO (final)", "NO-GO (review)"), or
+# nothing while the file does not end in a VERDICT line yet. The kind is the file's own `Pass:` line.
+round_line() {
+  local last kind
+  last=$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1)
+  [[ $last == "VERDICT: "* ]] || return 1
+  kind=$(sed -n 's/^Pass: //p' "$1" | head -1)
+  echo "${last#VERDICT: } (${kind:-kind not recorded})"
+}
+
+# report_key <unit> <round file> -- the report's item key: its round and its text, so a replacement build reusing the
+# unit name is a new report. Fails for a file with no round number.
+report_key() {
+  local n=${2%-reports.md}; n=${n##*-r}
+  [[ $n =~ ^[0-9]+$ ]] && echo "report-$1-r$n-$(cksum < "$2" | cut -d' ' -f1)"
+}
+
+# delivered <item file> -- Orca took the item's send (flush_send writes posted= only then), or it is settled.
+delivered() {
+  grep -qxE -e handled -e close=1 -e 'posted=[0-9]+' "$1" 2>/dev/null
+}
+
+# report_wake <worktree> <unit> -- every finished round file gets one stamp, due-<key>: unit, round, subject, body.
+# Stamping is all this does: report_send delivers from the stamp alone, and while a unit has a stamp seat() ends nothing
+# for it (a merge removes the worktree, a seat record goes, so no retry may need them).
+report_wake() {
+  local n f line verdict kind next key item
+  while read -r n f; do
+    line=$(round_line "$f") || continue
+    verdict=${line%% (*}; kind=${line#*(}; kind=${kind%)}
+    key=$(report_key "$2" "$f") || continue; item=$ST/item-$key
+    [ ! -e "$ST/due-$key" ] && ! delivered "$item" || continue
+    case "$kind:$verdict" in
+      "kind not recorded:"*) next="pass kind not recorded" ;;
+      final:GO) next="merge: $HERE/merge-unit-local.sh $2" ;;
+      review:GO) next="narrowed -- needs a final pass: builder-codex-pass.sh $2 $((n + 1)) final" ;;
+      adversarial:GO) next="a first-pass GO" ;;
+      *:NO-GO) next="fix round $n runs from $2-fix-r$n.md" ;;
+      *) next="see the report" ;;
+    esac
+    # Published by mv: report_send never reads half a stamp. The temp name is outside the due-* glob. A failed write
+    # leaves no stamp; report_pending still holds the unit and its later reports, and the next tick writes it again.
+    { printf '%s\n%s\n%s\n%s\n' "$2" "$n" "main-watch: $2 pass $n: $verdict ($kind)" "$f ends $verdict ($kind). Next: $next" \
+      > "$ST/.due-tmp" && mv "$ST/.due-tmp" "$ST/due-$key"; } 2>/dev/null || note "$2 pass $n: report stamp not written" "$key"
+  done < <(for f in "$1/.claude/briefs/$2"-r*-reports.md; do
+      n=${f%-reports.md}; n=${n##*-r}
+      [[ $n =~ ^[0-9]+$ ]] && printf '%s %s\n' "$n" "$f"
+    done | sort -n)
+}
+
+# report_send -- the one retry path for reports: every stamp, by unit in round order, through `post ... once`, from the
+# stamp's own text. A delivered one's stamp is removed. A stamp goes out only once every earlier finished report of its
+# unit reached main (report_pending), so one report goes per tick while earlier ones wait. An unsent item whose task is
+# not in this run's list (the run changed between the create and the send) is made again in this run.
+report_send() {
+  local u n f key item t
+  while read -r u n f; do
+    key=${f#"$ST/due-"}; item=$ST/item-$key
+    if delivered "$item"; then rm -f "$f"; continue; fi
+    ! report_pending "$u" "$n" || continue
+    t=$(sed -n 's/^task=//p' "$item" 2>/dev/null)
+    [ -z "$t" ] || [ "$t" = none ] || [ -n "$(jq -r --arg t "$t" 'first(.result.tasks[]? | select(.id == $t) | .id)' <<<"$TASKS")" ] || rm -f "$item"
+    post "$key" "" "$(sed -n 3p "$f")" "$(sed -n 4p "$f")" once
+  done < <(for f in "$ST"/due-report-*; do
+      [ -f "$f" ] && printf '%s %s %s\n' "$(sed -n 1p "$f")" "$(sed -n 2p "$f")" "$f"
+    done | sort -k1,1 -k2,2n)
+}
+
+# report_pending <unit> [<round>] -- the one question the fence (seat) and the delivery order (report_send) both ask: a
+# finished report of the unit, below <round> when given, has not reached main yet. Fails closed: it reads the worktree's
+# finished round files against what main got, so a step that failed before a stamp exists (the stamp write, the task
+# create) still holds. A stamp still waiting holds too, for when the worktree is gone.
+report_pending() {
+  local f n key below=${2:-}
+  for f in "$WS/$1/.claude/briefs/$1"-r*-reports.md; do
+    n=${f%-reports.md}; n=${n##*-r}
+    [ -z "$below" ] || { [[ $n =~ ^[0-9]+$ ]] && [ "$n" -lt "$below" ]; } || continue
+    round_line "$f" >/dev/null && key=$(report_key "$1" "$f") && ! delivered "$ST/item-$key" && return 0
+  done
+  for f in "$ST"/due-report-"$1"-r*; do
+    [ -f "$f" ] && [ "$(sed -n 1p "$f")" = "$1" ] || continue
+    [ -z "$below" ] || [ "$(sed -n 2p "$f")" -lt "$below" ] && return 0
+  done
+  return 1
+}
+
 # gate <unit> <worktree> -- the merge gate on a Builder's DONE (issues 254, 258). 0: the unit is queued, merging or
 # merged; merge_collect reports how its merge ends. 1: WHY says why it is not merged. A held unit (`Merge: hold` in
 # its brief, or an owner decision open on it) runs no gate, and its why starts "held:".
@@ -1111,20 +1215,24 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   esac
   # The seat's own message reached main: nothing to post.
   [ "$kind" != reported ] || { echo handled > "$ST/item-$item"; return 0; }
+  # The fence (issue 353): nothing ends a Builder unit (merge, finish or stopped post) while one of its reports has not
+  # reached main; the kind is settled, so the next tick picks up here.
+  [ "$4" = builder ] && report_pending "$u" && return 0
   if [ "$kind" = finished ]; then
     # A seat.sh wait on this pane reports the finish itself.
     pp_waited_on "$h" "$NOW" "${RV_OUT:-}" "watch:$item" && { echo handled > "$ST/item-$item"; return 0; }
     local why=
+    report_notes "$4" "$u" "$w"
     # A Builder's DONE in a unit worktree (one that holds its own brief) goes through the merge gate every tick
     # until it lands (issues 254, 258): only a held or refused one reaches main as a finish.
     if [ "$4" = builder ] && [ -f "$w/.claude/briefs/$u.md" ] && grep -qxF -- "${u^^}-DONE" <<<"$RV_OUT"; then
       gate "$u" "$w" && return 0; why=$WHY
       [[ $why != held:* ]] && { post "$item-$(git -C "$w" rev-parse HEAD 2>/dev/null)" "" "main-watch: seat $4 on $u finished ($h); not merged: $why" \
-        "Seat $4 on $u said DONE and its merge gate refused it: $why. Fix or merge it: $HERE/merge-unit-local.sh $u" once; return 0; }
+        "Seat $4 on $u said DONE and its merge gate refused it: $why. ${NARROWED:+$NARROWED }${NEWEST}Fix or merge it: $HERE/merge-unit-local.sh $u" once; return 0; }
     fi
     if reported "$h" "${ep:-${5:-0}}" "${5:-0}"; then mark_handled "$item"; return 0; fi
     POST_SEAT=$key post "$item" "$task" "main-watch: seat $4 on $u finished ($h)${why:+; not merged, $why}" \
-      "Seat $4 on $u stopped. Read it: $HERE/read-verdict.sh $h, then collect it."
+      "Seat $4 on $u stopped. ${NEWEST}Read it: $HERE/read-verdict.sh $h, then collect it."
   else
     # One more reading first: a seat Orca read idle for one tick while still at work, or whose session log was
     # written after this tick read it, is not stopped (issue 238). Its finish is forgotten, so the next is read afresh.
@@ -1136,9 +1244,28 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     NUDGED=""
     if [ "$4" = builder ] && [ -n "$state" ] && [ "$state" != none ]; then stopped_nudge "$u" "$h" "$item" && return 0; fi
     if reported "$h" "${ep:-${5:-0}}" "${5:-0}"; then mark_handled "$item"; return 0; fi
+    report_notes "$4" "$u" "$w"
+    if [ -n "$NARROWED" ]; then
+      # Issue 352: the newest report is a narrowed GO, which merges nothing: that is no stop without a report.
+      post "$item" "$task" "main-watch: $u $4 finished on a narrowed pass; needs a final pass" \
+        "Seat $4 ($h) on $u stopped with no DONE marker${state:+ (Orca: $state)}.$NUDGED $NEWEST${NARROWED}"
+      return 0
+    fi
     post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
       "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}.$NUDGED This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h${RV_OUT:+ Last words: $(tr '\n' ' ' <<<"$RV_OUT" | tail -c 300)}"
   fi
+}
+
+# report_notes <role> <unit> <worktree> -- sets NEWEST, a Builder's newest report as a lead for its finish post, and
+# NARROWED, the wording for a newest report that is a narrowed GO (issue 352): that GO merges nothing, and the unit
+# is not finished until the final pass the line names has ended GO. Both are empty for any other seat or report.
+report_notes() {
+  local line; NEWEST= NARROWED=
+  [ "$1" = builder ] || return 0
+  newest_round "$3" "$2"
+  line=$([ -z "$NR_FILE" ] || round_line "$NR_FILE") && [ -n "$line" ] || return 0
+  NEWEST="Newest report: ${NR_FILE##*/}: $line. "
+  [ "$line" != "GO (review)" ] || NARROWED="Finished on a narrowed pass; needs a final pass: builder-codex-pass.sh $2 $((NR_N + 1)) final."
 }
 
 # seat_reported <handle> <role> -- issue 320: the seat's own completion message that reached main (kind reported,
@@ -1463,6 +1590,7 @@ tick() {
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   merge_collect
+  report_send
   merge_start
   flush
   arm_diag

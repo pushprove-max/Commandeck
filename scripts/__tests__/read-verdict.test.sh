@@ -112,5 +112,31 @@ check "two NO-GOs on one class with no level print REPEAT CLASS" "REPEAT CLASS: 
 rf 3 NO-GO 'Finding: (P1) (class:probe) mid-line -- a.sh:1 -- why -- input'
 rf 4 NO-GO '1. [**P2**] (class: probe) numbered -- b.sh:2 -- why -- input'
 check "two NO-GOs on one class in other level forms print REPEAT CLASS" "REPEAT CLASS: probe (r3, r4)" "$(repeat)"
+# Issue 362: given an earlier round file, the comparison is with that round whatever its verdict, so a class that comes back
+# after a GO round (or after a pass in between) is the same flaw seen again.
+repeat_with() { bash "$REAL/scripts/read-verdict.sh" --repeat-class "$B/u-r4-reports.md" "$B/u-r$1-reports.md" 2>&1; }
+rf 4 NO-GO '- [P2] (class: lost-reply) back again -- b.sh:2 -- why -- input'
+rf 2 NO-GO '- [P2] (class: lost-reply) first time -- a.sh:1 -- why -- input'
+check "an earlier round that is not the one before, sharing the class, prints REPEAT CLASS with both rounds" "REPEAT CLASS: lost-reply (r2, r4)" "$(repeat_with 2)"
+rf 2 GO '- [P3] (class: lost-reply) a nit -- a.sh:1 -- why -- input'
+check "an earlier round that ended GO still counts when it names the class" "REPEAT CLASS: lost-reply (r2, r4)" "$(repeat_with 2)"
+rf 2 NO-GO '- [P2] (class: other) something else -- a.sh:1 -- why -- input'
+check "an earlier round of another class prints nothing" "" "$(repeat_with 2)"
+rf 4 GO '- [P3] (class: lost-reply) a nit -- b.sh:2 -- why -- input'
+rf 2 NO-GO '- [P2] (class: lost-reply) first time -- a.sh:1 -- why -- input'
+check "this round must itself end NO-GO: a GO round names no repeat" "" "$(repeat_with 2)"
+# Issue 353, pinned: the Builder's done marker is read as the last line of its latest message, so a marker after a
+# quoted VERDICT line counts, and a VERDICT line after the marker (the marker no longer last) does not.
+WM=$T/wtm; LM=$T/home/.claude/projects/$(printf '%s' "$WM" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$LM"
+reply() { # <message text> -- one Claude turn in the worktree's log
+  { jq -cn --arg t "$(date -u -d '@1000' +%Y-%m-%dT%H:%M:%SZ)" '{type: "user", timestamp: $t, message: {content: "build it"}}'
+    jq -cn --arg t "$(date -u -d '@1010' +%Y-%m-%dT%H:%M:%SZ)" --arg x "$1" '{type: "assistant", timestamp: $t, message: {id: "m1", content: [{type: "text", text: $x}]}}'
+    jq -cn --arg t "$(date -u -d '@1020' +%Y-%m-%dT%H:%M:%SZ)" '{type: "system", subtype: "turn_duration", timestamp: $t}'; } > "$LM/s1.jsonl"; }
+mark() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$T/sc" \
+    COMMANDECK_WORKSPACES="$T/ws" timeout 20 bash "$REAL/scripts/read-verdict.sh" --state --worktree "$WM" --agent claude --launched 1 --marker U-DONE 2>/dev/null | grep -m1 '^marker='); }
+reply $'Pass 3 ended.\nVERDICT: GO\nU-DONE'
+check "a marker alone on the last line after a VERDICT line reads marker=1" "marker=1" "$(mark)"
+reply $'U-DONE\nVERDICT: GO'
+check "a marker followed by a VERDICT line reads marker=0" "marker=0" "$(mark)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

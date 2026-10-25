@@ -30,9 +30,10 @@ grep -q 'hold merged' "$D" || fail "the waiting unit's merge has no digest line"
 for u in narrow hold owner; do gone $u; done
 
 # A kept refusal stands for its tip and round files: a new pass on the same commit (a new round file, nothing
-# committed) runs --verify again, and the unit merges.
+# committed) runs --verify again, and the unit merges. The new round file is a report main has not read yet (issue 353):
+# a tick stamps it, the next posts it, the third gates.
 N=$((N + 1000)); unit stale; echo "no closing pass" > "$F/refuse-stale"; tick $N; said_done stale; tick $((N + 60))
-rm "$F/refuse-stale"; echo "VERDICT: GO" > "$T/ws/stale/.claude/briefs/stale-r2-reports.md"; T0=$(tip stale); tick $((N + 120)); jobwait stale
+rm "$F/refuse-stale"; echo "VERDICT: GO" > "$T/ws/stale/.claude/briefs/stale-r2-reports.md"; T0=$(tip stale); tick $((N + 120)); tick $((N + 180)); tick $((N + 240)); jobwait stale
 grep -qx "stale@$T0" "$F/mq-calls" || fail "a new closing pass on an unchanged tip did not clear the kept refusal: $(cat "$F/mq-calls")"
 # How a merge ended reaches main with the worktree gone: the stub removes it as the real merge does.
 N=$((N + 1000)); unit late; echo late > "$F/mq-late"; tick $N; said_done late; tick $((N + 60)); jobwait late; tick $((N + 120))

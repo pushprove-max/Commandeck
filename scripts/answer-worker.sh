@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# answer-worker.sh <terminal-handle|unit> <text> [<question-id>] -- main's one way to answer a
+# answer-worker.sh [--interrupt] <terminal-handle|unit> <text> [<question-id>] -- main's one way to answer a
 # worker's question.
 #
 # A unit name finds its Builder's pane at send time: a restart gives the pane a
@@ -25,14 +25,21 @@
 # In main's own foreground (issue 340) the answer is sent and the call returns 0 at once: the wait for the tag in the log,
 # its retry and the ledger closing run in a detached follower, whose log the call names. Main hears from the follower
 # only when the answer is NOT delivered. Anywhere else the wait runs in the call and the exit code is as above.
+# --interrupt (issue 351): types the answer into the pane with an interrupt, for a pane blocked in ask-main.sh's wait. Only a
+# pane whose ask-main.sh call is in that wait as the answer is sent takes it (the call's wait token is claimed for the send,
+# and the call does not return until it is sent); any other pane, one between slices included, is refused with nothing
+# sent and the plain command printed: an interrupt would cut the work it is doing.
+# Never automatic. With no <question-id>, the pane's own open question (its seat record, the way pp_task_close counts it)
+# is the thread the answer replies in, so a pane blocked in `orchestration ask` is not left to wait out its limit.
 #
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/codex-helpers.sh"
-H=${1:?usage: answer-worker.sh <terminal-handle|unit> <text> [<question-id>]}; H=${H#terminal:}
-TEXT=${2:?usage: answer-worker.sh <terminal-handle|unit> <text> [<question-id>]}
+INTERRUPT=; [ "${1-}" != --interrupt ] || { INTERRUPT=1; shift; }
+H=${1:?usage: answer-worker.sh [--interrupt] <terminal-handle|unit> <text> [<question-id>]}; H=${H#terminal:}
+TEXT=${2:?usage: answer-worker.sh [--interrupt] <terminal-handle|unit> <text> [<question-id>]}
 Q=${3:-}
 # The reply goes to the Orca id inside <unit>-msg_<id> (a bare msg_<id> works too).
 QID=; case $Q in *msg_*) QID=msg_${Q##*msg_} ;; esac
@@ -58,6 +65,38 @@ if [ -d "$PP_WORKSPACES/$H" ]; then
   [ -n "$H" ] || { bash "$HERE/to-main.sh" --unit "$U" status "answer from main" "$TEXT" 2>/dev/null
     [ $? = 3 ] && { close_asks; echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2; } \
       || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }
+fi
+# --interrupt takes only a pane blocked in ask-main.sh's wait at the moment of the send, so it never cuts the work the
+# pane resumes after (an open question alone is not enough: between slices the pane is working). Right before the send it
+# claims the wait token ask-main.sh holds for this pane (<id>.wait, mv'd to <id>.claim.<pid>): ask-main.sh's own removal
+# and the claim exclude each other, and ask-main.sh does not return while a live claim is held. A token whose pid is not a
+# live ask-main.sh is a killed call's, and is dropped. Every refusal, and a failed send, prints the one retry: the plain
+# route, which reads no ask-main.sh state.
+CLAIM=
+claim_wait() { local t c p; for t in "$PP_SCRATCH"/ask-main/*.wait; do
+    [ -f "$t" ] && grep -qxF "pane=$H" "$t" 2>/dev/null || continue
+    c=${t%.wait}.claim.$$; mv "$t" "$c" 2>/dev/null || continue
+    p=$(sed -n 's/^pid=//p' "$c")
+    grep -qxF "pane=$H" "$c" && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o command= 2>/dev/null | grep -q 'ask-main\.sh' \
+      && { CLAIM=$c; return 0; }
+    rm -f "$c"
+  done; return 1; }
+retry() { printf 'Send it without --interrupt: bash %s/answer-worker.sh %q %q' "$HERE" "${U:-$H}" "$TEXT"; [ -z "$Q" ] || printf ' %q' "$Q"; }
+[ -z "$INTERRUPT" ] || trap '[ -z "$CLAIM" ] || rm -f "$CLAIM"' EXIT
+# No question id given: the pane's own open question is the thread to reply in (issue 351). pp_seat_open_ask counts the
+# questions pp_task_close counts, so the answer and the task close agree. Not in the background follower: the call that
+# started it has looked, and handed on the id it found.
+if [ -z "$QID" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ]; then
+  REC=$(grep -lx "handle=$H" "$PP_SCRATCH"/seat-*.txt 2>/dev/null | head -1 || true)
+  if [ -z "$REC" ]; then echo "answer-worker: no seat record names $H, so its open question was not looked up" >&2
+  else
+    rc=0; pp_seat_open_ask "$H" "$REC" || rc=$?
+    case $rc in
+      0) QID=$PP_OPEN_ASK_ID Q=$QID; echo "answer-worker: replying in $QID, the open question of $H" >&2 ;;
+      1) ;;
+      *) echo "answer-worker: the open question of $H could not be read (inbox or dispatch); sending without a question id" >&2 ;;
+    esac
+  fi
 fi
 WAIT=${ANSWER_WORKER_WAIT:-60}
 # Given the question's id, every route ends with a reply in that question's thread: it is the only answer pp_task_close
@@ -110,6 +149,13 @@ log_state
 FOLLOW=${ANSWER_WORKER_FOLLOW:-}
 if [ -n "$FOLLOW" ]; then
   WAY=$ANSWER_WORKER_WAY REPLIED=${ANSWER_WORKER_REPLIED:-}
+elif [ -n "$INTERRUPT" ]; then
+  WAY="typed into the pane with an interrupt"
+  claim_wait || { echo "answer-worker: --interrupt refused: $H is not waiting in ask-main.sh now (no question of its, or its wait has returned); nothing was sent. $(retry)" >&2; exit 1; }
+  timeout 8 orca-ide terminal send --terminal "$H" --text "$MSG" --enter --interrupt --json >/dev/null; rc=$?
+  rm -f "$CLAIM"; CLAIM=
+  [ "$rc" = 0 ] || { wake refused "terminal send --interrupt failed"; echo "answer-worker: terminal send --interrupt to $H failed (exit $rc); the answer may have been typed before it ended, so check the pane first. $(retry)" >&2; exit 1; }
+  wake sent
 elif idle; then
   WAY="typed into the pane"
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \

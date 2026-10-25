@@ -10,8 +10,9 @@ export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMAN
 # Run by hand from a Claude session the merge would detach itself (issue 230); the case for that unsets this.
 export COMMANDECK_FOREGROUND=1
 # Run as a real merge's check, the file inherits that merge's lock flag, which would skip its own merges' detach
-# and lock. Claude's folder is the empty HOME's: the caller's own profile is never read.
-unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK CLAUDE_CONFIG_DIR "${!UNIT_LEDGER_@}"
+# and lock. Claude's folder is the empty HOME's: the caller's own profile is never read. No pane handle: a pass run
+# here never acts as the caller's pane.
+unset COMMANDECK_MAIN COMMANDECK_ROUTING MERGE_UNIT_LOCAL_LOCK CLAUDE_CONFIG_DIR ORCA_TERMINAL_HANDLE "${!UNIT_LEDGER_@}"
 REPO=$TMP/proj
 mkdir -p "$HOME" "$TMP/ws" "$TMP/bin"; : > "$TMP/orca-calls"
 git init -q -b main "$REPO"
@@ -89,7 +90,12 @@ mk() { # <unit> [subject]: a Builder worktree with one commit, its brief and its
   echo "brief for $1" > "$w/.claude/briefs/$1.md"; echo "evidence for $1" > "$w/.claude/briefs/$1-evidence.md"
   echo built > "$w/$1.txt"; git -C "$w" add "$1.txt"; git -C "$w" commit -qm "${2:-feat($1): the unit}"
 }
+# Issue 362: a pass after a NO-GO refuses without the previous pass's Sites checked and New code checked sections;
+# these tests are not about that refusal, so every pass after the first finds both already written.
 pass() { # <unit> <N> <kind>: one pass of the real pass script on the unit's worktree
+  local ev=$COMMANDECK_WORKSPACES/$1/.claude/briefs/$1-evidence.md m=$(($2 - 1))
+  [ "$m" -lt 1 ] || grep -q "^## Sites checked (pass $m)" "$ev" \
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
   (cd "$COMMANDECK_WORKSPACES/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-$2 \
     bash "$PASS_SH" "$1" "$2" "$3" >/dev/null 2>"$TMP/pass.err") || { echo "FAIL the $3 pass on $1 did not run: $(cat "$TMP/pass.err")"; FAIL=$((FAIL+1)); }
 }

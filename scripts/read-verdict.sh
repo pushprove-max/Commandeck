@@ -385,17 +385,26 @@ pane_sessions() { # handle
   done | sort -u
 }
 
-# --repeat-class <round file>: two NO-GOs in a row on one finding class are a loop, not progress (issue 225).
-# Prints REPEAT CLASS: <class> (r<N-1>, r<N>) when this round and the one before it both end NO-GO with a
-# finding of that (class: <tag>), at any level or none; nothing otherwise.
+# --repeat-class <round file> [<earlier round file>]: two NO-GOs in a row on one finding class are a loop, not progress
+# (issue 225). Prints REPEAT CLASS: <class> (r<M>, r<N>) when this round and the one before it (M = N-1), or the earlier
+# round file given, both end NO-GO with a finding of that (class: <tag>), at any level or none; nothing otherwise.
+# Given an earlier round file the comparison is with that round whatever its verdict (issue 362: a class that comes back
+# after a GO round is the same flaw seen again), and the pass script runs it over every earlier round.
 if [ "${1:-}" = --repeat-class ]; then
   n=$(sed -n 's/.*-r\([0-9]*\)-reports\.md$/\1/p' <<<"${2:-}"); [ -n "$n" ] || exit 0
   # Every "(class:" tag: the gate's FINDING rule (builder-codex-pass.sh) counts any line holding one as a finding,
   # whatever level form it has or lacks, so a tag found here is on a line the gate counted.
-  classes() { [ "$(grep '^VERDICT:' "$1" 2>/dev/null | tail -1)" = "VERDICT: NO-GO" ] || return 0
-    grep -oE '\(class:[^)]*\)' "$1" | sed -E 's/^\(class:[[:space:]]*//; s/[[:space:]]*\)$//' | grep . | sort -u; }
-  c=$(comm -12 <(classes "${2%-r"$n"-reports.md}-r$((n - 1))-reports.md") <(classes "$2") | head -1)
-  [ -z "$c" ] || echo "REPEAT CLASS: $c (r$((n - 1)), r$n)"
+  classes() { # <round file> [any] -- its classes; a file that does not end NO-GO has none unless any is given
+    [ -n "${2:-}" ] || [ "$(grep '^VERDICT:' "$1" 2>/dev/null | tail -1)" = "VERDICT: NO-GO" ] || return 0
+    grep -oE '\(class:[^)]*\)' "$1" 2>/dev/null | sed -E 's/^\(class:[[:space:]]*//; s/[[:space:]]*\)$//' | grep . | sort -u; }
+  if [ -n "${3:-}" ]; then
+    m=$(sed -n 's/.*-r\([0-9]*\)-reports\.md$/\1/p' <<<"$3"); [ -n "$m" ] || exit 0
+    c=$(comm -12 <(classes "$3" any) <(classes "$2") | head -1)
+  else
+    m=$((n - 1))
+    c=$(comm -12 <(classes "${2%-r"$n"-reports.md}-r$m-reports.md") <(classes "$2") | head -1)
+  fi
+  [ -z "$c" ] || echo "REPEAT CLASS: $c (r$m, r$n)"
   exit 0
 fi
 if [ "${1:-}" = --state ]; then

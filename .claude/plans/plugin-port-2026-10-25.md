@@ -278,11 +278,12 @@ is refused, at 149 taken".
 Decision G4-3. No compatibility branch for plans or batches written before 0.47.0: a missing `Test:` line, size line
 or What can go wrong section is refused, the message naming the fix. This follows the host (2026-10-25, the newer
 rule) and `templates/global-rules.md:6` (ask before building compatibility; the count here is the plans in flight at
-upgrade, usually 0 or 1). The same rule removes the 0.46.0 Data design exception (`builder-launch.sh:90-91`: a batch
+upgrade, usually 0 or 1; counted in fix round 10: 0 unlaunched batches, the only workspace being this unit's and every
+batch in main's `.claude/briefs` belonging to a launched unit). The same rule removes the 0.46.0 Data design exception (`builder-launch.sh:90-91`: a batch
 with no Data design heading opens and the brief moves the answer to the Builder): a missing heading is refused like
 an empty one, and the NOTE and its brief line go. Test: builder-launch-resume-from-plan.test.sh "a batch with no What
 can go wrong section is refused"; builder-launch-resume-launch-line.test.sh "a batch with no Data design section is
-refused".
+refused" and "a 0.46.0-shape batch is refused, the Data design heading named as the fix, no Builder".
 Decision G4-4. The host's two approved additions in `47632f56` do not apply: the typecheck Stop-hook skip and the
 bugfix-lock message have no plugin site (`hooks/` holds no `typecheck.sh` and no `bugfix-test-lock.sh`, `git ls-files
 hooks`, 2026-10-25). Test: none, no site.
@@ -395,10 +396,15 @@ plugin.test.sh, its hook-count case.
   until the reply is acknowledged (A2 names the field), and tells main when it is not after the wait.
 - Ask 3 (BUILD): when `ask-main.sh` passes its deadline it sends main `to-main.sh question "ask-main: <id> unanswered"`
   once, so main can tell a lost answer from none.
-- Ask 4 (BUILD): `answer-worker.sh --interrupt`: for a pane with an open `ask-main.sh` state file (:31, deadline not
-  passed), the answer goes with `orca-ide terminal send --interrupt` (the flag exists: `orca-ide terminal send --help`,
-  2026-10-25). The hooks see only `bash answer-worker.sh ...`, so `duplicate-agent-guard.sh` does not refuse it.
-  Break: scripts/__tests__/answer-worker.test.sh -- --interrupt to a pane with no open ask-main question is refused -- scripts/answer-worker.sh the open-state check
+- Ask 4 (BUILD): `answer-worker.sh --interrupt`: for a pane blocked in `ask-main.sh`'s wait, the answer goes with
+  `orca-ide terminal send --interrupt` (the flag exists: `orca-ide terminal send --help`, 2026-10-25). The hooks see
+  only `bash answer-worker.sh ...`, so `duplicate-agent-guard.sh` does not refuse it. Fix round 2 (class
+  interrupt-lifetime): "blocked in the wait" is one fence, the wait token `<id>.wait` (`pid=`, `pane=`) that
+  `ask-main.sh` writes right before each `orchestration check --wait` and removes right after. The interrupt claims it
+  by one `mv` to `<id>.claim.<pid>` right before a `timeout 8` send; ask-main's remove that loses to the claim waits
+  while the claim and its claimer live, 60 s at most. A token naming a dead or non-ask-main pid is dropped. Every
+  refusal, and a failed send, prints one retry: the plain route without `--interrupt`.
+  Break: scripts/__tests__/answer-worker-interrupt.test.sh -- every ordering found so far, in order -- scripts/answer-worker.sh claim_wait's mv
   Catches: an interrupt typed into a pane that is mid-turn on other work, not waiting on main.
 
 Decision G7-1. One helper both callers use, so the answer and the task close count the same questions (host Decision
@@ -533,6 +539,118 @@ Decision G11-1. Nothing is tagged or published in this unit: the merge is local,
 push. The backfill creates public tags and releases, so it is run by main after the push, on the owner's go. Test:
 release-notes.test.sh "backfill --plan lists every version oldest first and creates nothing".
 
+### G13 -- shell tests run on the PC (main's order, owner ruling r-20261025-163319-1-38ab5f; host `c032363b` #2992 and its later fixes)
+
+- New `scripts/peer-offload.sh` (the host's `peer-runtime.sh` `pr_stage` and `pr_offload`, current host version):
+  `pr_offload <command>...` stages this checkout's HEAD on the peer named in `~/.config/devenv/peer` (a bundle on
+  top of the merge-base with origin/main; the base fetched by id), applies the uncommitted work as a patch in a
+  scratch worktree, refuses unless the tree there equals the one hashed here, and runs the command in the peer's
+  memory cage. The exit status comes back on a nonce-tagged line. Not ported: the node_modules borrowing and
+  `npm ci`, the test-run ledger rows, nvm, a named chain checkout. The peer's copy is a plain repository under
+  `~/.cache/commandeck-offload/repo`, created on first use.
+- `scripts/host-services.sh` gains `hs_chain_host` (reads `~/.config/devenv/chain-host`: mac or pc).
+- `scripts/run-shell-tests.sh`, after the files are chosen: in a Mac linked worktree whose chain host is pc, outside
+  a test run and not on the peer itself, the files go to the peer (`bash scripts/run-shell-tests.sh` there), all but
+  files marked `# host: mac` in their first five lines. The main checkout and the PC never offload. Not run there
+  (unreachable, asleep, no peer): the files run here once, the reason printed. Refused there (staging, patch, tree
+  or cage): exit 2, nothing runs here. A run that started there is final, red included.
+
+Decision G13-3 (class offload-retry, fix round 5: the redesign; revision 5 follows main's ruling of 2026-10-25 and
+replaces revision 4's fence). What reaches the Mac over ssh never proves what the PC did: a start line, an exit line or
+an ssh code can be lost after the PC acted (pass 4: the exit line lost after the start; pass 5: both lines lost). The
+one thing the Mac knows for sure is whether an ssh session was ever established: ssh authenticates before it sends the
+remote command, so a session that never authenticated ran nothing there. So the hand-off is told apart by that, and
+never by exit 255 or by a line that did not arrive (main's ruling: PC unreachable = run once on the Mac; a started
+run's red is final, never rerun here):
+- The run's ssh call writes its own log to a Mac-side temp file (`-E <file> -o LogLevel=VERBOSE`), apart from the
+  remote output. ssh logs `Authenticated to <host> ...` there once the session is established, before the command is
+  sent. The call also passes `-o ControlMaster=no -o ControlPath=none` (revision 6): a call that rides a shared
+  connection never authenticates itself and logs no such line, so it would read as "never connected" after the PC ran
+  it. Options on the command line win over the owner's ssh config, LogLevel included.
+- After the call, in this order:
+  - a nonce exit line arrived: it is the result (unchanged; its 3 becomes 1);
+  - a nonce refusal line arrived (`offload-refused: <nonce>`, printed by every refusal on the PC before its exit 2:
+    staging, patch, tree, cage): exit 2, nothing runs here (Decision G13-1);
+  - ssh ended 255 and its log holds no `Authenticated to` line: the connection never opened (connect timeout,
+    refused, no route, host key or auth failure), nothing started, so the files run here once, the reason
+    "unreachable or asleep" printed;
+  - anything else (the session was established, or ssh ended other than 255, and neither line arrived): ambiguous.
+    Exit 1, nothing runs here, and the message says the PC may still be running it.
+- So the only path to a local run is ssh's own failure before authentication, or no peer configured. A lost line can
+  only turn a result into a failure, never into a local run, whatever the stream carried.
+- The outcome reaches `run-shell-tests.sh` as `pr_offload`'s exit code alone, one of a fixed list (revision 7, class
+  offload-reason-write, its third return, main's answer of 2026-10-25; it replaces revision 6's reason file and
+  PR_WHY): 0 green; 1 red, or no status from a session that was established (the PC may still be running it); 2
+  refused (the PC's nonce refusal line, or a failure on the Mac once the run is routed: snapshot, staging, mktemp,
+  the nonce, which must be 16 hex digits, or loading host-services.sh or peer-offload.sh); 3 not routed (the files
+  run here, nothing said); 4 unreachable (no peer, or ssh 255 with no `Authenticated to` line: the files run here
+  once, the reason said). The command's own 2, 3 and 4 become 1. The runner runs the handed-off files here only on
+  exactly 3 or 4; every other code, an unknown one included, is final and in the runner's result: the handed-off
+  files never run here, the `# host: mac` files still do, and a 2 runs nothing here at all and exits 2. No
+  file, write or read carries the outcome, so none can fail into a local run. The sites that returned 3 with an empty
+  reason on an internal failure (peer-offload.sh's host-services.sh load, `git rev-parse` of the top folder and of
+  the git dirs, its mktemp; run-shell-tests.sh's load of peer-offload.sh) return 2. A missing
+  `~/.config/devenv/chain-host` or a chain host other than pc stays 3: that is the setup of every host that does not
+  hand off.
+  Test: run-shell-tests.test.sh "every ordering of the hand-off's outcome found so far", in order: the reason write
+  fails (r7; now the Mac's mktemp fails: TMPDIR unwritable, in a linked worktree routed to the PC: exit 2, no ssh
+  call), the reason read fails (r8; now peer-offload.sh cannot load: exit 2), then a stub `pr_offload` ending 0, 1,
+  2, 3, 4 and 5 in turn between two runs, each run reading nothing the last one left: the handed-off file runs here
+  only after 3 and 4, once; after 0 the run passes, after 1 and 5 it fails, after 2 and the two failures it exits 2;
+  a `# host: mac` file runs here after every code but 2 and the two failures. A 4 also says "running here, once".
+Test: peer-offload.test.sh "every ordering found so far: the exit line lost after the start (255, then 2), the start
+and exit lines lost (255, then 2), a drop after connect before anything ran (255): each fails, and nothing runs here;
+a PC that never connects (asleep): the files run here once". It removes each piece of the stream (the exit line, then
+the start and exit lines, then everything) between two runs, and the local run happens only when no session opened.
+Pass 7's inputs are its steps: an authenticated session that loses both lines and ends 255 or 2, and one that drops
+before the command runs (255).
+
+Decision G13-1. An unreachable PC runs the files here once; a refusal fails (exit 2) without a local run: a refusal
+means the PC was asked and said no, so a local run would hide a broken hand-off. Test: peer-offload.test.sh
+"an unreachable PC: the files run here once, and the reason is said" and "the PC refuses (it cannot set up its
+copy): exit 2, and nothing runs here or there".
+Decision G13-2. The decision to hand off is read before the runner clears the COMMANDECK_ variables, so a test run
+inside a test, and the run on the PC itself, never hand off again. Test: peer-offload.test.sh "a Mac linked worktree
+with chain host pc: the files run on the PC against the uncommitted tree, exit passed back" and "the run on the PC
+does not hand off again".
+
+### G14 -- fix rounds check the new code against the plan (main's order; host `12396351`)
+
+- `scripts/builder-codex-pass.sh`: after a NO-GO the next pass also refuses without `## New code checked (pass M)` in
+  the evidence file, each line `- <path>:<line> meets <plan line>`, `- <path>:<line> no plan rule, <why>` or
+  `- none, <why>`. When the previous pass's own commit changed only `.claude/plans/` (a redesign reviewed alone), the
+  next pass needs the same section. Its reviewers get the section with its own head. The fix brief asks for it, and
+  the class-again block now orders: the design into the plan and the failure table, a pass on that design alone to GO,
+  then the code, then a whole-branch pass. Helpers `evidence_section` and `new_code_checked`.
+- `templates/_builder-brief-template.md`: the Sites paragraph names the new section and the design-first order.
+- The reviewer-written class search (main's order in fix round 5, ported in fix round 10; host `55126a9c`):
+  a finding's `Class search: rg <arguments>` line names every place with the same mistake, the finding's own
+  file:line among them. The `FORMAT` line that asks reviewers for it is NOT in this unit (main's answer, fix round 10:
+  a prompt change mid-build voids the record check of every earlier pass); it lands in a follow-up Commandeck unit
+  with Q-318/Q-322 after this merges. After a NO-GO, once the round file is written and before any
+  hand-off check, `class_sites` (embedded `python3 -I`) runs each search as rg with no shell (`--no-config
+  --with-filename --line-number --no-heading`, in the worktree, 60 s). It refuses a command that is not rg, `--pre*`,
+  `--search-zip` or a short-flag cluster holding `z`, a search with no finding above it (one under `KNOWN GAPS:`
+  included), an rg error, a search that misses its own finding's file:line, and one over 200 hits. It writes
+  `.claude/briefs/<unit>-r<N>-class-sites.txt` (sorted `path:line`) and `-class-sites.md` (each search with its
+  count, the refusals, the hits); the fix brief gains `## Class sites (from the reviewers' searches)` with the md.
+  The next pass, `--check` included, refuses until every txt line is in `## Sites checked (pass M)` as `- <path>:<line>
+  fixed|not affected, <why>`, naming up to 10 missing. ripgrep joins the requirements (`scripts/requirements.sh`,
+  README, `docs/requirements.md`, the macOS CI job), and a pass with no `rg` on PATH refuses at once (the owner's
+  answer), so no search is skipped unseen. The brief template's Sites paragraph names the hits as owed.
+
+Decision G14-1. The design-only pass is found by its own commit (`feat(<unit>): Builder pass r<M>`) changing only
+`.claude/plans/`; a pass that commits nothing has no such commit and owes nothing. Test:
+builder-codex-pass-class-return.test.sh "the code after a design-only GO is refused without New code checked for that
+pass" and "...and taken with it".
+Decision G14-2. A reviewer's class search is untrusted text: it runs as an argument list (no shell), rg's
+program-running flags are refused, and a search that misses its own finding or hits over 200 lines owes nothing.
+Test: builder-codex-pass-class-sites.test.sh "--pre, -z in a flag cluster, a search missing its own finding, a non-rg
+command and a search under KNOWN GAPS are each refused, run nothing and owe nothing".
+Decision G14-3. No rg on PATH refuses the pass before anything runs, `--check` included (the owner's answer, 2026-10-25),
+rather than the host's "did not run" line per search. Test: builder-codex-pass-class-sites.test.sh "a pass with no rg on
+PATH is refused, naming rg, and starts no round".
+
 ## 3. Assumptions (each settled, or a Builder check with the action per outcome)
 
 - Settled: 0.46.0 holds the host twins dropped in section 4 (CHANGELOG.md 0.46.0 entry; code cited there).
@@ -605,6 +723,18 @@ the evidence file when G4 is green.
 | retry | report r1's Orca send fails, the Builder finishes, its worktree is removed before the next tick | the unit is neither finished nor merged while r1 is undelivered; the next tick posts r1 from its stamp, then r2; a further tick posts nothing | main-watch-report-wake.test.sh "r1's send fails, the worktree is removed, the next tick posts r1 from its stamp" |
 | boundary | a judged NO-GO plan at 149 and at 150 planned lines, rulings newer | 149 launches, 150 refused | builder-launch-resume-from-plan.test.sh "a NO-GO plan at 150 planned lines is refused, at 149 taken" |
 | foreign path | session A owns a tmp worktree with an uncommitted file; session B runs `git worktree add <that path> HEAD` (fails), then `git worktree remove --force <that path>` | B's remove is blocked; A's worktree and file remain | git-safety.test.sh "session B's failed add on session A's worktree path, then B's forced remove: blocked, A's worktree and its uncommitted file still there" |
+| retry (offload) | an ssh session to the PC was established, then the connection ends (ssh 255, or 2) with the exit line lost, the start line lost, both, or before anything ran | the run fails (exit 1); nothing runs again on the Mac, it is not called a refusal, and the message says the PC may still be running it | peer-offload.test.sh "every ordering found so far: ... a PC that never connects (asleep): the files run here once" (Decision G13-3) |
+| unreachable (offload) | the PC is asleep or unreachable: ssh ends 255 before it authenticates | the files run here once, the reason said; one ssh call | peer-offload.test.sh "an unreachable PC: the files run here once, and the reason is said" and the "never connects" step of the ordering test |
+| partial failure (offload outcome) | the hand-off's own setup fails on the Mac after routing (mktemp, a script that will not load), or `pr_offload` ends with a code outside 3 and 4 (an unknown one included) | the code is final and the handed-off files never run here: 2 for the setup failures and a refusal (nothing runs here at all), otherwise the code's own result (0 passes, any other fails); only exactly 3 (not routed) or 4 (unreachable) runs the files here | run-shell-tests.test.sh "every ordering of the hand-off's outcome found so far" (Decision G13-3, revision 7) |
+| partial failure (test result) | a test's run is killed, or its result file cannot be written, before the report reads it | that test counts as failed, never left out of the count, so a run cannot pass on nothing | run-shell-tests.test.sh "a test killed before its result is written counts as failed" |
+| marker (host: mac) | a file whose first five lines hold `# host: machine` or another word that starts with mac | it goes to the PC with the rest; only a whole `# host: mac` keeps a file on the Mac | peer-offload.test.sh "a marker that only starts with mac (# host: machine) does not keep a file here" |
+| old shape (batch) | a batch in the 0.46.0 shape: no Data design and no What can go wrong heading (0 unlaunched at upgrade, Decision G4-3) | refused (exit 2), each missing heading named as the fix in turn; no Builder opens | builder-launch-resume-launch-line.test.sh "a 0.46.0-shape batch is refused, the Data design heading named as the fix, no Builder", "... with its Data design written, refused next for What can go wrong, that heading named, no Builder"; builder-launch-resume-from-plan.test.sh "a batch and a plan with no What can go wrong section: refused, nothing on main" |
+| left out (own lane) | `--own-lane` named an ordinary file beside an own-lane one | the ordinary file is neither run nor counted; only a test that was launched and left no result fails | run-shell-tests.test.sh "--own-lane runs only the own-lane file, and the ordinary file it leaves out is not a failure" |
+| missing hit (class search) | a reviewer's Class search hits a.sh:1 and b.sh:1; Sites checked lists only a.sh:1 | the next pass refuses, naming b.sh:1 only; with b.sh:1 listed it starts | builder-codex-pass-class-sites.test.sh "the next pass refuses while a hit is missing from Sites checked, and names only that hit", "...and starts once every hit is listed" |
+| odd data (class search) | a Class search with `--pre`, `-nz`, a shell command (`cat a.sh; touch pwned`), one missing its own finding, one under `KNOWN GAPS:` | each refused in the md, nothing run, no hit owed, no file written by the command | builder-codex-pass-class-sites.test.sh "--pre, -z in a flag cluster, ..." |
+| missing tool (rg) | no `rg` on PATH, Homebrew's folders included | the pass refuses at once, naming rg; no round file | builder-codex-pass-class-sites.test.sh "a pass with no rg on PATH is refused, naming rg, and starts no round" |
+| test leak (pane handle) | a test that runs the pass from a real Orca pane (its `ORCA_TERMINAL_HANDLE` set), the pass ending NO-GO | the pass sees no handle; its notice to main stays in the fixture (stub or scratch queue), never the real main | builder-codex-pass-class-sites.test.sh "a test's pass has no pane handle, and its notice to main stays in the fixture" |
+| retry (answer) | `answer-worker.sh --interrupt`'s send fails after the text was typed (killed by its 8 s timeout) | exit 1; the message says the answer may have been typed and to check the pane before the plain retry, so it is not typed twice | answer-worker-interrupt.test.sh "an interrupting send that fails after typing says the answer may have been typed, and to check the pane first" |
 
 ## Claims to falsify
 
@@ -885,6 +1015,12 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
   `templates/_builder-brief-template.md` How to work, ~128-129; `templates/_batch-brief-template.md` ~46-52; tests
   `scripts/__tests__/brief-template.test.sh`, `scripts/__tests__/builder-codex-pass.test.sh`,
   `scripts/__tests__/builder-fresh-round.test.sh`, `scripts/__tests__/install-lib.test.sh`
+- G14 class search (fix round 10): `scripts/builder-codex-pass.sh` FORMAT, the rg check after the round number,
+  `class_sites`, the Sites gate, the call after the round file, the fix-brief section; `scripts/requirements.sh` (rg
+  row); `README.md` and `docs/requirements.md` (rg); `.github/workflows/ci.yml` (macOS job installs ripgrep);
+  `templates/_builder-brief-template.md` Sites paragraph; `CHANGELOG.md`; tests
+  `scripts/__tests__/builder-codex-pass-class-sites.test.sh` (new), `scripts/__tests__/fixtures/builder-codex-pass-setup.sh`
+  and `scripts/__tests__/fixtures/merge-unit-local-setup.sh` (no pane handle; an orca-ide stub)
 - Version: `.claude-plugin/plugin.json` ~3, `README.md` badge, `CHANGELOG.md`
 
 ## Done when
@@ -915,6 +1051,14 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
 9. `Catches:` lines on every new flow step; section "Contracts" holds Produces/Consumes for G2/G3/G4/G8 and G9/G10.
 10. Self-gating: this unit's passes run main's pass script with the command in A1; the new gate binds from the next unit.
 11. Background runs: RD13 makes every test run start in the background whatever its length, in `templates/main-session.md:7` and `templates/_builder-brief-template.md:128`.
+12. Offload retry (fix round 5): keep "PC unreachable = run once on the Mac; a started run's red is final, never rerun here". Tell the two apart by whether an ssh session was ever established, not by exit 255 alone: never opened falls back to the Mac once; opened then dropped without the nonce status fails, never reruns locally, and says the PC may still be running it. Test both (Decision G13-3).
+13. Offload reason write (fix round 8, third return, msg_b47022f790c7): the redesign is accepted as written: the
+    outcome is `pr_offload`'s exit code from a fixed list, the reason file and PR_WHY are dropped, the sites that
+    returned 3 with an empty reason become 2, and one ordering test. A class stop: the redesign is reviewed alone, to
+    GO, before its code (pass 9, design only); the revision-6 code and the new code stay uncommitted until then
+    (Decision G13-3, revision 7). Main's order after pass 9 (fix round 9, ORDER-CODE-NOW): a design-only pass runs as
+    a final on the whole branch, so the missing code keeps it NO-GO; stop design-only passes, commit plan and code
+    together, then run the final pass on the whole branch.
 
 ## Question for the owner
 
@@ -936,6 +1080,48 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
    Part B stays as planned, after A2. Or keep part A whole as planned.
 
 ## Plan change log
+
+- 2026-10-25, revision 9 (fix round 10): Decision G4-3 records the count of old-format batches unlaunched at upgrade
+  (0; main's answer: keep G4-3, no compatibility branch). New What can go wrong rows: "old shape (batch)" and "left
+  out (own lane)" (an ordinary file `--own-lane` leaves out is not read as a test with no result). G14 ports the
+  reviewer-written class search (host `55126a9c`, main's order of fix round 5) with Decisions G14-2 and G14-3, and rg
+  joins the requirements; the FORMAT line is left to the follow-up unit (main's answer: option C); What can go wrong rows "missing hit (class search)", "odd data (class search)", "missing
+  tool (rg)" and "test leak (pane handle)" (main's order: the pass fixture clears the pane handle and stubs orca-ide).
+
+- 2026-10-25, revision 8 (fix round 9, main's ORDER-CODE-NOW): revisions 6 and 7 of Decision G13-3 are coded in
+  this commit with their tests. The ordering test's text names each step's expected result (0 passes; 1 and 5 fail;
+  2 and the two failures exit 2). New What can go wrong rows: "partial failure (test result)", "marker (host:
+  mac)", "retry (answer)"; "partial failure (offload outcome)" no longer says every final code fails (0 passes).
+  `pr_offload` reads the routing inputs before git's folder names, so a checkout git cannot name is 2 only once the
+  run is routed; an unreadable ssh log (grep's 2) is not "no `Authenticated to` line".
+
+- 2026-10-25, revision 7 (fix round 8, class offload-reason-write back a third time; main's answer, a class stop):
+  Decision G13-3's outcome reaches the runner as `pr_offload`'s exit code from a fixed list (0, 1, 2 refused, 3 not
+  routed, 4 unreachable), replacing revision 6's reason file and PR_WHY; internal failures that returned 3 with an
+  empty reason return 2; the nonce must be 16 hex digits; What can go wrong row "partial failure (offload outcome)"
+  replaces "partial failure (offload reason)"; Main answers 13. Revision 6's offload-retry code is written and held
+  back uncommitted, by main's answer: pass 9 reviews this design alone, then the code follows its GO.
+
+- 2026-10-25, revision 6 (fix round 7, class offload-retry back in pass 7, and class offload-reason-write): Decision
+  G13-3 keeps revision 5 and adds `-o ControlMaster=no -o ControlPath=none` to the run's ssh call (a shared
+  connection logs no `Authenticated to` line), names pass 7's inputs as steps of the ordering test, and makes a
+  failed read of the reason file exit 2 as a failed write is; What can go wrong row "partial failure (offload
+  reason)". Reviewed alone first, as the class rule asks.
+- 2026-10-25, revision 5 (fix round 5, main's ruling on class offload-retry): Decision G13-3 tells "nothing started"
+  from "ambiguous" by whether the ssh session was ever established (ssh's own log), in place of revision 4's fence,
+  its reachability call and the "two at once (offload)" row; What can go wrong rows "retry (offload)" and
+  "unreachable (offload)". Reviewed alone first, as the class rule asks.
+- 2026-10-25, revision 4 (fix round 5, class offload-retry back in passes 4 and 5): Decision G13-3, the fence on the
+  PC, replaces revision 3's start-line rule; What can go wrong rows "retry (offload)" (widened) and "two at once
+  (offload)". Reviewed alone first, as the class rule asks.
+- 2026-10-25, revision 3 (fix round 4, Sol's pass-4 finding, class offload-retry): G13 says a run that started on
+  the PC and lost its connection fails with nothing run here; What can go wrong row "retry (offload)".
+
+- 2026-10-25, revision 2 (main's orders during fix round 2): G13 added (the PC test hand-off, owner ruling
+  r-20261025-163319-1-38ab5f). G4's Break gate (the `Mutation-verified:` check before pass 1) dropped by main's
+  answer, option B: Builders write no red or mutation proofs, and the issue-323 check stays. G14 added (main's order:
+  port host `12396351`, new code checked against the plan, a redesign reviewed alone first). G7 Ask 4 rewritten to the
+  fix-round-2 design (the wait token and its claim), which had replaced the open-state-file check.
 
 - 2026-10-25, revision 1 (answers the plan judge's NO-GO; main's rulings 1-11):
   - G8 357: ownership needs an absent path before the add and a worktree after a successful call (PostToolUse); new

@@ -32,7 +32,7 @@ while IFS= read -r cmd; do
     [ "$RC" = 0 ] && [ -z "$OUT" ] || LOUD="$LOUD $p:${cmd##*/hooks/}=$RC"
   done
 done < <(jq -r '.hooks[][].hooks[].command' "$ROOT/hooks/hooks.json")
-check "every registered hook was run" 49 "$N"
+check "every registered hook was run" 50 "$N"
 check "in a project never set up, and in a folder that is no project, no hook blocks or prints" "" "$LOUD"
 check "and none writes a log row" 0 "$(rows)"
 check "or any file: the project, the folder and the home are as they were" "||" \

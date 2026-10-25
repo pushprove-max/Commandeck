@@ -17,6 +17,15 @@ HS_PREFIX=com.commandeck.
 
 hs_os() { printf '%s' "${COMMANDECK_HOST_OS:-$(uname -s)}"; }
 
+# hs_chain_host -- the host that runs this machine's heavy work, from ~/.config/devenv/chain-host (mac when absent).
+# Prints it; returns 1 for a value other than mac or pc.
+hs_chain_host() {
+  local v=mac
+  [ ! -e "$HOME/.config/devenv/chain-host" ] || v=$(tr -d '[:space:]' < "$HOME/.config/devenv/chain-host")
+  printf '%s\n' "$v"
+  case $v in mac|pc) ;; *) return 1 ;; esac
+}
+
 # hs_load -- {load: [1m, 5m, 15m], swap: {totalMb, usedMb}}, each null when it
 # cannot be read: Linux /proc, the Mac's sysctl. It branches on /proc itself,
 # not hs_os, so a test pinned to Linux on a Mac still reads real numbers.

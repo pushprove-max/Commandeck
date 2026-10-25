@@ -55,6 +55,9 @@ export TMPDIR
 # paths.sh takes the project from these two before the folder a test runs in:
 # inherited from the caller's session, they would point a fixture's script at a real project.
 # CLAUDE_CONFIG_DIR the same for the owner's settings file, where the /config options are (issue 245).
+# The hand-off to the PC below is decided from three of them, read before they are cleared: a run inside a test
+# (COMMANDECK_HOOK_FIRE_LOG) and the run on the PC itself (COMMANDECK_OFFLOADED) never hand off again.
+OFF_ENV=("COMMANDECK_HOOK_FIRE_LOG=${COMMANDECK_HOOK_FIRE_LOG:-}" "COMMANDECK_OFFLOADED=${COMMANDECK_OFFLOADED:-}" "COMMANDECK_HOST_OS=${COMMANDECK_HOST_OS:-}")
 # Every other COMMANDECK_ variable the session or main-watch set too (main's pane folder, scratch, seat): the merge
 # check runs in main's environment, and a test must see what CI gives it. Kept: CI's two and this runner's own.
 unset CLAUDE_PROJECT_DIR CLAUDE_CONFIG_DIR
@@ -102,6 +105,33 @@ fi
 [ "${#TESTS[@]}" -gt 0 ] || { echo "run-shell-tests: found no test files" >&2; exit 2; }
 [ "${1:-}" = --list ] && { printf '%s\n' "${TESTS[@]}"; exit 0; }
 
+# In a Mac linked worktree whose chain host is the PC the files go there (peer-offload.sh, owner ruling 2026-10-25),
+# all but those marked `# host: mac` in their first five lines, which run here below. The hand-off's exit code is its
+# whole outcome, from a fixed list (Decision G13-3, revision 7): only 3 (not routed) and 4 (unreachable: no peer, or the
+# PC asleep) run the files here, once. 2 (refused there, or the hand-off failed here) runs nothing here and exits 2.
+# Every other code is final, a red run or a lost connection included. The main checkout and the PC never hand off.
+OFF_RC=0 OFFLOADED=0
+MACF=() RESTF=()
+ROOTP=$(pwd -P)
+for t in "${TESTS[@]}"; do
+  phys=$(cd "$(dirname "$t")" 2>/dev/null && pwd -P)/$(basename "$t")
+  if [[ $phys == "$ROOTP"/* ]] && ! sed -n '1,5p' "$t" | grep -q '^# host: *mac *$'; then RESTF+=("${phys#"$ROOTP"/}"); else MACF+=("$t"); fi
+done
+if [ "${#RESTF[@]}" -gt 0 ]; then
+  OFFARGS=(bash scripts/run-shell-tests.sh); [ "$ONLY_OWN_LANE" = 0 ] || OFFARGS+=(--own-lane)
+  # A subshell: host-services.sh, which peer-offload.sh loads, exports what the tests must not inherit.
+  ( export "${OFF_ENV[@]}"; . "$HERE/peer-offload.sh" || { echo "run-shell-tests: $HERE/peer-offload.sh did not load" >&2; exit 2; }
+    pr_offload "${OFFARGS[@]}" "${RESTF[@]}" )
+  OFF_RC=$?
+  case $OFF_RC in
+    3) OFF_RC=0 ;;
+    4) echo "run-shell-tests: running here, once"; OFF_RC=0 ;;
+    2) echo "run-shell-tests: the hand-off to the PC was refused or failed (reason above); nothing ran here" >&2; exit 2 ;;
+    *) OFFLOADED=1 TESTS=(${MACF[@]+"${MACF[@]}"})
+       [ "${#TESTS[@]}" -gt 0 ] || exit "$OFF_RC" ;;
+  esac
+fi
+
 RES=$(mktemp -d) || exit 2
 trap 'rm -rf "$RES"' EXIT
 # A real hook run by a test must not count as a real fire.
@@ -146,14 +176,15 @@ status_line() {
 }
 
 # Launch pass: skips are decided here, runnable tests go to the background.
-SKIPWHY=() CAP=()
+SKIPWHY=() CAP=() EXCL=()
 for i in "${!TESTS[@]}"; do
   t=${TESTS[$i]}
   parked=$(sed -n '1,5p' "$t" | sed -n 's/^# parked: *//p' | head -1)
   own_lane=$(sed -n '1,5p' "$t" | sed -n 's/^# own-lane: *//p' | head -1)
   if [ -n "$parked" ]; then SKIPWHY[i]=$parked
   elif [ "$ONLY_OWN_LANE" = 1 ]; then
-    [ -n "$own_lane" ] || continue
+    # Not this lane's file: neither run nor counted, so the report below does not read its missing result as a failure.
+    [ -n "$own_lane" ] || { EXCL[i]=1; continue; }
   elif [ -n "$own_lane" ]; then SKIPWHY[i]="own lane: $own_lane"
   fi
   if [ -n "${SKIPWHY[i]:-}" ]; then
@@ -170,10 +201,14 @@ wait
 PASS=0 FAIL=0 SKIP=0 FAILED=()
 for i in "${!TESTS[@]}"; do
   t=${TESTS[$i]}
+  [ -z "${EXCL[i]:-}" ] || continue
   if [ -n "${SKIPWHY[i]:-}" ]; then
     SKIP=$((SKIP + 1)); printf 'skip %-58s %s\n' "$(basename "$t")" "${SKIPWHY[i]}"; continue
   fi
-  [ -f "$RES/$i.rc" ] || continue
+  # No result file: the run was killed, or its result could not be written. A failure, never a skip.
+  if [ ! -f "$RES/$i.rc" ]; then
+    FAIL=$((FAIL + 1)); FAILED+=("$t"); printf 'FAIL %-58s no result: its run was killed or its result not written\n' "$(basename "$t")"; continue
+  fi
   line=$(status_line "$i"); printf '%s\n' "$line"
   case $line in
     ok*) PASS=$((PASS + 1)) ;;
@@ -186,10 +221,11 @@ done
 echo
 # Anti-vacuity: an own-lane run that matched nothing means the marker was
 # removed or renamed, and the lane would pass while testing nothing.
-[ "$ONLY_OWN_LANE" = 0 ] || [ $((PASS + FAIL)) -gt 0 ] || {
+[ "$ONLY_OWN_LANE" = 0 ] || [ "$OFFLOADED" = 1 ] || [ $((PASS + FAIL)) -gt 0 ] || {
   echo "run-shell-tests: --own-lane matched no test; is the # own-lane: marker still there?" >&2
   exit 2
 }
 echo "$PASS passed, $FAIL failed, $SKIP parked"
 [ "$FAIL" -eq 0 ] || { echo "failed:"; printf '  %s\n' "${FAILED[@]}"; }
-[ "$FAIL" -eq 0 ]
+[ "$OFF_RC" = 0 ] || echo "the files run on the PC ended $OFF_RC (above)"
+[ "$FAIL" -eq 0 ] && [ "$OFF_RC" = 0 ]

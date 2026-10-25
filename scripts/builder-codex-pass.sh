@@ -166,6 +166,10 @@ HOLD_HEAD='The owner'"'"'s decisions that name this unit. A finding on a behavio
 # a fixed rule over a Markdown parser, since each parser missed a new wrap; one copy, read as ERE and as Python re: the gate,
 # the hand-on to the next reviewer and the tests per finding all count the same lines.
 FINDING='(^|[^A-Za-z0-9])P[0-3]([^0-9]|$)|\(class:'
+# Issue 362: the plan's list of what can go wrong, and the Builder's search for the other sites of a NO-GO's pattern.
+CASES_HEAD='What can go wrong, from the plan: check the code and its tests against each case; a case the code breaks, or whose named test is missing or cannot fail, is a finding. A finding on a case not in this list ends with (not in the plan list).'
+SITES_HEAD='Sites checked: the Builder'"'"'s search for other places with the pattern of the last pass'"'"'s findings, with each site marked fixed or not affected. A site of the pattern that is missing from this list, or marked not affected for a wrong reason, is a finding:'
+NEWCODE_HEAD='New code checked: the Builder'"'"'s check of each read, write or check its last fix added or changed against the plan'"'"'s rules (Data design, What can go wrong, the failure table). A site the fix added that is missing from this list, or that breaks the plan line it names, is a finding:'
 LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is not a finding: do not list it:'
 DEFERRED_HEAD='Known and deferred to main: each item below needs main'"'"'s own hands (a settings file entry, a file only main edits), and main has it. Do not report a listed item again. Report anything else, a new defect in the same file included, and report a listed item that this branch could fix itself, since that is not main-only:'
 # The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
@@ -701,14 +705,17 @@ review_gh_check() { # <dir>
   if [ "$BY" = claude ]; then why=$(pp_gh_read codex-reviewer "$1" 2>&1) || die "the Claude reviewer cannot read GitHub: $why"
   else why=$(pp_gh_read --host codex-reviewer "$1" 2>&1) || die "the Codex reviewer's sandbox has no network, so its GitHub reads are made on the host, and the host cannot read GitHub: $why"; fi
 }
-# The Closes: issues, every issue or pull request their bodies and comments link (one level), and the unit branch's
-# pull request state, read on the host now, whole, with the reviewer's shellEnv as its preflight read was. --json, not
-# --comments: off a terminal that prints the comments and no body, and --json also reads a pull request's number. A
-# failed read refuses the pass; no pull request is a state, not a failure.
+# The Closes: issues and the brief's work items (brief-issues.sh, the one reader), every issue or pull request their
+# bodies and comments link (one level), and the unit branch's pull request state, read on the host now, whole, with the
+# reviewer's shellEnv as its preflight read was. --json, not --comments: off a terminal that prints the comments and no
+# body, and --json also reads a pull request's number. A failed read refuses the pass; no pull request is a state, not
+# a failure.
 gh_hand_in() {
   local closes html="" seen="" n r m repo out br e f=title,state,labels,body,comments a='Accept: application/vnd.github.full+json'
   mapfile -t e < <(jq -r '.shellEnv // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$SOL")
-  closes=$(grep -E '^Closes:' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | grep -oE '#[0-9]+' | tr -d '#' | awk '!s[$0]++')
+  closes=$({ grep -E '^Closes:' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | grep -oE '#[0-9]+' | tr -d '#'
+    bash "$HERE/brief-issues.sh" "$WT/.claude/briefs/$UNIT.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" \
+      | jq -r '.[] | numbers'; } | awk '!s[$0]++')
   for n in $closes; do
     out=$(cd "$WT" && env "${e[@]}" gh issue view "$n" --json "$f" 2>&1) || die "GitHub read failed on the host: gh issue view $n --json $f: $(grep -m1 . <<<"$out")"
     printf 'GitHub issue #%s with its comments, read on the host at launch:\n%s\n\n' "$n" "$out"
@@ -763,6 +770,8 @@ ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
 UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
+# The owner's answer (2026-10-25): a pass with no rg refuses at once, so no reviewer's class search is skipped unseen.
+[ "$ACK" = 1 ] || command -v rg >/dev/null || die "no rg (ripgrep) on PATH: after a NO-GO the pass runs each reviewer's Class search line with it. Install ripgrep (brew install ripgrep, or sudo apt-get install -y ripgrep), then run the pass again"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
 # Each reviewer leads with its own angle and carries the whole checklist: the rule gives every reviewer the same full scope.
 case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
@@ -854,6 +863,110 @@ if [ "$KIND" = review ]; then
     KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"
   fi
 fi
+# Issue 362 (host issue 3168): a fix that mends the named site while the same pattern sits at other call sites costs a
+# round per site. After a NO-GO the next pass needs the Builder's search for the pattern's other sites, in the evidence
+# file under "## Sites checked (pass <M>)": a Search: line, then a line per site found, fixed or not affected and why.
+EV=$WT/.claude/briefs/$UNIT-evidence.md
+plan_rel() { grep -ohE '\.claude/plans/[A-Za-z0-9._-]+\.md' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | head -1 || true; }
+plan_file() { local p; p=$(plan_rel); [ -z "$p" ] || [ ! -f "$WT/$p" ] || echo "$WT/$p"; }
+# evidence_section <heading regex> -- the lines under the evidence file's heading of that name, at any level.
+evidence_section() {
+  awk -v h="$1" '/^#+[[:space:]]/ { on = ($0 ~ ("^#+[[:space:]]+" h "[[:space:]]*$")); next } on' "$EV" 2>/dev/null || true
+}
+# new_code_checked <round> <why owed> -- sets NEWCODE from "## New code checked (pass <round>)", or refuses the pass.
+new_code_checked() {
+  NEWCODE=$(evidence_section "New code checked \\\\(pass $1\\\\)")
+  grep -qE '^- ([^ :]+:[0-9]+ (meets .+|no plan rule, .+)|none, .+)' <<<"$NEWCODE" \
+    || die "$2, and ${EV#"$WT/"} has no usable '## New code checked (pass $1)' section. Under that heading check every read, write or check you added or changed since that pass against the plan's Data design, What can go wrong and the failure table, one line each: '- <path>:<line> meets <the plan line it follows>', or '- <path>:<line> no plan rule, <why it is safe>'; when you added none, '- none, <why>'. Then run the pass again."
+}
+# class_sites <round file> <txt> <md> -- runs each reviewer's `Class search: rg ...` line (host change, owner order
+# 2026-10-25: a fixer that chose its own search searched its fix's shape, not the bug's). The text is the reviewer's, so
+# it runs as rg with no shell, rg's program-running flags refused, and a search must hit its own finding's file:line or
+# it owes nothing. A search under KNOWN GAPS: has no finding above it. Writes every hit as path:line to <txt> and the
+# searches, refusals and hits to <md>.
+class_sites() {
+  python3 -I - "$1" "$WT" "$2" "$3" <<'PY'
+import re, shlex, subprocess, sys
+out, wt, txt, md = sys.argv[1:5]
+CAP = 200
+FINDING = re.compile(r'^\s*(?:[-*]\s*)?\[P[0-3]\]')
+SITE = re.compile(r' -- ([^ :]+):(\d+) -- ')
+cur, hits, lines = None, [], []
+for line in open(out, encoding='utf-8', errors='replace'):
+    line = line.rstrip('\n')
+    if line.strip() == 'KNOWN GAPS:':
+        cur = None
+        continue
+    if FINDING.match(line):
+        m = SITE.search(line)
+        cur = (m.group(1).removeprefix('./'), m.group(2)) if m else None
+        continue
+    m = re.match(r'^\s*Class search:\s*(.+?)\s*$', line)
+    if not m:
+        continue
+    cmd = m.group(1).strip('`')
+    def refuse(why):
+        lines.append(f'- refused, {why}: {cmd}')
+    try:
+        argv = shlex.split(cmd)
+    except ValueError as e:
+        refuse(f'cannot parse ({e})'); continue
+    if not argv or argv[0] != 'rg':
+        refuse('not an rg command'); continue
+    if any(a.startswith('--pre') or a == '--search-zip' or (re.fullmatch(r'-[A-Za-z]+', a) and 'z' in a) for a in argv[1:]):
+        refuse('rg flag that runs a program'); continue
+    if cur is None:
+        refuse('no finding with a <file>:<line> above it'); continue
+    try:
+        r = subprocess.run(['rg', '--no-config', '--with-filename', '--line-number', '--no-heading', *argv[1:]],
+                           cwd=wt, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        refuse('ran past 60 s'); continue
+    if r.returncode not in (0, 1):
+        refuse(f'rg failed ({r.stderr.strip()[:160]})'); continue
+    found = []
+    for l in r.stdout.splitlines():
+        h = re.match(r'^(.+?):(\d+):', l)
+        if h and (h.group(1).removeprefix('./'), h.group(2)) not in found:
+            found.append((h.group(1).removeprefix('./'), h.group(2)))
+    if cur not in found:
+        refuse(f'does not hit its own finding {cur[0]}:{cur[1]}'); continue
+    if len(found) > CAP:
+        refuse(f'{len(found)} hits, over {CAP}: too broad to be one class'); continue
+    lines.append(f'- {cmd} ({len(found)} hits)')
+    for f in found:
+        if f not in hits:
+            hits.append(f)
+with open(txt, 'w') as t:
+    t.writelines(f'{p}:{n}\n' for p, n in sorted(hits, key=lambda h: (h[0], int(h[1]))))
+with open(md, 'w') as d:
+    d.write('\n'.join(lines + [f'  - {p}:{n}' for p, n in hits]) + ('\n' if lines else ''))
+PY
+}
+SITES= NEWCODE=
+if [ -n "$PREV" ] && [ "$(grep -v '^[[:space:]]*$' "$PREV" | tail -n 1)" = "VERDICT: NO-GO" ]; then
+  SM=${PREV##*/}; SM=${SM#"$UNIT-r"}; SM=${SM%-reports.md}
+  SITES=$(evidence_section "Sites checked \\\\(pass $SM\\\\)")
+  { grep -qE '^Search: .+' <<<"$SITES" && grep -qE '^- [^ :]+:[0-9]+ (fixed|not affected, .+)' <<<"$SITES"; } \
+    || die "pass $SM ended NO-GO, and ${EV#"$WT/"} has no usable '## Sites checked (pass $SM)' section. Under that heading write the search for the same pattern at the other call sites: a 'Search: <command>' line for each search you ran, then a '- <path>:<line> fixed' or '- <path>:<line> not affected, <why>' line for each site it found. Then run the pass again."
+  # Every hit of the reviewers' own class searches (class_sites) is owed as listed, fixed or not affected.
+  CS=$WT/.claude/briefs/$UNIT-r$SM-class-sites.txt
+  if [ -s "$CS" ]; then
+    MISSING=$(grep -vxFf <(sed -nE 's/^- ([^ ]+:[0-9]+) (fixed|not affected, .+)$/\1/p' <<<"$SITES") "$CS" || true)
+    [ -z "$MISSING" ] || die "pass $SM ended NO-GO, and '## Sites checked (pass $SM)' leaves out $(wc -l <<<"$MISSING" | tr -d ' ') hit(s) of the reviewers' class searches (.claude/briefs/$UNIT-r$SM-class-sites.md): $(head -10 <<<"$MISSING" | paste -sd' ' -). Add each as listed, '- <path>:<line> fixed' or '- <path>:<line> not affected, <why>'. Then run the pass again."
+  fi
+  # Host change (owner order 2026-10-25): passes kept finding a defect in the last fix's new code that broke a rule its
+  # own plan already stated. The fixer checks its new code against the plan.
+  new_code_checked "$SM" "pass $SM ended NO-GO"
+elif [ -n "$PREV" ]; then
+  # A class redesign is reviewed alone first (its pass commits only the plan); the code written after that GO is new
+  # code no pass has seen, so it owes the same check against the plan.
+  SM=${PREV##*/}; SM=${SM#"$UNIT-r"}; SM=${SM%-reports.md}
+  DC=$(git -C "$WT" log --format='%H %s' HEAD | awk -v s="feat($UNIT): Builder pass r$SM" '{ h = $1; sub(/^[^ ]+ /, "") } !f && $0 == s { print h; f = 1 }')
+  if [ -n "$DC" ] && ! git -C "$WT" show --name-only --format= "$DC" | grep . | grep -qv '^\.claude/plans/'; then
+    new_code_checked "$SM" "pass $SM reviewed a design alone (its commit changed only the plan)"
+  fi
+fi
 # Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
 # so the Builder learns of a refusal before a launch costs a retry.
 stage_and_check() {
@@ -894,17 +1007,18 @@ if [ "$BY" = codex ]; then
   TRY=0 PROBE_OK=0
   while [ "$TRY" -lt 3 ]; do
     TRY=$((TRY + 1)) RC=0
-    (cd "${TMPDIR:-/tmp}" && PATH="$HERE/codex-no-helpers:$PATH" timeout 30 codex exec --ephemeral --skip-git-repo-check -s read-only \
+    # 120 s, not 30: a signed-in Codex has taken 9 to 120+ s to say "ok" (issue 361); slow is not signed out.
+    (cd "${TMPDIR:-/tmp}" && PATH="$HERE/codex-no-helpers:$PATH" timeout 120 codex exec --ephemeral --skip-git-repo-check -s read-only \
       -m "$MODEL" -c "model_reasoning_effort=\"$EFFORT\"" 'Reply with the one word: ok' </dev/null >/dev/null 2>"$PROBE_ERR") || RC=$?
     [ "$RC" != 0 ] || { PROBE_OK=1; break; }
-    if [ "$RC" = 124 ]; then WHY="no answer within 30 s"; else WHY=$(grep . "$PROBE_ERR" | tail -1 || true); fi
+    if [ "$RC" = 124 ]; then WHY="no answer within 120 s"; else WHY=$(grep . "$PROBE_ERR" | tail -1 || true); fi
     LOAD=$(bash -c '. "$1" && hs_stamp' _ "$HERE/host-services.sh" 2>/dev/null | jq -r '.load1 // empty' 2>/dev/null || true)
     echo "Codex sign-in probe: try $TRY of 3 failed (load ${LOAD:-unknown}): ${WHY:-Codex said nothing}" >&2
     [ "$TRY" = 3 ] || sleep $((${COMMANDECK_PROBE_BACKOFF:-15} * TRY))
   done
   if [ "$PROBE_OK" = 0 ]; then
     ERR=$(tail -5 "$PROBE_ERR"); rm -f "$PROBE_ERR"
-    die "launch refused: Codex is not signed in or cannot answer (three one-word requests to $MODEL failed or took over 30 s; codex login status is not trusted for this). Codex said last:
+    die "launch refused: Codex is not signed in or cannot answer (three one-word requests to $MODEL failed or took over 120 s; codex login status is not trusted for this). Codex said last:
 ${ERR:-(nothing)}
 Run codex login, then run the pass again. No commit, no reviewer, no round file."
   fi
@@ -1026,6 +1140,7 @@ fi
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
   [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ (Stated limits|Cleared findings)/ { on = 1 }' "$f"
 done)
+CASES=$(PF=$(plan_file); [ -z "$PF" ] || awk 'on && /^#/ { on = 0 } on && NF { print } tolower($0) ~ /^#+[[:space:]]+what can go wrong/ { on = 1 }' "$PF")
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
 DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
@@ -1035,7 +1150,7 @@ SUITE_TEXT=""
 holds() { COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" holds "$UNIT" 2>/dev/null \
   || echo "The owner's decisions ledger ($MAIN_OF_WT/.claude/metrics/decisions.jsonl) could not be read, so an open question naming $UNIT cannot be ruled out: end the title of a finding that changes a behaviour the owner may have asked about with [HOLD unknown]."; }
 HOLDS=$(holds)
-REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
+REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${CASES:+$'\n'$CASES_HEAD$'\n'$CASES$'\n'}${SITES:+$'\n'$SITES_HEAD$'\n'$SITES$'\n'}${NEWCODE:+$'\n'$NEWCODE_HEAD$'\n'$NEWCODE$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
 [ "$BY" != codex ] || { GH_HAND=$(gh_hand_in) || exit 2; REST+=$'\n'$GH_HAND$'\n'; }
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
@@ -1045,8 +1160,22 @@ log_codex codex-start ",$(jq -nr --arg m "$MODEL" --arg e "${EFFORT:-}" '"\"mode
 # The pass's own temp folder: a short path, since a socket path past 104 bytes is invalid.
 SOCKS=$(mktemp -d "${TMPDIR:-/tmp}/pp-pass.XXXXXX") || die "cannot make a temp directory for the pass"
 BROKERS=()
+SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
+no_handoff() { # <reason> -- the fix round did not start (issue 355): print why and, when a Builder seat exists, tell main
+  local msg="NO FIX HAND-OFF after pass $N: $1; this session fixes on its launch model" rc=0
+  echo "$msg"
+  [ -f "$SEAT" ] || return 0
+  bash "$HERE/to-main.sh" question "$UNIT: no fix hand-off after pass $N" "$msg. Re-run the pass from the Builder's pane to hand off." >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] || [ "$rc" = 3 ] || echo "(main could not be told: the send to main failed)"
+}
+# The fix hand-off being written: set while its file is half-written, so an exit in between cleans up and says so.
+WRITING=
 pass_end() { # rc -- each broker and the Codex under it, the temp folder, then the log row
   local b
+  if [ -n "$WRITING" ] && [ "$1" != 0 ]; then
+    rm -f "$WRITING.tmp" || true
+    no_handoff "writing $WRITING failed (exit $1)"
+  fi
   for b in ${BROKERS[@]+"${BROKERS[@]}"}; do pkill -P "$b" 2>/dev/null || true; kill "$b" 2>/dev/null || true; done
   pp_rm_rf "$SOCKS" || true; unlock
   log_codex codex-end ",\"rc\":$1"
@@ -1232,15 +1361,28 @@ TIMING="$(printf '%s\n' "${T_BEGAN[@]}" | sort | sed -n 1p) $(printf '%s\n' "${T
   printf 'Pass: %s\nTiming: %s\n%s%s\n%s\n\n%s\n' "$KIND" "$TIMING" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
+# Issue 352: a narrowed GO with the closing pass on merges nothing; say the next command so no done marker follows it.
+[ "$VERDICT" = "VERDICT: GO" ] && [ "$KIND" = review ] && [ "$CLOSING" != no ] \
+  && echo "NARROWED GO: this GO merges nothing. Next: builder-codex-pass.sh $UNIT $((N + 1)) final; print your DONE line only after that pass's GO."
+# The reviewers' class searches run on every NO-GO, before any hand-off check, so a pass with no hand-off writes them too.
+CS_TXT=$WT/.claude/briefs/$UNIT-r$N-class-sites.txt CS_MD=$WT/.claude/briefs/$UNIT-r$N-class-sites.md
+[ "$VERDICT" != "VERDICT: NO-GO" ] || class_sites "$OUT" "$CS_TXT" "$CS_MD" || die "could not run the reviewers' class searches of ${OUT##*/}"
 
 # A fix round starts in a fresh session of the same pane instead of a context grown through the whole build.
 # Only the Builder's own pane (its seat record's handle) running its own pass from its own worktree hands over.
 # The hand-off stands alone: main's rulings are inlined, since a worker cannot read main's checkout.
-SEAT=$PP_SCRATCH/seat-$UNIT-builder.txt
 # Issue 302: a pass that ran long ends GO in a context grown through it, so the next round starts fresh too.
-{ [ "$VERDICT" = "VERDICT: NO-GO" ] || [ $((SECONDS - PASS_T0)) -gt "${COMMANDECK_LONG_PASS_SECONDS:-600}" ]; } && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] \
-  && [ "$(sed -n 's/^handle=//p' "$SEAT" 2>/dev/null | head -1)" = "$ORCA_TERMINAL_HANDLE" ] \
-  && [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$WT" rev-parse --show-toplevel)" ] || exit 0
+{ [ "$VERDICT" = "VERDICT: NO-GO" ] || [ $((SECONDS - PASS_T0)) -gt "${COMMANDECK_LONG_PASS_SECONDS:-600}" ]; } || exit 0
+# Issue 355: a hand-off that is skipped says which check failed (exit 0 still: the pass itself succeeded). Only a NO-GO
+# is a fix round main waits on, so only it is said; main is told when a Builder seat exists, since otherwise main or a
+# test ran the pass and reads the printed reason.
+SEAT_HANDLE=$(sed -n 's/^handle=//p' "$SEAT" 2>/dev/null | head -1 || true)
+TOP=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -z "${ORCA_TERMINAL_HANDLE:-}" ]; then WHY="no Orca handle (ORCA_TERMINAL_HANDLE is empty)"
+elif [ "$SEAT_HANDLE" != "$ORCA_TERMINAL_HANDLE" ]; then WHY="not the Builder's pane (its handle is not the seat record's)"
+elif [ "$TOP" != "$(git -C "$WT" rev-parse --show-toplevel)" ]; then WHY="not run from the unit's worktree ($TOP is not $WT)"
+else WHY=; fi
+if [ -n "$WHY" ]; then [ "$VERDICT" != "VERDICT: NO-GO" ] || no_handoff "$WHY"; exit 0; fi
 TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
 where() { # <what the brief is opened for> -- the lines both hand-offs open with
   printf 'You are the Builder of %s, in a fresh session of the same pane: the session that ran pass %s was cleared, so this file and the files it names are all you have.\n\n' "$UNIT" "$N"
@@ -1260,7 +1402,14 @@ fi
 HAND=$WT/.claude/briefs/$UNIT-fix-r$N.md
 # Open decisions naming the unit, read again now: one opened during the pass binds this round too.
 OPEN=$(holds | grep -v '^The owner answered ' || true)
-REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n 's/^REPEAT CLASS: //p' || true)
+# Issue 362: this round against EVERY earlier round, GO rounds included, not only the one before it: a class that comes
+# back after a GO round is the same flaw seen again. The latest earlier round that shares a class names it.
+REPEAT= WHEN='in two passes in a row'
+while read -r en ef; do
+  [ "$en" -lt "$N" ] || continue
+  rl=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" "$ef" 2>/dev/null | sed -n 's/^REPEAT CLASS: //p' || true)
+  [ -z "$rl" ] || { REPEAT=$rl; if [ "$en" = $((N - 1)) ]; then WHEN='in two passes in a row'; else WHEN='after an earlier pass'; fi; }
+done < <(round_files "$WT" "$UNIT" | sort -n)
 # Issue 341 (F3, F2): every finding of the build so far, by class, with this pass's included, and the classes the
 # evidence file's failure table does not name yet.
 FSF=$({ grep -E "$FINDING" <<<"$EARLIER" || true; grep -E "$FINDING" "$OUT" || true; } | grep -vE '^(Earlier pass |VERDICT)' | awk '
@@ -1269,23 +1418,35 @@ FSF=$({ grep -E "$FINDING" <<<"$EARLIER" || true; grep -E "$FINDING" "$OUT" || t
   END { for (i = 1; i <= k; i++) { c = order[i]; printf "### %s (%d finding%s)\n\n%s\n", c, n[c], n[c] == 1 ? "" : "s", list[c] } }')
 FTAB=$(awk 'on && /^#/ { on = 0 } on { print } tolower($0) ~ /^#+[[:space:]]+failure table/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 NOTAB=$(sed -n 's/^### \(.*\) ([0-9]* findings\{0,1\})$/\1/p' <<<"$FSF" | grep -vx 'no class' | while IFS= read -r c; do grep -qF -- "$c" <<<"$FTAB" || echo "$c"; done | paste -sd, - | sed 's/,/, /g' || true)
+# Written to a temp file and published by rename only when every write succeeded (issue 355): the block runs under
+# set -e, so a failed write exits at once, pass_end removes the temp file and says so, and nothing sits half-written at
+# $HAND.
+WRITING=$HAND
 {
   printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
   where "the findings say what to fix. Open it only when a finding needs it"
   printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n' "$N" "$((N + 1))"
+  # Issue 362: the next pass refuses without this section, and its reviewers get it.
+  printf -- '- Before pass %s, add `## Sites checked (pass %s)` to the evidence file: search the repo for the same pattern as each finding below, one `Search: <command>` line per search, then one line per site it turned up, `- <path>:<line> fixed` or `- <path>:<line> not affected, <why>`. The next pass refuses to start without it, and its reviewers treat a site of the pattern missing from the list, or wrongly marked not affected, as a finding.\n' "$((N + 1))" "$N"
+  printf -- '- Before pass %s, also add `## New code checked (pass %s)` to the evidence file: check every read, write or check your fix adds or changes against the plan'"'"'s Data design, What can go wrong and the failure table, one line each, `- <path>:<line> meets <the plan line it follows>` or `- <path>:<line> no plan rule, <why it is safe>` (`- none, <why>` when the fix added none). A new site follows the rule the plan already has for its kind (a read the plan says is strongly consistent is strongly consistent everywhere). The next pass refuses to start without it, and its reviewers check each line against the plan.\n' "$((N + 1))" "$N"
+  printf -- '- A finding marked `(not in the plan list)` is fixed AND added, with its test, to the What can go wrong section of the plan (%s) in the same commit.\n' "$(plan_rel | grep . || echo ".claude/plans/$UNIT.md")"
   printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n'
   printf -- '- A closing (final) pass first rebases this unit onto current local main and, when main moved, runs the shell tests that cover what you or main changed. A conflict or a red test stops it before the reviewer: fix a red test, send a conflict to main as a question.\n\n'
   printf '## Findings so far\n\nEvery finding of this build'"'"'s passes so far, this pass'"'"'s included, by class. A class with several findings, or one that returns, is one flaw seen again and again: fix it as a class.\n\n%s\n' "${FSF:-None with a level or a class tag.}"
   [ -z "$NOTAB" ] || printf 'Classes not yet in the failure table of the evidence file: %s. Add a row for each (pass, class, what failed, fixed by, test) before the next pass.\n' "$NOTAB"
   printf '\n## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
+  if [ -s "$CS_MD" ]; then
+    printf '\n## Class sites (from the reviewers'"'"' searches)\n\nThe reviewers'"'"' own class searches, run by the pass. Every hit below goes into `## Sites checked (pass %s)` as listed, `- <path>:<line> fixed` or `- <path>:<line> not affected, <why>`; the next pass refuses while one is missing. A refused search owes nothing: run your own search for that finding'"'"'s class.\n\n' "$N"
+    cat "$CS_MD"
+  fi
   [ -z "$OPEN" ] || printf '\n## Open decisions (HOLD)\n\n%s\n\nDo not fix a finding tagged [HOLD <id>] or one that touches these questions: send it to main as a question with the id, and fix the rest.\n' "$OPEN"
   # Issues 261, 303 and 2894: a class back in two passes in a row is fixed as a design, once, not input by input, and
   # main hears nothing for it. A class that comes back after a design fix (the previous hand-off carries this block's
   # second-return line) is a redesign: the Builder asks main one question, through ask-main.sh (issue 335).
   if [ -n "$REPEAT" ]; then
-    printf '\n## The same class again\n\nFindings of class %s came back in two passes in a row (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser). Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far, in this order. First update the Data design and the failure table in the evidence file so they account for every case found so far. Then change the code to match them. The next pass reads the whole branch. Send main nothing for it. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. Start one background read-only agent now (an Explore helper, with the issue in its description): it lists every site in the changed files, and the scripts they source, where the flaw of this class can occur, checked against the class'"'"'s ruling, as a compact list. Fix or justify each site before the next pass, and write one line per site in the evidence file: `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`. If the approach touches an open decision, ask main first.\n' \
-      "${REPEAT% (*}" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
+    printf '\n## The same class again\n\nFindings of class %s came back %s (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser). Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far, in this order. First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone and fix the design until a pass is GO. Only then change the code to match them, and run the next pass on the whole branch (final). Send main nothing for it. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. Start one background read-only agent now (an Explore helper, with the issue in its description): it lists every site in the changed files, and the scripts they source, where the flaw of this class can occur, checked against the class'"'"'s ruling, as a compact list. Fix or justify each site before the next pass, and write one line per site in the evidence file: `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`. If the approach touches an open decision, ask main first.\n' \
+      "${REPEAT% (*}" "$WHEN" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
     if grep -qF 'Fix the design for the whole class (one fence or stamp)' "$WT/.claude/briefs/$UNIT-fix-r$((N - 1)).md" 2>/dev/null; then
       printf '\nThis class has now returned three times. Fix the other findings first, then ask main one question, which waits for its answer: bash %s/ask-main.sh "%s: third return" "<the redesign you propose>". Build what main answers (a redesign by default; main asks the owner only for a policy call).\n' \
         "$HERE" "${REPEAT%% (*}"
@@ -1308,7 +1469,10 @@ NOTAB=$(sed -n 's/^### \(.*\) ([0-9]* findings\{0,1\})$/\1/p' <<<"$FSF" | grep -
   else echo 'None for this unit.'; fi
   printf '\n## Test files this build touched\n\nA fix round re-runs only the files it touches.\n\n'
   { git -C "$WT" diff --name-only main...HEAD | grep -E '\.test\.' || true; } | sed 's/^/- /'
-} > "$HAND"
+} > "$HAND.tmp"
+[ ! -d "$HAND" ]
+mv -f "$HAND.tmp" "$HAND"
+WRITING=
 mkdir -p "$PP_SCRATCH"
 bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &
 echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, a fresh session takes the fix round from ${HAND##*/}; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, main is told, and the fix round stays here."

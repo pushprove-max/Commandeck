@@ -49,5 +49,23 @@ check "thirty worktrees: under 3,000 bytes, every section header kept, the whole
 check "--full prints every worktree" 30 "$(bd --full | grep -c '^  w[0-9]* \[')"
 # The host project's second-machine chain lines read files no plugin script writes; the plugin has no second machine.
 check "no CHAIN HOST, OFFLOADED or PLACEMENT WAIT line" 0 "$(bd --full | grep -cE '^(CHAIN HOST|OFFLOADED|PLACEMENT WAIT)')"
+# Issue 353: a stopped Builder seat whose worktree has a round file shows its newest report (verdict, kind, age), not
+# the words of its pane. The stand-in Orca lists the Builder's pane as done.
+mkdir -p "$T/bin2" "$T/scratch"
+cat > "$T/bin2/orca-ide" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+  "terminal list") echo '{"result":{"terminals":[{"handle":"h5","tabId":"t","leafId":"l"}]}}' ;;
+  "worktree ps") echo '{"result":{"worktrees":[{"agents":[{"paneKey":"t:l","state":"done"}]}]}}' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/bin2/orca-ide"
+printf 'handle=h5\ntask=task_5\nrole=builder\nunit=u1\nlaunched=0\n' > "$T/scratch/seat-u1-builder.txt"
+round 12 review '- [P3] nit -- a:1' GO; touch -d '2 hours ago' "$B/u1-r12-reports.md"
+STOP=$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin2:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" --full 2>&1 | grep '^  u1 builder:')
+check "a stopped Builder shows its newest report, verdict, kind and age" "1" \
+  "$(grep -c '^  u1 builder: newest report u1-r12-reports.md: GO (review), 1[12][0-9] min ago$' <<<"$STOP")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

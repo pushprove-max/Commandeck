@@ -33,6 +33,9 @@ case "\$1 \$2" in
   "orchestration check") if [ -e "$T/asked" ]; then echo '{"ok":true,"result":{"messages":[]}}'; else touch "$T/asked"
     jq -n '{ok: true, result: {deliveryId: "d1", messages: [{id: "msg_q1", from_handle: "term_b", type: "question", subject: "question (u1)", body: "which option?"}]}}'; fi ;;
   "orchestration task-update") echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
+  # Issue 351: the pane's questions are $T/inbox.json (inbox-down: the read fails); a task's dispatch is ctx_<task>.
+  "orchestration inbox") [ ! -e "$T/inbox-down" ] || exit 1; cat "$T/inbox.json" 2>/dev/null || echo '{"result":{"messages":[]}}' ;;
+  "orchestration dispatch-show") while [ \$# -gt 0 ]; do case \$1 in --task) k=\$2 ;; esac; shift; done; jq -n --arg d "ctx_\${k#task_}" '{ok: true, result: {dispatch: {id: \$d}}}' ;;
   "orchestration send") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; esac; shift; done; printf '%s\n' "\$b" >> "$T/inbox"; echo '{"ok":true}' ;;
   "orchestration reply") while [ \$# -gt 0 ]; do case \$1 in --body) b=\$2 ;; --id) i=\$2 ;; esac; shift; done; printf '%s %s\n' "\$i" "\$b" >> "$T/replies"
     # a waiting ask reads its reply at once: the reply lands in the pane's log while $T/reads exists
@@ -166,13 +169,46 @@ echo idle > "$T/state"; : > "$T/inbox"
 OUT=$(fg term_b "fg typed answer"); RC=$?; PID=$(fgpid "$OUT")
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "a delivered answer: the follower's log says delivered, and main is sent nothing" "0:1:0" \
-  "$RC:$(grep -c 'delivered to term_b (typed into the pane)' "$T/scratch"/answer-worker-answer-*.log 2>/dev/null | awk -F: '{s+=$2} END {print s}'):$(wc -l < "$T/inbox" | tr -d ' ')"
+  "$RC:$(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'delivered to term_b (typed into the pane)'):$(wc -l < "$T/inbox" | tr -d ' ')"
 touch "$T/deaf"; rm -f "$T"/scratch/answer-worker-answer-*.log
 OUT=$(fg term_b "fg lost answer"); RC=$?; PID=$(fgpid "$OUT")
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
 check "an answer that never reaches the log: the call returned 0, the follower logs NOT delivered, and main is told" "0:1:1" \
   "$RC:$(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'NOT delivered'):$(cat "$T"/scratch/queue/*.jsonl 2>/dev/null | grep -c 'answer-worker.sh: not delivered')"
 rm -f "$T/deaf"
+
+# Issue 351 ask 1: main answers without the question's id. A pane blocked in `orchestration ask` returns only on a reply
+# in its question's thread, so the answer looks up the pane's own open question from its seat record, the way
+# pp_task_close counts it (one helper, pp_seat_open_ask): asked under the seat's dispatch, since the seat's launch, by
+# this pane and no other. Without it the answer is a plain send and the asker waits out its limit.
+# The seat: pane term_b, task_w (its dispatch is ctx_w), launched 1000 s ago.
+NOWTS=$(date +%s); LOOKREC=$T/scratch/seat-look-builder.txt
+rm -f "$T"/scratch/seat-*.txt "$T"/scratch/answer-worker-answer-*.log; : > "$T/replies"; : > "$T/inbox"; : > "$T/typed"
+printf 'handle=term_b\ntask=task_w\nrole=builder\nunit=look\nlaunched=%s\n' $((NOWTS - 1000)) > "$LOOKREC"
+iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+msg() { jq -nc --arg id "$1" --arg from "$2" --arg at "$3" '{id:$id,type:"question",from_handle:$from,thread_id:null,created_at:$at}'; }
+inbox() { jq -sc '{result:{messages:.}}' > "$T/inbox.json"; : > "$T/replies"; : > "$T/inbox"; }
+echo working > "$T/state"; touch "$T/reads"
+{ msg msg_q0 dispatch:ctx_w "$(iso $((NOWTS - 2000)))"; msg msg_qx term_x "$(iso $((NOWTS - 10)))"; msg msg_q1 dispatch:ctx_w "$(iso $((NOWTS - 20)))"; } | inbox
+OUT=$(answer term_b "Ruling 4"); RC=$?
+check "no id given, the pane has an open question under its dispatch: the answer is a reply in that thread, and no other question gets one" "0 1 0 0" \
+  "$RC $(grep -c '^msg_q1 .*Ruling 4' "$T/replies") $(grep -c '^msg_q0' "$T/replies") $(grep -c '^msg_qx' "$T/replies")"
+check "no id given: the answer says which question it replied in" 1 "$(grep -c 'replying in msg_q1, the open question of term_b' <<<"$OUT")"
+# Nothing open (an older question from before the launch, another pane's): sent as today and nothing said of a lookup.
+{ msg msg_q0 dispatch:ctx_w "$(iso $((NOWTS - 2000)))"; msg msg_qx term_x "$(iso $((NOWTS - 10)))"; } | inbox
+OUT=$(answer term_b "Ruling 5"); RC=$?
+check "no open question: a plain inbox send (queued, mid-turn), no reply, no lookup complaint" "2 0 1 0" \
+  "$RC $(wc -l < "$T/replies" | tr -d ' ') $(grep -c 'Ruling 5' "$T/inbox") $(grep -c 'could not be read\|no seat record' <<<"$OUT")"
+inbox </dev/null; : > "$T/inbox-down"
+OUT=$(answer term_b "Ruling 6"); RC=$?
+check "no id given and the inbox cannot be read: says so and sends without an id" "2 0 1 1" \
+  "$RC $(wc -l < "$T/replies" | tr -d ' ') $(grep -c 'Ruling 6' "$T/inbox") $(grep -c 'open question of term_b could not be read' <<<"$OUT")"
+rm -f "$T/inbox-down"; mv "$LOOKREC" "$LOOKREC.gone"
+OUT=$(answer term_b "Ruling 7"); RC=$?
+check "no id given and no seat record names the pane: says the lookup was skipped and sends as today" "2 1 1" \
+  "$RC $(grep -c 'Ruling 7' "$T/inbox") $(grep -c 'no seat record names term_b, so its open question was not looked up' <<<"$OUT")"
+mv "$LOOKREC.gone" "$LOOKREC"
+# --interrupt (issue 351 ask 4) has its own file: answer-worker-interrupt.test.sh.
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

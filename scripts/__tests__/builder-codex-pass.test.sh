@@ -44,6 +44,9 @@ pass 2 review
 check "a pass prints the files and line counts the round changed" 1 "$(grep -cx '  a.sh +1 -0' "$TMP/out")"
 check "a round of comments only is flagged" 1 "$(grep -c '^No code changed in this round' "$TMP/out")"
 check "the round file is a narrowed pass" 1 "$(grep -cx 'Pass: review' "$B/$U-r2-reports.md")"
+# Issue 352: this narrowed GO, with the closing pass on, merges nothing: the pass names the final command, so no done marker follows it.
+check "a narrowed GO with the closing pass on prints NARROWED GO and the final command" 1 \
+  "$(grep -cF "NARROWED GO: this GO merges nothing. Next: builder-codex-pass.sh $U 3 final; print your DONE line only after that pass's GO." "$TMP/out")"
 
 # Main adds scope to the brief during the fix round; the Builder's evidence says why it took
 # another fix than the named one and which other cases it checked, for round 3 only.
@@ -154,6 +157,13 @@ printf 'echo five\n' > "$W/a.sh"
   bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err")
 check "a pass whose fake reviewer runs several ticks prints the start line and at least two progress lines" "1 1" \
   "$(grep -c '^pass 6: 1 reviewer(s) started$' "$TMP/out") $([ "$(grep -c '^pass 6: reviewers running, 0 min, reviewer 1 session' "$TMP/out")" -ge 2 ] && echo 1 || echo 0)"
+
+# Issue 361: a signed-in Codex that answers the one-word request in 31 s is slow, not signed out. The one slow case, last.
+printf 'echo six\n' > "$W/a.sh"; echo 31 > "$TMP/probe-sleep"; : > "$TMP/probe"; echo 0 > "$TMP/probe-fail"
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' COMMANDECK_PROBE_BACKOFF=0 STUB_THREAD=thr-7 \
+  bash "$PASS_SH" "$U" 7 review >"$TMP/out" 2>"$TMP/err"); RC=$?
+check "a probe answering after 31 s passes: one try, no refusal" "0 1 0" \
+  "$RC $(wc -l < "$TMP/probe" | tr -d ' ') $(grep -c 'launch refused: Codex is not signed in' "$TMP/err")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

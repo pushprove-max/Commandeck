@@ -602,6 +602,21 @@ pp_open_ask() {
       else "none" end end' <<<"$in" 2>/dev/null) || return 2
   [ "$PP_OPEN_ASK_ID" != none ]
 }
+# pp_seat_open_ask <handle> <seat record> -- pp_open_ask over every id the seat record holds: its pane, earlier panes
+# (prior_pane=), every task (task=, answer_task=), each task's dispatch id, and the seat's launch (launched=). The one
+# place that says which questions count, shared by pp_task_close and answer-worker.sh (issue 351) so the answer and the
+# task close agree. Returns pp_open_ask's code; a dispatch read that fails or is unshaped is 2, "cannot tell".
+pp_seat_open_ask() {
+  local tasks other t d
+  tasks=$(sed -n 's/^\(answer_\)\{0,1\}task=//p' "$2"); other=$(sed -n 's/^prior_pane=//p' "$2")
+  for t in $tasks; do
+    # A task with no dispatch reads null.
+    d=$(orca-ide orchestration dispatch-show --task "$t" --json 2>/dev/null \
+      | jq -er '.result | if has("dispatch") then .dispatch.id // "" else error end' 2>/dev/null) || return 2
+    other+=" $d"
+  done
+  pp_open_ask "$1" "$tasks" "$(sed -n 's/^launched=\([0-9][0-9]*\)$/\1/p' "$2" | head -1)" "$other"
+}
 # Close an Orca task whose work has SETTLED. While the task's supervised
 # dispatch is active Orca refuses (task_not_startable), and a warm pane with an
 # active dispatch refuses the next one, so the dispatch is settled with
@@ -610,7 +625,7 @@ pp_open_ask() {
 # pane still refused the next dispatch; release never closes a pane we opened
 # ourselves, only one Orca created. Never for a worker still working: abandon fences it.
 pp_task_close() { # task status [result-json]
-  local args=(--id "$1" --status "$2" --json) out d h rec busy ask= tasks other t
+  local args=(--id "$1" --status "$2" --json) out d h rec busy ask=
   [ -z "${3:-}" ] || args+=(--result "$3")
   # A live dispatch is never settled under its pane (host issue 2998). The pane is the seat record's handle for this
   # task, by `task=` or by `answer_task=` (an answer sent by dispatch). Settling needs every check READ clear: the pane
@@ -621,16 +636,7 @@ pp_task_close() { # task status [result-json]
   read -r h rec < <(awk -F= -v t="$1" 'FNR==1{h=""} /^handle=/{h=$2} /^(answer_)?task=/ && h && $2==t {print h, FILENAME; exit}' "$PP_SCRATCH"/seat-*.txt 2>/dev/null) || true
   if [ -n "$h" ]; then
     busy=0; ( . "$PP_SCRIPTS/codex-helpers.sh" && pane_is_busy "$h" ) || busy=$?
-    if [ "$busy" = 1 ]; then
-      tasks=$(sed -n 's/^\(answer_\)\{0,1\}task=//p' "$rec"); other=$(sed -n 's/^prior_pane=//p' "$rec")
-      for t in $tasks; do
-        # A task with no dispatch reads null; a failed or unshaped read is "cannot tell".
-        d=$(orca-ide orchestration dispatch-show --task "$t" --json 2>/dev/null \
-          | jq -er '.result | if has("dispatch") then .dispatch.id // "" else error end' 2>/dev/null) || { ask=2; break; }
-        other+=" $d"
-      done
-      [ -n "$ask" ] || { ask=0; pp_open_ask "$h" "$tasks" "$(sed -n 's/^launched=\([0-9][0-9]*\)$/\1/p' "$rec" | head -1)" "$other" || ask=$?; }
-    fi
+    if [ "$busy" = 1 ]; then ask=0; pp_seat_open_ask "$h" "$rec" || ask=$?; fi
     if [ "$ask" = 0 ]; then
       echo "task $1: its pane $h has open question $PP_OPEN_ASK_ID; answer it with bash $PP_SCRIPTS/answer-worker.sh $h \"<text>\" $PP_OPEN_ASK_ID (or reply in its thread); not settled" >&2
       return 1

@@ -10,7 +10,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL
 export HOME=$T/home; mkdir -p "$HOME" "$T/bin"
 P=$T/proj WS=$T/ws
 mkdir -p "$P/.claude/plans" "$WS" "$T/plug"
-git init -q -b main "$P"; echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"; echo plan > "$P/.claude/plans/toy.md"
+git init -q -b main "$P"; echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"; PSZ="- Planned size: 1 file, 10 changed lines"; printf "plan\n%s\n" "$PSZ" > "$P/.claude/plans/toy.md"
 git -C "$P" add -A && git -C "$P" -c user.name=t -c user.email=t@t commit -q -m base
 # A copy of the plugin whose seat.sh only reruns the settings script (as the real launch does) and records the keep
 # the Builder would open with; the pass script has nothing to check, and the planning worktree has nothing to close.
@@ -29,7 +29,7 @@ echo '{"ok":true,"result":{}}'
 EOS
 chmod +x "$T"/bin/orca-ide "$T"/plug/scripts/*.sh
 # batchfor <unit> [launch line] -- the batch, its Launch line naming <unit> as a new unit unless one is given (issue 234).
-batchfor() { printf '## The issues\n\n1. #1: x\n\n## Launch\n\n%s\nOrder: build issue 1\n\n## Prior art\n\nnone\n\n## Data design\n\nnone: no state is added or changed\n\n## Plan\n\n.claude/plans/toy.md\n' "${2-Launch: new unit $1}" > "$T/batch.md"; }
+batchfor() { printf '## The issues\n\n1. #1: x\n\n## Launch\n\n%s\nOrder: build issue 1\n\n## Prior art\n\nnone\n\n## Data design\n\nnone: no state is added or changed\n\n## What can go wrong\n\nan empty batch: one named test\n\n## Plan\n\n.claude/plans/toy.md\n' "${2-Launch: new unit $1}" > "$T/batch.md"; }
 launch() { batchfor u1; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky "$@" u1 "$T/batch.md" </dev/null 2>&1); }
 # build <unit> -- a launch with no --risky; RC and $T/out hold its exit and output.
 build() { batchfor "$1"; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
@@ -43,9 +43,9 @@ SCR=$(cd "$P" && "${E[@]}" bash -c '. "$0/paths.sh" && mkdir -p "$PP_SCRATCH" &&
 fp() { : > "$T/seats"; (cd "$P" && "${E[@]}" bash "$T/plug/scripts/builder-launch.sh" --from-plan "$@" </dev/null >"$T/out" 2>&1); RC=$?; }
 hash() { sha256sum < "$WS/$1/.claude/plans/$1.md" | cut -d' ' -f1; }
 # fpunit <unit> -- a planning worktree holding its plan and the batch beside it, as the plan seats and main leave them.
-fpunit() { planned "$1"; mkdir -p "$WS/$1/.claude/plans" "$WS/$1/.claude/briefs"; echo "plan of $1" > "$WS/$1/.claude/plans/$1.md"
+fpunit() { planned "$1"; mkdir -p "$WS/$1/.claude/plans" "$WS/$1/.claude/briefs"; printf "plan of %s\n%s\n" "$1" "$PSZ" > "$WS/$1/.claude/plans/$1.md"
   batchfor "$1"; sed "s#\.claude/plans/toy\.md#.claude/plans/$1.md#" "$T/batch.md" > "$WS/$1/.claude/briefs/$1-batch.md"; }
 # judged <unit> <GO|NO-GO> <collected> -- the judge's record as seat.sh leaves it: the plan hashed at launch, then the verdict.
 judged() { printf 'role=plan-judge-%s\nlaunched=100\nplan=%s\nplanhash=%s\nverdict=VERDICT: %s\ncollected=%s\n' \
   "${4:-claude}" "$WS/$1/.claude/plans/$1.md" "$(hash "$1")" "$2" "$3" > "$SCR/seat-$1-plan-judge-${4:-claude}.txt"; }
-onmain() { git -C "$P" show "main:.claude/plans/$1.md" 2>/dev/null || echo none; }
+onmain() { git -C "$P" show "main:.claude/plans/$1.md" 2>/dev/null | head -1 | grep . || echo none; } # the plan's first line

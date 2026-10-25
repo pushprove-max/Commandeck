@@ -327,5 +327,25 @@ if [ -f "$STATE" ]; then
     exit 2
   fi
 fi
+
+# --- a worker sees its diff once, before its first suite run ------------------------------------------
+# Advice only, never a block: a run spent on files the brief does not name is the loss it prevents. One marker per
+# session, made with noclobber (O_EXCL), so of two calls released together exactly one creates it and prints. A marker
+# that cannot be made prints nothing (the next run may print it again). No session_id (a Codex pane) gets nothing, and
+# neither does a reviewer or a checkout that is not a linked worktree.
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' | tr -c 'A-Za-z0-9_-' '_')
+GITD=$(git -C "$CWD" rev-parse --path-format=absolute --git-dir 2>/dev/null) GITC=$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -n "$SID" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] && [ -n "$GITD" ] && [ "$GITD" != "$GITC" ] && ( set -C; : > "$DIR/diffstat-$SID" ) 2>/dev/null; then
+  BASE=$(git -C "$CWD" merge-base main HEAD 2>/dev/null)
+  if [ -n "$BASE" ]; then
+    UNT=$(git -C "$CWD" ls-files --others --exclude-standard 2>/dev/null)
+    NUNT=$(printf '%s' "$UNT" | grep -c '')
+    HOOK_FIRE_ADVISE=1
+    jq -n --arg stat "$(git -C "$CWD" diff --stat "$BASE" 2>/dev/null)" --arg unt "$(printf '%s\n' "$UNT" | head -20)" --argjson n "$NUNT" \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext:
+        ("Your diff against main, before this first test run (compare with the files your brief names):\n" + $stat
+         + (if $n > 0 then "\nUntracked:\n" + $unt + (if $n > 20 then "\n... and \($n - 20) more" else "" end) else "" end))}}'
+  fi
+fi
 printf '%s %s pending\n' "$NOW" "$TREE" > "$STATE"
 exit 0

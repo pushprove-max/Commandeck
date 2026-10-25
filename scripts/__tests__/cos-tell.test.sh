@@ -362,5 +362,12 @@ watch >/dev/null
 check "and a second poll of the same message adds no second decision" 1 \
   "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/decision.sh" list | jq '[.[] | select(.id == "u305-q1")] | length')"
 
+# Issue 363: bare text after --note is not forwarded to Orca as an unknown command: the helper takes exactly
+# <subject> <body>, refuses anything else with its usage line, and makes no Orca call.
+BEFORE=$(wc -l < "$T/store.jsonl" | tr -d ' ')
+OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "bare text with no body" 2>&1); RC=$?
+check "bare text after the type is refused with the usage line and no Orca call" "2:1:$BEFORE" \
+  "$RC:$(grep -c '^usage: cos-tell.sh --note <subject> <body>$' <<<"$OUT"):$(wc -l < "$T/store.jsonl" | tr -d ' ')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

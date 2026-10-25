@@ -29,6 +29,10 @@ check "with the line the check lets it through" 0 "$(grep -c "has no 'Launch: ne
 # Host issue 2999: the plan author is told to name a test file's time-bound checks, so a heavy case lands after them.
 check "a plan-author's prompt carries the Timed checks line rule" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'names them on a `Timed checks:` line and orders the heavy case after them')"
+# Issue 362: builder-launch.sh refuses a plan with no size line, a decision with no Test: line or no What can go wrong
+# section, so the plan author is told what the plan must hold before it writes.
+check "a plan-author's prompt names the size line, the Test: line, the Break: line and the What can go wrong section" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'A plan carries a `- Planned size: <n> files, <n> changed lines` line, a `Test:` line under each item.*a `Break:` line.*`## What can go wrong` section')"
 # The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?

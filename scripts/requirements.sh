@@ -193,6 +193,7 @@ sha256sum	setup	cmd:sha256sum	coreutils	coreutils	-
 jq	setup	cmd:jq	jq	jq	-
 git	setup	cmd:git	git	git	-
 perl	setup	cmd:perl	perl	perl	-
+ripgrep (rg)	setup	cmd:rg	ripgrep	ripgrep	-
 Python 3.11 or newer	setup	tomllib	python3	python3	-
 GitHub CLI (gh)	setup	cmd:gh	gh	gh	-
 GitHub CLI sign-in	setup	gh-auth	-	-	run: gh auth login

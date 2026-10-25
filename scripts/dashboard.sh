@@ -268,18 +268,19 @@ terminal_list() {
 # whole machine's worktrees, so every lookup is by path, never by name: two
 # projects may each have a unit of one name.
 # merged <unit> -- only committed evidence says merged (issue 343), never a clock or a leftover worktree: (a) the worktree
-# HEAD is in main and is not the commit its branch was created at (a fresh worktree's tip is main's own commit), or
+# HEAD is in main and the branch's newest reflog entry is the unit's own work (a tip placed there by `git worktree add`
+# or builder-launch.sh's reset, entries `branch:` and `reset:`, is main's own commit, issue 354), or
 # (b) a finished-builds line (merge-unit-local.sh's squash commit, listed in $RUN/merge-shas) names a commit main holds
 # that the worktree HEAD does not contain (a name reused for new work branches after its old merge). Both guards only
 # turn "merged" into "live". shortcut: a squash merge made outside merge-unit-local.sh leaves no line, so it reads live.
 merged() {
-  local head ref first sha
+  local head ref newest sha
   if head=$(git -C "$PP_WORKSPACES/$1" rev-parse -q --verify HEAD 2>/dev/null) \
      && git -C "$PP_MAIN" cat-file -e "$head^{commit}" 2>/dev/null \
      && git -C "$PP_MAIN" merge-base --is-ancestor "$head" main 2>/dev/null; then
     ref=$(git -C "$PP_WORKSPACES/$1" symbolic-ref -q HEAD 2>/dev/null)
-    first=$([ -z "$ref" ] || git -C "$PP_MAIN" reflog show --format=%H "$ref" 2>/dev/null | tail -1)
-    [ -n "$first" ] && [ "$first" != "$head" ] && return 0
+    newest=$([ -z "$ref" ] || git -C "$PP_MAIN" reflog show -1 --format=%gs "$ref" 2>/dev/null)
+    case $newest in ''|branch:*|reset:*) ;; *) return 0 ;; esac
   fi
   for sha in $(awk -F'\t' -v u="$1" '$1 == u { print $2 }' "$RUN/merge-shas"); do
     git -C "$PP_MAIN" merge-base --is-ancestor "$sha" main 2>/dev/null || continue

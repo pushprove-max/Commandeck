@@ -94,8 +94,10 @@ printf '#!/usr/bin/env bash\n#\n#\n#\n#\n# parked: too late to count\necho late 
 : > "$RAN"; OUT=$(cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh scripts/__tests__/untouched.test.sh scripts/__tests__/seat.test.sh 2>&1); RC=$?
 check "a parked file and an own-lane file are skipped with their reasons, and a marker past line 5 runs its file" "0 late 1 1" \
   "$RC $(sort "$RAN" | paste -sd' ' -) $(grep -c '^skip touched.test.sh *waits on a fix' <<<"$OUT") $(grep -c '^skip untouched.test.sh *own lane: slow by design' <<<"$OUT")"
-: > "$RAN"; (cd "$R" && timeout 30 bash "$RUNNER" --own-lane scripts/__tests__/untouched.test.sh scripts/__tests__/seat.test.sh >/dev/null 2>&1)
-check "--own-lane runs only the own-lane file" lane "$(cat "$RAN")"
+# The ordinary file --own-lane leaves out is neither run nor counted: not a failure for having no result.
+: > "$RAN"; OUT=$(cd "$R" && timeout 30 bash "$RUNNER" --own-lane scripts/__tests__/untouched.test.sh scripts/__tests__/seat.test.sh 2>&1); RC=$?
+check "--own-lane runs only the own-lane file, and the ordinary file it leaves out is not a failure" "lane 0 1" \
+  "$(cat "$RAN") $RC $(grep -c '^1 passed, 0 failed' <<<"$OUT")"
 git -C "$R" checkout -q -- .
 
 # The merge check runs in main's environment, which main-watch and the session give a real pane folder, scratch and
@@ -131,6 +133,46 @@ check "plain --changed runs only the same-name test of a touched script, not a t
 ran --callers
 check "--callers also runs the test that names the touched script" "seat uses-seat" "$GOT"
 git -C "$R" checkout -q -- .
+
+# A test whose run is killed before its result is written failed: it is never left out of the count as if skipped.
+printf '#!/usr/bin/env bash\nkill -9 "$(ps -o ppid= -p "$PPID" | tr -d " ")"\n' > "$R/scripts/__tests__/touched.test.sh"
+OUT=$(cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh 2>&1); RC=$?
+check "a test killed before its result is written counts as failed" "1 1" "$RC $(grep -c '^0 passed, 1 failed' <<<"$OUT")"
+sed -i.bak '1a\
+# own-lane: killed in its lane' "$R/scripts/__tests__/touched.test.sh"; rm -f "$R/scripts/__tests__/touched.test.sh.bak"
+OUT=$(cd "$R" && timeout 30 bash "$RUNNER" --own-lane scripts/__tests__/touched.test.sh scripts/__tests__/seat.test.sh 2>&1); RC=$?
+check "... and so does an own-lane test killed in its --own-lane run, beside the ordinary file it leaves out" "1 1" "$RC $(grep -c '^0 passed, 1 failed' <<<"$OUT")"
+git -C "$R" checkout -q -- .
+
+# Every ordering of the hand-off's outcome found so far (Decision G13-3, revision 7), in order. The outcome is the
+# hand-off's exit code alone, from a fixed list; only 3 (not routed) and 4 (unreachable) run the handed-off files here.
+# r7, the reason write that failed: now the Mac cannot make the hand-off's temp files (TMPDIR unwritable), in a linked
+# worktree routed to the PC. Exit 2, nothing runs here, no ssh call.
+W=$TMP/wt; git -C "$R" worktree add -q --detach "$W"
+mkdir -p "$TMP/home/.config/devenv" "$TMP/ro" "$TMP/sshbin"; chmod 555 "$TMP/ro"
+echo pc > "$TMP/home/.config/devenv/peer"; echo pc > "$TMP/home/.config/devenv/chain-host"
+printf '#!/usr/bin/env bash\necho ssh >> "$RAN"\nexit 255\n' > "$TMP/sshbin/ssh"; chmod +x "$TMP/sshbin/ssh"
+check "the fixture's TMPDIR cannot be written" 1 "$(touch "$TMP/ro/probe" 2>/dev/null; [ -e "$TMP/ro/probe" ]; echo $?)"
+: > "$RAN"; OUT=$(cd "$W" && env -u COMMANDECK_HOOK_FIRE_LOG -u COMMANDECK_OFFLOADED HOME="$TMP/home" COMMANDECK_HOST_OS=Darwin \
+  TMPDIR="$TMP/ro" PATH="$TMP/sshbin:$PATH" timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh 2>&1); RC=$?
+check "every ordering of the hand-off's outcome found so far: the Mac cannot make its temp files: exit 2, nothing runs here or there" \
+  "2  1" "$RC $(sort "$RAN" | paste -sd' ' -) $(grep -c 'nothing ran here' <<<"$OUT")"
+chmod 755 "$TMP/ro"
+# The rest through a copy of the runner whose peer-offload.sh is a stub: PO_STUB=fail makes it fail to load (r8, the
+# reason read that failed), and otherwise its pr_offload logs `off` and returns PO_STUB. Between two runs nothing is
+# kept: each run decides from its own code alone. A `# host: mac` file runs here after every code but a failure (2).
+mkdir -p "$TMP/stub/scripts"; cp "$REAL"/scripts/*.sh "$TMP/stub/scripts/"
+printf '[ "$PO_STUB" != fail ] || return 1\npr_offload() { echo off >> "$RAN"; return "$PO_STUB"; }\n' > "$TMP/stub/scripts/peer-offload.sh"
+printf '#!/usr/bin/env bash\n# host: mac\necho mac >> "$RAN"\n' > "$R/scripts/__tests__/mac.test.sh"
+for step in "fail 2 " "0 0 mac off" "1 1 mac off" "2 2 off" "3 0 mac off touched" "4 0 mac off touched" "5 1 mac off"; do
+  set -- $step; stub=$1 want=$2; shift 2
+  : > "$RAN"; OUT=$(cd "$R" && PO_STUB=$stub timeout 30 bash "$TMP/stub/scripts/run-shell-tests.sh" \
+    scripts/__tests__/touched.test.sh scripts/__tests__/mac.test.sh 2>&1); RC=$?
+  check "every ordering of the hand-off's outcome found so far: the hand-off ends $stub: exit $want, and only $* run" \
+    "$want $*" "$RC $(sort "$RAN" | paste -sd' ' -)"
+done
+check "... an unreachable PC (4) says it runs the files here, once" 1 "$(PO_STUB=4 bash -c 'cd "$1" && bash "$2" scripts/__tests__/touched.test.sh' _ "$R" "$TMP/stub/scripts/run-shell-tests.sh" 2>&1 | grep -c 'running here, once')"
+rm -f "$R/scripts/__tests__/mac.test.sh"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

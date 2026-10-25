@@ -52,6 +52,15 @@ it lives, who writes it, who reads it, when it resets, and what a retry runs. Wr
 
 - <piece of state>: lives in <where>; written by <who>; read by <who>; reset when <when>; a retry runs <what>
 
+## What can go wrong
+
+Required: builder-launch.sh refuses a batch with no such section in it or in its plan. The cases a reviewer and
+every fix round check the build against, one named test per case: limits (empty, tiny, huge, cut off mid-way),
+timing (two actions or replies in either order, retries, timeouts) and odd data (special characters, missing
+fields, duplicates, old shapes).
+
+- <case>: <the test that checks it>
+
 ## Plan
 
 Required: builder-launch.sh refuses a batch without it. The plan the owner

@@ -234,18 +234,6 @@ no_holds() { # <step>
 no_holds "step 1 preconditions"
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
-state rebase
-echo "STEP 2 rebase: git -C $WT rebase main"
-if [ "$DRY_RUN" = 0 ]; then
-  git -C "$WT" rebase main || {
-    echo "FAILED step 2 rebase: conflict left for the Builder" >&2
-    echo "Fix the conflict in the unit's worktree, then run the merge again." >&2
-    exit 1
-  }
-fi
-
-TIP=$(git -C "$WT" rev-parse HEAD)
-state proof
 # Builder proof: a Builder runs its own review passes, so its last round file
 # must be the pass script's, GO, for this tip or a clean rebase of it, from a
 # real reviewer session, that names no finding: every finding, P0 to P3, blocks
@@ -255,6 +243,8 @@ state proof
 # lists as generated (.claude/commandeck.json generatedFiles, main's copy) keeps
 # that review: step 4's check on the merged tree proves them. A deletion, a merge
 # commit or any other path in the tail needs a new pass, as before.
+# Issue 352: one predicate, run at the end of step 1 and again at step 3. The rebase rewrites the branch, so a proof that
+# step 3 alone refuses would be refused only after the Builder's branch was already rewritten.
 GEN=$(jq -r '.generatedFiles // [] | .[] | strings' "$ROOT/.claude/commandeck.json" 2>/dev/null || true)
 generated_only() { # <commit>
   local st p g hit
@@ -268,13 +258,31 @@ generated_only() { # <commit>
     [ "$hit" = 1 ] || return 1
   done < <(git -C "$WT" diff-tree --no-commit-id -r --no-renames --name-status "$1")
 }
-PROVED=$TIP TAIL=0 VERR=$(mktemp) FIRST_ERR=""
-until BUILDER_PROOF=$(bash "$HERE/builder-codex-pass.sh" --verify "$WT" "$UNIT" "$PROVED" 2>"$VERR"); do
-  FIRST_ERR=${FIRST_ERR:-$(cat "$VERR")}
-  generated_only "$PROVED" || { rm -f "$VERR"; echo "$FIRST_ERR" >&2; fail "step 3 proof" "the Builder's review proof is missing or stale (named above)"; }
-  PROVED=$(git -C "$WT" rev-parse "$PROVED^") TAIL=$((TAIL + 1))
-done
-rm -f "$VERR"
+prove() { # <step> [<what the refusal adds>]: sets PROVED, TAIL and BUILDER_PROOF for the worktree's tip, or fails
+  local verr first_err=""
+  PROVED=$(git -C "$WT" rev-parse HEAD) TAIL=0 verr=$(mktemp)
+  until BUILDER_PROOF=$(bash "$HERE/builder-codex-pass.sh" --verify "$WT" "$UNIT" "$PROVED" 2>"$verr"); do
+    first_err=${first_err:-$(cat "$verr")}
+    generated_only "$PROVED" || { rm -f "$verr"; echo "$first_err" >&2; fail "$1" "the Builder's review proof is missing or stale (named above)${2:+; $2}"; }
+    PROVED=$(git -C "$WT" rev-parse "$PROVED^") TAIL=$((TAIL + 1))
+  done
+  rm -f "$verr"
+}
+prove "step 1 proof" "the branch is untouched"
+
+state rebase
+echo "STEP 2 rebase: git -C $WT rebase main"
+if [ "$DRY_RUN" = 0 ]; then
+  git -C "$WT" rebase main || {
+    echo "FAILED step 2 rebase: conflict left for the Builder" >&2
+    echo "Fix the conflict in the unit's worktree, then run the merge again." >&2
+    exit 1
+  }
+fi
+
+TIP=$(git -C "$WT" rev-parse HEAD)
+state proof
+prove "step 3 proof"
 echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"

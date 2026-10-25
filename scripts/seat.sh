@@ -412,6 +412,8 @@ launch)
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Your last line, alone, is PLAN-DONE: a message saying the plan is done does not replace it."
   # Host issue 2999: a heavy fixture added to a test file with time-bound checks slows them past their bound.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan that adds a heavy fixture to a test file with time-bound checks names them on a \`Timed checks:\` line and orders the heavy case after them."
+  # Issue 362: builder-launch.sh refuses a plan without these, so the plan author is told before it writes.
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
   # Two reviewer seats of one unit are handed the same spec, so the spec cannot
   # say whose session a log is; this tag, unique to the launch, does.
   TAG=seat-$ROLE-$LAUNCH_EPOCH-$$

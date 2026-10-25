@@ -23,17 +23,14 @@ check "a batch whose Launch line names this unit as new opens its Builder" "0:1"
 
 # Issue 341 (F1): a batch states its data design (what state it adds, who owns it, when it resets, what a retry runs) before
 # any Builder opens. A missing section, an empty one, and the template's placeholder alone are refused.
-dd() { : > "$T/seats"; : > "$T/orca.log"; batchfor "$1"; sed -i.bak '/^## Data design$/,/^## Plan$/{/^## Plan$/!d;}' "$T/batch.md"; rm -f "$T/batch.md.bak"
+dd() { : > "$T/seats"; : > "$T/orca.log"; batchfor "$1"; sed -i.bak '/^## Data design$/,/^## What can go wrong$/{/^## What can go wrong$/!d;}' "$T/batch.md"; rm -f "$T/batch.md.bak"
   [ -z "${2-}" ] || printf '\n## Data design\n\n%s\n' "$2" >> "$T/batch.md"
   (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS \
     bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
-# A batch with no Data design heading at all was written before 0.46.0 (the template has carried the heading since): it
-# was valid when written, maybe judged and approved, so it still opens, and the brief moves the answer to the Builder,
-# before its first edit. The section stays required wherever the heading is: empty or placeholder-only is refused.
+# Issue 362: the 0.46.0 exception (a batch with no Data design heading at all opened, and its Builder wrote the design) is
+# gone: a missing heading is refused like an empty section or a placeholder-only one, and no Builder opens.
 dd u15
-check "a batch written before the Data design section opens its Builder and says so" "0:1:1" "$RC:$(grep -cx 'launch builder u15' "$T/seats"):$(grep -c 'NOTE: .* has no Data design section' "$T/out")"
-check "its brief has the Builder write the Data design in the evidence file before the first edit" "1" \
-  "$(grep -c '^This batch was written before the Data design section: before the first edit write' "$WS/u15/.claude/briefs/u15.md")"
+check "a batch with no Data design section is refused and opens no Builder" "2:1:0" "$RC:$(grep -c 'REFUSED: .* has no Data design section' "$T/out"):$(grep -c 'launch builder' "$T/seats")"
 dd u16 ''
 dd u16 ' '
 check "a batch whose Data design section is empty is refused" "2:1" "$RC:$(grep -c 'REFUSED: .* has no Data design section' "$T/out")"
@@ -43,6 +40,17 @@ dd u18 '- the pass hand-off file: lives in the unit worktree; written by the pas
 check "a batch that fills the section opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u18' "$T/seats")"
 dd u19 'none: no state is added or changed'
 check "a batch that says none, with the reason, opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u19' "$T/seats")"
+# Decision G4-3: a batch in the 0.46.0 shape (no Data design, no What can go wrong heading) has no compatibility branch,
+# because 0 such batches were unlaunched at upgrade. It is refused with each missing heading named in turn, and no Builder opens.
+: > "$T/seats"; batchfor u20; awk '/^## / { omit = ($0 == "## Data design" || $0 == "## What can go wrong") } !omit' "$T/batch.md" > "$T/legacy.md"
+legacy() { (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS \
+  bash "$T/plug/scripts/builder-launch.sh" u20 "$T/legacy.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+legacy
+check "a 0.46.0-shape batch is refused, the Data design heading named as the fix, no Builder" "2:1:0" \
+  "$RC:$(grep -c "REFUSED: .* has no Data design section (a '## Data design' heading" "$T/out"):$(grep -c 'launch builder' "$T/seats")"
+printf '\n## Data design\n\nnone: no state is added or changed\n' >> "$T/legacy.md"; legacy
+check "... with its Data design written, refused next for What can go wrong, that heading named, no Builder" "2:1:0" \
+  "$RC:$(grep -c "REFUSED: neither .* has a What can go wrong section .*'## What can go wrong' heading" "$T/out"):$(grep -c 'launch builder' "$T/seats")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

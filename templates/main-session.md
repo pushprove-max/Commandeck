@@ -47,6 +47,8 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 - After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
   neither again, except a part its RESUMED line names as cut (read that pointer
   once). A fresh start's first call is `scripts/board.sh`.
+- **A Builder's state is its newest report, not its pane**: the wake and `board.sh` name its newest `<unit>-r<N>-reports.md`,
+  verdict and pass kind. A `review` GO merges nothing; only a `final` GO finishes it. No report yet: `read-verdict.sh`.
 - Worker panes run without auto memory. Copy into the brief every memory fact the unit depends on: the ruling with
   its id, configured values, known traps. A brief never cites a memory by file name alone. A worker and a Builder
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or

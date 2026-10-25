@@ -19,6 +19,7 @@ printf 'echo built\n' > "$W/a.sh"
 pass 1 adversarial
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
 fin() { # <N> [reply] -- a final pass from the Builder's worktree; prints its exit code
+  sites "$1"
   (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-$1 STUB_REPLY="${2:-VERDICT: GO}" bash "$PASS_SH" "$U" "$1" final >"$TMP/out" 2>"$TMP/err"); echo $?; }
 round() { [ -e "$B/$U-r$1-reports.md" ] && echo yes || echo no; }
 ontop() { git -C "$W" merge-base --is-ancestor main HEAD; echo $?; }
@@ -47,7 +48,7 @@ check "and once it is green the retry goes on to Codex" "0 yes" "$(fin 4 "$NOGO2
 
 # main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
 echo main-side > "$REPO/a.sh"; G commit -qam 'a.sh on main'
-printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add -A; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
+printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
   "$(fin 5 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"

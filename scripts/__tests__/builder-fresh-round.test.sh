@@ -111,29 +111,32 @@ newbuild() { rm -f "$BR"/*-fix-r*.md; }
 TS="title:Builder — u9,Your task spec"
 fr u9-fix-r1.md sonnet high
 check "first NO-GO on a build: routing's fixer first moves a Sonnet high Builder to Opus high, and the record says fixer=first:routing" \
-  "/clear,/model opus,$TS|model=opus effort=high fixer=first:routing" "$SEQ|$NEWREC"
+  "/clear,/model opus,$TS|model=opus effort=high fixer=first:routing model=opus effort=high round=1" "$SEQ|$NEWREC"
 fr u9-fix-r2.md sonnet medium
 check "second NO-GO on the same build: the fixer types /model opus and /effort high; the record says model=opus effort=high fixer=later:routing" \
-  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing" "$SEQ|$NEWREC"
+  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing model=opus effort=high round=2" "$SEQ|$NEWREC"
 newbuild; opts '{"fixerFirstModel": "builder", "fixerFirstEffort": "builder"}'; fr u9-fix-r1.md sonnet high
 check "a /plugin override wins on the first pass: fixerFirstModel=builder keeps the Builder's launched model and effort, a raised Sonnet high Builder included" \
-  "/clear,$TS|model=sonnet effort=high fixer=first:config" "$SEQ|$NEWREC"
+  "/clear,$TS|model=sonnet effort=high fixer=first:config model=sonnet effort=high round=1" "$SEQ|$NEWREC"
 opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'; fr u9-fix-r2.md opus high
 check "a /plugin override wins on the second pass: fixerModel=sonnet fixerEffort=medium" \
-  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=later:config" "$SEQ|$NEWREC"
+  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=later:config model=sonnet effort=medium round=2" "$SEQ|$NEWREC"
 opts '{"fixerEnabled": false}'; fr u9-fix-r3.md sonnet medium
-check "fixer off: no /model or /effort on a later round, and the record says fixer=off" "/clear,$TS|model=sonnet effort=medium fixer=off" "$SEQ|$NEWREC"
+check "fixer off: no /model or /effort on a later round, and the record says fixer=off" "/clear,$TS|model=sonnet effort=medium fixer=off model=sonnet effort=medium round=3" "$SEQ|$NEWREC"
 # Off after an earlier round moved the pane to Opus high: the pane goes back to the Builder's launch settings.
 fr u9-fix-r3.md sonnet medium $'model=opus\neffort=high\nfixer=later:routing'
 check "fixer off after an escalation: /model and /effort put the Builder's launch settings back, and the record says so" \
-  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=off" "$SEQ|$NEWREC"
+  "/clear,/model sonnet,/effort medium,$TS|model=sonnet effort=medium fixer=off model=sonnet effort=medium round=3" "$SEQ|$NEWREC"
 opts '{"fixerModel": "gpt-6.1-sol"}'; fr u9-fix-r4.md sonnet medium
 check "a value the key does not take stops the hand-off naming the key, nothing switched or typed after /clear" "1|/clear|1" \
   "$R|$SEQ|$(grep -c '/plugin config fixerModel = gpt-6.1-sol is not a claude model for fixer' "$T/fr.out")"
 opts '{}'; rm -f "$BR/u9-fix-r4.md"
-# A new unit's first fix hand-off is its first, whatever its pass number and whatever another unit's files hold.
-BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r3.md sonnet medium; BR=$OBR
-check "a new unit's first fix round counts as first" "fixer=first:routing" "$(grep '^fixer=' "$T/rec")"
+# Issue 355: the round is the N in the hand-off's name, whatever other fix files the folder holds: fix-r1 is the first
+# fix round, and a lone fix-r7 is a later one (a pruned or sparse set never picks the first-round model).
+BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r1.md sonnet medium; BR=$OBR
+check "a new unit's fix-r1 counts as the first fix round" "fixer=first:routing model=opus effort=high round=1" "$(grep '^fixer=' "$T/rec")"
+rm -f "$BR8"/*-fix-r*.md; BR=$BR8; fr u8-fix-r7.md sonnet medium; BR=$OBR
+check "a lone fix-r7 runs on the later-round fixer" "fixer=later:routing model=opus effort=high round=7" "$(grep '^fixer=' "$T/rec")"
 # The filename guard: with two fix files there and a fixer that would switch, a GO continuation and added work switch nothing.
 newbuild; echo x > "$BR/u9-fix-r1.md"; echo x > "$BR/u9-fix-r2.md"; opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'
 fr u9-after-r3.md opus high
@@ -141,6 +144,10 @@ check "two fix files, an Opus high pane, fixerModel=sonnet fixerEffort=medium: a
   "/clear,$TS|" "$SEQ|$NEWREC"
 fr u9-added-19990101-000000.md opus high
 check "and an added-work hand-off types nothing and leaves the record unchanged" "/clear,$TS|" "$SEQ|$NEWREC"
+# Issue 355: a plain hand-off (a pass that ended GO) moves no model, whatever the fixer rules say: a model switch
+# belongs at a cleared context of a fix round, because the prompt cache is per model.
+fr u9-handoff.md opus high
+check "a plain hand-off types no /model" "/clear,$TS|" "$SEQ|$NEWREC"
 opts '{}'; newbuild
 touch "$T/no-title"; fr u9-fix-r1.md opus high; rm -f "$T/no-title"
 check "an Orca without set-pane-title: the hand-off still goes through" "0 /clear,Your task spec" "$R $SEQ"

@@ -52,5 +52,12 @@ check "rounds with no report file say verdict file gone; the round with one keep
 check "a Builder with no report file at all has a verdict for every round" '"verdict file gone"' \
   "$(part '.units.inFlight[]? | select(.unit == "u-stale") | .builder.verdicts["9"]')"
 
+# Issue 354: a unit's plan commit lands on main and the Builder's launch resets the worktree onto it. The tip is in main
+# and the branch has no commit of its own yet, so the newest reflog entry is `reset:` and the unit stays in flight.
+unit u-plan; gc "$MAIN" "plan(u-plan): plan"; git -C "$WS/u-plan" reset -q --hard main
+rm -rf "$T/out/cache"; DNOW=$NOW dash
+check "a worktree reset onto its plan commit in main stays in flight" '"u-plan"' \
+  "$(part '[.units.inFlight[]? | .unit | select(. == "u-plan")] | join(" ")')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

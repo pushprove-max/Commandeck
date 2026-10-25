@@ -214,6 +214,11 @@ echo "== panes that have stopped, and their last words"
 # parallel rather than being made cheaper. Serial, fourteen seats added
 # fifteen seconds to every wake.
 LIVE=$(orca-ide terminal list --json 2>/dev/null || true)
+# handle<TAB>Orca agent state, joined on the pane key as main-watch.sh's STATES is.
+STATES=$(jq -rn --argjson ps "${PS_JSON:-null}" --argjson ts "${LIVE:-null}" '
+  ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
+  | ($ts.result | if type == "array" then . else (.terminals // []) end)[]?
+  | "\(.handle)\t\($a["\(.tabId):\(.leafId)"] // "none")"' 2>/dev/null)
 STOPPED=$(mktemp -d)
 trap 'pp_rm_rf "$STOPPED"' EXIT
 for r in ${SEATS[@]+"${SEATS[@]}"}; do
@@ -229,7 +234,30 @@ for r in ${SEATS[@]+"${SEATS[@]}"}; do
   launched=$(grep '^launched=' "$r" | cut -d= -f2)
   (
     msg=$(bash "$PP_SCRIPTS/read-verdict.sh" "$h" 5 "" "" "" "" "" "${launched:-0}" 2>/dev/null)
-    [ $? -eq 5 ] || exit 0
+    rc=$?
+    # Issue 353: a Builder's state is its newest finished round file, never its pane's words; the pane is the last
+    # resort when no report exists yet. Stopped is Orca's state for the pane (done or idle, main-watch's stop), never
+    # read-verdict's exit: a Claude Builder's DONE line is no verdict. Exit 5 also counts: a Codex pane Orca reads as none.
+    st=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
+    if [ "$role" = builder ] && { [ "$st" = done ] || [ "$st" = idle ] || [ $rc -eq 5 ]; }; then
+      rf= rn=0 un=0
+      for f in "$WS/$u/.claude/briefs/$u"-r*-reports.md; do
+        n=${f%-reports.md}; n=${n##*-r}
+        [[ $n =~ ^[0-9]+$ ]] || continue
+        last=$(grep -v '^[[:space:]]*$' "$f" | tail -n 1)
+        if [[ $last == "VERDICT: "* ]]; then [ "$n" -gt "$rn" ] && { rn=$n; rf=$f; }
+        else [ "$n" -gt "$un" ] && un=$n; fi
+      done
+      if [ -n "$rf" ]; then
+        last=$(grep -v '^[[:space:]]*$' "$rf" | tail -n 1)
+        kind=$(sed -n 's/^Pass: //p' "$rf" | head -1)
+        printf '  %s %s: newest report %s: %s (%s), %s min ago%s\n' "$u" "$role" "${rf##*/}" "${last#VERDICT: }" \
+          "${kind:-kind not recorded}" "$(( ($(date +%s) - $(stat -c %Y "$rf")) / 60 ))" \
+          "$([ "$un" -le "$rn" ] || echo "; r$un is not finished")" > "$STOPPED/$u-$role"
+        exit 0
+      fi
+    fi
+    [ $rc -eq 5 ] || exit 0
     # tail -n +4 drops read-verdict's own three-line heading; what is left is
     # the pane's last message, which is the only part main has not already got.
     printf '  %s %s: %s\n' "$u" "$role" \

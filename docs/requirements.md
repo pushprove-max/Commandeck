@@ -7,6 +7,7 @@
 | git | worktrees, the merge |
 | GitHub CLI (`gh`), signed in | the issues a merge files for findings left open, and the dashboard |
 | `jq`, `perl`, Python 3.11 or newer, Bash 4 or newer | the scripts and the hooks |
+| ripgrep (`rg`) | a Codex pass runs each reviewer's class search with it |
 | GNU `sed`, `stat`, `date`, `readlink`, `grep`, `realpath`, `timeout`, `sha1sum` and `sha256sum`; `flock` | the scripts |
 | Codex CLI and the `openai-codex` Claude Code plugin, both signed in | the `claude-openai` profile only: its review passes run on Codex |
 

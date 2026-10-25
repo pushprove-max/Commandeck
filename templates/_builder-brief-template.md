@@ -193,6 +193,15 @@ N the number of the pass that will read it. When you do not take the fix a
 reviewer named, write `Different fix r<N>: <why>` before you ask for pass N.
 Pass N shows both lines to its reviewer, and reads only a line that starts
 with those words: no bullet, no backticks.
+After a pass that ends NO-GO, search the repo for the same pattern as each finding before the next pass, and write
+`## Sites checked (pass <N>)` in the evidence file: a `Search: <command>` line for each search, then one line per
+site it found, `- <path>:<line> fixed` or `- <path>:<line> not affected, <why>`. The next pass refuses to start
+without it, and its reviewers treat a missing or wrongly cleared site as a finding. Every hit of the reviewers' own
+`Class search:` lines, which the pass runs and lists in your fix brief, must be among those sites. It also needs
+`## New code checked (pass <N>)`: every read, write or check the fix added, checked against the plan's Data design,
+What can go wrong and failure table, `- <path>:<line> meets <plan line>` or `- <path>:<line> no plan rule, <why>`
+(`- none, <why>` when it added none). A class redesign goes into the plan first and is reviewed alone, to GO, before
+its code; the code after that pass owes the same check.
 A finding only main can fix (a settings file entry, a file only main edits)
 goes as one line under `## Main-only (deferred)` in the evidence file: every
 later pass is handed that list as known, so it is not raised again.
@@ -236,7 +245,7 @@ above call for.
 
 Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
 with no finding named.
-Print `{UNIT}-DONE` as your last line and stop. An answer from main that
+Print `{UNIT}-DONE` as your last line and stop, but only after a GO the script did not mark `NARROWED GO` (that GO merges nothing: run the `final` pass it names first). An answer from main that
 arrives after it is still yours: read it and act on it. A question or a refusal
 goes on a line of its own that starts QUESTION: or BLOCKED:.
 

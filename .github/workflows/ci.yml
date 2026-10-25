@@ -71,7 +71,7 @@ jobs:
           printf '%s\n' "$out"
           [ "$rc" = 1 ] && grep -q '^setup: requirements are missing' <<<"$out" && grep -q '^  Homebrew: it is not installed' <<<"$out"
       - name: Tools the scripts call
-        run: brew install bash coreutils gnu-sed grep flock jq
+        run: brew install bash coreutils gnu-sed grep flock jq ripgrep
       - name: Git identity for fixture repos
         run: |
           git config --global user.email ci@example.com

@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.47.0 -- 2026-10-25
+
+Part A1 of the plugin-port batch: ten fixes to the review loop, the report path, the answer path and the Chief of Staff
+hooks. Each paragraph that closes an issue says so.
+
+- Shell tests run on the PC. In a Mac linked worktree whose `~/.config/devenv/chain-host` is `pc`,
+  `run-shell-tests.sh` sends its files to the peer in `~/.config/devenv/peer` (new `scripts/peer-offload.sh`). The
+  worktree's exact tree goes with them, uncommitted work included, and the peer refuses a tree that differs. The
+  files run there in a memory box, and their result is the run's. A file marked `# host: mac` stays on the Mac. The
+  main checkout and the PC itself never hand off. When the PC cannot be reached, the files run on the Mac once. When
+  the PC refuses, the run fails with exit 2 and runs nothing. When the connection drops after the files started on
+  the PC, the run fails and the files do not run again on the Mac.
+- A fix round checks its new code against the plan. After a NO-GO, the next pass also needs
+  `## New code checked (pass M)` in the evidence file: each read, write or check the fix added, against the plan's
+  Data design, What can go wrong and failure table. Its reviewers get that list. A class redesign now goes into the
+  plan first and is reviewed alone, to GO, before its code; the pass after that design-only pass needs the same list.
+- The Codex reviewer is handed the brief's work items. Its sandbox has no network, and the host read only the
+  `Closes:` issues, so a brief that lists its issues under `## The issues` with no `Closes:` line left the reviewer
+  unable to read them: it ended `BLOCKED: GitHub read failed`. The host now reads those items too
+  (`brief-issues.sh`).
+
+- Local commit 6da84e5 is in this release: `answer-worker.sh` detaches its follower with perl's `POSIX::setsid` on every
+  host (Linux `setsid(1)` can fork, leaving the printed pid already gone), `plan-tier.test.sh` puts the codex stub back
+  before its effort check, and `.claude/main-session.settings.json` is ignored as a runtime file.
+- A narrowed pass says so, and the dashboard reads the newest reflog entry. A review that read only the changes since
+  the last pass ends its report with a `NARROWED GO` line, the done marker is written only after a GO that was not
+  narrowed, and the merge's proof is one predicate run before and after the rebase (`merge-unit-local.sh` step 1 and
+  step 3). `dashboard.sh` decides "merged" from the newest reflog entry of the branch. The Codex sign-in probe waits 120
+  seconds, and both of its messages say so. Closes #352, #354 and #361.
+- A report reaches main before main acts on a seat. `main-watch.sh` stamps a new round file (`due-report-<unit>-r<N>-<cksum>`),
+  posts the report, and holds the seat's next step (`report_pending`) until the post is delivered; the board's builder line
+  puts the report first. A new round file takes three ticks (stamp, post, gate). Closes #353.
+- The fix hand-off says why it was not made. After a NO-GO the pass script hands the fix to a fresh session only from the
+  Builder's own pane; any other case, and a failed write of `<unit>-fix-r<N>.md` (now written to a temp file and moved into
+  place), tells main with one line, `NO FIX HAND-OFF after pass <N>: <why>`. `builder-fresh-round.sh` takes its round
+  from the `fix-r<N>` name and records `fixer=<rule> model=<m> effort=<e> round=<N>` in the seat record. Two asks of
+  issue #355 are not built: there is no in-place `/model` switch after a NO-GO, and none on a plain handoff. The fresh
+  session stays on its launch model. Closes #355.
+- Review passes ask for other call sites, and plans show their tests. After a NO-GO the next pass does not start until
+  the evidence file holds `## Sites checked (pass <M>)` with a `Search:` line and a line per site, `fixed` or `not
+  affected, <why>`. A finding's `Class search: rg <arguments>` line, when the reviewer writes one, is run as rg with
+  no shell (rg's `--pre` and `-z` refused; a search that misses its own finding or hits over 200 lines owes nothing),
+  hands the hits to the fix round, and the next pass refuses until every hit is in Sites checked. ripgrep (`rg`) joins
+  the requirements, and a pass with no `rg` is refused rather than skipping the searches. A finding class that comes back after any earlier pass, a GO pass included, is a class stop
+  (`read-verdict.sh --repeat-class <round> <earlier round>`). A launch refuses a batch with no Data design section, a
+  plan with no `Planned size:` line or no `What can go wrong` section, and a decision or accepted failure mode with no
+  `Test:` line; a NO-GO of the plan judge on a plan under 150 lines goes on under main's rulings. The batch template
+  gains `## What can go wrong` and the plan author's spec asks for the size, `Test:` and `Break:` lines. Closes #362.
+- `to-main.sh` and `cos-tell.sh` already took positional words and built `--subject` and `--body` themselves, so the bug
+  of issue #363 does not exist here; two tests pin it. Closes #363.
+- Main's picker and the Chief of Staff. With the Chief of Staff pane live, `ask-records-decision.sh` records the question
+  in the decisions ledger and then refuses the picker, naming the ledger id and `relay-order.sh`; with no pane found the
+  picker opens as before. Closes #350. A new Stop hook, `hooks/cos-unfinished-stop.sh`, holds the Chief of Staff's reply
+  (main's, when no Chief of Staff runs) once when it leaves its own work undone ("haven't filed it", "want me to ...");
+  the second stop of a turn passes. This is part 1 of #364; #364 stays open for its second part. `suite-rerun-guard.sh`
+  prints a worker's diff against main (and up to 20 untracked files) once, before its first test run of a session.
+- Answers reach a waiting Builder. `answer-worker.sh` given no question id replies in the pane's own open question (one
+  helper, `pp_seat_open_ask`, shared with `pp_task_close`). `ask-main.sh --resume` reads the full inbox view first,
+  so an answer an earlier read acknowledged without printing is not lost; past its 9 minutes it sends main one
+  `ask-main: <id> unanswered` question naming the plain `answer-worker.sh` command; while a call is blocked in its
+  inbox wait it holds a wait token naming its pid and pane. `answer-worker.sh --interrupt <pane> "<text>"` types the
+  answer in with an interrupt only while it holds that pane's token: it claims the token for the send, and `ask-main.sh`
+  does not return until the send is done, so the interrupt never cuts work resumed between slices. A refused interrupt
+  prints the plain command to send instead. The
+  background follower still follows the log-tag check: Orca's `delivered_at` stayed unset after an acknowledged batch
+  (checked 2026-10-25), so the plan's second ask stays on the log tag. Closes #351.
+
 ## 0.46.0 -- 2026-10-24
 
 Parts D, E and F of the open-issues batch, the autodecide port and added work: fewer messages to main, stricter review

@@ -236,6 +236,12 @@ check "a refused send writes one refused line carrying Orca's reason" "to-main:r
 rm -f "$WLJ" "$T/send-fail"; main_is ''; send logqueued >/dev/null
 check "no live main writes one queued line" "to-main:queued" "$(logged)"
 main_is term_w
+# Issue 363: bare message text after the type is not forwarded to Orca as an unknown command: the helper takes exactly
+# <type> <subject> <body>, refuses anything else with its usage line, and makes no Orca call.
+rm -f "$T"/inbox-*
+OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" status "bare text with no body" 2>&1); RC=$?
+check "bare text after the type is refused with the usage line and no Orca call" "2:1:0" \
+  "$RC:$(grep -c '^usage: to-main.sh \[--unit <unit>\] <type> <subject> <body>$' <<<"$OUT"):$(ls "$T"/inbox-* 2>/dev/null | wc -l | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

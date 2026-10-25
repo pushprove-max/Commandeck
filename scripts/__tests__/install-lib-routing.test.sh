@@ -209,8 +209,10 @@ rm -f "$MB" "$MC"
 # Setup's routing checks and its review preflight read the merged routing (judge amendment A): with only an edited
 # builder in the owner's file, the Claude profile's preflight found no Claude reviewer and refused before any write.
 # The preflight also reads GitHub as the reviewer would (issue 316): the project has a GitHub remote and a gh that answers.
+# It also needs a claude on PATH; the PC that runs a Mac worktree's tests has none, so a stub stands in.
 git -C "$PROJ" remote get-url origin >/dev/null 2>&1 || git -C "$PROJ" remote add origin https://github.com/o/proj.git
-mkdir -p "$T/ghbin" && printf '#!/usr/bin/env bash\necho "{}"\n' > "$T/ghbin/gh" && chmod +x "$T/ghbin/gh"
+mkdir -p "$T/ghbin" && printf '#!/usr/bin/env bash\necho "{}"\n' > "$T/ghbin/gh" && printf '#!/usr/bin/env bash\n' > "$T/ghbin/claude" \
+  && chmod +x "$T/ghbin/gh" "$T/ghbin/claude"
 setup_routing() { PATH=$T/ghbin:$PATH COMMANDECK_ROUTING=$1 lib 'S=$(cat "$0/setup.sh"); HERE=$0; die() { echo "setup: $*" >&2; exit 1; }
   ASKED=claude GIVEN={} PROFILE=claude PASS=claude RL={}
   eval "$(sed -n "/^# --- routing:/,/^# --- preflight:/p" <<<"$S")"

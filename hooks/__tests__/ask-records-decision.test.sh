@@ -138,5 +138,31 @@ check "and its ledger row is kept, not duplicated" "$ROWS0" "$(wc -l < "$L")"
 rm "$TMP/main/.claude/commandeck.json"
 check "with no project config the repeat goes out too" 0 "$(ask 'Ship: Now?' 'Ship the release today?')"
 
+# Issue 350: with the Chief of Staff live, the recorded row is how the owner sees the question: the picker is refused
+# after every row is written, with the ids and where the answer comes from. A pane that is not found (or Orca that does
+# not answer) leaves the picker allowed, so the owner is never left with no way to be asked.
+echo '{"chiefOfStaff": {"name": "Relay"}}' > "$TMP/main/.claude/commandeck.json"
+mkdir -p "$TMP/cbin" "$TMP/ws/Chief-of-Staff"
+cat > "$TMP/cbin/orca-ide" <<EOS
+#!/bin/sh
+case "\$*" in
+  "terminal list"*) [ -e "$TMP/cos-up" ] || exit 1; echo '{"ok":true,"result":{"terminals":[{"handle":"term_cos","worktreePath":"$TMP/ws/Chief-of-Staff","agentIdentity":"claude"}]}}' ;;
+  *) exit 1 ;;
+esac
+EOS
+chmod +x "$TMP/cbin/orca-ide"
+cask() { PATH="$TMP/cbin:$PATH" COMMANDECK_WORKSPACES="$TMP/ws" ask "$@"; }
+ROWS1=$(wc -l < "$L")
+check "main with no Chief of Staff pane: picker allowed, row written" "0 $((ROWS1 + 1))" "$(cask 'Rollout' 'Which rollout order?') $(wc -l < "$L" | tr -d ' ')"
+touch "$TMP/cos-up"; ROWS2=$(wc -l < "$L")
+check "main with a live Chief of Staff pane: refused with the redirect, row written" "2 $((ROWS2 + 1))" "$(cask 'Cache' 'Which cache size?') $(wc -l < "$L" | tr -d ' ')"
+check "the redirect names the recorded id, the Chief of Staff and relay-order.sh, and opens no picker" "1:1:1" \
+  "$(grep -c "recorded in the decisions ledger as cache-$DAY" "$TMP/err"):$(grep -c 'the Chief of Staff puts it to the owner' "$TMP/err"):$(grep -c 'relay-order.sh sends the answer back' "$TMP/err")"
+check "the fire log reads block for it" "block" "$(jq -r .decision "$TMP/fire.jsonl" | tail -1)"
+rm -f "$TMP/cos-up"
+check "a Chief of Staff pane that disappears again: the next question goes out" 0 "$(cask 'Window' 'Which window?')"
+touch "$TMP/cos-up"; echo '{}' > "$TMP/main/.claude/commandeck.json"
+check "a live pane but no relay named: nothing is refused" 0 "$(cask 'Region' 'Which region?')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

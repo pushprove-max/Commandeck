@@ -104,14 +104,14 @@ trap 'rm -f "$STAMP"' EXIT
 send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing typed"
 idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
 # Issue 313, the fixer: /clear keeps the model and effort the pane opened with. Only a fix hand-off
-# (<unit>-fix-r<N>.md) switches anything, and its count is that unit's fix hand-offs in the folder (not N, the pass
-# number), so it resets per build. The first runs on fixer first, every later one on fixer's model and effort (both
+# (<unit>-fix-r<N>.md) switches anything, and its round is the N in the name (issue 355): 1 is the first fix round, a
+# later N a later one, so a re-run of an older hand-off keeps its own round and a sparse or pruned set of fix-r files
+# never picks the wrong model. The first runs on fixer first, every later one on fixer's model and effort (both
 # Opus high; builder: as the Builder launched, a per-build raise included); /plugin config keys beat routing's.
 # fixerEnabled=false keeps the Builder's launched model and effort, switching back a pane an earlier round moved. Each
 # switch is typed only where the pane differs, and the record says the rule.
 if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]; then
-  FU=${BASH_REMATCH[1]}
-  K=$(ls "${HAND%/*}/$FU"-fix-r*.md 2>/dev/null | grep -cE -- '-fix-r[0-9]+\.md$')
+  ROUND=${HAND##*-fix-r}; ROUND=$((10#${ROUND%.md}))
   # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take stops the hand-off.
   SRC=routing
   pick() { local v rc=0; v=$(pp_role_option fixer "$2" 2>&1) || rc=$?
@@ -123,7 +123,7 @@ if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]
   CM=$(sed -n 's/^model=//p' "$REC" | tail -1); [ -n "$CM" ] || CM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   CE=$(sed -n 's/^effort=//p' "$REC" | tail -1); [ -n "$CE" ] || CE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   if [ "$EN" = false ]; then RULE=off WM=builder WE=builder
-  elif [ "$K" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:$SRC
+  elif [ "$ROUND" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:$SRC
   else pick WM model .roles.fixer.model; pick WE effort .roles.fixer.effort; RULE=later:$SRC; fi
   # builder: the Builder's launched model or effort, which the pane keeps.
   [ "$WM" != builder ] || WM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
@@ -138,7 +138,7 @@ if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]
     idle 120000 || fail "typed /effort $WE but $H was not idle within 120s; the hand-off pointer was not typed"
   fi
   { [ -z "$WM" ] || echo "model=$WM"; [ -z "$WE" ] || echo "effort=$WE"; } >> "$REC"
-  echo "fixer=$RULE" >> "$REC"
+  echo "fixer=$RULE model=${WM:-launch} effort=${WE:-launch} round=$ROUND" >> "$REC"
 fi
 # Issue 278: the new session retitles its pane; give it back its role and unit.
 U=$(sed -n 's/^unit=//p' "$REC" 2>/dev/null | tail -1)

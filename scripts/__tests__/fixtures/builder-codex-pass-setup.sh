@@ -1,6 +1,7 @@
 # Sourced by builder-codex-pass.test.sh, builder-codex-pass-fresh-round.test.sh, builder-codex-pass-suite.test.sh,
-# builder-codex-pass-closing.test.sh, builder-codex-pass-decisions.test.sh, builder-codex-pass-fresh-session.test.sh and
-# builder-codex-pass-github.test.sh:
+# builder-codex-pass-closing.test.sh, builder-codex-pass-decisions.test.sh, builder-codex-pass-fresh-session.test.sh,
+# builder-codex-pass-github.test.sh, builder-codex-pass-class-return.test.sh, builder-codex-pass-rebase.test.sh and
+# builder-codex-pass-class-sites.test.sh:
 # a scratch repo with a Builder worktree, stubs of the Codex plugin, the Codex CLI and Orca, and the pass helpers.
 # Seven files, not one: one file of every case ran 199 s alone at load ~150, past the runner's 120 s per-file cap, and
 # the owner ruled that no file raises it.
@@ -12,9 +13,13 @@ TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
 # Issue 301: a fresh-round helper a pass started outlives the file; the exit kills any that still names its folder.
 trap 'pkill -f "$TMP/" 2>/dev/null; rm -rf "$TMP"' EXIT
 export HOME=$TMP/home CODEX_HOME=$TMP/codex COMMANDECK_WORKSPACES=$TMP/ws COMMANDECK_SCRATCH=$TMP/scratch
-unset COMMANDECK_MAIN COMMANDECK_ROUTING CLAUDE_CONFIG_DIR
+# A pass run from a real pane inherited its handle: a NO-GO there failed the Builder-pane check and its notice reached
+# the real main. No pass here has a handle unless its call sets one (fpass), and every orca-ide call any pass makes
+# lands in a stub: $TMP/cli's logs to $TMP/orca-calls; fpass puts its own ahead of it.
+unset COMMANDECK_MAIN COMMANDECK_ROUTING CLAUDE_CONFIG_DIR ORCA_TERMINAL_HANDLE
 REPO=$TMP/proj U=unit
 mkdir -p "$HOME" "$TMP/ws" "$TMP/cli" "$TMP/py" "$CODEX_HOME"
+printf '#!/bin/sh\necho "$*" >> "%s/orca-calls"\necho '"'"'{"ok":true,"result":{}}'"'"'\n' "$TMP" > "$TMP/cli/orca-ide"; chmod +x "$TMP/cli/orca-ide"
 
 # A stub of the Codex plugin that leaves the session record Codex would (as in
 # merge-unit-local.test.sh); STUB_THREAD names each pass's threads.
@@ -51,12 +56,16 @@ cat > "$TMP/cli/codex" <<EOF
 #!/bin/sh
 case "\$1" in
   login) [ "\$*" = "login status" ] ;;
-  exec) echo "\$PWD" >> "$TMP/probe"; n=\$(cat "$TMP/probe-fail" 2>/dev/null || echo 0)
+  exec) echo "\$PWD" >> "$TMP/probe"; [ ! -s "$TMP/probe-sleep" ] || { s=\$(cat "$TMP/probe-sleep"); rm -f "$TMP/probe-sleep"; sleep "\$s"; }
+    n=\$(cat "$TMP/probe-fail" 2>/dev/null || echo 0)
     [ "\$n" -gt 0 ] || exit 0; echo \$((n - 1)) > "$TMP/probe-fail"; echo 'ERROR: stream disconnected before completion' >&2; exit 1 ;;
   *) exit 1 ;;
 esac
 EOF
 chmod +x "$TMP/cli/codex"
+# The Claude-reviewer pass needs a claude on PATH: a stand-in, so the cases do not depend on the host having one (the PC
+# has none) and never start a real headless Claude. It logs each call and fails.
+printf '#!/bin/sh\necho "$*" >> "%s/claude.log"\nexit 1\n' "$TMP" > "$TMP/cli/claude"; chmod +x "$TMP/cli/claude"
 # Issue 316: the pass reads GitHub before any reviewer starts. The gh stand-in answers a read from the files under
 # $TMP/gh (issue-<n>.txt, JSON with body and comments; api-<n>.json, the HTML GitHub renders for them; pr.txt) and
 # fails with the text of $TMP/gh-fail, if there is one; it logs each call. Off a terminal, as here, a real gh issue view
@@ -99,7 +108,18 @@ W=$TMP/ws/$U B=$TMP/ws/$U/.claude/briefs MAINBRIEF=$REPO/.claude/briefs/$U-build
 mkdir -p "$B" "${MAINBRIEF%/*}"; echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$W/.claude/settings.local.json"
 # The launcher's brief in main's checkout: a first pass of one reviewer, a small build not launched risky.
 printf 'Fix #1.\nbash x/builder-codex-pass.sh %s 1 adversarial\n' "$U" > "$MAINBRIEF"; cp "$MAINBRIEF" "$B/$U.md"
+# Issue 362: a pass after a NO-GO refuses without the Builder's search for the pattern's other sites (and its check of the
+# fix's new code against the plan). Every test that is
+# not about that refusal runs its next pass with the section already in the evidence file (the refusal's own test calls
+# the script directly).
+sites() { # <N>: the section for the pass before pass N, when that pass ended NO-GO and the section is not there yet
+  local m=$(($1 - 1)) r="$B/$U-r$(($1 - 1))-reports.md"
+  [ -f "$r" ] && [ "$(grep -v '^[[:space:]]*$' "$r" | tail -n 1)" = "VERDICT: NO-GO" ] || return 0
+  grep -q "^## Sites checked (pass $m)" "$B/$U-evidence.md" 2>/dev/null \
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$B/$U-evidence.md"
+}
 pass() { # <N> <kind>: one pass of the real pass script; what it printed is in $TMP/out
+  sites "$1"
   (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-$1 \
     bash "$PASS_SH" "$U" "$1" "$2" >"$TMP/out" 2>"$TMP/err") || { echo "FAIL the $2 pass r$1 did not run: $(cat "$TMP/err")"; FAIL=$((FAIL+1)); }
 }
@@ -124,6 +144,7 @@ SH
 chmod +x "$FB/orca-ide"
 fpass() { # <dir> <round> <kind> <reply> [env...]: one pass from <dir> as the Builder's pane; prints its exit code
   local d=$1 n=$2 k=$3 r=$4; shift 4
+  sites "$n"
   (cd "$d" && env TMPDIR=$TMP PATH=$FB:$TMP/cli:$PATH COMMANDECK_MAIN=$REPO ORCA_TERMINAL_HANDLE=term_frs COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 \
     FRS_CALLS=$TMP/frs-calls FRS_PROJ=$PROJ STUB_THREAD=thr-$n "STUB_REPLY=$r" "$@" bash "$PASS_SH" "$U" "$n" "$k" >"$TMP/out" 2>"$TMP/err"); echo $?
 }
