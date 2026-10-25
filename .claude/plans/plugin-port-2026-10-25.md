@@ -18,7 +18,7 @@ when (section "Parts"):
 | A | plugin-port-2026-10-25 (this plan file) | G1-G9, the drift items, local commit 6da84e5 | 350-365, host 3173, every drift line | ~2,470 | ~84 |
 | B | plugin-port-mod-2026-10-25 | G10, G11 | 348, 349 | ~1,450 | ~25 |
 
-Part A is still over the files cap (~84 of 40) and over 60 files: section "Question for Max" proposes an A1/A2 split
+Part A is still over the files cap (~84 of 40) and over 60 files: section "Question for the owner" proposes an A1/A2 split
 along group lines; this plan does not split it. Part B shares only `.claude-plugin/plugin.json`, `scripts/merge-unit-local.sh` and
 `scripts/__tests__/plugin.test.sh` with part A, so part A merges first and part B launches on main after it. Main
 copies section "Parts", part B, with G10, G11 and the cited assumptions, into `.claude/plans/plugin-port-mod-2026-10-25.md`
@@ -339,7 +339,7 @@ builder-codex-pass-class-return.test.sh "a class's first return after a GO round
   (no `~/.commandeck/install/`, no `ponytail` key in any project `commandeck.json` or in the plugin's
   `pluginConfigs` in `~/.claude/settings.json`, checked 2026-10-25); elsewhere unknowable (a public plugin with no
   install registry). So this unit plans NO cleanup of an existing install: no removal of an installed ponytail skill
-  copy and no saved-option rewrite (section "Question for Max"). A saved `ponytail` answer left in a project file is
+  copy and no saved-option rewrite (section "Question for the owner"). A saved `ponytail` answer left in a project file is
   read by nothing after G5.
 - Tests that assert ponytail (`rg -c -i ponytail scripts/__tests__ hooks/__tests__`: install-lib-setup 13,
   profile-revoke 13, profile-settings 11, plugin 6, plugin-option 4, update 2, dependency-addition-guard 1,
@@ -792,7 +792,7 @@ Version 0.47.0, unless another unit takes it first. Closes: the `Closes:` line a
 Build order: A2, A3, A5 (A2 first), then G1, G2, G3, G4 (halfway cut), G5, G6, G7, G8, G9, G12, version and
 CHANGELOG. Every pass runs main's pass script (A1).
 - Planned size: ~84 files, ~2470 changed lines (G1-G9 ~2,215, G12 ~190, version ~65). Over the 40-file cap and over
-  60 files: section "Question for Max" proposes A1/A2.
+  60 files: section "Question for the owner" proposes A1/A2.
 Done when: the common Done when below, for every G1-G9 and RD item; the 6da84e5 tests green on the tip.
 
 ### Part B -- plugin-port-mod-2026-10-25
@@ -899,7 +899,7 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
 ## Main answers
 
 1. Worktree ownership: granted only after a successful add on a path proven absent before it (PreToolUse `pending`, PostToolUse `owned`); the failed-add test on another session's path is in G8.
-2. Ponytail removal: `scripts/worktree-setup.sh` (:73, :197) and its summary-hook cleanup, `plugin-option.test.sh` and `docs/configuration.md` (:48, :57) are in G5; `config/retired.tsv` is a lint row only; no installed-copy cleanup is planned (count unknowable, section "Question for Max").
+2. Ponytail removal: `scripts/worktree-setup.sh` (:73, :197) and its summary-hook cleanup, `plugin-option.test.sh` and `docs/configuration.md` (:48, :57) are in G5; `config/retired.tsv` is a lint row only; no installed-copy cleanup is planned (count unknowable, section "Question for the owner").
 3. Report delivery: the host's stamp contract (`due-*`, `report_send`, the `report_pending` fence before finish and merge) is ported in G2, with the worktree-removed retry test.
 4. Merge proof: one `prove` predicate runs before and after the rebase, so a generated-only tail stays accepted (G2).
 5. Units mod: part B ports the v2 mod as `84118aa9` leaves it, no stall mechanic and no stall producer (G10).
@@ -910,7 +910,7 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
 10. Self-gating: this unit's passes run main's pass script with the command in A1; the new gate binds from the next unit.
 11. Background runs: RD13 makes every test run start in the background whatever its length, in `templates/main-session.md:7` and `templates/_builder-brief-template.md:128`.
 
-## Question for Max
+## Question for the owner
 
 1. Existing ponytail installs. Installs carrying a saved `ponytail` answer: 0 on this machine (checked 2026-10-25: no
    `~/.commandeck/install/`, no `ponytail` key in a project `commandeck.json` or in the plugin's `pluginConfigs`);
@@ -953,4 +953,4 @@ the CHANGELOG's own issue form, "Closes" on every issue of the Closes line, and 
   - A1 settled: main's pass script, with the command.
   - Timed checks: the new heavy cases' files named, none has a time-bound check.
   - Sizes re-stated (part A ~84 files, ~2,470 lines; part B ~25 files, ~1,450 lines); "Main answers" and "Question
-    for Max" added.
+    for the owner" added.
