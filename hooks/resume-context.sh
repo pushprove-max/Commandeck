@@ -99,7 +99,7 @@ resumed() { # parts cut to fit ("" for none) -> the RESUMED line
   fi
 }
 # Both binding outcomes; checkpoint.md's Resume section carries the same line.
-TODO_RULE='TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record.'
+TODO_RULE='TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record. A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint'"'"'s Closed section keeps it.'
 # The old session's transcript sits beside the new one, named by its id; with
 # no transcript_path, the project folder comes from paths.sh, never a newest-file guess.
 if [ -n "$transcript" ]; then tdir=$(dirname "$transcript")

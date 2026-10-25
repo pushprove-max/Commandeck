@@ -1,0 +1,10 @@
+# Whether a prompt is machine text, not words the owner typed: nothing but whole notification blocks, Orca inbox
+# banners, the checkpoint resume command (lib/context-clear-restart.sh) and main-watch.sh's wakes, or a prompt that
+# opens with a known machine preamble. ruling-log.sh logs no such prompt and ruling-log-archive.sh moves the old ones
+# out, so both apply this test and nowhere else. Keep the whole-text forms in parity with their producers.
+def machine_prompt:
+  (gsub("<(task-notification|system-notification|system-reminder)>[\\s\\S]*?</\\1>|You have [0-9]+ orchestration messages?\\. Run `orca orchestration check[^`\\n]*`\\.?|resume from the checkpoint \\S+\\.md \\(its text, board\\.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut\\); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing \\(main-watch\\.sh wakes you\\); then service whichever marker has landed(?:\\. Your first line to the owner is: Handoff done: this is the new main session, resumed from \\S+\\.md; the old pane \\S+ closes now\\.)?|main-watch: items are waiting in your Orca inbox for run [\\w-]+; read them and handle each\\.|main-watch: Orca did not take these for run [\\w-]+, so they are NOT in your inbox: [^\\n]*?\\. Each retries every tick\\.(?: Other items are waiting in your Orca inbox\\.)?(?: To take the run back, run this from your own pane: orca-ide orchestration run-use --id [\\w-]+| Who holds run [\\w-]+ is unknown; reconcile first: find out what that pane is before taking the run\\.| Live pane [\\w-]+ holds run [\\w-]+; reconcile first: find out what that pane is before taking the run\\.)"; "")
+    | test("\\A\\s*\\z"))
+  # Preambles that only ever open a whole machine prompt: a judge's transcript prompt and another agent's note. The
+  # resume and main-watch texts are matched whole above, never by prefix, because the owner's words may follow one.
+  or test("\\A\\s*(=== Transcript of a conversation |Here is a note offered by )");

@@ -78,7 +78,7 @@ line per item, each with its own reason (`Q-<n> -- <reason>` closes a Queue item
   `git -C <main> log --oneline main..<unit-branch>`. A seat commits its work,
   so `git -C <wt> diff --stat` and the board's dirty count are both empty on a
   finished unit and read as "nothing was done".
-- TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record.
+- TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record. A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint's Closed section keeps it.
   Load the tools via ToolSearch `select:TaskCreate,TaskUpdate,TaskList`
   (`templates/main-session.md`, Show the owner a checklist).
 - Nothing to arm: main-watch.sh posts every finished, unhandled item

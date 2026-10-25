@@ -41,6 +41,7 @@ block() {
   echo "BLOCKED: adding a new dependency ($1) requires the owner's explicit approval first." >&2
   echo "Rule 2 / ponytail: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "If the owner has approved this exact package, install it with the token as the COMMAND PREFIX: COMMANDECK_DEP_APPROVED=1 npm install <pkg> (one command per approval; package.json direct edits stay blocked -- the install writes it)." >&2
+  echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
   exit 2
 }
 
@@ -276,6 +277,7 @@ block_manifest() {
   echo "BLOCKED: adding a new dependency ('$1' in $FILE_PATH) requires the owner's explicit approval first." >&2
   echo "Rule 2 / ponytail: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "Once the owner has approved THIS package: COMMANDECK_DEP_APPROVED=$1 (exact, comma-separated for several) in .claude/settings.local.json env, or install it with COMMANDECK_DEP_APPROVED=1 npm install <pkg> as the command prefix." >&2
+  echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
   exit 2
 }
 
@@ -393,7 +395,7 @@ fi
 # shaped metadata key, a script name, or a URL in an unrelated section all read
 # as packages, and a real addition written in a shape the regex did not know
 # read as nothing.
-PY_OK=1
+PY_OK=1 PY_RC=0
 CANDIDATES=$(printf '%s' "$INPUT" | python3 -c '
 import json, re, sys
 payload = json.load(sys.stdin)
@@ -441,9 +443,9 @@ for text in texts:
         if isinstance(v, dict):
             keys.update(v)
 if not read:
-    raise SystemExit(1)
+    raise SystemExit(5)  # the edit applied, and what it leaves is not JSON (host issue 3029)
 print("\n".join(sorted(keys)))
-' "$BASE" 2>/dev/null) || { [ $? != 3 ] || ambiguous; PY_OK=0; }
+' "$BASE" 2>/dev/null) || { PY_RC=$?; [ "$PY_RC" != 3 ] || ambiguous; PY_OK=0; }
 
 if [ "$PY_OK" = 0 ]; then
   # The edit could not be applied to the file on disk (its old_string is gone,
@@ -468,6 +470,20 @@ if [ ! -f "$BASE" ]; then
     block "'$NAME' in NEW file $FILE_PATH"
   done
   exit 0
+fi
+
+# With something to screen (host issue 3029), the manifest on disk and the one the edit would leave must both be JSON.
+# Neither is, and the line-shape screen above then names a metadata key as a package: a block that tells the worker
+# the wrong thing. A Write replaces the file, so only its own content counts.
+if [ -n "$CANDIDATES" ]; then
+  if [ "$TOOL" != Write ] && ! jq empty "$BASE" >/dev/null 2>&1; then
+    echo "BLOCKED: $FILE_PATH is not valid JSON, so this edit cannot be screened for a new dependency; fix the file first (a Write of valid JSON is screened)." >&2
+    exit 2
+  fi
+  if [ "$PY_RC" = 5 ]; then
+    echo "BLOCKED: this edit leaves $FILE_PATH as invalid JSON; make the edit keep it valid." >&2
+    exit 2
+  fi
 fi
 
 # "Existing" means present in a DEPENDENCY MAP of the on-disk manifest --

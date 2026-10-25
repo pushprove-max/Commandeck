@@ -120,7 +120,7 @@ open_pane() (
   # Unrecorded, a pane that retitles itself is invisible to the next launch.
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$h" "$(date +%s)" >> "$PANE_TITLES" || {
     echo "cannot record $h ($2) in $PANE_TITLES; closing it" >&2
-    orca-ide terminal close --terminal "$h" --json >/dev/null 2>&1; return 1; }
+    pp_pane_close "$h" "open_pane: record failed" || true; return 1; }
   echo "$h"
 )
 # pane_is_busy <handle|terminal:handle> -- 0 when the pane's agent is mid-turn

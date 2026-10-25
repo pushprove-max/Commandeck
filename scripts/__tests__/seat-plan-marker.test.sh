@@ -26,6 +26,9 @@ check "the refusal says the Order line must quote the owner's yes naming the uni
 printf 'Launch: new unit pn\nOrder: plan it\n' | cat - "$T/plan-spec.md" > "$T/plan-spec-pn.md"
 srun launch plan-author pn "$T/plan-spec-pn.md" >"$T/out" 2>&1
 check "with the line the check lets it through" 0 "$(grep -c "has no 'Launch: new unit" "$T/out")"
+# Host issue 2999: the plan author is told to name a test file's time-bound checks, so a heavy case lands after them.
+check "a plan-author's prompt carries the Timed checks line rule" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'names them on a `Timed checks:` line and orders the heavy case after them')"
 # The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?

@@ -117,9 +117,14 @@ SETTINGS='A change that adds or changes a required setting (a config key, an env
 CALLERS='When the change alters a function'"'"'s signature or behaviour, or a data shape (a type, a stored record, an API payload), open the callers and readers the diff did not touch and check that each still holds.'
 # Right today is not enough: some code costs more, or breaks, as time and data grow.
 LATER='Cost over time is a finding class: code that is right today but grows in cost or breaks later. Examples: retries stacked across layers, or with no backoff or cap; a full-table scan or an unindexed query on a hot path; local time where UTC is needed, a day boundary or DST.'
+# One sentence for the full pass and the behaviour angle: a reviewer that stops at the first failing ordering returns the next one each round.
+ORDERINGS='When the diff involves timers, background loads, retries, concurrent writes or tab or page switches, list EVERY ordering of those events in this first pass, check each, and report every ordering that fails, not the first.'
+# Issue 341: a build whose state had no owner, reset or retry path found the same fault in pass after pass. The first
+# pass reads the brief's Data design section before the diff.
+DATA_DESIGN='Before anything else, check the Data design section of the unit brief: for each piece of state it names (where it lives, who writes it, who reads it, when it resets, what a retry runs), the diff must keep to it. Report as P1 (class: data-design) state the diff adds or changes that the section does not name, an owner, reset or retry the diff contradicts, and a section that is empty or still the template'"'"'s placeholder.'
 # Issue 282: an exception a comment justified hid a real gap for months.
 EXCEPTION='An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the alternative it claims, or the entry cites an owner ruling id. A comment is not proof. Report an entry that has neither as P1.'
-FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $EXCEPTION"
+FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $ORDERINGS $EXCEPTION"
 # Asked in every pass and by every reviewer, after its focus.
 LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -136,7 +141,7 @@ $CLOSE
 # handed all three; on a small build it is one reviewer (SMALL_BUILD).
 ANGLES=(
   "Angle 1 of 3, bypass and trust: can any check, guard, proof or gate in this change be skipped, forged or made to pass when it should refuse? Look at every input the change trusts. $EXCEPTION"
-  "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER"
+  "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER $ORDERINGS"
   'Angle 3 of 3, tests and words: a changed behaviour with no test, a test that cannot fail, and comments, rule text or docs the change leaves untrue.'
 )
 # The first line of the review input says which pass this is, then "Reviewer <k>
@@ -760,7 +765,7 @@ UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|f
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 MAX_ROUNDS=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') || exit 2
 # Each reviewer leads with its own angle and carries the whole checklist: the rule gives every reviewer the same full scope.
-case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
+case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
 [ "$ACK" = 1 ] || review_gh_check "$WT"  # an acknowledgement reads no GitHub
@@ -834,6 +839,12 @@ if [ "$KIND" = review ] && { [ ! -e "$SCOPE_REC" ] || [ "$SCOPE" != "$(cat "$SCO
   KIND=final
   echo "The brief or main's rulings for $UNIT changed since the last pass, or no record of them was kept: this pass reads the whole branch, as the closing pass does (Pass: final)."
 fi
+# Issue 341 (F4): a class that came back is redesigned, and the pass after that fix reads the whole branch: a narrowed
+# pass would read only the redesign and leave the rest of the branch on the old model.
+if [ "$KIND" = review ] && grep -qF 'Fix the design for the whole class (one fence or stamp)' "$WT/.claude/briefs/$UNIT-fix-r$((N - 1)).md" 2>/dev/null; then
+  KIND=final
+  echo "The fix round before this pass redesigned a class that came back: this pass reads the whole branch, as the closing pass does (Pass: final)."
+fi
 # Issues 260 and 266: a narrowed GO after a closing pass merges nothing, and the final after it read the same tip
 # again. A finding normal use would hit blocks the merge, so after any closing pass the review is the closing pass.
 if [ "$KIND" = review ]; then
@@ -901,9 +912,45 @@ Run codex login, then run the pass again. No commit, no reviewer, no round file.
 fi
 
 stage_and_check
+# rebase_and_test -- before a closing (final) pass (issue 344, host issue 3171): the unit is rebased onto current local
+# main, so the pass reads what will merge, and when main moved the shell tests that cover the unit's changed files and
+# the files main changed since the old base run, so a clash with main fails here and not at the merge. Selection is
+# shell-tests-for.sh, never the full suite. A conflict stops the pass: the rebase is aborted, the conflicting files are
+# named, nothing is resolved here.
+rebase_and_test() {
+  local old new conflicts files tests own t log=$PP_SCRATCH/$UNIT-rebase-r$N.log pend
+  [ "$KIND" = final ] || return 0
+  # A red run leaves the unit already on main, so a retry would find nothing to do: the old base stays on record until the tests pass.
+  pend=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-rebase-pending-$UNIT
+  old=$(cat "$pend" 2>/dev/null) || old=$(git -C "$WT" merge-base main HEAD) || die "cannot find where $UNIT left local main in $WT"
+  new=$(git -C "$WT" rev-parse -q --verify main) || die "cannot find local main in $WT"
+  [ "$old" != "$new" ] || return 0
+  if ! COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase main >/dev/null 2>&1; then
+    conflicts=$(git -C "$WT" diff --name-only --diff-filter=U | paste -sd' ' -)
+    COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase --abort >/dev/null 2>&1 || true
+    die "REBASE CONFLICT: $UNIT does not rebase onto current local main (${conflicts:-no file named}). The rebase was aborted and the branch is as it was; no reviewer was run. Main resolves the conflict, then run the pass again: builder-codex-pass.sh $UNIT $N final"
+  fi
+  echo "rebased $UNIT onto local main ${new:0:8} (was based on ${old:0:8})"
+  echo "$old" > "$pend"
+  files=$({ git -C "$WT" diff --name-only "$new...HEAD"; git -C "$WT" diff --name-only "$old" "$new"; } | sort -u)
+  tests=$(cd "$WT" && bash "$HERE/shell-tests-for.sh" <<<"$files") || die "shell-tests-for.sh failed in $WT"
+  [ -n "$tests" ] || { rm -f "$pend"; echo "no shell test covers the files $UNIT or main changed since the old base"; return 0; }
+  mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the rebase test log"
+  # An `# own-lane:` test is skipped by the ordinary run, so it gets its own call, as the merge does.
+  own=$(for t in $tests; do sed -n '1,5p' "$WT/$t" | grep -q '^# own-lane:' && echo "$t"; done || true)
+  : >"$log"
+  # shellcheck disable=SC2086 -- the paths hold no whitespace (shell-tests-for.sh matches [^/]+\.test\.sh)
+  { (cd "$WT" && bash "$HERE/run-shell-tests.sh" $tests) >>"$log" 2>&1 \
+      && { [ -z "$own" ] || (cd "$WT" && bash "$HERE/run-shell-tests.sh" --own-lane $own) >>"$log" 2>&1; }; } \
+    || die "after the rebase onto main, tests that cover what $UNIT or main changed are red (full output $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
+$(grep -E '^(FAIL|       FAIL)' "$log" | head -10)"
+  rm -f "$pend"
+  echo "tests after the rebase: $(grep -E '^[0-9]+ passed' "$log" | tail -1)"
+}
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
 git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N"
+rebase_and_test
 SHA=$(git -C "$WT" rev-parse HEAD)
 # The suite runs on the tip just committed, before any reviewer starts. Its line goes first in the review input,
 # where --verify reads it from the prompt the pass recorded; a red run makes the pass NO-GO whatever the reviewer says.
@@ -934,7 +981,7 @@ fi
 RULE_LINE=""
 if [ "$KIND" = adversarial ]; then
   SIZE=$(build_size "$WT" "$SHA") || exit 2
-  ! one_reviewer_fits "$SIZE" || FOCI=("All three angles, in this one review. ${ANGLES[*]}")
+  ! one_reviewer_fits "$SIZE" || FOCI=("$DATA_DESIGN All three angles, in this one review. ${ANGLES[*]}")
   RULE_LINE="Reviewers: ${#FOCI[@]} ($(size_words "$SIZE"); $SMALL_WORDS, else three)"
   echo "$RULE_LINE"
 fi
@@ -1214,17 +1261,36 @@ HAND=$WT/.claude/briefs/$UNIT-fix-r$N.md
 # Open decisions naming the unit, read again now: one opened during the pass binds this round too.
 OPEN=$(holds | grep -v '^The owner answered ' || true)
 REPEAT=$(bash "$HERE/read-verdict.sh" --repeat-class "$OUT" 2>/dev/null | sed -n 's/^REPEAT CLASS: //p' || true)
+# Issue 341 (F3, F2): every finding of the build so far, by class, with this pass's included, and the classes the
+# evidence file's failure table does not name yet.
+FSF=$({ grep -E "$FINDING" <<<"$EARLIER" || true; grep -E "$FINDING" "$OUT" || true; } | grep -vE '^(Earlier pass |VERDICT)' | awk '
+  function cls(l) { if (match(l, /\(class: [^)]*\)/)) return substr(l, RSTART + 8, RLENGTH - 9); return "no class" }
+  !seen[$0]++ { c = cls($0); if (!(c in n)) order[++k] = c; n[c]++; list[c] = list[c] $0 "\n" }
+  END { for (i = 1; i <= k; i++) { c = order[i]; printf "### %s (%d finding%s)\n\n%s\n", c, n[c], n[c] == 1 ? "" : "s", list[c] } }')
+FTAB=$(awk 'on && /^#/ { on = 0 } on { print } tolower($0) ~ /^#+[[:space:]]+failure table/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+NOTAB=$(sed -n 's/^### \(.*\) ([0-9]* findings\{0,1\})$/\1/p' <<<"$FSF" | grep -vx 'no class' | while IFS= read -r c; do grep -qF -- "$c" <<<"$FTAB" || echo "$c"; done | paste -sd, - | sed 's/,/, /g' || true)
 {
   printf '# %s: fix round after pass %s\n\n' "$UNIT" "$N"
   where "the findings say what to fix. Open it only when a finding needs it"
   printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n' "$N" "$((N + 1))"
-  printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n\n'
-  printf '## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
+  printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n'
+  printf -- '- A closing (final) pass first rebases this unit onto current local main and, when main moved, runs the shell tests that cover what you or main changed. A conflict or a red test stops it before the reviewer: fix a red test, send a conflict to main as a question.\n\n'
+  printf '## Findings so far\n\nEvery finding of this build'"'"'s passes so far, this pass'"'"'s included, by class. A class with several findings, or one that returns, is one flaw seen again and again: fix it as a class.\n\n%s\n' "${FSF:-None with a level or a class tag.}"
+  [ -z "$NOTAB" ] || printf 'Classes not yet in the failure table of the evidence file: %s. Add a row for each (pass, class, what failed, fixed by, test) before the next pass.\n' "$NOTAB"
+  printf '\n## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
   [ -z "$OPEN" ] || printf '\n## Open decisions (HOLD)\n\n%s\n\nDo not fix a finding tagged [HOLD <id>] or one that touches these questions: send it to main as a question with the id, and fix the rest.\n' "$OPEN"
-  # Issues 261 and 303: a class back in two passes in a row is fixed as a class, once, not input by input.
-  [ -z "$REPEAT" ] || printf '\n## The same class again\n\nFindings of class %s came back in two passes in a row (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser), fix the other findings first, then send main that approach as a question. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. If the approach touches an open decision, ask main first.\n' \
-    "${REPEAT% (*}" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
+  # Issues 261, 303 and 2894: a class back in two passes in a row is fixed as a design, once, not input by input, and
+  # main hears nothing for it. A class that comes back after a design fix (the previous hand-off carries this block's
+  # second-return line) is a redesign: the Builder asks main one question, through ask-main.sh (issue 335).
+  if [ -n "$REPEAT" ]; then
+    printf '\n## The same class again\n\nFindings of class %s came back in two passes in a row (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser). Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far, in this order. First update the Data design and the failure table in the evidence file so they account for every case found so far. Then change the code to match them. The next pass reads the whole branch. Send main nothing for it. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. Start one background read-only agent now (an Explore helper, with the issue in its description): it lists every site in the changed files, and the scripts they source, where the flaw of this class can occur, checked against the class'"'"'s ruling, as a compact list. Fix or justify each site before the next pass, and write one line per site in the evidence file: `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`. If the approach touches an open decision, ask main first.\n' \
+      "${REPEAT% (*}" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
+    if grep -qF 'Fix the design for the whole class (one fence or stamp)' "$WT/.claude/briefs/$UNIT-fix-r$((N - 1)).md" 2>/dev/null; then
+      printf '\nThis class has now returned three times. Fix the other findings first, then ask main one question, which waits for its answer: bash %s/ask-main.sh "%s: third return" "<the redesign you propose>". Build what main answers (a redesign by default; main asks the owner only for a policy call).\n' \
+        "$HERE" "${REPEAT%% (*}"
+    fi
+  fi
   # Issue 264: each finding's test, by the rule run-shell-tests.sh --changed uses for a same-name test.
   # A finding's place is the first " -- <path>:<line> -- " on its line: one its text quotes comes later.
   TPF=$({ grep -E "$FINDING" "$OUT" || true; } | awk 'match($0, / -- [^ :]+:[0-9]+ -- /) { p = substr($0, RSTART + 4, RLENGTH - 8); sub(/:/, " ", p); if (!seen[p]++) print p }' | while read -r p l; do

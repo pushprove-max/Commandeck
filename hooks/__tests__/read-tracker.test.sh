@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # read-tracker.sh's MCP-unused tripwire. A worker that searches source by shell 25 times and never asks serena
-# or codebase-memory is told, and main is told by an escalation built from the worker's own dispatch preamble.
-# Orca's newer preambles carry no dispatch capability: a send line without one must still reach main, or main
-# is never told.
+# or codebase-memory is told to record it as a main-only deferred item; main is sent nothing (message cuts).
 set -u
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
@@ -12,7 +10,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); 
 git init -q -b main "$T/main" && git -C "$T/main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 git -C "$T/main" worktree add -q "$T/wt" -b work 2>/dev/null
 mkdir -p "$T/bin"
-# A file named refuse makes the send fail, as an Orca that refuses it does.
+# Any call to orca-ide is logged: the tripwire must make none.
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/orca.calls"\n[ ! -e "%s/refuse" ] || exit 1\n' "$T" "$T" > "$T/bin/orca-ide"; chmod +x "$T/bin/orca-ide"
 # trip <session> <preamble send line> -- the 25th source search of a session; prints the hook's exit code.
 trip() {
@@ -23,18 +21,19 @@ trip() {
   rm -f "/tmp/claude-mcp-unused-told-$1" "/tmp/claude-mcp-shell-searches-$1"
 }
 S=rt-$$
-check "the 25th shell search with no MCP call is refused" 2 "$(trip "$S-a" "orca orchestration send --from term_w1 --type escalation")"
-check "and main is told, from a preamble with no dispatch capability" "orchestration send --from term_w1 --type escalation" \
-  "$(grep -o 'orchestration send --from term_w1 --type escalation' "$T/orca.calls" 2>/dev/null)"
-check "with the dispatch's ids" 1 "$(grep -c -- '--task-id task_1 --dispatch-id ctx_1' "$T/orca.calls" 2>/dev/null)"
-rm -f "$T/orca.calls"
-trip "$S-b" "orca orchestration send --from term_w2 --dispatch-capability dcap_9 --type escalation" >/dev/null
-check "an older preamble's capability is kept" 1 "$(grep -c 'send --from term_w2 --dispatch-capability dcap_9 --type escalation' "$T/orca.calls" 2>/dev/null)"
-# Issue 331: the escalation Orca takes writes one sent line; one Orca refuses writes one refused line.
-logged() { jq -rs 'map("\(.from):\(.result)") | join(",")' "$T/sc/wake-log.jsonl" 2>/dev/null; }
-check "the MCP-unused escalation Orca accepts writes one sent line" "read-tracker:sent,read-tracker:sent" "$(logged)"
-rm -f "$T/sc/wake-log.jsonl"; touch "$T/refuse"
-trip "$S-c" "orca orchestration send --from term_w3 --type escalation" >/dev/null; rm -f "$T/refuse"
-check "and one Orca refuses writes one refused line" "read-tracker:refused" "$(logged)"
+OUT=$(printf '%s\n' "orca orchestration send --from term_w1 --type escalation --subject x" "  --task-id task_1 --dispatch-id ctx_1 --outcome succeeded" > "$T/$S-a.jsonl"
+  yes '' | head -24 > "/tmp/claude-mcp-shell-searches-$S-a"
+  jq -cn --arg s "$S-a" --arg t "$T/$S-a.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Bash", tool_input: {command: "rg foo src/"}}' \
+    | (cd "$T/wt" && CLAUDE_PROJECT_DIR=$T/wt COMMANDECK_HOOK_TIER=strict COMMANDECK_SERENA=1 COMMANDECK_SCRATCH="$T/sc" PATH="$T/bin:$PATH" bash "$SOURCE/hooks/read-tracker.sh" 2>&1 >/dev/null; echo "rc=$?"))
+rm -f "/tmp/claude-mcp-unused-told-$S-a" "/tmp/claude-mcp-shell-searches-$S-a"
+# Message cuts: the nudge is for the worker alone; main is sent nothing and no wake line is written.
+check "the 25th shell search with no MCP call is refused" 1 "$(grep -c '^rc=2$' <<<"$OUT")"
+check "MCP unused warns the worker once, to record it as a main-only deferred item" 1 "$(grep -c 'Record it under `## Main-only (deferred)`' <<<"$OUT")"
+check "and sends nothing to main, nor writes a wake line" "0:0" "$(cat "$T/orca.calls" 2>/dev/null | wc -l | tr -d ' '):$(cat "$T/sc/wake-log.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
+# Host issue 3147: a session whose gate found the server missing was told so with a note; the tripwire adds nothing.
+touch "/tmp/claude-mcp-down-$S-b"
+check "no MCP-unused warning in a session whose gate saw the server missing" 0 "$(trip "$S-b" "orca orchestration send --from term_w1 --type escalation")"
+rm -f "/tmp/claude-mcp-down-$S-b"
+check "the same session without that flag is refused at the 25th search" 2 "$(trip "$S-b" "orca orchestration send --from term_w1 --type escalation")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -66,7 +66,7 @@ if ! printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1; then
   echo "$(date +%FT%T) restart: resume prompt REFUSED by $new ($(printf '%s' "$sent" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)); old pane $old LEFT UP" >>"$log"
   # Only a closed replacement re-arms the retry (as a failed create does);
   # left open, it would stand as a second main beside the retry's pane.
-  if orca-ide terminal close --terminal "$new" --json 2>>"$log" | jq -e '.ok' >/dev/null 2>&1; then
+  if pp_pane_close "$new" "restart: unprompted new"; then
     rm -f "$cp.restarted"
     echo "$(date +%FT%T) restart: closed unprompted $new; next stop retries" >>"$log"
   else
@@ -81,9 +81,8 @@ rm -f "${cp%.md}.handoff"
 # ran, goes to the live pane and not the closed one.
 pp_handle_record main "$new"
 echo "$(date +%FT%T) restart: new pane $new resumed from $cp; closing $old" >>"$log"
-res=$(orca-ide terminal close --terminal "$old" --json 2>&1)
-printf '%s' "$res" | jq -e '.ok' >/dev/null 2>&1 \
-  || echo "$(date +%FT%T) restart: close of $old REFUSED ($(printf '%s' "$res" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)); unpin and close it by hand" >>"$log"
+pp_pane_close "$old" "restart: old main" \
+  || echo "$(date +%FT%T) restart: close of $old REFUSED ($(printf '%s' "$PP_CLOSE_RES" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)); unpin and close it by hand" >>"$log"
 # Finished panes otherwise pile up across restarts (ruling 2026-09-23). The
 # new main sits in the main checkout, which the sweep never touches. The handoff
 # is already done, so a failed sweep is only logged.

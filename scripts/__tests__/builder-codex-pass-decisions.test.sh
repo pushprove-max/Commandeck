@@ -32,7 +32,7 @@ check "the prompt names the open decision and the answered one with its answer" 
   "$(input 18 | grep -c 'Open question to the owner q-1999-01-01-open: Keep the old reply?') $(input 18 | grep -c 'The owner answered q-1999-01-01-done (Drop the cache?): drop it')"
 check "the hand-off has the HOLD section with the open id only, after the findings" "1 1 0 1" \
   "$(hand 18 | grep -cx '## Open decisions (HOLD)') $(hand 18 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-open') \
-$(hand 18 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-done') $(hand 18 | grep -n '^## ' | sed -n 1p | grep -c 'What pass 18 found')"
+$(hand 18 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-done') $(hand 18 | grep '^## ' | sed -n '/What pass 18 found/,$p' | grep -cx '## Open decisions (HOLD)')"
 # Issues 260 and 266: a review after a closing pass that found a P1 merged nothing on its GO; it runs as the closing pass.
 printf 'echo nineteen\n' > "$W/a.sh"; chk19() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" 19 review 2>&1); }
 check "--check prints the same pick: final in place of review" 1 "$(chk19 | grep -c '^final in place of review: .*this is the closing pass, its GO merges and no separate final follows')"
@@ -68,8 +68,8 @@ $([ -f "$W/$(grep -o 'test hooks/__tests__/[^ ;,]*' <<<"$TPF" | head -1 | cut -d
 check "a finding on a file with no same-name test says so" 1 "$(grep -c '^- a.sh:1: no same-name test: name the test file in the evidence before the fix' <<<"$TPF")"
 check "a place the finding's text quotes gets no test line" 0 "$(grep -c 'q.sh:9' <<<"$TPF")"
 check "two different classes add no approach line" 0 "$(hand 21 | grep -c 'came back in two passes in a row')"
-check "the hand-off's sections run findings, tests per finding, rulings, touched tests (the round file's and rulings' own headings inside them)" \
-  "What pass 21 found,Sol,Tests per finding,Main's rulings,1. RULING-PROBE: keep the probe,Cleared findings,Test files this build touched" \
+check "the hand-off's sections run findings so far, findings, tests per finding, rulings, touched tests (the round file's and rulings' own headings inside them)" \
+  "Findings so far,What pass 21 found,Sol,Tests per finding,Main's rulings,1. RULING-PROBE: keep the probe,Cleared findings,Test files this build touched" \
   "$(hand 21 | sed -n 's/^## //p' | sed 's/ (.*//' | paste -sd, -)"
 check "the touched-tests list names test files only, not a fixture beside them" "1 0" \
   "$(hand 21 | sed -n '/^## Test files/,$p' | grep -c 'y.test.sh') $(hand 21 | grep -c 'fixture.txt')"

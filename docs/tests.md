@@ -25,6 +25,24 @@ This selects edited tests and same-name tests for changed scripts or hooks;
 it does not discover every caller of a shared helper. With no base argument,
 the base is HEAD. Documentation changes select no shell tests.
 
+Add `--callers` to also select every test that names a changed script or hook
+by its file name, and the tests that name those tests, until nothing new turns
+up (`scripts/shell-tests-for.sh` does the selecting; a shared helper selects
+many tests):
+
+```bash
+bash scripts/run-shell-tests.sh --changed main --callers
+```
+
+To know whether a test file needs a new run, ask what it reads. It prints
+`unchanged <file>` when neither the file, nor a script it names, nor a file those
+source has changed since the commit, and `changed <file>` otherwise (or when it
+cannot tell):
+
+```bash
+bash scripts/test-inputs.sh <commit> <test file>...
+```
+
 The other repository checks are:
 
 ```bash

@@ -35,6 +35,12 @@ LOST=$(while IFS= read -r l; do [ -z "$l" ] || grep -qF -- "$l" <<<"$MSG" || pri
 # No marker and no ask line, no send: a mid-work turn end has nothing for main, and
 # main-watch's and seat.sh wait's own timers catch a pane that stopped silently.
 [ -n "$ASK" ] || printf '%s' "$MSG" | grep -qE -- '-DONE|VERDICT:|PLANFIX' || exit 0
+# A NO-GO goes back to the Builder through its fix round, so main has nothing to act on. Only a NO-GO that is the
+# last line is silent: one quoted earlier in a turn that ends on a DONE marker is still that turn's report. A turn
+# with an ask line is never silenced: its question or refusal reaches main.
+[ -z "$ASK" ] && printf '%s' "$MSG" | awk 'NF { l = $0 } END { gsub(/^[ \t]+|[ \t]+$/, "", l); exit l != "VERDICT: NO-GO" }' && exit 0
+# Deliberate gap against the Claude twin: a Codex payload carries no transcript, so a Codex GO/DONE cannot tell
+# whether the unit already sent worker_done and keeps this echo.
 command -v orca-ide >/dev/null || exit 0
 # A unit with a live drive, loop or run driver reports through that driver, and
 # this send would wake main for nothing. Only a positive answer

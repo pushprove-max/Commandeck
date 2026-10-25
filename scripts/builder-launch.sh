@@ -78,6 +78,18 @@ pp_unit_name "$UNIT" || exit 2
 BT=$(cat "$BATCH"; echo .) BT=${BT%.}
 # Every batch says which standard governs it, what library or service already does it, and why we build if we do.
 grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
+# Issue 341: every batch states its data design. The section holds a line of its own beyond the template's guidance (the
+# paragraph that starts "Required:") and any <placeholder> line; "none: <why>" is an answer. A batch with no Data design
+# heading at all was written before 0.46.0 (the template carries the heading since), valid then and maybe already judged:
+# it opens, and its brief has the Builder write the data design before the first edit (LEGACY_DD).
+# shortcut: a new batch that drops the heading passes as an old one; drop this path once no pre-0.46.0 batch is in flight.
+DD=$(awk '/^#+[[:space:]]/ { on = tolower($0) ~ /^#+[[:space:]]+data design([[:space:]:]|$)/; req = 0; next } !on { next }
+  /^Required:/ { req = 1 } /^[[:space:]]*$/ { req = 0; next } !req && !/<[^>]*>/ { print }' "$BATCH")
+LEGACY_DD=
+if [ -z "$DD" ] && ! grep -qiE '^#+[[:space:]]+data design([[:space:]:]|$)' "$BATCH"; then
+  echo "NOTE: $BATCH has no Data design section (a batch written before 0.46.0): the Builder writes it in the evidence file before the first edit" >&2
+  LEGACY_DD="This batch was written before the Data design section: before the first edit write the evidence file's \`## Data design\` yourself (for each piece of state the batch adds or changes: where it lives, who writes it, who reads it, when it resets, what a retry runs; or \`none: <why>\`). It binds as the batch's would."
+elif [ -z "$DD" ]; then echo "REFUSED: $BATCH has no Data design section (a '## Data design' heading with a line under it): for each piece of state the batch adds or changes, say where it lives, who writes it, who reads it, when it resets and what a retry runs; or 'none: <why no state is added or changed>'" >&2; exit 2; fi
 WT=$PP_WORKSPACES/$UNIT
 # A new unit opens only on an order that names it (issue 234): the batch's ## Launch section quotes the order.
 LAUNCH=$(sed -n 's/^Launch:[[:space:]]*//p' "$BATCH" | head -1 | sed 's/[[:space:]]*$//')
@@ -143,10 +155,11 @@ if [ "$FROM" = 1 ]; then
       [ "$(rv "$r" plan)" = "$WP" ] && [ "$c" -gt "$JAT" ] && [ "$c" -gt "$AT" ] || continue
       A=$r AT=$c
     done
-    [ -z "$A" ] || [[ $(rv "$A" verdict) != PLAN-DONE* ]] || WANT=$(rv "$A" planhash)
+    # PLAN-WRITTEN and PLAN-REVISED are finishes as PLAN-DONE is (issue 342): a plan spec may name any of the three.
+    [ -z "$A" ] || case $(rv "$A" verdict) in PLAN-DONE*|PLAN-WRITTEN*|PLAN-REVISED*) WANT=$(rv "$A" planhash) ;; esac
   fi
   [ -n "$WANT" ] && [ "$(sha256sum < "$FROZEN" | cut -d' ' -f1)" = "$WANT" ] \
-    || nope "$WP is not the plan the judge read ($(rv "$J" verdict) in $J), nor the plan author's revision collected PLAN-DONE after a NO-GO${A:+ ($(rv "$A" verdict) in $A)}; judge this plan again"
+    || nope "$WP is not the plan the judge read ($(rv "$J" verdict) in $J), nor the plan author's revision collected PLAN-DONE (or PLAN-WRITTEN, PLAN-REVISED) after a NO-GO${A:+ ($(rv "$A" verdict) in $A)}; judge this plan again"
   if [ "$DRY" = 0 ]; then
     pp_sync_main "$PP_MAIN" || exit 1
     # A retry after a later failure finds the plan on main byte for byte and goes on.
@@ -243,6 +256,7 @@ else T=${T//'{ponytail}'/"- \`/ponytail $PONYLEVEL\`: the smallest complete chan
 # Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 [ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}
+[ -z "$LEGACY_DD" ] || T=${T/$'\n## Data design\n\n'/$'\n## Data design\n\n'"$LEGACY_DD"$'\n\n'}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
 SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2

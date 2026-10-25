@@ -60,7 +60,7 @@ printf 'echo seven\n' > "$W/a.sh"
 check "a NO-GO pass from the Builder's pane ends 0 and tells the old session to stop" "0 1" \
   "$(fpass "$W" 7 review "$NOGO") $(grep -c '^FIX ROUND 7: end your turn now' "$TMP/out")"
 H7=$B/$U-fix-r7.md
-check "the hand-off stands alone: brief, evidence, the findings, main's rulings inlined, the task and the touched tests" "1 1 1 1 1 1" \
+check "the hand-off stands alone: brief, evidence, the findings, main's rulings inlined, the task and the touched tests (the finding shows under Findings so far and under what the pass found)" "1 1 2 1 1 1" \
   "$(grep -c "$B/$U.md\$" "$H7") $(grep -c "$B/$U-evidence.md\$" "$H7") $(grep -c 'FINDING-PROBE' "$H7") $(grep -c 'RULING-PROBE' "$H7") $(grep -c 'Orca task: task_frs' "$H7") $(grep -cF 'x/__tests__/y.test.sh' "$H7")"
 # Each fix-round session read the whole brief at start, about 37K cache-write tokens a
 # time. The findings say what to fix; the brief stays reachable by path for the finding that needs it.
@@ -79,7 +79,7 @@ check "main's seat record now names the new session, not the cleared one" "sessi
 rm -f "$TMP/frs-calls"; printf 'echo eight\n' > "$W/a.sh"
 check "a pane that is gone before it goes idle: the pass still ends 0" 0 "$(fpass "$W" 8 review "$NOGO" FRS_IDLE=1 FRS_GONE=1)"
 helper_done 8
-check "and the helper types nothing and says why" "0 1" \
+check "and the helper types nothing and says why (the hand-off is tried twice, so the reason is logged per attempt)" "0 2" \
   "$(grep -c 'terminal send' "$TMP/frs-calls") $(grep -c 'pane term_frs is gone; nothing typed' "$SC/$U-fix-r8.log")"
 rm -f "$TMP/frs-calls"; printf 'echo nine\n' > "$W/a.sh"
 check "a GO pass hands nothing over" "0 0 0" \
@@ -92,7 +92,7 @@ check "a NO-GO pass from another pane (its handle not the seat record's) hands n
 rm -f "$TMP/frs-calls"
 (cd "$W" && env PATH=$FB:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 FRS_CALLS=$TMP/frs-calls FRS_PROJ=$PROJ FRS_SEND_FAILS=1 \
   timeout 30 bash "$REAL/scripts/builder-fresh-round.sh" term_frs "$H7" > "$TMP/frs.out" 2>&1); R=$?
-check "a /clear Orca refuses: exit 1, Orca's answer in the log, and main is told" "1 1 1" \
+check "a /clear Orca refuses: exit 1, Orca's answer in the log once per attempt (one retry), and main is told once" "1 2 1" \
   "$R $(grep -c 'typing /clear into term_frs failed (orca: PROBE-REFUSAL)' "$TMP/frs.out") $(cat "$TMP/frs-calls" "$SC/queue/main.jsonl" 2>/dev/null | grep -c "fresh round not started: ${H7##*/}")"
 
 

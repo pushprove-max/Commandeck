@@ -29,7 +29,7 @@ echo '{"ok":true,"result":{}}'
 EOS
 chmod +x "$T"/bin/orca-ide "$T"/plug/scripts/*.sh
 # batchfor <unit> [launch line] -- the batch, its Launch line naming <unit> as a new unit unless one is given (issue 234).
-batchfor() { printf '## The issues\n\n1. #1: x\n\n## Launch\n\n%s\nOrder: build issue 1\n\n## Prior art\n\nnone\n\n## Plan\n\n.claude/plans/toy.md\n' "${2-Launch: new unit $1}" > "$T/batch.md"; }
+batchfor() { printf '## The issues\n\n1. #1: x\n\n## Launch\n\n%s\nOrder: build issue 1\n\n## Prior art\n\nnone\n\n## Data design\n\nnone: no state is added or changed\n\n## Plan\n\n.claude/plans/toy.md\n' "${2-Launch: new unit $1}" > "$T/batch.md"; }
 launch() { batchfor u1; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" --risky "$@" u1 "$T/batch.md" </dev/null 2>&1); }
 # build <unit> -- a launch with no --risky; RC and $T/out hold its exit and output.
 build() { batchfor "$1"; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }

@@ -15,7 +15,8 @@ IS_ERROR=$(echo "$INPUT" | jq -r 'if (.tool_response|type) == "object" then (.to
 # A worker that searches with the shell and never asks serena or
 # codebase-memory is working blind (cut 1, 2026-09-18: 245 rg, 0 MCP calls).
 # Any MCP call, even an errored one, shows the tools are in use. Past this many
-# shell searches with none, the worker is nudged and main told, once.
+# shell searches with none, the worker is nudged, once. Main is not sent a
+# message: the worker records it in its evidence file.
 MCP_UNUSED_AFTER=25
 MCP_KEY=$(echo "$INPUT" | jq -r '.session_id // empty'); MCP_KEY=${MCP_KEY:-${CLAUDE_SESSION_ID:-${PPID}}}
 case "$TOOL_NAME" in mcp__serena__*|mcp__codebase-memory__*) : > "/tmp/claude-mcp-used-$MCP_KEY" ;; esac
@@ -24,8 +25,9 @@ case "$TOOL_NAME" in mcp__serena__*|mcp__codebase-memory__*) : > "/tmp/claude-mc
 # file, counts: a builder editing .claude/hooks has nothing for serena to answer,
 # and the nudge fired on one on 2026-09-18.
 mcp_unused_tripwire() {
-  local N="/tmp/claude-mcp-shell-searches-$MCP_KEY" TOLD="/tmp/claude-mcp-unused-told-$MCP_KEY" DIR GD TP LINE IDS
-  [ -e "/tmp/claude-mcp-used-$MCP_KEY" ] || [ -e "$TOLD" ] && return 0
+  local N="/tmp/claude-mcp-shell-searches-$MCP_KEY" TOLD="/tmp/claude-mcp-unused-told-$MCP_KEY" DIR GD
+  # A session whose gate saw the server missing (pane-budget-gate.sh) was told so already.
+  [ -e "/tmp/claude-mcp-used-$MCP_KEY" ] || [ -e "$TOLD" ] || [ -e "/tmp/claude-mcp-down-$MCP_KEY" ] && return 0
   printf '%s' "$1" | grep -qE '(^|[;&|(])[[:space:]]*(rg|grep|cat|sed[[:space:]]+-n)[[:space:]]' || return 0
   # Path OPERANDS only: a search pattern such as 'src/|shared/' is not a path.
   CMD=$1 python3 - <<'PY' || return 0
@@ -78,19 +80,7 @@ PY
   DIR=${CLAUDE_PROJECT_DIR:-$PWD}
   GD=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-dir 2>/dev/null) || return 0
   [ "$GD" = "$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-common-dir 2>/dev/null)" ] && return 0
-  # The send line comes from the dispatch preamble in this session's transcript.
-  # Newer Orca preambles carry no dispatch capability, so it is optional; an
-  # older preamble's capability is kept.
-  TP=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
-  LINE=$(grep -oE 'send --from term_[A-Za-z0-9_-]+( --dispatch-capability dcap_[A-Za-z0-9_-]+)? --type escalation' "$TP" 2>/dev/null | tail -1)
-  IDS=$(grep -oE -- '--task-id task_[A-Za-z0-9_]+ --dispatch-id ctx_[A-Za-z0-9_]+' "$TP" 2>/dev/null | tail -1)
-  # Unquoted on purpose: both captures are flag/value pairs of [A-Za-z0-9_-].
-  [ -z "$LINE" ] || [ -z "$IDS" ] || timeout 10 orca-ide orchestration $LINE \
-    --subject "$(basename "$DIR"): $MCP_UNUSED_AFTER shell searches, no serena or codebase-memory call" \
-    --body "Worker $(basename "$DIR") (pane ${ORCA_TERMINAL_HANDLE:-unknown}, session $MCP_KEY) has run $MCP_UNUSED_AFTER source searches and no MCP call." \
-    $IDS --json >/dev/null 2>&1 && R=sent || R=refused
-  [ -z "$LINE" ] || [ -z "$IDS" ] || { . "${BASH_SOURCE[0]%/*}/lib/wake-log.sh" 2>/dev/null; hook_wake_log read-tracker main "$MCP_UNUSED_AFTER shell searches, no MCP call" "$R"; }
-  echo "MCP UNUSED: $MCP_UNUSED_AFTER shell searches and not one serena or codebase-memory call. Use serena find_symbol / find_referencing_symbols and codebase-memory search_graph / trace_path for code; if they are missing from this session, stop and say so. Main has been told." >&2
+  echo "MCP UNUSED: $MCP_UNUSED_AFTER shell searches and not one serena or codebase-memory call. Use serena find_symbol / find_referencing_symbols and codebase-memory search_graph / trace_path for code; if they are missing from this session, stop and say so. Record it under \`## Main-only (deferred)\` in the evidence file and go on." >&2
   return 2
 }
 

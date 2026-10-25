@@ -7,48 +7,43 @@ const since = atom({ plugin: 'commandeck', key: 'autoDecideSince' } as const, nu
 // "### " entries in the current (or, while off, the last) run's log: one per decision.
 const count = atom({ plugin: 'commandeck', key: 'autoDecideCount' } as const, 0)
 
-type Mode = { log: string; since: string; how: string }
+type Mode = { log: string; since: string }
 type Seat = { name: 'chiefOfStaff' | 'main'; main: string }
 
-// One-off exceptions to standing rules: these are never decided for the owner. `autoDecideNever` in the project's
-// .claude/commandeck.json adds the owner's own.
-const NEVER = [
-  'admin access to production',
-  'copying production data',
-  'the licence or consent of data used for training',
-  'security thresholds and minimums',
-  'network or write access for a seat',
-  'the configured values of product settings',
-]
-
-// Examples of how an owner may decide, shown only when the decisions ledger has too few owner answers to learn from.
-const EXAMPLES = [
-  'Take the recommended option when it is well argued.',
-  'Pick the complete fix over the narrow one.',
-  'Security patches and dependency advisories: yes, at once.',
-  'A review that finds the same class of deliberate bypass again and again: accept the gap, record it as a stated limit.',
-  'Do not push half a feature: wait until the related issues are built.',
-]
+// One-off exceptions to the owner's standing rules: these are never decided for them. The sentence ships fixed, as the
+// owner wrote it. `autoDecideNever` in the project's .claude/commandeck.json adds the owner's own after it.
+const NEVER =
+  'using an admin PROD login, copying PROD images or personal data, the licence or consent of training data, verification or score lines, giving a seat network or write access, password or security minimums, accepting a rollout gap on a security change, and the configured values of product settings in DEV or PROD ("leave things as they are, i\'ll change them myself")'
 
 const RELAY_ORDER = '~/.commandeck/plugin/scripts/relay-order.sh'
 
-const rules = (m: Mode, never: string[]) => `# AUTO-DECIDE IS ON (the owner turned it on at ${m.since} with /autodecide on)
+// How the owner decides, shipped fixed: the owner's own pattern, not a reading of the ledger.
+const HOW = `  - Default: take the recommended option when it is well argued.
+  - Pick the complete fix over the narrow one: "do both", "fix everything and re-review", one unit per part, the plugin follows the host project's rule and defaults.
+  - Security patches and dependency advisories: yes, at once.
+  - A review that finds the same class of deliberate bypass again and again: accept the gap, record it as a stated limit, stop the class.
+  - Backward compatibility: none when the count of old data is zero ("we have zero customers on Stripe"); protect real users' existing data when it exists (extend old links first).
+  - Cut wakes and work that only spend tokens; prefer the build that fixes a real bug, even if it costs a little more.
+  - Do not push half a feature: wait until the related issues are built.`
 
-The owner is away and has delegated their decisions to you. Pick what is best for the project's long-term health, not the fastest path.
+const rules = (m: Mode, never: string[]) => `# AUTO-DECIDE IS ON (the owner turned it on at ${m.since} ET with /autodecide on)
 
-- Do NOT ask the owner: the question picker is blocked while this is on. Decide each open dashboard decision and each question main sends yourself.
+The owner is away and has delegated their decisions to you. Their standing words (10-23): "make decisions for me on my behalf. pick the ones that are for the best long term health of the platform. keep track of the decisions you make for me in a markdown ... include the "why" you made the decision you did".
+
+- Do NOT ask the owner: no AskUserQuestion picker (it is blocked while this is on). Decide each open dashboard decision and each question main sends yourself, picking what is best for the platform's long-term health, not the fastest path.
 - Make every decision with one command: \`bash ${RELAY_ORDER} --auto <id> '<exact option label>' '<why>' '<trade-off weighed>' '<what would make you pick differently>' '<reversible: yes or no, and how>'\`. It writes the entry in the log, records the answer in the decisions ledger and tells main. Write no log entry yourself, and answer no decision any other way.
-- How the owner decides:
-${m.how}
-- Never decide, even when the pattern seems clear, because each is a one-off exception to the owner's own standing rules: ${[...NEVER, ...never].join('; ')}. Put these under "## Waiting for the owner" in the log.
-- Limits even now, which also go under "## Waiting for the owner" instead of being decided: any deploy to production or read of production data beyond counts, any push to any remote, any irreversible delete, any new unit or build the owner did not already name, and any policy call the owner reserved. Start no new work beyond what the owner already approved.
-- Keep "## Summary" at the top of ${m.log} current: what ran, what was decided, what waits for the owner.
-- When the owner next types to you, give them a short account of what you decided and point them at the log. The mode stays on until they run /autodecide off.`
+- How the owner decides (from their last 100 picks, 10-22 to 10-23; they took the recommended option at least 71 times):
+${HOW}
+- Never decide, even when the pattern seems clear, because the owner made each of these as a one-off exception to their own standing rules: ${NEVER}. These go under "## Waiting for the owner" in the log.${never.length ? ` The owner's own additions (\`autoDecideNever\`): ${never.join('; ')}.` : ''}
+- Limits even now, which go under "## Waiting for the owner" in the log instead of being decided: any PROD deploy or PROD read beyond counts, any push to any repo, any irreversible delete, any new feature flag, any new unit or build the owner did not already name, and any policy call they reserved. Do not start new work beyond what the owner already approved.
+- Keep a "## Summary" at the top of the log (${m.log}) current: what ran, what was decided, what waits for the owner.
+- When the owner next types to you, give them a short account of what you decided (point them at the log). Mode stays on until they run /autodecide off.`
 
 // Decisions is the last section, so the entries relay-order.sh --auto appends land under it.
-const logHead = (at: string) => `# Decisions made for the owner (auto-decide, from ${at})
+const logHead = (at: string) => `# Decisions made for the owner (auto-decide, from ${at} ET)
 
-The owner delegated their decisions with /autodecide on. Each entry gives the question, the pick, the why and whether it can be reversed.
+The owner delegated their decisions with /autodecide on. Each entry gives the question, the pick, **why**, and whether it can be reversed.
+Limits kept: no PROD deploy, no push, no irreversible delete, no new feature flag, no new unit.
 
 ## Summary
 
@@ -75,36 +70,11 @@ const recount = async ($: EngineInterface, log: string) => {
   return n
 }
 
+// Every time is New York time, shown with " ET".
 const clock = async ($: EngineInterface) => {
-  const r = await $.process.run(['date', '+%F|%H:%M|%F-%H%M'])
+  const r = await $.process.run(['date', '+%F|%H:%M|%F-%H%M'], { env: { TZ: 'America/New_York' } })
   const [day, time, stamp] = r.stdout.trim().split('|')
   return { at: `${day} ${time}`, day, time, stamp }
-}
-
-// The owner's last 100 answers: how often the default was taken, and where they departed from it.
-// Owner answers only: not a worker question main answers, not a re-ask, not the relay's own auto-decisions.
-const ownerPattern = async ($: EngineInterface, main: string) => {
-  const raw = (await $.fs.read(`${main}/.claude/metrics/decisions.jsonl`).catch(() => '')) as string
-  const latest = new Map<string, any>()
-  for (const line of raw.split('\n')) {
-    try {
-      const row = JSON.parse(line)
-      if (row && typeof row.id === 'string') latest.set(row.id, row)
-    } catch {}
-  }
-  const norm = (s: string) => s.replace(/ \(r-[^)]*\)$/, '').trim()
-  const rows = [...latest.values()]
-    .filter(r => r.answeredAt && !r.waitsOn && !String(r.answer).startsWith('re-asked as ') && !String(r.answer).endsWith('(auto-decided)'))
-    .sort((a, b) => String(b.answeredAt).localeCompare(String(a.answeredAt)))
-    .slice(0, 100)
-  if (rows.length < 10) return EXAMPLES.map(e => `  - ${e}`).join('\n')
-  const departures = rows.filter(r => norm(String(r.answer)) !== String(r.proposedDefault).trim())
-  const lines = [
-    `  - From the last ${rows.length} answers, the owner took the proposed default ${rows.length - departures.length} times. Take it when it is well argued.`,
-    ...departures.slice(0, 10).map(r => `  - Departed from "${r.proposedDefault}" to "${norm(String(r.answer))}" on: ${String(r.question).slice(0, 80)}`),
-    ...EXAMPLES.map(e => `  - ${e}`),
-  ]
-  return lines.join('\n')
 }
 
 const seats = new Map<string, Promise<Seat | undefined>>()
@@ -154,7 +124,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const a = await active($, gate)
     if (!a) return next(e)
-    await $.command.register({ name: 'autodecide', description: 'Decide for the owner while away: /autodecide on | off | status' })
+    await $.command.register({ name: 'autodecide', description: 'Autonomous decisions for the owner: /autodecide on | off | status' })
     // An idle seat runs no hook, so it reads the shared mode again every 5 s to catch another seat's on or off.
     stopPoll?.()
     stopPoll = $.clock.every(5000, () => void active($, gate).catch(() => undefined))
@@ -170,16 +140,18 @@ export const register: Register = (on, options) => {
     const onFile = `${main}/.claude/metrics/autodecide.on`
 
     if (arg === 'on') {
-      if (m) return { text: `auto-decide is already on (since ${m.since}). Log: ${m.log}` }
+      if (m) return { text: `auto-decide is already on (since ${m.since} ET). Log: ${m.log}` }
       const t = await clock($)
       // The name has minute precision (and DST repeats an hour): a run started in a minute that already has a log
       // gets the next free -<n> name, so no run's log is ever written over.
       const base = `${main}/.claude/metrics/autodecide-${t.stamp}`
       let log = `${base}.md`
       for (let i = 2; await $.fs.read(log).then(() => true, () => false); i++) log = `${base}-${i}.md`
-      const mode: Mode = { log, since: t.at, how: await ownerPattern($, main) }
+      const mode: Mode = { log, since: t.at }
       await $.process.run(['mkdir', '-p', `${main}/.claude/metrics`])
       await $.fs.write(mode.log, logHead(mode.since))
+      const index = `${main}/.claude/metrics/INDEX.md`
+      await $.fs.write(index, `${await $.fs.read(index).catch(() => '')}- ${t.day} auto-decide decision log: ${mode.log.slice(index.length - 'INDEX.md'.length)}\n`)
       // The shell side (relay-order.sh --auto) sees the mode, and the log, through this file.
       await $.fs.write(onFile, mode.log)
       await $.store.set(`mode:${main}`, mode)
@@ -188,7 +160,7 @@ export const register: Register = (on, options) => {
       $.ui.status('AUTO-DECIDE ON')
       await $.process.run(['orca-ide', 'tab', 'create', '--url', `file://${mode.log}`, '--worktree', `path:${await $.session.root()}`]).catch(() => undefined)
       return {
-        text: `auto-decide ON. Decisions are made for you until /autodecide off. Log (open in Orca): ${mode.log}`,
+        text: `auto-decide ON. Decisions are mine until /autodecide off. Log (open in Orca): ${mode.log}`,
         context: ['The owner ran /autodecide on. You now decide for them under the AUTO-DECIDE rules in your system prompt. Check the dashboard for open decisions now and handle each one.'],
       }
     }
@@ -205,14 +177,14 @@ export const register: Register = (on, options) => {
       // Appended, not written back whole: a relay-order.sh --auto that read the mode file before the rm above may
       // still be appending its entry (>>), and a write from an earlier read would drop it.
       if (await $.fs.read(m.log).then(() => true, () => false))
-        await $.process.run(['tee', '-a', m.log], { stdin: `\n---\nauto-decide turned off by the owner at ${t.at}.\n` })
+        await $.process.run(['tee', '-a', m.log], { stdin: `\n---\nauto-decide turned off by the owner at ${t.at} ET.\n` })
       return {
-        text: `auto-decide OFF after ${n} decision${n === 1 ? '' : 's'}. Decisions go back to the owner by picker. Log: ${m.log}`,
+        text: `auto-decide OFF after ${n} decision(s). Decisions go back to the owner by picker. Log: ${m.log}`,
         context: [`The owner ran /autodecide off. Delegation is over: put every decision to the owner by picker again. Give them a short account of the decisions you made while it was on (from ${m.log}).`],
       }
     }
 
-    return { text: m ? `auto-decide is ON since ${m.since}. Log: ${m.log}` : 'auto-decide is OFF. Use /autodecide on or /autodecide off.' }
+    return { text: m ? `auto-decide is ON since ${m.since} ET. Log: ${m.log}` : 'auto-decide is OFF. Use /autodecide on or /autodecide off.' }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -231,7 +203,7 @@ export const register: Register = (on, options) => {
 
   // A picker nobody answers would stall the seat; a failed guard lets it through: asking the owner is the safe side.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) =>
-    (await active($, gate))?.mode ? { deny: 'auto-decide is on: the owner is away. Decide this yourself with relay-order.sh --auto, and do not ask.' } : next(e),
+    (await active($, gate))?.mode ? { deny: 'auto-decide is on: the owner is away. Decide this yourself, log it with its why, and do not ask.' } : next(e),
   ).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -240,7 +212,7 @@ export const register: Register = (on, options) => {
     const n = await read($, count)
     const { Text } = $.ui.resolve(e)
     return at
-      ? <Text color="error" weight="bold">● AUTO-DECIDE ON since {at} · {n} decision{n === 1 ? '' : 's'} made · /autodecide off</Text>
+      ? <Text color="error" weight="bold">● AUTO-DECIDE ON since {at} ET · {n} decision{n === 1 ? '' : 's'} made · /autodecide off</Text>
       : <Text dimColor>○ auto-decide off · last run: {n} decision{n === 1 ? '' : 's'} · /autodecide on</Text>
   })
 }

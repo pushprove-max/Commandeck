@@ -102,10 +102,11 @@ check "a NO-GO the merge check refuses: next is a fix round, never merge it" "1 
 OUT=$(wake NO-GO 0)
 check "a NO-GO the merge check passes: still a fix round, never merge it, no owner's-word line" "1 0 0" \
   "$(grep -c 'next: fix round: r5 ended NO-GO' <<<"$OUT") $(grep -c "owner's word" <<<"$OUT") $(grep -c 'merge it' <<<"$OUT")"
-# Issue 225: a second NO-GO in a row on one finding class is a loop, not progress: main makes a class-level call.
+# Issue 225: a second NO-GO in a row on one finding class is a loop, not progress: the Builder fixes the design and main
+# is asked nothing yet (only a third return reaches main, through the Builder's ask-main.sh question).
 OUT=$(wake NO-GO 1 lost-reply)
-check "two NO-GOs on one class: next asks a class-level question, never merge and file, not a third fix round" "1 0 0" \
-  "$(grep -c 'next: ask the owner one class-level question (two NO-GOs on lost-reply); the class is fixed in the unit' <<<"$OUT") $(grep -c 'merge and file' <<<"$OUT") $(grep -c 'next: fix round' <<<"$OUT")"
+check "two NO-GOs on one class: next is nothing for main, never merge and file, never an owner question" "1 0 0 0" \
+  "$(grep -c 'next: nothing for main yet: the Builder fixes the class by design (two NO-GOs on lost-reply); a third return comes as its question' <<<"$OUT") $(grep -c 'merge and file' <<<"$OUT") $(grep -c 'next: fix round' <<<"$OUT") $(grep -c 'ask the owner' <<<"$OUT")"
 OUT=$(wake GO 0)
 check "a GO the merge check passes still prints merge it" "1 0" "$(grep -c 'next: merge it:' <<<"$OUT") $(grep -c 'fix round' <<<"$OUT")"
 # Issue 223: a heads-up printed its whole body and other messages up to 60 lines, so one wake could fill main's

@@ -37,7 +37,7 @@ NOW=$(date +%s)
 ALL=$(jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s7 "$(iso 604800)" --argjson hasSe true \
   --argjson se "[{\"role\": \"rev\", \"completedAt\": \"$(iso 60)\", \"tokens\": {\"input\": 100, \"cachedInput\": 50}},
     {\"role\": \"rev\", \"completedAt\": \"$(iso 259200)\", \"tokens\": {\"input\": 100, \"cachedInput\": 100}}]" \
-  --argjson parts "[{\"host\": {\"swap\": {\"totalMb\": 1000, \"usedMb\": 900}},
+  --argjson parts "[{\"mcpDown\": [{\"server\": \"serena\", \"at\": $((NOW - 60))}], \"host\": {\"swap\": {\"totalMb\": 1000, \"usedMb\": 900}},
     \"limit\": {\"usedPct\": 80, \"goalPct\": 50, \"codex\": {\"usedPct\": 80, \"goalPct\": 50},
       \"api\": {\"limitUsd\": 100, \"spentUsd\": 80, \"goalUsd\": 50}, \"cacheWritePct24h\": 9},
     \"projects\": {\"p\": {\"guardBlocks\": {\"lastHour\": 40, \"perHour\": 1},
@@ -48,7 +48,7 @@ ALL=$(jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s
       \"mainEvents\": {\"carried\": [{\"cp\": \"/x/m1.md\", \"at\": \"$(iso 600)\", \"items\": 2, \"restartedAt\": null}]},
       \"sources\": {\"builder-logs\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}}}}]" \
   --argjson srcs "[{\"projects\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}]" --argjson preva '[{}]')
-check "the all-rules fixture fires each of the 16 rules, and every alert's text names its action" "16 16" \
+check "the all-rules fixture fires each of the 17 rules, and every alert's text names its action" "17 17" \
   "$(jq '[.alerts[].id | sub("-[0-9]+$"; "")] | unique | length' <<<"$ALL") $(jq '[.alerts[] | select(.text | test("[.] Action: [a-z]"))] | length' <<<"$ALL")"
 # Issue 295: an answer main never got is the owner's order lost. The host gave up on it, or it has failed for 10 min:
 # a critical alert naming why. One failing for under 10 min is still the host's to retry, and raises none.
@@ -72,5 +72,10 @@ OUT=$(held "$COOL" "$(jq -c .since <<<"$OUT")")
 check "issue 274: an alert gone in the next run is resolved with its start, clear time and text, and is not open" \
   "[] host-swap 1998-07-09T16:00:00Z $(jq -nr --argjson n "$NOW" '$n | todate') true" \
   "$(jq -r '"\(.alerts) \(.resolved[0].key) \(.resolved[0].since) \(.resolved[0].resolvedAt) \(.resolved[0].text | startswith("Host swap 90% used"))"' <<<"$OUT")"
+# Host issue 3147: a stamp (pane-budget-gate.sh) under 10 min old raises one alert naming the server and what to do; an old one none.
+mcpdown() { jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s7 "$(iso 604800)" --argjson hasSe false \
+  --argjson se '[]' --argjson parts "[{\"mcpDown\": $1, \"projects\": {}}]" --argjson srcs '[]' --argjson preva '[{}]'; }
+check "a fresh mcp-down stamp raises one alert; an old one, or none, raises none" "1 0 0" \
+  "$(mcpdown "[{\"server\": \"serena\", \"at\": $((NOW - 60))}]" | jq '[.alerts[] | select(.id | startswith("mcp-down-serena-"))] | length') $(mcpdown "[{\"server\": \"serena\", \"at\": $((NOW - 700))}]" | jq '[.alerts[] | select(.id | startswith("mcp-down-"))] | length') $(mcpdown '[]' | jq '[.alerts[] | select(.id | startswith("mcp-down-"))] | length')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -5,8 +5,9 @@
 # seat record, the new session's id is appended as its last session= line, which main-watch.sh reads, so main
 # watches the new log and not the cleared one.
 # builder-codex-pass.sh runs it after a NO-GO pass, and builder-add-work.sh when main adds work, each as a plain
-# background child. It waits while the pane is busy, until the pane is gone or Orca fails 5 tries in a row; one
-# hand-off to a pane at a time.
+# background child. It waits while the pane is busy (saying so, and for how long), until the pane is gone, Orca fails
+# 5 tries in a row, or MAXW seconds (COMMANDECK_FRESH_ROUND_MAX_SECONDS, 1800) pass, when main is told; one hand-off
+# to a pane at a time. Orca's accepted:false on a typing is retried 3 times and said.
 # A hand-off that does not start gets nothing typed: the reason and a re-run line go to stderr and to main
 # (to-main.sh: a log alone was never read), the exit is 1, and the round stays in the old session.
 # Self-test: bash scripts/__tests__/builder-fresh-round.test.sh
@@ -15,8 +16,10 @@ set -uo pipefail
 H=${1:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}
 HAND=${2:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]}
 REC=${3:-}
+ARGS=("$@")
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
 SETTLE=${COMMANDECK_FRESH_ROUND_SETTLE_SECONDS:-20}
+MAXW=${COMMANDECK_FRESH_ROUND_MAX_SECONDS:-1800}   # the longest this waits on a busy pane before telling main
 # idle <ms> -- the pane is idle within <ms>. Orca's answer is kept in W: a busy pane is a wait that timed out.
 idle() { W=$(orca-ide terminal wait --terminal "$H" --for tui-idle --timeout-ms "$1" --json 2>&1); }
 # tell <reason> -- the reason on stderr, and to main: a hand-off that never started is news only main can act on.
@@ -30,9 +33,30 @@ re-run: bash $(printf %q "$d/builder-fresh-round.sh") $(printf %q "$H") $(printf
   echo "builder-fresh-round: $1" >&2
   exit 1
 }
-fail() { tell "$1; the round of $HAND stays in the old session."; }
-# send <text> -- type <text> and Enter into the pane; Orca's answer is kept for the reason when it fails.
-send() { SENT=$(orca-ide terminal send --terminal "$H" --text "$1" --enter --json 2>&1) || { SENT=$(printf '%s' "$SENT" | tr -s '\n' ' ' | cut -c1-300); return 1; }; }
+# A one-off typing failure is retried once (a refused setting is a config error, told at once), whole and under the lock already held (fd 9 stays open across the exec, and
+# the retry does not reopen it); only a failed retry tells main.
+fail() {
+  if [ -n "${LOCKED:-}" ] && [ -z "${PP_FRESH_ROUND_RETRY:-}" ]; then
+    echo "builder-fresh-round: $1; retrying the hand-off once" >&2
+    rm -f "${STAMP:-}"
+    PP_FRESH_ROUND_RETRY=1 exec bash "${BASH_SOURCE[0]}" "${ARGS[@]}"
+  fi
+  tell "$1; the round of $HAND stays in the old session."
+}
+# send <text> -- type <text> and Enter into the pane; Orca's answer is kept for the reason when it fails. Orca may take
+# the request and type nothing (accepted:false: a paired phone can hold the pane's keyboard, issue 342): nothing was
+# typed, so it is retried in place, 3 tries SETTLE apart, each refusal said; only a pane that refuses all 3 fails.
+send() {
+  local try
+  for try in 1 2 3; do
+    SENT=$(orca-ide terminal send --terminal "$H" --text "$1" --enter --json 2>&1) || { SENT=$(printf '%s' "$SENT" | tr -s '\n' ' ' | cut -c1-300); return 1; }
+    jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$SENT" || return 0
+    SENT="Orca took no input (accepted:false)"
+    echo "builder-fresh-round: Orca refused the typing (accepted:false) into $H, try $try of 3" >&2
+    [ "$try" = 3 ] || sleep "$SETTLE"
+  done
+  return 1
+}
 # listed -- 0: Orca's list holds $H live; 1: it answers without it (gone); 2: no list (it failed, or is not JSON).
 listed() {
   orca-ide terminal list --json 2>/dev/null | jq -e --arg h "$H" '(.result | if type == "array" then . else .terminals end)
@@ -40,7 +64,11 @@ listed() {
   local r=$?; [ "$r" -le 1 ] || r=2; return "$r"
 }
 # A second hand-off to the same pane waits here until the first exits: two would interleave their typing.
-mkdir -p "$PP_SCRATCH" && exec 9>>"$PP_SCRATCH/fresh-round-$H.lock" && flock 9 || fail "cannot lock $PP_SCRATCH/fresh-round-$H.lock; nothing typed"
+if [ -z "${PP_FRESH_ROUND_RETRY:-}" ]; then
+  mkdir -p "$PP_SCRATCH" && exec 9>>"$PP_SCRATCH/fresh-round-$H.lock" \
+    && { flock -n 9 || { echo "builder-fresh-round: another hand-off to $H holds its lock; waiting for it" >&2; flock 9; }; } || fail "cannot lock $PP_SCRATCH/fresh-round-$H.lock; nothing typed"
+fi
+LOCKED=1
 # Idle twice, SETTLE apart: a background-task notice can wake the old session just after it ends its turn, and
 # /clear typed into a busy turn is lost. A busy pane (the wait timed out) or one blocked on its user (Orca exits 1
 # with wait.satisfied false) is waited on 5 minutes a try, for as long as it is listed. Any other failed wait,
@@ -56,6 +84,10 @@ while :; do
     MS=300000
     if jq -e '.error.code == "timeout" or .result.wait.satisfied == false' >/dev/null 2>&1 <<<"$W"; then
       DOWN=0
+      # Issue 342: a busy pane is waited on, but not for ever and not in silence. Past MAXW seconds main is told (tell, not
+      # fail: a retry would wait the whole limit again) and the re-run line is its to use when the pane idles.
+      [ "$SECONDS" -lt "$MAXW" ] || tell "pane $H stayed busy for $SECONDS s (limit $MAXW s, COMMANDECK_FRESH_ROUND_MAX_SECONDS); nothing typed; the round of $HAND stays in the old session."
+      echo "builder-fresh-round: pane $H is busy (mid-turn, or waiting on its user); waiting, $SECONDS s of $MAXW s used" >&2
     else
       listed; case $? in
         1) fail "pane $H is gone; nothing typed" ;;
@@ -83,10 +115,10 @@ if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]
   # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take stops the hand-off.
   SRC=routing
   pick() { local v rc=0; v=$(pp_role_option fixer "$2" 2>&1) || rc=$?
-    case $rc in 0) SRC=config ;; 1) v=$(jq -r "$3 // empty" "$(pp_routing)") ;; *) fail "${v#REFUSED: }; nothing switched, the hand-off pointer was not typed" ;; esac
+    case $rc in 0) SRC=config ;; 1) v=$(jq -r "$3 // empty" "$(pp_routing)") ;; *) tell "${v#REFUSED: }; nothing switched, the hand-off pointer was not typed; the round of $HAND stays in the old session." ;; esac
     printf -v "$1" '%s' "$v"; }
   rc=0; EN=$(pp_role_option fixer enabled 2>&1) || rc=$?
-  [ "$rc" != 2 ] || fail "${EN#REFUSED: }; nothing switched, the hand-off pointer was not typed"
+  [ "$rc" != 2 ] || tell "${EN#REFUSED: }; nothing switched, the hand-off pointer was not typed; the round of $HAND stays in the old session."
   # The pane's model and effort now: the last switch the record names, else the launch's own command.
   CM=$(sed -n 's/^model=//p' "$REC" | tail -1); [ -n "$CM" ] || CM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   CE=$(sed -n 's/^effort=//p' "$REC" | tail -1); [ -n "$CE" ] || CE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
@@ -117,6 +149,15 @@ send "Your task spec is the file $HAND. Read all of it now and do what it says."
   || fail "typed /clear but typing the hand-off pointer into $H failed (${SENT:-no answer})"
 echo "builder-fresh-round: $H cleared and handed $HAND"
 [ -n "$REC" ] && [ -f "$REC" ] || exit 0
+# The pane that ran this pass is the live Builder. A relaunch leaves its record on the dead handle, and the first-line
+# readers (main-watch, board, pp_watched_seats) would keep watching and protecting that one (host issue 3011): rewrite
+# the line in place, never append. A record with no handle= line is left alone. The old pane stays as prior_pane= (a
+# key with no "handle=" in it): a question it sent still holds the task (pp_task_close).
+CUR=$(sed -n 's/^handle=//p' "$REC" | head -1)
+if [ -n "$CUR" ] && [ "$CUR" != "$H" ]; then
+  awk -v h="$H" -v o="$CUR" '!d && /^handle=/ { print "handle=" h; d = 1; next } { print } END { print "prior_pane=" o }' "$REC" > "$REC.tmp" && mv "$REC.tmp" "$REC" \
+    && echo "builder-fresh-round: $REC now names pane $H"
+fi
 # The new session is the log written since /clear that carries the pointer, other than the one the record names.
 OLD=$(sed -n 's/^session=//p' "$REC" | tail -1)
 PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "${HAND%/.claude/briefs/*}")

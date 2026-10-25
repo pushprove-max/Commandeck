@@ -42,7 +42,7 @@ case "\$1 \$2" in
 esac
 EOF
 chmod +x "$T/bin/orca-ide"
-answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
   COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
 
 # A Builder's question, as main's wait shows it: recorded in the decisions ledger as waiting on main.
@@ -111,9 +111,17 @@ OUT=$(answer term_b "go ahead"); RC=$?
 check "an answer typed into an idle pane that shows it is delivered" "0:1" "$RC:$(grep -c 'delivered to term_b (typed into the pane)' <<<"$OUT")"
 check "a delivered answer completes that pane's item task, and not another pane's" "1:0" \
   "$(grep -c -- '--id task_item_b --status completed' "$T/updates"):$(grep -c task_item_o "$T/updates")"
-touch "$T/deaf"
+# Host issue 2998: given the question's id, a typed answer ends with a reply in that question's thread (the only answer
+# pp_task_close counts), and only once the pane's log shows it.
+: > "$T/replies"
+OUT=$(answer term_b "go ahead, typed" u1-msg_q1); RC=$?
+check "a typed answer given the question's id replies in its thread once it is delivered" "0:1" \
+  "$RC:$(grep -c '^msg_q1 \[answer-.*\] go ahead, typed$' "$T/replies")"
+touch "$T/deaf"; : > "$T/replies"
 OUT=$(answer term_b "stop here"); RC=$?
 check "an idle pane whose log never shows the answer: NOT delivered" "1:1:0" "$RC:$(grep -c 'NOT delivered' <<<"$OUT"):$(grep -c 'queued' <<<"$OUT")"
+OUT=$(answer term_b "stop here too" u1-msg_q1); RC=$?
+check "and an answer that never reached the log replies in no thread" "1:0" "$RC:$(wc -l < "$T/replies" | tr -d ' ')"
 OUT=$(answer term_gone "hello"); RC=$?
 check "a pane that is gone: nothing sent, and said" "1:1" "$RC:$(grep -c 'no agent pane term_gone' <<<"$OUT")"
 
@@ -138,10 +146,33 @@ esac
 EOF
 chmod +x "$T/bin2/orca-ide"
 : > "$T/typed2"; : > "$T/inbox2"; touch -d '2 hours ago' "$P2/a.jsonl" # B's log is the newer one, as --current reads it
-OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
   ANSWER_WORKER_WAIT=2 PATH="$T/bin2:$PATH" bash "$REAL/scripts/answer-worker.sh" term_pa "take option two" 2>&1); RC=$?
 check "an answer to planner A reads A's log: A is mid-turn, so it goes to A's inbox, not typed in" "2:1:0" \
   "$RC:$(wc -l < "$T/inbox2" | tr -d ' '):$(wc -l < "$T/typed2" | tr -d ' ')"
+
+# Issue 340: in main's own foreground the answer is sent and the call returns at once; the wait for the tag in the log,
+# its retry and the ledger closing run in a detached follower, and main hears only if the answer is NOT delivered.
+rm -f "$T/deaf"; : > "$T/inbox"; : > "$T/typed"
+fg() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_FOREGROUND CLAUDECODE=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=${AWAIT:-2} PATH="$T/bin:$PATH" timeout 8 bash "$REAL/scripts/answer-worker.sh" "$@" </dev/null 2>&1); }
+fgpid() { sed -n 's/.*(pid \([0-9]*\)).*/\1/p' <<<"$1"; }
+echo working > "$T/state"
+OUT=$(AWAIT=30 fg term_b "fg inbox answer"); RC=$?; PID=$(fgpid "$OUT")
+check "in main's foreground a 30 s wait returns 0 at once, naming the follower's log; the answer is in the inbox" "0:1:1" \
+  "$RC:$(grep -c 'checked in the background' <<<"$OUT"):$(grep -c 'fg inbox answer' "$T/inbox")"
+[ -z "$PID" ] || { pkill -P "$PID" 2>/dev/null; kill "$PID" 2>/dev/null; }
+echo idle > "$T/state"; : > "$T/inbox"
+OUT=$(fg term_b "fg typed answer"); RC=$?; PID=$(fgpid "$OUT")
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "a delivered answer: the follower's log says delivered, and main is sent nothing" "0:1:0" \
+  "$RC:$(grep -c 'delivered to term_b (typed into the pane)' "$T/scratch"/answer-worker-answer-*.log 2>/dev/null | awk -F: '{s+=$2} END {print s}'):$(wc -l < "$T/inbox" | tr -d ' ')"
+touch "$T/deaf"; rm -f "$T"/scratch/answer-worker-answer-*.log
+OUT=$(fg term_b "fg lost answer"); RC=$?; PID=$(fgpid "$OUT")
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "an answer that never reaches the log: the call returned 0, the follower logs NOT delivered, and main is told" "0:1:1" \
+  "$RC:$(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'NOT delivered'):$(cat "$T"/scratch/queue/*.jsonl 2>/dev/null | grep -c 'answer-worker.sh: not delivered')"
+rm -f "$T/deaf"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -19,7 +19,7 @@ W() { git -C "$WT" -c user.name=t -c user.email=t@t "$@"; }
 mkdir -p "$P/.claude/plans" "$P/node_modules" "$WS"
 git init -q -b main "$P"
 echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"
-printf 'node_modules/\n.env\n.claude/briefs/\n' > "$P/.gitignore"
+printf 'node_modules/\n.env\n.claude/briefs/\n.serena/\n.claude/scratch/\n' > "$P/.gitignore"
 echo plan > "$P/.claude/plans/toy.md"; echo a > "$P/a.txt"; echo old > "$P/f"; touch "$P/node_modules/x"
 G add -A && G commit -q -m base; BASE=$(G rev-parse HEAD)
 # The orca-ide stand-in: one pane in the worktree while $T/pane exists; $T/close-fail, close-noop, list-fail and
@@ -38,7 +38,8 @@ case "\$*" in
     [ -e "$T/pane" ] && echo '{"result":{"terminals":[{"handle":"h1","worktreePath":"$WT"}]}}' || echo '{"result":{"terminals":[]}}' ;;
   "terminal close"*) [ ! -e "$T/close-fail" ] || exit 1
     [ ! -e "$T/close-hook" ] || bash "$T/close-hook"
-    [ -e "$T/close-noop" ] || rm -f "$T/pane" ;;
+    [ -e "$T/close-noop" ] || rm -f "$T/pane"
+    echo '{"ok":true}' ;;
   "worktree remove"*) p="\$*"; p=\${p#*path:}; git -C "$P" worktree remove --force "\${p%% *}" ;;
 esac
 EOF
@@ -83,8 +84,14 @@ refused "node_modules linked somewhere else" node_modules untracked
 fresh; mv "$P/node_modules" "$P/nm2"
 refused "node_modules dangling, its readlink unchanged" node_modules untracked
 mv "$P/nm2" "$P/node_modules"
+# Issue 342: ignored tool caches (serena's index, the scratch folder, a settings file that is not the generated one) are no
+# plan content, so they never block a close or an adoption; any other ignored file still does.
 fresh; jq '.env.LOCAL_NOTE = "x"' "$WT/.claude/settings.local.json" > "$T/s.json" && cp "$T/s.json" "$WT/.claude/settings.local.json"
-refused "settings plus a custom key" .claude/settings.local.json ignored
+mkdir -p "$WT/.serena/cache" "$WT/.claude/scratch"; echo i > "$WT/.serena/cache/idx"; echo s > "$WT/.claude/scratch/n"
+close --adopt
+check "--adopt: .serena/, .claude/scratch/ and a settings file with a custom key do not block it" "0:adopted $WT" "$RC:$(cat "$T/out")"
+fresh; mkdir -p "$WT/.serena"; echo i > "$WT/.serena/idx"; echo k > "$WT/.env"; close --adopt
+check "--adopt: .serena/ beside an ignored .env still keeps the worktree, naming .env" "1:1" "$RC:$(grep -c '^kept: .* holds .env (ignored)' "$T/err")"
 # Issue 204: JSON members are unordered, so setup's settings with their keys in another order (an older generator's)
 # are still setup's own: the close goes ahead. The case above, a changed value, is still refused.
 fresh; S=$WT/.claude/settings.local.json; jq 'to_entries | reverse | from_entries' "$S" > "$T/s.json"

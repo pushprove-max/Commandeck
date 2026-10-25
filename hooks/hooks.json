@@ -27,6 +27,9 @@
       {"matcher": "Read", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/read-range-guard.sh\""}
       ]},
+      {"matcher": "TaskCreate|TaskUpdate", "hooks": [
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/checklist-guard.sh\"", "onFailure": "block", "timeout": 30}
+      ]},
       {"matcher": "AskUserQuestion", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/worker-ask-guard.sh\"", "onFailure": "block", "timeout": 30},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-records-decision.sh\"", "onFailure": "block", "timeout": 30}

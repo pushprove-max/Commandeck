@@ -30,6 +30,11 @@ check "every launch is checked first with the pass script's --check, which commi
 check "the closing run covers only touched files whose inputs changed since their last green run" "ONE run of every test file this build touched whose inputs changed since its last green run starts in the background beside the closing pass"
 check "a touched file already green on the current tree is cited, not run again" "a touched file already green on the current tree is cited instead (its log path and totals), never run again"
 check "the evidence lists each touched test file as run or cited" "The evidence file lists each touched test file as run or cited: \`Closing run: <file>: run, <n> passed, <n> failed\` or \`Closing run: <file>: cited <log path>, <n> passed, <n> failed\`."
+# Host issue 3164: the first class stop starts one background sweep of every site where the class's flaw can occur.
+check "the class rule names the background sweep and the Sweep line" "The first class stop also starts one background read-only agent that lists every site in the changed files, and the scripts they source, where the class's flaw can occur, checked against the class's ruling. Fix or justify each site before the next pass: the evidence file gets one line per site, \`Sweep: <file>:<line>: fixed\` or \`Sweep: <file>:<line>: safe, <why>\`."
+# Host issue 336: a file whose inputs did not change since an earlier green commit is cited at that commit.
+check "the closing-run rule names the cite-at-commit line and the complete run on the tip" "is cited with that commit: \`Closing run: <file>: cited <log path> at <commit>, <n> passed, <n> failed\`. Once the closing pass ends GO, one complete run of every touched file on that tip (\`bash {scripts}/run-shell-tests.sh --changed <base> --callers\`) is the last run before the hand-off."
+check "the closing-run rule names test-inputs.sh and its unchanged line" "\`bash {scripts}/test-inputs.sh <commit> <file>...\` prints \`unchanged <file>\`"
 # The leak check searches an image's text chunks only: its pixels are a human check.
 check "a new or changed image needs the owner's review line in the evidence" "A new or changed image needs the owner's review: the evidence file carries \`image reviewed by the owner: <file>\` for each"
 check "no Builder writes a new end-to-end test" "Builders never write new end-to-end tests: no test installs or uninstalls the plugin, or runs setup.sh or uninstall.sh whole."
@@ -42,11 +47,43 @@ BODY=$SAVED
 # Issue 303: a class-stop fix kept a second retry path that only one source of state reached.
 RETRY='The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens.'
 check "the Builder template: a class fix has one retry path, tested state by state" "$RETRY"
+# Message cuts (issue 2894's twin): the second return of a class is the Builder's to fix by design and costs main nothing;
+# the third is one ask-main.sh question, and main answers redesign unless the owner must make a policy call.
+check "the class rule says fix the design on the second return: one fence or stamp, one test for every ordering" "When the class comes back a second time, fix the design: one fence or stamp for the whole class, and one test that covers every ordering found so far."
+check "the class rule says send main nothing on the second return, and one ask-main.sh question on the third" "Write in the evidence file what the class is, and send main nothing for it: the review loop goes on. When the class returns a THIRD time, the fix-round hand-off says so: fix the other findings first, then ask main one question with \`ask-main.sh\` naming the class and the redesign you propose, and build what main answers."
+# Issue 341: the Builder brief carries the Data design and failure table rules, and the redesign order on a class's first repeat.
+check "the Builder brief has a Data design section the Builder copies into the evidence file and keeps true" "The batch's Data design section above binds. Before the first edit copy it into the evidence file as \`## Data design\`, and keep it true"
+check "the evidence file carries a failure table kept current before every pass" "The evidence file also carries \`## Failure table\`, one row per failure a test or a pass found, kept current before every pass"
+check "a class's redesign goes data design and failure table first, then the code, then a whole-branch pass" "The redesign goes in this order: update the Data design and the failure table in the evidence file first, then the code, then take a whole-branch pass"
+if grep -qF '## Data design' "${T%/*}/_batch-brief-template.md" && grep -qF 'builder-launch.sh refuses a batch without it. For each piece of state' "${T%/*}/_batch-brief-template.md"; then PASS=$((PASS+1)); echo "ok   the batch brief template has the required Data design section"; else FAIL=$((FAIL+1)); echo "FAIL the batch brief template has no required Data design section"; fi
+# Issue 344 (host issue 3171): the closing pass rebases first and runs the tests that cover what moved.
+check "the closing pass rebases onto current local main first and runs the covering tests; a conflict or a red test stops it" "Before it reads anything it rebases your branch onto current local main and, when main moved, runs the shell tests that cover what you or main changed (not the full suite); a conflict stops the pass, aborted and named, for main to resolve, and a red test stops it before the reviewer."
+if grep -qF 'about 100 tokens' <<<"$BODY"; then FAIL=$((FAIL+1)); echo "FAIL the class rule still sends main a 100-token status note"; else PASS=$((PASS+1)); echo "ok   the class rule sends main no status note"; fi
 # Issues 260 and 266: a review run as the closing pass is the last one; a separate final after it reviewed the same tip again.
 check "the Builder template: final in place of review means no separate final follows" 'A `review` that prints `final in place of review`'
 check "and that review is the closing pass whose GO merges" 'is the closing pass: its GO merges, and no separate final follows.'
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/main-session.md" | sed -E 's/ +/ /g')
 check "main's class rule: one retry path, tested state by state" "$RETRY"
+check "main-session.md sends the Builder to redesign on the third return and asks the owner only for a policy call" "answer redesign by default, and send the Builder to redesign the whole mechanism. Ask the owner only for a real policy call (what the product promises, security posture, a stated limit)."
+check "main-session.md leaves the second return to the Builder, sending main nothing" "is the Builder's to fix by design, and it sends main nothing for it."
+check "main's checklist rule names the 8-item cap, the 80-character subject and no ids" "At most 8 open items; a subject of 80 characters at most, with no ids (no message, task or dispatch id, commit hash or issue number)."
+check "main's checklist rule says a done item is deleted, never marked completed" "An item done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint's Closed section keeps it."
+# Host issue 3165: main's card names the large-read rule inside its 40 lines; Details hold the example prompt.
+check "main's card names the large-read rule and the 10 KB line" "a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question"
+check "main's Details hold the large-read example prompt" "Large reads (host issue 3165): a read over 10 KB goes to a background \`Explore\` helper with one precise question and the file path"
+# Issue 343: a hand merge leaves its worktree, which the dashboard reads as a unit still building; main runs step 5.
+check "main's Details: after a hand merge main runs step 5 of merge-unit-local.sh and removes the worktree" "After a hand merge, or a failed auto-merge you finish by hand, run step 5 of \`merge-unit-local.sh\` yourself: close the unit's panes, then \`merge-unit-local.sh <unit> --cleanup\` (never a forced remove)."
+if [ "$(grep -n '^## Details' "${T%/*}/main-session.md" | cut -d: -f1)" -le 41 ]; then PASS=$((PASS+1)); echo "ok   main's card is still 40 lines (Details heading on line 41)"; else FAIL=$((FAIL+1)); echo "FAIL main's card is over 40 lines"; fi
+# Issue 340: main's waiting rule names the 30-second line, and the card is still 40 lines.
+check "main's card: any wait over about 30 s on external state runs in the background" "a long job, or any wait over about 30 s on external state (a directory-size scan included), in main's foreground -> its own pane, or \`run_in_background\`"
+# Issue 345: settings decide. Main asks neither "Write a plan first?" nor "Which model and effort?"; it runs plan-tier.sh,
+# says in one line what it picked, and a plan is still never a build order.
+check "main's card: plan-tier.sh and the configured seats decide, told in one line" "before \`builder-launch.sh\`, ask nothing: run \`plan-tier.sh <batch file>\`, use the"
+check "main's card: the owner changes the trigger file or /plugin settings, or says so in chat" "The owner changes the trigger file or \`/plugin\` settings, or says so in chat for that unit."
+check "main's Details: neither question is asked" "ask neither \"Write a plan"
+check "main's Details: a seat runs on its printed model and effort" "Each seat runs on its printed model and effort"
+if ! grep -qF -e 'ask the owner "Write a plan' -e 'Then ask "Which model and effort?"' "${T%/*}/main-session.md" && grep -qF 'ask no question. Run `plan-tier.sh <batch file>`' "${T%/*}/AGENT_STARTUP.md"; then PASS=$((PASS+1)); echo "ok   neither main-session.md nor AGENT_STARTUP.md tells main to ask the plan or model question"; else FAIL=$((FAIL+1)); echo "FAIL a template still tells main to ask the plan or model question"; fi
+check "a plan is still never a build order" "A plan is never a build order: with no build word from the owner, STOP at the plan file."
 # Issue 333: an auto-decided answer has no ruling; main checks it against its ledger row, and still checks every other
 # relayed answer against the ruling log. r2 (class delivery-retry): the ledger row alone, the one record relay-order.sh's
 # retry also reads; a mode-file condition made main refuse a retry sent after /autodecide off.
@@ -101,5 +138,9 @@ else FAIL=$((FAIL+1)); echo "FAIL a template still names the old way, or lacks a
 NOACK=$(grep -o 'check --wait[^`]*' "$T" | grep -v -- '--ack' | paste -sd' ' -)
 if [ -z "$NOACK" ]; then PASS=$((PASS+1)); echo "ok   every check --wait in the Builder brief carries --ack"
 else FAIL=$((FAIL+1)); echo "FAIL a check --wait in the brief has no --ack: $NOACK"; fi
+# Message cuts: a progress note to main is a wake main cannot act on; both templates carry the one rule.
+ONE='One status per decision: message main only for a decision only main or the owner can make. No progress notes; progress goes in the evidence file.'
+if grep -qF "$ONE" "$T" && grep -qF "$ONE" "$ST"; then PASS=$((PASS+1)); echo "ok   the brief and AGENT_STARTUP.md both carry the one-status-per-decision rule"
+else FAIL=$((FAIL+1)); echo "FAIL the one-status-per-decision rule is missing from the brief or AGENT_STARTUP.md"; fi
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

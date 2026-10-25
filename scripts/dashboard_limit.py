@@ -356,9 +356,16 @@ def listed(model):
     return model in PRICES or codex_rates(model) is not None
 
 
+UNREAD_TIER = ":tier-unread"  # a Codex response whose file never logged a speed tier (codex_row): priced as standard, estimated
+
+
 def estimate(model):
-    """The price of a fast mode the vendor does not publish: twice its model's standard rate, the multiple
-    both vendors publish for the fast modes they do list. None when there is nothing near to estimate from."""
+    """The price of a mode the vendor does not publish: a fast mode is twice its model's standard rate, the multiple
+    both vendors publish for the fast modes they do list; a response whose tier was never read is its model's
+    standard rate. None when there is nothing near to estimate from."""
+    if model.endswith(UNREAD_TIER):
+        standard = model[:-len(UNREAD_TIER)]
+        return PRICES.get(standard) or (codex_rates(standard) or (None,))[0]
     base = PRICES.get(model[:-5]) if model.endswith(":fast") else None
     return tuple(2 * x for x in base) if base else None
 
@@ -374,7 +381,8 @@ def estimated(row):
 
 
 def price(row):
-    codex = codex_rates(row[1])
+    # A response of unread tier steps up for a long prompt where its model's standard rate does.
+    codex = codex_rates(row[1][:-len(UNREAD_TIER)] if row[1].endswith(UNREAD_TIER) else row[1])
     p = PRICES.get(row[1]) or estimate(row[1]) or (codex and codex[0])
     if p is None:
         # Every count present and 0 costs $0 at any price; a missing count is unknown, so it stays unpriced.
@@ -990,8 +998,9 @@ def codex_row(r, model, tier):
     n = lambda d, k: d.get(k) if isinstance(d.get(k), int) else None
     u = p["usage"]
     inp, read, write = n(u, "input_tokens"), n(u, "cached_input_tokens"), n(u, "cache_write_input_tokens")
-    # An unnamed tier is the standard one; any other name stays in the model name, priced only if listed.
-    mode = "" if tier in (None, "default") else ":fast" if tier == "priority" else f":{tier}"
+    # A tier the file never logged (None) is unread: priced as standard and counted as estimated. A tier the log
+    # read as null reaches here as "default": standard, read. Any other name stays in the model name, priced only if listed.
+    mode = UNREAD_TIER if tier is None else "" if tier == "default" else ":fast" if tier == "priority" else f":{tier}"
     return [epoch(r["timestamp"]), f"{model or 'unknown Codex model'}{mode}",
             None if inp is None else max(0, inp - (read or 0) - (write or 0)), write, 0, read, n(u, "output_tokens")]
 
@@ -1031,8 +1040,8 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
         with open(cache_path) as f:
             cache = json.load(f)
         files, seen, where, file = cache["files"], cache["requests"], cache["cwd"], cache["file"]
-        # Version 3 keeps each response's working folder, version 4 its file; an older cache is read again.
-        if cache.get("version") != 4 or not isinstance(files, dict) or not isinstance(seen, dict) or not isinstance(where, dict) \
+        # Version 3 keeps each response's working folder, version 4 its file, version 5 prices a response whose file never logged its tier as unread (standard, estimated); an older cache is read again.
+        if cache.get("version") != 5 or not isinstance(files, dict) or not isinstance(seen, dict) or not isinstance(where, dict) \
                 or not isinstance(file, dict):
             raise ValueError("not this reader's cache")
         if cache.get("root") != sessions_dir:
@@ -1082,7 +1091,7 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
                     if r.get("type") == "session_meta":
                         cwd = p.get("cwd") if isinstance(p.get("cwd"), str) else cwd
                     elif isinstance(s, dict):
-                        model, tier = s.get("model") if isinstance(s.get("model"), str) else model, s.get("service_tier")
+                        model, tier = s.get("model") if isinstance(s.get("model"), str) else model, "default" if s.get("service_tier") is None else s["service_tier"]
                     elif r.get("type") == "turn_context" and isinstance(p.get("model"), str):
                         model = p["model"]
                     elif r.get("type") == "token_usage_record" and codex_row(r, model, tier):
@@ -1101,7 +1110,7 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 4, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen},
+        json.dump({"version": 5, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen},
                    "cycle": CYCLE, "complete": len(missed) == n, "covered": since, "root": sessions_dir}, f)
     os.replace(tmp, cache_path)
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]

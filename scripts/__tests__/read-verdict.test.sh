@@ -42,6 +42,17 @@ printf 'handle=term_r\ntask=task_r\nrole=plan-author\nlaunched=%s\nsession=%s\n'
 jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type: "assistant", timestamp: $t, message: {content: [{type: "text", text: "Done.\nVERDICT: NO-GO"}]}},
   {type: "system", subtype: "turn_duration", timestamp: $t}' > "$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl"
 check "a record's bound Codex log path is not read as a Claude session id" "VERDICT: NO-GO" "$(verdict 'Working.\n')"
+# Ordinal `prompt` (main-watch.sh reported()): the epoch of the seat's latest prompt, so a worker_done made before it is
+# an earlier turn's report. A system-reminder-only user row is no prompt; no log or no prompt is exit 3.
+L=$T/home/.claude/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl
+P1=$(( $(date +%s) - 50 )); P2=$(( P1 + 20 )); P3=$(( P2 + 10 ))
+{ jq -cn --arg t "$(date -u -r "$P1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$P1" +%Y-%m-%dT%H:%M:%SZ)" '{type: "user", timestamp: $t, message: {content: "first task"}}'
+  jq -cn --arg t "$(date -u -r "$P2" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$P2" +%Y-%m-%dT%H:%M:%S).500Z" '{type: "user", timestamp: $t, message: {content: [{type: "text", text: "follow up"}]}}'
+  jq -cn --arg t "$(date -u -r "$P3" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$P3" +%Y-%m-%dT%H:%M:%SZ)" '{type: "user", timestamp: $t, isMeta: true, message: {content: "<system-reminder>x</system-reminder>"}}'; cat "$L"; } > "$L.new" && mv "$L.new" "$L"
+pr() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$T/sc" \
+    COMMANDECK_WORKSPACES="$T/ws" timeout 20 bash "$REAL/scripts/read-verdict.sh" term_r 5 "" "" "" "" prompt "$(( $(date +%s) - 60 ))" 2>/dev/null; echo ":$?"); }
+check "ordinal prompt prints the epoch of the seat's latest prompt, not a meta row's" "$P2:0" "$(pr | tr -d '\n')"
+mv "$L" "$L.off"; check "ordinal prompt with no session log exits 3" ":3" "$(pr | tr -d '\n')"; mv "$L.off" "$L"
 # Issue 291: under an account profile (CLAUDE_CONFIG_DIR) Claude Code writes its transcripts and session files in that
 # folder, and ~/.claude holds none: every seat read there was "not measured".
 mkdir -p "$T/prof"; mv "$T/home/.claude/projects" "$T/prof/"
@@ -57,6 +68,27 @@ sleep 0.3
 sess() { env -u CLAUDE_CONFIG_DIR ${PROFILE:+CLAUDE_CONFIG_DIR="$PROFILE"} HOME="$T/home" bash "$REAL/scripts/read-verdict.sh" --session term_s$$ 2>/dev/null; }
 check "issue 291: a pane's session is read from CLAUDE_CONFIG_DIR when it is set, from ~/.claude when not" "s-prof s-home" \
   "$(PROFILE=$T/prof sess) $(sess)"
+# Host issue 3038: the pane's environment is read whole on either host. Each case runs once per reader, with `uname`
+# stubbed and the reader's input injected under the stand-in claude's pid, whose real environment carries none of these
+# values: only the injected input can make a case pass, so the host that runs this file does not pick the reader tested.
+# Catches: the Darwin branch back to `ps -Eww | tr` (an entry split at its spaces), or the Linux /proc read changed.
+mkdir -p "$T/unamebin" "$T/home2"
+inject() { # <Linux|Darwin> <entry>... -- the pid's environment as that host's reader takes it
+  local os=$1 e; shift
+  printf '#!/bin/sh\necho %s\n' "$os" > "$T/unamebin/uname"; chmod +x "$T/unamebin/uname"
+  rm -rf "$T/proc" "$T/procargs"; mkdir -p "$T/proc/$CP" "$T/procargs"
+  if [ "$os" = Linux ]; then for e in "$@"; do printf '%s\0' "$e"; done > "$T/proc/$CP/environ"
+  else { printf '\001\000\000\000/bin/claude\0\0\0claude\0'; for e in "$@"; do printf '%s\0' "$e"; done; printf '\0'; } > "$T/procargs/$CP"; fi
+}
+session_of() { # <handle> -- the session the injected environment links to that pane
+  env -u CLAUDE_CONFIG_DIR PATH="$T/unamebin:$PATH" HOME="$T/home" READ_VERDICT_PROC="$T/proc" READ_VERDICT_PROCARGS="$T/procargs" \
+    bash "$REAL/scripts/read-verdict.sh" --session "$1" 2>/dev/null
+}
+for OS in Linux Darwin; do
+  inject "$OS" "ORCA_TERMINAL_HANDLE=term_inj_$OS" "CLAUDE_CONFIG_DIR=$T/my profile" "X=a ORCA_TERMINAL_HANDLE=term_decoy"
+  check "$OS reader: an entry that is the handle links the pane to its session" "s-home" "$(session_of "term_inj_$OS")"
+  check "$OS reader: a handle inside another variable's value does not link" "" "$(session_of term_decoy)"
+done
 # Issue 225: two NO-GOs in a row on one finding class are a loop, not progress: --repeat-class names the class.
 # rf <round> <verdict> <finding line> -- a round file as builder-codex-pass.sh writes it.
 B=$T/briefs; mkdir -p "$B"

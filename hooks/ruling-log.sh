@@ -93,24 +93,28 @@ answer_decisions() {
 
 case "$EVENT" in
   UserPromptSubmit)
-    # A prompt that is nothing but whole notification blocks and Orca inbox
-    # banners is not the owner: logged void, so it is no ruling and answers
-    # no ask. Any other text beside them, or quoting them, is the owner's reply.
-    # The checkpoint resume prompt matches only as the whole command
-    # lib/context-clear-restart.sh types; keep the two texts in parity.
-    # The wakes scripts/main-watch.sh types match the same way: whole,
-    # the refusal reason bounded to its one line by the fixed text around it,
-    # and only the endings wake() builds, so words after one stay the owner's.
-    PROW=$(printf '%s' "$INPUT" | jq -c --arg id "r-$STAMP-p-$RND" --arg utc "$UTC" --arg et "$ET" '
-      select((.prompt // "") != "")
+    # The log holds the owner's rulings: a prompt is logged only from main's checkout or the Chief-of-Staff
+    # worktree (the relay, found as cos-own-echo.sh finds it), the panes the owner types in. Builders', reviewers' and
+    # Codex passes' prompts are the orchestrator's words. ruling-log-archive.sh keeps the same panes' rows.
+    [ "${COMMANDECK_REVIEWER:-}" != 1 ] || exit 0
+    root=${CLAUDE_PROJECT_DIR:-$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)}
+    gitdir=$(git -C "${root:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+    [ "$gitdir" = "$(git -C "${root:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] \
+      || [ "$(basename "$(git -C "${root:-.}" rev-parse --show-toplevel 2>/dev/null)")" = Chief-of-Staff ] || exit 0
+    # Machine text (lib/ruling-typed.jq: notification blocks, Orca banners, the checkpoint resume, main-watch's
+    # wakes, known machine preambles) is not the owner, so it is not logged: no ruling, and it answers no ask. Any
+    # other text beside it, or quoting it, is the owner's reply. The resume prompt matches only as the whole command
+    # lib/context-clear-restart.sh types, and the wakes scripts/main-watch.sh types the same way: whole, the refusal
+    # reason bounded to its one line by the fixed text around it, and only the endings wake() builds.
+    PROW=$(printf '%s' "$INPUT" | jq -c -L "${BASH_SOURCE[0]%/*}/lib" --arg id "r-$STAMP-p-$RND" --arg utc "$UTC" --arg et "$ET" '
+      include "ruling-typed";
+      select((.prompt // "") != "" and (.prompt | machine_prompt | not))
       | {id:$id, utc:$utc, et:$et, session:.session_id, cwd:.cwd, source:"prompt",
-         question:null, answer:.prompt, annotations:null, pick:"prompt"}
-        + (if .prompt | gsub("<(task-notification|system-notification|system-reminder)>[\\s\\S]*?</\\1>|You have [0-9]+ orchestration messages?\\. Run `orca orchestration check[^`\\n]*`\\.?|resume from the checkpoint \\S+\\.md \\(its text, board\\.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut\\); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing \\(main-watch\\.sh wakes you\\); then service whichever marker has landed(?:\\. Your first line to the owner is: Handoff done: this is the new main session, resumed from \\S+\\.md; the old pane \\S+ closes now\\.)?|main-watch: items are waiting in your Orca inbox for run [\\w-]+; read them and handle each\\.|main-watch: Orca did not take these for run [\\w-]+, so they are NOT in your inbox: [^\\n]*?\\. Each retries every tick\\.(?: Other items are waiting in your Orca inbox\\.)?(?: To take the run back, run this from your own pane: orca-ide orchestration run-use --id [\\w-]+| Who holds run [\\w-]+ is unknown; reconcile first: find out what that pane is before taking the run\\.| Live pane [\\w-]+ holds run [\\w-]+; reconcile first: find out what that pane is before taking the run\\.)"; "")
-              | test("\\A\\s*\\z") then {void:true} else {} end)' 2>/dev/null)
+         question:null, answer:.prompt, annotations:null, pick:"prompt"}' 2>/dev/null) \
+      || { HOOK_FIRE_ADVISE=1; echo "ruling NOT logged: this prompt could not be read as typed text or machine text. It has no id to cite."; exit 0; }
     [ -n "$PROW" ] || exit 0
     append_log "$PROW" \
       || { HOOK_FIRE_ADVISE=1; echo "ruling NOT logged: could not write $LOG. This prompt has no id to cite."; exit 0; }
-    jq -e '.void == true' <<<"$PROW" >/dev/null && exit 0
     # The owner's prompt answers a plain-chat ask put to them before it only when it names that decision: an
     # unrelated line, or one typed in another session, closed every open ask. Named = the id, or the id without
     # its -YYYY-MM-DD day, as whole words in any case and spacing. A picker row waits for its own PostToolUse

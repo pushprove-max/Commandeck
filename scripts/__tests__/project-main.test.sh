@@ -88,7 +88,7 @@ check "pp_rm_rf removes a plain folder, a file, and a file in a checkout's work 
   "$(rmrf "$T/junk" "$T/junk-file" "$V/nest/proj/.claude/metrics/decisions.jsonl") $([ -e "$T/junk" ] || [ -e "$T/junk-file" ] || [ -e "$V/nest/proj/.claude/metrics/decisions.jsonl" ] || echo gone)"
 # Every other raw rm -rf removes a folder its own script made with mktemp; a new one is read here before it ships.
 check "only the scripts that remove their own mktemp folder use a raw rm -rf" \
-  "scripts/context-overhead.sh scripts/hook-probe.sh scripts/paths.sh scripts/proof-run.sh scripts/run-shell-tests.sh scripts/startup-size.sh scripts/update.sh" \
+  "scripts/context-overhead.sh scripts/hook-probe.sh scripts/paths.sh scripts/proof-run.sh scripts/ruling-log-archive.sh scripts/run-shell-tests.sh scripts/startup-size.sh scripts/update.sh" \
   "$(cd "$REAL" && grep -lE 'rm -(rf|fr|r) ' hooks/*.sh hooks/lib/*.sh scripts/*.sh | while read -r f; do grep -E 'rm -(rf|fr|r) ' "$f" | grep -qv 'pp_rm_rf\|^[[:space:]]*#\|warn "running state' && echo "$f"; done | sort | paste -sd' ' -)"
 
 # COMMANDECK_MAIN is kept as given and a worktrees folder loses only a trailing / or /., so each compare
@@ -109,13 +109,19 @@ EOF2
 mkdir -p "$T/home/.commandeck/dashboard" "$T/bin"; printf '%s\n' "$T/elsewhere" "$V" > "$T/home/.commandeck/dashboard/projects"
 cat > "$T/bin/orca-ide" <<EOF2
 #!/usr/bin/env bash
-echo '{"result":{"terminals":[{"handle":"h-main","worktreePath":"$V","agentIdentity":"claude"}]}}'
+[ -e "$T/list-by-id" ] && echo '{"result":{"terminals":[{"handle":"h-id","worktreeId":"wt1::$V/","agentIdentity":"claude"}]}}' \
+  || echo '{"result":{"terminals":[{"handle":"h-main","worktreePath":"$V","agentIdentity":"claude"}]}}'
 EOF2
 chmod +x "$T/bin/orca-ide"
 pths() { ( cd "$V" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$1" bash -c '. "$0" && eval "$1"' "$REAL/scripts/paths.sh" "$2" 2>/dev/null ); }
 check "a main checkout given as <tmp>/victim/./ is the one the dashboard registry names, and the one Orca's pane is in" "yes h-main" \
   "$(pths "$V/./" 'pp_registered && echo yes') $(pths "$V/./" 'pp_pane_of "$PP_MAIN"')"
 check "another checkout is neither" "no" "$(pths "$V/nest/proj" 'pp_registered && echo yes || echo no; pp_pane_of "$PP_MAIN"')"
+# Orca may name the worktree only in worktreeId: the pane is still found (wtp), and still not for another checkout.
+touch "$T/list-by-id"
+check "a pane named by worktreeId alone is main's pane, and not another checkout's" "h-id|" \
+  "$(pths "$V" 'pp_pane_of "$PP_MAIN"')|$(pths "$V/nest/proj" 'pp_pane_of "$PP_MAIN"')"
+rm -f "$T/list-by-id"
 
 # Claude Code gives a Bash command no CLAUDE_PROJECT_DIR, so main closing a
 # task (orca-wait.sh --close) from a folder outside the project was told "no

@@ -27,5 +27,8 @@ printf '## Goal\n- one short goal\n\n## Queue (in order)\n- one item\n' > "$CPD/
 OUT=$(resume "$CPD/small.md")
 check "a short checkpoint is injected whole" "1 1 0" \
   "$(grep -c 'one short goal' <<<"$OUT") $(grep -c 'one item' <<<"$OUT") $(grep -c 'checkpoint cut to fit' <<<"$OUT")"
+# A done item is deleted, never marked completed: the list the owner reads shows open items only.
+check "the resumed TODO line says a done task is deleted, not completed" 1 \
+  "$(grep -c '^TODO LIST: .*A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint.s Closed section keeps it\.' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

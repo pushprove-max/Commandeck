@@ -21,5 +21,28 @@ check "a batch whose order names another unit is refused" "2:1:0" "$RC:$(grep -c
 order u14 'Launch: new unit u14'
 check "a batch whose Launch line names this unit as new opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u14' "$T/seats")"
 
+# Issue 341 (F1): a batch states its data design (what state it adds, who owns it, when it resets, what a retry runs) before
+# any Builder opens. A missing section, an empty one, and the template's placeholder alone are refused.
+dd() { : > "$T/seats"; : > "$T/orca.log"; batchfor "$1"; sed -i.bak '/^## Data design$/,/^## Plan$/{/^## Plan$/!d;}' "$T/batch.md"; rm -f "$T/batch.md.bak"
+  [ -z "${2-}" ] || printf '\n## Data design\n\n%s\n' "$2" >> "$T/batch.md"
+  (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS \
+    bash "$T/plug/scripts/builder-launch.sh" "$1" "$T/batch.md" </dev/null >"$T/out" 2>&1); RC=$?; }
+# A batch with no Data design heading at all was written before 0.46.0 (the template has carried the heading since): it
+# was valid when written, maybe judged and approved, so it still opens, and the brief moves the answer to the Builder,
+# before its first edit. The section stays required wherever the heading is: empty or placeholder-only is refused.
+dd u15
+check "a batch written before the Data design section opens its Builder and says so" "0:1:1" "$RC:$(grep -cx 'launch builder u15' "$T/seats"):$(grep -c 'NOTE: .* has no Data design section' "$T/out")"
+check "its brief has the Builder write the Data design in the evidence file before the first edit" "1" \
+  "$(grep -c '^This batch was written before the Data design section: before the first edit write' "$WS/u15/.claude/briefs/u15.md")"
+dd u16 ''
+dd u16 ' '
+check "a batch whose Data design section is empty is refused" "2:1" "$RC:$(grep -c 'REFUSED: .* has no Data design section' "$T/out")"
+dd u17 $'Required: builder-launch.sh refuses a batch without it. Say what state the batch adds.\n\n- <piece of state>: lives in <where>; written by <who>; reset when <when>'
+check "a batch with only the template's guidance and placeholder is refused" "2:1" "$RC:$(grep -c 'REFUSED: .* has no Data design section' "$T/out")"
+dd u18 '- the pass hand-off file: lives in the unit worktree; written by the pass script; rewritten each round; a retry rewrites it whole'
+check "a batch that fills the section opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u18' "$T/seats")"
+dd u19 'none: no state is added or changed'
+check "a batch that says none, with the reason, opens its Builder" "0:1" "$RC:$(grep -cx 'launch builder u19' "$T/seats")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

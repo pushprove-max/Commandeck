@@ -4,17 +4,16 @@
 
 - **Do not -> instead** (what the guards block):
   - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
-  - a long job in main's foreground -> its own pane, or `run_in_background` and `wait-test-run.sh <pid> <file>`
+  - a long job, or any wait over about 30 s on external state (a directory-size scan included), in main's foreground -> its own pane, or `run_in_background` and `wait-test-run.sh <pid> <file>`; `answer-worker.sh`, `seat.sh run` and the merge already return at once
   - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
   - an edit to project code -> a batch brief, then `builder-launch.sh <unit> <brief>`
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every implementation and review runs as a visible
   CLI in its own Orca worktree. Main writes only intents, briefs, findings and config; reads worker_done payloads
-  and diff summaries, never worktrees or whole source files (serena for symbols); routes findings, never fixes them.
+  and diff summaries, never worktrees or whole source files (serena for symbols); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with one foreground `bash scripts/orca-wait.sh`.
   A wake that leaves nothing for the owner to do or decide ends the turn with no text to the owner.
-- **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask the owner "Write a plan first?"
-  (AGENT_STARTUP.md step 0; tiers: Details). Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
+- **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask nothing: run `plan-tier.sh <batch file>`, use the configured model and effort per seat, and tell the owner in one line the tier, trigger and each seat's model and effort (AGENT_STARTUP.md step 0; tiers: Details). The owner changes the trigger file or `/plugin` settings, or says so in chat for that unit. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
   and one of its skills fits this unit (for example TDD for new logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses
   what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
   owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one,
@@ -53,17 +52,18 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
   `builder-launch.sh --keep billing`) brings Stripe back for a billing unit, `--keep all` changes none of it.
 
-- Plan before every build (owner order 2026-10-17): before `builder-launch.sh`, ask the owner "Write a plan
-  first?" with five answers. Auto (the default): `bash scripts/plan-tier.sh <batch file>` picks No plan, Plan +
+- Plan before every build (owner order 2026-10-17): before `builder-launch.sh`, ask neither "Write a plan
+  first?" nor "Which model and effort?" (issue 345). `bash scripts/plan-tier.sh <batch file>` picks No plan, Plan +
   judge or Panel from the trigger file (the project's `.claude/plan-triggers.tsv`, else the plugin's
   `config/plan-triggers.tsv`), one tier up when unsure, and prints the tier, the trigger that picked it and the
-  seats; tell the owner all three. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
+  seats with their effort; tell the owner all of it in one line. The owner changes the trigger file or `/plugin`
+  settings, or says in chat that this unit takes another tier, model or effort. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
   written. Panel: `plan-author` writes the plan, and `plan-judge-astra` and `plan-judge-sol` both read it. A seat
-  that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Then ask "Which model and effort?" for
-  each seat, default that seat's printed model and effort (`seat.sh launch <role> <unit> <spec> --model <alias>
-  --effort <level>`, or `seat.sh run` with the same options: one call, one line back). A size target in a
+  that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
+  (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
+  only when the owner named another for that unit. A size target in a
   planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
   trimming needed content to fit. One judge round and one revision, never a judging loop. Either judge may run
   on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never
@@ -89,6 +89,9 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   decision. A pass merges with `merge-queue.sh <unit>@<tip>` (a train for two or more); never a push. Routine
   items (a merge that landed, a repeated heads-up) go to main-watch's digest, and `orca-wait.sh` prints its count
   and path: read it only when you need it.
+- After a hand merge, or a failed auto-merge you finish by hand, run step 5 of `merge-unit-local.sh` yourself: close
+  the unit's panes, then `merge-unit-local.sh <unit> --cleanup` (never a forced remove). Leave the worktree and the dashboard
+  keeps the unit on its board.
 - No redundant steps: a step added to the build, merge, review or push flow names what only it catches.
 - Main may set a dispatch's effort (cap `max`), logged in the brief as
   `effort override: <role> <pinned/default> -> <used>: <reason>`.
@@ -96,11 +99,14 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   `builder-add-work.sh <unit>` stops the Builder, and a fresh session of its
   pane takes the work from a hand-off that stands alone. Added scope after the first review pass is a follow-up
   unit; file it, or pass `--small --reason '<one line>'` for a change under about 50 lines.
-- Two NO-GOs in a row on one finding class (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next line names
-  it): no third fix round. Ask the owner one class-level question; the class is fixed in the unit, never merged and
-  filed. A fix-round brief lists every variant of the class it fixes. The class fix has one retry path that does
-  not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and
-  shows the retry still happens.
+- A finding class that returns in a second NO-GO in a row (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next
+  line names it) is the Builder's to fix by design, and it sends main nothing for it. A fix-round brief lists every
+  variant of the class it fixes. The class fix has one retry path that does not depend on where the state came
+  from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens.
+- A class that returns a third time reaches you as the Builder's one `ask-main.sh` question naming the class and
+  the redesign it proposes: answer redesign by default, and send the Builder to redesign the whole mechanism. Ask the
+  owner only for a real policy call (what the product promises, security posture, a stated limit). The class is
+  fixed in the unit, never merged and filed.
 - Pickers: before a picker, search the rulings log (`~/.claude/rulings/<project>.jsonl`) for its topic and answer
   from a ruling that covers it. One question per picker, the decoy first (`hooks/lib/ask-decoy.sh`); an answer that
   comes back empty is void, and the hook says to ask it again on its own.
@@ -112,7 +118,9 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   is the review convergence, not who types the diff.
 - Checklist: show the owner one (todo tool; Orca task list for dispatched work), updated in the reply that does
   the work; on a wake, every task-list change goes in ONE reply as one batch of calls, recording the same. A
-  resume recreates only the unfinished items, in one reply.
+  resume recreates only the unfinished items, in one reply. An item done is deleted (TaskUpdate status deleted),
+  never marked completed; the checkpoint's Closed section keeps it. At most 8 open items; a subject of 80
+  characters at most, with no ids (no message, task or dispatch id, commit hash or issue number).
 - Re-asks: never ask the owner a question they already have; `decision.sh` exits 3 (and the picker is blocked) on a question still
   open or answered in the last 24 hours and names the earlier decision and
   answer: use it. Two re-asks are allowed: a picker retry after the decoy voided
@@ -124,34 +132,30 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
 - Announce every worker at dispatch time (agent, model, worktree, task); report what it came back with when it finishes.
-- relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`,
-  which stores the note in your run (`run:<id>`), the mailbox the relay's
-  inbox poller reads, and exits 1 when Orca does not confirm it. Never
-  `--to <its handle>`: that mailbox is live-only, and notes sent while the
-  pane was busy were lost. The poller prints every note you send yourself
-  (type `status`), except `main-watch`, `heads-up`, `main:` and `answer from
-  main` subjects; from a script or any other pane it prints only a subject
-  that starts `cos:` or names the owner. A subject
-  that starts `FYI` does not wake it: it is held and shown with your next
-  message that does. It asks the owner and relays the answer
-  verbatim; check each relayed answer against
-  `~/.claude/rulings/<project>.jsonl` before acting. A message titled
-  `auto-decided for the owner on <id>` is the relay's own decision under
-  auto-decide, not an owner ruling: there is no ruling to find. Act on it when
-  the ledger row for `<id>` answers `<words> (auto-decided)`, whether or not
-  auto-decide is still on; else ask the relay.
-  The owner may reverse it later; a reversal arrives as an ordinary relayed
-  answer, and the ledger row then answers `<words> (<ruling id>)` with the
-  auto answer in its history. Ask the owner directly only when no such pane is running. Ledger: AskUserQuestion records itself; a
-  plain-chat ask needs `decision.sh add` in the same turn or the Stop is held;
-  when the owner answers, run `decision.sh answer <id> '<answer>'` (agent-awareness
-  lists the open ids every turn).
+- relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`, which stores the note in your run
+  (`run:<id>`), the mailbox the relay's inbox poller reads, and exits 1 when Orca does not confirm it. Never `--to
+  <its handle>`: that mailbox is live-only, and notes sent while the pane was busy were lost. The poller prints every
+  note you send yourself (type `status`), except `main-watch`, `heads-up`, `main:` and `answer from main` subjects;
+  from a script or any other pane it prints only a subject that starts `cos:` or names the owner. A subject that
+  starts `FYI` does not wake it: it is held and shown with your next message that does. It asks the owner and relays
+  the answer verbatim; check each relayed answer against `~/.claude/rulings/<project>.jsonl` before acting. A message
+  titled `auto-decided for the owner on <id>` is the relay's own decision under auto-decide, not an owner ruling:
+  there is no ruling to find. Act on it when the ledger row for `<id>` answers `<words> (auto-decided)`, whether or
+  not auto-decide is still on; else ask the relay. The owner may reverse it later; a reversal arrives as an ordinary
+  relayed answer, and the ledger row then answers `<words> (<ruling id>)` with the auto answer in its history. Ask the
+  owner directly only when no such pane is running. Ledger: AskUserQuestion records itself; a plain-chat ask needs
+  `decision.sh add` in the same turn or the Stop is held; when the owner answers, run `decision.sh answer <id>
+  '<answer>'` (agent-awareness lists the open ids every turn).
 - Helper agents (owner ruling 2026-10-10): a helper that searches or looks up is `Explore` (Haiku); one that
   edits, runs, tests or judges is `general-purpose` (Sonnet). On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
   helper brief says: python3/rg into /tmp/commandeck, report what is unanswered
   at 40 turns. A lookup serena, codebase-memory or one `rg` answers stays in
   main; a pure count names Haiku.
+- Large reads (host issue 3165): a read over 10 KB goes to a background `Explore` helper with one precise question and
+  the file path, and the answer comes back as a few lines with file:line. Example prompt: "In <log path>, which test
+  failed first and why? Answer in at most 5 lines with file:line, and a NOT FOUND: line for anything absent." Main
+  reads the text itself when it must act on exact words: a commit, an edit, a ruling quote.
 - Effort (owner rulings 2026-10-09): an override beats the routing.json pin and
   the global medium default, critical seats included. Log it in that unit's
   brief or dispatch spec. routing.json stays the starting point; the same

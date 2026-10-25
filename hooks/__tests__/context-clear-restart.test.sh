@@ -21,6 +21,7 @@ case "\$1 \$2" in
   "terminal list") cat "$T/list.json" ;;
   "terminal create") panes term_old term_new; echo '{"ok":true,"result":{"terminal":{"handle":"term_new"}}}' ;;
   "terminal close") echo "close \$4 while main=\$(tail -1 "$T/scratch/handles/main")" >> "$T/calls.log"; [ "\$4" != term_old ] || panes term_new; echo '{"ok":true}' ;;
+  "terminal send") [ ! -e "$T/refuse-send" ] || { echo '{"ok":false,"error":"refused"}'; exit 0; }; echo '{"ok":true}' ;;
   "orchestration send") while [ \$# -gt 0 ]; do [ "\$1" != --to ] || echo "\$2" >> "$T/sent-to"; shift; done; echo '{"ok":true}' ;;
   *) echo '{"ok":true}' ;;
 esac
@@ -35,6 +36,16 @@ check "send after handoff reaches the new pane: handles/main ends with term_new 
 (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" question q body >/dev/null 2>&1)
 check "a to-main.sh send right after the close goes to term_new" "term_new" "$(cat "$T/sent-to" 2>/dev/null)"
 check "the older handle is kept in the record, the new one last" "term_old term_new" "$(paste -sd' ' "$T/scratch/handles/main")"
+
+# Every close goes through pp_pane_close, so each one is logged with its cause (host issue 3009): the old main after
+# a restart, and a replacement that refused the resume prompt.
+check "the old main's close writes a pane-closes.log line with its cause" "term_old|restart: old main|ok" \
+  "$(awk -F'\t' '$2 == "term_old" {print $2 "|" $4 "|" $5}' "$T/scratch/pane-closes.log")"
+touch "$T/refuse-send"; echo term_old > "$T/scratch/handles/main"; echo "checkpoint two" > "$T/cp2.md"
+jq -n --arg p "$T/p" '{result: {terminals: [{handle: "term_old", worktreePath: $p, agentIdentity: "claude"}]}}' > "$T/list.json"
+(cd "$T/p" && "${E[@]}" bash "$REAL/hooks/lib/context-clear-restart.sh" term_old "$T/cp2.md" true "$T/restart2.log" >/dev/null 2>&1)
+check "the unprompted replacement's close writes one too" "term_new|restart: unprompted new|ok" \
+  "$(awk -F'\t' '$4 == "restart: unprompted new" {print $2 "|" $4 "|" $5}' "$T/scratch/pane-closes.log")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

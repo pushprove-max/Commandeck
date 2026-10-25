@@ -43,6 +43,15 @@ Required: builder-launch.sh refuses a batch without it. Which standard
 governs this change, which library or managed service already does it (the
 project's `.claude/paved-road.md`, by area), and why we build instead if we do.
 
+## Data design
+
+Required: builder-launch.sh refuses a batch without it. For each piece of state the
+batch adds or changes (a file, a record, a counter, a lock, a log, a setting): where
+it lives, who writes it, who reads it, when it resets, and what a retry runs. Write
+`none: <why no state is added or changed>` when there is none.
+
+- <piece of state>: lives in <where>; written by <who>; read by <who>; reset when <when>; a retry runs <what>
+
 ## Plan
 
 Required: builder-launch.sh refuses a batch without it. The plan the owner

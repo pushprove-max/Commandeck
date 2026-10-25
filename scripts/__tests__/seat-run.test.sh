@@ -45,5 +45,24 @@ check "a pane killed mid-run: exit 3, no verdict, never GO, and one wake saying 
   "$RC:$(grep -c '^seat=plan-judge-sol unit=pu no verdict' <<<"$OUT"):$(grep -c 'GO' <<<"$OUT"):$(wakes):$(grep -c 'no verdict' "$SQ" 2>/dev/null):$(jq -r .type "$SQ" 2>/dev/null)"
 rm -f "$T/die-on-wait"
 
+# Host issue 3162: a seat run started by main survives main's pane closing. Main's foreground run goes on detached
+# in its own session; the shell that started it then dies with its process group, as a closed pane's does, and the run
+# still finishes and collects.
+printf 'Judge the plan, detached.\nPlan: .claude/plans/pu.md\nEnd on a verdict line.\n' > "$T/run-det.md"; echo 'VERDICT: GO' > "$T/screen"
+: > "$T/wakes"; rm -f "$SQ" "$T/pane-up"
+cat > "$T/det.sh" <<EOF
+cd "$PROJ" && env -u COMMANDECK_FOREGROUND -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR CLAUDECODE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 \
+  COMMANDECK_LOOP_POLL_SECONDS=0 PATH="$BIN:\$PATH" HOME="$HOME" bash "$REAL/scripts/seat.sh" run plan-judge-sol pu "$T/run-det.md" > "$T/det.out" 2>&1
+sleep 60
+EOF
+perl -e 'use POSIX; setpgid(0, 0); exec @ARGV' bash "$T/det.sh" & GRP=$!
+for _ in $(seq 100); do grep -q 'running detached, pid' "$T/det.out" 2>/dev/null && break; sleep 0.2; done
+DPID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' "$T/det.out")
+kill -TERM -- "-$GRP" 2>/dev/null; wait "$GRP" 2>/dev/null
+[ -z "$DPID" ] || tail --pid="$DPID" -f /dev/null
+DLOG=$(ls "$HOME/.commandeck/scratch/"*/run-*pu-plan-judge-sol.log 2>/dev/null | head -1)
+check "a detached run started from a shell that is then killed (with its process group) still finishes and collects" "1:1" \
+  "$(grep -c '^seat=plan-judge-sol unit=pu VERDICT: GO report=' "$DLOG" 2>/dev/null):$(grep -c "run-det.md" "$JREC")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -1,4 +1,4 @@
-# The triggers of the Auto answer to "Write a plan first?" (scripts/plan-tier.sh). To change them, copy this file to
+# The triggers that pick the plan tier with no question to the owner (scripts/plan-tier.sh). To change them, copy this file to
 # the project's .claude/plan-triggers.tsv and edit that copy: a project's own file replaces this one whole.
 # One trigger a line, three tab-separated columns: the tier (panel or none), a lowercase extended regex matched
 # against the lowercased batch brief, and the name Auto prints. A panel trigger on any line picks Panel. No plan only

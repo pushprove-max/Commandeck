@@ -69,5 +69,14 @@ check "main's wakes: the hour's count, and its failures by result" '{"hour":5,"f
   "$(jq -c '.projects.demo.seats.main.wakes' <<<"$(collect)")"
 rm -f "$WLJ"
 check "with no wake log it counts none" '{"hour":0,"failed":{}}' "$(jq -c '.projects.demo.seats.main.wakes' <<<"$(collect)")"
+
+# Host issue 3147: a worker session that found serena down leaves a host-wide stamp (pane-budget-gate.sh). Collect lists
+# one mcp-down-serena alert while the stamp is under 10 minutes old, and none once it is older.
+mcpdown() { jq -c '[.alerts[].id | select(startswith("mcp-down-")) | sub("-[0-9]{9,}$"; "")]' <<<"$1"; }
+mkdir -p "$HOME/.commandeck/mcp-health"; echo "$(date +%s)" > "$HOME/.commandeck/mcp-health/mcp-down-serena"
+check "a fresh mcp-down-serena stamp in the health folder lists one mcp-down-serena alert" '["mcp-down-serena"]' "$(mcpdown "$(collect)")"
+echo "$(( $(date +%s) - 700 ))" > "$HOME/.commandeck/mcp-health/mcp-down-serena"
+check "a stamp over 10 minutes old lists none" '[]' "$(mcpdown "$(collect)")"
+rm -f "$HOME/.commandeck/mcp-health/mcp-down-serena"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

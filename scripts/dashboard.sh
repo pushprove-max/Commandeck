@@ -267,6 +267,28 @@ terminal_list() {
 # One projection for the board: every worktree of this project. Orca lists the
 # whole machine's worktrees, so every lookup is by path, never by name: two
 # projects may each have a unit of one name.
+# merged <unit> -- only committed evidence says merged (issue 343), never a clock or a leftover worktree: (a) the worktree
+# HEAD is in main and is not the commit its branch was created at (a fresh worktree's tip is main's own commit), or
+# (b) a finished-builds line (merge-unit-local.sh's squash commit, listed in $RUN/merge-shas) names a commit main holds
+# that the worktree HEAD does not contain (a name reused for new work branches after its old merge). Both guards only
+# turn "merged" into "live". shortcut: a squash merge made outside merge-unit-local.sh leaves no line, so it reads live.
+merged() {
+  local head ref first sha
+  if head=$(git -C "$PP_WORKSPACES/$1" rev-parse -q --verify HEAD 2>/dev/null) \
+     && git -C "$PP_MAIN" cat-file -e "$head^{commit}" 2>/dev/null \
+     && git -C "$PP_MAIN" merge-base --is-ancestor "$head" main 2>/dev/null; then
+    ref=$(git -C "$PP_WORKSPACES/$1" symbolic-ref -q HEAD 2>/dev/null)
+    first=$([ -z "$ref" ] || git -C "$PP_MAIN" reflog show --format=%H "$ref" 2>/dev/null | tail -1)
+    [ -n "$first" ] && [ "$first" != "$head" ] && return 0
+  fi
+  for sha in $(awk -F'\t' -v u="$1" '$1 == u { print $2 }' "$RUN/merge-shas"); do
+    git -C "$PP_MAIN" merge-base --is-ancestor "$sha" main 2>/dev/null || continue
+    [ -n "$head" ] && git -C "$PP_MAIN" merge-base --is-ancestor "$sha" "$head" 2>/dev/null && continue
+    return 0
+  done
+  return 1
+}
+
 units() {
   local ps='' u wt ag st branch dirty diff age seat s run open='' role sr rd bj bl rows b v vr f po pj rs
   if ps=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) && jq -e . >/dev/null 2>&1 <<<"$ps"; then ok orca
@@ -290,9 +312,13 @@ units() {
   if run=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE") && [ -n "$run" ]; then
     open=$(cached orca-tasks open_tasks "$run")
   else nm orca-tasks "no Orca run named in $PP_RUN_FILE"; fi
+  # (unit, sha) of every merge this checkout made (finished_builds): merged()'s committed evidence.
+  finished_builds | jq -r '.[]? | "\(.unit)\t\(.sha)"' > "$RUN/merge-shas" 2>/dev/null || : > "$RUN/merge-shas"
   for wt in "$PP_WORKSPACES"/*/; do
     wt=${wt%/}; [ -e "$wt/.git" ] || continue
     u=${wt##*/}
+    # A merged unit leaves the in-flight list even while its worktree stays (finishedBuilds lists it). Seats are not units.
+    case $u in Chief-of-Staff) ;; *) ! merged "$u" || continue ;; esac
     # A plan seat's worktree, marked by seat.sh, is the unit's Planning stage until the Builder's launch adopts it and
     # drops the mark: <unit> itself, or <unit>-plan for a unit planned before 0.18.0, whose card the unit's own
     # worktree carries when it is there: one unit, one card.
@@ -365,14 +391,21 @@ units() {
         vr=${f##*/}; vr=${vr#"${u##*/}-r"}; vr=${vr%-reports.md}
         [[ $vr =~ ^[0-9]+$ ]] && vr=$((10#$vr)) || vr=null
         bj=$(jq -c --arg v "$v" --argjson vr "$vr" '.verdict = $v | .verdictRound = $vr' <<<"$bj")
-        # Every round file's own verdict by its round, so each finished pass shows its own.
-        vs='{}'
-        while IFS= read -r r; do
-          n=${r##*/}; n=${n#"${u##*/}-r"}; n=${n%-reports.md}
-          [[ $n =~ ^[0-9]+$ ]] && vs=$(jq -c --arg n "$((10#$n))" --arg v "$(grep -v '^[[:space:]]*$' "$r" | tail -1 | cut -c1-200)" '.[$n] = $v' <<<"$vs")
-        done < <(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$')
-        bj=$(jq -c --argjson vs "$vs" '.verdicts = $vs' <<<"$bj")
       fi
+      # Every finished round's own verdict by its round, so each pass shows its own: its report file's last line, else
+      # "verdict file gone" (issue 343): no pass shows a blank verdict. shortcut: a Codex result file is no fallback here,
+      # the pass script keeps none; add one if it ever does.
+      vs='{}'
+      while IFS= read -r r; do
+        n=${r##*/}; n=${n#"${u##*/}-r"}; n=${n%-reports.md}
+        [[ $n =~ ^[0-9]+$ ]] && vs=$(jq -c --arg n "$((10#$n))" --arg v "$(grep -v '^[[:space:]]*$' "$r" | tail -1 | cut -c1-200)" '.[$n] = $v' <<<"$vs")
+      done < <(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$')
+      if [[ $rd =~ ^[0-9]+$ ]]; then
+        for ((n = 1; n <= rd; n++)); do
+          jq -e --arg n "$n" 'has($n)' >/dev/null <<<"$vs" || vs=$(jq -c --arg n "$n" '.[$n] = "verdict file gone"' <<<"$vs")
+        done
+      fi
+      [ "$vs" = '{}' ] || bj=$(jq -c --argjson vs "$vs" '.verdicts = $vs' <<<"$bj")
       # An unreadable log stays wholly not measured; any other Builder also carries its issues and findings.
       # reviewedTree: is the worktree still the tree its newest pass read. The build review reads the same script.
       [ "$(jq -c '.steps' <<<"$bj")" = null ] || bj=$(jq -c --argjson p "$(builder_progress "$wt" "$u")" --argjson rt "$(bash "$HERE/reviewed-tree.sh" "$wt" "${u##*/}" 2>/dev/null || echo null)" '. + $p + {reviewedTree: $rt}' <<<"$bj")
@@ -1029,6 +1062,15 @@ main_events() {
   else nm mainEvents "main's compactions and carry failures could not be read: $(head -1 "$RUN/err-main-events" 2>/dev/null)"; echo null; fi
 }
 
+# The host-wide MCP-down stamps (pane-budget-gate.sh, host issue 3147) as one part, {mcpDown: [{server, at}]}; a stamp
+# whose content is not an epoch is left out.
+mcp_stamps() {
+  local d=${COMMANDECK_MCP_HEALTH_DIR:-$HOME/.commandeck/mcp-health} f
+  for f in "$d"/mcp-down-*; do
+    [ -f "$f" ] && jq -nc --arg s "${f##*/mcp-down-}" --rawfile at "$f" '{server: $s, at: ($at | rtrimstr("\n") | tonumber?)}'
+  done | jq -sc '{mcpDown: .}'
+}
+
 # The active alerts from the parts already built this collect; the rules are
 # dashboard_alerts.jq. Each alert's start persists in the cache, so its id
 # holds across collects. An input not measured makes the record not measured,
@@ -1041,7 +1083,7 @@ alerts() {
   prev=$(jq -c 'objects' "$f" 2>/dev/null) && [ -n "$prev" ] || prev='{}'
   out=$(jq -nc -f "$HERE/dashboard_alerts.jq" --argjson now "$NOW" --arg s7 "$(since7)" --argjson hasSe "$([ ${#se[@]} -gt 0 ] && echo true || echo false)" \
     --slurpfile se <([ ${#se[@]} -eq 0 ] || jq -c --arg s "$(since7)" 'select((.completedAt // "") >= $s) | {role, completedAt, tokens}' "${se[@]}") \
-    --slurpfile parts <(cat "$RUN"/parts/*.json) --slurpfile srcs <(cat "$RUN"/src/*.json) --slurpfile preva <(printf '%s' "$prev")) || return 1
+    --slurpfile parts <(cat "$RUN"/parts/*.json; mcp_stamps) --slurpfile srcs <(cat "$RUN"/src/*.json) --slurpfile preva <(printf '%s' "$prev")) || return 1
   jq -c .since <<<"$out" > "$f"
   # Issue 274: each alert that cleared is kept 24 h for the page's folded list.
   jq -c --argjson now "$NOW" --slurpfile r <(jq -c 'arrays' "$CACHE/alerts-resolved.json" 2>/dev/null) \

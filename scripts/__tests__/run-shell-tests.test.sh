@@ -109,5 +109,28 @@ check "a test inherits no session or main-watch COMMANDECK_ variable; CI's and t
   "pane= scratch= seat= nm=/ci/nm fg=1" "$(cat "$RAN")"
 git -C "$R" checkout -q -- .
 
+# Host issue 3009: a test with no orca-ide stub of its own once closed a real pane. The runner puts a stub first on
+# PATH that refuses `terminal close` and names the test file; a test's own stub, prepended later, still wins.
+printf '#!/usr/bin/env bash\norca-ide terminal close --terminal h1 --json >> "$RAN" 2>&1; echo "rc=$?" >> "$RAN"\n' > "$R/scripts/__tests__/touched.test.sh"
+: > "$RAN"; (cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh >/dev/null 2>&1)
+check "a test without its own stub cannot close a pane: refused, the test file named" "1 1 rc=1" \
+  "$(grep -c '"test-unstubbed-close"' "$RAN") $(grep -c "refused in .*scripts/__tests__/touched.test.sh" "$RAN") $(grep '^rc=' "$RAN")"
+mkdir -p "$TMP/own"; printf '#!/usr/bin/env bash\necho own-stub\n' > "$TMP/own/orca-ide"; chmod +x "$TMP/own/orca-ide"
+printf '#!/usr/bin/env bash\nPATH=%s/own:$PATH orca-ide terminal close --terminal h1 >> "$RAN" 2>&1\n' "$TMP" > "$R/scripts/__tests__/touched.test.sh"
+: > "$RAN"; (cd "$R" && timeout 30 bash "$RUNNER" scripts/__tests__/touched.test.sh >/dev/null 2>&1)
+check "a test's own stub, put first on PATH by the test, still wins" "own-stub" "$(cat "$RAN")"
+git -C "$R" checkout -q -- .
+
+# Host issue 2997: a script named only by an unrelated test (here a test that runs seat.sh) is not run by plain
+# --changed, which is the merge check's speed; --callers adds it, and only when asked.
+printf '#!/usr/bin/env bash\n# runs scripts/seat.sh\necho uses-seat >> "$RAN"\n' > "$R/scripts/__tests__/uses-seat.test.sh"
+git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm "a caller's test"
+echo '# edited' >> "$R/scripts/seat.sh"
+ran
+check "plain --changed runs only the same-name test of a touched script, not a test that merely names it" "seat" "$GOT"
+ran --callers
+check "--callers also runs the test that names the touched script" "seat uses-seat" "$GOT"
+git -C "$R" checkout -q -- .
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

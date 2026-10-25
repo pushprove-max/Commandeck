@@ -23,7 +23,10 @@ cat > "$TMP/bin/orca-ide" <<STUB
 #!/usr/bin/env bash
 echo "\$*" >> "$TMP/orca-calls"
 case "\$1 \$2" in
-  "terminal list") echo '{"result":{"terminals":[{"handle":"t_'"\$(cat "$TMP/unit")"'","worktreePath":"$TMP/ws/'"\$(cat "$TMP/unit")"'"}]}}' ;;
+  # The unit's one pane, listed until a close of it (as Orca does: a closed pane leaves the list).
+  "terminal list") if grep -qx "t_\$(cat "$TMP/unit")" "$TMP/closed" 2>/dev/null; then echo '{"result":{"terminals":[]}}'
+    else echo '{"result":{"terminals":[{"handle":"t_'"\$(cat "$TMP/unit")"'","worktreePath":"$TMP/ws/'"\$(cat "$TMP/unit")"'"}]}}'; fi ;;
+  "terminal close") echo "\$4" >> "$TMP/closed"; echo '{"ok":true}' ;;
   "worktree remove") [ ! -e "$TMP/remove-fails" ] || { echo "orca: the worktree is busy" >&2; exit 1; }
     git -C "\$(git -C "\${4#path:}" rev-parse --path-format=absolute --git-common-dir)" worktree remove --force "\${4#path:}" ;;
   *) echo '{"ok":true}' ;;

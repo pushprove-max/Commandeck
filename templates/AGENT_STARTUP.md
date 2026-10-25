@@ -17,7 +17,8 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 
 ## Builder flow
 
-0. Main, before every build: ask the owner "Write a plan first?". The tiers, seats and models are in
+0. Main, before every build: ask no question. Run `plan-tier.sh <batch file>`, use the configured model and effort per
+   seat, and tell the owner in one line the tier, the trigger and each seat's model and effort. The tiers and seats are in
    `templates/main-session.md` under Details. A plan is never a build order: with no build word from the owner,
    main STOPS at the plan file.
 1. Main: `bash scripts/builder-launch.sh <unit> <batch file>` opens the
@@ -59,6 +60,7 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 - `bash scripts/ask-main.sh <subject> <body>`: a question for main, waited on
   (`--resume <id>` after a `no answer yet` line). Workers ask main, never
   the owner; main asks the owner through the Chief of Staff pane.
+- One status per decision: message main only for a decision only main or the owner can make. No progress notes; progress goes in the evidence file.
 - `orca-ide terminal read --terminal <handle> --screen`: what a pane shows.
 - Main only: `bash scripts/board.sh` (state of every unit and pane),
   `bash scripts/orca-wait.sh` (wait for one wake, in the foreground),

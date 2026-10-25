@@ -185,6 +185,33 @@ for H in "bash <<'EOF'" "sh <<'EOF'" "cd $TMP && sh -s <<-'EOF'" "cat <<'EOF' | 
   check "a heredoc body run by: $H still blocks" 2 "$(run "$(bash_p "$H"$'\n'"$INSTALL lodash"$'\n'"EOF")")"
 done
 
+# Message cuts: a blocked package is no question for main; the worker records it and goes on. Both blocks say so.
+DEFER='record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main'
+check "the new-dependency block tells the worker to record a main-only deferred item" 1 \
+  "$(err "$(bash_p "$INSTALL lodash")" | grep -c -F "$DEFER")"
+check "and so does the manifest block" 1 \
+  "$(err "$(edit "$MANIFEST" "$DEPS_OLD" '"dependencies": {
+    "left-pad": "^1.0.0",
+    "zod": "^3.22.0"')" | grep -c -F "$DEFER")"
+
+# --- a manifest that is not JSON, before or after the edit (host issue 3029) -----
+# The line-shape screen read a metadata key as a package: the block named `check`, which the worker had only edited.
+mkdir -p "$TMP/bad" "$TMP/ok"
+BAD=$TMP/bad/package.json; OK=$TMP/ok/package.json
+printf '{"scripts":{"build":"tsc",},"dependencies":{"zod":"^3.22.0"}}\n' > "$BAD"
+printf '{"scripts":{"check":"old"}}\n' > "$OK"
+check "an edit to an invalid package.json blocks, naming the file and not a package" "2:1:0" \
+  "$(run "$(edit "$BAD" '"zod": "^3.22.0"' '"zod": "^3.22.0", "left-pad": "^1.0.0"')"):$(err "$(edit "$BAD" '"zod": "^3.22.0"' '"zod": "^3.22.0", "left-pad": "^1.0.0"')" | grep -c "$BAD is not valid JSON"):$(err "$(edit "$BAD" '"zod": "^3.22.0"' '"zod": "^3.22.0", "left-pad": "^1.0.0"')" | grep -c "left-pad")"
+check "an edit to an invalid package.json that adds nothing to screen passes" 0 \
+  "$(run "$(edit "$BAD" '"build"' '"compile"')")"
+check "a Write of valid JSON over an invalid package.json is screened, not refused for the old file" "2:0" \
+  "$(run "$(write "$BAD" '{"dependencies":{"left-pad":"^1.0.0"}}')"):$(err "$(write "$BAD" '{"dependencies":{"left-pad":"^1.0.0"}}')" | grep -c 'not valid JSON')"
+EDIT_BREAK=$(edit "$OK" '"check":"old"' '"check":"new",')
+check "an Edit that leaves the manifest as invalid JSON blocks as invalid and does not name the script as a package" "2:1:0" \
+  "$(run "$EDIT_BREAK"):$(err "$EDIT_BREAK" | grep -c "leaves $OK as invalid JSON"):$(err "$EDIT_BREAK" | grep -c "adding a new dependency")"
+check "a valid edit of a valid file is screened as before: a bump passes, an added package still blocks by name" "0:2:1" \
+  "$(run "$(edit "$OK" '"check":"old"' '"check":"new"')"):$(run "$(edit "$OK" '"check":"old"' '"check":"old"},"dependencies":{"lodash":"^4.0.0"')"):$(err "$(edit "$OK" '"check":"old"' '"check":"old"},"dependencies":{"lodash":"^4.0.0"')" | grep -c "'lodash'")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

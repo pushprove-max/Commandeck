@@ -406,6 +406,24 @@ pp_wake_log() {
     '{at: $at, from: $from, to: $to, reason: $reason, result: $result, error: $error}' >> "$f" 2>/dev/null || true
   return 0
 }
+# pp_worker_done_since <handle> <epoch> -- did pane <handle> report to main after <epoch>? Reads `orchestration inbox
+# --json` on stdin: a worker_done from that handle. Orca files a worker_done only once it accepts it, so a refused send,
+# another message type or another pane's report proves nothing. An unreadable inbox answers no. Orca stamps whole
+# seconds, so only a later second is proof: one from <epoch>'s own second may predate it.
+# Callers: main-watch.sh reported(), claude-worker-notify.sh.
+pp_worker_done_since() {
+  jq -e --arg h "$1" --argjson s "$2" '.result.messages | any(.[]?;
+      ((.created_at // "" | sub("\\.[0-9]+"; "") | fromdateiso8601?) // 0) > $s
+      and .type == "worker_done" and .from_handle == $h)' >/dev/null 2>&1
+}
+# pp_seat_log <worktree> <session> -- the seat's session log, when it exists: a Claude session id is looked up in the
+# config folder's projects/<worktree slug>/, a path (a Codex log seat.sh bound) is the log itself. Empty for none.
+# main-watch.sh grew_at and seat.sh collect both name the log through this, so their delivery receipts agree.
+pp_seat_log() {
+  local f
+  case ${2:-} in '') return 0 ;; /*) f=$2 ;; *) f=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "$1")/$2.jsonl ;; esac
+  [ ! -f "$f" ] || printf '%s' "$f"
+}
 # pp_seat_clear <record> [recipient handle...] -- succeeds when the inbox answered in full and the seat reported no
 # failure since its prompt: the one test pp_seat_done and the Stop hook's PLAN-DONE request share.
 pp_seat_clear() {
@@ -559,6 +577,31 @@ pp_close_items() {
   done
   return 0
 }
+# pp_open_ask <handle> <task ids> <since epoch> [<other ids>] -- does the seat hold any question since <since> (its
+# launch: an older one is another episode) still unanswered (host issue 2998)? 0 open (the oldest such id in
+# PP_OPEN_ASK_ID), 1 none open, 2 cannot tell: the inbox or a row in it cannot be read, or the read stops at the row
+# limit before reaching back to <since> with no open question in it, so one may lie past the cut.
+# A question is a `question` that opens its own thread (Orca leaves thread_id null on one) whose sender
+# (`dispatch:<id>` for `orchestration ask` under a dispatch), payload taskId or payload dispatchId is ANY id the seat
+# holds: the handle, the task ids, the other ids (earlier panes, dispatch ids); ids are space-separated. It is answered
+# ONLY by a reply in its own thread, which answer-worker.sh posts once given the question's id. EVERY question counts,
+# not a chosen one, and no transcript is read: a question answered another way keeps its task unsettled, loudly.
+pp_open_ask() {
+  local in
+  in=$(orca-ide orchestration inbox --limit 5000 --json 2>/dev/null) || return 2
+  PP_OPEN_ASK_ID=$(jq -er --arg ids "$1 $2 ${4:-}" --argjson s "${3:-0}" '
+    def ep: .created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+    def pl: ((.payload // "{}") | fromjson? // {});
+    [$ids | splits("\\s+") | select(. != "") | ., "dispatch:" + .] as $ids
+    | .result.messages as $m | if ($m | type) != "array" then error else
+    [$m[] | select(.type == "question" and (.thread_id // .id) == .id and ep >= $s
+        and any(.from_handle, pl.taskId, pl.dispatchId; IN($ids[])))
+      | . as $q | select(any($m[]; .id != $q.id and .thread_id == $q.id) | not)] as $open
+    | if $open != [] then ($open | min_by(ep) | .id)
+      elif ($m | length) >= 5000 and ([$m[] | ep] | min) >= $s then error
+      else "none" end end' <<<"$in" 2>/dev/null) || return 2
+  [ "$PP_OPEN_ASK_ID" != none ]
+}
 # Close an Orca task whose work has SETTLED. While the task's supervised
 # dispatch is active Orca refuses (task_not_startable), and a warm pane with an
 # active dispatch refuses the next one, so the dispatch is settled with
@@ -567,8 +610,35 @@ pp_close_items() {
 # pane still refused the next dispatch; release never closes a pane we opened
 # ourselves, only one Orca created. Never for a worker still working: abandon fences it.
 pp_task_close() { # task status [result-json]
-  local args=(--id "$1" --status "$2" --json) out d h
+  local args=(--id "$1" --status "$2" --json) out d h rec busy ask= tasks other t
   [ -z "${3:-}" ] || args+=(--result "$3")
+  # A live dispatch is never settled under its pane (host issue 2998). The pane is the seat record's handle for this
+  # task, by `task=` or by `answer_task=` (an answer sent by dispatch). Settling needs every check READ clear: the pane
+  # idle (pane_is_busy 1) and no open question since the seat's launch (pp_open_ask 1) from ANY id the record holds:
+  # its pane, earlier panes (prior_pane=), every task, and each task's dispatch. Working, an open question and any
+  # check that could not be read (pane state, a dispatch, the inbox) all refuse. A task with no record takes the path
+  # below as before.
+  read -r h rec < <(awk -F= -v t="$1" 'FNR==1{h=""} /^handle=/{h=$2} /^(answer_)?task=/ && h && $2==t {print h, FILENAME; exit}' "$PP_SCRATCH"/seat-*.txt 2>/dev/null) || true
+  if [ -n "$h" ]; then
+    busy=0; ( . "$PP_SCRIPTS/codex-helpers.sh" && pane_is_busy "$h" ) || busy=$?
+    if [ "$busy" = 1 ]; then
+      tasks=$(sed -n 's/^\(answer_\)\{0,1\}task=//p' "$rec"); other=$(sed -n 's/^prior_pane=//p' "$rec")
+      for t in $tasks; do
+        # A task with no dispatch reads null; a failed or unshaped read is "cannot tell".
+        d=$(orca-ide orchestration dispatch-show --task "$t" --json 2>/dev/null \
+          | jq -er '.result | if has("dispatch") then .dispatch.id // "" else error end' 2>/dev/null) || { ask=2; break; }
+        other+=" $d"
+      done
+      [ -n "$ask" ] || { ask=0; pp_open_ask "$h" "$tasks" "$(sed -n 's/^launched=\([0-9][0-9]*\)$/\1/p' "$rec" | head -1)" "$other" || ask=$?; }
+    fi
+    if [ "$ask" = 0 ]; then
+      echo "task $1: its pane $h has open question $PP_OPEN_ASK_ID; answer it with bash $PP_SCRIPTS/answer-worker.sh $h \"<text>\" $PP_OPEN_ASK_ID (or reply in its thread); not settled" >&2
+      return 1
+    elif [ "$busy" != 1 ] || [ "$ask" != 1 ]; then
+      echo "task $1: its pane $h is working or could not be read (pane state, a dispatch or inbox); not settled" >&2
+      return 1
+    fi
+  fi
   out=$(orca-ide orchestration task-update "${args[@]}" 2>&1 || true)
   jq -e '.ok' <<<"$out" >/dev/null 2>&1 && return 0
   # A driver's own launchd/systemd terminal holds no run binding; act as the
@@ -589,6 +659,26 @@ pp_task_close() { # task status [result-json]
   d=$(jq -r '.error | select(.) | "\(.code): \(.message)"' <<<"$out" 2>/dev/null || true)
   echo "could not close task $1 ($2): ${d:-${out:-no answer from orca-ide}}" >&2
   return 1
+}
+# Every script close of an agent pane goes through here (host issue 3009: panes vanished and nobody could say who closed
+# them). One tab-separated line lands in $PP_SCRATCH/pane-closes.log: UTC time, handle, the calling script, the
+# cause, then `ok` or `refused: <Orca's answer>`. A pane closed by hand, the Orca UI or Orca itself is not in the
+# log. Orca can refuse a close with exit 0, so only `.ok == true` counts; the answer is left in PP_CLOSE_RES for the
+# caller's own message. A failed log write never blocks or fakes the close.
+pp_pane_close() { # <handle> <cause>
+  local rc=1
+  PP_CLOSE_RES=$(timeout 20 orca-ide terminal close --terminal "$1" --json 2>&1) && jq -e '.ok == true' <<<"$PP_CLOSE_RES" >/dev/null 2>&1 && rc=0
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${0##*/}" "$2" \
+    "$([ "$rc" = 0 ] && echo ok || echo "refused: $(printf %s "$PP_CLOSE_RES" | tr '\n\t' '  ' | cut -c1-200)")" >> "$PP_SCRATCH/pane-closes.log" 2>/dev/null || true
+  return $rc
+}
+# pp_worktree_panes <worktree> -- the handles of the panes Orca lists in <worktree>, one a line, matched by wtp (any
+# of the three fields Orca names a worktree in). Non-zero when the listing cannot be read: a failed call, an empty
+# answer, or one that is not a terminal list. A caller that deletes on "no pane" reads it again after its closes.
+pp_worktree_panes() {
+  local out; out=$(timeout 10 orca-ide terminal list --json 2>/dev/null) \
+    && jq -e . <<<"$out" >/dev/null 2>&1 && jq -r --arg wt "$1" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . elif (.terminals | type) == "array" then .terminals else error("not a terminal list") end)[]
+      | select((wtp | pnorm) == $wt) | .handle' <<<"$out" 2>/dev/null
 }
 
 # A pane waiting on a person: Claude's and Codex's permission and approval
@@ -877,7 +967,7 @@ pp_registered() {
 pp_pane_of() {
   timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$1" \
     "$PP_PNORM"'($wt | pnorm) as $wt | first((.result | if type == "array" then . else (.terminals // []) end)[]?
-      | select((.worktreePath | pnorm) == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
+      | select((wtp | pnorm) == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
       | select((.title // "") | test("^(Reviewer|Claude reviewer|Codex reviewer|Luna reviewer|Refuter|Certifier|Judge)\\b") | not) | .handle) // empty' 2>/dev/null
 }
 # pp_seat_pane <seat key> <worktree> -- the live pane of main (key main) or of a
@@ -895,7 +985,7 @@ pp_seat_pane() {
   [ "$1" = main ] || hs="$hs $(sed -n 's/^handle=//p' "$PP_SCRATCH/seat-${1#unit-}-builder.txt" 2>/dev/null | tail -1)"
   [ -z "${hs// /}" ] || h=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg hs "$hs" \
     "$PP_PNORM"'($wt | pnorm) as $wt | [(.result | if type == "array" then . else (.terminals // []) end)[]?
-      | select((.worktreePath | pnorm) == $wt and .connected != false and .orphaned != true) | .handle] as $live
+      | select((wtp | pnorm) == $wt and .connected != false and .orphaned != true) | .handle] as $live
       | first($hs | splits(" +") | select(. != "" and IN($live[]))) // empty' 2>/dev/null)
   [ -n "$h" ] || [ "$1" != main ] || h=$(pp_pane_of "${COMMANDECK_MAIN_PANE_DIR:-$2}")
   [ -z "$h" ] || printf '%s\n' "$h"

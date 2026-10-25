@@ -345,12 +345,40 @@ worker_state() {
 # pane's handle into its shell, so the process carries it, and Claude names its
 # log after the id in <config folder>/sessions/<pid>.json (CLAUDE_CONFIG_DIR, else ~/.claude). A claude started by that
 # claude inherits the handle too, so only top-level processes count.
+# pid_env <pid> -- the pid's environment, one NUL-terminated entry each, so a value with a space, or an entry quoted
+# inside another's value, stays whole (macOS `ps -E` joins them with spaces; host issue 3038). Test inputs only:
+# READ_VERDICT_PROC (a /proc root) and READ_VERDICT_PROCARGS (a directory of <pid> files holding a KERN_PROCARGS2
+# buffer), so both readers run on any host.
+pid_env() {
+  if [ "$(uname -s)" != Darwin ]; then cat "${READ_VERDICT_PROC:-/proc}/$1/environ" 2>/dev/null; return 0; fi
+  python3 -I -c '
+import ctypes, os, sys
+pid, d = int(sys.argv[1]), os.environ.get("READ_VERDICT_PROCARGS")
+if d:
+    try:
+        raw = open(os.path.join(d, str(pid)), "rb").read()
+    except OSError:
+        sys.exit(0)
+else:
+    buf = ctypes.create_string_buffer(int(sys.argv[2]))
+    size = ctypes.c_size_t(len(buf))
+    if ctypes.CDLL(None).sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)):
+        sys.exit(0)
+    raw = buf.raw[:size.value]
+argc = int.from_bytes(raw[:4], "little")
+# exec path, NUL padding, argc arguments, then the environment up to the first empty string.
+rest = raw[4:].split(b"\0")[1:]
+while rest and not rest[0]:
+    rest.pop(0)
+for e in rest[argc:]:
+    if not e:
+        break
+    sys.stdout.buffer.write(e + b"\0")' "$1" "$([ -n "${READ_VERDICT_PROCARGS:-}" ] || sysctl -n kern.argmax)"
+}
 pane_sessions() { # handle
   local p penv
   for p in $(pgrep -x claude 2>/dev/null); do
-    # macOS has no /proc; its `ps -E` appends the environment to the command.
-    if [ -d /proc/self ]; then penv=$(tr '\0' '\n' 2>/dev/null < "/proc/$p/environ")
-    else penv=$(ps -Eww -o command= -p "$p" 2>/dev/null | tr ' ' '\n'); fi
+    penv=$(pid_env "$p" | tr '\0' '\n')
     grep -qxF "ORCA_TERMINAL_HANDLE=$1" <<<"$penv" || continue
     claude_ancestor "$p" && continue
     jq -r '.sessionId // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/$p.json" 2>/dev/null
@@ -515,7 +543,9 @@ AGENT=${4:-$(orca-ide terminal list --json 2>/dev/null | jq -r --arg h "$HANDLE"
 UNIT=${5:-${WTP##*/}}
 MODEL=${6:-}
 # 0 is the LAST verdict: a re-prompted pane's answer is its latest turn's.
+# `prompt` prints the epoch of the seat's latest prompt instead (main-watch.sh reported()).
 ORDINAL=${7:-0}
+PROMPT_AT=0; [ "$ORDINAL" != prompt ] || { PROMPT_AT=1; ORDINAL=0; }
 LAUNCHED=${8:-0}
 [[ "$ORDINAL" =~ ^[0-9]+$ ]] || ORDINAL=0
 [[ "$LAUNCHED" =~ ^[0-9]+$ ]] || LAUNCHED=0
@@ -593,6 +623,9 @@ codex_report() {
 # no-verdict tail holds an implementer's `<UNIT>-DONE` marker for main-watch's
 # has_result; find_verdict still sees no verdict in it. Codex seats get the
 # same through task_complete (exit 5).
+CLAUDE_PROMPT='def prompt: .type == "user" and .isMeta != true
+      and (.message.content | if type == "string" then [.] else [.[]? | select(.type == "text") | .text] end
+           | any(.[]; sub("^(\\s*<(?<t>task-notification|system-reminder|local-command-[a-z]+)>[\\s\\S]*?</\\k<t>>)+"; "") | test("\\S")));'
 claude_report() {
   # Claude Code 2.1.300's api-request rows hold no report: dropped before jq slurps the log.
   grep -v '^{"type":"api-request' "$1" 2>/dev/null | jq -rs --argjson n "$ORDINAL" '
@@ -600,9 +633,7 @@ claude_report() {
     # A prompt is a user row with typed text; a tool result is not one, nor is
     # a row holding only notices the harness writes. Text after a notice in the
     # same row is typed text, and so is any other text, tagged or not.
-    def prompt: .type == "user" and .isMeta != true
-      and (.message.content | if type == "string" then [.] else [.[]? | select(.type == "text") | .text] end
-           | any(.[]; sub("^(\\s*<(?<t>task-notification|system-reminder|local-command-[a-z]+)>[\\s\\S]*?</\\k<t>>)+"; "") | test("\\S")));
+    '"$CLAUDE_PROMPT"'
     . as $rows
     | ([range(0; length) | select($rows[.] | prompt)] | last // -1) as $asked
     | [(if $n == 0 then $rows[$asked + 1:] else $rows end)[]
@@ -723,6 +754,18 @@ if [ -n "$WTP" ] && { [ "$AGENT" = claude ] || [ -z "$AGENT" ]; } && [ "$LOG_FOU
     echo "read-verdict: cannot tie $HANDLE to one Claude session log in $PROJ: no Claude process in the pane, no session= in a seat record, and no launch time (argument 8). Not guessing." >&2
     exit 7
   fi
+fi
+
+# Ordinal `prompt`: the epoch (whole seconds, floored) of the latest prompt in the seat's session log, where its latest
+# answer begins; exit 3 with no log or no prompt. main-watch.sh reported() bounds a worker_done by it.
+if [ "$PROMPT_AT" = 1 ]; then
+  case "$SOURCE" in
+    codex-log*) f=${SOURCE#codex-log }; pj='[.[] | select(.type == "response_item" and .payload.type == "message" and .payload.role == "user")]' ;;
+    claude-log*) f=${SOURCE#claude-log }; pj="$CLAUDE_PROMPT"' [.[] | select(prompt)]' ;;
+    *) exit 3 ;;
+  esac
+  [ -f "$f" ] && grep -v '^{"type":"api-request' "$f" | jq -rs "$pj"' | last | .timestamp // "" | sub("\\.[0-9]+"; "") | fromdateiso8601? // empty' 2>/dev/null | grep . || exit 3
+  exit 0
 fi
 
 if [ "$LOG_FOUND" -eq 0 ]; then

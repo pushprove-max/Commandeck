@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# plan-tier.sh picks the Auto answer to "Write a plan first?" from the batch brief's "The issues" and "The batch"
+# plan-tier.sh picks the plan tier, with no question to the owner, from the batch brief's "The issues" and "The batch"
 # sections. A panel trigger in a sub-heading of those sections (### Authentication) is a trigger as much as one in a
 # line of text: it picked nothing, so a security batch got one tier too low. The words of the section's own
 # heading ("The batch") pick nothing.
@@ -48,5 +48,12 @@ rm -f "$T/bin/codex"; opts '{}'
 check "a judge on Codex where no codex is installed is refused, naming the keys that move it" 1 \
   "$(run "${PJ[@]}" >/dev/null; printf '%s\n' "${PJ[@]}" > "$T/brief.md"; cd "$T/p" && env -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:/usr/bin:/bin:$(dirname "$(command -v jq)")" \
     COMMANDECK_MAIN="$T/p" bash "$REAL/scripts/plan-tier.sh" "$T/brief.md" 2>&1 >/dev/null | grep -c 'planJudgeSolAgent=claude, or planJudgeSolEnabled=false')"
+# Issue 345: main asks no "Which model and effort?" question, so each seat's effort is printed under its seat line.
+efforts() { run "$@" | sed -n 's/^effort: //p' | paste -sd, -; }
+opts '{}'
+check "each seat prints its configured effort, so main can say what it picked" \
+  "plan-author high,plan-judge-astra high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
+opts '{"planAuthorEffort": "medium"}'
+check "an effort set in /plugin config is the one printed" "plan-author medium" "$(efforts "${PJ[@]}" | cut -d, -f1)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

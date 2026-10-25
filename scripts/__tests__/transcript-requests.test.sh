@@ -61,6 +61,30 @@ import sys, dashboard_limit as d
 rows = d.codex_requests(sys.argv[1] + "/sessions", sys.argv[1] + "/cache.json", 0, d.epoch("2026-10-10T13:00:00Z"), None, True)
 print(len(rows), *[x for t in rows for x in t[1:]])' "$T/cx" 2>&1)"
 
+# --- host issue 3053: a Codex response is priced at the tier its file logged, and a file that logged none is said to be estimated ---
+# One response of 100,000 input tokens on gpt-6.1-sol: $0.20 standard, $0.40 fast (priority).
+setting() { jq -cn --arg t "$1" '{type:"event_msg",timestamp:"2026-10-10T12:00:01Z",payload:{type:"thread_settings_applied",thread_settings:({model:"gpt-6.1-sol"} + if $t == "-" then {} else {service_tier: (if $t == "null" then null else $t end)} end)}}'; }
+usage_rec() { jq -cn --arg id "$1" '{type:"token_usage_record",timestamp:"2026-10-10T12:00:05Z",payload:{response_id:$id,usage:{input_tokens:100000,cached_input_tokens:0,cache_write_input_tokens:0,output_tokens:0}}}'; }
+# tiers <dir> -- "<count> <dollars> <estimated count>" of the Codex rows read from <dir>/sessions through <dir>/cache.json.
+tiers() { (cd "$ROOT/scripts" && python3 -c '
+import sys, dashboard_limit as d
+rows = d.codex_requests(sys.argv[1] + "/sessions", sys.argv[1] + "/cache.json", 0, d.epoch("2026-10-10T13:00:00Z"))
+print(len(rows), round(sum(d.price(r) for r in rows), 6), sum(d.estimated(r) for r in rows))' "$1" 2>&1); }
+tierlog() { local d=$T/$1; rm -rf "$d"; mkdir -p "$d/sessions/2026/10/10"; echo "$d/sessions/2026/10/10/rollout-t.jsonl"; }
+X=$(tierlog fast); { setting priority; usage_rec f1; } > "$X"
+check "a fast tier response is priced at the fast rate, and not estimated" "1 0.4 0" "$(tiers "$T/fast")"
+X=$(tierlog std); { setting default; usage_rec s1; } > "$X"
+check "a standard tier response is priced at the standard rate, and not estimated" "1 0.2 0" "$(tiers "$T/std")"
+X=$(tierlog null); { setting null; usage_rec n1; } > "$X"
+check "a settings record whose tier is null reads as standard, not estimated" "1 0.2 0" "$(tiers "$T/null")"
+X=$(tierlog mid); { setting priority; usage_rec m1; setting default; usage_rec m2; } > "$X"
+check "a switch mid-file prices each response at the tier in force when it was logged" "2 0.6 0" "$(tiers "$T/mid")"
+X=$(tierlog none); { jq -cn '{type:"turn_context",timestamp:"2026-10-10T12:00:01Z",payload:{model:"gpt-6.1-sol"}}'; usage_rec u1; } > "$X"
+check "a file with no settings record is priced at the standard rate and counted as estimated" "1 0.2 1" "$(tiers "$T/none")"
+# A cache from before this reader marked unread tiers holds the same response as plain standard: it is read again.
+jq -cn --arg p "$X" --argjson off "$(wc -c < "$X")" '{version: 4, files: {($p): [$off, "gpt-6.1-sol", null, null]}, requests: {u1: [1791633605, "gpt-6.1-sol", 100000, 0, 0, 0, 0]}, cwd: {u1: null}, file: {u1: $p}, root: ($p | sub("/2026/.*"; ""))}' > "$T/none/cache.json"
+check "a version-4 cache holding an unchanged log with no settings record is read again, its rows estimated" "1 0.2 1" "$(tiers "$T/none")"
+
 # --- #71: a 2.1.300 log, its assistant rows among the new api-request rows ---
 # The new rows' shapes are those a 2.1.300 session writes, with short contents.
 mkdir -p "$T/v300/projects/p" "$T/old/projects/p"

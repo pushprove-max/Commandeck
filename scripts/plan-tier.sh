@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# plan-tier.sh <batch-brief> -- the Auto answer to "Write a plan first?", the default (owner's ruling 2026-10-17).
+# plan-tier.sh <batch-brief> -- the plan tier for a build, picked with no question to the owner (issue 345).
 # Picks No plan, Plan + judge or Panel from the triggers in the project's .claude/plan-triggers.tsv, or the plugin's
 # config/plan-triggers.tsv when the project has none, read against the batch's "The issues" and "The batch"
 # sections. When unsure it goes one tier up: No plan only when every item line matches a none trigger. A seat off in
 # /plugin config is no seat: plan-author off is No plan, one judge off leaves the other alone, and both off is One
 # planner (the plan installs unjudged). Prints each seat that is off, the tier and the trigger that picked it, then
-# each seat with the agent and model it runs on.
+# each seat with the agent and model it runs on, and its effort (issue 345: main asks neither question, it reports these).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -50,4 +50,5 @@ echo "tier: $TIER (trigger: $WHY; from $TRIG)"
 for r in "${OUT[@]}"; do
   S=$(pp_plan_seat "$r") || exit 2
   echo "seat: $S"
+  echo "effort: $r $(pp_route_json "$r" | jq -r '.effort // "default"')"
 done

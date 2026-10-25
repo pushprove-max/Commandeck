@@ -82,6 +82,15 @@ echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnab
 fpunit f12; author 100 f12 PLAN-DONE; fp f12
 check "judges' Enabled keys holding a value they do not take: refused naming the key, nothing on main, no Builder" "2:1:none:0" \
   "$RC:$(grep -c '^REFUSED: /plugin config planJudgeSolEnabled = disabled' "$T/out"):$(onmain f12):$(grep -cx 'launch builder f12' "$T/seats")"
+# Issue 342: a plan author may end on PLAN-WRITTEN or PLAN-REVISED, the words a plan spec can use for a finished plan or a
+# revision; the launcher takes them as it takes PLAN-DONE. Any other marker is still not a finish.
+rm -f "$HOME/.claude/settings.json"
+for M in PLAN-WRITTEN PLAN-REVISED; do
+  u=g-$(tr 'A-Z' 'a-z' <<<"${M#PLAN-}"); fpunit "$u"; judged "$u" NO-GO 200; echo "the revision of $u" > "$WS/$u/.claude/plans/$u.md"; author 300 "$u" "$M"; fp "$u"
+  check "a NO-GO and a revision collected $M after it: installed, the Builder opens" "0:the revision of $u:1" "$RC:$(onmain "$u"):$(grep -cx "launch builder $u" "$T/seats")"
+done
+fpunit g-other; judged g-other NO-GO 200; echo 'half a plan' > "$WS/g-other/.claude/plans/g-other.md"; author 300 g-other PLAN-MAYBE; fp g-other
+check "a revision collected under another marker is still refused, nothing on main" "2:none" "$RC:$(onmain g-other)"
 rm -f "$HOME/.claude/settings.json"
 
 echo "$PASS passed, $FAIL failed"

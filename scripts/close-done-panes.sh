@@ -26,8 +26,8 @@
 # unit last named (Orca's `done` lies); a unit's implementer, Builder or
 # fixer pane named in its seat record; every pane in a worktree the owner owns
 # (not CLI-created, or a named keeper); every pane in another repo's worktree
-# (outside $PP_WORKSPACES: Orca lists every repo's, and that repo's records are not here). The orphan rule also spares a pane named
-# in a seat record.
+# (outside $PP_WORKSPACES: Orca lists every repo's, and that repo's records are not here). A seat pane whose record
+# has no verdict= line, until seat.sh collect writes one.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 CLOSE=0; [ "${1:-}" = --close ] && CLOSE=1
@@ -69,8 +69,8 @@ PROTECT=$(
     grep -oE '(implementer|pane)=term_[0-9a-f-]+' "$SCRATCH/scratchpad/$u-${n%%-*}-${n##*-}.log" 2>/dev/null | tail -1 | cut -d= -f2 || true
   done
 )
-# A seat pane is left to seat.sh collect by the orphan rule only; a `done` one
-# still goes after QUIET_SECONDS, its verdict readable from its session log.
+# A seat pane whose record has no verdict= line is left to seat.sh collect: neither the done nor the orphan rule
+# closes it (a plan seat printed PLAN-DONE and was swept before collect).
 # A record with a verdict= line was collected, so it claims nothing.
 # One awk over every record: two processes per record took 5 s of each board.
 CLAIMED=$(awk 'FNR == 1 { if (!v) printf "%s", h; h = ""; v = 0 }
@@ -102,7 +102,7 @@ rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$
   | "\(.handle)\t\(.worktreePath | split("/") | last)\t\($a[0].agentType // .agentIdentity // "shell")" as $row
   | if $n != 1 then "skip\t\($k)\t\($n) panes carry this key, need exactly 1"
     elif ($at | type) != "number" then empty
-    elif ($a | length) > 0 and all($a[]; .state == "done") and $at < $cutoff
+    elif ($a | length) > 0 and all($a[]; .state == "done") and $at < $cutoff and (.handle | IN($claim[]) | not)
     then "\($row)\t\(($now - $at) / 60000 | floor)"
     elif (.handle | IN($claim[]) | not) and all($a[]; .state != "working") and $oat < $orphan
     then "\($row)\t\(($now - $oat) / 60000 | floor)"
@@ -112,11 +112,11 @@ while IFS=$'\t' read -r h wt agent idle; do
   [ -n "$h" ] || continue
   if [ "$h" = skip ]; then echo "skip $wt: $agent" >&2; continue; fi
   if [ "$CLOSE" = 1 ]; then
-    # A refused close can exit 0; only `.ok` says the pane went (as in context-clear-restart.sh).
-    if res=$(orca-ide terminal close --terminal "$h" --json 2>&1) && jq -e '.ok == true' <<<"$res" >/dev/null 2>&1; then
+    # A refused close can exit 0; pp_pane_close counts only `.ok` and logs the close with its cause.
+    if pp_pane_close "$h" "sweep: ${agent:-shell} idle ${idle}m"; then
       printf 'closed %s\t%s\t%s\t%s\n' "$h" "$wt" "$agent" "$idle"; closed+=" $h"
     else
-      echo "close of $h failed: $res" >&2
+      echo "close of $h failed: $PP_CLOSE_RES" >&2
     fi
   else
     printf '%s\t%s\t%s\t%s\n' "$h" "$wt" "$agent" "$idle"

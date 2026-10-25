@@ -23,7 +23,7 @@
       "effort": "high",
       "unboxed": true,
       "edits": true,
-      "note": "The plan main asks for before every build: it writes the plan file and nothing else. Main stops once the plan exists; the build starts only on the owner's own go after reading it. Off (planAuthorEnabled=false in /plugin config): no plan, plan-tier.sh prints the --skip-plan line."
+      "note": "The plan main writes before every build: it writes the plan file and nothing else. Main stops once the plan exists; the build starts only on the owner's own go after reading it. Off (planAuthorEnabled=false in /plugin config): no plan, plan-tier.sh prints the --skip-plan line."
     },
     "plan-judge-sol": {
       "agent": "codex",

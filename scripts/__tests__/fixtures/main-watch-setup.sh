@@ -19,6 +19,8 @@ mkdir -p "$REPO/config"; cp "$SOURCE/config/routing.json" "$REPO/config/"
 cat > "$REPO/scripts/read-verdict.sh" <<RV
 #!/usr/bin/env bash
 [ "\$1" = --state ] && { cat "$F/state-\${3##*/}" 2>/dev/null; exit 0; }
+# Ordinal prompt (reported()): the epoch of the seat's latest prompt, from prompt-<handle>; none is exit 3.
+[ "\${7:-}" != prompt ] || { cat "$F/prompt-\$1" 2>/dev/null || exit 3; exit 0; }
 # A one-shot hook: the flip file runs at the next read, mid-tick, so a test can change what Orca reads after the tick began.
 [ ! -e "$F/flip" ] || { bash "$F/flip"; rm -f "$F/flip"; }
 cat "$F/verdict-\$1" 2>/dev/null || exit 3
@@ -26,6 +28,10 @@ RV
 printf '#!/usr/bin/env bash\nexit 0\n' > "$REPO/scripts/close-done-panes.sh"
 echo run_test > "$S/current-run"
 export COMMANDECK_HOST_OS=Linux
+# Every tick may post a heads-up digest (no 30-minute hold) and a held delivery lock gives up in 1s, not 20.
+export COMMANDECK_MAIN_WATCH_HU_DIGEST_S=0 COMMANDECK_MAIN_WATCH_LOCK_S=1
+# A collect whose task will not settle gives up at once, not after the 60 s retry (host issue 2998).
+export COMMANDECK_SEAT_SETTLE_RETRY_S=0
 : > "$F/agents"; : > "$F/tasks"; : > "$T/sends"
 # No processes: the broker reaper must never see or signal this machine's own.
 printf '#!/usr/bin/env bash\ncase "$*" in *lstart=*) exec /bin/ps "$@" ;; esac\nexit 0\n' > "$T/bin/ps"
@@ -68,6 +74,10 @@ case "\$1 \$2" in
       [ ! -e "$F/flip-inbox" ] || { mv "$F/flip-inbox" "$F/flip-inbox.run"; bash "$F/flip-inbox.run"; }; echo "\$o"; exit 0; }
     cat "$F/inbox" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}' ;;
   # coord names the run's coordinator; term_main without it.
+  # A task close is recorded and accepted, as Orca accepts one.
+  "orchestration task-update") echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
+  # A task with no dispatch reads null (pp_task_close checks it before it settles a seat's task).
+  "orchestration dispatch-show") echo '{"ok":true,"result":{"dispatch":null}}' ;;
   "orchestration run-list") jq -nc --arg c "\$(cat "$F/coord" 2>/dev/null || echo term_main)" '{result:{runs:[{id:"run_test",coordinator_handle:\$c}]}}' ;;
   "worktree ps") jq -Rn '{result:{worktrees:[{agents:[inputs | split(" ") | {paneKey:(.[0] + ":l"), state:.[1]}]}]}}' < "$F/agents" ;;
   *) echo '{}' ;;

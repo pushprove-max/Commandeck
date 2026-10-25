@@ -147,6 +147,11 @@ MADE_FROM = {
     "13e9906d": ("c8e23316",),
     # 0.44.x main-session.md: the relay-pane Details rule reworded (issue 333); the Checkpoint rule points to its template
     "b2a85a66": ("48b02596",), "4439c5bf": ("487d3e9e",),
+    # 0.46.0 main-session.md and AGENT_STARTUP.md: the plan is picked from settings with no question (issue 345); the
+    # class rule split in two (second NO-GO, third return); the planning, checklist and "Do not" rules reworded
+    "1b63993c": ("31119f58",), "31f8b10f": ("953565b7",), "5686234d": ("f4e12488",),
+    "399b22b8": ("70e51fcc",), "45cd53bc": ("70e51fcc",), "71c7e94b": ("607f18a2",),
+    "0b0b3a70": ("a726a12f",), "ed48665e": ("8e991ec1",),
 }
 
 

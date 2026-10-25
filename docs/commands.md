@@ -70,4 +70,4 @@ made, the question picker is blocked in that pane, and the system prompt carries
 entry to the decision log (`.claude/metrics/autodecide-<date>.md` in the main checkout), records the answer in the
 decisions ledger as `<words> (auto-decided)` and tells main. The seats that read the mode are the `autoDecideSeats`
 setting; extra never-decide items go in `autoDecideNever` in `.claude/commandeck.json`. The hard limits and the
-never-decide list are instructions to the model, not code.
+never-decide list ship fixed and are instructions to the model, not code.

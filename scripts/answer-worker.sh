@@ -22,6 +22,10 @@
 # decisions ledger: the one <question-id> names, or the only one open. With
 # several open and none named, none is closed: one answer is not every answer.
 #
+# In main's own foreground (issue 340) the answer is sent and the call returns 0 at once: the wait for the tag in the log,
+# its retry and the ledger closing run in a detached follower, whose log the call names. Main hears from the follower
+# only when the answer is NOT delivered. Anywhere else the wait runs in the call and the exit code is as above.
+#
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
@@ -56,8 +60,17 @@ if [ -d "$PP_WORKSPACES/$H" ]; then
       || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }
 fi
 WAIT=${ANSWER_WORKER_WAIT:-60}
+# Given the question's id, every route ends with a reply in that question's thread: it is the only answer pp_task_close
+# counts (paths.sh pp_open_ask), so an answer sent without the id leaves the asker's task unsettled. The typed route
+# replies only once the tag is in the log (a reply on an undelivered answer would let pp_task_close settle a worker that
+# never got it); the inbox route replies first, since that reply is how a worker blocked in `ask` receives the answer.
+REPLIED=
+reply_delivered() {
+  [ -z "$QID" ] || [ -n "$REPLIED" ] || jq -e '.ok == true' <<<"$(orca-ide orchestration reply --id "$QID" --body "$MSG" --json 2>/dev/null)" >/dev/null 2>&1 \
+    || echo "answer-worker: delivered, but the reply to $QID failed, so its task will not settle until a reply lands in that thread: orca-ide orchestration reply --id $QID --body \"answered: $TAG\"" >&2
+}
 # The tag is what is looked for in the log: the text itself may be re-wrapped.
-TAG="answer-$(date +%s)-$$"
+TAG=${ANSWER_WORKER_TAG:-answer-$(date +%s)-$$}
 MSG="[$TAG] $TEXT"
 
 TS=$(timeout 8 orca-ide terminal list --json 2>/dev/null) && PS=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) \
@@ -92,7 +105,12 @@ idle() {
 # wake <result> -- the wake log's line for this answer (the owner's view of what main sent a worker).
 wake() { pp_wake_log answer-worker "$H" "answer ${TAG}" "$@"; }
 log_state
-if idle; then
+# The background follower (issue 340) is this script run again: the answer is already sent, the way it went is handed
+# over, and only the wait for the tag in the log, its retry and the closing of the ledger entry are left.
+FOLLOW=${ANSWER_WORKER_FOLLOW:-}
+if [ -n "$FOLLOW" ]; then
+  WAY=$ANSWER_WORKER_WAY REPLIED=${ANSWER_WORKER_REPLIED:-}
+elif idle; then
   WAY="typed into the pane"
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
     || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
@@ -103,6 +121,7 @@ else
   if [ -n "$QID" ]; then
     orca-ide orchestration reply --id "$QID" --body "$MSG" --json >/dev/null \
       || { wake refused "inbox reply to $QID failed"; echo "answer-worker: the inbox reply to $QID failed; the answer was not delivered" >&2; exit 1; }
+    REPLIED=1
   else
     orca-ide orchestration send --to "$H" --type status --subject "answer from main" --body "$MSG" --json >/dev/null \
       || { wake refused "inbox send failed"; echo "answer-worker: the inbox send to $H failed; the answer was not delivered" >&2; exit 1; }
@@ -110,17 +129,18 @@ else
   wake sent
 fi
 
-LEFT=$WAIT
+confirm() {
+local LEFT=$WAIT
 while :; do
   log_state
-  [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; exit 0; }
+  [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
   # inbox: the answer is typed in then, once, and waited for afresh.
   if [[ $WAY == "sent to the pane's inbox"* ]]; then
     if idle; then
       WAY="typed into the pane once its turn ended with the inbox message unread"
       orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
-        || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+        || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; return 1; }
       wake sent
       LEFT=$WAIT; sleep 2; continue
     fi
@@ -129,6 +149,24 @@ while :; do
   sleep 2; LEFT=$((LEFT - 2))
 done
 # Still mid-turn: the answer sits in its inbox, read at the pane's next check. Not a failure, and not read either.
-[[ $WAY == "sent to the pane's inbox"* ]] && { close_asks; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Do not send it again." >&2; exit 2; }
+[[ $WAY == "sent to the pane's inbox"* ]] && { close_asks; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Do not send it again." >&2; return 2; }
 echo "answer-worker: NOT delivered: the answer was $WAY, but its tag $TAG is not in $H's session log (${LOG:-no log found for $WT}) after ${WAIT}s." >&2
-exit 1
+return 1
+}
+# In main's own foreground the wait runs detached (issue 340): the answer is sent, so this returns at once, naming the
+# log. Only an answer that is NOT delivered (exit 1 of the wait) comes to main, as a message; a delivered or queued one
+# says nothing more. Anywhere else (a test, a script, the follower itself) the wait runs here and its code is the exit.
+if [ -z "$FOLLOW" ] && pp_main_foreground; then
+  FLOG=$PP_SCRATCH/answer-worker-$TAG.log
+  mkdir -p "$PP_SCRATCH"
+  # Its own session, so main's pane closing does not end it (macOS has no setsid; perl's POSIX::setsid is the same, as in seat.sh).
+  if command -v setsid >/dev/null 2>&1; then DETACH=(setsid); else DETACH=(perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"'); fi
+  ANSWER_WORKER_FOLLOW=1 ANSWER_WORKER_TAG=$TAG ANSWER_WORKER_WAY=$WAY ANSWER_WORKER_REPLIED=$REPLIED COMMANDECK_FOREGROUND=1 \
+    nohup "${DETACH[@]}" bash -c 'log=$1; shift; "$@" > "$log" 2>&1; rc=$?
+      [ "$rc" != 1 ] || bash "$0" question "answer-worker.sh: not delivered" "$(tail -n 5 "$log")" >/dev/null 2>&1' \
+    "$HERE/to-main.sh" "$FLOG" bash "$HERE/answer-worker.sh" "$H" "$TEXT" "$Q" </dev/null >/dev/null 2>&1 &
+  echo "answer-worker: sent to $H ($WAY), tag $TAG; whether it arrived is checked in the background (pid $!): $FLOG. Main hears only if it is NOT delivered. Do not send it again."
+  exit 0
+fi
+confirm
+exit $?

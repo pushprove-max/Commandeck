@@ -66,12 +66,18 @@ from_plan() {
     *) return 1 ;;
   esac
 }
+# Ignored caches the tools keep in a worktree (issue 342): serena's index, the scratch folder, and the settings file
+# whether or not it still matches the generated one. They are no plan content, so they never block an adoption.
+tool_cache() {
+  case $1 in .serena|.serena/*|.claude/scratch|.claude/scratch/*|.claude/settings.local.json) return 0 ;; *) return 1 ;; esac
+}
 # scan <layer> <reader> <git args> -- every path git lists must read the same as on main; HIT names the first that does not.
 scan() {
   local layer=$1 reader=$2 p; shift 2
   git -C "$WT" "$@" > "$LIST" || { HIT="(git $1 failed) ($layer)"; return 0; }
   while IFS= read -r -d '' p; do
     case $layer in untracked|ignored) if setup_made "$p" || from_plan "$p"; then continue; fi; [ "$DRY" = 0 ] || ! moving "$p" || continue ;; esac
+    [ "$layer" != ignored ] || ! tool_cache "$p" || continue
     [ "$layer" != ignored ] || { HIT="$p ($layer)"; return 0; }
     [ "$($reader "$p")" = "$(main_of "$p")" ] || { HIT="$p ($layer)"; return 0; }
   done < "$LIST"
@@ -96,11 +102,6 @@ refuse() {
   [ "$ADOPT" = 0 ] || { echo "kept: $WT holds $HIT, not identical on local main; the Builder's launch resets it to main$1" >&2; exit 1; }
   echo "REFUSED: $WT holds $HIT, not identical on local main; left in place (bash $PP_SCRIPTS_Q/plan-worktree-close.sh $UNIT once it is)$1" >&2
   exit 1
-}
-panes() {
-  local out; out=$(timeout 10 orca-ide terminal list --json 2>/dev/null) \
-    && jq -e . <<<"$out" >/dev/null && jq -r --arg wt "$WT" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . elif (.terminals | type) == "array" then .terminals else error("not a terminal list") end)[]
-      | select((wtp | pnorm) == $wt) | .handle' <<<"$out"
 }
 
 # Issue 284: planning scratch is not the plan. An untracked .claude/briefs/<unit>-* or _<unit>-* file, and a report=
@@ -134,14 +135,14 @@ while IFS= read -r rel; do
     && { rmdir -p "$(dirname "$WTP/$rel")" 2>/dev/null; echo "moved: $rel -> $PP_SCRATCH/$UNIT-planning/$rel"; }
 done <<<"$MOVE"
 refuse ""
-PL=$(panes) || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
+PL=$(pp_worktree_panes "$WT") || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
 N=0; [ -z "$PL" ] || N=$(printf '%s\n' "$PL" | wc -l | tr -d ' ')
 [ "$DRY" = 0 ] || { echo "would close $N panes and $([ "$ADOPT" = 1 ] && echo adopt || echo remove) $WT"; exit 0; }
 while IFS= read -r h; do
-  [ -z "$h" ] || timeout 20 orca-ide terminal close --terminal "$h" --json >/dev/null 2>&1 || KEPT="${KEPT:-}$h"$'\n'
+  [ -z "$h" ] || pp_pane_close "$h" "plan worktree close" || KEPT="${KEPT:-}$h"$'\n'
 done <<<"$PL"
 bash "$HERE/codex-helpers.sh" stop "$WT" || true
-LEFT=$(panes) || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
+LEFT=$(pp_worktree_panes "$WT") || { echo "kept: $WT: terminal list failed" >&2; exit 1; }
 # A pane that closed non-zero or is still listed.
 BAD=$(printf '%s\n%s\n' "${KEPT:-}" "$LEFT" | awk 'NF && !s[$0]++')
 if [ -n "$BAD" ]; then

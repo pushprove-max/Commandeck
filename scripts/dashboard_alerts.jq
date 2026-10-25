@@ -44,6 +44,9 @@ def builder_warmup_input: 3300000;
       | a("limit-api"; "crit"; "API spend is on pace to pass the weekly limit before Monday: $\(.spentUsd | round) spent, the even pace for now is $\(.goalUsd | round) of $\(.limitUsd | round)"; "slow dispatch (fewer Builders at once) or move work to the other provider")),
     ($d.limit.cacheWritePct24h // null | select(. != null and . > 5)
       | a("cache-write"; "warn"; "\(. | r)% of input tokens over the last 24 h were written to cache, over 5%"; "find the sessions rewriting cache")),
+    # A worker session found an MCP server down within 10 min (pane-budget-gate.sh's stamp, host-wide, in $parts as mcpDown).
+    ($d.mcpDown // [] | .[] | select(.server != null and .at != null and $now - .at < 600)
+      | a("mcp-down-\(.server)"; "warn"; "\(.server) was not running in a worker session \((($now - .at) / 60) | floor) min ago; workers carry on without it"; "check why the server does not start on this machine; until then workers record it as deferred for main") + {since: .at}),
     ($d.host.swap // {} | select((.totalMb // 0) > 0 and .usedMb != null and .usedMb * 100 > .totalMb * 75)
       | a("host-swap"; "warn"; "Host swap \(.usedMb * 100 / .totalMb | round)% used (\(.usedMb) of \(.totalMb) MB)"; "hold new launches and stop any stray process the awareness hook lists")),
     ($projects[] | .key as $p | .value as $v

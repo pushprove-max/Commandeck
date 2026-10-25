@@ -49,8 +49,8 @@ check "settings wire the gate to Bash" 0 "$(jq -en --arg m "$GATE_MATCHER" '"Bas
 # the project has serena.
 check "settings run the gate on every tool, Read included" 0 "$(jq -en --arg m "$GATE_MATCHER" '"Read" | test("^(" + $m + ")$")' >/dev/null && echo 0 || echo 1)"
 mkdir -p "$BOX/bin"
-# A file named orca-refuse makes the send fail, as an Orca that refuses it does.
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ORCA_LOG"\n[ ! -e "%s/orca-refuse" ] || exit 1\n' "$BOX" > "$BOX/bin/orca-ide"; chmod +x "$BOX/bin/orca-ide"
+# Every orca-ide call is logged: the gate must make none.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ORCA_LOG"\n' > "$BOX/bin/orca-ide"; chmod +x "$BOX/bin/orca-ide"
 # A stand-in for the claude process: it starts the named MCP servers as its
 # children, then runs the hook as another. It runs under a copy of bash named
 # claude, so its comm reads "claude" on Linux AND macOS, where a script's comm
@@ -58,39 +58,64 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ORCA_LOG"\n[ ! -e "%s/orca-refuse" 
 cp "$(command -v bash)" "$BOX/claude"
 cat > "$BOX/fake-claude.sh" <<'FAKE'
 for s in "$@"; do case $s in
-  serena) (exec -a "serena start-mcp-server" sleep 30) & ;;
+  serena) (exec -a "serena start-mcp-server" "$RSLEEP" 30) & ;;
   # The server one level further down, as a launcher's child.
-  deep) bash -c '(exec -a "serena start-mcp-server" sleep 30) & wait' & ;;
+  deep) bash -c '(exec -a "serena start-mcp-server" "$RSLEEP" 30) & wait' & ;;
   # The server two seconds after the session's first call started.
-  late) (sleep 2; exec -a "serena start-mcp-server" sleep 30) & ;;
+  late) (sleep 2; exec -a "serena start-mcp-server" "$RSLEEP" 30) & ;;
+  # A server that is stopped: the process is there and answers nothing.
+  stopped) (exec -a "serena start-mcp-server" "$RSLEEP" 30) & sp=$!; sleep 0.2; kill -STOP "$sp" ;;
 esac; done
 sleep 0.3
-"$HOOK" < "$IN" 2> "$ERR" >/dev/null; rc=$?
-kill $(jobs -p) 2>/dev/null
+"$HOOK" < "$IN" 2> "$ERR" >"$OUTF"; rc=$?
+kill -CONT $(jobs -p) 2>/dev/null; kill $(jobs -p) 2>/dev/null
 exit $rc
 FAKE
-export ORCA_LOG="$BOX/orca.log" ERR="$BOX/err" HOOK COMMANDECK_RUN=run_t COMMANDECK_SCRATCH="$BOX/sc"
+# Host issue 3147: the gate asks ps how old the claude process is. FAKE_ETIME stands in for it, so a case need not wait
+# 15 real seconds for an "old" session; any other ps question goes to the real one.
+mkdir -p "$BOX/psbin"; printf '#!/bin/sh\ncase "$*" in *etime=*) [ -z "$FAKE_ETIME" ] || { echo "$FAKE_ETIME"; exit 0; } ;; esac\nexec %s "$@"\n' "$(command -v ps)" > "$BOX/psbin/ps"; chmod +x "$BOX/psbin/ps"
+printf '#!/bin/sh\n[ "$1" != 1 ] || echo x >> "$BOX/sleeps"\nexec %s "$@"\n' "$(command -v sleep)" > "$BOX/psbin/sleep"; chmod +x "$BOX/psbin/sleep"
+RSLEEP=$(command -v sleep); export BOX RSLEEP
+HEALTH=$BOX/health
+export ORCA_LOG="$BOX/orca.log" ERR="$BOX/err" OUTF="$BOX/hookout" HOOK COMMANDECK_RUN=run_t COMMANDECK_SCRATCH="$BOX/sc" COMMANDECK_MCP_HEALTH_DIR="$HEALTH"
 first_call() { # session dir servers...
   jq -cn --arg sid "$1" --arg log "$BOX/log.jsonl" '{session_id:$sid, transcript_path:$log, tool_name:"Read", tool_input:{file_path:"/x"}}' > "$BOX/in-$1"
   local sid=$1 dir=$2; shift 2
-  # No wait for a late server unless a case asks: every refusal would sit it out.
-  IN="$BOX/in-$sid" CLAUDE_PROJECT_DIR="$dir" PANE_BUDGET_CONFIG="$BOX/budget-nocompact.json" PATH="$BOX/bin:$PATH" \
+  # No wait for a late server unless a case asks: a missing server would sit it out.
+  IN="$BOX/in-$sid" CLAUDE_PROJECT_DIR="$dir" PANE_BUDGET_CONFIG="$BOX/budget-nocompact.json" PATH="$BOX/psbin:$BOX/bin:$PATH" \
     COMMANDECK_MCP_WAIT=${WAIT:-0} "$BOX/claude" "$BOX/fake-claude.sh" "$@"; echo $?
 }
-S="mcp-$$-"; rm -f /tmp/claude-mcp-checked-"$S"*; : > "$ORCA_LOG"
-check "worker with neither server: first call refused" 2 "$(first_call "${S}a" "$BOX/lw")"
-check "the refusal names serena" 1 "$(grep -c 'serena is not running' "$ERR")"
-check "worker with serena passes" 0 "$(first_call "${S}b" "$BOX/lw" serena)"
+# The wait is counted in the gate's one-second sleeps (a shim logs them), not timed: a loaded host stretches seconds.
+slept() { : > "$BOX/sleeps"; RC=$("$@"); SL=$(grep -c . "$BOX/sleeps"); } # sets RC (first_call's exit) and SL (sleeps)
+S="mcp-$$-"; rm -f /tmp/claude-mcp-checked-"$S"* /tmp/claude-mcp-down-"$S"*; : > "$ORCA_LOG"
+# A server still missing blocks nothing (host issue 3147): the worker gets one note, as stderr and as context.
+check "worker with neither server: the first call passes, with the note" "0:1" "$(first_call "${S}a" "$BOX/lw"):$(grep -c 'serena is not running' "$ERR")"
+check "the note also reaches the worker as context" 1 "$(jq -r '.hookSpecificOutput.additionalContext // empty' "$OUTF" | grep -c 'serena is not running')"
+check "the missing server left a stamp, and the session's flag for read-tracker" "yes:yes" "$([ -s "$HEALTH/mcp-down-serena" ] && echo yes):$([ -e "/tmp/claude-mcp-down-${S}a" ] && echo yes)"
+check "server running: the call passes with no note, and the stamp is removed" "0:0:no" \
+  "$(first_call "${S}b" "$BOX/lw" serena):$(grep -c 'not running' "$ERR"):$([ -e "$HEALTH/mcp-down-serena" ] && echo yes || echo no)"
 rm -f /tmp/claude-mcp-checked-"$S"*
-# Issue 331: the missing-server escalation Orca takes writes one sent line; one Orca refuses writes one refused line.
+# Message cuts: a missing server is the worker's to record under the deferred heading, never a send to main. The note
+# comes on the session's first call only.
 WLJ=$BOX/sc/wake-log.jsonl
-logged() { jq -rs 'map("\(.from):\(.to):\(.result)") | join(",")' "$WLJ" 2>/dev/null; }
-# The first refusal tells nobody: the gate looks again on the same call repeated, and tells main on that second look.
-rm -f "$WLJ"; first_call "${S}c" "$BOX/lw" >/dev/null; first_call "${S}c" "$BOX/lw" >/dev/null
-check "the escalation Orca accepts writes one sent line to main's run" "pane-budget-gate:run:run_t:sent" "$(logged)"
-rm -f "$WLJ" /tmp/claude-mcp-checked-"$S"*; touch "$BOX/orca-refuse"; first_call "${S}d" "$BOX/lw" >/dev/null; first_call "${S}d" "$BOX/lw" >/dev/null; rm -f "$BOX/orca-refuse"
-check "and one it refuses writes one refused line" "pane-budget-gate:run:run_t:refused" "$(logged)"
-rm -f /tmp/claude-mcp-checked-"$S"*
+rm -f "$WLJ"; : > "$ORCA_LOG"; first_call "${S}c" "$BOX/lw" >/dev/null; N1=$(grep -c 'ecord .serena missing. as one line under `## Main-only (deferred)`' "$ERR"); first_call "${S}c" "$BOX/lw" >/dev/null
+check "a missing server sends nothing to main and writes no wake line" "0:0" "$(cat "$ORCA_LOG" | wc -l | tr -d " "):$(cat "$WLJ" 2>/dev/null | wc -l | tr -d " ")"
+check "the note tells the worker to record it under the deferred heading, on the first call only" "1:0" "$N1:$(grep -c 'serena missing' "$ERR")"
+# The wait: a new session looks for 3 s; an older session, or one that follows a fresh stamp, does not.
+rm -f "$HEALTH"/mcp-down-serena
+FAKE_ETIME=01:00 WAIT=3 slept first_call "${S}d" "$BOX/lw"
+check "server missing, session over 15 s old, no stamp: the call passes with no wait" "0:0" "$RC:$SL"
+rm -f "$HEALTH"/mcp-down-serena
+WAIT=3 slept first_call "${S}e" "$BOX/lw"
+check "a new session, no stamp, no server: it waits 3 s for the server, then passes" "0:3" "$RC:$SL"
+COMMANDECK_SCRATCH="$BOX/sc-other" WAIT=3 slept first_call "${S}f" "$BOX/lw"
+check "a stamp written by a session of one project makes a session of another project skip the wait" "0:0" "$RC:$SL"
+echo $(( $(date +%s) - 700 )) > "$HEALTH/mcp-down-serena"
+WAIT=3 slept first_call "${S}g" "$BOX/lw"
+check "a stamp over 10 minutes old does not skip the wait" "0:3" "$RC:$SL"
+rm -f "$HEALTH"/mcp-down-serena
+check "a server that is stopped counts as missing" "0:1" "$(first_call "${S}h" "$BOX/lw" stopped):$(grep -c 'serena is not running' "$ERR")"
+rm -f /tmp/claude-mcp-checked-"$S"* /tmp/claude-mcp-down-"$S"*
 
 # No pane of any role is refused for its number of turns
 # (owner ruling 2026-10-12). The shipped config is the one read.

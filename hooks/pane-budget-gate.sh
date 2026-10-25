@@ -64,9 +64,12 @@ TOP=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$CLAUDE_PROJECT_
 UNIT=$(basename "$CLAUDE_PROJECT_DIR")
 # A worker with no serena server ran a whole cut on rg and
 # sed and nobody knew (2026-09-18). Whatever the cause, the server runs
-# somewhere under the session's claude process, so look there until a call passes. The first refusal
-# asks for the same call again and the gate looks again; the second tells
-# main, and the calls after it pass: main decides.
+# somewhere under the session's claude process, so look there on the session's first call. A server still missing
+# blocks nothing (host issue 3147): the worker gets one note to record it for main, and every call after passes.
+# The wait for a server still starting is bounded: 3 s, only in a session under 15 s old and only when no session of
+# the host found it down in the last 10 minutes (the stamp in the health folder). A server that is stopped or a
+# zombie counts as missing: alive but not answering (shortcut: process state stands in for a protocol ping;
+# upgrade if a hung server in a running state is seen).
 # under <pid>: is it the claude process or one of its descendants?
 under() {
   local p=$1
@@ -77,7 +80,18 @@ under() {
   done
   return 1
 }
-have() { local pid; for pid in $(pgrep -f "$1"); do under "$pid" && return 0; done; return 1; }
+have() {
+  local pid st
+  for pid in $(pgrep -f "$1"); do
+    under "$pid" || continue
+    st=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
+    case $st in T*|Z*) ;; *) return 0 ;; esac
+  done
+  return 1
+}
+# Seconds a process has run: ps's [[dd-]hh:]mm:ss.
+age_s() { ps -o etime= -p "$1" 2>/dev/null | awk -F'[-:]' 'NF == 4 { print $1*86400 + $2*3600 + $3*60 + $4 } NF == 3 { print $1*3600 + $2*60 + $3 } NF == 2 { print $1*60 + $2 }'; }
+HEALTH=${COMMANDECK_MCP_HEALTH_DIR:-$HOME/.commandeck/mcp-health}
 missing() {
   MISSING=""
   have 'serena.*start-mcp-server' || MISSING="serena"
@@ -94,31 +108,19 @@ if [ -n "$SID" ] && [ ! -e "$MCP_CHECKED" ]; then
   done
   MISSING=""
   if [ -n "$CLAUDE_PID" ] && pp_serena; then
-    # A session's server takes a few seconds to start: look for that long before deciding.
-    LEFT=${COMMANDECK_MCP_WAIT:-10}
+    # A new session's server takes a few seconds to start: look for that long, and only in a new session. An older
+    # session's server is up or it is not; a stamp under 10 minutes old (any project's session) skips the wait too.
+    AGE=$(age_s "$CLAUDE_PID"); AT=$(cat "$HEALTH/mcp-down-serena" 2>/dev/null); LEFT=0
+    if [ "${AGE:-999}" -lt 15 ] && ! { [ "${AT:-0}" -gt 0 ] 2>/dev/null && [ $(($(date +%s) - AT)) -lt 600 ]; }; then LEFT=${COMMANDECK_MCP_WAIT:-3}; fi
     while missing && [ "$LEFT" -gt 0 ]; do sleep 1; LEFT=$((LEFT - 1)); done
+    if [ -n "$MISSING" ]; then mkdir -p "$HEALTH" 2>/dev/null && date +%s > "$HEALTH/mcp-down-$MISSING"; else rm -f "$HEALTH/mcp-down-serena"; fi
   fi
   if [ -n "$MISSING" ]; then
-    WHY="$MISSING is not running in this session (no server process under claude pid $CLAUDE_PID)"
-    if [ ! -e "$MCP_CHECKED.again" ]; then
-      : > "$MCP_CHECKED.again"
-      echo "BLOCKED: $WHY. Make the same call once more: the gate looks again. Do not work around it with rg or sed." >&2
-      exit 2
-    fi
-    : > "$MCP_CHECKED"
-    # Two steps, not ${X:-$( { ...; } )}: Bash 3.2 cannot parse a brace group there.
-    RUN=${COMMANDECK_RUN:-}
-    [ -n "$RUN" ] || RUN=$( { tr -d '[:space:]' < "$(pp_run_file)"; } 2>/dev/null)
-    TOLD="Main could NOT be told (the send failed): send it yourself with orca-ide orchestration send --type escalation, then wait"
-    [ -z "$RUN" ] || ! timeout 10 orca-ide orchestration send --run "$RUN" --to "run:$RUN" --type escalation \
-      --subject "$UNIT: $MISSING missing from the worker pane" \
-      --body "Worker $UNIT (pane ${ORCA_TERMINAL_HANDLE:-unknown}, session $SID) started without $MISSING: no server process under claude pid $CLAUDE_PID." \
-      --json >/dev/null 2>&1 || TOLD="Main has been told. Stop and wait"
-    . "${BASH_SOURCE[0]%/*}/lib/wake-log.sh" 2>/dev/null
-    case $TOLD in "Main has been told"*) R=sent ;; *) R=refused ;; esac
-    hook_wake_log pane-budget-gate "run:${RUN:-none}" "$UNIT: $MISSING missing" "$R"
-    echo "BLOCKED: $WHY, on a second look. $TOLD for main's answer. Do not work around it with rg or sed." >&2
-    exit 2
+    # read-tracker.sh reads this flag: a session with no server is not nudged to use it.
+    : > "/tmp/claude-mcp-down-$SID"
+    NOTE="$MISSING is not running in this session (no server process under claude pid $CLAUDE_PID); reads go through without it. Record '$MISSING missing' as one line under \`## Main-only (deferred)\` in the evidence file and go on; main reads it at review."
+    echo "$NOTE" >&2
+    jq -n --arg m "$NOTE" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
   fi
   : > "$MCP_CHECKED"
 fi

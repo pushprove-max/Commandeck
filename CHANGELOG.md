@@ -1,5 +1,127 @@
 # Changelog
 
+## 0.46.0 -- 2026-10-24
+
+Parts D, E and F of the open-issues batch, the autodecide port and added work: fewer messages to main, stricter review
+ordering rules, a shorter checklist, safer pane and worktree closes, a cheaper closing run, fewer waits in main's
+foreground, four launch and fix-round fixes, a data design for every build, and no plan or model question to the owner.
+A paragraph that closes an issue says so.
+
+- Main hears a thing once. A turn that ends on `VERDICT: NO-GO` sends nothing (the Builder's fix round takes it), and
+  a Claude seat's finish is not echoed when its `worker_done` is already in the run inbox (a question or refusal line
+  is always sent). A block from the pane gate, the read tracker, the dependency guard or the suite-rerun guard no
+  longer asks main for leave: it tells the Builder to record the item under `## Main-only (deferred)` and go on. A
+  failed `/clear` hand-off to a fresh Builder session is tried once more before main is told, and the brief says
+  "one status per decision".
+- `main-watch.sh` posts less. Heads-up notes go out as one digest per 30 minutes (`COMMANDECK_MAIN_WATCH_HU_DIGEST_S`),
+  a note that repeats a held one is dropped, a stall or a wait posts once, and a finished or stopped seat whose
+  `worker_done` is in the inbox posts nothing. A seat's finish is sent under a per-seat lock with a delivery receipt
+  (its session log and size) that `seat.sh collect` writes and reads too, so a finish reaches main once whichever
+  of the two sends it first. An unreadable inbox or log still posts: a duplicate, never silence. `read-verdict.sh` takes
+  the ordinal `prompt`, the epoch of the seat's latest prompt.
+- Review passes list every ordering at once. The first full pass and the behaviour angle both ask the reviewer to list
+  and check every ordering of timers, background loads, retries, concurrent writes and tab switches, and to report
+  each that fails. A finding class that returns a second time is fixed by design, with one fence or stamp and one test
+  over every ordering found, and sends main nothing. A third return is one `ask-main.sh` question naming the class and
+  the redesign; main answers redesign unless the owner must make a policy call. `orca-wait.sh` no longer tells main to
+  ask the owner on the second return.
+- The checklist stays short. A done item is deleted, never marked completed (the resumed TODO line and the
+  checkpoint say so). A new hook, `hooks/checklist-guard.sh`, refuses in main's session a ninth open item, a subject
+  over 80 characters or holding an id (issue or PR number, message or task id, commit hash), and a mark of
+  `completed`.
+- Part E: a pane closes only once, through one helper. Every script that closes a pane now calls `pp_pane_close`, which
+  logs the close and its cause in `pane-closes.log`, and a test's own `orca-ide` stub must be first on PATH or the
+  close is refused. A seat's task closes (`pp_task_close`) only when its Builder pane is idle and no question of its
+  own is open without a reply in its thread; `seat.sh collect` on a working pane exits 4 and closes nothing. A
+  relaunched Builder's record names its new pane (`prior_pane=` keeps the old one). `seat.sh run` starts under
+  `setsid`; a probe showed a pane's close ends a process still attached to its shell, with or without a new session,
+  and spares an orphaned one, so the detach covers a kill of the process group.
+- Part E: the merge cleanup keeps the worktree when unsure. `merge-unit-local.sh` step 5 closes the unit's panes and
+  stops its Codex helpers first, then archives the briefs; a pane that will not close, a pane list that cannot be read
+  (or is empty), a pane still listed after its close, or any uncommitted path in the worktree after the panes closed,
+  holds the worktree (exit 5, the paths on the DONE line). Panes are matched by any of Orca's three worktree fields.
+  The retry is `merge-unit-local.sh <unit> --cleanup`: step 5 alone, from the unit's name, for a unit main already
+  holds; the hold line names it and never a forced remove.
+  `scripts/shell-tests-for.sh` lists the tests that name a changed script, to a fixed point, and
+  `run-shell-tests.sh --changed [<base>] --callers` runs them. A plan-author's spec asks for a `Timed checks:` line
+  when a plan adds a heavy fixture to a test file with time-bound checks.
+- Part E: three smaller guards. The MCP gate (`pane-budget-gate.sh`) waits at most 3 seconds, only in a session under
+  15 seconds old and only when no session found the server down in the last 10 minutes; a stopped or zombie server
+  counts as missing. A server still missing blocks nothing: the worker gets one note to record it as deferred, and the
+  dashboard raises an `mcp-down-<server>` alert for 10 minutes. `read-verdict.sh` reads a macOS pane's environment
+  whole (KERN_PROCARGS2), so a config path with a space no longer loses the handle. The dependency guard blocks an
+  edit that adds something to screen when `package.json` is not valid JSON, or the edit would leave it invalid,
+  and names the file, not a package. The dashboard prices a Codex response at the speed tier its file logged
+  (`priority` is the fast rate); a file that logged no tier is priced at the standard rate and counted in
+  `estimatedUsd` (Codex cache version 5).
+- Part F: the closing run and the review loop waste less. `scripts/test-inputs.sh <commit> <file>...` prints `unchanged`
+  or `changed` for a test file by the files it reads (itself, the scripts it names by basename, and the files those
+  source, to a fixed point); a source line with a variable path reads `changed`. The Builder brief cites an unchanged
+  file with `at <commit>` and ends with one complete run of every touched file on the tip, `--callers`. On a finding
+  class's first stop the hand-off asks for one background read-only sweep of every site where the flaw can occur, and
+  a `Sweep: <file>:<line>: fixed|safe, <why>` evidence line per site. Main's card holds one line for a read over 10 KB
+  (a background read-only agent with one question); the example is in Details. Closes #336, #337, #338 and #339 (#339:
+  paperwork after a long test run took 3 minutes in part D and 1 in part E, under the 5-minute line, so no
+  background-paperwork rule was added).
+- `/autodecide` follows the owner's own rules. The rules the model gets are the owner's prototype, shipped fixed: their
+  standing words, seven "how the owner decides" lines, the one-sentence never-decide list (a non-empty `autoDecideNever`
+  adds a sentence after it) and the limits (any new feature flag included). Times are New York time, marked ET. `on`
+  adds a line for the log to `.claude/metrics/INDEX.md`. The rules are no longer built from the decisions ledger
+  (`ownerPattern`, the example list and `Mode.how` are gone). The relay still records a decision with
+  `relay-order.sh --auto`, and a second run in one minute still gets its own log.
+- Main waits less in the foreground. Closes #340. The merge start and `seat.sh run` already returned at once in main's
+  foreground (their tests pin it); `answer-worker.sh` now does too: it sends the answer, prints the tag of a background
+  follower and exits, and the follower runs the log check and the retry and tells main only when the answer was NOT
+  delivered. Main's card gains the rule: any wait over about 30 s on external state (a directory-size scan included)
+  runs in the background. The plugin runs no directory-size scan, so there was none to move. The 24-hour re-measure of
+  main's waiting time is not built: it is a check the owner runs after the merge.
+- Four Builder-launch and fix-round bugs. Closes #342. (a) `builder-launch.sh --from-plan` takes a plan revision that
+  ends `PLAN-WRITTEN` or `PLAN-REVISED` as it takes `PLAN-DONE`. (b) The close and the adoption of a planning worktree
+  skip ignored tool caches (`.serena/`, `.claude/scratch/`, and `.claude/settings.local.json` even when it differs from
+  the generated one); any other ignored file still stops them. (c) `main-watch.sh` types one `Signal INBOX` line into a
+  Builder pane that is idle or done and holds an unread message addressed to it, once per message, and again on the next tick when Orca did not take the
+  typing. (d)
+  `builder-fresh-round.sh` retries a typing that Orca refused (`accepted:false`) 3 times and says each refusal, says why
+  it waits on a busy pane and for how long, and after `COMMANDECK_FRESH_ROUND_MAX_SECONDS` (default 1800) tells main
+  the reason and the re-run line instead of waiting on.
+- Builds state their data design. Closes #341. Batch briefs need a `## Data design` section (state added or changed:
+  where it lives, who writes and reads it, when it resets, what a retry runs; or `none: <why>`) and
+  `builder-launch.sh` refuses a batch whose section has no line of its own. A batch with no such heading at all
+  (written before 0.46.0) still opens, and its Builder writes the data design in the evidence file before its first edit. The Builder brief copies it into the evidence file and keeps
+  it true, with a `## Failure table` of every failure found, kept current. The first review pass reads the Data design
+  before the diff. Every fix brief gets a `## Findings so far` section (all findings, by class) and names the classes the
+  failure table lacks. A class that comes back (its second NO-GO; the trigger already fired there) is redesigned in
+  order: Data design and failure table first, then the code, then a pass over the whole branch, which the pass script now
+  runs as `final`.
+- Main no longer asks the owner two questions before a build. Closes #345. It runs `plan-tier.sh`, uses the configured
+  model and effort for each seat, and tells the owner in one line the tier, the trigger and each seat's model and effort
+  (`plan-tier.sh` now prints an `effort:` line per seat). The owner changes the trigger file or the `/plugin`
+  settings, or says so in chat for that unit. A plan is still never a build order.
+- The closing pass rebases first (ported work for #344, from the host fix for the same bug). `builder-codex-pass.sh ... final`
+  rebases the Builder's branch onto current local main before it reads anything. When main moved, it runs the shell tests
+  that cover what the unit or main changed (not the full suite, and the `# own-lane:` tests in their own lane). A rebase
+  conflict stops the pass with the files named and the rebase aborted, for main to resolve; a red test stops it before the
+  reviewer. The Builder brief and every fix hand-off say so.
+- The ruling log holds the owner's rulings only (ported work for #346, from the host fix for the same bug).
+  `ruling-log.sh` logged every prompt of every session, so a log reached 220 MB, about 98% of it Builder, reviewer and
+  Codex prompts and wake notices, and a lookup took minutes. It now logs a prompt only from main's checkout or the
+  Chief-of-Staff worktree, never in a reviewer, and never machine text (notification blocks, Orca banners, the
+  checkpoint resume, main-watch's wakes, a judge's transcript prompt, another agent's note: `hooks/lib/ruling-typed.jq`).
+  Picker answers stay logged from every pane. The host also logs a Research worktree; the plugin has no such pane and
+  no setting for the owner's panes, so it keeps to the Chief-of-Staff worktree it already tells apart by name. New
+  `scripts/ruling-log-archive.sh` is a one-off, lock-held move of the old non-ruling rows to
+  `<log>.archive-2026-10-24.jsonl` beside the log: nothing is deleted, ids and order are kept, and the counts are checked
+  before the live file is replaced. A full copy, `<log>.before-archive.jsonl`, sits beside the log until the rewrite is
+  done, so a run stopped midway loses no row; a rerun refuses while it is there. Run it once per project: `bash scripts/ruling-log-archive.sh` from the project.
+- A merged unit is not drawn as a live Builder (ported work for #343, from the host fix for the same bug). The dashboard
+  listed every worktree as a unit in flight, so a merged unit whose worktree stayed showed a FIXING card and a QUIET
+  alert. A unit now leaves the in-flight list when committed evidence says merged: its worktree tip is in main and is not
+  the commit its branch began at, or a finished-builds line (`merge-unit-local.sh`'s squash commit) names a commit main
+  holds that the worktree does not contain, so a name reused for new work stays live. A pass whose round report is gone
+  shows "verdict file gone", never a blank. Not ported: the host's Codex-result-file fallback (the plugin keeps no such
+  file). A merge made by hand with no finished-builds line still reads live until its worktree is removed, so main's template
+  now says to run step 5 of `merge-unit-local.sh` after a hand merge: close the unit's panes, then `merge-unit-local.sh <unit> --cleanup`.
+
 ## 0.45.1 -- 2026-10-24
 
 Turns CI green on main: seven shell tests were red (part C's release fixed the option reader and count meanwhile).

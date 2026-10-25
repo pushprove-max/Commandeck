@@ -13,6 +13,14 @@ any other line is refused.
 
 {batch}
 {design}
+## Data design
+
+The batch's Data design section above binds. Before the first edit copy it into the evidence file as
+`## Data design`, and keep it true: a change to where a piece of state lives, who writes or reads it, when it
+resets or what a retry runs updates that section first, then the code. The first review pass reads it before the
+diff. The evidence file also carries `## Failure table`, one row per failure a test or a pass found, kept current
+before every pass: `| pass | class | what failed | fixed by | test |`. Every fix brief lists the classes the table lacks.
+
 ## How to work
 
 {ponytail}
@@ -33,7 +41,13 @@ any other line is refused.
 - A fix round on a finding's class (its `(class: <tag>)`) fixes every variant of that class this build has, not
   only the one cited: a second NO-GO on the same class stops the review loop. The class fix has one retry path
   that does not depend on where the state came from, and its test removes each piece of state between two runs
-  (ticks) and shows the retry still happens.
+  (ticks) and shows the retry still happens. When the class comes back a second time, fix the design: one fence
+  or stamp for the whole class, and one test that covers every ordering found so far. The redesign goes in this
+  order: update the Data design and the failure table in the evidence file first, then the code, then take a
+  whole-branch pass (the pass script reads the whole branch after a redesign). The first class stop also
+  starts one background read-only agent that lists every site in the changed files, and the scripts they source,
+  where the class's flaw can occur, checked against the class's ruling. Fix or justify each site before the next
+  pass: the evidence file gets one line per site, `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`.
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one
@@ -100,6 +114,12 @@ any other line is refused.
   evidence file lists each touched test file as run or cited:
   `Closing run: <file>: run, <n> passed, <n> failed` or
   `Closing run: <file>: cited <log path>, <n> passed, <n> failed`.
+  A touched file that passed at an earlier commit of this build, and whose inputs are unchanged since
+  (`bash {scripts}/test-inputs.sh <commit> <file>...` prints `unchanged <file>`; it prints `changed` when
+  coverage is uncertain), is cited with that commit:
+  `Closing run: <file>: cited <log path> at <commit>, <n> passed, <n> failed`. Once the closing pass ends GO, one
+  complete run of every touched file on that tip (`bash {scripts}/run-shell-tests.sh --changed <base> --callers`)
+  is the last run before the hand-off.
   Never start it while another run expected over about 5 minutes is still going: wait for that one with
   `wait-test-run.sh` first. Overlapped runs time out under the load and pass alone.
 - A new or changed image needs the owner's review: the evidence file carries
@@ -116,6 +136,7 @@ any other line is refused.
 - A documented command you write or change (a README line, a usage line) runs
   once from a scratch project outside this repository before you ask for
   review. The evidence file lists each one with its result.
+- One status per decision: message main only for a decision only main or the owner can make. No progress notes; progress goes in the evidence file.
 - A question for main is one `bash {scripts}/ask-main.sh <subject> <body>`: it sends
   to main's live pane (queued when main is down) and waits for the reply to that
   question, 240 s at most per call (run it with the Bash `timeout` set to 270000) and 9 minutes in all. It prints `no answer yet:
@@ -154,7 +175,9 @@ merge refuses a round file the script did not write, or one older than the tip.
    that prints `final in place of review` (after any closing pass that ended NO-GO, or after a commit on a
    closing GO) is the closing pass: its GO merges, and no separate final follows.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
-   branch once more. Its GO, naming no blocking finding, is the one the merge takes. Any blocking finding there
+   branch once more. Before it reads anything it rebases your branch onto current local main and, when main moved,
+   runs the shell tests that cover what you or main changed (not the full suite); a conflict stops the pass,
+   aborted and named, for main to resolve, and a red test stops it before the reviewer. Its GO, naming no blocking finding, is the one the merge takes. Any blocking finding there
    goes back to step 2 as a fix round, whose next `review` runs as the closing pass. There is no
    narrowed-pass exit and no blocking finding left open at merge.
 
@@ -177,13 +200,11 @@ When a reviewer finds a way round a guard, list the other ways round the same gu
 and fix them all BEFORE asking for the next pass; one test covers the bug class, not one per way round.
 A fix that changes when a state is trusted (narrows or widens it) reruns the existing
 cases with the state swapped in before the next pass, and the evidence file records the result.
-When a pass finds a SECOND variant of a finding you already fixed in this
-build, fix the whole class, not the named case: work out what the variants have
-in common, list every input the check trusts without verifying it, add one test
-for the class (not one per variant), and write in the evidence file what the class is. Send
-main a note of about 100 tokens (an Orca `status` naming the class and the fix)
-without waiting for a reply. Ask main and wait
-only when the class fix would cross a stated limit of this brief.
+When a finding class returns a SECOND time, fix the design, not the named case: work out what the variants
+have in common, put one fence or stamp on the whole class, and add one test that covers every ordering found so
+far. Write in the evidence file what the class is, and send main nothing for it: the review loop goes on. When
+the class returns a THIRD time, the fix-round hand-off says so: fix the other findings first, then ask main one
+question with `ask-main.sh` naming the class and the redesign you propose, and build what main answers.
 A fix adds a test only if it guards a real regression. Write no test that only
 shows a file, function or setting exists. A shell test file over its time budget
 is a red you trim or split, never a raised limit.

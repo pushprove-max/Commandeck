@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-shell-tests.sh [--own-lane] [--list | --changed [<base>] | <file>...] -- run every shell
+# run-shell-tests.sh [--own-lane] [--list | --changed [<base>] [--callers] | <file>...] -- run every shell
 # self-test under hooks/__tests__ and scripts/__tests__ (or only the named files), one per line in
 # sorted order, and exit non-zero if any failed. Each file's result is also
 # printed the moment it finishes, as a `-- ` line ahead of the sorted report.
@@ -23,7 +23,7 @@
 # only those, which is how the chain gives them a lane of their own. The
 # coverage guard reads the same marker, so the two never both run one test.
 #
-# `--changed [<base>]` runs only the tests `git diff --name-only <base>` (default
+# `--changed [<base>] [--callers]` runs only the tests `git diff --name-only <base>` (default
 # HEAD) touches: a test it adds or edits, and the same-name test of a script or
 # hook it adds or edits (scripts/seat.sh -> scripts/__tests__/seat.test.sh). It is
 # the merge check: the whole suite took 12 minutes a merge (ruling 2026-10-17).
@@ -36,6 +36,7 @@ set -uo pipefail
 # The tests, and this runner's mapfile and wait -n, need Bash 4: with no newer Bash to restart under, say so.
 [ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "run-shell-tests: the tests need Bash 4 or newer and this is $BASH_VERSION; on a Mac: brew install bash" >&2; exit 2; }
 ROOT=$(git rev-parse --show-toplevel)
+HERE=$(cd "$(dirname "$0")" && pwd)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
@@ -66,12 +67,14 @@ ONLY_OWN_LANE=0
 [ "${1:-}" = --own-lane ] && { ONLY_OWN_LANE=1; shift; }
 
 if [ "${1:-}" = --changed ]; then
-  BASE=${2:-HEAD}
+  shift; CALLERS=0 BASE=HEAD
+  for a in "$@"; do case $a in --callers) CALLERS=1 ;; *) BASE=$a ;; esac; done
   # An unknown base would select nothing and pass: fail instead.
   git rev-parse -q --verify "$BASE^{commit}" >/dev/null || { echo "run-shell-tests: --changed: no commit $BASE" >&2; exit 2; }
   # A deleted file selects nothing (--diff-filter=d). A failed git would also select nothing and pass: fail instead.
   CHANGED=$(git diff --name-only --diff-filter=d "$BASE" --) || { echo "run-shell-tests: --changed: git diff $BASE failed" >&2; exit 2; }
   # A shared helper's callers' tests are not run (main's ruling 2026-10-17): CI's full suite on every push covers them.
+  # --callers adds them: every test that names a changed script or hook, a deleted one too (shell-tests-for.sh).
   mapfile -t TESTS < <({ printf '%s\n' "$CHANGED" | while IFS= read -r f; do
     case $f in
       (hooks/__tests__/*/*|scripts/__tests__/*/*) ;;
@@ -87,7 +90,8 @@ if [ "${1:-}" = --changed ]; then
     for p in $(sed -n '1,5p' "$t" | sed -n 's/^# covers: *//p'); do
       grep -qxF -- "$p" <<<"$CHANGED" && { echo "$t"; break; }
     done
-  done; } | sort -u)
+  done
+  if [ "$CALLERS" = 1 ]; then git diff --name-only "$BASE" -- | bash "$HERE/shell-tests-for.sh"; fi; } | sort -u)
   [ "${#TESTS[@]}" -gt 0 ] || { echo "run-shell-tests: no shell test was touched since $BASE"; exit 0; }
 elif [ $# -gt 0 ] && [ "$1" != --list ]; then
   # Named files are relative to where the caller stood, not to $ROOT.
@@ -102,12 +106,28 @@ RES=$(mktemp -d) || exit 2
 trap 'rm -rf "$RES"' EXIT
 # A real hook run by a test must not count as a real fire.
 export COMMANDECK_HOOK_FIRE_LOG="$RES/hook-fire-log.jsonl"
+# A test with no orca-ide stub of its own must not close a real pane (host issue 3009): this stub, first on PATH,
+# refuses `terminal close` and names the test file; every other subcommand reaches the real binary, resolved before
+# the PATH change. A test's own stub, prepended later, still wins. Ceiling: it sees only tests run through this script.
+mkdir -p "$RES/stubbin"
+{ printf '#!/usr/bin/env bash\nREAL=%q\n' "$(command -v orca-ide 2>/dev/null)"
+  cat <<'STUB'
+if [ "${1-} ${2-}" = "terminal close" ]; then
+  echo "run-shell-tests: unstubbed 'orca-ide $*' refused in ${COMMANDECK_RUNNING_TEST:-a test}; give that test its own orca-ide stub" >&2
+  echo '{"ok":false,"error":{"code":"test-unstubbed-close"}}'; exit 1
+fi
+[ -n "$REAL" ] || { echo "orca-ide: command not found" >&2; exit 127; }
+exec "$REAL" "$@"
+STUB
+} > "$RES/stubbin/orca-ide"
+chmod +x "$RES/stubbin/orca-ide"
+export PATH="$RES/stubbin:$PATH"
 run_one() {
   local start rc
   start=$(date +%s)
   # review-round.sh's default self-review is a REAL Codex review: every test
   # sets its own stub, and one that does not runs this poison and fails below.
-  COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
+  COMMANDECK_RUNNING_TEST="$2" COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
     timeout "${CAP[$1]}" bash "$2" > "$RES/$1.out" 2>&1; rc=$?
   echo "$rc $(( $(date +%s) - start ))" > "$RES/$1.rc"
   # One printf per line: parallel files then cannot interleave inside a line.

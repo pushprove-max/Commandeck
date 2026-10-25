@@ -361,10 +361,10 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       elif [ -n "$KEPT" ]; then why="main-watch merges it: its gate passed on this tip"
       else why=""
       fi
-      # Two NO-GOs in a row on one finding class: a third fix round finds the next variant (issue 225).
+      # Two NO-GOs in a row on one finding class: the Builder fixes it by design and sends main nothing; only a third return reaches main (issue 225).
       [ -z "$nogo" ] || rep=$(bash "$PP_SCRIPTS/read-verdict.sh" --repeat-class "$round" 2>/dev/null | sed -n 's/^REPEAT CLASS: \(.*\) (r[0-9]*, r[0-9]*)$/\1/p')
       if [ -n "$nogo" ]; then
-        if [ -n "$rep" ]; then echo "  next: ask the owner one class-level question (two NO-GOs on $rep); the class is fixed in the unit"
+        if [ -n "$rep" ]; then echo "  next: nothing for main yet: the Builder fixes the class by design (two NO-GOs on $rep); a third return comes as its question"
         else echo "  next: fix round: ${verdict%% *} ended NO-GO; the Builder fixes what it found and runs the next pass"; fi
       elif [ -n "$why" ]; then echo "  next: nothing for main yet: $why"
       else echo "  next: merge it: bash $PP_SCRIPTS_Q/merge-unit-local.sh $unit (it detaches; wait on its log, never run it again)"

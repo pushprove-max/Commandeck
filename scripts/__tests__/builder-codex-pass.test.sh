@@ -107,6 +107,13 @@ check "the first and later passes' prompts carry the deployed-format rule" "1 1"
 # grow in cost later: both are asked of the behaviour reviewer in every pass.
 check "the first and later passes' prompts ask about untouched callers and cost over time" "1 1 1 1" \
   "$(grep -c 'callers and readers the diff did not touch' "$B/$U-r1-prompt-2.md") $(grep -c 'Cost over time' "$B/$U-r1-prompt-2.md") $(grep -c 'callers and readers the diff did not touch' "$B/$U-r4-prompt-1.md") $(grep -c 'Cost over time' "$B/$U-r4-prompt-1.md")"
+# A reviewer that stops at the first failing ordering of a race returns the next one every round: the first pass lists them all.
+check "the full pass and the behaviour angle prompts both carry the every-ordering sentence" "1 1" \
+  "$(grep -c 'list EVERY ordering of those events in this first pass, check each, and report every ordering that fails, not the first' "$B/$U-r1-prompt-2.md") $(grep -c 'list EVERY ordering of those events in this first pass, check each, and report every ordering that fails, not the first' "$B/$U-r4-prompt-1.md")"
+# Issue 341 (F1): the first pass checks the brief's Data design section before anything else, in every reviewer's prompt; a
+# later, narrowed pass is not handed the sentence again.
+check "the first pass's prompts lead with the Data design check, and a later pass's do not" "1 1 0" \
+  "$(grep -c 'Before anything else, check the Data design section of the unit brief' "$B/$U-r1-prompt-2.md") $(grep -c 'Report as P1 (class: data-design)' "$B/$U-r1-prompt-1.md") $(grep -c 'Data design section of the unit brief' "$B/$U-r4-prompt-1.md")"
 # Every pass asks whether the change hand-builds what the project's paved-road registry or a standard covers,
 # and has such a finding cite the registry row.
 # Issue 282: an exception entry with no proof in its test and no ruling id is P1, asked of the first pass and of later ones.

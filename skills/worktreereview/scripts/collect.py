@@ -311,7 +311,8 @@ def read_codex(path, worktree):
             p['model'], p['effort'] = pay.get('model') or p['model'], pay.get('effort') or p['effort']
         elif pay.get('type') == 'thread_settings_applied' and isinstance(pay.get('thread_settings'), dict):
             # Only this row logs the speed tier; the dashboard reads the model from it too.
-            p['model'], tier = pay['thread_settings'].get('model') or p['model'], pay['thread_settings'].get('service_tier')
+            # A tier read as null is the standard one ("default"); None stays "never read" (codex_row).
+            p['model'], tier = pay['thread_settings'].get('model') or p['model'], pay['thread_settings'].get('service_tier') or 'default'
         elif e.get('type') == 'token_usage_record':
             # One response's counts, as the dashboard's row for it; None when it cannot be used.
             p['rows'].append(PRICES.codex_row(e, p['model'], tier) if PRICES else None)

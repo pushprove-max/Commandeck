@@ -18,15 +18,19 @@ if SELF_TOP=$(git -C "${SELF%/*}" rev-parse --show-toplevel 2>/dev/null) \
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
 # survives.
 usage() { cat <<'EOF'
-usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>]
+usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] | <unit> --cleanup
 Squash-merge a Builder's branch onto local main; run from the main checkout on main.
   --dry-run        run the checks and print the plan; merge and clean up nothing
   --auto <sha>     merge only while the branch tip is still <sha>, the commit main-watch's gate passed
+  --cleanup        step 5 alone, for a unit main already holds (a held cleanup's retry): close its panes, archive
+                   its briefs, remove its worktree; holds (exit 5) while a pane is listed or a path is uncommitted,
+                   refuses (exit 1) a unit main does not hold
 The brief's "## Post-merge" lines run once the merge stands, each as a job of its own, and only these:
 dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>.
 exit: 0 merged; 1 refused or failed, not merged; 2 usage; 3 MERGED, but a step after the
       merge commit failed (archiving the unit's brief files, or closing its panes and removing
-      its worktree): finish it by hand, do not merge again; 5 MERGED, but a post-merge line was refused or its step failed
+      its worktree): finish it by hand, do not merge again; 5 MERGED, but a post-merge line was refused or its step failed,
+      or the worktree held uncommitted work (or a pane that would not close) and was kept (named on the DONE line)
       4 a merge of this unit at this sha is already running or waiting (issue 317): nothing was queued; wait for that one, never run this again
 example: merge-unit-local.sh my-unit --dry-run
 EOF
@@ -35,11 +39,11 @@ EOF
 case "${1:-}" in --help|-h) usage; exit 0 ;; "") usage >&2; exit 2 ;; esac
 # Issue 317: the same unit at the same sha, merging or waiting on the lock below, is never run twice: exit 4, saying so.
 # The sha is --auto's, else the unit worktree's tip; a unit that cannot be read here is left to step 1 to refuse.
-# A dry run is no request. In main's own foreground the merge restarts itself detached and returns at once (issue 230).
+# A dry run is no request, nor is a --cleanup (it merges nothing). In main's own foreground the merge restarts itself detached and returns at once (issue 230).
 # The request is queued BEFORE it detaches: a second one is refused here, at once, and never starts a run that would
 # empty the first one's log. The detached run is handed its queue entry (MERGE_UNIT_LOCAL_QUEUE) and holds it by pid.
 QFILE=${MERGE_UNIT_LOCAL_QUEUE:-}
-if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -x -- --dry-run >/dev/null \
+if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! printf '%s\n' "$@" | grep -xE -- '--dry-run|--cleanup' >/dev/null \
    && ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && COMMANDECK_MAIN=$ROOT . "${SELF%/*}/paths.sh"; then
   REQ=$(printf '%s\n' "$@" | grep -x -A1 -- --auto | sed -n 2p || true)
   [[ ${REQ:-HEAD} =~ ^([0-9a-f]{7,40}|HEAD)$ ]] && REQ=$(git -C "$PP_WORKSPACES/$1" rev-parse --verify -q "${REQ:-HEAD}^{commit}" 2>/dev/null) || REQ=
@@ -61,14 +65,16 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$SELF" "$@"
 fi
 UNIT=$1; shift
-DRY_RUN=0 AUTO=""
+DRY_RUN=0 AUTO="" CLEANUP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --auto) AUTO=${2:-}; [[ $AUTO =~ ^[0-9a-f]{7,40}$ ]] || { usage >&2; exit 2; }; shift 2 ;;
+    --cleanup) CLEANUP=1; shift ;;
     *) usage >&2; exit 2 ;;
   esac
 done
+[ "$CLEANUP" = 0 ] || [ "$DRY_RUN$AUTO" = 0 ] || { usage >&2; exit 2; }
 [[ "$UNIT" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid unit: $UNIT" >&2; exit 2; }
 fail() { echo "FAILED $1: $2" >&2; exit 1; }
 ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a git checkout"
@@ -100,6 +106,87 @@ WTID="path:$WT"
 [ -d "$WT" ] || fail "step 1 preconditions" "worktree does not exist: $WT"
 # Step 5 removes this folder: a checkout of its own (a .git folder, not a linked worktree's .git file) never gets there.
 [ -f "$WT/.git" ] || fail "step 1 preconditions" "$WT is not a linked worktree (its .git is not a file), and step 5 would remove it"
+CLEANUP_HELD="" PANE_STUCK=""
+# Step 5 keeps the worktree when it holds work the merge does not (host issue 3028): the DONE line names why and the
+# retry, which closes the panes again and removes the worktree only once nothing holds it. It never says force-remove.
+hold() { CLEANUP_HELD="$WT kept, $1; close the unit's panes and commit or move what is named, then run bash $(printf %q "$SELF") $UNIT --cleanup"; }
+# Step 5 deletes the worktree, so it fails toward KEEPING it (host issue 3028). In order: stop the writers (the
+# unit's panes, then its Codex helpers; a pane that will not close holds, and nothing is archived or removed), then
+# archive the worktree's brief files (.claude/briefs/ is ignored, so no status check sees a write there: with no live
+# writer left, none can come after this), then any path `git status` still lists holds, a deletion excepted (its
+# bytes are in the merged HEAD). A hold keeps the worktree and the DONE line says why; the merge stands.
+# Limit: ignored files still go with the forced remove, and a background process a pane started is not stopped.
+# `terminal close --worktree --all` reports terminal_close_incomplete for a finished reviewer pane; closing by
+# handle succeeds every time. Reads ARCHIVE, KEPT and MAIN_FILES (step 4's, or --cleanup's own).
+cleanup_step() {
+  echo "STEP 5 cleanup: close the unit's panes by handle (logged in pane-closes.log), stop its Codex helpers, archive its briefs, then orca-ide worktree remove --worktree $WTID --force"
+  state cleanup
+  # The listing is read and checked first: a failed, empty or malformed one lists no pane, and no pane listed is not
+  # no writer, so it holds like a refused close. A close that answered ok is not a pane gone either: the proof is the
+  # listing read again after the closes, through the same reader, with no pane of the worktree in it.
+  if PANES=$(pp_worktree_panes "$WT"); then
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      pp_pane_close "$h" "merge cleanup" || { echo "pane $h did not close" >&2; PANE_STUCK="a pane did not close"; }
+    done <<<"$PANES"
+  else PANE_STUCK="the pane list could not be read"; fi
+  bash "$HERE/codex-helpers.sh" stop "$WT" || true
+  if [ -z "$PANE_STUCK" ]; then
+    if ! LEFT=$(pp_worktree_panes "$WT"); then PANE_STUCK="the pane list could not be read after the close"
+    elif [ -n "$LEFT" ]; then PANE_STUCK="still listed after the close: $(tr '\n' ' ' <<<"$LEFT" | sed 's/ $//')"; fi
+  fi
+  if [ -n "$PANE_STUCK" ]; then hold "$PANE_STUCK, brief files not archived"
+  else
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
+      KEPT=$((KEPT + 1))
+    done < <(pp_unit_briefs "$WT/.claude/briefs" "$UNIT")
+    [ "${#MAIN_FILES[@]}" = 0 ] || rm -- "${MAIN_FILES[@]}" || fail "step 4 briefs" "could not remove the archived main brief files"
+    echo "step 4 briefs: added $KEPT entries to $ARCHIVE"
+    held=()
+    if st=$(git -C "$WT" status --porcelain --no-renames --untracked-files=all 2>/dev/null); then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case ${line:0:2} in ' D'|'D ') continue ;; esac
+        # Untracked brief files are the ones just archived (step 1 lets them be).
+        case $line in '?? .claude/briefs/'*) continue ;; esac
+        held+=("${line:3}")
+      done <<<"$st"
+      [ "${#held[@]}" = 0 ] || hold "${#held[@]} uncommitted path(s): $(printf '%s, ' "${held[@]:0:3}" | sed 's/, $//')"
+    else hold "git status failed"; fi
+  fi
+  if [ -n "$CLEANUP_HELD" ]; then echo "STEP 5 cleanup HELD: $CLEANUP_HELD"
+  else orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"; fi
+}
+# main_holds <tip>: main already holds the unit, read from git alone: the tip is in main (a fast-forward, or no commit
+# of its own), or one commit of main since the fork point is the branch's whole diff (the squash, by patch id), or
+# every path the branch changed reads in main as it does at the tip (a hand merge).
+# shortcut: a hand merge that resolved a path differently, and that main then changed again, reads as not merged;
+# --cleanup then refuses and nothing is closed (the safe side).
+main_holds() {
+  local base id ids p paths=()
+  git merge-base --is-ancestor "$1" main && return 0
+  base=$(git merge-base main "$1") || return 1
+  id=$(git diff --no-color --no-relative --no-renames "$base" "$1" | git patch-id --stable | cut -d' ' -f1) || return 1
+  ids=$(git log -p --no-color --no-renames --format='commit %H' "$base..main" | git patch-id --stable | cut -d' ' -f1) || return 1
+  [ -z "$id" ] || ! grep -qxF "$id" <<<"$ids" || return 0
+  while IFS= read -r -d '' p; do paths+=("$p"); done < <(git diff --no-relative --no-renames --name-only -z "$base" "$1")
+  [ "${#paths[@]}" -gt 0 ] && git diff --quiet --no-relative "$1" main -- "${paths[@]}"
+}
+# --cleanup: step 5 alone, the retry of a held cleanup. It reads the unit's name, git and a live pane listing, and no
+# record an earlier run left (seat records, the finished-builds line, pane-closes.log, the brief archive). The rest of
+# this script (the merge) never runs.
+if [ "$CLEANUP" = 1 ]; then
+  PRE_TIP=$(git -C "$WT" rev-parse HEAD) && STARTED=$(date +%s) || fail "--cleanup" "cannot read $WT's tip"
+  main_holds "$PRE_TIP" || fail "--cleanup" "$UNIT is not merged: main does not hold its branch's changes, so its panes may be a live Builder's; nothing was closed or removed. A hand merge that resolved it differently: confirm the merge by hand, close the unit's panes, then orca-ide worktree remove --worktree $WTID (no --force)"
+  ARCHIVE=$HOME/.commandeck/briefs/$PP_PROJECT/$UNIT.tar KEPT=0 MAIN_FILES=()
+  mkdir -p "$(dirname "$ARCHIVE")" || fail "--cleanup" "could not create the archive directory"
+  cleanup_step
+  echo "DONE unit=$UNIT cleanup=$([ -z "$CLEANUP_HELD" ] && echo removed || echo "HELD: $CLEANUP_HELD")"
+  [ -z "$CLEANUP_HELD" ] || exit 5
+  exit 0
+fi
 [ -f "$BRIEF" ] || fail "step 1 preconditions" "unit brief does not exist: $BRIEF"
 BRANCH=$(git -C "$WT" branch --show-current)
 [ -n "$BRANCH" ] && [ "$BRANCH" != main ] || fail "step 1 preconditions" "worktree $WT is on '${BRANCH:-no branch}', not on a branch of its own"
@@ -229,6 +316,7 @@ merged_end() {
     printf '%s' "$NOT_CLOSED" >&2; rc=3
   fi
   [ "$rc" != 0 ] || [ -z "$POST_FAILED" ] || { echo "MERGED, but a post-merge line was refused or its step failed (step 4 post-merge, above); the merge stands" >&2; rc=5; }
+  [ "$rc" != 0 ] || [ -z "$CLEANUP_HELD" ] || { echo "MERGED, but the worktree was kept (step 5 cleanup, above); the merge stands" >&2; rc=5; }
   exit "$rc"
 }
 
@@ -532,25 +620,10 @@ if [ "$DRY_RUN" = 0 ]; then
     UNIT_LEDGER_ROUNDS=${#REPORTS[@]} UNIT_LEDGER_GO_ROUNDS=$GO_ROUNDS UNIT_LEDGER_NO_GO_ROUNDS=$NO_GO_ROUNDS \
     UNIT_LEDGER_MERGE_RULE=$RULE bash "$HERE/unit-ledger.sh" "$UNIT" local --append \
     || echo "no unit ledger row written for $UNIT (ignored)" >&2
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
-    KEPT=$((KEPT + 1))
-  done < <(pp_unit_briefs "$WT/.claude/briefs" "$UNIT")
-  [ "${#MAIN_FILES[@]}" = 0 ] || rm -- "${MAIN_FILES[@]}" || fail "step 4 briefs" "could not remove the archived main brief files"
-  echo "step 4 briefs: added $KEPT entries to $ARCHIVE"
+  cleanup_step
 fi
 
-state cleanup
-echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
-if [ "$DRY_RUN" = 0 ]; then
-  # `terminal close --worktree --all` reports terminal_close_incomplete for a
-  # finished reviewer pane; closing by handle succeeds every time.
-  orca-ide terminal list --json | jq -r --arg wt "$WT" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . else (.terminals // []) end)[] | select((.worktreePath | pnorm) == $wt) | .handle' \
-    | while read -r h; do orca-ide terminal close --terminal "$h" --json >/dev/null || echo "pane $h did not close" >&2; done
-  orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"
-  bash "$HERE/codex-helpers.sh" stop "$WT" || true
-fi
-echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed"
+[ "$DRY_RUN" = 0 ] || echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
+echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${CLEANUP_HELD:+; cleanup HELD: $CLEANUP_HELD}"
 # The unit's seats are done with: main-watch's item tasks about them are handled by this merge.
 [ "$DRY_RUN" = 1 ] || pp_close_items $(sed -n 's/^handle=//p' "$PP_SCRATCH"/seat-"$UNIT"-*.txt 2>/dev/null || true)

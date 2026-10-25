@@ -117,7 +117,7 @@ echo 'VERDICT: GO' > "$F/verdict-term_wt-j1"; state term_wt-j1 "done"; tick 3912
 # Commit-only completion across the wait, the watcher and collect (real times: the wait's claim is read against
 # the clock): the wait releases on the commit and records PLAN-DONE, the watcher's markerless read is that wait's,
 # and collect's report is the one notification.
-cp "$SOURCE/scripts/seat.sh" "$SOURCE/scripts/run-bound.sh" "$REPO/scripts/"
+cp "$SOURCE/scripts/seat.sh" "$SOURCE/scripts/run-bound.sh" "$SOURCE/scripts/codex-helpers.sh" "$REPO/scripts/"
 R=$(date +%s); pseat wt-p5 term_wt-p5 task_wt-p5 $((R - 200)); state term_wt-p5 working; tick $((R - 100)); pcommit wt-p5 $((R - 50))
 printf '1\nseen %s PLAN-DONE\n' "$R" > "$S/waiting-term_wt-p5"; echo marker=PLAN-DONE >> "$S/seat-wt-p5-plan-author.txt"
 state term_wt-p5 "done"; tick $((R + 1))

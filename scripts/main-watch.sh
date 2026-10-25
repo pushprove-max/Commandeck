@@ -238,7 +238,7 @@ post() {
   # A repeat waits while main is mid-turn: main is awake, and the post would only
   # queue another full replay behind that turn. A first post is never held.
   [ -n "$last" ] && [ "$MAIN_BUSY" = 1 ] && return 0
-  DUE_KEY+=("$1"); DUE_TASK+=("$task"); DUE_SUBJ+=("$3")
+  DUE_KEY+=("$1"); DUE_TASK+=("$task"); DUE_SUBJ+=("$3"); DUE_SEAT+=("${POST_SEAT:-}")
   # pp_task_close, not a bare task-update: a seat's task keeps its supervised
   # dispatch active, and Orca refuses the update until that dispatch is ended.
   DUE_BODY+=("$4"$'\n'"handled = close task $task: (. $(printf '%q' "$HERE")/paths.sh && pp_task_close $task completed)")
@@ -284,6 +284,35 @@ stopped_nudge() {
     && pp_wake_log main-watch "$2" "nudge STOPPED $1" sent \
     || { echo "main-watch: nudge to $2 for $1 failed" >&2; pp_wake_log main-watch "$2" "nudge STOPPED $1" refused; }
   return 0
+}
+
+# inbox_wake -- issue 342: a Builder that has stopped never reads its inbox, and typing into its pane by hand is blocked
+# by the duplicate-agent guard while it is busy. A Builder pane that is idle or done, with an unread message addressed
+# to it, is typed one line pointing it at its inbox, once per message (the ids are kept in builder_watch's history
+# directory). The ids are recorded only once Orca took the typing: nothing else wakes a stopped Builder, so a send that
+# fails or answers accepted:false is typed again on the next tick. A mid-turn Builder reads at its next check.
+inbox_wake() {
+  local r u h state hist out id new sent
+  for r in "$SCRATCH"/seat-*-builder.txt; do
+    [ -f "$r" ] && ! grep -q '^origin=' "$r" || continue
+    u=$(sed -n 's/^unit=//p' "$r" | head -1); h=$(sed -n 's/^handle=//p' "$r" | head -1)
+    [ -n "$u" ] && [ -n "$h" ] || continue
+    state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
+    case $state in idle|done) ;; *) continue ;; esac
+    out=$(timeout 10 orca-ide orchestration inbox --terminal "$h" --json 2>/dev/null) || continue
+    hist=$ST/builder-$u-$h.inbox
+    # Its unread messages not yet woken for (a reply that is not an inbox lists none): one line for all of them.
+    new=()
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      grep -qxF -- "$id" "$hist" 2>/dev/null || new+=("$id")
+    done < <(jq -r --arg h "$h" '.result.messages[]? | select(.to_handle == $h and (.read // 0) == 0) | .id // empty' <<<"$out" 2>/dev/null)
+    [ "${#new[@]}" -gt 0 ] || continue
+    if sent=$(orca-ide terminal send --terminal "$h" --text "Signal INBOX: a message for you is waiting in your Orca inbox. Read it with \`orca orchestration check --wait --timeout-ms 5000\`, act on it, and end your turn." --enter 2>/dev/null) \
+      && ! jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$sent"; then
+      printf '%s\n' "${new[@]}" >> "$hist"; pp_wake_log main-watch "$h" "nudge INBOX $u" sent
+    else echo "main-watch: inbox wake to $h for $u failed; typed again next tick" >&2; pp_wake_log main-watch "$h" "nudge INBOX $u" refused; fi
+  done
 }
 
 # builder_watch -- each working Builder seat's event log through
@@ -352,8 +381,34 @@ builder_watch() {
 # flush -- every item due this tick goes out as ONE message, since each post is a
 # full context replay for main. Each item keeps its own task and posted time.
 flush() {
-  local n=${#DUE_KEY[@]} i subj body="" type=question
+  local n=${#DUE_KEY[@]} i fd lockfds=() k=() s=() b=() t=() d=() r=() rcp
   [ "$n" -gt 0 ] || return 0
+  # A seat's finish is sent under that seat's delivery lock, the one seat.sh collect takes, and its receipt is read
+  # again once the lock is held: a collect that sent while this finish was queued has already told main, so the item
+  # is handled, not sent twice. A lock not had in COMMANDECK_MAIN_WATCH_LOCK_S (20) sends anyway: a duplicate, never silence.
+  # The receipt flush_send writes is this pre-send read (DUE_RCP), never the log after the send: a turn that lands
+  # during the send would read as delivered and collect would not report it.
+  for i in "${!DUE_KEY[@]}"; do
+    rcp=""
+    if [ -n "${DUE_SEAT[i]}" ] && { exec {fd}>>"$ST/delivered-${DUE_SEAT[i]}.lock" && flock -w "${COMMANDECK_MAIN_WATCH_LOCK_S:-20}" "$fd"; } 2>/dev/null; then
+      lockfds+=("$fd")
+      rcp=$(sed -n 4p "$ST/grow-${DUE_SEAT[i]}" 2>/dev/null)$'\n'$(log_size "${DUE_SEAT[i]}")
+      if [ -n "${rcp%$'\n'}" ] && [ "$(cat "$ST/delivered-${DUE_SEAT[i]}" 2>/dev/null)" = "$rcp" ]; then
+        mark_handled "${DUE_KEY[i]}"
+        continue
+      fi
+    fi
+    [ -z "${DUE_SEAT[i]}" ] || rcp=${rcp:-$(sed -n 4p "$ST/grow-${DUE_SEAT[i]}" 2>/dev/null)$'\n'$(log_size "${DUE_SEAT[i]}")}
+    k+=("${DUE_KEY[i]}"); s+=("${DUE_SUBJ[i]}"); b+=("${DUE_BODY[i]}"); t+=("${DUE_TASK[i]}"); d+=("${DUE_SEAT[i]}"); r+=("$rcp")
+  done
+  DUE_KEY=("${k[@]}") DUE_SUBJ=("${s[@]}") DUE_BODY=("${b[@]}") DUE_TASK=("${t[@]}") DUE_SEAT=("${d[@]}") DUE_RCP=("${r[@]}")
+  n=${#DUE_KEY[@]}
+  [ "$n" -gt 0 ] || { for fd in "${lockfds[@]}"; do exec {fd}>&-; done; return 0; }
+  flush_send
+  for fd in "${lockfds[@]}"; do exec {fd}>&-; done
+}
+flush_send() {
+  local n=${#DUE_KEY[@]} i subj body="" type=question
   # Issue 318: a heads-up is a note to verify, not a wake: as a status it is held for main's next wake.
   [ "$RELAY" = 0 ] || type=status
   if [ "$n" = 1 ]; then subj=${DUE_SUBJ[0]} body=${DUE_BODY[0]}
@@ -365,9 +420,13 @@ flush() {
   if orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type "$type" \
        --subject "$subj" --body "$body" --json; then
     pp_wake_log main-watch "run:$RUN" "flush $n item(s)" sent
-    for i in "${!DUE_KEY[@]}"; do printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"; done
-    # A heads-up relay is inbox only: nothing is ever typed for it.
-    [ "$RELAY" = 0 ] || return 0
+    for i in "${!DUE_KEY[@]}"; do
+      printf 'posted=%s\ntask=%s\n' "$NOW" "${DUE_TASK[i]}" > "$ST/item-${DUE_KEY[i]}"
+      # The delivery receipt seat.sh collect reads: written here only, after Orca took the send.
+      [ -z "${DUE_SEAT[i]}" ] || printf '%s\n' "${DUE_RCP[i]}" > "$ST/delivered-${DUE_SEAT[i]}"
+    done
+    # A heads-up relay is inbox only: nothing is ever typed for it. The digest clock starts when Orca took it.
+    [ "$RELAY" = 0 ] || { echo "$NOW" > "$ST/hu-last"; return 0; }
     # IN THE INBOX IS NOT AWAKE: an idle main missed ~16 accepted
     # sends, two merge-ready STOPs among them. The wake is its own record, proven
     # by wake() and retried without a second message. An idle main the inbox
@@ -651,8 +710,8 @@ grew_at() {
   # An unanswered read keeps the old cursor, so it never reads as growth.
   cur=$(pane_cursor "$2" "${old:-0}")
   cur=${cur:-$old}
-  log=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$3" | sed 's#/#-#g')/$6.jsonl
-  if [ -z "$6" ] || [ ! -f "$log" ]; then
+  log=$(pp_seat_log "$3" "$6")
+  if [ -z "$log" ]; then
     # The read-verdict lookup is the costly read: once per seat, then again only
     # for a stall candidate, in case the seat moved to a new session.
     log=$(cat "$lf" 2>/dev/null)
@@ -886,6 +945,31 @@ merge_start() {
     bash "$HERE/merge-queue.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & echo $! > "${log%.log}.pid")
 }
 
+# mark_handled <key> -- "handled" from a path that found main needs nothing more. A task post minted (the key does
+# not end in it; a seat's own task ends its key and its owner ends it) is closed first: a bare mark would erase task=
+# whether or not main ever got the post, and that task would stay pending for good. A close Orca refuses leaves the
+# item as it is, so the next tick reads the seat as reported again and retries.
+mark_handled() {
+  local t; t=$(sed -n 's/^task=//p' "$ST/item-$1" 2>/dev/null)
+  if [ -n "$t" ] && [ "$t" != none ] && [[ $1 != *"-$t" ]]; then pp_task_close "$t" completed || return 0; fi
+  echo handled > "$ST/item-$1"
+}
+
+# reported <handle> <since> <launched> -- the seat has already told main: the run inbox holds a worker_done from its
+# pane made after the latest of <since> (the episode start), the seat's latest prompt and 30 min ago, so a follow-up
+# main sent is not silenced by the earlier report, even when both turns ended between two ticks and no new episode
+# began. One inbox read per tick (non-draining); an unreadable inbox or prompt time answers no: a duplicate post,
+# never a missed finish. The prompt is read only once the inbox says yes. A collected verdict is proven only by
+# collect's delivery receipt, which flush re-reads under the seat's lock, never by its subject.
+reported() {
+  local since=$2 asked; [[ $since =~ ^[0-9]+$ ]] || since=0
+  [ $((NOW - 1800)) -le "$since" ] || since=$((NOW - 1800))
+  [ -n "${INBOX+x}" ] || INBOX=$(orca-ide orchestration inbox --terminal "run:$RUN" --limit 500 --json 2>/dev/null)
+  pp_worker_done_since "$1" "$since" <<<"$INBOX" || return 1
+  asked=$(timeout 20 bash "$HERE/read-verdict.sh" "$1" 5 "" "" "" "" prompt "$3" 2>/dev/null) && [[ $asked =~ ^[0-9]+$ ]] || return 1
+  [ "$asked" -le "$since" ] || pp_worker_done_since "$1" "$asked" <<<"$INBOX"
+}
+
 seat() { # handle task unit role launched [session id] [seat tag] [worktree name]
   # A planner of a unit planned before 0.18.0 runs in <unit>-plan: the record names where the seat runs.
   local h=$1 task=$2 u=$3 w=$WS/${8:-$3} key="seat-$1-$2" state kind since at ep item
@@ -932,8 +1016,9 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
         at=$(grew_at "$key" "$h" "$w" "$task" "$5" "${6:-}")
         [ $((NOW - at)) -ge "$STALL_S" ] || return 0
         # A quiet seat that reported or committed its plan is finished, whatever Orca's snapshot says (issue 320).
-        seat_reported "$h" "$4" || { post "stall-$key-$at" "" "main-watch: $u $4 stalled; inspect" \
-          "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h"
+        # One stall post per seat episode: a pane that grew a little began no new item.
+        seat_reported "$h" "$4" || { post "stall-$item" "" "main-watch: $u $4 stalled; inspect" \
+          "Seat $4 ($h) on $u is working, but its session log and pane have not changed for $(( (NOW - at) / 60 )) min. Inspect it: $HERE/read-verdict.sh $h" once
           return 0; }
         : > "$ST/sw-$key"; echo "$kind" > "$ST/kind-$key"; printf '%s\n' "$RV_OUT" > "$ST/rv-$key"
         mark_pane f "$key" "$h" "$w" "$task" "$5" "${6:-}"
@@ -1020,8 +1105,8 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
       [ "$state" != none ] || mark_pane f "$key" "$h" "$w" "$task" "$5" "${6:-}" ;;
     *)
       [ $((NOW - since)) -ge "$WAITING_S" ] || return 0
-      post "wait-$key-$since" "" "main-watch: $u $4 stalled in Orca state $state; inspect" \
-        "Seat $4 ($h) on $u has been '$state' for $(( (NOW - since) / 60 )) min. It may be waiting for input: $HERE/read-verdict.sh $h"
+      post "wait-$item" "" "main-watch: $u $4 stalled in Orca state $state; inspect" \
+        "Seat $4 ($h) on $u has been '$state' for $(( (NOW - since) / 60 )) min. It may be waiting for input: $HERE/read-verdict.sh $h" once
       return 0 ;;
   esac
   # The seat's own message reached main: nothing to post.
@@ -1037,7 +1122,8 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
       [[ $why != held:* ]] && { post "$item-$(git -C "$w" rev-parse HEAD 2>/dev/null)" "" "main-watch: seat $4 on $u finished ($h); not merged: $why" \
         "Seat $4 on $u said DONE and its merge gate refused it: $why. Fix or merge it: $HERE/merge-unit-local.sh $u" once; return 0; }
     fi
-    post "$item" "$task" "main-watch: seat $4 on $u finished ($h)${why:+; not merged, $why}" \
+    if reported "$h" "${ep:-${5:-0}}" "${5:-0}"; then mark_handled "$item"; return 0; fi
+    POST_SEAT=$key post "$item" "$task" "main-watch: seat $4 on $u finished ($h)${why:+; not merged, $why}" \
       "Seat $4 on $u stopped. Read it: $HERE/read-verdict.sh $h, then collect it."
   else
     # One more reading first: a seat Orca read idle for one tick while still at work, or whose session log was
@@ -1049,6 +1135,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     # A live Builder pane is nudged first (issue 258); a gone one has no one to type to.
     NUDGED=""
     if [ "$4" = builder ] && [ -n "$state" ] && [ "$state" != none ]; then stopped_nudge "$u" "$h" "$item" && return 0; fi
+    if reported "$h" "${ep:-${5:-0}}" "${5:-0}"; then mark_handled "$item"; return 0; fi
     post "$item" "$task" "main-watch: $u $4 stopped without reporting; inspect" \
       "Seat $4 ($h) on $u stopped with no marker, verdict or worker_done${state:+ (Orca: $state)}.$NUDGED This is NOT a finish. Inspect it: $HERE/read-verdict.sh $h${RV_OUT:+ Last words: $(tr '\n' ' ' <<<"$RV_OUT" | tail -c 300)}"
   fi
@@ -1083,6 +1170,7 @@ HU_LOG=$ST/heads-up-log.jsonl
 # went with its item file would leave the note on record and looking new.
 HU_DONE=$ST/heads-up-handled
 HU_WINDOW_MS=300000
+HU_DIGEST_S=${COMMANDECK_MAIN_WATCH_HU_DIGEST_S:-1800}
 
 # hu_cwd <session id> -- the checkout the session ran in: the first cwd its own
 # transcript records. The project directory name is a lossy slug and is never
@@ -1149,8 +1237,12 @@ hu_take() {
     jq -e --arg p "$p" '.pairs[$p]' >/dev/null <<<"$led" && continue
     # Still shown in the store after the temp folder lost the ledger.
     grep -qxF -- "$p" "$HU_DONE" 2>/dev/null && continue
-    # The same session showing the same text again is handled with it.
-    if jq -e --slurpfile ha <(printf '%s' "$htext") '$ha[0][[.id, .line, .explanation] | tojson] != null' >/dev/null 2>&1 <<<"$o"; then
+    # The same session showing the same text again is handled with it, whether main handled the note, it was posted,
+    # or it waits for the digest (session, line AND explanation all equal; any other change is a new note).
+    # A file, not --argjson: the ledger grows without a bound.
+    if jq -e --slurpfile ha <(printf '%s' "$htext") --slurpfile la <(printf '%s' "$led") '. as $o
+      | $ha[0][[.id, .line, .explanation] | tojson] != null
+        or any($la[0].groups[] | select(.line == $o.line) | .members[]; .id == $o.id and .explanation == $o.explanation)' >/dev/null 2>&1 <<<"$o"; then
       echo "$p" >> "$HU_DONE"; continue
     fi
     # An archived record keeps the checkout it was captured with; only a missing
@@ -1318,6 +1410,7 @@ tick() {
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
   NOW=${COMMANDECK_NOW:-$(date +%s)}
   DIAG= DIAG_KEYS= REBOUND= RELAY=0
+  unset INBOX   # reported() reads the run inbox once per tick
   # Read once a tick: every post and the heads-up relay stand down under it (hu_claimed).
   CLAIMED=0
   if hu_claimed; then
@@ -1350,9 +1443,10 @@ tick() {
   resolve_main "$ps" "$terms"
   MAIN_BUSY=0
   [ "$MAIN_STATE" = working ] && MAIN_BUSY=1
-  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() MERGE=()
+  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() DUE_SEAT=() DUE_RCP=() MERGE=()
   proc_warn
   builder_watch
+  inbox_wake
 
   # A seat another host's run placed here is marked so (origin= line): that run
   # hears of it, and posting it here too would wake a second main.
@@ -1377,9 +1471,12 @@ tick() {
   if [ -d "$PP_WORKSPACES/Chief-of-Staff" ]; then relay_picker "$terms"; else rm -f "$ST/relay-picker.json"; fi
   # Heads-up notes are their own batch, after the typed wake and its diagnostic:
   # inbox only, success or refusal.
-  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() RELAY=1
-  heads_up_post
-  flush
+  # One digest per HU_DIGEST_S: notes captured in between wait in the ledger, which a restart keeps.
+  DUE_KEY=() DUE_TASK=() DUE_SUBJ=() DUE_BODY=() DUE_SEAT=() DUE_RCP=() RELAY=1
+  if [ $((NOW - $(cat "$ST/hu-last" 2>/dev/null || echo 0))) -ge "$HU_DIGEST_S" ]; then
+    heads_up_post
+    flush
+  fi
   RELAY=0
   # Finished and orphaned panes are closed here, after this tick's items went
   # out with the panes still listed; an open pane holds RAM.
