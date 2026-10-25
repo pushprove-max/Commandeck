@@ -50,7 +50,8 @@ check "a judge on Codex where no codex is installed is refused, naming the keys 
     COMMANDECK_MAIN="$T/p" bash "$REAL/scripts/plan-tier.sh" "$T/brief.md" 2>&1 >/dev/null | grep -c 'planJudgeSolAgent=claude, or planJudgeSolEnabled=false')"
 # Issue 345: main asks no "Which model and effort?" question, so each seat's effort is printed under its seat line.
 efforts() { run "$@" | sed -n 's/^effort: //p' | paste -sd, -; }
-opts '{}'
+# The judges run on Codex: put back the stub the case above removed, or a host with no codex prints plan-author alone.
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/codex"; chmod +x "$T/bin/codex"; opts '{}'
 check "each seat prints its configured effort, so main can say what it picked" \
   "plan-author high,plan-judge-astra high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
 opts '{"planAuthorEffort": "medium"}'

@@ -159,8 +159,9 @@ return 1
 if [ -z "$FOLLOW" ] && pp_main_foreground; then
   FLOG=$PP_SCRATCH/answer-worker-$TAG.log
   mkdir -p "$PP_SCRATCH"
-  # Its own session, so main's pane closing does not end it (macOS has no setsid; perl's POSIX::setsid is the same, as in seat.sh).
-  if command -v setsid >/dev/null 2>&1; then DETACH=(setsid); else DETACH=(perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"'); fi
+  # Its own session, so main's pane closing does not end it. perl's POSIX::setsid on every host: it execs in
+  # place, so $! is the follower; Linux setsid(1) can fork, leaving $! a pid that already exited.
+  DETACH=(perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"')
   ANSWER_WORKER_FOLLOW=1 ANSWER_WORKER_TAG=$TAG ANSWER_WORKER_WAY=$WAY ANSWER_WORKER_REPLIED=$REPLIED COMMANDECK_FOREGROUND=1 \
     nohup "${DETACH[@]}" bash -c 'log=$1; shift; "$@" > "$log" 2>&1; rc=$?
       [ "$rc" != 1 ] || bash "$0" question "answer-worker.sh: not delivered" "$(tail -n 5 "$log")" >/dev/null 2>&1' \

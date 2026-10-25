@@ -1,6 +1,7 @@
 node_modules/
 __pycache__/
 .claude/settings.local.json
+.claude/main-session.settings.json
 .claude/builder-events.jsonl
 .claude/briefs/
 .claude/routing-log
