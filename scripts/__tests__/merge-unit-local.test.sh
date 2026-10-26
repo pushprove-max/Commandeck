@@ -80,8 +80,8 @@ check "the merge of to ends 0" 0 "$(merge to)"
 check "a unit whose round files have no Timing line has null review seconds, a named gap, and still its pass kinds" "null|true|{\"adversarial\":{\"go\":1,\"noGo\":0},\"final\":{\"go\":1,\"noGo\":0}}" \
   "$(jq -sr 'map(select(.unit == "to")) | .[0] | "\(.reviewSeconds)|\(.gaps | index("reviewSeconds") != null)|\(.passKinds | tojson)"' "$UL" 2>/dev/null)"
 
-# Issue 239: the merge closes each issue the brief lists that its commit names, with the commit and the version; one
-# the commit does not name stays open and is named. Issue 227: main-watch's item task about the unit's seat is
+# Issue 239: the merge closes each issue the brief lists, with the commit and the version, whether or not its commit
+# names it. Issue 227: main-watch's item task about the unit's seat is
 # closed by the merge, another unit's is left open.
 mk w "feat(w): the unit (#5)"; printf '# w\n\n## The issues\n\n1. #5: one\n2. #6: two\n' > "$COMMANDECK_WORKSPACES/w/.claude/briefs/w.md"
 # The work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief.
@@ -94,7 +94,7 @@ printf 'posted=1\ntask=task_item_o\n' > "$COMMANDECK_SCRATCH/main-watch/item-sea
 go w; : > "$TMP/gh-calls"; : > "$TMP/orca-calls"
 check "a GO merge of w ends 0" 0 "$(merge w)"
 check "the issue the commit names is closed once, naming the merge commit" 1 "$(grep -c "^issue close 5 --comment Fixed in $(git -C "$REPO" rev-parse --short=8 HEAD)" "$TMP/gh-calls")"
-check "the issue the commit does not name stays open, and is named" "0 1" "$(grep -c '^issue close 6' "$TMP/gh-calls") $(grep -c 'left open: #6' "$TMP/out")"
+check "a work item the commit does not name is closed too: the merged build is done" "1 0" "$(grep -c '^issue close 6 ' "$TMP/gh-calls") $(grep -c 'left open' "$TMP/out")"
 check "the unit's item task is completed, another unit's is not" "1 0" \
   "$(grep -c 'task-update --id task_item_w --status completed' "$TMP/orca-calls") $(grep -c 'task_item_o' "$TMP/orca-calls")"
 # Issue 323: red proofs are retired. w's commit carried no Mutation-verified: line and merged above; a branch that
@@ -112,12 +112,20 @@ mk cl "feat(cl): the unit"
 printf '# cl\n\n## The issues\n\n1. #8: one\n2. #9: two\n3. #10: three\n\nCloses: #8, #9, #13\n\n## Close as shipped\n\n- #10\n\n## Examples\n\n````markdown\n```\nCloses: #11\n```\n## The issues\n1. #11: example only\n## Close as shipped\n- #12\n````\n\n<!--\nCloses: #14\n-->\n' > "$COMMANDECK_WORKSPACES/cl/.claude/briefs/cl.md"
 issues cl '[8,9,10]'
 go cl; : > "$TMP/gh-calls"
-check "a brief's Closes: line gives the merge commit a Closes line per work item it names" "3 Closes #8 Closes #9" \
+check "the merge commit has a Closes line per work item the merge closes: its Closes: line and Close as shipped" "3 Closes #8 Closes #9 Closes #10" \
   "$(merge cl) $(git -C "$REPO" log -1 --format=%b | grep . | paste -sd' ' -)"
 check "and the merge closes each of those issues, and the work item under Close as shipped" "1 1 1" \
   "$(grep -c '^issue close 8 ' "$TMP/gh-calls") $(grep -c '^issue close 9 ' "$TMP/gh-calls") $(grep -c '^issue close 10 ' "$TMP/gh-calls")"
 check "an issue that is not a work item is not closed, quoted or not, and is named and left to close by hand" "0 0 0 0 #11 #12 #13 #14 11 12 13 14" \
   "$(for n in 11 12 13 14; do grep -c "^issue close $n " "$TMP/gh-calls"; done | paste -sd' ' -) $(grep '^step 4 issues: not closed:' "$TMP/out" | grep -oE '#[0-9]+' | sort | paste -sd' ' -) $(grep -oE '^NOT CLOSED: gh issue close [0-9]+' "$TMP/out" | grep -oE '[0-9]+$' | sort -n | paste -sd' ' -)"
+# A plugin merge closes the issues it built: GitHub closes an issue on push only when the commit says "Closes #n". A
+# work item the evidence marks built gets Closes; one it marks partly built gets Refs, so the push leaves it open.
+mk bp "feat(bp): the unit"; printf '# bp\n\n## The issues\n\n1. #31: one\n2. #32: two\n' > "$COMMANDECK_WORKSPACES/bp/.claude/briefs/bp.md"
+printf '# bp evidence\n\n## Per issue\n\n| Issue | Status |\n|---|---|\n| #31 | built |\n| #32 | partly built |\n' > "$COMMANDECK_WORKSPACES/bp/.claude/briefs/bp-evidence.md"
+issues bp '[31,32]'; go bp; : > "$TMP/gh-calls"
+check "a built work item gets Closes and a partly built one Refs, and nothing else" "0 Closes #31 Refs #32" \
+  "$(merge bp) $(git -C "$REPO" log -1 --format=%b | grep . | paste -sd' ' -)"
+check "and the merge closes the built one only" "1 0" "$(grep -c '^issue close 31 ' "$TMP/gh-calls") $(grep -c '^issue close 32 ' "$TMP/gh-calls")"
 # One retry path, whatever the state came from: #20 is named by the commit, a Closes: line and Close as shipped, and
 # is on the launch list. Between two dry runs one piece of that state is removed; #20 is still closed, or, with no
 # launch list, still printed as a by-hand close: never dropped without a word.

@@ -319,10 +319,11 @@ echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
 check_filed "step 3 filing"
-# The unit's issues, closed at its merge (issue 239): each work item (the launch list, $ISSUES) that the commit message
-# names (#N), is on a brief's "Closes:" line or under its "Close as shipped" heading. A work item none of them names
-# stays open and is named. Any other issue they name, and with no launch list every one, is never closed here: it is
-# named and joins NOT CLOSED, as a close GitHub refuses does, printed last with its command; the script ends with code 3.
+# The unit's issues, closed at its merge (issue 239): a merged unit's Build step is done, so each work item (the launch
+# list, $ISSUES) is built, as the units mod counts it, and is closed. One the evidence's Issue/Status table marks not
+# built ($PARTIAL) stays open and is named. Any other issue the commit message (#N), a brief's "Closes:" line or its
+# "Close as shipped" heading names, and with no launch list every one, is never closed here: it is named and joins
+# NOT CLOSED, as a close GitHub refuses does, printed last with its command; the script ends with code 3.
 NOT_CLOSED="" POST_FAILED=""
 close_issues() { # [--dry-run]
   local listed shipped named n ver c left="" off=""
@@ -334,12 +335,12 @@ close_issues() { # [--dry-run]
   [ -r "$ISSUES" ] || echo "step 4 issues: no work-item list at $ISSUES (builder-launch.sh writes it at launch), so the merge closes no issue itself"
   for n in $(printf '%s\n' $listed $shipped $([ -r "$ISSUES" ] || echo $named) | awk 'NF && !s[$0]++'); do
     if ! printf '%s\n' $listed | grep -x -- "$n" >/dev/null; then off+=" #$n"; NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'
-    elif ! printf '%s\n' $named $shipped | grep -x -- "$n" >/dev/null; then left+=" #$n"
+    elif printf '%s\n' $PARTIAL | grep -x -- "#$n" >/dev/null; then left+=" #$n"
     elif [ "${1:-}" = --dry-run ]; then echo "step 4 issues: would close #$n"
     elif (cd "$ROOT" && gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
     else NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
   done
-  [ -z "$left" ] || echo "step 4 issues: left open:$left (work items the commit message and the brief do not name to close)"
+  [ -z "$left" ] || echo "step 4 issues: left open:$left (work items the evidence marks not fully built)"
   [ -z "$off" ] || echo "step 4 issues: not closed:$off (named to close, but not on the launch list of work items; close by hand if shipped)"
   [ "${1:-}" != --dry-run ] || printf '%s' "$NOT_CLOSED"
 }
@@ -388,9 +389,15 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
 # the Builder edits its brief, and a quoted list or directive in it adds nothing.
 ISSUES=$PP_MAIN/.claude/briefs/$UNIT-issues.json
 LISTED=$(jq -r '.[] | numbers | "#\(.)"' "$ISSUES" 2>/dev/null || true)
-# A "Closes: #n" line in the brief is carried into the squash message as "Closes #n" and closes that issue below.
-CLOSES=$(grep -E '^Closes:' "$BRIEF" | grep -oE '#[0-9]+' | grep -xF -- "$LISTED" | awk '!s[$0]++' || true)
-CLOSE_BODY=""; [ -z "$CLOSES" ] || CLOSE_BODY=$(sed 's/^/Closes /' <<<"$CLOSES")
+# Partial is read by the one reader of the evidence, the dashboard's. A read that fails stops the merge: every work
+# item would otherwise close, the unfinished ones too.
+PROGRESS=$(COMMANDECK_MAIN=$ROOT bash "$HERE/dashboard.sh" --progress "$WT" "$UNIT") \
+  || fail "step 1 preconditions" "the evidence's Issue/Status table could not be read (dashboard.sh --progress $WT $UNIT)"
+PARTIAL=$(jq -r '.partial | arrays | .[] | numbers | "#\(.)"' <<<"$PROGRESS")
+# The squash message carries "Closes #n" for each work item the merge closes below and "Refs #n" for each it leaves
+# open: GitHub closes the first kind on push, never the second.
+CLOSE_BODY=$(printf '%s\n' $LISTED | awk -v p="$(tr '\n' ' ' <<<"$PARTIAL")" \
+  'BEGIN { n = split(p, a, " "); for (i = 1; i <= n; i++) part[a[i]] = 1 } NF && !s[$0]++ { print (($0 in part) ? "Refs " : "Closes ") $0 }')
 # A squash that deletes a file neither the brief nor the evidence's "Files
 # deleted" list names is a botched rebase, not a unit: a unit told to cut
 # "everything but X" can name its cuts only once it has made them. The size

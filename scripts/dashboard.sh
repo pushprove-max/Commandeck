@@ -219,7 +219,7 @@ seat_actual() {
 # and main's rulings file for the unit: an issue is its number, an item with no issue number its own text.
 # Built ones are the items its evidence file heads a section with, findings the newest round report's finding lines.
 builder_progress() {
-  local d=$1/.claude/briefs u=${2##*/} is=null bu=null fi_=null f t tb
+  local d=$1/.claude/briefs u=${2##*/} is=null bu=null pa=null fi_=null f t tb
   [ ! -f "$d/$u.md" ] || is=$(bash "$HERE/brief-issues.sh" "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md")
   # The file's title names the unit's issue before anything is built: only a section heading counts.
   # A heading "Item N" with no issue number stands for the items on numbered line N of the brief
@@ -245,12 +245,14 @@ builder_progress() {
       grep -oE '#[0-9]+' <<<"$t" | grep -xFf <(jq -r '.[] | numbers | "#\(.)"' <<<"$is")
       sed -E 's/^[0-9]+\. +//; s/[[:space:]:.]+$//' <<<"$t" | grep -xFf <(jq -r '.[] | strings' <<<"$is") | sed 's/^/=/'
     done; sed -n 's/^+//p' <<<"$tb"; } | grep -vxFf <(sed -n 's/^-//p' <<<"$tb") | bash "$HERE/brief-issues.sh" --list)
+  # Partial: the issues that table marks not built; a merge gives them Refs, not Closes (merge-unit-local.sh).
+  [ -z "${tb:-}" ] || pa=$(sed -n 's/^-//p' <<<"$tb" | bash "$HERE/brief-issues.sh" --list)
   f=$(ls -t "$d/$u"-r*-reports.md 2>/dev/null | head -1)
   [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
   # Raised: the effort main raised the Builder to and why, from the line builder-launch.sh writes in its brief.
   t=$(grep -m1 -E '^effort override: builder [a-z]+ -> [a-z]+: ' "$d/$u.md" 2>/dev/null || true)
-  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson fi "$fi_" --arg ra "$t" \
-    '{issues: $is, built: $bu, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null)}'
+  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson pa "$pa" --argjson fi "$fi_" --arg ra "$t" \
+    '{issues: $is, built: $bu, partial: $pa, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null)}'
 }
 # terminal_list -- Orca's terminal list, read once per collect into $DASH_TERMS for every project's units() and
 # chief_of_staff() (issue 299); fails, for all of them, when the read or its shape does (the failure is kept too, so a
@@ -1471,6 +1473,8 @@ case "${1:-}" in
   --register) register "${2:?--register <repo>}"; exit ;;
   --unregister) unregister "${2:?--unregister <repo>}"; exit ;;
   --import) import_from "${2:?--import <folder>}"; exit ;;
+  # Internal: merge-unit-local.sh reads the partial list from here, so a merge leaves open what the evidence says is unfinished.
+  --progress) builder_progress "${2:?--progress <worktree> <unit>}" "${3:?--progress <worktree> <unit>}"; exit ;;
   # The job's own manager restarts it (issue 294), by the label and unit install wrote.
   --restart) if [ "$(hs_os)" = Darwin ]; then launchctl kickstart -k "gui/$(id -u)/$HS_PREFIX$NAME"
              else systemctl --user --no-block restart "$UNIT"; fi
