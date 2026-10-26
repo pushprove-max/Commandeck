@@ -24,7 +24,9 @@ V=$(jq -r '.version // "(none)"' "$IL_CONFIG" 2>/dev/null) || V="(unreadable)"
 il_profile_lock 60 || die "the install folder $IL_DIR stayed locked (a launch's repair or a revoke); nothing was changed, run this again"
 
 echo "commandeck $(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json") at $IL_ROOT (was at $(jq -r '.root // "?"' "$IL_PROJECT"))"
-bash "$HERE/release-notes.sh" "$(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json")"
+# Exit 2 is a section the style guard refuses: the update goes on (it comes from the marketplace, not from releases).
+# Exit 1, no section, still stops it here, before any write.
+bash "$HERE/release-notes.sh" "$(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json")" || [ $? -eq 2 ]
 
 # Every recorded path as it is now, for the way back, and the Codex home in
 # use today: setup writes to it, and it is not on record yet if it is a new one.

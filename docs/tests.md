@@ -53,7 +53,8 @@ bash scripts/startup-size.sh
 ```
 
 Version check compares to `origin/main` by default. Documentation-only changes
-need no version bump. Plugin changes need a version and changelog entry; see
+need no version bump. Plugin changes need a version and a changelog entry in the
+plain release-note style that `bash scripts/release-notes.sh --check` enforces; see
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 Use the runtime requirements above plus ripgrep and Node.js. Dashboard DOM

@@ -17,6 +17,12 @@ bash scripts/run-shell-tests.sh
 Every change to the plugin raises the version in `.claude-plugin/plugin.json` and the README's badge, with a `CHANGELOG.md` entry: the third part for a fix, the second for new behaviour.
 `ci/version-check.sh` fails when a plugin file changed against the main branch and the version did not; a change to the docs or to `ci/` alone does not count.
 
+A `CHANGELOG.md` entry is a release note, written for the person who uses the plugin:
+- Put it under `## <x.y.z> -- <date>` as `###` topics named for what a person does or sees, with no intro paragraph. Anything the person must do goes first, under `### What you need to do`; security fixes go under `### Security and maintenance`.
+- Each bullet is one or two plain sentences saying what changed, the effect first.
+- Never name a file, script, function or path, or give an issue number, "Closes", a commit hash or an internal unit name. A slash command, a setup question or a setting name the person types or sees is fine.
+- `bash scripts/release-notes.sh --check` prints each line that breaks this and exits 1; it must exit 0 before you send a change. The release job runs the same check on the entry it publishes.
+
 They need `bash`, `git`, `ripgrep`, `jq` and `perl`.
 CI's Ubuntu ships jq 1.7, which refuses some programs jq 1.8 accepts: before you send a change, run the suite once
 with jq 1.7 first on `PATH` (on a Mac, `J=$(mktemp -d); ln -s /usr/bin/jq "$J/jq"; PATH="$J:$PATH" bash scripts/run-shell-tests.sh`).

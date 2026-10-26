@@ -213,7 +213,9 @@ repository" (T26) and "an origin that is not a GitHub repository stops the rewri
 
 D10. `release-backfill.sh` checks every body before it tags, pushes or calls `gh`. Pass 1 walks the same plugin.json
 history and runs `release-notes.sh <v>` for each version: exit 0 keeps the body, exit 1 (no section) keeps today's
-"Version <x>." fallback, exit 2 (refused) collects each stderr refusal as `release-backfill: v<x>: CHANGELOG.md:<line>:
+"Version <x>." fallback and only exit 1 does (`release-notes.sh` exits 1 for a missing section and for nothing else: a
+section with no notes, a CHANGELOG that cannot be read and bad arguments exit 3), exit 2 (refused) and every other
+status (3, a crash) collect each stderr line as `release-backfill: v<x>: CHANGELOG.md:<line>:
 <reason>: <text>`. Any refusal prints them all and exits 1 with nothing tagged, pushed or published, not even the
 fallback. Pass 2 is today's loop body (`release-backfill.sh:15-20`) with `--notes` the body kept in pass 1. `--plan`
 is unchanged (no gate; A2 uses it read-only).
@@ -269,6 +271,9 @@ Mutation: scripts/__tests__/update.test.sh -- a version with no CHANGELOG sectio
 | odd data (no section) | `gh release list` names v1.0.0 and v9.9.9; the fixture CHANGELOG has 1.0.0 only | exit 1, stderr names v9.9.9, no `gh release edit` call | release-notes.test.sh "a release with no CHANGELOG section stops the rewrite before any edit, naming it" |
 | odd data (`###` topics) | version 1.1.0 with `### What you need to do`, a stray `## Notes` line and `### Security and maintenance`, then `## 1.0.0 -- <date>` | the body is every topic whole, `###` printed as `##`, no version heading, nothing from 1.0.0 | release-notes.test.sh "the extractor keeps every topic of a version, up to the next version heading" |
 | limits (whole file) | the rewritten CHANGELOG, 69 sections plus this unit's | `release-notes.sh --check` exits 0 with no output | release-notes.test.sh "the whole CHANGELOG passes the style guard" |
+| odd data (section with no notes) | a version whose `## <v> -- <date>` section holds only blank lines; `release-backfill.sh` runs | exit 1, stderr `release-backfill: v<v>: ... no notes under version`, 0 gh calls, no tag locally or on origin; `release-notes.sh <v>` exits 3, a missing section still exits 1 | release-notes.test.sh "a backfill over an existing section with no notes publishes nothing and fails" |
+| odd data (unreadable CHANGELOG) | `CHANGELOG.md` is absent when `release-backfill.sh` runs | exit 1, 0 gh calls, no tag locally or on origin, no `Version <x>.` body | release-notes.test.sh "a backfill whose CHANGELOG cannot be read publishes nothing and fails" |
+| odd data (a fourth release-body writer) | a script or workflow other than `release-rewrite.sh`, `release-backfill.sh` and `release.yml` runs `gh release create` or `gh release edit` | the test fails until the writer is named in the Data design and the test | release-notes.test.sh "release bodies are written by release-backfill.sh, release-rewrite.sh and the release workflow only" |
 | timing (update after a dirty merge) | the plugin's own version's section has a `#### Odd` heading; `update.sh` runs | the notes and the refusal print, setup and the doctor run, `update: done` | update.test.sh "a version whose notes the guard refuses still updates, and the refusal is shown" |
 
 ## Acceptance tests
@@ -504,5 +509,8 @@ None.
   `Mutation: `, text kept; no break run is recorded (Main answers, Break lines).
 - 2026-10-26, revision 4: the plan judge's P2 leak-test finding accepted: D2 and D4 carry no dollar sign followed by
   a digit, meaning kept; D4's example reran with the same output (Main answers, D2, D4).
+- 2026-10-26, fix round 1: pass 1 found an existing section with no notes publishing "Version <x>." (error-as-absence,
+  not in the plan list): only exit 1 of `release-notes.sh` means a missing section, no notes and an unreadable
+  CHANGELOG exit 3, and backfill stops on every other status (D10, AF1, What can go wrong).
 
 PLAN-DONE

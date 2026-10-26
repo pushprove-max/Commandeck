@@ -22,7 +22,7 @@ jobs:
         run: |
           DECISION=$(bash scripts/release-decide.sh "${{ github.event.before }}" "$GITHUB_SHA")
           echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
-      # A missing changelog section fails the job here, before anything is tagged.
+      # A missing changelog section, or one the style guard refuses, fails the job here, before anything is tagged.
       - name: Notes
         if: startsWith(steps.decide.outputs.decision, 'release ')
         env:

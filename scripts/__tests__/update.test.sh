@@ -75,6 +75,18 @@ echo 'echo "doctor: ok" | tee -a "$HOME/log"' > "$PL/scripts/doctor.sh"
 check "the update opens the relay's pane after the doctor, with the lock free" "doctor: ok
 create: lock free" "$(cat "$HOME/log")"
 check "and says so, then done" '1:1' "$(grep -c "^Relay: opened Kit's pane (term_relay)\.$" <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT")"
+# The plugin updates from the marketplace's main branch, not from releases: notes the style guard refuses are shown
+# with the refusal and the update goes on, while a version with no section at all still stops it before any write.
+V=$(jq -r .version "$REAL/.claude-plugin/plugin.json")
+rm "$PL/CHANGELOG.md"; printf '# Changelog\n\n## %s -- 2026-10-02\n\n### Joining a room\n\n#### Odd\n\n- Fine.\n' "$V" > "$PL/CHANGELOG.md"
+: > "$HOME/log"; OUT=$(upd)
+check "a version whose notes the guard refuses still updates, and the refusal is shown" "1:1:1" \
+  "$(grep -c '^release-notes: CHANGELOG.md:7: ' <<<"$OUT"):$(grep -c '^doctor: ok$' <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT")"
+printf '# Changelog\n\n## 0.0.1 -- 2026-10-01\n\n### Start\n\n- Hello.\n' > "$PL/CHANGELOG.md"
+BEFORE=$(cksum < "$HOME/.commandeck/install/$SLUG.json"); : > "$HOME/log"; OUT=$(upd); RC=$?
+check "a version with no CHANGELOG section still stops the update, as it does today" "1:1:0:0:same" \
+  "$RC:$(grep -c "^release-notes: .*has no section for version $V" <<<"$OUT"):$(grep -c '^doctor: ok$' <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT"):$([ "$BEFORE" = "$(cksum < "$HOME/.commandeck/install/$SLUG.json")" ] && echo same || echo changed)"
+rm "$PL/CHANGELOG.md"; ln -s "$REAL/CHANGELOG.md" "$PL/"
 echo 'echo "doctor: broken"; exit 1' > "$PL/scripts/doctor.sh"
 : > "$HOME/log"; OUT=$(upd)
 check "an update that goes back opens no pane" 0 "$(grep -c create "$HOME/log")"
