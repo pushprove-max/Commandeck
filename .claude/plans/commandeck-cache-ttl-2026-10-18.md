@@ -146,7 +146,7 @@ Ponytail rung per item: 1 need, 2 in the codebase, 5 one line, 6 minimum code.
   Why: an update must move setup's own 1h and never an owner's (+~10 test lines).
 
 ### 2. `scripts/setup.sh`: the two answers, no write without one (~14 lines)
-- `:206`: `--cache-ttl) case $2 in 5m|leave)`, and the die text says `5m or leave`. New `--relay-cache-ttl`
+- `:206`: `--cache-ttl) case ${2} in 5m|leave)`, and the die text says `5m or leave`. New `--relay-cache-ttl`
   line, same shape (`1h|leave`). `:53` `TAKES` gets `--relay-cache-ttl`. `:111` reads
   `RCACHE=$(old .chiefOfStaff.cacheTtl)`. `:357-376`: the `chiefOfStaff` object gets
   `cacheTtl: $rcache` inside the existing empty-value filter.

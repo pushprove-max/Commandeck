@@ -343,7 +343,7 @@ pane and /units, and nothing in the band").
   enters neither `SEL` nor the table, and keeps `EXCL[i]=1` for the report as today. Then `live run <epoch> <jobs>`,
   one `live file <rel>` per `SEL` file, one `live end <rel> skip 0` per skipped `SEL` file, and the launch pass over
   `RUN` (the `jobs -rp` wait unchanged). All of it runs after the hand-off to the PC (:120-133), so a file run on the
-  PC is not listed. `run_one` (:155-165) writes `live start "${REL[$1]}" <epoch>` before and `live end "${REL[$1]}"
+  PC is not listed. `run_one` (:155-165) writes `live start "${REL[${1}]}" <epoch>` before and `live end "${REL[${1}]}"
   <ok|FAIL> <secs>` after its file, the word being the first of its `status_line` (host :185, :195). The report pass
   is unchanged. The mod's `readTests` keeps only the table half: it lists
   `${gitDir}/commandeck-test-live/*.tsv` (owner `main`) and `${gitDir}/worktrees/<w>/commandeck-test-live/*.tsv`, a
@@ -381,7 +381,7 @@ pane and /units, and nothing in the band").
   99.tsv: table unreadable`); "a stopped merge does not hide the next standalone test run of that checkout" with its
   test run as a table; "mid-run merge and test logs show step and counts in /units and the status line" with the
   merge from the state, queue and log adapter and the test run from a table (the status line still `1 building · 1
-  merging · 1 testing · today $1.00`); "a table whose pid is dead draws nothing".
+  merging · 1 testing · today <cost>`); "a table whose pid is dead draws nothing".
   Break: scripts/__tests__/run-shell-tests.test.sh -- a run's live table lists its files while they run and is gone when the run exits -- scripts/run-shell-tests.sh the live start line in run_one
   Break: scripts/__tests__/run-shell-tests.test.sh -- a skipped own-lane file finishes as skip in the live table, and under --own-lane the ordinary file it leaves out never enters it -- scripts/run-shell-tests.sh the live end skip line per skipped SEL file, and the EXCL file kept out of SEL
   Break: hooks/units.test.tsx -- a merge check's test lines show files done and the first failure in its merge row, and its tmp copy's table draws no test row -- hooks/units.tsx readTests' ownerOf skip of a worktree outside $PP_WORKSPACES
@@ -631,10 +631,10 @@ rule is the template sentence above, already there) and the host test's backgrou
   then the code, then a whole-branch pass".
 - `main-watch.sh`, the narrowed and design wordings kept apart as host `95730a8d` keeps them (two `case` arms in
   `auto_merge`'s note): `report_wake` (:928-934) gains `design:GO) next="design only, merges nothing -- the Builder
-  writes the code, then builder-codex-pass.sh $2 $((n + 1)) final"` beside the unchanged `review:GO` arm.
+  writes the code, then builder-codex-pass.sh ${2} $((n + 1)) final"` beside the unchanged `review:GO` arm.
   `report_notes` (:1268) becomes a `case "$line"`: `"GO (review)"` keeps today's `NARROWED="Finished on a narrowed
-  pass; needs a final pass: builder-codex-pass.sh $2 $((NR_N + 1)) final."` and sets `GO_PASS=narrowed`; `"GO
-  (design)"` sets `NARROWED="Finished on a design-only pass; the code is not reviewed yet: builder-codex-pass.sh $2
+  pass; needs a final pass: builder-codex-pass.sh ${2} $((NR_N + 1)) final."` and sets `GO_PASS=narrowed`; `"GO
+  (design)"` sets `NARROWED="Finished on a design-only pass; the code is not reviewed yet: builder-codex-pass.sh ${2}
   $((NR_N + 1)) final."` (the host's text) and `GO_PASS=design-only`; both cleared with `NEWEST`. The finish subject
   at :1250 reads `finished on a $GO_PASS pass; needs a final pass`, so a narrowed GO's subject is today's text
   unchanged. `NARROWED` keeps its name (its readers :1231, :1248, :1251 are unchanged); the comment at :1260 names
@@ -1711,7 +1711,7 @@ enforces); the owner's order keeps it one unit. The pass script falls back to a 
 | publish failed after tag (G11, pass 1) | a run pushed tag v1.1.0, then Publish failed; the job reruns | the decision is `release v1.1.0`; the Tag step finds its tag, exits 0 and pushes nothing; a version whose tag and release exist decides skip | release-notes.test.sh "a tag pushed by a run whose publish failed decides release again"; "a rerun's Tag step with its tag already there exits 0 and pushes nothing"; "a changed version whose tag and release exist decides skip" |
 | decide fails (G11, pass 1) | the Decide step's script exits 1 (version unreadable) | the step fails and writes no `decision=` line | release-notes.test.sh "a Decide step whose version cannot be read fails, writing no decision" |
 | idle pane (G10, pass 1) | `unitsPane` on, no live unit; then a unit goes live; then it finishes | no pane opened; the pane opens; the pane closes | units-panes.test.tsx "no live units: no band row, no pane, no status line"; "the pane opens when a unit goes live and closes when the last one finishes" |
-| shared status line (G10, pass 1) | the relay seat with auto-decide off and one unit building, over two polls | `1 building · today $1.00 · auto-decide off` both times | units.test.tsx "the relay keeps its units summary beside the auto-decide mode, across polls" |
+| shared status line (G10, pass 1) | the relay seat with auto-decide off and one unit building, over two polls | `1 building · today <cost> · auto-decide off` both times | units.test.tsx "the relay keeps its units summary beside the auto-decide mode, across polls" |
 | merged then pushed (G10, pass 1) | a snapshot whose `mergedSincePush` is empty after a push and whose `finishedBuilds` holds today's merge with its cost | the merge row and today's spend stay | units-sources.test.tsx "a push keeps today's merged builds and their spend" |
 | built beyond the brief (G10, pass 7) | a building unit with `issues:[349]`, `built:[349,357]` (an evidence heading also names 357); and `issues:[349,"Rule drift"]`, `built:["Rule drift",357,"Rule drift","other"]` | `██████████  1 of 1 issues built`, no RangeError; then `█████░░░░░  1 of 2 issues built`: only the brief's issues count (as `dashboard/app.js` counts) and the bar stays 10 wide | units-sources.test.tsx "issues built count only the brief's issues, and the bar never overflows" |
 | main-only scope (G9, pass 1) | a project with no relay pane | main's loaded rules carry the order file, the NOT-ordered additions, one multi-select question, no bundle approvals, the pass-4 report; the plan author writes an `Owner's words:` line and the judge flags an untraced requirement | agent-startup-context.test.sh "with no relay pane main keeps the scope rules: the order file, NOT-ordered additions checked, one multi-select question, no bundle approvals, pass 4 reported"; seat-plan-marker.test.sh "a plan-author's prompt asks for the Owner's words line from the order, every requirement traced to it"; "the judge's prompt makes a requirement that does not trace to the owner's words a finding (issue 360)" |

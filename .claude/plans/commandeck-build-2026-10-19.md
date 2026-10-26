@@ -154,7 +154,7 @@ setting `COMMANDECK_DEP_APPROVED=1` in the setup skill. The issue rules that out
   `.claude/settings.local.json` with `worktree-setup.sh --print-settings` by `cmp -s`.
   - The 0.18.0 generator wrote the same keys in another order, so every planning worktree made before it is
     refused. Both the close and the Builder's `--adopt` (item 12 of 0.18.0) refuse.
-- **Change:** `[ -s "$SETF" ] && a=$(jq -S . "$WT/$1" 2>/dev/null) && [ -n "$a" ] && [ "$a" = "$(jq -S .
+- **Change:** `[ -s "$SETF" ] && a=$(jq -S . "$WT/${1}" 2>/dev/null) && [ -n "$a" ] && [ "$a" = "$(jq -S .
   "$SETF")" ]`. A file that is not JSON still counts as the owner's.
 - **Red first,** `scripts/__tests__/plan-worktree-close.test.sh`, beside the "settings plus a custom key" case
   (~86):

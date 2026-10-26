@@ -112,7 +112,7 @@ catches that no other step does. Section "Contracts" holds the `Produces:`/`Cons
   :271-274 says so. Part (b), the finished-builds loop :285-290, is unchanged.
   Break: scripts/__tests__/dashboard-merged-unit.test.sh -- a worktree reset onto its plan commit in main stays in flight -- scripts/dashboard.sh:~282 the newest-entry branch:/reset: test
 - 363: no code change. Evidence: `to-main.sh:29` refuses any call that is not exactly `<type> <subject> <body>`
-  and `:41` builds `--subject "$2" --body "$3"` itself; `cos-tell.sh:14` does the same for `--note`, and its
+  and `:41` builds `--subject "${2}" --body "${3}"` itself; `cos-tell.sh:14` does the same for `--note`, and its
   dictation path (:34-36) types text with `terminal send`, never `orchestration send`. `rg -n 'orchestration send'
   scripts hooks | grep '"\$@"'` is empty (2026-10-25). Two pin cases close the issue on a test.
 
@@ -160,7 +160,7 @@ Test: to-main.test.sh "bare text after the type is refused with the usage line a
     reached main: it reads the worktree's finished round files against `delivered`, then any stamp still waiting
     (for a removed worktree). Fails closed: a step that failed before its stamp exists still holds.
   - The fence, in `seat()` before the finished branch (:1114) that posts the finish and calls `gate` (:1121, the
-    auto-merge): `[ "$4" = builder ] && report_pending "$u" && return 0`. Nothing ends or merges a Builder unit
+    auto-merge): `[ "${4}" = builder ] && report_pending "$u" && return 0`. Nothing ends or merges a Builder unit
     while one of its reports has not reached main.
   Catches: report_wake catches a finished report main was never told of; report_send catches a send that failed
   after its worktree was removed; the fence catches a finish or merge that would remove the worktree before an

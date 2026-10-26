@@ -25,7 +25,7 @@ Public repo: no personal names, handles, pane names (other than the existing sea
 
 - **New `--keep <list>`, stored as `.env.COMMANDECK_SKILL_KEEP`.** Comma-separated words. Stored so a rerun
   without the flag keeps it; a rerun that passes `--keep` replaces the stored list (the same pattern as the
-  existing stored Builder flag). Today `$2` is `--builder` or `--print-settings`, and both must keep working:
+  existing stored Builder flag). Today `${2}` is `--builder` or `--print-settings`, and both must keep working:
   parse `--builder` and `--keep` in any order after `<wt>`.
   - `billing` keeps the stripe plugin.
   - `all` makes a keep-all seat: a rerun deletes every leaf B1-B3 owns, and writes none.

@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.49.0 -- 2026-10-26
+
+Setup starts from a recommended set, the review loop's caps become settings, and a Builder can no longer commit by hand.
+
+### Setup
+
+- Setup offers the recommended set first and lists the options it changes; the groups that follow are asked in order,
+  and every option stays reachable. The recommended values live in one file, and `--recommended` and `--option` apply
+  them without a question.
+- Turning on the full suite before the final pass with no test command is refused, and the choice is saved where
+  /config reads it.
+- One order decides every value setup saves: this run's explicit answer, then the profile or `--recommended`, then
+  the saved value. `--bind`, `--port` and `--option dashboardBind`/`dashboardPort` now set the address the dashboard
+  is installed at, where before a saved address won. Moving the reviewer or the Sol judge to the other agent resets a
+  saved model that agent cannot run, where before setup refused it.
+- `setup.sh --plan` on a machine setup has never run on no longer stops with no message.
+
+### Review loop
+
+- The most review passes a build may run, the lowest severity that holds a merge, and the fresh closing reviewer are
+  settings. A change to the blocking severity in the middle of a build asks for a new unit, because earlier passes can
+  no longer be read under the new rule.
+- A fix round goes to the Builder's pane whatever shape the session has, so the fixer setting applies every round.
+- Two passes started at once no longer clash: one pass holds the lock and only it releases it.
+- Before the first adversarial pass, every `Break:` line in a plan must name a test, a label and a command to run, and a
+  data-design unit must carry a filled failure table. A small risky unit (under 150 changed lines) gets one judge
+  instead of the panel.
+
+### Builders and main
+
+- A Builder launched from a pane in another checkout records that checkout, and a queued message to main says when no
+  main pane was found there.
+- An answer queued behind a busy Builder is checked until it is read, ten minutes at most, and ends "not
+  acknowledged" with one follow-up to main instead of two different exit codes.
+
+### Guards
+
+- The dependency-addition guard reads a command the way the shell does: an install after `cd x &&` or `;`, or inside
+  `$(...)`, backticks or `$((...))`, still blocks, and quoted text and here-document bodies that name an install pass.
+  The guard is a tripwire, not a security boundary: an install handed to another program as text (`bash -c '...'`,
+  `eval`, a here-document sent to a shell) is not read.
+- A Builder pane refuses a hand-written commit. The review pass commits what is staged, and the refusal names a model
+  co-author trailer when the message carries one.
+
+### Release checks
+
+- The leak test allows a build's unit name, an issue number and a commit hash, and now fails on a secret key shape.
+  Names, paths under a person's home and ruling ids still fail.
+- The leak test fails on a spend figure: a dollar sum with cents, comma thousands or three or more digits anywhere,
+  and a one- or two-digit sum in text (docs, plans, JSON, this changelog, a merge message). The dashboard's test
+  fixtures, which hold made-up figures, are exempt for the figure only. A one- or two-digit failure says how to fix
+  it: a shell parameter in text is written with braces, an amount in words.
+
 ## 0.48.0 -- 2026-10-25
 
 The rest of the open plugin issues: the units mod, per-role prompt cache, a Fable plan judge, the ponytail add-on
@@ -1394,7 +1447,7 @@ behind a proxy finds its model.
 - Doctor and setup say whether Codex goes through a proxy, and a refusal
   names the fix that fits.
 - Claude cost behind an API proxy (#47). A proxy writes session lines with
-  no `requestId`, and the "Cost today" tile showed $0.00. A line with no
+  no `requestId`, and the "Cost today" tile showed zero. A line with no
   `requestId` is now counted under its `message.id` (a streamed request
   writes several lines with one `message.id`; the last holds the final
   usage), else its `uuid`, so a request is never counted twice. A log where

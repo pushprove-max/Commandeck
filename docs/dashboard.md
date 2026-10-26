@@ -57,7 +57,7 @@ The merge does not run it. It makes one HTML page per build under
 It shows where the time went stage by stage, every review pass with its full
 findings and lines changed, tokens and list-price cost by model, and time
 spent waiting. The page flags a build with over 30 minutes of review, over
-$30, or over a third of its clock (and over 10 minutes) on tests or idle
+30 US dollars, or over a third of its clock (and over 10 minutes) on tests or idle
 waits; that flag names the largest single command. A wait on a review pass
 run outside the Builder's session, or on a review tool that was down, is
 shown on its own and flags nothing. A lesson that proposes a change becomes

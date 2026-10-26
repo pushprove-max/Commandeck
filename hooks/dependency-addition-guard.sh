@@ -21,13 +21,15 @@
 #
 # Deliberately allowed: bare `npm install` / `npm ci` (lockfile-driven),
 # version bumps of EXISTING deps in package.json.
-# Accepted over-match class: substring matching of command text can block
-# prose that looks like an install command -- loud and cheap, reword it.
+# Only the code bash runs is judged (bash_code, below): quoted text and here-document
+# bodies are data, so prose or a note that names an install does not block.
 #
 # THREAT MODEL (charter): this is a TRIPWIRE against sloppiness -- forgetting
 # to ask before reaching for a package -- not a security boundary against a
 # deliberately evasive operator (who could trivially bypass any text-matching
-# hook). Evasion-class review findings are out of scope by design. The `i`
+# hook). Evasion-class review findings are out of scope by design: an install
+# handed to another program as text (`bash -c '...'`, `eval '...'`, a body piped
+# to a shell, `ssh host '...'`) is not seen. The `i`
 # alias stays out of the loose tier (there it made ordinary compounds
 # false-block); `npm --prefix <dir> i <pkg>` is caught by dropping npm's valued
 # flags before the tight tier reads the command.
@@ -45,90 +47,375 @@ block() {
   exit 2
 }
 
-# ran <command> -- the text bash runs, for the matchers below. A quoted
-# span is skipped only on a line where EVERY command is a sender, below: there
-# it is a message body, a commit message, an issue body. Any other line is
-# read whole (whole, below), so a form nobody listed is judged as an install:
-# the worst case is a false block, never a missed install. Past a false block:
-# put the text in a file (--body-file, -F).
-# A line is a senders' line when each command on it, between `;`, `&&`, `||`,
-# `|`, `&`, brackets and line ends, starts with a sender's bare name, no
-# backtick and no `$(` runs in it, and every here-document on it has a quoted end word
-# (bash expands nothing in those; their bodies are dropped). strip_quoted reads
-# the spans (the reader git-safety.sh and no-poll-loops.sh use): a one-word
-# span stays the word it is, a span of several words becomes $QUOTED.
-# Commands that only carry text; none runs a quoted word given to it. The plugin's
-# own setup.sh, run by bash or sh, is one too (own_setup, below).
-SENDERS='gh|orca|orca-ide|git[[:space:]]+(commit|tag|notes|status|log|diff|show|add)|echo|printf|cat'
-. "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null || true
-ran() {
-  local M=$'\x01' CODE SEG RAW
-  # Whether anything can run a word is asked of the reader's own output, never
-  # of the raw text: it alone knows which `<<` opens a here-document, so one
-  # named in a comment or a quoted string hides no line after it. What
-  # it prints holds every backtick and `$(` that runs, and each quoted end word
-  # as a mark after its `<<`; a here-document with any other end word expands
-  # its body, which the reader drops, so the whole command is read instead.
-  # An end word that is not plain makes the whole command code (strip_odd_end).
-  if declare -F strip_quoted >/dev/null && [ -z "$(strip_odd_end "$1")" ] && CODE=$(strip_quoted "$1" "$M") && [[ $CODE != *'`'* && $CODE != *'$('* ]] \
-    && ! grep -qE "<<-?[[:space:]]*[^[:space:]$M<-]" <<<"${CODE//<<</ }"; then
-    RAW=$CODE
-    CODE=$(sed -E "s/$M([^[:space:]$M])/\1/g; s/$M/ \$QUOTED /g" <<<"$CODE")
-    while IFS= read -r SEG; do
-      [[ $SEG =~ ^[[:space:]]*$ || $SEG =~ ^[[:space:]]*($SENDERS)([[:space:]]|$) ]] && continue
-      # The plugin's own setup.sh saves its quoted answers (a test command) and runs none of them (issue 206).
-      [[ $SEG =~ ^[[:space:]]*(bash|sh)[[:space:]]+([^[:space:]]+) ]] && own_setup "${BASH_REMATCH[2]}" && continue
-      whole "$(no_bodies "$1" "$RAW")"; return
-    done < <(sed -E 's/[0-9]*[<>]&[0-9-]*//g; s/&&|\|\||[;|&()]/\n/g' <<<"$CODE")
-    printf '%s' "$CODE"
+# bash_code <command> -- the code bash runs, one simple command per line, for the matchers
+# below. Words are split the way bash splits them: quoted text, here-strings and here-document
+# bodies are data, and `$(...)`, backticks and `<(...)`, `>(...)` are code wherever bash runs
+# them (in a bare word, a double-quoted string, a `$((...))`, an unquoted end word's body).
+# Code given to another program as text (`bash -c '...'`, `eval '...'`, a body a shell reads)
+# is data too: the tripwire's stated limit (see THREAT MODEL). A word with a quoted part prints
+# as its text when that is one plain run, else as $QUOTED; a redirection and its target are
+# dropped. A command it cannot split (an unclosed quote, an unmatched `$(`, a here-document
+# with no end line, python3 missing or failing) is read whole, a quote mark being a word
+# break: the worst case is a false block, never a missed install. Past a false block: put the
+# text in a file (--body-file, -F).
+bash_code() {
+  local PROG OUT
+  IFS= read -r -d '' PROG <<'PY' || true
+import re, sys
+
+ANSI = {'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t',
+        'v': '\v', '\\': '\\', "'": "'", '"': '"', '?': '?'}
+OUT = []
+
+
+class Bad(Exception):
+    pass
+
+
+class Word:
+    def __init__(self):
+        self.text, self.quoted, self.dyn = '', False, False
+
+
+def arith_end(s, i):
+    # The end of the $((...)) at i; the $(...) and backticks inside it run first, so they are read as code.
+    depth, j = 2, i + 3
+    while j < len(s):
+        if s[j] == '(':
+            depth += 1
+        elif s[j] == ')':
+            depth -= 1
+            if depth == 0:
+                data_subst(s[i + 3:j - 1])
+                return j + 1
+        j += 1
+    raise Bad
+
+
+def ansi(s, i):
+    buf, n = [], len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            return ''.join(buf), i + 1
+        if c == '\\' and i + 1 < n:
+            d = s[i + 1]
+            m = re.match(r'x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}', s[i + 1:])
+            if d in ANSI:
+                buf.append(ANSI[d])
+                i += 2
+            elif m:
+                g = m.group(0)
+                buf.append(chr(int(g[1:], 16) if g[0] in 'xuU' else int(g, 8)))
+                i += 1 + len(g)
+            else:
+                buf.append('\\' + d)
+                i += 2
+        else:
+            buf.append(c)
+            i += 1
+    raise Bad
+
+
+def tick(s, i):
+    buf, j = [], i + 1
+    while True:
+        if j >= len(s):
+            raise Bad
+        if s[j] == '\\' and j + 1 < len(s) and s[j + 1] in '`\\$':
+            buf.append(s[j + 1])
+            j += 2
+        elif s[j] == '`':
+            break
+        else:
+            buf.append(s[j])
+            j += 1
+    Parser(''.join(buf)).run(None)
+    return j + 1
+
+
+def paren(s, i):
+    p = Parser(s, i + 2)
+    p.run(')')
+    return p.i, p
+
+
+def data_subst(b):
+    i = 0
+    while i < len(b):
+        if b[i] == '\\':
+            i += 2
+        elif b.startswith('$((', i):
+            i = arith_end(b, i)
+        elif b.startswith('$(', i):
+            i = paren(b, i)[0]
+        elif b[i] == '`':
+            i = tick(b, i)
+        else:
+            i += 1
+
+
+class Parser:
+    def __init__(self, s, i=0):
+        self.s, self.i = s, i
+        self.cmd, self.word, self.skip, self.pend = [], None, False, []
+
+    def add(self, t, q=False, d=False):
+        if self.word is None:
+            self.word = Word()
+        self.word.text += t
+        self.word.quoted |= q
+        self.word.dyn |= d
+
+    def endword(self):
+        w, self.word = self.word, None
+        if w is None:
+            return
+        if self.skip:
+            self.skip = False
+        elif not w.quoted and not w.dyn and w.text in ('{', '}'):
+            self.endcmd()
+        else:
+            self.cmd.append(w)
+
+    def endcmd(self):
+        self.skip = False
+        cmd, self.cmd = self.cmd, []
+        if cmd:
+            OUT.append(cmd)
+
+    def bodies(self):
+        s = self.s
+        for tag, quoted, dash in self.pend:
+            lines = []
+            while True:
+                if self.i >= len(s):
+                    raise Bad
+                j = s.find('\n', self.i)
+                line = s[self.i:] if j < 0 else s[self.i:j]
+                self.i = len(s) if j < 0 else j + 1
+                if (line.lstrip('\t') if dash else line) == tag:
+                    break
+                lines.append(line)
+            if not quoted:
+                data_subst('\n'.join(lines))
+        self.pend = []
+
+    def heredoc_tag(self):
+        s, n = self.s, len(self.s)
+        while self.i < n and s[self.i] in ' \t':
+            self.i += 1
+        tag, quoted = '', False
+        while self.i < n and s[self.i] not in ' \t\n;|&()<>':
+            c = s[self.i]
+            if c == '\\' and self.i + 1 < n:
+                tag += s[self.i + 1]
+                quoted = True
+                self.i += 2
+            elif c in '\'"':
+                j = s.find(c, self.i + 1)
+                if j < 0:
+                    raise Bad
+                tag += s[self.i + 1:j]
+                quoted = True
+                self.i = j + 1
+            else:
+                tag += c
+                self.i += 1
+        if not tag:
+            raise Bad
+        return tag, quoted
+
+    def redirect(self):
+        s, i = self.s, self.i
+        c = s[i]
+        if s[i + 1:i + 2] == '(':
+            self.i = self.procsub(i)
+            return
+        w = self.word
+        if w is not None and not w.quoted and not w.dyn and w.text.isdigit():
+            self.word = None
+        else:
+            self.endword()
+        if s.startswith('<<<', i):
+            self.i = i + 3
+            self.skip = True
+        elif s.startswith('<<', i):
+            self.i = i + 2
+            dash = s[self.i:self.i + 1] == '-'
+            if dash:
+                self.i += 1
+            tag, quoted = self.heredoc_tag()
+            self.pend.append((tag, quoted, dash))
+        else:
+            self.i = i + 1
+            more = '>&|' if c == '>' else '&>'
+            for _ in range(2 if c == '>' else 1):
+                if s[self.i:self.i + 1] and s[self.i] in more:
+                    self.i += 1
+            self.skip = True
+
+    def procsub(self, i):
+        j = paren(self.s, i)[0]
+        self.add('$SUBST', False, True)
+        return j
+
+    def dollar(self):
+        s, i = self.s, self.i
+        if s.startswith("$'", i):
+            t, self.i = ansi(s, i + 2)
+            self.add(t, True)
+        elif s.startswith('$"', i):
+            self.i = i + 1
+            self.dquote()
+        elif s.startswith('$((', i):
+            self.i = arith_end(s, i)
+            self.add('$ARITH', False, True)
+        elif s.startswith('$(', i):
+            self.i = paren(s, i)[0]
+            self.add('$SUBST', False, True)
+        else:
+            self.add('$')
+            self.i = i + 1
+
+    def dquote(self):
+        s, n = self.s, len(self.s)
+        i, buf = self.i + 1, []
+        self.add('', True)
+        while True:
+            if i >= n:
+                raise Bad
+            c = s[i]
+            if c == '"':
+                i += 1
+                break
+            if c == '\\' and i + 1 < n:
+                d = s[i + 1]
+                if d in '"\\$`':
+                    buf.append(d)
+                elif d != '\n':
+                    buf.append('\\' + d)
+                i += 2
+            elif s.startswith('$((', i):
+                i = arith_end(s, i)
+                buf.append('$ARITH')
+                self.word.dyn = True
+            elif s.startswith('$(', i):
+                i = paren(s, i)[0]
+                buf.append('$SUBST')
+                self.word.dyn = True
+            elif c == '`':
+                i = tick(s, i)
+                buf.append('$SUBST')
+                self.word.dyn = True
+            else:
+                buf.append(c)
+                i += 1
+        self.word.text += ''.join(buf)
+        self.i = i
+
+    def run(self, closer):
+        s, n = self.s, len(self.s)
+        depth = 0
+        while True:
+            if self.i >= n:
+                if closer:
+                    raise Bad
+                self.endword()
+                self.endcmd()
+                if self.pend:
+                    raise Bad
+                return
+            i = self.i
+            c = s[i]
+            if c in ' \t':
+                self.endword()
+                self.i += 1
+            elif c == '\n':
+                self.endword()
+                self.endcmd()
+                self.i += 1
+                if self.pend:
+                    self.bodies()
+            elif c == '\\':
+                if s[i + 1:i + 2] == '\n':
+                    self.i += 2
+                elif i + 1 >= n:
+                    raise Bad
+                else:
+                    self.add(s[i + 1], True)
+                    self.i += 2
+            elif c == "'":
+                j = s.find("'", i + 1)
+                if j < 0:
+                    raise Bad
+                self.add(s[i + 1:j], True)
+                self.i = j + 1
+            elif c == '"':
+                self.dquote()
+            elif c == '$':
+                self.dollar()
+            elif c == '`':
+                self.i = tick(s, i)
+                self.add('$SUBST', False, True)
+            elif c == '#' and self.word is None:
+                j = s.find('\n', i)
+                self.i = n if j < 0 else j
+            elif c in '<>':
+                self.redirect()
+            elif c == '&' and s[i + 1:i + 2] == '>':
+                self.endword()
+                self.i = i + 2 + (s[i + 2:i + 3] == '>')
+                self.skip = True
+            elif c in ';|&':
+                self.endword()
+                self.endcmd()
+                self.i += 1
+                if s[self.i:self.i + 1] and s[self.i] in ';|&':
+                    self.i += 1
+            elif c == '(':
+                self.endword()
+                self.endcmd()
+                depth += 1
+                self.i += 1
+            elif c == ')':
+                self.endword()
+                self.endcmd()
+                self.i += 1
+                if depth:
+                    depth -= 1
+                elif closer:
+                    if self.pend:
+                        raise Bad
+                    return
+            else:
+                self.add(c)
+                self.i += 1
+
+
+def show(w):
+    if w.dyn:
+        return '$QUOTED'
+    if not w.quoted:
+        return w.text
+    return w.text if w.text and not re.search(r'[\s;&|<>()`]', w.text) else '$QUOTED'
+
+
+try:
+    Parser(sys.argv[1]).run(None)
+except (Bad, RecursionError):
+    sys.exit(3)
+for cmd in OUT:
+    print(' '.join(show(w) for w in cmd))
+PY
+  if command -v python3 >/dev/null 2>&1 && OUT=$(python3 -I -c "$PROG" "$1" 2>/dev/null); then
+    printf '%s' "$OUT"
   else
-    whole "$1"
+    # Read whole: a quote mark is a word break, so `bash -c 'npm ci'` reads as npm ci. A quoted
+    # folder with a space becomes $QUOTED, which blocks as a folder the guard cannot read.
+    printf '%s' "$1" | sed -E "s/(cd|pushd|--prefix|-C)([[:space:]=]+)\\\\?(\"[^\"']*[[:space:]][^\"']*\"|'[^\"']*[[:space:]][^\"']*')/\1\2\$QUOTED /g" \
+      | tr "\"'\`" '   ' | sed 's/<<</ /g'
   fi
-}
-# own_setup <path> -- the path, absolute or under ~, is this plugin's own setup.sh: the one next to
-# this hook (the repo checkout), or one version folder of the plugin cache Claude Code installs into
-# (an update leaves the hook that fires and the setup.sh on the line in different folders, issue 311).
-# Judged on resolved paths, so a link out of that cache, or a cache-shaped folder anywhere else, is
-# not exempt. A relative path is not read: an earlier `cd` on the line could point it at another setup.sh.
-own_setup() {
-  local p=$1 r c
-  [[ $p == '~/'* ]] && p=$HOME/${p:2}
-  [[ $p == /* ]] && [ -f "$p" ] && r=$(realpath "$p" 2>/dev/null) || return 1
-  c=$(realpath "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/commandeck/commandeck" 2>/dev/null)
-  [ "$r" = "$(realpath "${BASH_SOURCE[0]%/*}/../scripts/setup.sh" 2>/dev/null)" ] \
-    || [[ -n $c && $r == "$c"/* && ${r#"$c"/} =~ ^[^/]+/scripts/setup\.sh$ ]]
-}
-# no_bodies <command> <reader output> -- the command without the here-document bodies that are data,
-# for a line with a command that is not a sender (issue 311). A body is data only when the whole
-# line that opens it has one fixed shape: `cd W &&` / `mkdir [-p] W &&` steps, then a sender, plain
-# words or `> file`, one `<<` with a quoted end word (nothing expands), plain words or `> file` to the
-# end. A plain word has no quote, bracket, brace, `;&|<>`, `$` or backtick. No parser guesses which
-# command reads the body: any other line (a shell, a group, a pipe, `>(`, a quoted argument) keeps
-# it, read as code; the worst case is a false block (past it: write the file, use --body-file). A
-# body written to a file and run later is a file, which this guard does not read from a Write either.
-# Trusted only when the reader, run on the result, prints what it printed on the command; else (a
-# `<<` inside a quote or comment) the command is returned whole.
-no_bodies() {
-  local T
-  T=$(awk -v senders="$SENDERS" '
-    BEGIN { q = "\047"; w = "[^][ \t" q "\"\\\\;&|(){}<>$`]+"; a = "([ \t]*>>?[ \t]*" w "|[ \t]+" w ")*"
-      shape = "^[ \t]*((cd|mkdir([ \t]+-p)?)[ \t]+" w "[ \t]*&&[ \t]*)*(" senders ")" a \
-        "[ \t]*<<-?[ \t]*(" q w q "|\"" w "\"|\\\\" w ")" a "[ \t]*$" }
-    nt { l = $0; if (dash[k]) sub(/^\t+/, "", l); if (l == tag[k]) { print; if (++k > nt) nt = 0 } else if (!drop[k]) print; next }
-    { print; s = $0
-      while (match(s, /<<-?[ \t]*(\047[^\047]+\047|"[^"]+"|\\[A-Za-z0-9_.-]+)/)) {
-        t = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-        drop[++nt] = ($0 ~ shape)
-        dash[nt] = (t ~ /^<<-/); sub(/^<<-?[ \t]*/, "", t); gsub(/[\047"\\]/, "", t); tag[nt] = t }
-      k = 1 }' <<<"$1")
-  if [ "$(strip_quoted "$T" $'\x01')" = "$2" ]; then printf '%s' "$T"; else printf '%s' "$1"; fi
-}
-# The whole line as code: a quote mark is a word break, so `bash -c 'npm ci'`
-# reads as npm ci. A quoted folder with a space becomes $QUOTED, which blocks
-# as a folder the guard cannot read, instead of its first word.
-whole() {
-  printf '%s' "$1" | sed -E "s/(cd|pushd|--prefix|-C)([[:space:]=]+)\\\\?(\"[^\"']*[[:space:]][^\"']*\"|'[^\"']*[[:space:]][^\"']*')/\1\2\$QUOTED /g" \
-    | tr "\"'\`" '   ' | sed 's/<<</ /g'
 }
 
 if [ "$TOOL" = "Bash" ]; then
@@ -140,7 +427,7 @@ if [ "$TOOL" = "Bash" ]; then
   # Normalize backslash-newline continuations so a split command matches the
   # same as its single-line form.
   CMD=$(printf '%s' "$CMD" | sed -z 's/\\\n/ /g')
-  RAN=$(ran "$CMD")
+  RAN=$(bash_code "$CMD"); SPLIT_OF=$CMD
   # npm ci replaces node_modules. In a worker worktree that is a symlink to the
   # main checkout's shared copy, and npm ci there wiped it for every worktree.
   # Checked before the approval shortcut: no approval covers it. The guard does
@@ -152,7 +439,7 @@ if [ "$TOOL" = "Bash" ]; then
   # may be quoted. One this cannot read (`$VAR`, a command substitution,
   # `cd -`, `popd`, a pattern, an option) blocks: it could be the linked one.
   # Ceiling: CDPATH is not read, so a relative `cd` it sends elsewhere is missed.
-  # It reads the text bash runs (ran, above).
+  # It reads the code bash runs (bash_code, above).
   NPM_CI='(^|[;&|([:space:]])(\S*/)?npm([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+ci([[:space:];&|)]|$)'
   if grep -qE "$NPM_CI" <<<"$RAN"; then
     NPM_CWD=$(echo "$INPUT" | jq -r '.cwd // empty'); NPM_CWD=${NPM_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}
@@ -224,8 +511,7 @@ if [ "$TOOL" = "Bash" ]; then
   #        `i` is excluded from LOOSE -- too short to survive arbitrary tokens.
   # A redirection is not a package, and neither is what follows a separator:
   # the package position stops at `;`, `&`, `|` and `)`.
-  CMD=$(ran "$CMD")
-  CMD=$(sed -E 's/[[:space:]]*[0-9]*(>>?|<)&?[[:space:]]*[^;&|<>[:space:]]+//g' <<<"$CMD")
+  if [ "$CMD" = "$SPLIT_OF" ]; then CMD=$RAN; else CMD=$(bash_code "$CMD"); fi
   # npm's flags that take a value: dropped with the value, so `npm install
   # --prefix web` is a bare install and `npm --prefix web i lodash` is not.
   # Read for npm only: `-w` is a switch in pnpm.

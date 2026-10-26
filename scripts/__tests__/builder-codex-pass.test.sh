@@ -81,6 +81,25 @@ echo "$(sh -c 'echo $$')" > "$L/pid"
 pass 4 review
 check "a dead holder's lock is taken over, and the pass releases it" "1 0" \
   "$(grep -cx 'Pass: final' "$B/$U-r4-reports.md") $(ls -d "$L" 2>/dev/null | wc -l | tr -d ' ')"
+# Issue 369: the lock's own functions, run on a hand-made lock. Two passes that start together on a dead holder's lock
+# must not both take it over, and a pass that ends must not remove a lock another pass took.
+LOCKFNS=$(sed -n '/^guarded()/p;/^take_lock()/,/^}/p;/^release_lock()/,/^}/p;/^unlock()/p' "$PASS_SH")
+LK=$TMP/lockcase; mkdir -p "$LK"
+as_pass() { LOCK=$LK/builder-pass.lock bash -c "$LOCKFNS"'; '"$1"; }
+mkdir "$LK/builder-pass.lock"; echo 99999999 > "$LK/builder-pass.lock/pid"
+# The winner stays alive after it takes the lock (as a running pass does), so the loser finds a live holder.
+for i in 1 2; do OUTF=$LK/$i.out as_pass 'guarded take_lock >"$OUTF" 2>&1; rc=$?; echo "rc=$rc" >>"$OUTF"; [ $rc != 0 ] || sleep 2' & done
+wait
+check "two passes started together on a dead holder's lock: one runs and the other is refused" "1 1" \
+  "$(cat "$LK"/*.out 2>/dev/null | grep -c '^rc=0$') $(cat "$LK"/*.out 2>/dev/null | grep -c '^rc=1$')"
+rm -rf "$LK"; mkdir -p "$LK"; mkdir "$LK/builder-pass.lock"
+sleep 30 & OTHER=$!
+echo "$OTHER" > "$LK/builder-pass.lock/pid"
+as_pass 'guarded release_lock'
+check "the first pass's exit leaves the second's lock in place" "$OTHER" "$(cat "$LK/builder-pass.lock/pid" 2>/dev/null)"
+kill "$OTHER" 2>/dev/null; wait "$OTHER" 2>/dev/null
+as_pass 'guarded take_lock; guarded release_lock'
+check "and a pass releases the lock it took" 0 "$(ls -d "$LK/builder-pass.lock" 2>/dev/null | wc -l | tr -d ' ')"
 # Issue 366: passes 3 and 4 are closing passes, a fresh reviewer handed no review history, so no main-only list
 # (builder-codex-pass-threshold.test.sh covers the list reaching a narrowed pass).
 check "a closing pass is not handed the evidence file's main-only list" "0 0 0 0" \
@@ -157,14 +176,14 @@ rm -f "$HOME/.claude/settings.json"
 
 # Issue 335: a pass that waits on its reviewers in silence reads as a hung one. It says it started, then that it runs.
 printf 'echo five\n' > "$W/a.sh"
-(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' STUB_THREAD=thr-6 STUB_SLEEP=4 COMMANDECK_PASS_TICK=1 \
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-6 STUB_SLEEP=4 COMMANDECK_PASS_TICK=1 \
   bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err")
 check "a pass whose fake reviewer runs several ticks prints the start line and at least two progress lines" "1 1" \
   "$(grep -c '^pass 6: 1 reviewer(s) started$' "$TMP/out") $([ "$(grep -c '^pass 6: reviewers running, 0 min, reviewer 1 session' "$TMP/out")" -ge 2 ] && echo 1 || echo 0)"
 
 # Issue 361: a signed-in Codex that answers the one-word request in 31 s is slow, not signed out. The one slow case, last.
 printf 'echo six\n' > "$W/a.sh"; echo 31 > "$TMP/probe-sleep"; : > "$TMP/probe"; echo 0 > "$TMP/probe-fail"
-(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' COMMANDECK_PROBE_BACKOFF=0 STUB_THREAD=thr-7 \
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_PROBE_BACKOFF=0 STUB_THREAD=thr-7 \
   bash "$PASS_SH" "$U" 7 review >"$TMP/out" 2>"$TMP/err"); RC=$?
 check "a probe answering after 31 s passes: one try, no refusal" "0 1 0" \
   "$RC $(wc -l < "$TMP/probe" | tr -d ' ') $(grep -c 'launch refused: Codex is not signed in' "$TMP/err")"
@@ -176,7 +195,7 @@ printf '# Plan: p\n\n## What can go wrong\n\n| case | x |\n|---|---|\n| CASE-PRO
 printf 'Plan: .claude/plans/%s.md\n' "$U" >> "$B/$U.md"
 printf '\n## Stated limits\n- LIMIT-PROBE: one measured bound\n' >> "$MAINBRIEF"
 printf 'echo seven\n' > "$W/a.sh"
-(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' STUB_THREAD=thr-8 \
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-8 \
   bash "$PASS_SH" "$U" 8 adversarial >"$TMP/out" 2>"$TMP/err") || { echo "FAIL the adversarial pass r8 did not run: $(cat "$TMP/err")"; FAIL=$((FAIL+1)); }
 P8=$B/$U-r8-prompt-2.md
 at() { grep -n -m1 -- "$1" "$P8" | cut -d: -f1; } # <pattern>: the first line of the behaviour reviewer's prompt that matches
@@ -198,6 +217,50 @@ check "the review prompt carries the failing-test default, the cold-read order a
   "$(for s in 'written to fail on the diff as it stands' 'whose test is written and whose fix is under ten lines' 'a reviewer never reviews its own fix' \
   'This prompt, the brief and the dispatch spec outrank the startup file' 'runtime_unavailable' "draft your findings, and only then open the author's evidence" \
   'only to confirm or refute one finding, and say which' 'never a generated file'; do grep -cF -- "$s" "$P8"; done | paste -sd' ' -)"
+
+# Issue 362: the Break gate before pass 1, run on a hand-written plan and evidence file (the gate's own function).
+GATEFNS=$(sed -n '/^round_files()/,/^}/p;/^plan_rel()/p;/^plan_file()/p;/^evidence_section()/,/^}/p;/^break_gate()/,/^}/p' "$PASS_SH")
+GW=$TMP/gate; mkdir -p "$GW/.claude/briefs" "$GW/.claude/plans"
+printf 'Plan: .claude/plans/g.md\n' > "$GW/.claude/briefs/g.md"
+gate() { (die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$GATEFNS"; break_gate) 2>&1; echo "rc=$?"; }
+printf '# Plan\n\nBreak: t/a.test.sh -- the first check -- a.sh the gate\nBreak: t/b.test.sh -- the second check -- b.sh the rule\n\n```\nBreak: t/fenced.test.sh -- not a line -- x\n```\n' > "$GW/.claude/plans/g.md"
+printf '## Break runs\n\n- t/a.test.sh -- the first check -- red: sed -i s/x/y/ a.sh; bash t/a.test.sh\n' > "$GW/.claude/briefs/g-evidence.md"
+OUT=$(gate)
+check "pass 1 refuses when a plan Break line has no recorded break run, naming it and not the ones that have one" "rc=2 1 0 0" \
+  "$(tail -1 <<<"$OUT") $(grep -c 't/b.test.sh -- the second check' <<<"$OUT") $(grep -c 't/a.test.sh -- the first check' <<<"$OUT") $(grep -c 'fenced' <<<"$OUT")"
+printf -- '- t/b.test.sh -- the second check -- red: bash t/b.test.sh with the rule removed\n' >> "$GW/.claude/briefs/g-evidence.md"
+check "pass 1 runs when every Break line has a red break run (the fenced one is no line)" "rc=0" "$(gate)"
+printf '## Break runs\n\n- t/a.test.sh -- the first check -- red: \n- t/b.test.sh -- the second check -- red: bash t/b.test.sh\n' > "$GW/.claude/briefs/g-evidence.md"
+check "a break run with no command does not count" "rc=2" "$(gate | tail -1)"
+printf '# Plan\n\nno break lines here\n' > "$GW/.claude/plans/g.md"; : > "$GW/.claude/briefs/g-evidence.md"
+check "a plan with no Break line owes nothing" "rc=0" "$(gate)"
+printf 'Break: t/a.test.sh -- c -- s\n' > "$GW/.claude/plans/g.md"; printf 'VERDICT: GO\n' > "$GW/.claude/briefs/g-r1-reports.md"
+check "a unit with a round file already is past pass 1: the gate owes nothing" "rc=0" "$(gate)"
+rm -f "$GW/.claude/briefs/g-r1-reports.md" "$GW/.claude/briefs/g.md"
+check "a unit whose brief names no plan owes nothing" "rc=0" "$(gate)"
+
+# Issue 341: the failure table gate before pass 1, on a hand-written brief and evidence file.
+TGATEFNS=$(sed -n '/^round_files()/,/^}/p;/^evidence_section()/,/^}/p;/^table_gate()/,/^}/p' "$PASS_SH")
+tgate() { (die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$TGATEFNS"; table_gate) 2>&1; echo "rc=$?"; }
+# The batch comes first in a Builder brief, the template's own Data design section after it.
+brief() { printf '## The issues\n\n## Data design\n\n%s\n\n## The batch\n\nx\n\n## Data design\n\nThe batch'"'"'s Data design section above binds.\n' "$1" > "$GW/.claude/briefs/g.md"; }
+HEAD4='## Failure table\n\n| Save | Steps | Left behind if it stops after each step | The one recovery |\n|---|---|---|---|\n'
+brief '- the reply file: lives in a.json; written by the pass'; printf '## Data design\n\nx\n' > "$GW/.claude/briefs/g-evidence.md"
+OUT=$(tgate)
+check "pass 1 refuses a unit with a data design and no failure table row, showing the row shape" "rc=2 1" \
+  "$(tail -1 <<<"$OUT") $(grep -c '| Save | Steps | Left behind if it stops after each step | The one recovery |' <<<"$OUT")"
+printf "$HEAD4" > "$GW/.claude/briefs/g-evidence.md"
+check "a table with only its header and separator is no row" "rc=2" "$(tgate | tail -1)"
+printf "$HEAD4"'| reply file | write, rename | a half file | rewritten by the next pass |\n' > "$GW/.claude/briefs/g-evidence.md"
+check "pass 1 runs for a unit with a data design and a four-cell row" "rc=0" "$(tgate)"
+printf "$HEAD4"'| reply file | write, rename | a half file |\n' > "$GW/.claude/briefs/g-evidence.md"
+check "a row with three cells is no row" "rc=2" "$(tgate | tail -1)"
+printf "$HEAD4"'| reply file | write, rename | | rewritten |\n' > "$GW/.claude/briefs/g-evidence.md"
+check "a row with an empty cell is no row" "rc=2" "$(tgate | tail -1)"
+brief 'none: no state is added or changed'; : > "$GW/.claude/briefs/g-evidence.md"
+check "pass 1 runs for a unit whose data design is none" "rc=0" "$(tgate)"
+printf 'no data design heading at all\n' > "$GW/.claude/briefs/g.md"
+check "a brief with no Data design section owes no table" "rc=0" "$(tgate)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

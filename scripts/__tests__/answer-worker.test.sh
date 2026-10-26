@@ -3,7 +3,7 @@
 # Builder was mid-turn printed "NOT delivered", yet the Builder read it at its
 # next check: main could not tell a late read from a lost answer, and sent it
 # again. Pinned: an answer left in a mid-turn pane's inbox reports queued, not
-# read yet (exit 2) and stays in the inbox; an answer to a Builder past its
+# read yet, is checked on, and ends NOT acknowledged (exit 1) only after the acknowledgement limit; an answer to a Builder past its
 # done marker is typed in even while Orca still calls it working (it never
 # reads its inbox again); an answer typed into an idle pane
 # whose log shows it is delivered (exit 0); a pane that is gone, or an idle
@@ -46,7 +46,7 @@ esac
 EOF
 chmod +x "$T/bin/orca-ide"
 answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
-  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=${AACK:-3} PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
 
 # A Builder's question, as main's wait shows it: recorded in the decisions ledger as waiting on main.
 LED=$T/p/.claude/metrics/decisions.jsonl
@@ -57,8 +57,8 @@ check "a Builder's question lands in the ledger, waiting on main" '{"answer":nul
 echo working > "$T/state"
 OUT=$(answer term_b "use the second option"); RC=$?
 check "main's answer closes it" '"use the second option"' "$(tail -1 "$LED" | jq -c 'select(.answeredAt != null) | .answer')"
-check "an answer to a mid-turn pane reports queued, not read yet, apart from a failure" "2:1:0" \
-  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT")"
+check "an answer to a mid-turn pane that is never read says queued first, then ends NOT acknowledged (exit 1), not NOT delivered" "1:1:0:1" \
+  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT"):$(grep -c 'NOT acknowledged' <<<"$OUT")"
 check "and waits in its inbox for its next check" 1 "$(grep -c '\] use the second option$' "$T/inbox")"
 # Issue 329: a Builder blocked in `orchestration ask` returns only on a reply to its question's id, never on a new send.
 : > "$T/inbox"; : > "$T/replies"; : > "$T/typed"; touch "$T/reads"
@@ -77,12 +77,12 @@ check "an inbox reply writes one line to the Builder's handle" "1:answer-worker:
 # Green pins: the fallback and the queued report the reply must not break.
 : > "$T/replies"; : > "$T/inbox"
 OUT=$(answer term_b "pick four"); RC=$?
-check "a mid-turn pane given no id is sent the answer as before, with no reply and none named" "2:0:1:0" \
+check "a mid-turn pane given no id is sent the answer as before, with no reply and none named" "1:0:1:0" \
   "$RC:$(wc -l < "$T/replies" | tr -d ' '):$(wc -l < "$T/inbox" | tr -d ' '):$(grep -c 'as a reply' <<<"$OUT")"
 rm "$T/reads"; : > "$T/replies"
 OUT=$(answer term_b "pick five" u1-msg_q1); RC=$?
-check "a reply to a pane still mid-turn after the wait exits 2, queued, not NOT delivered" "2:1:0" \
-  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT")"
+check "a reply to a pane still mid-turn after the wait is queued, then NOT acknowledged (exit 1), not NOT delivered" "1:1:0:1" \
+  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'NOT delivered' <<<"$OUT"):$(grep -c 'NOT acknowledged' <<<"$OUT")"
 : > "$T/inbox"
 # Two questions open from one unit: an answer closes only the one it names, never the other as answered.
 for q in q2 q3; do (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" \
@@ -150,15 +150,15 @@ EOF
 chmod +x "$T/bin2/orca-ide"
 : > "$T/typed2"; : > "$T/inbox2"; touch -d '2 hours ago' "$P2/a.jsonl" # B's log is the newer one, as --current reads it
 OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" \
-  ANSWER_WORKER_WAIT=2 PATH="$T/bin2:$PATH" bash "$REAL/scripts/answer-worker.sh" term_pa "take option two" 2>&1); RC=$?
-check "an answer to planner A reads A's log: A is mid-turn, so it goes to A's inbox, not typed in" "2:1:0" \
+  ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=3 PATH="$T/bin2:$PATH" bash "$REAL/scripts/answer-worker.sh" term_pa "take option two" 2>&1); RC=$?
+check "an answer to planner A reads A's log: A is mid-turn, so it goes to A's inbox, not typed in" "1:1:0" \
   "$RC:$(wc -l < "$T/inbox2" | tr -d ' '):$(wc -l < "$T/typed2" | tr -d ' ')"
 
 # Issue 340: in main's own foreground the answer is sent and the call returns at once; the wait for the tag in the log,
 # its retry and the ledger closing run in a detached follower, and main hears only if the answer is NOT delivered.
 rm -f "$T/deaf"; : > "$T/inbox"; : > "$T/typed"
 fg() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_FOREGROUND CLAUDECODE=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
-  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=${AWAIT:-2} PATH="$T/bin:$PATH" timeout 8 bash "$REAL/scripts/answer-worker.sh" "$@" </dev/null 2>&1); }
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=${AWAIT:-2} ANSWER_WORKER_ACK_WAIT=${AACK:-3} PATH="$T/bin:$PATH" timeout 8 bash "$REAL/scripts/answer-worker.sh" "$@" </dev/null 2>&1); }
 fgpid() { sed -n 's/.*(pid \([0-9]*\)).*/\1/p' <<<"$1"; }
 echo working > "$T/state"
 OUT=$(AWAIT=30 fg term_b "fg inbox answer"); RC=$?; PID=$(fgpid "$OUT")
@@ -176,6 +176,20 @@ OUT=$(fg term_b "fg lost answer"); RC=$?; PID=$(fgpid "$OUT")
 check "an answer that never reaches the log: the call returned 0, the follower logs NOT delivered, and main is told" "0:1:1" \
   "$RC:$(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'NOT delivered'):$(cat "$T"/scratch/queue/*.jsonl 2>/dev/null | grep -c 'answer-worker.sh: not delivered')"
 rm -f "$T/deaf"
+
+# Issue 351: an inbox answer to a pane that is mid-turn is checked on after the first wait (queued, said once), until the
+# tag is in the log (delivered) or the acknowledgement limit passes (NOT acknowledged, exit 1). In main's foreground the
+# follower sends main that last result as one question.
+echo working > "$T/state"; : > "$T/inbox"; : > "$T/typed"
+(sleep 3; jq -cn '{type: "user", message: {role: "user", content: "[late-tag] a late read"}, timestamp: "2026-10-15T10:06:00Z", sessionId: "s1"}' >> "$LOG") &
+OUT=$(AACK=12 ANSWER_WORKER_TAG=late-tag answer term_b "a late read"); RC=$?; wait
+check "an answer read during the longer wait ends delivered (exit 0), after the queued line, and is not NOT acknowledged" "0:1:1:0" \
+  "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'delivered to term_b' <<<"$OUT"):$(grep -c 'NOT acknowledged' <<<"$OUT")"
+: > "$T/inbox"; rm -f "$T"/scratch/answer-worker-answer-*.log "$T"/scratch/queue/*.jsonl
+OUT=$(fg term_b "fg unread answer"); RC=$?; PID=$(fgpid "$OUT")
+[ -z "$PID" ] || tail --pid="$PID" -f /dev/null
+check "in main's foreground an answer never read reaches main as one question" "0:1:1" \
+  "$RC:$(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'NOT acknowledged'):$(cat "$T"/scratch/queue/*.jsonl 2>/dev/null | grep -c 'answer-worker.sh: not delivered')"
 
 # Issue 351 ask 1: main answers without the question's id. A pane blocked in `orchestration ask` returns only on a reply
 # in its question's thread, so the answer looks up the pane's own open question from its seat record, the way
@@ -197,15 +211,15 @@ check "no id given: the answer says which question it replied in" 1 "$(grep -c '
 # Nothing open (an older question from before the launch, another pane's): sent as today and nothing said of a lookup.
 { msg msg_q0 dispatch:ctx_w "$(iso $((NOWTS - 2000)))"; msg msg_qx term_x "$(iso $((NOWTS - 10)))"; } | inbox
 OUT=$(answer term_b "Ruling 5"); RC=$?
-check "no open question: a plain inbox send (queued, mid-turn), no reply, no lookup complaint" "2 0 1 0" \
+check "no open question: a plain inbox send (queued, mid-turn), no reply, no lookup complaint" "1 0 1 0" \
   "$RC $(wc -l < "$T/replies" | tr -d ' ') $(grep -c 'Ruling 5' "$T/inbox") $(grep -c 'could not be read\|no seat record' <<<"$OUT")"
 inbox </dev/null; : > "$T/inbox-down"
 OUT=$(answer term_b "Ruling 6"); RC=$?
-check "no id given and the inbox cannot be read: says so and sends without an id" "2 0 1 1" \
+check "no id given and the inbox cannot be read: says so and sends without an id" "1 0 1 1" \
   "$RC $(wc -l < "$T/replies" | tr -d ' ') $(grep -c 'Ruling 6' "$T/inbox") $(grep -c 'open question of term_b could not be read' <<<"$OUT")"
 rm -f "$T/inbox-down"; mv "$LOOKREC" "$LOOKREC.gone"
 OUT=$(answer term_b "Ruling 7"); RC=$?
-check "no id given and no seat record names the pane: says the lookup was skipped and sends as today" "2 1 1" \
+check "no id given and no seat record names the pane: says the lookup was skipped and sends as today" "1 1 1" \
   "$RC $(grep -c 'Ruling 7' "$T/inbox") $(grep -c 'no seat record names term_b, so its open question was not looked up' <<<"$OUT")"
 mv "$LOOKREC.gone" "$LOOKREC"
 # --interrupt (issue 351 ask 4) has its own file: answer-worker-interrupt.test.sh.

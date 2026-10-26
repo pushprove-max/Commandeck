@@ -5,9 +5,10 @@
 #          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
 #          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]   (<tokens>: 140000, 140k)
-#          [--option <role key>=<value> ...] (a role's /plugin config key: builderModel=sonnet, planJudgeSolAgent=claude)
+#          [--recommended] [--option <key>=<value> ...] (any /plugin config key: builderModel=sonnet, unitsBand=off;
+#          --recommended saves every value of config/recommended.json first, and any later answer beats it)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
+#          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--main-cache-ttl 5m|1h|leave] [--worker-cache-ttl 5m|1h|leave] [--relay-cache-ttl 5m|1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
@@ -53,14 +54,20 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
-INSTALL= ASKED= OPT= PLAN= QUESTIONS=
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+INSTALL= ASKED= OPT= PLAN= QUESTIONS= REC= AGENTS=
 for a; do
-  if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
+  if [ -n "$OPT" ]; then
+    [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a
+    # The seats that run on Codex or Claude by an --option answer: rec_agent reads the last of each.
+    [ "$OPT" != --option ] || case $a in codexReviewerAgent=*|planJudgeSolAgent=*) AGENTS="$AGENTS $a" ;; esac
+    OPT=; continue
+  fi
   case $TAKES in *" $a "*) OPT=$a; continue ;; esac
   case $a in
     --install-missing) INSTALL=1 ;;
     --plan) PLAN=1 ;;
+    --recommended) REC=1 ;;
   esac
 done
 # The picker guard's decoy is off while this marker is under an hour old (worker-ask-guard.sh).
@@ -100,7 +107,7 @@ need "$ASKED"
 die() { echo "setup: $*" >&2; exit 1; }
 # toks <flag> <answer> -- a token count for the Builder clear line or the issue sizing: 140000, 140k or 140K (140000), off, or '' (the default).
 toks() { [[ $2 =~ ^(off|[1-9][0-9]*[kK]?)?$ ]] || die "$1 takes a number of tokens (140000 or 140k), or off, not '$2'. Nothing was changed"; [[ $2 == *[kK] ]] && echo "${2%[kK]}000" || echo "$2"; }
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -131,6 +138,115 @@ RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2
 rl() { [ -z "$2" ] || [[ $2 =~ $3 ]] || die "$4 takes $5; '$2' was not saved, and nothing was changed"
   RL=$(jq -c --arg k "$1" --arg v "$2" 'if $v == "" then del(.[$k]) else .[$k] = $v end' <<<"$RL"); }
 INT='^[1-9][0-9]*$' NUM='^[0-9]+([.][0-9]+)?$' OFFNUM='^(off|[0-9]+([.][0-9]+)?)$'
+# given <key> <true|false> -- this run's answer to a /config boolean: it replaces /config's value (il_plugin_options'
+# third argument), as an --option answer does, so an earlier saved `false` cannot beat a later On (issue 374).
+given() { GIVEN=$(jq -c --arg k "$1" --argjson v "$2" '.[$k] = $v' <<<"$GIVEN"); }
+# rw_unanswered -- succeeds when the review workflow (blocking severity, pass cap, fresh closing reviewer) has no answer
+# yet: none in the project's review loop, and none of its three keys in /config (this run's answers counted).
+rw_unanswered() {
+  [ "$(jq -r '[.blockAt, .passCap, .freshClosing] | map(select(. != null)) | length' <<<"$RL")" = 0 ] || return 1
+  local k; for k in reviewBlockSeverity reviewPassCap freshClosingReviewer; do COMMANDECK_OPTIONS=$GIVEN pp_config_option "$k" >/dev/null && return 1; done
+  return 0
+}
+# --- the recommended profile (config/recommended.json) and --option's checks ---
+REC_FILE=$IL_ROOT/config/recommended.json MANIFEST=$IL_ROOT/.claude-plugin/plugin.json
+WAKE_KINDS='worker_done escalation question decision_gate merge_ready status dispatch handoff'
+# rec_agent <key> -- the agent the key's seat runs on this run: an --option answer to its Agent key, else the profile asked
+# for, else what /config saved, else the saved profile. Only the reviewer and the Sol judge can run on Codex.
+rec_agent() {
+  local k a
+  case $1 in codexReviewer*) k=codexReviewerAgent ;; planJudgeSol*) k=planJudgeSolAgent ;; *) echo claude; return ;; esac
+  a=$(printf '%s\n' $AGENTS | sed -n "s/^$k=//p" | tail -1)
+  if [ -z "$a" ] && [ -n "$ASKED" ]; then a=codex; [ "$ASKED" != claude ] || a=claude; fi
+  [ -n "$a" ] || a=$(pp_config_option "$k") || a=
+  [ -n "$a" ] || { a=codex; [ "$PROFILE" != claude ] || a=claude; }
+  echo "$a"
+}
+# rec_skip <key> <value> -- why this run cannot take the profile's value, or nothing. A Codex model for a seat that runs on
+# Claude, and a Codex fast tier the Codex home does not allow, are left out and named; they are never a refusal.
+rec_skip() {
+  local agent; agent=$(rec_agent "$1")
+  case $1 in
+    *Model) [ "$agent" = codex ] || case $2 in opus|sonnet|fable|builder|project) ;; *) echo "the seat runs on Claude, which takes opus, sonnet or fable" ;; esac ;;
+    *Fast) [ "$2" != true ] || [ "$agent" != codex ] || pp_codex_fast_home >/dev/null 2>&1 || echo "Codex's config.toml has no service_tier = \"fast\" line" ;;
+  esac
+}
+# rec_expand -- the profile as EXP, one `--option <key>=<value>` pair for each value this run can take; REC_SKIPPED
+# names each one it cannot.
+rec_expand() {
+  local k v w
+  while IFS=$'\t' read -r k v; do
+    w=$(rec_skip "$k" "$v")
+    if [ -n "$w" ]; then REC_SKIPPED+=("recommended $k=$v skipped: $w"); else EXP+=(--option "$k=$v"); fi
+  done < <(jq -r '.options | to_entries[] | [.key, (.value | tostring)] | @tsv' "$REC_FILE")
+}
+# rec_takes <key> -- every value the key takes, from the manifest.
+rec_takes() {
+  jq -r --arg k "$1" --arg w "$WAKE_KINDS" '.userConfig[$k] as $c | if $c.options then $c.options | join(", ")
+    elif $c.type == "boolean" then "true, false"
+    elif $c.type == "number" then "a whole number from \($c.min // 0)\(if $c.max then " to \($c.max)" else "" end)"
+    elif $k == "wakeKinds" then "a comma list of: \($w | split(" ") | join(", "))"
+    elif ($k | test("^(codexReviewer|planJudgeSol)Model$")) then "opus, sonnet, fable; on Codex a family or a model id"
+    elif ($k | test("Model$")) then "opus, sonnet, fable"
+    else "any text" end' "$MANIFEST"
+}
+# opt_flag <key> <value> -- an --option key that has its own flag prints "<flag> <value>", so the one answer is saved the
+# one way (the project's file, the cache settings, the closing-pass rules) whichever way it was given.
+opt_flag() {
+  local v=$2
+  case $1 in
+    mainPromptCacheTtl) echo "--main-cache-ttl $2"; return ;;
+    workerPromptCacheTtl) echo "--worker-cache-ttl $2"; return ;;
+    relayPromptCacheTtl) echo "--relay-cache-ttl $2"; return ;;
+    reviewBlockSeverity) echo "--block-at $2"; return ;;
+    reviewPassCap) echo "--pass-cap $2"; return ;;
+    closingPass|freshClosingReviewer|fullSuiteBeforeFinal)
+      case $2 in true) v=yes; [ "$1" != fullSuiteBeforeFinal ] || v=on ;; false) v=no; [ "$1" != fullSuiteBeforeFinal ] || v=off ;;
+        *) echo "setup: --option $1 takes true or false, not '$2'. Nothing was changed" >&2; return 2 ;; esac ;;
+    *) return 1 ;;
+  esac
+  case $1 in closingPass) echo "--closing-pass $v" ;; freshClosingReviewer) echo "--fresh-closing $v" ;; *) echo "--full-suite $v" ;; esac
+}
+# opt_check <key> -- a /plugin config key that is no role's: its value in GIVEN checked against the manifest (an options
+# list, a whole number from its min, a boolean, the wake kinds) and saved as the type the manifest names.
+opt_check() {
+  local k=$1 v t o mn mx w
+  jq -e --arg k "$k" '.userConfig | has($k)' "$MANIFEST" >/dev/null \
+    || die "--option takes a key /plugin config lists ($(jq -r '.userConfig | keys | join(" ")' "$MANIFEST")), not '$k'. Nothing was changed"
+  v=$(jq -r --arg k "$k" '.[$k] | tostring' <<<"$GIVEN")
+  t=$(jq -r --arg k "$k" '.userConfig[$k].type' "$MANIFEST")
+  case $t in
+    boolean) case $v in true|false) GIVEN=$(jq -c --arg k "$k" --argjson v "$v" '.[$k] = $v' <<<"$GIVEN") ;; *) die "--option $k takes true or false, not '$v'. Nothing was changed" ;; esac ;;
+    number) mn=$(jq -r --arg k "$k" '.userConfig[$k].min // 0' "$MANIFEST") mx=$(jq -r --arg k "$k" '.userConfig[$k].max // empty' "$MANIFEST")
+      { [[ $v =~ ^[0-9]+$ ]] && [ "$v" -ge "$mn" ] && { [ -z "$mx" ] || [ "$v" -le "$mx" ]; }; } \
+        || die "--option $k takes $(rec_takes "$k"), not '$v'. Nothing was changed"
+      GIVEN=$(jq -c --arg k "$k" --argjson v "$v" '.[$k] = $v' <<<"$GIVEN") ;;
+    *) o=$(jq -r --arg k "$k" '.userConfig[$k].options // empty | join(" ")' "$MANIFEST")
+      if [ -n "$o" ]; then case " $o " in *" $v "*) ;; *) die "--option $k takes $(rec_takes "$k"), not '$v'. Nothing was changed" ;; esac; fi
+      if [ "$k" = wakeKinds ]; then
+        for w in ${v//,/ }; do case " $WAKE_KINDS " in *" $w "*) ;; *) die "--option wakeKinds takes $(rec_takes wakeKinds), not '$w'. Nothing was changed" ;; esac; done
+      fi ;;
+  esac
+}
+# full_suite_answer on|off -- the closing pass's full run of the test command, saved as fullSuiteBeforeFinal.
+FULL_ASKED= FULL_OFF_NOTE=
+full_suite_answer() {
+  case $1 in
+    on) FULL=true FULL_ASKED=on; given fullSuiteBeforeFinal true ;;
+    off) FULL=false; given fullSuiteBeforeFinal false ;;
+    *) die "--full-suite takes on or off, not '$1'. Nothing was changed" ;;
+  esac
+}
+# full_suite_rule -- the full run needs the merge check command it runs. An On asked for this run with none given or
+# saved stops setup; a saved On with none is set off, and the plan and the summary say so. Saved is /config's answer
+# (this run's counted) when it has one, else the project's file: /config beats the file wherever they differ.
+full_suite_rule() {
+  [ -z "$TEST" ] || return 0
+  [ "$FULL_ASKED" != on ] || die "--full-suite on needs a merge check: the closing pass runs that command. Answer the Merge check question (--test-command '<cmd>'), or --full-suite off. Nothing was changed"
+  local on; on=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option fullSuiteBeforeFinal) || on=$FULL
+  [ "$on" != true ] || { FULL_OFF_NOTE=1; given fullSuiteBeforeFinal false; }
+  FULL=false
+}
 SCOPE=$(jq -r '.scope // empty' "$IL_PROJECT" 2>/dev/null || true)
 BIND=$(jq -r '.dashboard.bind // empty' "$IL_MACHINE" 2>/dev/null || true)
 PORT=$(jq -r '.dashboard.port // empty' "$IL_MACHINE" 2>/dev/null || true)
@@ -171,9 +287,20 @@ if [ "$QUESTIONS" = begin ]; then
     '') echo "  context window: no model setting here; a model id that ends in [1m] (yours, or what /model shows) is a 1M window, else 200K" ;;
     *) echo "  context window: 200K (the model setting is $CM, which does not end in [1m]): preselect 200K" ;;
   esac
+  # The recommended profile, with every value each key takes: the skill shows these, never its own text.
+  while IFS=$'\t' read -r k v; do echo "  recommended $k: $v (takes: $(rec_takes "$k"))"; done \
+    < <(jq -r '.options | to_entries[] | [.key, (.value | tostring)] | @tsv' "$REC_FILE")
+  ! rw_unanswered || echo "  review workflow: not answered (blocking severity, pass cap, fresh closing reviewer): ask them, even on Keep saved"
   date +%s > "$ASKING"
   echo "setup: questions show without their extra safety option until setup ends (or: setup.sh --questions end)"
   exit 0
+fi
+# --recommended: the profile's values come first as --option answers, so any flag after them beats them. A value this run
+# cannot take is left out and named in the plan.
+REC_SKIPPED=() EXP=()
+if [ -n "$REC" ]; then
+  rec_expand
+  set -- ${EXP[@]+"${EXP[@]}"} "$@"
 fi
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
@@ -184,15 +311,21 @@ while [ $# -gt 0 ]; do
     --name) NAME=$2; shift 2 ;;
     --persona) PERSONA=$2; shift 2 ;;
     --test-command) TEST=$2; shift 2 ;;
-    --bind) BIND=$2; shift 2 ;;
-    --port) PORT=$2; shift 2 ;;
+    # This run's address is saved over /config's, as an --option answer is ('' is no answer).
+    --bind) BIND=$2; [ -z "$2" ] || GIVEN=$(jq -c --arg v "$2" '.dashboardBind = $v' <<<"$GIVEN"); shift 2 ;;
+    --port) PORT=$2; [ -z "$2" ] || GIVEN=$(jq -c --arg v "$2" '.dashboardPort = $v' <<<"$GIVEN"); shift 2 ;;
     --hosts) HOSTS=$2; shift 2 ;;
     --status-line) [ -n "$2" ] || usage; STATUS=$2; shift 2 ;;
     # The Builder's clear line and the issue sizing line: '' takes the default back (nothing saved).
     --builder-clear-line) BCLEAR=$(toks --builder-clear-line "$2") || exit 1; shift 2 ;;
     # A role's /plugin config key (issue 312), checked below once every answer is in; project takes the default back.
     --option) [[ $2 =~ ^[A-Za-z]+=. ]] || die "--option takes <key>=<value>, not '$2'. Nothing was changed"
+      # A key with its own flag is answered by that flag, so there is one way to save it.
+      rc=0; OF=$(opt_flag "${2%%=*}" "${2#*=}") || rc=$?
+      [ "$rc" != 2 ] || exit 1
+      if [ "$rc" = 0 ]; then set -- "${OF%% *}" "${OF#* }" "${@:3}"; continue; fi
       GIVEN=$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '.[$k] = $v' <<<"$GIVEN"); shift 2 ;;
+    --recommended) shift ;;
     --issue-sizing) SIZING=$(toks --issue-sizing "$2") || exit 1; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
@@ -210,17 +343,21 @@ while [ $# -gt 0 ]; do
                   DROPS=$(jq -c --arg i "$2" --arg v "$([ "$1" = --rules-drop ] && echo keep-mine || echo keep-both)" '.[$i] = $v' <<<"$DROPS") ;; esac; shift 2 ;;
     # The add-ons to install or update this run (config/addons.tsv names), never saved; with none given, every one.
     --addons) ADDONS=${2//,/ } ADDONS_SET=1; [ "$2" != none ] || ADDONS=; shift 2 ;;
-    --main-cache-ttl) case $2 in 5m|1h|leave) MCACHE=$2 ;; *) die "--main-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
-    --worker-cache-ttl) case $2 in 5m|1h|leave) WCACHE=$2 ;; *) die "--worker-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
-    --relay-cache-ttl) case $2 in 5m|1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --main-cache-ttl) case $2 in 5m|1h|leave) MCACHE=$2; given mainPromptCacheTtl "\"$2\"" ;; *) die "--main-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --worker-cache-ttl) case $2 in 5m|1h|leave) WCACHE=$2; given workerPromptCacheTtl "\"$2\"" ;; *) die "--worker-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --relay-cache-ttl) case $2 in 5m|1h|leave) RCACHE=$2; given relayPromptCacheTtl "\"$2\"" ;; *) die "--relay-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
     --worker-skills-off|--worker-plugins-off|--keep-word) CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2 ;;
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
-    --max-rounds) rl maxRounds "$2" "$INT" "$1" "a whole number of passes"; shift 2 ;;
-    --closing-pass) case $2 in yes) rl closingPass '' '' ;; no) rl closingPass no '^no$' ;; *) usage ;; esac; shift 2 ;;
+    # The review workflow (issue 373): the lowest severity that holds a merge, the pass cap, and a fresh closing reviewer.
+    # '' takes the default back, in the project's file and in /config alike.
+    --block-at) rl blockAt "$2" '^P[123]$' "$1" "P1, P2 or P3"; given reviewBlockSeverity "\"${2:-P2}\""; shift 2 ;;
+    --pass-cap) rl passCap "$2" "$INT" "$1" "a whole number of passes, 1 or more"; given reviewPassCap "${2:-5}"; shift 2 ;;
+    --fresh-closing) case $2 in yes) rl freshClosing '' ''; given freshClosingReviewer true ;; no) rl freshClosing no '^no$'; given freshClosingReviewer false ;; *) usage ;; esac; shift 2 ;;
+    --closing-pass) case $2 in yes) rl closingPass '' ''; given closingPass true ;; no) rl closingPass no '^no$'; given closingPass false ;; *) usage ;; esac; shift 2 ;;
     # The closing pass's full run of the test command (builder-codex-pass.sh), saved as fullSuiteBeforeFinal.
-    --full-suite) case $2 in on) FULL=true ;; off) FULL=false ;; *) die "--full-suite takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --full-suite) full_suite_answer "$2"; shift 2 ;;
     # Issue 315: on trusts every hook in the Codex home before each Codex launch; off keeps the plugin's own hooks only.
     --trust-all-hooks) case $2 in on) TRUSTALL=true ;; off) TRUSTALL=false ;; *) die "--trust-all-hooks takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     # off is saved as the word: no build is small, so every first pass has three reviewers.
@@ -241,7 +378,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 SCOPE=${SCOPE:-project}
-[ -n "$TEST" ] || FULL=false  # no test command: the closing pass has no suite to run
+full_suite_rule
 case $PROFILE in claude|claude-openai) ;; *) echo "setup: --profile is claude (Claude does the review passes) or claude-openai (Codex does them)" >&2; usage ;; esac
 case $SCOPE in project|machine) ;; *) usage ;; esac
 for a in $ADDONS; do
@@ -268,6 +405,20 @@ if [ -n "$ASKED" ]; then
   a=codex; [ "$PROFILE" != claude ] || a=claude
   GIVEN=$(jq -c --arg a "$a" '{codexReviewerAgent: $a, planJudgeSolAgent: $a} + .' <<<"$GIVEN")
 fi
+# One precedence for every value setup saves: this run's explicit answer, then the profile or --recommended, then the
+# saved value. A seat whose agent this run chose, with no model answered, drops a saved model that agent cannot run
+# (a Codex model on Claude, a Claude one on Codex): it goes back to routing's default ("project") and the plan says so.
+stale_models() {
+  local s a v
+  for s in codexReviewer planJudgeSol; do
+    a=$(jq -r --arg k "${s}Agent" '.[$k] // empty' <<<"$GIVEN"); case $a in claude|codex) ;; *) continue ;; esac
+    ! jq -e --arg k "${s}Model" 'has($k)' <<<"$GIVEN" >/dev/null || continue
+    v=$(pp_config_option "${s}Model") || continue
+    ! jq -ne --arg v "$v" --arg a "$a" "$PP_ROUTE_JQ"' $v | model_ok($a)' >/dev/null || continue
+    given "${s}Model" '"project"'; REC_SKIPPED+=("saved ${s}Model=$v reset to the default: the seat runs on $a this run")
+  done
+}
+stale_models
 ROLES=$(jq -r '.roles | keys[]' "$RT")
 # rk <key> -- "<role> <field>" of a role key /plugin config lists; fails for any other key.
 rk() { local r f; for r in $ROLES; do for f in $PP_ROLE_FIELDS; do [ "$(pp_role_key "$r" "$f")" != "$1" ] || { pp_role_has "$r" "$f" && echo "$r $f"; return; }; done; done; return 1; }
@@ -278,7 +429,8 @@ for k in $(jq -r 'keys[]' <<<"$GIVEN"); do
     builderEnabled) die "the Builder cannot be off: with none there is no branch to review or merge. Nothing was changed" ;;
     codexReviewerEnabled) die "the reviewer cannot be off: the merge check needs a GO round file from it. Nothing was changed" ;;
   esac
-  RF=$(rk "$k") || die "--option takes a role key /plugin config lists ($(for r in $ROLES; do for f in $PP_ROLE_FIELDS; do ! pp_role_has "$r" "$f" || pp_role_key "$r" "$f"; done; done | paste -sd' ' -)), not '$k'. Nothing was changed"
+  # A key that is no role's is checked against the manifest (a list, a number, a boolean, the wake kinds).
+  RF=$(rk "$k") || { opt_check "$k"; continue; }
   # A boolean key is saved as one, so /plugin shows it as its own toggle.
   if [ "$(jq -r --arg k "$k" '.userConfig[$k].type' "$IL_ROOT/.claude-plugin/plugin.json")" = boolean ]; then
     case $(jq -r --arg k "$k" '.[$k]' <<<"$GIVEN") in true|false) ;; *) die "--option $k takes true or false. Nothing was changed" ;; esac
@@ -404,7 +556,9 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
 # Issue 245: an option the owner set in /config beats this setup's answer, here and in every reader (pp_option).
-MCACHE_ON=$(pp_config_option mainPromptCacheTtl || echo "$MCACHE") WCACHE_ON=$(pp_config_option workerPromptCacheTtl || echo "$WCACHE") RCACHE_ON=$(pp_config_option relayPromptCacheTtl || echo "$RCACHE")
+MCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option mainPromptCacheTtl || echo "$MCACHE") WCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option workerPromptCacheTtl || echo "$WCACHE") RCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option relayPromptCacheTtl || echo "$RCACHE")
+# The same for the full run before the final review: /config's answer is the one in force, the project's file is the fallback.
+FULL_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option fullSuiteBeforeFinal || echo "$FULL")
 case $WCACHE_ON in 5m|1h) il_cache_ttl "$IL_PROJECT" "$PSET" "$WCACHE_ON" ;; esac
 il_auto_mode "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
@@ -426,8 +580,10 @@ if [ "$PROFILE" = claude-openai ]; then
   # update is kept in CUPD for "Needs you" below: NEED is reset after this step. `|| [ $? = 2 ]`: an unknown latest version ends no run.
   if [ -n "$PLAN" ]; then il_codex_update plan || [ $? = 2 ]; else L=$(il_codex_update) && s=0 || s=$?; [ -z "$L" ] || echo "$L"; [ "$s" != 1 ] || CUPD=$L; fi
 fi
-! V=$(pp_config_option dashboardBind) || BIND=$V
-! V=$(pp_config_option dashboardPort) || PORT=$V
+# This run's answer (--bind, --port or --option) beats /config, and /config the machine's saved address: the job is
+# installed with the address il_plugin_options saves below, not the one it replaces.
+! V=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option dashboardBind) || BIND=$V
+! V=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option dashboardPort) || PORT=$V
 if [ -n "$PLAN" ]; then
   if [ -n "$DASHBOARD" ]; then echo "plan: would register this project with the dashboard and install its job ($DASH_JOB), serving $(case ${BIND:-127.0.0.1} in 127.0.0.1|localhost|::1) echo http ;; *) echo https ;; esac)://${BIND:-127.0.0.1}:${PORT:-<a free port>}/"
   elif jq -e '.registered == true' "$IL_PROJECT" >/dev/null 2>&1; then echo "plan: would take this project off the dashboard"; fi
@@ -458,7 +614,8 @@ done
 # run's --option answers replace the key's value (issue 312).
 il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --argjson rl "$RL" \
   --arg full "$FULL" --arg mcache "$MCACHE" --arg wcache "$WCACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
-  {maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
+  {reviewBlockSeverity: ($rl.blockAt // ""), reviewPassCap: ($rl.passCap // "" | if . == "" then . else tonumber end),
+   freshClosingReviewer: (if $rl.freshClosing == null then "" else $rl.freshClosing != "no" end),
    closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end),
    mainPromptCacheTtl: $mcache, workerPromptCacheTtl: $wcache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
   | with_entries(select(.value != ""))')" "$GIVEN"
@@ -475,6 +632,9 @@ il_main_lean "$IL_PROJECT" "$PP_MAIN/$IL_MAIN_LEAN_FILE" "$MCACHE_ON"
 # --- what the owner should know: said in a plan and at the end of a run alike ---
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
+for n in ${REC_SKIPPED[@]+"${REC_SKIPPED[@]}"}; do NOTES+=("$n"); done
+[ -z "$FULL_OFF_NOTE" ] || NOTES+=("Full suite before the final review: off, as no merge check command is set")
+! rw_unanswered || NEED+=("Review workflow: not answered yet; /commandeck:setup asks, or: setup.sh --block-at P1|P2|P3 --pass-cap <n> --fresh-closing yes|no")
 [ -z "${CUPD:-}" ] || NEED+=("$CUPD")
 case $MCACHE_ON in 5m|1h|leave) ;; *) NEED+=("Main prompt cache: not answered since 0.48.0; /commandeck:setup asks, or: setup.sh --main-cache-ttl 5m|1h|leave") ;; esac
 case $WCACHE_ON in 5m|1h|leave) ;; *) NEED+=("Builder and worker prompt cache: not answered since 0.48.0; /commandeck:setup asks, or: setup.sh --worker-cache-ttl 5m|1h|leave") ;; esac
@@ -607,7 +767,7 @@ for a in $ADDONS; do
 done
 # Read back from the config written above, so this line and the hooks agree.
 echo "serena (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG")"
-echo "full suite before the final review: $([ "$FULL" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
+echo "full suite before the final review: $([ "$FULL_ON" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
 [ "$PROFILE" != claude-openai ] || echo "trust every hook in the Codex home before each Codex launch: $([ "$TRUSTALL" = true ] && echo on || echo off) (setup.sh --trust-all-hooks on|off)"
 echo "prompt cache: main ${MCACHE_ON:-not answered}, workers ${WCACHE_ON:-not answered}, relay ${RCACHE_ON:-not answered}"
 for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "$n"; done

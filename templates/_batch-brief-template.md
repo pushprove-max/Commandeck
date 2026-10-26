@@ -15,6 +15,8 @@ One paragraph per item above, by its number: what is built, and what done
 means. Then the tests to write first, and how the batch will be reviewed.
 An item that adds a step to the build, merge, review or push flow carries a
 `Catches:` line: what the step catches that no existing step does.
+Optional: a line `Estimated size: ~<n> changed lines`. Under 150, a risky trigger gets
+one plan judge, not two; with no line, or 150 or more, the plan tier stays Panel.
 
 - Name every reader of anything an item deletes (exports, docs, scripts that
   call it), so none is left calling it.

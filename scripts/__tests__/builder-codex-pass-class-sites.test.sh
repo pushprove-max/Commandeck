@@ -24,13 +24,16 @@ check "...and starts once every hit is listed" 0 "$(chk 3)"
 # The command is the reviewer's text: it runs as rg with no shell, and rg's program-running flags are refused. A search
 # under KNOWN GAPS: has no finding above it.
 R3=$'- [P2] (class: x) x -- a.sh:1 -- why -- cmd\nClass search: rg --pre cat built a.sh\n- [P2] (class: x) y -- a.sh:1 -- why -- cmd\nClass search: rg -n nomatch a.sh\nClass search: rg -nz built a.sh\n- [P2] (class: x) z -- a.sh:1 -- why -- cmd\nClass search: cat a.sh; touch pwned\nKNOWN GAPS:\n- a gap -- a.sh:1 -- needs a bypass\nClass search: rg -n built a.sh\nVERDICT: NO-GO'
+# Issue 355: a NO-GO's fix round goes to the seat record's pane, so pass 3 runs on a record that names none: its
+# hand-off is skipped and said, which the check below holds.
+grep -v '^handle=' "$SC/seat-$U-builder.txt" > "$SC/seat.nohandle"; mv "$SC/seat.nohandle" "$SC/seat-$U-builder.txt"
 printf 'other two\n' > "$W/c.sh"; rawpass 3 review "$R3" >/dev/null
 check "--pre, -z in a flag cluster, a search missing its own finding, a non-rg command and a search under KNOWN GAPS are each refused, run nothing and owe nothing" "5 0 0" \
   "$(grep -c '^- refused' "$B/$U-r3-class-sites.md" 2>/dev/null) $(wc -l < "$B/$U-r3-class-sites.txt" | tr -d ' ') $([ -e "$W/pwned" ] && echo 1 || echo 0)"
-# Run from a real pane, this file once sent main a real "no fix hand-off" question: the fixture clears the pane handle,
-# so the NO-GO pass above saw none, and its notice to main stayed in the fixture (the orca-ide stub, or the scratch queue).
-check "a test's pass has no pane handle, and its notice to main stays in the fixture" "1 1" \
-  "$(grep -c 'NO FIX HAND-OFF after pass 3: no Orca handle' "$TMP/out") $(cat "$TMP/orca-calls" "$SC"/queue/*.jsonl 2>/dev/null | grep -c 'no fix hand-off after pass 3')"
+# Run from a real pane, this file once sent main a real "no fix hand-off" question: the fixture's seat record names no
+# pane, so the NO-GO pass above skipped the hand-off, and its notice to main stayed in the fixture (the orca-ide stub, or the scratch queue).
+check "a test's pass has no pane to hand to, and its notice to main stays in the fixture" "1 1" \
+  "$(grep -c 'NO FIX HAND-OFF after pass 3: the seat record names no pane' "$TMP/out") $(cat "$TMP/orca-calls" "$SC"/queue/*.jsonl 2>/dev/null | grep -c 'no fix hand-off after pass 3')"
 # The owner's answer (2026-10-25): with no rg the pass refuses loudly, so no class search is skipped unseen.
 NORG=$TMP/norg; mkdir -p "$NORG" "$TMP/nobrew"; IFS=: read -ra DIRS <<<"$TMP/cli:$PATH"
 for d in "${DIRS[@]}"; do [ ! -d "$d" ] || for f in "$d"/*; do [ -e "$NORG/${f##*/}" ] || ln -s "$f" "$NORG/" 2>/dev/null; done; done; rm -f "$NORG/rg"

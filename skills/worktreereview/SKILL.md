@@ -23,7 +23,7 @@ It collects, renders, files the page under
 `~/.commandeck/reviews/<date>/<project>/<unit>-review.html` and prints that path as its `page:` line.
 The page flags a build past a threshold. Defaults: more than 30 minutes of Codex review in total;
 more than a third of the clock on tests or idle waits when those also come to more than 10 minutes, the
-flag naming the largest single command; more than $30 at list price (`--max-review-min`,
+flag naming the largest single command; more than 30 US dollars at list price (`--max-review-min`,
 `--max-test-share`, `--max-usd`; the owner's answers at setup, saved as `reviewLoop` in the project
 config, replace these defaults). A wait on a review pass run outside the Builder's session (the owner
 ran it) or on a review tool that was down has its own slice of the clock and counts toward no flag.
@@ -175,8 +175,8 @@ largest first), and put them to the owner one at a time.
 ## Writing the lessons page in a separate writer session
 
 Use this when the session asked for the review is busy with other work and its context is large (an
-orchestrator, for example): the words cost far less in a fresh session. Measured: about $0.31 to $0.72
-per page.
+orchestrator, for example): the words cost far less in a fresh session, which does not carry that
+large context.
 
 1. Run collect (steps 1 to 3), then copy `writer-handoff.md` (beside this file) to the scratch folder
    and fill in every `<...>`: the inputs, the facts the logs do not show (step 4), and the lesson

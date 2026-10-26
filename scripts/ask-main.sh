@@ -31,7 +31,7 @@ else
   [ -z "$OUT" ] || echo "$OUT"
   case $RC in
     0) ;;
-    3) echo "ask-main: main is down; the question is queued and main's answer is typed into your pane"; exit 3 ;;
+    3) echo "ask-main: main is down; the question is queued and main's answer is typed into your pane. Main sees the queue only when a main session starts in its own checkout; a main running elsewhere must be told another way."; exit 3 ;;
     *) exit "$RC" ;;
   esac
   # to-main's sent line: "sent to <who> (<handle>) id <id>", a warning after it when main's pane shows a prompt.

@@ -16,8 +16,9 @@
 # on a reply to its own question, never on a new message. With no id it is a send.
 # Either way the answer counts as delivered only when its text is in the
 # pane's session log (exit 0). An inbox message to a pane still mid-turn when
-# the wait ends is queued, not read yet (exit 2); anything else exits 1, NOT
-# delivered. An answer that left main (delivered, queued in the inbox, or
+# the wait ends is said to be queued, not read yet, and checked on until ANSWER_WORKER_ACK_WAIT seconds from the send
+# (default 600): then it is NOT acknowledged (exit 1, issue 351; exit 2 is gone). Anything else not in the log exits 1,
+# NOT delivered. An answer that left main (delivered, queued in the inbox, or
 # queued for a restart) closes the unit's question waiting on main in the
 # decisions ledger: the one <question-id> names, or the only one open. With
 # several open and none named, none is closed: one answer is not every answer.
@@ -33,6 +34,7 @@
 # is the thread the answer replies in, so a pane blocked in `orchestration ask` is not left to wait out its limit.
 #
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
+# ANSWER_WORKER_ACK_WAIT: seconds an inbox answer to a busy pane is checked from the send before it is NOT acknowledged (default 600).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -99,6 +101,8 @@ if [ -z "$QID" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ]; then
   fi
 fi
 WAIT=${ANSWER_WORKER_WAIT:-60}
+# An inbox answer still unread after WAIT is checked until ACK seconds from the send (longer than ask-main.sh's 540-second limit).
+ACK=${ANSWER_WORKER_ACK_WAIT:-600}
 # Given the question's id, every route ends with a reply in that question's thread: it is the only answer pp_task_close
 # counts (paths.sh pp_open_ask), so an answer sent without the id leaves the asker's task unsettled. The typed route
 # replies only once the tag is in the log (a reply on an undelivered answer would let pp_task_close settle a worker that
@@ -176,7 +180,7 @@ else
 fi
 
 confirm() {
-local LEFT=$WAIT
+local LEFT=$WAIT T0=$SECONDS QUEUED=
 while :; do
   log_state
   [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
@@ -191,11 +195,15 @@ while :; do
       LEFT=$WAIT; sleep 2; continue
     fi
   fi
-  [ "$LEFT" -gt 0 ] || break
+  if [ "$LEFT" -le 0 ]; then
+    [[ $WAY == "sent to the pane's inbox"* ]] || break
+    # Issue 351: still mid-turn, the answer sits in its inbox, read at the pane's next check. That is said once, and the
+    # check goes on until the tag is in the log or ACK seconds from the send have passed: an answer nobody read is not delivered.
+    [ -n "$QUEUED" ] || { close_asks; QUEUED=1; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Still checking for up to ${ACK}s from the send. Do not send it again." >&2; }
+    [ $((SECONDS - T0)) -lt "$ACK" ] || { echo "answer-worker: NOT acknowledged: the answer (tag $TAG) is still unread in $H's inbox after ${ACK}s; $H never ended its turn or read its inbox. Send it again, or look at the pane." >&2; return 1; }
+  fi
   sleep 2; LEFT=$((LEFT - 2))
 done
-# Still mid-turn: the answer sits in its inbox, read at the pane's next check. Not a failure, and not read either.
-[[ $WAY == "sent to the pane's inbox"* ]] && { close_asks; echo "answer-worker: queued, not read yet: $H is still mid-turn after ${WAIT}s; the answer is in its inbox, read at its next check (tag $TAG). Do not send it again." >&2; return 2; }
 echo "answer-worker: NOT delivered: the answer was $WAY, but its tag $TAG is not in $H's session log (${LOG:-no log found for $WT}) after ${WAIT}s." >&2
 return 1
 }

@@ -56,5 +56,14 @@ check "each seat prints its configured effort, so main can say what it picked" \
   "plan-author high,plan-judge-fable high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
 opts '{"planAuthorEffort": "medium"}'
 check "an effort set in /plugin config is the one printed" "plan-author medium" "$(efforts "${PJ[@]}" | cut -d, -f1)"
+# Issue 362: a risky trigger on a small unit gets one judge; the estimate is the batch's own line, and without one the
+# Panel stands.
+opts '{}'
+check "a security batch estimated at ~120 changed lines gets one judge, and the reason says why" "Plan + judge|plan-author claude opus,plan-judge-sol codex gpt-6.1-sol|1" \
+  "$(tier "${PANEL[@]}" 'Estimated size: ~120 changed lines')|$(seats "${PANEL[@]}" 'Estimated size: ~120 changed lines')|$(run "${PANEL[@]}" 'Estimated size: ~120 changed lines' | grep -c 'a small unit (~120 changed lines, under 150): one judge')"
+check "estimated at ~200 it stays Panel" "Panel" "$(tier "${PANEL[@]}" 'Estimated size: ~200 changed lines')"
+check "estimated at exactly ~150 it stays Panel" "Panel" "$(tier "${PANEL[@]}" 'Estimated size: ~150 changed lines')"
+check "with no estimate it stays Panel" "Panel" "$(tier "${PANEL[@]}")"
+check "an estimate outside The batch is not read" "Panel" "$(tier '## Notes' 'Estimated size: ~120 changed lines' "${PANEL[@]}")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

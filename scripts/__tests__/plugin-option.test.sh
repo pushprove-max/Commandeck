@@ -50,13 +50,14 @@ conf '{"builderEffort": "low", "dashboardPort": 8800}'
 check "a CLAUDE_CONFIG_DIR's settings file is the one read" "8795|machine" \
   "$(mkdir -p "$T/cd" && echo '{}' > "$T/cd/settings.json" && L "export CLAUDE_CONFIG_DIR=$T/cd"'; echo "$(pp_option dashboardPort)|$(pp_option dashboardPort source)"' | sed "s#|$M#|machine#")"
 
-jq '. + {reviewLoop: {closingPass: "no", maxRounds: "5"}}' "$P" > "$T/x" && mv "$T/x" "$P"
-check "the review loop reads the project's answers with no /config ones" "no 5" "$(L 'echo $(pp_review_loop closingPass yes "^(yes|no)$") $(pp_review_loop maxRounds "" "^[1-9][0-9]*$")')"
-conf '{"closingPass": true, "maxReviewRounds": 3}'
-check "and takes /config's: a closing pass runs, three rounds" "yes 3" "$(L 'echo $(pp_review_loop closingPass yes "^(yes|no)$") $(pp_review_loop maxRounds "" "^[1-9][0-9]*$")')"
-conf '{"maxReviewRounds": 0}'
-OUT=$(L 'pp_review_loop maxRounds "" "^[1-9][0-9]*$"; echo "rc=$?"')
-check "a /config number the review loop does not take is refused, and says where it is" "rc=1 1" "$(tail -1 <<<"$OUT") $(grep -c 'maxReviewRounds = "0" in /config' <<<"$OUT")"
+jq '. + {reviewLoop: {closingPass: "no", passCap: "7", blockAt: "P1"}}' "$P" > "$T/x" && mv "$T/x" "$P"
+RL='echo $(pp_review_loop closingPass yes "^(yes|no)$") $(pp_review_loop passCap 5 "^[1-9][0-9]*$") $(pp_review_loop blockAt P2 "^P[123]$") $(pp_review_loop freshClosing yes "^(yes|no)$")'
+check "the review loop reads the project's answers with no /config ones" "no 7 P1 yes" "$(L "$RL")"
+conf '{"closingPass": true, "reviewPassCap": 3, "reviewBlockSeverity": "P3", "freshClosingReviewer": false}'
+check "and takes /config's: a closing pass runs, three passes, P3 blocks, no fresh closing reviewer" "yes 3 P3 no" "$(L "$RL")"
+conf '{"reviewPassCap": 0}'
+OUT=$(L 'pp_review_loop passCap 5 "^[1-9][0-9]*$"; echo "rc=$?"')
+check "a /config number the review loop does not take is refused, and says where it is" "rc=1 1" "$(tail -1 <<<"$OUT") $(grep -c 'reviewPassCap = "0" in /config' <<<"$OUT")"
 conf '{"workerPromptCacheTtl": "leave"}'; jq '. + {workerCacheTtl: "5m"}' "$P" > "$T/x" && mv "$T/x" "$P"
 check "a /config 'leave' is an answer, though the project saved 5m" "leave|/config" "$(O workerPromptCacheTtl)"
 # Issue 256: the Builder cap has no setup question; an owner sets it in /config, or by hand in the project's file.
@@ -205,6 +206,35 @@ check "a rerun's given answers replace the /config ones, and a key not given kee
   "$(jq -cS '.pluginConfigs["commandeck@commandeck"].options' "$S")"
 check "only the fill answer /config beats is named" "1 0" "$(grep -c 'codexReviewerModel is gpt-6.1-astra in /config, which beats' <<<"$OUT") $(grep -c 'fixerEnabled is' <<<"$OUT")"
 check "uninstall would take out only the key that had no value" '{"fixerFirstModel":"opus"}' "$(jq -c --arg s "$S" '.entries[$s].options["commandeck@commandeck"]' "$M")"
+# Issue 374: --full-suite on, given this run with a merge check, replaces the false an earlier run left in /config, and
+# --closing-pass yes does the same (setup.sh's own answer functions, run on a hand-written settings file).
+SETUP_FNS=$(sed -n '/^given()/p;/^full_suite_answer()/,/^}/p;/^full_suite_rule()/,/^}/p' "$REAL/scripts/setup.sh")
+conf '{"fullSuiteBeforeFinal": false, "closingPass": false}'
+check "--full-suite on with a test command leaves fullSuiteBeforeFinal true where /config reads it, over an earlier false" "true|/config" \
+  "$(L "die() { echo \"\$*\" >&2; exit 1; }; $SETUP_FNS
+  GIVEN='{}' TEST='npm test' FULL= ; full_suite_answer on; full_suite_rule; il_plugin_options \"\$HOME/.claude/settings.json\" '{}' \"\$GIVEN\" >/dev/null
+  echo \"\$(pp_option fullSuiteBeforeFinal)|\$(pp_option fullSuiteBeforeFinal source)\"")"
+conf '{"fullSuiteBeforeFinal": true}'
+check "a saved On with no test command is written off to /config too, so /config shows what the plan said" "false" \
+  "$(L "die() { echo \"\$*\" >&2; exit 1; }; $SETUP_FNS
+  GIVEN='{}' TEST= FULL=true; full_suite_rule; il_plugin_options \"\$HOME/.claude/settings.json\" '{}' \"\$GIVEN\" >/dev/null
+  pp_option fullSuiteBeforeFinal")"
+# Issue 373: the review workflow's three answers. A rerun that finds none (this is the first run since they existed) says
+# so, even when the owner keeps the saved review loop; an answer in the project's file, in /config, or given this run is one.
+RW_FNS=$(sed -n '/^rl()/,/^INT=/p;/^given()/p;/^rw_unanswered()/,/^}/p' "$REAL/scripts/setup.sh")
+rw() { L "die() { echo \"\$*\" >&2; exit 1; }; $RW_FNS; RL='$1' GIVEN='${2:-{\}}'; $3; echo \$?"; }
+conf '{}'
+check "no review workflow answer anywhere is unanswered" 0 "$(rw '{}' '{}' rw_unanswered)"
+check "a pass cap in the project's review loop is an answer" 1 "$(rw '{"passCap":"7"}' '{}' rw_unanswered)"
+check "a fresh-closing answer given this run is an answer" 1 "$(rw '{}' '{"freshClosingReviewer":false}' rw_unanswered)"
+conf '{"reviewBlockSeverity": "P1"}'
+check "a blocking severity in /config is an answer" 1 "$(rw '{}' '{}' rw_unanswered)"
+conf '{}'
+check "--pass-cap 7 is saved to the review loop and handed to /config, where pp_review_loop reads it" "7 7" \
+  "$(L "die() { echo \"\$*\" >&2; exit 1; }; $RW_FNS; RL='{}' GIVEN='{}'; rl passCap 7 \"\$INT\" --pass-cap 'a number'; given reviewPassCap 7
+  echo \"\$(COMMANDECK_REVIEW_LOOP=\$RL pp_review_loop passCap 5 '^[1-9][0-9]*\$') \$(jq -r .reviewPassCap <<<\"\$GIVEN\")\"")"
+check "--pass-cap 0 is refused, naming the flag" 1 \
+  "$(L "die() { echo \"setup: \$*\" >&2; exit 1; }; $RW_FNS; RL='{}'; (rl passCap 0 \"\$INT\" --pass-cap 'a whole number of passes, 1 or more') 2>&1 | grep -c -- '--pass-cap takes a whole number'")"
 # A role key given this run lives only in the user settings file, so with none the pre-fill makes one; it was setup's,
 # so the record says so and uninstall takes out the options it added.
 rm "$S"; echo '{"version": 1, "entries": {}}' > "$M"; L 'il_plugin_options "$HOME/.claude/settings.json" "{}" "{\"builderModel\": \"sonnet\"}"' >/dev/null

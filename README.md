@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.48.0-111111?style=flat-square" alt="Version 0.48.0">
+  <img src="https://img.shields.io/badge/version-0.49.0-111111?style=flat-square" alt="Version 0.49.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -102,20 +102,15 @@ answer first on a rerun) and is asked only when it applies.
 | Your rules | Only with a `CLAUDE.md` or `.claude/rules/`: merge (the plugin's rules you already state are left out; you choose for each rule that says the same in other words or disagrees) or keep both |
 | Own startup, Own main | Only with your own `AGENT_STARTUP.md` or `.claude/main-session.md`: merge, replace or skip |
 | Global rules, Global CLAUDE | Merge into, add as a block to, or skip `~/.claude/CLAUDE.md` (install or skip when it does not exist). Your own text is never changed |
-| Main | Opus medium or Opus high |
-| Builder model, Builder effort | Sonnet or Opus; then the effort (high on Sonnet, medium on Opus recommended) |
-| Fixer | The Builder's model and effort for the first fix round, then Opus high; Opus high every round; or the Builder's model every round |
+| Settings | The recommended set (every `/plugin` config option at its recommended value), choose groups (models, plan seats, reviewer, review workflow, caches, builders and wakes, unit views, auto-decide) or keep saved. `--option <key>=<value>` sets any one |
 | Context | 200K or a larger window |
 | Builder clear line | 180K, 150K, 250K or off: past it the Builder goes on in a fresh session |
 | Issue sizing | 40K, 30K, 60K or off: a large independent issue is proposed as its own unit |
-| Reviewer model, hook trust | Codex reviewer only: Sol medium or Astra high; and whether to trust every hook in the Codex home before each Codex launch |
-| Plan author, Sol judge, Fable judge | The planning seats' model, or off |
-| Fast tier | Which seats run on the fast tier (none by default; it costs more) |
+| Hook trust | Codex reviewer only: whether to trust every hook in the Codex home before each Codex launch |
 | Relay, Relay voice | No relay, or a Chief of Staff pane with a name and a one-line voice |
 | Dashboard | On for this machine only, off, or on under another name (it then listens on the network, behind a login) |
 | Merge check, Full suite | The command that must pass before a merge, or none; and whether the closing review pass runs it once on the build's tip |
 | Strict hooks | Off (safety hooks only) or on (also search before reading, and one test run per change) |
-| Main prompt cache, Builder and worker prompt cache, Chief of Staff prompt cache | 1 hour for main, 5 minutes for Builders and other worker panes, 1 hour for the relay pane; each 5m, 1h or left as is |
 | Auto mode | Add two lines about the plugin's scripts to the auto-mode classifier's list, leave it, or take setup's lines out |
 | Worker cuts, Keep words | Extra skills and plugins to turn off in worker panes, and words that bring a set back for one unit |
 | Add-ons | All, serena, agent-browser or none |
@@ -196,7 +191,7 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   test command once. It is handed no earlier finding. Its GO is the one that
   merges.
 
-`maxReviewRounds` caps the passes. More: [docs/review-loop.md](docs/review-loop.md).
+`reviewPassCap` sets the pass at which the loop ends, and `reviewBlockSeverity` the lowest finding that holds a merge. More: [docs/review-loop.md](docs/review-loop.md).
 
 ## Configuration
 
@@ -233,7 +228,9 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `codexReviewerModel` | a family (`sol`, `astra`), a model id, or `opus`, `sonnet`, `fable` on Claude | The reviewer's model (project: sol, or sonnet on Claude) |
 | `codexReviewerEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | The reviewer's effort (project: medium, or high on Claude) |
 | `codexReviewerFast` | `true`, `false` (default) | The fast tier, which costs more |
-| `maxReviewRounds` | a number, or empty | The most review passes a build may run (empty: no cap) |
+| `reviewBlockSeverity` | `P1`, `P2` (default), `P3` | The lowest severity of finding that holds a merge |
+| `reviewPassCap` | a number, 1 or more (default 5) | From this many passes, a closing NO-GO with no P0 or P1 ends the loop with its findings open |
+| `freshClosingReviewer` | `true` (default), `false` | The closing pass is handed no earlier finding or fix note |
 | `closingPass` | `true` (default), `false` | One more pass over the whole branch after the narrowed passes end GO |
 | `fullSuiteBeforeFinal` | `true` (default), `false` | The closing pass runs the test command once on the build's tip |
 

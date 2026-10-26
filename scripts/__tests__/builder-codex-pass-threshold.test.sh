@@ -178,5 +178,46 @@ printf '\n## Sites checked (pass 6)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n
 check "a P1 in a pass that ended after a higher-numbered clean pass is a REVIEW STOP naming that pass" "0 0 1" \
   "$(tpass lt 20 final) $(tpass lt 8 final "$LTP1") $(grep -c '^REVIEW STOP: .*decision review-stop-lt-r8' "$TMP/pout")"
 
+# 9. Issue 373: the owner picks the lowest severity that holds a merge (reviewBlockSeverity). The setup answer reaches the
+# pass as COMMANDECK_REVIEW_LOOP, which beats /config. At P3 a GO beside a P3 is no GO; at P1 a GO beside a P2 ends the
+# loop and the P2 is filed like any open finding. Either way the reviewer is told the levels it was asked for.
+loop() { COMMANDECK_REVIEW_LOOP=$1 "${@:2}"; } # <reviewLoop json> <command...>
+# The blocking severity is in every prompt, so a build keeps the one its first pass was sent: its passes run under it.
+mk bk3; loop '{"blockAt":"P3"}' go bk3 >/dev/null
+BK3=$'- [P3] (class: wording) BK3-NIT -- bk3.txt:1 -- reads oddly -- cat bk3.txt\nVERDICT: GO'
+check "blockAt P3: a GO beside a P3 is read as NO-GO, and the prompt names P0 to P3" "0 1 1" \
+  "$(loop '{"blockAt":"P3"}' tpass bk3 2 final "$BK3") $(last bk3 2 | grep -cx 'VERDICT: NO-GO') \
+$(prompt bk3 2 | grep -c 'VERDICT: GO when you list no P0, P1, P2 or P3 finding (known gaps alone are GO)')"
+mk bk1; loop '{"blockAt":"P1"}' go bk1 >/dev/null
+BK1=$'- [P2] (class: wording) BK1-NIT -- bk1.txt:1 -- reads oddly -- cat bk1.txt\nVERDICT: GO'
+check "blockAt P1: a GO beside a P2 ends the loop with the P2 open, and the prompt names P0 and P1" "0 1 1 0 1 1" \
+  "$(loop '{"blockAt":"P1"}' tpass bk1 2 final "$BK1") $(last bk1 2 | grep -cx 'VERDICT: GO') \
+$(grep -c '^STOP (threshold): .*names no P0 or P1, so the review loop ends with only P2 and P3 findings open' "$TMP/pout") \
+$(loop '{"blockAt":"P1"}' verify bk1) $(grep -c '^Open finding: bk1.txt - \[P2\] (class: wording) BK1-NIT' "$TMP/vout") \
+$(prompt bk1 2 | grep -c 'VERDICT: GO when you list no P0 or P1 finding (P2 and P3 findings and known gaps alone are GO)')"
+mk bk2; go bk2
+check "with the default, a GO beside a P2 stays NO-GO and the prompt is the one it always was" "0 1 1" \
+  "$(tpass bk2 2 final "$BK1") $(last bk2 2 | grep -cx 'VERDICT: NO-GO') \
+$(prompt bk2 2 | grep -c 'VERDICT: GO when you list no P0, P1 or P2 finding (P3 findings and known gaps alone are GO)')"
+
+# 10. Issue 373: the cap is the owner's number (reviewPassCap), and the fresh closing reviewer is the owner's choice.
+# A cap of 3 stops the third pass on record, where the default 5 lets it run on.
+mk pc; go pc
+PC=$'- [P2] (class: lost-reply) PC-P2 -- pc.txt:1 -- drops a reply -- cat pc.txt\nVERDICT: NO-GO'
+tpass pc 2 final "$PC" >/dev/null
+check "a cap of 3 makes the third pass on record a cap stop, and --verify takes it as one" "0 1 0 1" \
+  "$(loop '{"passCap":"3"}' tpass pc 3 final "$PC") $(grep -c '^STOP (cap): .*at or past the cap of 3, and names an open P2' "$TMP/pout") \
+$(loop '{"passCap":"3"}' verify pc) $(grep -c 'rule: cap stop$' "$TMP/vout")"
+mk pd; go pd
+tpass pd 2 final "$PC" >/dev/null
+check "and the default cap of 5 lets the same third pass run on: no stop, and --verify refuses a P2 below the cap" "0 0 2" \
+  "$(tpass pd 3 final "$PC") $(grep -c '^STOP' "$TMP/pout") $(verify pd)"
+mk fc; go fc
+tpass fc 2 final $'- [P2] (class: lost-reply) FC-P2 -- fc.txt:1 -- drops a reply -- cat fc.txt\nVERDICT: NO-GO' >/dev/null
+echo fixed > "$WS/fc/fc.txt"
+check "freshClosing no: the closing pass is handed the earlier finding and the history files stay open to it, and --verify takes its GO" "0 1 0 0" \
+  "$(loop '{"freshClosing":"no"}' tpass fc 3 final) $(prompt fc 3 | grep -c 'FC-P2') \
+$(prompt fc 3 | grep -c 'Do not open the evidence file, the round reports or fix hand-offs') $(loop '{"freshClosing":"no"}' verify fc)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

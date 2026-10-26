@@ -30,6 +30,10 @@ PICK=$(awk -F'\t' '
     else if (quiet) print "Plan + judge\t" none " matched only some items, so one tier up"
     else print "Plan + judge\teverything else" }' "$TRIG" "$BATCH")
 TIER=${PICK%%$'\t'*} WHY=${PICK#*$'\t'}
+# Issue 362: a risky trigger on a small unit gets one judge, not two. The batch's "The batch" section may carry
+# "Estimated size: ~<n> changed lines"; with none, or one at 150 or more, the Panel stands (one tier up when unsure).
+EST=$(awk '/^#+ / { on = ($0 ~ /^#+ The batch/); next } on && match($0, /^Estimated size: ~[0-9]+ changed lines/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit }' "$BATCH")
+if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ "$((10#$EST))" -lt 150 ]; then TIER='Plan + judge' WHY="$WHY, a small unit (~$((10#$EST)) changed lines, under 150): one judge"; fi
 # on <role> -- the seat is on in /plugin config (issue 312); a value its Enabled key does not take stops here.
 on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
 case $TIER in

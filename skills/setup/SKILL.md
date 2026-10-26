@@ -108,21 +108,31 @@ Ask them in this order, up to four questions per call.
    - Install (no file yet): creates the file with them. `install`
    - Skip: the file is left alone. `skip`
    "Global rules" are the plugin's working, review, agent and test rules; "Global CLAUDE" its general instructions (working rules, code exploration, root-cause discipline). Your own text is never changed, and a copy of the file is made first.
-6. Which models run? Each answer is sent as `--option <key>=<value>` lines and saved as that role's key in `/plugin` config, where it can be changed later; `<key>=project` takes back an earlier answer, so the role runs on its default.
-   Ask "Main": Opus medium (recommended) | Opus high
-   - The orchestrator: this session. Saved in this checkout's `.claude/settings.local.json` as its model and effort. Opus medium: `--option orchestratorModel=project --option orchestratorEffort=project`; Opus high: `--option orchestratorModel=opus --option orchestratorEffort=high`.
-   Ask "Builder model": Sonnet (recommended) | Opus
-   - Sonnet: uses less of your plan. `--option builderModel=project`
-   - Opus: best quality, with no advisor. `--option builderModel=opus`
-   Then the effort, right after the model: its recommended answer follows the model picked. On Sonnet:
-   Ask "Builder effort": High (recommended) | Low | Medium | Maximum
-   On Opus:
-   Ask "Builder effort": Medium (recommended) | Low | High | Maximum
-   - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. High: `--option builderEffort=project`, or `--option builderEffort=low`, `medium`; Maximum: `max`.
-   Ask "Fixer": Same as Builder, then Opus high (recommended) | Opus high every round | Builder's model every round
-   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
-   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=opus --option fixerFirstEffort=high`
-   - Builder's model every round: no switch; every fix pass runs as the Builder was launched. `--option fixerEnabled=false`
+6. The settings. Every `/plugin` config option has a recommended value in the plugin's recommended profile: the
+   `recommended <key>: <value> (takes: ...)` lines `--questions begin` printed. They are the one source of recommended
+   values and of every value a key takes; never answer either from this text. An answer is sent as `--option <key>=<value>`
+   (any key `/plugin` config lists; a key with its own flag, below, is sent either way) and saved as that key in `/plugin`
+   config, where it can be changed later. A value `--plan` says it skipped (a Codex model on the Claude profile) is not
+   an error.
+   Ask "Settings": Recommended set (recommended) | Choose groups | Keep saved
+   - Recommended set: every setting from the recommended profile, listed by the `--plan` preview; nothing else is asked about them. `--recommended`
+   - Choose groups: `--recommended`, then each chosen group's answers override it.
+   - Keep saved: sends none of these flags. Offer it only on a rerun (`--questions begin` printed "earlier answers").
+   On "Choose groups", two multi-select questions (`multiSelect: true`):
+   Ask "Groups": Models | Plan seats | Reviewer | Review workflow
+   Ask "More groups": Caches | Builders and wakes | Units views | Auto-decide
+   A chosen group asks each of its keys once, up to four keys per call. The question names the key and what it sets; its
+   options are the recommended value first, marked "(recommended)", then up to three other values from the key's `takes:`
+   list (a model's other families, an effort's neighbours, a boolean's other value); the owner's own text answer takes any
+   other value in that list. Sent as `--option <key>=<value>`, after `--recommended`.
+   - Models: `orchestratorModel`, `orchestratorEffort` (this session; saved in this checkout's `.claude/settings.local.json`), `builderModel`, `builderEffort`, `fixerEnabled`, `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`. `project` takes back an earlier answer, so the role runs on its default. A Builder cannot be off, and no advisor is added.
+   - Plan seats: `planAuthorEnabled`, `planAuthorModel`, `planAuthorEffort`, `planAuthorFast`, `planJudgeSolEnabled`, `planJudgeSolAgent` (codex or claude; the Reviewer question sets the default, and a Claude judge reads only), `planJudgeSolModel`, `planJudgeSolEffort`, `planJudgeSolFast`, `planJudgeFableEnabled`, `planJudgeFableModel`, `planJudgeFableEffort`, `planJudgeFableFast`. A fast tier costs more; offer a Codex seat's only when the check said "Codex fast mode: available".
+   - Reviewer: `codexReviewerModel`, `codexReviewerEffort`, `codexReviewerFast`. On the Codex profile, when the check said "Codex model: not found", offer the id it printed first, as recommended. The Claude reviewer's model is one of opus, sonnet, fable.
+   - Review workflow: step 13.
+   - Caches: step 11.
+   - Builders and wakes: `maxBuilders` (a whole number; empty is no cap, so leave it out for no cap), `wakeKinds`, `wakeWindowSeconds`. `--option maxBuilders=<n>`.
+   - Units views: `unitsBand`, `unitsPane`, `unitsStatus`.
+   - Auto-decide: `autoDecideSeats`.
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
    - Larger: your model holds more (a 1M window). `--no-standard-context`
@@ -137,29 +147,11 @@ Ask them in this order, up to four questions per call.
    Ask "Issue sizing": 40K (recommended) | 30K | 60K | Off
    - The batch brief sizes each issue; one that shares no files with the rest and needs more reading than this is proposed to the orchestrator as its own unit before the launch. `--issue-sizing ''`, or `30000`, `60000`; Off keeps today's grouping: `--issue-sizing off`
    Only with the Codex reviewer:
-   Ask "Reviewer model": Sol medium (recommended) | Astra high
-   - Sol medium: `--option codexReviewerModel=project --option codexReviewerEffort=project`
-   - Astra high: `--option codexReviewerModel=astra --option codexReviewerEffort=high`
-   - When the check said "Codex model: not found", offer the id it printed first, as recommended: `--option codexReviewerModel=<id>`.
    Ask "Trust every hook in this Codex home before each Codex launch?": Yes (recommended) | No
    - Yes: every Codex launch (a pane or `codex exec`) first trusts every hook in the Codex home, so a hook another tool rewrote in an update does not open the pane on Codex's "hooks need review" menu, where it sits. `--trust-all-hooks on`
    - No: only the plugin's own hooks are trusted. A pane that opens on the review menu ends its launch as failed, naming the blocked hooks. `--trust-all-hooks off`
    - The `--plan` preview lists the hooks it will trust; show that list with the question.
    The Claude reviewer runs Sonnet high and is not asked.
-   Then the plan seats, which plan a risky build before it starts:
-   Ask "Plan author": Opus high (recommended) | Sonnet medium | Off
-   - Opus high: `--option planAuthorEnabled=true --option planAuthorModel=project --option planAuthorEffort=project`
-   - Sonnet medium: `--option planAuthorEnabled=true --option planAuthorModel=sonnet --option planAuthorEffort=medium`
-   - Off: no plan is written for a build. `--option planAuthorEnabled=false`
-   Ask "Sol judge": Codex high (recommended) | Claude Sonnet high | Off
-   Ask "Fable judge": Claude Fable high (recommended) | Off
-   - Codex high: `--option planJudgeSolEnabled=true --option planJudgeSolAgent=codex`
-   - Claude Sonnet high: the judge runs on Claude, which cannot write. `--option planJudgeSolEnabled=true --option planJudgeSolAgent=claude`
-   - Off: the plan is judged without it. `--option planJudgeSolEnabled=false`
-   - Fable judge, Claude Fable high: `--option planJudgeFableEnabled=true`. Off: `--option planJudgeFableEnabled=false`
-   On the Claude profile, ask the Sol judge Claude Sonnet high (recommended) | Off.
-   Ask "Fast tier", one multi-select question (`multiSelect: true`): None (recommended) | Plan author | Judges | Reviewer
-   - A seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Each chosen one is sent as true and the rest as false: Plan author `planAuthorFast`; Judges `planJudgeSolFast` and `planJudgeFableFast`; Reviewer `codexReviewerFast`, as `--option planAuthorFast=true --option planJudgeSolFast=false ...`. None picked with a seat means that seat alone. Offer a seat that runs on Codex only when the check said "Codex fast mode: available".
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`
@@ -190,7 +182,7 @@ Ask them in this order, up to four questions per call.
     Ask "Strict hooks": Off (recommended) | On
     - Off: only the safety hooks (lost work, wrong commits). `--no-strict`
     - On: also search before reading, and one test run per change. `--strict`
-11. How long Claude keeps a conversation's prompt cache, one answer for each role:
+11. How long Claude keeps a conversation's prompt cache, one answer for each role. Asked when the owner chose the Caches group in step 6 (the recommended set answers all three), with these three questions; `--option mainPromptCacheTtl=<v>` and the flags below are the same answer:
     Ask "Main prompt cache": 1h (recommended) | 5m | Leave as is
     - 1h: Main keeps its cache 1 hour. Saved in `.claude/main-session.settings.json`, which only a main started with `claude --settings <that file>` reads. `--main-cache-ttl 1h`
     - 5m: Main keeps its cache 5 minutes, in the same file. `--main-cache-ttl 5m`
@@ -225,14 +217,17 @@ Ask them in this order, up to four questions per call.
     - None: install nothing; setup prints each command to run later.
     All sends nothing; the other chosen ones are sent as `--addons <a>,<b>`, None as `--addons none`.
     Setup runs them for this main checkout and reports each as installed or failed, with the command.
-13. The review loop.
-    Ask "Review": Use defaults (recommended) | Tune now | Keep saved
-    - Use defaults: no round cap, a closing pass, one reviewer under 200 changed lines, the default review flags. `--max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd ''`
-    - Tune now: the questions below.
-    - Keep saved: sends none of these flags.
-    On "Tune now", one call:
-    Ask "Review rounds": No cap (recommended) | 5 | 10
-    - The most review passes a build may run. `--max-rounds ''` or `--max-rounds <n>`
+13. The review workflow. Asked when the owner chose the Review workflow group in step 6. The recommended set answers the
+    first four questions already (`--recommended`: P2 and above hold a merge, a pass cap of 5, a fresh closing reviewer, a
+    closing pass; the small-build line and the review flags stay at their defaults). When Keep saved was chosen and
+    `--questions begin` printed `review workflow: not answered`, ask the first three questions even so.
+    One call, then the rest:
+    Ask "Blocking severity": P2 and above (recommended) | P1 and above | P3 and above
+    - The lowest severity of finding that holds a merge. `--block-at P2`, `P1` or `P3`
+    Ask "Review pass cap": 5 (recommended) | 3 | 8
+    - From this many passes, a closing NO-GO with no P0 or P1 ends the loop with its findings open. `--pass-cap <n>`
+    Ask "Fresh closing reviewer": Yes (recommended) | No
+    - Yes: the closing pass reads the whole branch handed no earlier finding. `--fresh-closing yes`; No: `--fresh-closing no`
     Ask "Closing pass": Runs (recommended) | None
     - Runs: after the narrowed passes end GO, one more pass reads the whole branch, and its GO merges. `--closing-pass yes`
     - None: the narrowed pass that ends GO merges. `--closing-pass no`
@@ -240,7 +235,7 @@ Ask them in this order, up to four questions per call.
     - A first pass is one reviewer under this many changed lines, else three. `--small-build ''` or `<n>`
     - Off: every first pass has three reviewers. `--small-build off`
     Ask "Review flags": Defaults (recommended) | Off | Set each
-    - When a finished build is flagged for a written review: over 30 minutes of review, over a third of the time on tests or idle waits, over $30 at list price. Defaults: `--max-review-min '' --max-test-percent '' --max-usd ''`; Off: `--review-flags off`.
+    - When a finished build is flagged for a written review: over 30 minutes of review, over a third of the time on tests or idle waits, over 30 US dollars at list price. Defaults: `--max-review-min '' --max-test-percent '' --max-usd ''`; Off: `--review-flags off`.
     On "Set each":
     Ask "Review minutes": 30 (recommended) | Off | 60
     Ask "Test share": 33 (recommended) | Off | 50

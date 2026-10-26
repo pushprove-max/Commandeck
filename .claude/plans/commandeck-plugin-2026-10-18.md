@@ -153,7 +153,7 @@ host-load, main-compact, checkpoint-rejected). host-load already left this file 
 - **Change:** move `2>/dev/null` ahead of the input redirection:
   - `scripts/cos-watch-inbox.sh:77`, the issue's line.
   - The same bug where the file can be missing:
-    - `scripts/read-verdict.sh:159` (`< "$2"`, a session log).
+    - `scripts/read-verdict.sh:159` (`< "${2}"`, a session log).
     - `hooks/edit-content-tripwires.sh:204` (`wc -c < "$FILE_PATH"`, a file being created).
     - `scripts/wait-test-run.sh:22` (`wc -l < "$OUT"`).
     - `scripts/platform-audit/run.sh:46` (`wc -c < "$A/out/$id.md"`).

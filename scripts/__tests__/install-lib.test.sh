@@ -219,7 +219,7 @@ check "il_cache_ttl never writes promptCacheTtl, and leaves an owner's own promp
 # il_cache_ttl is a counter, no setup run. A line that is gone fails the harness loud: a rename cannot make the cases no-ops.
 replay() {
   echo "$1" > "$T/replay.json"
-  ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0 CLAUDE_CONFIG_DIR=$T/replay-cc
+  ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0 CLAUDE_CONFIG_DIR=$T/replay-cc GIVEN={}
     il_cache_ttl() { calls=$((calls + 1)); }
     eval "$(sed -n '/^PP_OPTS_KEY=/,/^}/p' "$REAL/scripts/paths.sh")"
     for l in '^old()' 'WCACHE=$(old .workerCacheTtl)' '^MCACHE_ON=' 'case $WCACHE_ON in 5m|1h) il_cache_ttl' 'Builder and worker prompt cache: not answered since 0.48.0'; do
@@ -268,19 +268,22 @@ done
 
 # --- issue 244: the full suite before the final review, saved as fullSuiteBeforeFinal for builder-codex-pass.sh ---
 # setup.sh's own read line, its no-test-command rule and its config write, as cuts runs them; the second arg is the
-# --full-suite answer as its case arm saves it (true, false, or '' for none given). No setup run.
+# --full-suite answer as its case arm passes it (on, off, or '' for none given). No setup run.
 full() {
   echo "$1" > "$T/full.json"
   lib 'S=$(cat "$0/setup.sh"); IL_CONFIG=$1; il_write() { cat; }; CMODELS={} RL={} GEN=null DROPS={} CUTS={} BUILDER={}
     eval "$(grep "^old()" <<<"$S")"; eval "$(grep "^PROFILE=\$(old .profile)" <<<"$S")"; eval "$(grep "^FULL=\$(old " <<<"$S")"
-    [ -z "$2" ] || FULL=$2
-    eval "$(grep "^\[ -n \"\$TEST\" \] || FULL=false" <<<"$S")"
+    F=$(sed -n "/^given()/p;/^full_suite_answer()/,/^}/p;/^full_suite_rule()/,/^}/p" <<<"$S")
+    [ "$(grep -c "()" <<<"$F")" = 3 ] || { echo "setup.sh lost given, full_suite_answer or full_suite_rule"; exit 0; }
+    eval "$F"; GIVEN={} FULL_ASKED= FULL_OFF_NOTE=
+    [ -z "$2" ] || full_suite_answer "$2"
+    full_suite_rule
     { eval "$(sed -n "/^jq -n --argjson v \"\$IL_VERSION\"/,/| il_write \"\$IL_CONFIG\"$/p" <<<"$S")"; } | jq -c .fullSuiteBeforeFinal' "$T/full.json" "$2"
 }
-check "--full-suite on is saved as true" true "$(full '{"version":1,"testCommand":"t"}' true)"
+check "--full-suite on is saved as true" true "$(full '{"version":1,"testCommand":"t"}' on)"
 check "a re-run with no answer keeps on as saved" true "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":true}' '')"
 check "a re-run with no answer keeps off as saved, not dropped" false "$(full '{"version":1,"testCommand":"t","fullSuiteBeforeFinal":false}' '')"
-check "with no test command it records off, whatever the answer: the closing pass would have no suite to run" false "$(full '{"version":1}' true)"
+check "with no test command a saved on is recorded off: the closing pass would have no suite to run" false "$(full '{"version":1,"fullSuiteBeforeFinal":true}' '')"
 
 # Issue 256: setup rebuilds .builder from its answers; a key it asks nothing about (the hand-written maxBuilders cap)
 # must survive, or an update lifts the cap. The second arg is the --builder-clear-line answer ('' clears it). No setup

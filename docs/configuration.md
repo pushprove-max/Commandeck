@@ -29,6 +29,12 @@ the role does not take is refused, naming the key. Setup writes the keys
 from its answers (`--option <key>=<value>`). The keys live in your user
 settings file, so a plugin update does not change them.
 
+One order decides every value setup saves: this run's explicit answer (a flag
+or `--option`), then the profile or `--recommended`, then the value saved
+before. When a run moves the reviewer or the Sol judge to the other agent and
+names no model for it, a saved model that agent cannot run goes back to the
+default, and setup says so.
+
 The fixer runs the fix passes after a review: the first one on the model and
 effort the Builder was launched with, every later one on Opus high by default.
 `fixerFirstModel=opus` and `fixerFirstEffort=high` run the first one on Opus
@@ -48,7 +54,7 @@ fills those models in, and asks for a type when a call names none.
 | `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
 | `.claude/settings.local.json` of the main checkout | Claude Code applies it over every worktree session's own settings, so setup puts no lean list there. |
 | `.claude/main-session.settings.json` of the main checkout | Main's lean lists: the `ui-themes` and `mattpocock-skills` plugins off. Only a session started with `claude --settings .claude/main-session.settings.json` reads it, so start main that way; workers never do. A key you set there stays; uninstall removes only what setup added. |
-| `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line; the plugin's `/config` options (`pluginConfigs`), which setup fills where they are empty. A `/config` option beats the project's answer, and the doctor names where each value comes from. `maxBuilders`, the most Builders that may run at once over all units, is set there or by hand as `builder.maxBuilders` in the project's `commandeck.json`; setup asks nothing for it. `wakeKinds`, the Orca message types that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`; others are held and shown at the next wake), and `wakeWindowSeconds`, the window in which actionable messages wake main once (default 60; 0 wakes at once), are set there too; setup asks neither. |
+| `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line; the plugin's `/config` options (`pluginConfigs`), which setup fills where they are empty and replaces with this run's answers. A `/config` option beats the project's answer, and the doctor names where each value comes from. `maxBuilders`, the most Builders that may run at once over all units, is set there or by hand as `builder.maxBuilders` in the project's `commandeck.json`; setup asks nothing for it. `wakeKinds`, the Orca message types that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`; others are held and shown at the next wake), and `wakeWindowSeconds`, the window in which actionable messages wake main once (default 60; 0 wakes at once), are set there too; setup asks neither. |
 | `~/.claude/CLAUDE.md` | Optional marked global instruction blocks. |
 | `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks, trust, the notify line and `check_for_update_on_startup = false` (no update prompt in launched panes; an owner's own value stays), relocated when CODEX_HOME is set. |
 | `~/.commandeck/install/` | Per-project and machine manifests, original blobs and saved dashboard bind/port/hosts. |
@@ -67,13 +73,14 @@ that have `/autodecide`, the band and the rules; a seat not listed never reads t
 next session. With both seats listed, they share one mode: `/autodecide on` or `off` in one seat shows in the other
 seat's band and status line within 5 seconds.
 
-Review-loop keys are `maxRounds`, `closingPass`, `smallBuild`, `maxReviewMinutes`,
+Review-loop keys are `blockAt`, `passCap`, `freshClosing`, `closingPass`, `smallBuild`, `maxReviewMinutes`,
 `maxTestPercent` and `maxUsd`. Setup saves tuned numeric answers as strings.
-Defaults are no cap, a closing pass, one reviewer below 200 changed lines,
+Defaults are P2 as the lowest severity that holds a merge, a pass cap of 5, a
+fresh closing reviewer, a closing pass, one reviewer below 200 changed lines,
 and report flags at 30 review minutes, a third of the clock on tests/idle
-with over 10 minutes, and $30. Those report flags do not block a merge.
-`maxRounds` is not the review cap: from the fifth pass on record, `review`
-runs as the closing pass whatever it is set to ([Review passes](review-loop.md)).
+with over 10 minutes, and 30 US dollars. Those report flags do not block a merge.
+From the pass cap on the record, `review` runs as the closing pass
+([Review passes](review-loop.md)). `maxRounds` is no longer read.
 `generatedFiles` lets merge accept a tail of commits changing only the listed
 generated paths after the reviewed commit; do not list handwritten source.
 

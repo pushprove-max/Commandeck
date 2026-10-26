@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Issue 341: every fix brief opens its findings so far, by class, and names the classes the evidence file's failure table
-# lacks; a class that comes back is redesigned in order (data design and failure table, a design-only pass to GO, then the
+# Issue 341: every fix brief opens its findings so far, by class, and asks a fix that touches a save to update that save's
+# row of the evidence file's failure table; a class that comes back is redesigned in order (data design and failure table, a design-only pass to GO, then the
 # code, then a whole-branch pass), and the pass after that fix reads the whole branch. After a NO-GO, or a design-only
 # pass, the next pass needs the fix's new code checked against the plan.
 # builder-codex-pass.sh fix rounds when a finding class keeps coming back. The second return (the same class in two
@@ -24,8 +24,9 @@ check "the first NO-GO of a class asks for no class fix" 0 "$(hand 2 | grep -c '
 check "the fix brief after the first NO-GO lists its findings so far under their class (and again under what the pass found)" "1 1 2" \
   "$(hand 2 | grep -c '^## Findings so far') $(hand 2 | grep -c '^### lost-reply (1 finding)') $(hand 2 | grep -c 'CLASS-PROBE')"
 check "every fix brief says the closing pass rebases onto main first (issue 344)" 1 "$(hand 2 | grep -c 'A closing (final) pass first rebases this unit onto current local main')"
-check "and names the class the evidence file's failure table lacks" 1 "$(hand 2 | grep -c '^Classes not yet in the failure table of the evidence file: lost-reply')"
-printf '## Failure table\n\n| pass | class | what failed | fixed by | test |\n|---|---|---|---|---|\n| 2 | lost-reply | a reply is dropped | - | - |\n' > "$B/$U-evidence.md"
+check "a fix brief asks the save's row of the failure table to change with the fix, and lists no classes" "1 0" \
+  "$(hand 2 | grep -c "^A fix that touches a save updates that save's row in the evidence file's failure table") $(hand 2 | grep -c '^Classes not yet in the failure table')"
+printf '## Failure table\n\n| Save | Steps | Left behind if it stops after each step | The one recovery |\n|---|---|---|---|\n| reply file | write, rename | a half file | the next pass rewrites it |\n' > "$B/$U-evidence.md"
 printf 'echo three\n' > "$W/a.sh"; fpass "$W" 3 review "$CLS" >/dev/null
 check "the fix round after a class's second return says fix the design, one test for every ordering, send main nothing" "1 1 1 0" \
   "$(hand 3 | grep -c 'Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far') \
@@ -35,7 +36,7 @@ $(hand 3 | grep -c 'Send main nothing for it') $(hand 3 | grep -c 'The class fix
 check "the redesign comes in order: data design and failure table first, a design-only pass to GO, then the code, then a whole-branch pass" "1 1 1" \
   "$(hand 3 | grep -c 'First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone (a commit with no code runs as a design-only pass: its reviewer judges the design, and its GO merges nothing) and fix the design until a pass is GO') \
 $(hand 3 | grep -c 'Only then change the code') $(hand 3 | grep -c 'run the next pass on the whole branch (final)')"
-check "a class in the failure table is not named as missing" "0 1" "$(hand 3 | grep -c '^Classes not yet in the failure table') $(hand 3 | grep -c '^### lost-reply (1 finding)')"
+check "a later fix brief lists the class under Findings so far and still lists no missing classes" "0 1" "$(hand 3 | grep -c '^Classes not yet in the failure table') $(hand 3 | grep -c '^### lost-reply (1 finding)')"
 check "the class-again block starts the background sweep and asks for a Sweep line per site" "1 1" \
   "$(hand 3 | grep -c 'Start one background read-only agent now') $(hand 3 | grep -c 'Sweep: <file>:<line>: fixed')"
 printf 'echo four\n' > "$W/a.sh"; fpass "$W" 4 review "$CLS" >/dev/null

@@ -449,7 +449,7 @@ live seat on another spec, `:270-280`).
 - **Cause:** 56 scripts under `scripts/` do not handle `--help` or `-h` (checked while planning). `to-main.sh`
   would read `--help` as a message type and send it.
 - **Change:** each script that runs has, before it sources anything or reads state:
-  `case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac`
+  `case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "${0}" | head -3; exit 0 ;; esac`
   (or the script's existing `usage`). That prints its signature lines from the header. The sourced libraries are
   skipped (`paths.sh`, `install-lib.sh`, `host-services.sh`, `project-main.sh`, `cos-lib.sh`, `requirements.sh`).
   The optional usage card in the startup context is not built: main's print has 286 bytes of room (item 22).

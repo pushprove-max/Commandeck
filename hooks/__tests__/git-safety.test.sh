@@ -9,7 +9,8 @@ PASS=0 FAIL=0
 
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 cmd() { jq -cn --arg c "$1" '{tool_name:"Bash", tool_input:{command:$c}}'; }
-run() { bash "$HOOK" >/dev/null 2>&1 <<<"$(cmd "$1")"; echo $?; }
+# A Builder pane runs this test with COMMANDECK_BUILDER=1 set; the plain cases are the ones outside it.
+run() { env -u COMMANDECK_BUILDER bash "$HOOK" >/dev/null 2>&1 <<<"$(cmd "$1")"; echo $?; }
 blocks() { for C in "$@"; do check "blocks: $C" 2 "$(run "$C")"; done; }
 passes() { for C in "$@"; do check "passes: $C" 0 "$(run "$C")"; done; }
 
@@ -155,6 +156,22 @@ mkdir -p "$WT/co"; echo x > "$WT/co/only-here.txt"
 check "git -C <dir> checkout <a file only that folder has> blocks" 2 "$(pre sX "git -C $WT/co checkout only-here.txt")"
 rm -rf "$E" "$WT"; unset TMPDIR COMMANDECK_SCRATCH
 # Without its strip helper the hook must refuse, not read an empty command.
+# --- issue 371: a Builder never commits by hand; the pass script commits what is staged ---
+brun() { COMMANDECK_BUILDER=1 bash "$HOOK" 2>&1 >/dev/null <<<"$(cmd "$1")"; }
+brc() { COMMANDECK_BUILDER=1 bash "$HOOK" >/dev/null 2>&1 <<<"$(cmd "$1")"; echo $?; }
+check "a hand commit in a Builder pane is refused"            2 "$(brc 'git commit -m "wip"')"
+check "... after && and with -C <worktree>"                   2 "$(brc 'cd /repo && git -C /wt/unit commit -am wip')"
+check "... after --attr-source and its value (git takes it as two words)" 2 "$(brc 'git --attr-source HEAD commit -m wip')"
+check "... the refusal says the pass script commits"          1 "$(brun 'git commit -m wip' | grep -c 'builder-codex-pass.sh commits what is staged')"
+check "... a model co-author trailer is named in the refusal" 1 \
+  "$(brun $'git commit -F - <<EOF\nfix\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF' | grep -c 'model co-author trailer')"
+check "... a plain message does not name a trailer"           0 "$(brun 'git commit -m wip' | grep -c 'co-author trailer')"
+check "a commit outside a Builder pane passes"                0 "$(run 'git commit -m wip')"
+check "the pass script run in a Builder pane passes"          0 "$(brc 'bash scripts/builder-codex-pass.sh u 2 review')"
+check "git log naming commit in a Builder pane passes"        0 "$(brc 'git log --grep commit')"
+check "a Builder's staging and status calls pass"             0 "$(brc 'git add -A && git status --porcelain')"
+check "--record-add never blocks, even on a Builder commit"   0 \
+  "$(COMMANDECK_BUILDER=1 bash "$HOOK" --record-add >/dev/null 2>&1 <<<"$(cmd 'git commit -m wip')"; echo $?)"
 LONE=$(mktemp -d); cp "$HOOK" "$LONE/"
 check "a missing strip-quoted.sh blocks"        2 \
   "$(bash "$LONE/git-safety.sh" >/dev/null 2>&1 <<<"$(cmd 'git push --force')"; echo $?)"

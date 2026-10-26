@@ -18,8 +18,9 @@ any other line is refused.
 The batch's Data design section above binds. Before the first edit copy it into the evidence file as
 `## Data design`, and keep it true: a change to where a piece of state lives, who writes or reads it, when it
 resets or what a retry runs updates that section first, then the code. The first review pass reads it before the
-diff. The evidence file also carries `## Failure table`, one row per failure a test or a pass found, kept current
-before every pass: `| pass | class | what failed | fixed by | test |`. Every fix brief lists the classes the table lacks.
+diff. When it is not `none`, the evidence file also carries `## Failure table`, one row per save:
+`| Save | Steps | Left behind if it stops after each step | The one recovery |`. The first pass refuses without a row,
+and a fix that touches a save updates that save's row in the same commit.
 
 ## How to work
 
@@ -177,7 +178,10 @@ merge refuses a round file the script did not write, or one older than the tip.
 1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
    the first pass and one pass: three reviewers at once, or one when the build
    is under {small-build} changed lines and main did not launch it with `--risky` (the
-   pass prints which); fix everything it finds together.
+   pass prints which); fix everything it finds together. Before it, each `Break:` line of the plan
+   (`<test file> -- <check label> -- <site>`) needs a recorded break run: run that test red with the
+   condition removed, then write `- <test file> -- <check label> -- red: <the command that ran it>` under
+   `## Break runs` in the evidence file. The pass refuses until every `Break:` line has one.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
    when main changed this brief or its rulings since the last pass. A review finding blocks the merge only

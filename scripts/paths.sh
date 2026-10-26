@@ -1049,7 +1049,9 @@ pp_codex_fast() { [ "${COMMANDECK_CODEX_FAST:-}" != false ] && [ "$(pp_role_opti
 pp_review_loop() {
   local f=$PP_MAIN/.claude/commandeck.json v src=/dev/stdin o=
   # The owner's /config answer beats the project's (issue 245); setup's own check reads the answers it saves.
-  if case $1:${COMMANDECK_REVIEW_LOOP:-} in maxRounds:) o=maxReviewRounds v=$(pp_config_option maxReviewRounds) ;;
+  if case $1:${COMMANDECK_REVIEW_LOOP:-} in passCap:) o=reviewPassCap v=$(pp_config_option reviewPassCap) ;;
+       blockAt:) o=reviewBlockSeverity v=$(pp_config_option reviewBlockSeverity) ;;
+       freshClosing:) o=freshClosingReviewer v=$(pp_config_option freshClosingReviewer) ;;
        closingPass:) o=closingPass v=$(pp_config_option closingPass) ;; *) false ;; esac; then
     [[ $v =~ $3 ]] || { echo "$o = \"$v\" in /config is not a value it takes; change it with /config" >&2; return 1; }
     echo "$v"; return 0
@@ -1080,7 +1082,7 @@ pp_config_option() {
   { cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || echo '{}'; } \
     | jq -er --arg k "$1" --argjson a "${a:-null}" "$PP_OPTS_KEY"' (if $a // {} | has($k) then $a[$k] else .pluginConfigs[key].options[$k]? end)
     | select(. != null and . != "project")
-    | if $k == "closingPass" then (if . then "yes" else "no" end) else tostring end' 2>/dev/null
+    | if $k == "closingPass" or $k == "freshClosingReviewer" then (if . then "yes" else "no" end) else tostring end' 2>/dev/null
 }
 # Issue 312: every role's settings are /plugin config keys, <role in camelCase><Field> (plan-judge-sol model:
 # planJudgeSolModel). A key the manifest does not list is no setting: orchestrator, builder and codex-reviewer have no
@@ -1139,7 +1141,8 @@ pp_option() {
   done; done
   case $1 in
     maxBuilders) p=.builder.maxBuilders ;;
-    maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
+    reviewBlockSeverity) p=.reviewLoop.blockAt d=P2 ;; reviewPassCap) p=.reviewLoop.passCap d=5 ;;
+    freshClosingReviewer) p=.reviewLoop.freshClosing d=yes ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;;
     autoDecideSeats) p=.autoDecideSeats d=chiefOfStaff ;;
     unitsBand) p=.units.band d=auto ;; unitsPane) p=.units.pane d=auto ;; unitsStatus) p=.units.status d=auto ;;

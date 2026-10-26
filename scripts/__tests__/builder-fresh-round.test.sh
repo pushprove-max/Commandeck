@@ -106,7 +106,7 @@ fr() { rm -f "$T/sends"; printf 'handle=%s\nunit=u9\nrole=builder\ncmd=export CO
   (sleep 1; echo "$BR/$1" > "$LOGS/s-$1.jsonl") &
   (cd "$T/p" && env -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$SC" COMMANDECK_WORKSPACES="$T/ws" \
     COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 timeout 10 bash "$REAL/scripts/builder-fresh-round.sh" term_x "$BR/$1" "$T/rec" > "$T/fr.out" 2>&1); R=$?
-  SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); NEWREC=$(diff "$T/rec.before" "$T/rec" | sed -n 's/^> //p' | grep -v '^session=' | paste -sd' ' -); }
+  SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); NEWREC=$(diff "$T/rec.before" "$T/rec" | sed -n 's/^> //p' | grep -v '^session=' | paste -sd' ' -); echo "$SEQ" >> "$T/allseq"; }
 newbuild() { rm -f "$BR"/*-fix-r*.md; }
 TS="title:Builder — u9,Your task spec"
 fr u9-fix-r1.md sonnet high
@@ -144,10 +144,30 @@ check "two fix files, an Opus high pane, fixerModel=sonnet fixerEffort=medium: a
   "/clear,$TS|" "$SEQ|$NEWREC"
 fr u9-added-19990101-000000.md opus high
 check "and an added-work hand-off types nothing and leaves the record unchanged" "/clear,$TS|" "$SEQ|$NEWREC"
-# Issue 355: a plain hand-off (a pass that ended GO) moves no model, whatever the fixer rules say: a model switch
-# belongs at a cleared context of a fix round, because the prompt cache is per model.
+# Issue 355: a plain hand-off (the context line's) is a fix round when the unit's newest round file ends NO-GO, and
+# its round is that file's N; after a GO round, or with no round file, it moves no model: a model switch belongs at a
+# cleared context, because the prompt cache is per model.
+rm -f "$BR"/u9-r*-reports.md; opts '{}'
 fr u9-handoff.md opus high
-check "a plain hand-off types no /model" "/clear,$TS|" "$SEQ|$NEWREC"
+check "a plain hand-off with no round file types no /model" "/clear,$TS|" "$SEQ|$NEWREC"
+printf 'f\nVERDICT: NO-GO\n' > "$BR/u9-r2-reports.md"; printf 'f\nVERDICT: GO\n' > "$BR/u9-r3-reports.md"
+fr u9-handoff.md opus high
+check "a plain hand-off after a GO round types no /model" "/clear,$TS|" "$SEQ|$NEWREC"
+printf 'f\nVERDICT: NO-GO\n' > "$BR/u9-r3-reports.md"; printf 'f\nVERDICT: GO\n' > "$BR/u9-r10-reports.md"
+fr u9-handoff.md opus high
+check "the newest round file is the highest N, not the last name sorted: r10 ended GO, so nothing is switched" "/clear,$TS|" "$SEQ|$NEWREC"
+rm -f "$BR/u9-r10-reports.md"
+fr u9-handoff.md sonnet medium
+check "a plain hand-off after a NO-GO round 3 switches to the later-round fixer and records fixer=later round=3" \
+  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing model=opus effort=high round=3" "$SEQ|$NEWREC"
+rm -f "$BR"/u9-r*-reports.md; printf 'f\nVERDICT: NO-GO\n' > "$BR/u9-r1-reports.md"
+fr u9-handoff.md sonnet high
+check "a plain hand-off after a NO-GO round 1 records fixer=first round=1" \
+  "/clear,$TS|model=sonnet effort=high fixer=first:routing model=sonnet effort=high round=1" "$SEQ|$NEWREC"
+rm -f "$BR"/u9-r*-reports.md
+# Not tied to one hand-off: a /model typed anywhere in any run above comes right after /clear.
+check "every /model in every run's typed sequence comes right after /clear" 0 \
+  "$(awk -F, '{ for (i = 1; i <= NF; i++) if ($i ~ /^\/model/ && $(i - 1) != "/clear") bad++ } END { print bad + 0 }' "$T/allseq")"
 opts '{}'; newbuild
 touch "$T/no-title"; fr u9-fix-r1.md opus high; rm -f "$T/no-title"
 check "an Orca without set-pane-title: the hand-off still goes through" "0 /clear,Your task spec" "$R $SEQ"

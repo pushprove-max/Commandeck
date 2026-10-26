@@ -123,23 +123,60 @@ check "npm ci through a linked node_modules blocks" 2 "$(run "$(bash_p "npm ci" 
 check "approval cannot carry npm ci through a link" 2 "$(run "$(bash_p "COMMANDECK_DEP_APPROVED=1 npm ci" "$WTX")")"
 
 # Issue 206: setup.sh only saves its quoted answers (a test command such as 'npm test') and never runs them, so its
-# own preview is a sender of its quoted text; setup's answers `add` and `install` had joined 'npm test' into an install.
+# own preview carries its quoted text as data; setup's answers `add` and `install` had joined 'npm test' into an install.
 SETUP=$(cd "$(dirname "$0")/../.." && pwd)/scripts/setup.sh
 mkdir -p "$TMP/h"; ln -s "${SETUP%/scripts/setup.sh}" "$TMP/h/plug"
 check "the plugin's own setup preview with --auto-mode add is not blocked" 0 \
   "$(run "$(bash_p "bash $SETUP --profile claude --test-command 'npm test' --auto-mode add --worker-cache-ttl 5m --plan")")"
 check "the plugin's own setup preview with install answers, named through ~, is not blocked" 0 \
   "$(run_env HOME="$TMP/h" "$(bash_p "bash ~/plug/scripts/setup.sh --test-command 'npm test' --global-claude merge --global-rules install --rules merge --plan")")"
-check "another setup.sh with the same flags still blocks" 2 \
+check "any script's quoted answers are data: another setup.sh with the same flags passes" 0 \
   "$(run "$(bash_p "bash ./other/setup.sh --test-command 'npm test' --auto-mode add --worker-cache-ttl 5m --plan")")"
+# Issue 372: the same preview named through the plugin-root variable, or by a relative path after a cd, is not blocked
+# either. No path is trusted: a quoted answer is data whichever script it is given to.
+check "setup with --test-command 'npm test' and install answers passes, named through \${CLAUDE_PLUGIN_ROOT}" 0 \
+  "$(run "$(bash_p 'bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --test-command '"'npm test'"' --global-rules install --rules merge --plan')")"
+check "setup with --test-command 'npm test' and install answers passes, run by a relative path after cd" 0 \
+  "$(run "$(bash_p "cd x && bash scripts/setup.sh --test-command 'npm test' --global-rules install --rules merge --plan")")"
+check "a quoted option value that names an install passes" 0 "$(run "$(bash_p "foo --x '$INSTALL lodash'")")"
+check "a heredoc body with an unquoted end word naming an install passes" 0 \
+  "$(run "$(bash_p "cat <<EOF"$'\n'"$INSTALL lodash"$'\n'"EOF")")"
+check "a quoted string given to a program that is no shell (ssh) is not read: the stated bound of the tripwire" 0 \
+  "$(run "$(bash_p "ssh host '$INSTALL lodash'")")"
+check "a real install still blocks: alone" 2 "$(run "$(bash_p "$INSTALL lodash")")"
+check "a real install still blocks: after cd x &&" 2 "$(run "$(bash_p "cd x && $INSTALL lodash")")"
+check "a real install still blocks: after ;" 2 "$(run "$(bash_p "true; $INSTALL lodash")")"
+check "a real install still blocks: inside \$(...)" 2 "$(run "$(bash_p "echo \$($INSTALL lodash)")")"
+check "a real install still blocks: inside double-quoted \$(...)" 2 "$(run "$(bash_p "echo \"\$($INSTALL lodash)\"")")"
+check "a real install still blocks: inside backticks" 2 "$(run "$(bash_p "echo \`$INSTALL lodash\`")")"
+check "an install inside a heredoc body's \$(...) still blocks" 2 \
+  "$(run "$(bash_p "cat <<EOF"$'\n'"\$($INSTALL lodash)"$'\n'"EOF")")"
+check "even inside single quotes in the body: bash expands an unquoted body first, whoever reads it" "2:0" \
+  "$(run "$(bash_p "bash <<EOF"$'\n'"echo '\$($INSTALL lodash)'"$'\n'"EOF")")":"$(run "$(bash_p "bash <<'EOF'"$'\n'"echo '\$($INSTALL lodash)'"$'\n'"EOF")")"
+# The owner's ruling after plan pass 4: code given as text (a shell's -c, eval, a wrapper's program, a body or
+# here-string a shell reads) is quoted text like any other, so it is data. The guard is a tripwire against forgetting
+# to ask, not a security boundary (plan L4); what bash runs itself, its substitutions included, still blocks.
+for H in "bash -c '$INSTALL lodash'" "sh -lc \"$INSTALL lodash\"" "eval '$INSTALL lodash'" "sudo bash -c '$INSTALL lodash'" \
+  "bash -o pipefail -c '$INSTALL lodash'" "bash <<< '$INSTALL lodash'" "bash <<'EOF'"$'\n'"$INSTALL lodash"$'\n'"EOF" \
+  "cat <<'EOF' | bash"$'\n'"$INSTALL lodash"$'\n'"EOF" "cat <<'EOF' > >(sh)"$'\n'"$INSTALL lodash"$'\n'"EOF"; do
+  check "code given as text is data, the guard's stated limit: ${H%%$'\n'*}" 0 "$(run "$(bash_p "$H")")"
+done
+check "a substitution in a shell's double-quoted -c text still blocks: bash runs it before the shell starts" 2 \
+  "$(run "$(bash_p "bash -c \"\$($INSTALL lodash)\"")")"
+# An install inside a $(( )) runs before the arithmetic does (a reviewer's known gap of pass 4).
+check "a substitution inside arithmetic still blocks: in a word, in backticks, in an unquoted heredoc body" "2:2:2" \
+  "$(run "$(bash_p "echo \$(( \$($INSTALL lodash) + 0 ))")"):$(run "$(bash_p "echo \"\$(( \`$INSTALL lodash\` + 0 ))\"")"):$(run "$(bash_p "cat <<EOF"$'\n'"\$(( \$($INSTALL lodash) + 0 ))"$'\n'"EOF")")"
+check "and is data in a quoted heredoc body" 0 \
+  "$(run "$(bash_p "cat <<'EOF'"$'\n'"\$(( \$($INSTALL lodash) + 0 ))"$'\n'"EOF")")"
+check "a command with an unclosed quote is read whole and an install in it still blocks" 2 \
+  "$(run "$(bash_p "echo 'it's $INSTALL lodash")")"
+check "a commit message that names an install, written through a quoted heredoc, passes" 0 \
+  "$(run "$(bash_p "git commit -m \"\$(cat <<'EOF'"$'\n'"fix $INSTALL of lodash"$'\n'"EOF"$'\n'")\"")")"
 check "an install after the plugin's setup on the same line still blocks" 2 \
   "$(run "$(bash_p "bash $SETUP --test-command 'npm test' --plan && npm install lodash")")"
-check "a quoted install run by bash -c beside the plugin's setup still blocks" 2 \
-  "$(run "$(bash_p "bash $SETUP --plan; bash -c 'npm install lodash'")")"
 
 # Issue 311: after a plugin update the hook that fires and the setup.sh on the line sit in two different version
 # folders of the plugin cache, so the sibling-path check refused the owner's own preview and apply.
-# Only the cache under the Claude config folder is trusted: a cache-shaped path anywhere else is screened.
 PC=$TMP/home/.claude/plugins/cache/commandeck/commandeck EVIL=$TMP/evil/plugins/cache/commandeck/commandeck/0.25.3
 mkdir -p "$PC/0.25.2" "$PC/0.25.3/scripts" "$EVIL/scripts" "$PC/0.25.3/x/scripts"
 cp -R "${HOOK%/*}" "$PC/0.25.2/hooks"
@@ -155,19 +192,13 @@ check "issue 311's apply, hook and setup.sh in two version folders, is not block
   "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS")")"
 check "an install after the cache setup.sh on the same line still blocks" 2 \
   "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan && $INSTALL lodash")")"
-check "a cache-shaped setup.sh outside the Claude config folder still blocks" 2 \
-  "$(run_old "$(bash_p "bash $EVIL/scripts/setup.sh 'npm install lodash'")")"
-check "a setup.sh nested deeper than a version folder still blocks" 2 \
-  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/x/scripts/setup.sh $ISSUE_ARGS --plan")")"
-# The trusted cache follows CLAUDE_CONFIG_DIR, as Claude Code's own does; reached by a link it is the same folder.
+# No setup.sh is trusted by its path any more (issue 372): a quoted answer is data for every script, so the scoping
+# fences of issue 311 (a cache-shaped folder elsewhere, a nested folder, another config folder, a link out of the
+# cache) have nothing left to fence; the same commands all pass.
 ln -s "$TMP/home/.claude" "$TMP/cfg"
-check "the preview passes when CLAUDE_CONFIG_DIR names the config folder by a link" 0 \
-  "$(run_old "$(bash_p "bash $TMP/cfg/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/cfg")"
-check "a cache outside CLAUDE_CONFIG_DIR still blocks" 2 \
-  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/evil")"
 ln -s "$EVIL" "$PC/0.25.4"
-check "a cache entry that links out of the cache still blocks" 2 \
-  "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.4/scripts/setup.sh $ISSUE_ARGS --plan")")"
+check "issue 311's scoping commands pass: the same preview from a look-alike, nested, other-config or linked setup.sh" "0:0:0:0:0" \
+  "$(run_old "$(bash_p "bash $EVIL/scripts/setup.sh 'npm install lodash'")"):$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/x/scripts/setup.sh $ISSUE_ARGS --plan")"):$(run_old "$(bash_p "bash $TMP/cfg/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/cfg"):$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")" "$TMP/evil"):$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.4/scripts/setup.sh $ISSUE_ARGS --plan")")"
 
 # Issue 311, related: a here-document with a quoted end word is data whichever command shares the line.
 HD=$'use npm install lodash and yarn add left-pad\n'
@@ -179,10 +210,14 @@ check "a real install after such a heredoc still blocks" 2 \
   "$(run "$(bash_p "cd $TMP && cat > b.md <<'EOF'"$'\n'"${HD}EOF"$'\n'"$INSTALL left-pad")")"
 check "a << inside a quoted string hides no install after it" 2 \
   "$(run "$(bash_p "ls && echo \"x <<'EOF'\""$'\n'"$INSTALL left-pad"$'\n'"EOF")")"
-# A body is data only when a sender reads it and sends it nowhere else: a shell, or a pipe on to one, runs it.
-for H in "bash <<'EOF'" "sh <<'EOF'" "cd $TMP && sh -s <<-'EOF'" "cat <<'EOF' | bash" "cat <<'EOF' > >(sh)" "python3 - <<\\EOF" \
-  "(bash; echo done) <<'EOF'" "(sh; printf done) <<'EOF'" "(bash; cat ) <<'EOF'" "bash -s -- \"report (cat adoption)\" <<'EOF'"; do
-  check "a heredoc body run by: $H still blocks" 2 "$(run "$(bash_p "$H"$'\n'"$INSTALL lodash"$'\n'"EOF")")"
+check "a here-string is data like a heredoc body" 0 "$(run "$(bash_p "cat <<< '$INSTALL lodash'")")"
+check "a here-string with a substitution still blocks whoever reads it" 2 "$(run "$(bash_p "cat <<< \"\$($INSTALL lodash)\"")")"
+check "a shell name among a program's arguments is printed, not run" "0:0:0" \
+  "$(run "$(bash_p "echo bash -c \"$INSTALL lodash\"")"):$(run "$(bash_p "command echo bash -c '$INSTALL lodash'")"):$(run "$(bash_p "git commit -m x -- bash -c '$INSTALL lodash'")")"
+# A body is judged by what it holds alone, never by a command before it on its line or an earlier one: the guard keeps
+# no runner state, so each case passes the same with the earlier command in place or removed.
+for P in "bash -c true;" "bash --version &&" $'bash -c true\n' $'python3 -c pass\n' ""; do
+  check "a body after '${P%$'\n'}' is data" 0 "$(run "$(bash_p "$P cat <<'EOF'"$'\n'"$INSTALL lodash"$'\n'"EOF")")"
 done
 
 # Message cuts: a blocked package is no question for main; the worker records it and goes on. Both blocks say so.

@@ -9,13 +9,18 @@ it is one reviewer told all three angles. The pass prints which rule chose,
 and the merge counts the lines again and refuses a one-reviewer first pass
 the rule did not allow.
 
+The first pass refuses to start until the evidence file shows its checks. Each `Break:` line of the plan (a test, a
+check label and the site it guards) needs a line under `## Break runs`: the test run red with the condition removed,
+and the command that ran it. A brief whose Data design is not `none` needs a `## Failure table` with a row per save
+(steps, what is left after each, the one recovery). A plan with no `Break:` line and a Data design of `none` owe
+neither.
+
 After that come narrowed passes, each reading only the changes since the last
 one, until one ends `VERDICT: GO`. A closing pass then reads the whole branch
 again. If the first pass ends GO and nothing is committed after it, that GO
 merges and no closing pass is needed. A project that answered "none" to the
 closing pass at setup merges the narrowed pass that ends GO, once narrowed
-passes have read every commit after the first pass; one that set a round cap
-has any pass numbered above it refused.
+passes have read every commit after the first pass.
 
 Each pass after the first prints the files and lines changed since the last
 pass, and says so when no code line changed (only comments or blank lines). If
@@ -41,11 +46,14 @@ level or class tag, and a pass with only known gaps ends GO. A gap in
 documentation, plan wording or a failure table is a P3 unless it hides a real
 defect. A pass whose findings are all P3 ends GO.
 
-A P0, P1 or P2 holds the loop: the Builder fixes it and the next `review`
+A P0, P1 or P2 holds the loop (the blocking severity, P2 by default; set
+`reviewBlockSeverity` to P1 so only a P0 or P1 holds, or to P3 so every
+finding does; the setting is part of every prompt, so change it between builds, not during one): the Builder fixes it and the next `review`
 runs as the closing pass. The pass count is the passes on record for the
 build, not the number the Builder gives a pass. From the fifth pass on record
-(the cap), `review` runs as the closing pass. The closing pass is handed the
-plan's decisions and accepted failure modes, but no earlier finding. The loop
+(the cap, `reviewPassCap`), `review` runs as the closing pass. The closing pass is handed the
+plan's decisions and accepted failure modes, but no earlier finding (turn
+`freshClosingReviewer` off and it is handed the review history like any pass). The loop
 stops at the first of these:
 
 - A closing pass ends GO. Each P3 still open, its own or an earlier GO

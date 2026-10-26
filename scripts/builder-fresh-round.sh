@@ -110,8 +110,18 @@ idle 120000 || fail "typed /clear but the new session of $H was not idle within 
 # Opus high; builder: as the Builder launched, a per-build raise included); /plugin config keys beat routing's.
 # fixerEnabled=false keeps the Builder's launched model and effort, switching back a pane an earlier round moved. Each
 # switch is typed only where the pane differs, and the record says the rule.
-if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]] && [ -n "$REC" ] && [ -f "$REC" ]; then
-  ROUND=${HAND##*-fix-r}; ROUND=$((10#${ROUND%.md}))
+# Issue 355: a plain hand-off (<unit>-handoff.md, the context line's) is a fix round too when the unit's newest round file
+# ends NO-GO: its round is that file's N. After a GO round, or with no round file, it switches nothing.
+ROUND=
+if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]]; then ROUND=${HAND##*-fix-r}; ROUND=$((10#${ROUND%.md}))
+elif [[ ${HAND##*/} =~ ^(.+)-handoff\.md$ ]]; then
+  UN=${BASH_REMATCH[1]} LAST=0
+  for f in "${HAND%/*}/$UN"-r*-reports.md; do
+    n=${f##*/$UN-r}; n=${n%-reports.md}; [[ $n =~ ^[0-9]+$ ]] && [ $((10#$n)) -gt "$LAST" ] && LAST=$((10#$n)) && LASTF=$f
+  done
+  [ "$LAST" = 0 ] || [ "$(tail -n 1 "$LASTF")" != "VERDICT: NO-GO" ] || ROUND=$LAST
+fi
+if [ -n "$ROUND" ] && [ -n "$REC" ] && [ -f "$REC" ]; then
   # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take stops the hand-off.
   SRC=routing
   pick() { local v rc=0; v=$(pp_role_option fixer "$2" 2>&1) || rc=$?

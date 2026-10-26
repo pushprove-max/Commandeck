@@ -16,7 +16,8 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # here; one missing from this list is never screened at all.
 P=${COMMAND//[\'\"\\]/}
 case "$P" in *git*) ;; *) exit 0 ;; esac
-case "$P" in *push*|*reset*|*checkout*|*switch*|*restore*|*clean*|*stash*|*branch*|*worktree*|*reflog*|*gc*) ;; *) exit 0 ;; esac
+# `commit` is screened only in a Builder pane (issue 371), so any other session passes it here.
+case "$P" in *push*|*reset*|*checkout*|*switch*|*restore*|*clean*|*stash*|*branch*|*worktree*|*reflog*|*gc*) ;; *commit*) [ "${COMMANDECK_BUILDER:-}" = 1 ] || exit 0 ;; *) exit 0 ;; esac
 
 # `p\ush` and `$'push'` are the word push to bash (a backslash before a letter
 # is that letter), so every check below reads them that way.
@@ -169,9 +170,9 @@ fi
 # form): a plain token as written, quoted prose as one placeholder word.
 # Quoted data is still never the START of a call: a quoted `git` word becomes
 # the placeholder too, so `git grep "git" -- "restore"` is one call, a grep.
-case "$P" in *checkout*|*switch*|*restore*|*clean*|*stash*|*branch*|*worktree*|*reflog*|*gc*) ;; *) exit 0 ;; esac
+case "$P" in *checkout*|*switch*|*restore*|*clean*|*stash*|*branch*|*worktree*|*reflog*|*gc*) ;; *commit*) [ "${COMMANDECK_BUILDER:-}" = 1 ] || exit 0 ;; *) exit 0 ;; esac
 # The subcommand is matched as a whole word, so `git restore-mtime` is not a restore.
-DISCARD="(^|[;&|(/]|[[:space:]])git${GITOPTS}[[:space:]]+(checkout|switch|restore|clean|stash|branch|worktree|reflog|gc)[^;&|()[:space:]]*([[:space:]]+[^;&|()[:space:]]+)*"
+DISCARD="(^|[;&|(/]|[[:space:]])git${GITOPTS}[[:space:]]+(checkout|switch|restore|clean|stash|branch|worktree|reflog|gc|commit)[^;&|()[:space:]]*([[:space:]]+[^;&|()[:space:]]+)*"
 # Temporary worktree ownership (issue 357). A forced remove of a worktree is blocked, except one this session added
 # on a path under the temporary folder. Two proofs, both of one add. The add's own success: only a command on a FIXED
 # LIST shows it (WT_ADD below: `git [-C <dir>] worktree add [-q|--quiet|--detach|--no-checkout|-b <name>|-B <name>]...
@@ -266,7 +267,7 @@ while IFS= read -r CALL; do
   while [ $# -gt 0 ]; do
     case "$1" in
       -C) case ${2-} in /*) GDIR=$2 ;; ?*) GDIR=$GDIR/$2 ;; esac; shift; [ $# -gt 0 ] && shift ;;
-      -c|--git-dir|--work-tree|--namespace|--config-env) shift; [ $# -gt 0 ] && shift ;;
+      -c|--git-dir|--work-tree|--namespace|--config-env|--attr-source) shift; [ $# -gt 0 ] && shift ;;
       --) break ;; # git has no bare `--` option: `git grep git -- restore` names a file
       -*) shift ;;
       *) break ;;
@@ -315,6 +316,13 @@ while IFS= read -r CALL; do
       [ "${ARGS[0]-}" = expire ] && WHY="git reflog expire drops the entries that recover lost commits." ;;
     gc)
       arg_is "$(abbr --prune)=now" && WHY="git gc --prune=now deletes unreachable objects at once, the ones the reflog could still recover. Plain \`git gc\` keeps the grace period." ;;
+    commit)
+      # Issue 371: builder-codex-pass.sh commits what is staged, under its own message, inside the script (this hook sees only
+      # the `bash .../builder-codex-pass.sh` call). Outside a Builder pane the fast path above has already passed the call.
+      if [ "${COMMANDECK_BUILDER:-}" = 1 ]; then
+        WHY="a Builder never commits by hand: builder-codex-pass.sh commits what is staged, under its own message. Stage the work and run the pass."
+        ! grep -qiE 'co-authored-by:.*(claude|anthropic|codex|openai)' <<<"$WT_RAW" || WHY="$WHY This message also carries a model co-author trailer, which no Builder commit may carry."
+      fi ;;
   esac
   [ -n "$WHY" ] || continue
   echo "Blocked: $WHY" >&2

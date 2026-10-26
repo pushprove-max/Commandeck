@@ -146,5 +146,12 @@ RC=$(for a in "undo status-line" "undo" "undo status-line --keep"; do rlib 'bash
 check "pass 8: revoked-option-restoration: undo of a value not on the list is refused, and undo with nothing or with --keep is usage" "1 2 2 " "$RC"
 
 
+# A machine with no manifest yet (setup --plan writes none): no record, an empty answer, where jq's error on the missing
+# file ended setup --plan under set -e with exit 2 and no message.
+eval "$(sed -n '/^il_profile_record()/,/^}/p' "$REAL/scripts/install-lib.sh")"
+check "a manifest that does not exist yet is no record (empty, exit 0)" "0:" "$(r=$(il_profile_record "$T/none.json" "$T/s.json"); echo "$?:$r")"
+echo '{' > "$T/bad.json"
+check "a manifest that is not JSON still fails" 1 "$(il_profile_record "$T/bad.json" "$T/s.json" >/dev/null; [ $? -ne 0 ] && echo 1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${PROFILE_REVOKE_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

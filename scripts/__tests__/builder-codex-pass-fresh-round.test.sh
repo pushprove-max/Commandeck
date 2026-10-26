@@ -26,7 +26,8 @@ check "and sits right after it" "Timing" "$(grep -A1 -m1 '^Pass:' "$B/$U-r1-repo
 # the owner's extra rounds for one unit, with no edit to the tracked settings file.
 printf 'echo six\n' > "$W/a.sh"
 p6() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-6 bash "$PASS_SH" "$U" 6 review >"$TMP/out" 2>"$TMP/err"); echo $?; }
-check "round 6 is over the project's 5" "2 1" "$(p6) $(grep -c 'over the 5 rounds' "$TMP/err")"
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 5 >/dev/null)
+check "round 6 is over the unit's 5" "2 1" "$(p6) $(grep -c 'over the 5 rounds' "$TMP/err")"
 echo 9 > "$B/$U-review-cap.md"
 check "a cap the Builder writes in its own worktree is not read" 2 "$(p6)"
 check "review-cap.sh refuses in a Builder worktree" 2 "$(cd "$W" && bash "$REAL/scripts/review-cap.sh" "$U" 9 >/dev/null 2>&1; echo $?)"
@@ -85,8 +86,12 @@ rm -f "$TMP/frs-calls"; printf 'echo nine\n' > "$W/a.sh"
 check "a GO pass hands nothing over" "0 0 0" \
   "$(fpass "$W" 9 review 'VERDICT: GO') $(ls "$B/$U-fix-r9.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | wc -l | tr -d ' ')"
 printf 'echo ten\n' > "$W/a.sh"
-check "a NO-GO pass from another pane (its handle not the seat record's) hands nothing over to a fresh session" "0 0 0" \
-  "$(fpass "$W" 10 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(ls "$B/$U-fix-r10.md" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | grep -c -- '--text')"
+# Issue 355: the fix round is the Builder's pane's (the seat record's handle), whoever ran the pass.
+check "a NO-GO pass from another pane hands the fix round to the Builder's pane, and tells the caller to fix nothing" "0 1 1 0" \
+  "$(fpass "$W" 10 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(ls "$B/$U-fix-r10.md" 2>/dev/null | wc -l | tr -d ' ') $(grep -c "^FIX ROUND 10: this session is not the Builder's pane, so the Builder's pane (term_frs) takes the fix round" "$TMP/out") $(grep -c 'end your turn now' "$TMP/out")"
+helper_done 10
+check "and the helper types into the seat record's pane, not the caller's" "1 0" \
+  "$(grep -c 'terminal send --terminal term_frs --text /clear' "$TMP/frs-calls") $(grep -c 'term_other' "$TMP/frs-calls")"
 # A hand-off the pane never took reaches main, with Orca's own answer. The send's output went to /dev/null
 # and the log was the only trace, so main never heard that fix round 2 of commandeck-speedups-0-7-2 had not started.
 rm -f "$TMP/frs-calls"
@@ -95,9 +100,9 @@ rm -f "$TMP/frs-calls"
 check "a /clear Orca refuses: exit 1, Orca's answer in the log once per attempt (one retry), and main is told once" "1 2 1" \
   "$R $(grep -c 'typing /clear into term_frs failed (orca: PROBE-REFUSAL)' "$TMP/frs.out") $(cat "$TMP/frs-calls" "$SC/queue/main.jsonl" 2>/dev/null | grep -c "fresh round not started: ${H7##*/}")"
 
-# Issue 355: a NO-GO whose hand-off is skipped names the check that failed and tells main (when a Builder seat exists),
-# and writes no fix-r file; without a seat the reason is only printed. A hand-off that cannot be written leaves no
-# file at its path and starts no helper, so no /clear is typed into a pane for a half-written brief.
+# Issue 355: a NO-GO whose hand-off is skipped (the seat record names no pane) says so and tells main (when a Builder
+# seat exists), and writes no fix-r file; without a seat the reason is only printed. A hand-off that cannot be written
+# leaves no file at its path and starts no helper, so no /clear is typed into a pane for a half-written brief.
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
 # Issue 366: the P1 of pass 10 open at the seventh pass on record would stop the loop for the owner (REVIEW STOP)
 # with no hand-off. Passes 6 to 10 are aged out of the 14-day session window, so pass 11 is the second on record.
@@ -105,19 +110,25 @@ find "$CODEX_HOME/sessions" -name 'rollout-*-thr-[0-9]-*.jsonl' ! -name '*-thr-1
 find "$CODEX_HOME/sessions" -name 'rollout-*-thr-10-*.jsonl' -exec touch -t 200001010000 {} +
 told() { cat "$SC/queue/main.jsonl" "$TMP/frs-calls" 2>/dev/null | grep -c "NO FIX HAND-OFF after pass $1"; } # <N>: messages naming it
 rm -f "$TMP/frs-calls"; printf 'echo eleven\n' > "$W/a.sh"
-check "a skipped hand-off names the failed check and tells main: no Orca handle" "0 1 1 0" \
-  "$(fpass "$W" 11 review "$NOGO" ORCA_TERMINAL_HANDLE=) $(grep -c 'NO FIX HAND-OFF after pass 11: no Orca handle (ORCA_TERMINAL_HANDLE is empty); this session fixes on its launch model' "$TMP/out") $(told 11) $(ls "$B/$U-fix-r11.md" 2>/dev/null | wc -l | tr -d ' ')"
+check "a NO-GO pass with no Orca handle hands the fix round to the Builder's pane and tells main nothing" "0 1 0 1" \
+  "$(fpass "$W" 11 review "$NOGO" ORCA_TERMINAL_HANDLE=) $(ls "$B/$U-fix-r11.md" 2>/dev/null | wc -l | tr -d ' ') $(told 11) $(grep -c "^FIX ROUND 11: this session is not the Builder's pane" "$TMP/out")"
+helper_done 11
 printf 'echo twelve\n' > "$W/a.sh"
-check "a skipped hand-off names the failed check and tells main: not the Builder's pane" "0 1 1 0" \
-  "$(fpass "$W" 12 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(grep -c "NO FIX HAND-OFF after pass 12: not the Builder's pane" "$TMP/out") $(told 12) $(ls "$B/$U-fix-r12.md" 2>/dev/null | wc -l | tr -d ' ')"
-mv "$SC/seat-$U-builder.txt" "$SC/seat-$U-builder.hold"; printf 'echo thirteen\n' > "$W/a.sh"
+check "a hand-off for a pane the seat record names is the same from a pane that is not the Builder's" "0 1 0" \
+  "$(fpass "$W" 12 review "$NOGO" ORCA_TERMINAL_HANDLE=term_other) $(ls "$B/$U-fix-r12.md" 2>/dev/null | wc -l | tr -d ' ') $(told 12)"
+helper_done 12
+cp "$SC/seat-$U-builder.txt" "$SC/seat-$U-builder.keep"; grep -v '^handle=' "$SC/seat-$U-builder.keep" > "$SC/seat-$U-builder.txt"; printf 'echo thirteen\n' > "$W/a.sh"
+check "a seat record with no pane is a skipped hand-off: the reason is named, main is told and no fix-r file is written" "0 1 1 0" \
+  "$(fpass "$W" 13 review "$NOGO" ORCA_TERMINAL_HANDLE=term_frs) $(grep -c 'NO FIX HAND-OFF after pass 13: the seat record names no pane for the Builder' "$TMP/out") $(told 13) $(ls "$B/$U-fix-r13.md" 2>/dev/null | wc -l | tr -d ' ')"
+mv "$SC/seat-$U-builder.keep" "$SC/seat-$U-builder.txt"
+mv "$SC/seat-$U-builder.txt" "$SC/seat-$U-builder.hold"; printf 'echo fourteen\n' > "$W/a.sh"
 check "a skipped hand-off with no Builder seat record prints the reason and tells nobody" "0 1 0" \
-  "$(fpass "$W" 13 review "$NOGO" ORCA_TERMINAL_HANDLE=) $(grep -c 'NO FIX HAND-OFF after pass 13' "$TMP/out") $(told 13)"
+  "$(fpass "$W" 14 review "$NOGO" ORCA_TERMINAL_HANDLE=) $(grep -c 'NO FIX HAND-OFF after pass 14' "$TMP/out") $(told 14)"
 mv "$SC/seat-$U-builder.hold" "$SC/seat-$U-builder.txt"
-rm -f "$TMP/frs-calls"; printf 'echo fourteen\n' > "$W/a.sh"; mkdir -p "$B/$U-fix-r14.md"
+rm -f "$TMP/frs-calls"; printf 'echo fifteen\n' > "$W/a.sh"; mkdir -p "$B/$U-fix-r15.md"
 check "a fix hand-off that cannot be written names the failure, tells main, leaves no file and starts no helper" "1 1 1 0 0 0" \
-  "$(fpass "$W" 14 review "$NOGO") $(grep -c 'NO FIX HAND-OFF after pass 14: writing' "$TMP/out") $(told 14) $(grep -c '^FIX ROUND' "$TMP/out") $(ls "$B/$U-fix-r14.md.tmp" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | grep -c -- '--text /clear')"
-rmdir "$B/$U-fix-r14.md"
+  "$(fpass "$W" 15 review "$NOGO") $(grep -c 'NO FIX HAND-OFF after pass 15: writing' "$TMP/out") $(told 15) $(grep -c '^FIX ROUND' "$TMP/out") $(ls "$B/$U-fix-r15.md.tmp" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | grep -c -- '--text /clear')"
+rmdir "$B/$U-fix-r15.md"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

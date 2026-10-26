@@ -51,29 +51,41 @@ while IFS='|' read -r k d a; do
   [ "$a" != - ] || { check "option $k, which setup does not ask, has no default" "$d" "$(jq -c --arg k "$k" '.userConfig[$k].default // "none"' "$M")"; continue; }
   check "option $k defaults to setup's recommended answer ($a)" "$d 1" "$(jq -c --arg k "$k" '.userConfig[$k] | if has("default") then .default else "none" end' "$M") $(grep -cF "$a (recommended)" "$REAL/skills/setup/SKILL.md")"
 done <<'EOF'
-builderModel|"project"|Ask "Builder model": Sonnet
-builderEffort|"project"|Ask "Builder effort": High
-orchestratorEffort|"project"|Ask "Main": Opus medium
-fixerEnabled|true|Ask "Fixer": Same as Builder, then Opus high
-fixerFirstModel|"project"|Ask "Fixer": Same as Builder, then Opus high
-codexReviewerModel|"project"|Ask "Reviewer model": Sol medium
-planAuthorEnabled|true|Ask "Plan author": Opus high
-planJudgeSolEnabled|true|Ask "Sol judge": Codex high
-planJudgeFableEnabled|true|Ask "Fable judge": Claude Fable high
-planAuthorFast|false|Ask "Fast tier", one multi-select question (`multiSelect: true`): None
-maxReviewRounds|"none"|Ask "Review rounds": No cap
-closingPass|true|Ask "Closing pass": Runs
 fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
-mainPromptCacheTtl|"1h"|Ask "Main prompt cache": 1h
-workerPromptCacheTtl|"5m"|Ask "Builder and worker prompt cache": 5m
-relayPromptCacheTtl|"1h"|Ask "Chief of Staff prompt cache": 1h
 dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
 dashboardPort|"none"|Ask "Dashboard": On, this machine only
 maxBuilders|"none"|-
-wakeKinds|"worker_done,escalation,question,decision_gate,merge_ready"|-
-wakeWindowSeconds|60|-
 EOF
-check "the set is the 26 role keys (issue 312; the Fable judge has four and no agent key) and the 15 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349) and the three prompt-cache options, one for each role (issue 367), among them" 41 "$(jq '.userConfig | length' "$M")"
+# The recommended profile (config/recommended.json) holds the recommended value of every other option; the skill reads
+# it from setup.sh, so its text no longer repeats them. A manifest default that is a concrete value (not "project", which
+# is the role's own default) is the profile's value too: the two would show the owner different answers.
+check "a profile value equals the key's manifest default wherever the default is a concrete value" "" \
+  "$(jq -r --slurpfile m "$M" '.options | to_entries[] | .key as $k | $m[0].userConfig[$k] as $c
+    | select($c.default != null and $c.default != "project" and $c.default != .value) | $k' "$REAL/config/recommended.json" | paste -sd' ' -)"
+check "the profile recommends a Sonnet Builder at high effort (issue 293: Sonnet below high builds below Opus at medium)" "sonnet high" \
+  "$(jq -r '.options | "\(.builderModel) \(.builderEffort)"' "$REAL/config/recommended.json")"
+check "the set is the 26 role keys (issue 312; the Fable judge has four and no agent key) and the 17 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349), the three prompt-cache options, one for each role (issue 367), and the review workflow's three (blocking severity, pass cap, fresh closing reviewer; issue 373), among them" 43 "$(jq '.userConfig | length' "$M")"
+# The recommended profile (config/recommended.json) is the one place setup's recommended values live. Every option is in it
+# or asked by name, so none is left for an owner who takes the recommended set to find in /config; every value is one its
+# key takes; and it holds nothing that is one machine's (a path, an address, a name).
+REC=$REAL/config/recommended.json
+ORPHANS=$(jq -r --slurpfile r "$REC" '.userConfig | keys[] | select(. as $k | $r[0].options | has($k) | not)' "$M" | sort | paste -sd' ' -)
+check "every option is in the recommended profile or asked by name; the ones asked are these" \
+  "codexReviewerAgent dashboardBind dashboardPort fullSuiteBeforeFinal maxBuilders planJudgeSolAgent" "$ORPHANS"
+SK=$REAL/skills/setup/SKILL.md
+check "and the skill asks each of them: the Reviewer question, the Dashboard question, the Full suite question, and --option maxBuilders" "1 1 1 1" \
+  "$(grep -c 'Ask "Reviewer"' "$SK") $(grep -c 'Ask "Dashboard"' "$SK") $(grep -c 'Ask "Full suite' "$SK") $(grep -c -- '--option maxBuilders=' "$SK")"
+check "the profile names no option the manifest lacks" "" \
+  "$(jq -r --slurpfile m "$M" '.options | keys[] | select(. as $k | $m[0].userConfig | has($k) | not)' "$REC" | paste -sd' ' -)"
+check "every profile value is one its key takes (a listed word, a boolean, a number from the key's min, text)" "" \
+  "$(jq -r --slurpfile m "$M" '.options | to_entries[] | .key as $k | .value as $v | $m[0].userConfig[$k] as $c
+    | select(if $c.options then ($c.options | index($v) | not) elif $c.type == "boolean" then ($v | type) != "boolean"
+      elif $c.type == "number" then (($v | type) != "number" or $v < ($c.min // 0) or ($c.max != null and $v > $c.max)) else ($v | type) != "string" end) | $k' "$REC" | paste -sd' ' -)"
+check "the profile holds no path, address or name: no value with a slash, an at sign, a dotted address or a space" "" \
+  "$(jq -r '.options | to_entries[] | select(.value | tostring | test("[/@ ]|[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+")) | .key' "$REC" | paste -sd' ' -)"
+# Issue 373: a review loop with no pass cap never ends, so no option, flag or question offers one.
+check "no setup question, flag or option offers No cap for the review loop" 0 \
+  "$(cat "$REAL/skills/setup/SKILL.md" "$REAL/scripts/setup.sh" "$M" | grep -c 'No cap\|--max-rounds\|maxReviewRounds')"
 # The second plan judge is a Claude seat on Fable that cannot write the plan it judges; the Astra judge role and its
 # options are gone, and nothing outside the tests reads them.
 check "the Fable judge is a read-only Claude reviewer on fable at high, and no Astra judge role is left" \
@@ -91,12 +103,6 @@ check "wake options: no answer (the deployed format) takes the defaults" "$D318"
 check "wake options: an empty or unknown kinds list and a window that is not whole seconds take the defaults" "$D318:$D318" \
   "$(wopt '{"wakeKinds":"","wakeWindowSeconds":"soon"}'):$(wopt '{"wakeKinds":"bogus","wakeWindowSeconds":-5}')"
 check "wake options: an answer is read, spaces dropped, and a window of 0 kept" "question,status 0" "$(wopt '{"wakeKinds":"question, status","wakeWindowSeconds":0}')"
-# Issue 293: a Sonnet Builder ran at medium because setup recommended Medium whatever the model, and asked it three
-# questions later. The effort is asked right after the model, High recommended on Sonnet (the default model), Medium on
-# Opus; the model and effort options default to "project", no answer, which the /config dialog may save without hiding
-# the project's answer.
-check "setup asks the Builder effort right after the model, High recommended on Sonnet and Medium on Opus" '1:1' \
-  "$(awk '/Ask "Builder model":/ {m = 1; next} m && /^ +Ask / {print ($0 ~ /Ask "Builder effort": High \(recommended\)/); exit}' "$REAL/skills/setup/SKILL.md"):$(grep -A1 -x '   On Opus:' "$REAL/skills/setup/SKILL.md" | grep -cxF '   Ask "Builder effort": Medium (recommended) | Low | High | Maximum')"
 # Issue 311: AskUserQuestion takes 2 to 4 options. "Worker cuts" and "Keep words" listed only None when nothing was saved,
 # the call failed with "Invalid tool parameters" and the agent answered None without asking. A saved name or a detected
 # command (<...>) may be absent, so the options that are always there must be two or more, and the line has at most four.
@@ -206,7 +212,8 @@ check "no setup option defers a typed value to a follow-up" "" "$(grep -E '(: |[
 check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in plain text for' "$SETUP")"
 # A first-time owner sees which answer to take: one option of every question is marked, and a
 # question is titled in words, never by a rule's hash.
-check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS"; grep '(recommended).*(recommended)' <<<"$ASKS")"
+# The two group pickers choose which groups to answer, so no group is the recommended one.
+check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS" | grep -v '^ *Ask "\(More groups\|Groups\)": '; grep '(recommended).*(recommended)' <<<"$ASKS")"
 # Issue 367: one prompt-cache question for each role, its default bullet and its Leave as is bullet each ending with the flag.
 check "the main prompt cache question recommends 1h, offers 5m, and Leave as is writes nothing" '1:1:1:1' "$(grep -cxF '    Ask "Main prompt cache": 1h (recommended) | 5m | Leave as is' "$SETUP"):$(grep -cF -- '- 1h: Main keeps its cache 1 hour.' "$SETUP"):$(grep -cF -- '`--main-cache-ttl 1h`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--main-cache-ttl leave`' "$SETUP")"
 check "the Builder and worker prompt cache question recommends 5m, offers 1h, and Leave as is writes nothing" '1:1:1:1' "$(grep -cxF '    Ask "Builder and worker prompt cache": 5m (recommended) | 1h | Leave as is' "$SETUP"):$(grep -cF -- '- 5m: Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too.' "$SETUP"):$(grep -cF -- '`--worker-cache-ttl 5m`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--worker-cache-ttl leave`' "$SETUP")"

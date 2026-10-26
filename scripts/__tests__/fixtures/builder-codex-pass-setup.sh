@@ -100,7 +100,7 @@ export COMMANDECK_ROUTING=$TMP/routing.json
 git init -q -b main "$REPO"
 git -C "$REPO" config user.name t; git -C "$REPO" config user.email t@t; git -C "$REPO" config core.hooksPath /dev/null
 git -C "$REPO" remote add origin https://github.com/o/proj.git
-printf 'echo base\n' > "$REPO/a.sh"; mkdir -p "$REPO/.claude"; echo '{"reviewLoop":{"maxRounds":"5"}}' > "$REPO/.claude/commandeck.json"
+printf 'echo base\n' > "$REPO/a.sh"; mkdir -p "$REPO/.claude"; echo '{"reviewLoop":{}}' > "$REPO/.claude/commandeck.json"
 git -C "$REPO" add a.sh .claude/commandeck.json; git -C "$REPO" commit -qm base
 printf '%s\n' .claude/settings.local.json .claude/builder-events.jsonl >> "$REPO/.git/info/exclude"
 git -C "$REPO" worktree add -q "$TMP/ws/$U" -b "builder/$U"

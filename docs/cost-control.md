@@ -18,9 +18,9 @@
   proves nothing and says so.
 - The price of each build. The build review prices every request at list
   price from one table in `scripts/dashboard_limit.py` and flags a build over
-  $30. These are list-price equivalents and a subscription plan bills
+  30 US dollars. These are list-price equivalents and a subscription plan bills
   differently. A model with no list price on file is shown as unpriced,
-  never as $0.
+  never as zero.
   `scripts/unit-cost.sh` prints a build as turns, tool calls
   and tokens per session.
 - Helper usage. `scripts/subagent-usage.sh` records one row per finished

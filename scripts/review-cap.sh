@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # review-cap.sh <unit> <rounds> -- main's one command for the owner's extra
 # review rounds on one unit: writes <main>/.claude/briefs/<unit>-review-cap.md,
-# which builder-*-pass.sh reads before reviewLoop.maxRounds. The briefs folder
+# which builder-*-pass.sh reads as the highest round number it will run. The briefs folder
 # is never committed, so neither checkout gets dirty and the merge's step 1
 # still passes; the merge archives the file with the unit's other papers.
 # Refused in a linked worktree: a Builder does not raise its own limit.

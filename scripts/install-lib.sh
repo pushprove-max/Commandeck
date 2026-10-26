@@ -558,6 +558,8 @@ il_profile_lock() {
 # line of JSON, or nothing. A manifest from before optionsWant has the options in `options`, and one from before status
 # lines were kept per file its status line at the top (il_status_out).
 il_profile_record() {
+  # No manifest yet (a first setup --plan writes none) is no record, not a jq error set -e turns into a silent exit.
+  [ -e "$1" ] || return 0
   jq -c --arg p "$2" --arg s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" '.statusLine as $top | .entries[$p] // empty
     | .statusLine //= (if $p == $s then $top else null end) | .optionsWant = ((.options // {}) * (.optionsWant // {}))
     | .revoked //= {}' "$1" 2>/dev/null

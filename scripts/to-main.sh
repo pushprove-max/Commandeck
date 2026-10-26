@@ -31,6 +31,8 @@ queue() {
   mkdir -p "$PP_SCRATCH/queue" && jq -cn --arg at "$(date +%FT%T)" --arg t "$1" --arg s "$2" --arg b "$3" '{at: $at, type: $t, subject: $s, body: $b}' >> "$PP_SCRATCH/queue/$KEY.jsonl" \
     || { echo "to-main: $WHO is not running, and the message could not be queued: it is lost" >&2; exit 1; }
   echo "to-main: $WHO is not running; message queued ($PP_SCRATCH/queue/$KEY.jsonl), shown first when it starts again" >&2
+  # Issue 368: a queue is read by a main session that starts in this checkout, so a main running elsewhere never sees it.
+  [ "$KEY" != main ] || echo "to-main: no main pane was found in ${COMMANDECK_MAIN_PANE_DIR:-$WT}, so main does not see this queue until a main session starts in $PP_MAIN. A main running in another checkout must be told another way." >&2
   pp_wake_log to-main "$KEY" "$1: ${2:0:60}" queued
   owed "$2"; exit 3
 }

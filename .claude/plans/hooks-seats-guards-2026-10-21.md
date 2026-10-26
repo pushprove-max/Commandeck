@@ -320,7 +320,7 @@ commits came after a closing GO (a replay onto main stays narrowed). With no clo
 narrowed (owner answer 5, as the host does). It runs under `--check` too. `--verify` is unchanged.
 
 - **Plugin today:** `builder-codex-pass.sh:822-825` already upgrades `review` to `final` when the brief or rulings
-  changed. The same `PASSES` record (`:811`, fields `$8` ended, `$9` read, `$11` said, kind `$3`) and the `FINDING` /
+  changed. The same `PASSES` record (`:811`, fields `${8}` ended, `${9}` read, `${11}` said, kind `${3}`) and the `FINDING` /
   `BLOCKER` patterns (`--verify`'s, from `:540-560`) are what `pick_kind` reads. With `reviewLoop.closingPass` off,
   no final is on record, so nothing changes there.
 - **Change:** port `pick_kind` beside the scope upgrade. Call it in `--check` (`:855`) on the index's tree and after

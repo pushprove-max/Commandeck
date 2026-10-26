@@ -292,10 +292,13 @@ T=${T//'{design}'/"$DESIGN"}
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 [ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
-SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && MAXR=$(pp_review_loop maxRounds '' '^[1-9][0-9]*$') \
+SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && PASSCAP=$(pp_review_loop passCap 5 '^[1-9][0-9]*$') \
+  && BLOCKAT=$(pp_review_loop blockAt P2 '^P[123]$') && FRESHC=$(pp_review_loop freshClosing yes '^(yes|no)$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 LOOP=
-[ -z "$MAXR" ] || LOOP+="This project allows at most $MAXR rounds: a pass numbered over $MAXR is refused. Before that, stop and report to main what is still open."$'\n'
+[ "$PASSCAP" = 5 ] || LOOP+="This project's review pass cap is $PASSCAP: from the ${PASSCAP}th pass on the reviewer's record, only the closing pass ends the loop, and a closing NO-GO with no P0 or P1 merges with its findings open."$'\n'
+[ "$BLOCKAT" = P2 ] || LOOP+="This project's blocking severity is $BLOCKAT: a finding at $BLOCKAT or above holds the merge, a lower one never does."$'\n'
+[ "$FRESHC" = yes ] || LOOP+="This project's closing pass is handed the review history like any pass."$'\n'
 [ "$CLOSING" != no ] || LOOP+="This project runs no closing pass: skip step 3. The narrowed pass that ends \`VERDICT: GO\` is the one the merge takes, once narrowed passes have read every commit after the first pass; change nothing after it."$'\n'
 # Small build off: no build is small, so the first pass is always three reviewers.
 [ "$SMALL" != off ] || T=${T//$'or one when the build\n   is under {small-build} changed lines and main did not launch it with `--risky` (the\n   pass prints which)'/'never one: this project turned the small build off'}
@@ -364,6 +367,22 @@ else
   pp_worktree_new "$UNIT" || exit 1
 fi
 bash "$HERE/worktree-setup.sh" "$WT" --builder ${KEEP:+--keep "$KEEP"}
+# Issue 368: a main session that runs in another checkout than $PP_MAIN is found by the Builder only through the pane it
+# launched from. That pane's checkout (Orca's list, by $ORCA_TERMINAL_HANDLE) goes in the Builder's settings as
+# COMMANDECK_MAIN_PANE_DIR, which pp_seat_pane falls back to; a launch from main's own checkout, or one whose pane cannot
+# be read, records none (a relaunch drops an earlier one).
+record_main_pane() { # <settings file>
+  local f=$1 dir=
+  [ -f "$f" ] || return 0
+  [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || dir=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg h "$ORCA_TERMINAL_HANDLE" \
+    "$PP_PNORM"'first((.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h) | wtp) // empty' 2>/dev/null) || dir=
+  if [ -n "$dir" ] && [ "$(pp_norm "$dir")" != "$(pp_norm "$PP_MAIN")" ]; then
+    jq --arg d "$dir" '.env.COMMANDECK_MAIN_PANE_DIR = $d' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  else
+    jq 'del(.env.COMMANDECK_MAIN_PANE_DIR)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+}
+record_main_pane "$WT/.claude/settings.local.json" || { echo "could not record main's pane folder in $WT/.claude/settings.local.json; the Builder was not launched" >&2; exit 1; }
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"

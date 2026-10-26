@@ -243,5 +243,19 @@ OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" status "bare text w
 check "bare text after the type is refused with the usage line and no Orca call" "2:1:0" \
   "$RC:$(grep -c '^usage: to-main.sh \[--unit <unit>\] <type> <subject> <body>$' <<<"$OUT"):$(ls "$T"/inbox-* 2>/dev/null | wc -l | tr -d ' ')"
 
+# Issue 368: main runs in a checkout other than the project's (a pane in a different folder). The Builder's settings carry
+# that folder as COMMANDECK_MAIN_PANE_DIR, which the pane lookup falls back to; without it the message queues, and says
+# plainly that main does not see the queue.
+OTHER=$T/other-main; mkdir -p "$OTHER"; rm -rf "$T"/inbox-* "$T/scratch/queue"
+jq -n --arg p "$OTHER" '{result: {terminals: [{handle: "term_other", worktreePath: $p, agentIdentity: "claude"}]}}' > "$T/list.json"
+OUT=$(cd "$T/p" && "${E[@]}" COMMANDECK_MAIN_PANE_DIR="$OTHER" bash "$REAL/scripts/to-main.sh" status "far" "body of far" 2>&1)
+check "a Builder whose main runs in another checkout delivers to that pane, not to the queue" "1 0" \
+  "$(grep -c 'body of far' "$T/inbox-term_other" 2>/dev/null) $(ls "$T"/scratch/queue/main.jsonl 2>/dev/null | wc -l | tr -d ' ')"
+OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" status "far2" "body of far2" 2>&1)
+check "with no pane folder recorded, the message queues and says main does not see the queue until a main session starts in the project" "1 1" \
+  "$(grep -c 'does not see this queue until a main session starts in' <<<"$OUT") $(ls "$T"/scratch/queue/main.jsonl 2>/dev/null | wc -l | tr -d ' ')"
+check "a queued message to a Builder does not say it" 0 "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit ux status s b 2>&1 | grep -c 'does not see this queue')"
+main_is term_w
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

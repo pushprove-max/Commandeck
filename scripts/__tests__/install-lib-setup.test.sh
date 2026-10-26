@@ -37,6 +37,7 @@ SETUP='il_record "$IL_MACHINE" merge "$IL_CODEX/hooks.json" "$IL_CODEX/config.to
 # setup_keys <--profile or ""> <--option answers as JSON> -- the answers setup writes.
 setup_keys() { ASK=$1 GV=$2 lib 'S=$(cat "$0/setup.sh"); HERE=$0; die() { echo "setup: $*" >&2; exit 1; }
   ASKED=$ASK GIVEN=$GV PROFILE=${ASK:-claude-openai} RL={}
+  eval "$(sed -n "/^REC_FILE=/p;/^WAKE_KINDS=/p;/^rec_takes()/,/^}/p;/^opt_check()/,/^}/p" <<<"$S")"
   eval "$(sed -n "/^# --- routing:/,/^# --- preflight:/p" <<<"$S")" && echo "$GIVEN"' 2>&1; }
 [ ! -e "$PROJ/.claude" ] || { echo "install-lib: the key cases expect no $PROJ/.claude; a case above left one" >&2; exit 1; }
 mkdir "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"

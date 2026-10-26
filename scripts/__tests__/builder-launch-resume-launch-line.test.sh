@@ -52,5 +52,28 @@ printf '\n## Data design\n\nnone: no state is added or changed\n' >> "$T/legacy.
 check "... with its Data design written, refused next for What can go wrong, that heading named, no Builder" "2:1:0" \
   "$RC:$(grep -c "REFUSED: neither .* has a What can go wrong section .*'## What can go wrong' heading" "$T/out"):$(grep -c 'launch builder' "$T/seats")"
 
+# Issue 368: a Builder reaches the main that launched it, wherever that runs. record_main_pane (the launch's own
+# function) on a hand-written settings file and a stubbed Orca pane list.
+RMP=$(sed -n '/^record_main_pane()/,/^}/p' "$REAL/scripts/builder-launch.sh")
+mkdir -p "$T/lbin"; OTHER=$T/other-main; mkdir -p "$OTHER"
+cat > "$T/lbin/orca-ide" <<EOS
+#!/usr/bin/env bash
+[ -e "$T/list-down" ] && exit 1
+jq -n --arg o "$OTHER" --arg p "$P" '{result: {terminals: [{handle: "term_other", worktreePath: \$o}, {handle: "term_own", worktreePath: (\$p + "/")}]}}'
+EOS
+chmod +x "$T/lbin/orca-ide"
+SETDEF='{"env":{"COMMANDECK_BUILDER":"1"}}'
+rmp() { # <handle> [settings json] -- the settings file after a launch from that pane
+  printf '%s\n' "${2:-$SETDEF}" > "$T/set.json"
+  (cd "$P" && env -u CLAUDE_PROJECT_DIR COMMANDECK_MAIN="$P" PATH="$T/lbin:$PATH" ORCA_TERMINAL_HANDLE="$1" bash -c '. "$0/scripts/paths.sh" >/dev/null; '"$RMP"'; record_main_pane "$1"' "$REAL" "$T/set.json") ; jq -c .env "$T/set.json"; }
+check "a launch from a pane in another checkout records that checkout as COMMANDECK_MAIN_PANE_DIR, and keeps the Builder's other env" "{\"COMMANDECK_BUILDER\":\"1\",\"COMMANDECK_MAIN_PANE_DIR\":\"$OTHER\"}" "$(rmp term_other)"
+check "a launch from main's own checkout records none (a trailing slash on the pane's folder is the same folder)" '{"COMMANDECK_BUILDER":"1"}' "$(rmp term_own)"
+check "a relaunch from main's own checkout drops the earlier record" '{"COMMANDECK_BUILDER":"1"}' \
+  "$(rmp term_own "{\"env\":{\"COMMANDECK_BUILDER\":\"1\",\"COMMANDECK_MAIN_PANE_DIR\":\"$OTHER\"}}")"
+check "a launch from a pane Orca does not list records none" '{"COMMANDECK_BUILDER":"1"}' "$(rmp term_gone)"
+touch "$T/list-down"
+check "a launch while Orca's list cannot be read records none, and does not fail" '{"COMMANDECK_BUILDER":"1"}' "$(rmp term_other)"
+rm -f "$T/list-down"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

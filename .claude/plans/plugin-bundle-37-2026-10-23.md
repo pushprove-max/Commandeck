@@ -246,7 +246,7 @@ Each group's tests are green before the next starts. Commit per group.
 
 - **310** `scripts/merge-unit-local.sh:~28`: first, before any `cd`, resolve the script itself:
   `SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/${BASH_SOURCE[0]##*/}`; the sourcing at :37, the
-  re-execs at :52 (`bash "$0"`) and :60 (`flock ... "$0"`) and `HERE` at :72 use it. Then, when that folder is in a
+  re-execs at :52 (`bash "${0}"`) and :60 (`flock ... "${0}"`) and `HERE` at :72 use it. Then, when that folder is in a
   git checkout that is the main worktree on branch `main` (`git -C "${SELF%/*}" rev-parse --show-toplevel`,
   `--git-common-dir` equal to `--git-dir`, branch `main`), `cd` to it before the code at :37 and :68 reads the cwd.
   Anywhere else (an installed copy) the cwd rules as today; the existing `merge-unit-local.test.sh` cases pin that.

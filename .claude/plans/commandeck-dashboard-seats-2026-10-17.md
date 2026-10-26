@@ -123,7 +123,7 @@ comment's six locations, checked against today's code:
   roles, each with its model, effort and done/running. Red today: it names only `u.seat`. This is the issue's
   "fails if only the newest seat is drawn".
   (b) Same card with `plan.cost` (the existing ~423 shape): `.lane.figs i` texts are `["120:00 so far"]` and
-  `["$0.40"]`. Red today: no figures row.
+  `["<cost>"]`. Red today: no figures row.
   (c) Edit `SEAT_ROWS` ~419: `plan-judge-sol, running`. Red today.
 - `scripts/__tests__/dashboard-built.test.sh`.
   Export `COMMANDECK_CODEX_REVIEW_HOME=$T/review-home` next to `HOME` ~16, so no case can read a real review home.

@@ -139,12 +139,10 @@ test('a snapshot without this project, or with no unit list, draws nothing and s
   expect(parseSnapshot(dash({ inFlight: null }), NOW, 'p')).toMatchObject({ note: 'units: snapshot unreadable', rows: [] })
 })
 
-// The line numbers are built, not written as a hash and digits: ci/leak-words.txt fails a shipped file holding one.
 test("a plan's Closes line names its issues in the plugin's form and the host's", () => {
-  const hashes = (ns: string[]) => ns.map(n => `#${n}`)
-  expect(closesOf('Closes: issue 348, issue 349\n')).toEqual(hashes(['348', '349']))
+  expect(closesOf('Closes: issue 348, issue 349\n')).toEqual(['#348', '#349'])
   expect(closesOf('Closes: #12 #34\n')).toEqual(['#12', '#34'])
-  expect(closesOf('Closes: issue 348\nCloses (only when G19 is built): issue 366\n')).toEqual(hashes(['348']))
+  expect(closesOf('Closes: issue 348\nCloses (only when G19 is built): issue 366\n')).toEqual(['#348'])
 })
 
 test('a merge log is read from its last ATTEMPT line, and a log with none has no attempt', () => {
