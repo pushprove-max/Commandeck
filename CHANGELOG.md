@@ -57,6 +57,7 @@ removed, and a release workflow. A paragraph that closes an issue says so.
   alert. The forced removal of a temporary worktree is granted only while the session's claim on that worktree still
   stands. The discard and reset checks read every abbreviation git accepts for a long option (`--forc`, `--har`).
   Six reworded global rules carry their `MADE_FROM` line, so an owner's "keep mine" still holds after an update.
+  The picker refusal shown while the Chief of Staff is live names the script that delivers the answer.
 
 ## 0.47.0 -- 2026-10-25
 
