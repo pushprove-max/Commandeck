@@ -131,5 +131,13 @@ check "the refusal names the hand-merge way out: confirm the merge, close the pa
   "$(grep -cF "A hand merge that resolved it differently: confirm the merge by hand, close the unit's panes, then orca-ide worktree remove --worktree path:$(W $u) (no --force)" "$TMP/out")"
 rm -f "$TMP/list-answer"
 
+# Issue 391: a pass writes <unit>-r<N>-class-sites.txt and .md, untracked, in .claude/briefs (a review record like the round
+# report). The merge lets an untracked file in that folder through and cleanup skips it, so they never hold the worktree.
+n=$((n + 1)); u=cs$n; mk $u; go $u
+printf 'a.sh:1\n' > "$(W $u)/.claude/briefs/$u-r1-class-sites.txt"; printf '## Class sites\n- a.sh:1\n' > "$(W $u)/.claude/briefs/$u-r1-class-sites.md"
+RC=$(merge $u)
+check "class_sites_files_do_not_hold_cleanup: a unit whose passes wrote class-sites files merges and its worktree is removed by cleanup" "0 gone 0" \
+  "$RC $(gone $u && echo kept || echo gone) $(grep -c 'cleanup HELD' "$TMP/out" || true)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

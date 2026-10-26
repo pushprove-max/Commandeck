@@ -16,6 +16,7 @@ BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$T" | 
 check "the first turn opens the brief and its files together, and later looks are batched" "In your first turn, open this brief and every file it names, together; after that, send every look whose inputs you already know in one turn."
 check "a red hang test sets its own short timeout" "A red test that shows a hang sets its own short timeout"
 check "each evidence heading is written the moment its item turns green (#90)" "The moment an item's test turns green, add its section to the evidence file: \`## #<issue> <title>\`, then the guarding test name and file on the next line."
+check "the evidence file opens with an Issue | Status table, each row set to built as its cut lands (#383)" "The evidence file opens with an \`Issue | Status\` table, one \`| #<n> | not built |\` row per issue of the batch, each set to \`built\` in the same edit that adds the section of the cut that finishes it."
 check "a changed setting keeps reading the deployed format" "keeps reading the format already deployed from its first commit, and has a test that the release accepts the deployed format"
 check "a poll on test output goes to run_in_background, a blocking wait to wait-test-run.sh only (#84)" "start the run with \`run_in_background\`, which tells you when it exits. To block on it, wait only with \`bash {scripts}/wait-test-run.sh <runner-pid> <output-file>\`"
 check "the post-fix checks have one home, the runner that starts them at once and reports each code" "\`bash {scripts}/post-fix-checks.sh <the touched test files>\` runs them and, in a plugin checkout, \`claude plugin validate .\` and \`claude plugin test .\`, all at once, and reports each exit code; any red fails the round."
@@ -167,6 +168,10 @@ check "the batch template's Data design asks for half-write recovery, concurrent
 BODY=$(JOIN "$T")
 check "every test run starts in the background whatever its length, in the Builder brief" "Every test run starts in the background (Bash \`run_in_background\`), whatever its length, and so does every other command that can run in the background; only quick reads stay in the foreground."
 if grep -qF 'over 60 seconds' "$T"; then FAIL=$((FAIL+1)); echo "FAIL the Builder brief still lets a test under 60 seconds run in the foreground"; else PASS=$((PASS+1)); echo "ok   no 60-second qualifier on background runs"; fi
+check "the Builder template asks for the prove step before the first pass, with Ran: and Saw: lines under ## Proof" "Before step 1, once the build is done, you are asked: \`Prove to me this works\`. Run the changed behaviour through its real entry point, with an input from the batch's done criteria"
+check "the Builder template asks for a Ran: and a Saw: line per thing proved under ## Proof" "Under \`## Proof\` in the evidence file write one \`Ran:\` line (the command or action) and one \`Saw:\` line (what came back) per thing proved, and a \`Fixed:\` line per fix."
+BODY=$(JOIN "$R/templates/main-session.md")
+check "the plan judge is asked for the established practice, and a flow step with no Catches: line is rejected" "The judge also names the established practice for the problem and says whether the plan follows it (an unjustified departure is a finding, a justified cheaper one is not), and rejects a step added to the build, merge, review or push flow with no \`Catches:\` line."
 BODY=$SAVED
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

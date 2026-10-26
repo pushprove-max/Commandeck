@@ -41,6 +41,15 @@ printf '%s\n' '{"event":"tool-start","ts":"2026-10-10T11:59:00Z","tool":"Read","
 check "a retried pass of the same round keeps both tries in the review time" 360 \
   "$(jq -s --argjson now 0 -f "$SOURCE/scripts/dashboard_builders.jq" "$T/retry.jsonl" | jq -c '.reviewSec')"
 
+# Issue 383: a Builder that writes its evidence by cut keeps the Issue | Status table the template asks for, and the
+# dashboard counts the rows marked built before any "## #<issue>" section exists.
+CE=$WS/cut-evidence; mkdir -p "$CE/.claude/briefs" && touch "$CE/.git"
+echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$CE/.claude/settings.local.json"
+printf '# cut-evidence -- evidence\n\n| Issue | Status |\n|---|---|\n| #12001 | built |\n| #12002 | not built |\n| #12003 | built |\n\n## Data design\n\nnone\n' \
+  > "$CE/.claude/briefs/cut-evidence-evidence.md"
+dash
+check "cut-evidence: a Builder writing evidence by cut counts the issues its status table marks built, mid-build" '[[12001,12003]]' "$(built cut-evidence)"
+
 # The dashboard off for every project (the registry exists and lists none) collects no home project either; a job
 # installed before any registration (no registry yet) keeps collecting it.
 off() { rm -rf "$T/out2"; mkdir -p "$T/out2"; case ${1:-} in "") ;; EMPTY) : > "$T/out2/projects" ;; *) printf '%s\n' "$1" > "$T/out2/projects" ;; esac

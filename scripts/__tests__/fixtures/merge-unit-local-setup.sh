@@ -98,7 +98,7 @@ mk() { # <unit> [subject]: a Builder worktree with one commit, its brief and its
 pass() { # <unit> <N> <kind>: one pass of the real pass script on the unit's worktree
   local ev=$COMMANDECK_WORKSPACES/$1/.claude/briefs/$1-evidence.md m=$(($2 - 1))
   [ "$m" -lt 1 ] || grep -q "^## Sites checked (pass $m)" "$ev" \
-    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
   (cd "$COMMANDECK_WORKSPACES/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-$2 \
     bash "$PASS_SH" "$1" "$2" "$3" >/dev/null 2>"$TMP/pass.err") || { echo "FAIL the $3 pass on $1 did not run: $(cat "$TMP/pass.err")"; FAIL=$((FAIL+1)); }
 }

@@ -31,8 +31,8 @@ check "a plan-author's prompt carries the Timed checks line rule" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'names them on a `Timed checks:` line and orders the heavy case after them')"
 # Issue 362: builder-launch.sh refuses a plan with no size line, a decision with no Test: line or no What can go wrong
 # section, so the plan author is told what the plan must hold before it writes.
-check "a plan-author's prompt names the size line, the Test: line, the Break: line and the What can go wrong section" 1 \
-  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'A plan carries a `- Planned size: <n> files, <n> changed lines` line, a `Test:` line under each item.*a `Break:` line.*`## What can go wrong` section')"
+check "a plan-author's prompt names the size line, the Test: line, the Break: line, the Claims to falsify list and the What can go wrong section" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'A plan carries a `- Planned size: <n> files, <n> changed lines` line, a `Test:` line under each item.*a `Break:` line.*a `## Claims to falsify` list (one checkable claim per line), and a `## What can go wrong` section')"
 # Issue 360: a plan grew the owner's request into requirements nobody ordered; the plan carries the owner's words.
 check "a plan-author's prompt asks for the Owner's words line from the order, every requirement traced to it" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'The plan opens with an `Owner.s words:` line copied word for word from the order.*every requirement it plans traces to those words or to an addition the owner approved by name')"

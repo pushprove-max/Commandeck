@@ -53,14 +53,19 @@ runs as the closing pass. The pass count is the passes on record for the
 build, not the number the Builder gives a pass. From the fifth pass on record
 (the cap, `reviewPassCap`), `review` runs as the closing pass. The closing pass is handed the
 plan's decisions and accepted failure modes, but no earlier finding (turn
-`freshClosingReviewer` off and it is handed the review history like any pass). The loop
+`freshClosingReviewer` off and it is handed the review history like any pass). A fresh
+closing pass reviews a detached copy of the pass commit with the unit's round reports,
+hand-offs and evidence removed; the copy is deleted when the pass ends. The loop
 stops at the first of these:
 
 - A closing pass ends GO. Each P3 still open, its own or an earlier GO
   round's, is printed as an `Open finding` line (threshold stop).
 - A closing pass at or past the cap ends NO-GO naming an open P2 and no P0
   or P1. Its P2 and P3 findings are printed as `Open finding` lines (cap
-  stop). A NO-GO that names no P2 is no cap stop.
+  stop). A NO-GO that names no P2 is no cap stop. After a cap stop no later
+  pass launches, and past the cap none launches on a change that is only the
+  plan, brief or metrics folders, while no P0 or P1 is open: the launch is
+  refused before it commits anything.
 - A P0 or P1 is still open two passes past the cap. The pass prints
   `REVIEW STOP` with a decision id, no fix round runs, and the next launch
   refuses until the owner answers that decision: the question the pass

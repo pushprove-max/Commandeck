@@ -166,10 +166,14 @@ Acceptance tests (`builder-codex-pass-threshold.test.sh`):
 - new: "past the cap a closing NO-GO with no cappable finding is not a cap stop: the next closing pass launches"
   (What can go wrong row 5)
 - new: "a closing GO at the cap does not refuse the narrowed pass after a later commit" (the exemption)
+- new (pass 1 fix): "a closing NO-GO rerun of a round with an abandoned cut row is still a cap stop, whichever row
+  comes first and whatever the change" and "a closing GO rerun of a round with an abandoned cut row is still a closing
+  GO" (What can go wrong row 9)
 - new: "a P1 still open past the cap is never refused by the cap gate"
 - flip: none; kept: the file's cap cases (section 10, `:203-223`)
 
-Break: scripts/__tests__/builder-codex-pass-threshold.test.sh -- cap_stop_refuses_later_pass -- scripts/builder-codex-pass.sh the cap gate after the REVIEW STOP gate
+Break: scripts/__tests__/builder-codex-pass-cap-gate.test.sh -- cap_stop_refuses_later_pass: after the pass 3 cap stop a design-only pass 4 is refused before any commit (and by --check), and so is a code pass 4 -- scripts/builder-codex-pass.sh the cap gate after the REVIEW STOP gate
+Break: scripts/__tests__/builder-codex-pass-cap-gate.test.sh -- a closing NO-GO rerun of a round with an abandoned cut row is still a cap stop, whichever row comes first and whatever the change -- scripts/builder-codex-pass.sh cap_gate_reason (a cut row holds a round only while no reviewer of it answered)
 
 ### C3 -- #378: the fresh closing reviewer reads a clean copy of the branch (~262 lines)
 
@@ -260,13 +264,16 @@ Acceptance tests:
   exit non-zero with no reviewer launched, its output to name the copy as kept, and the file to hold the change)
 - new, same file: "a Claude closing reviewer runs in the copy too, and the merge takes it" (with
   `codexReviewerAgent=claude`, as `builder-codex-pass.test.sh:167` sets it)
+- new (pass 1 fix), `builder-codex-pass-closing-copy.test.sh`: "closing_copy_gets_the_untracked_brief: the brief is
+  untracked in the worktree and the closing reviewer still finds it in the copy" (What can go wrong row 6)
 - kept: `builder-codex-pass-threshold.test.sh:218-220` (with `freshClosing` no, no copy: the reviewer is in the worktree);
   `project-main.test.sh:90-92` "only the scripts that remove their own mktemp folder use a raw rm -rf", its list unchanged
 
-Break: scripts/__tests__/builder-codex-pass-closing.test.sh -- fresh_closing_pass_reads_a_clean_copy -- scripts/builder-codex-pass.sh RCWD (reverted to the worktree)
-Break: scripts/__tests__/builder-codex-pass-closing.test.sh -- closing_copy_holds_no_review_artifacts -- scripts/builder-codex-pass.sh the artifact delete in the copy
-Break: scripts/__tests__/unit-folders.test.sh -- a folder under the copy or the worktree is the unit's; a same-prefix unit and its copy are not; an alias matches -- scripts/unit_folders.py belongs
-Break: scripts/__tests__/builder-codex-pass-closing.test.sh -- closing_copy_locked_kept -- scripts/builder-codex-pass.sh drop_copy (the still-listed check that keeps a copy git refused)
+Break: scripts/__tests__/builder-codex-pass-closing-copy.test.sh -- closing_copy_gets_the_untracked_brief: the brief is untracked in the worktree and the closing reviewer still finds it in the copy -- scripts/builder-codex-pass.sh the brief copied into the closing copy
+Break: scripts/__tests__/builder-codex-pass-closing-copy.test.sh -- fresh_closing_pass_reads_a_clean_copy: the closing reviewer's --cwd is the copy under the scratch folder, not the worktree; it is gone after the verdict, and the merge still takes the pass -- scripts/builder-codex-pass.sh RCWD (reverted to the worktree)
+Break: scripts/__tests__/builder-codex-pass-closing-copy.test.sh -- closing_copy_holds_no_review_artifacts: at reviewer launch the copy holds no round report, fix hand-off, hand-off, after-round hand-off or evidence file, even one committed; the brief is there -- scripts/builder-codex-pass.sh the artifact delete in the copy
+Break: scripts/__tests__/unit-folders.test.sh -- belongs: a folder under the copy or the worktree is the unit's; a same-prefix unit and its copy are not; an alias matches -- scripts/unit_folders.py belongs
+Break: scripts/__tests__/builder-codex-pass-closing-copy.test.sh -- closing_copy_locked_kept: a locked closing copy holding an uncommitted tracked change survives the pass with its change intact; the pass exits non-zero, runs no reviewer, and names the copy as kept -- scripts/builder-codex-pass.sh drop_copy (the still-listed check that keeps a copy git refused)
 
 Catches: a fresh closing reviewer reading the unit's round reports, hand-offs and evidence, which today only a prompt
 line asks it not to do (`FRESH_HEAD`, `:194`); no existing check sees what the reviewer's folder holds. The copy's
@@ -350,7 +357,8 @@ Port of host issue 3162's GONE lines (Decision 6). In `hooks/resume-context.sh`,
   names may be gone; run bash scripts/seat.sh status <role> <unit> for each` and no GONE line.
 - `PP_SCRATCH` comes from `paths.sh` (the hook sources it only in its `elif`, `:106`; the block sources it itself and
   skips with no line when it fails). The lines' bytes come off `left`, as `aged`'s do, and go into `out` (`:153`)
-  after `aged`.
+  after `aged`. At most 8 GONE lines (pass 3 fix): the rest are counted in one line, `GONE: <k> more seat runs named in
+  <checkpoint> are not running and left no result; check each with ...`, so the block cannot crowd the checkpoint out.
 
 Produces: zero or more lines in the SessionStart block; no writes. Consumes: seat record and run log names
 (`scripts/seat.sh:76`, `:172`), `PP_SCRATCH`. Existing consumers: none (new output lines; `clear-hook.log`'s
@@ -498,6 +506,9 @@ scripts/__tests__`, 2026-10-26; the Builder runs it again after the change and i
 Acceptance tests:
 - new, `builder-codex-pass-class-sites.test.sh`: "sites_fixed_needs_how: a bare fixed Sites line is refused and the
   refusal names the fixed, <how> form"; "a class-sites hit listed as fixed, <how> counts as listed"
+- new (pass 1 fix), same file: "sites_old_format_accepted: bare fixed lines launch when the round's hand-off asked for
+  the bare form (a deployed-release hand-off), and a hand-off that asks for the how refuses them" (What can go wrong
+  row 8)
 - new, `brief-template.test.sh`: "the Builder template asks for the prove step before the first pass"; "the plan
   judge is asked for the established practice"
 - flip, `seat-plan-marker.test.sh:34`: the prompt names the size line, the Test: line, the Break: line, the Claims to
@@ -506,6 +517,7 @@ Acceptance tests:
 - kept, unchanged and green: the `break_gate` and `table_gate` checks (`builder-codex-pass.test.sh:222-240`)
 
 Break: scripts/__tests__/builder-codex-pass-class-sites.test.sh -- sites_fixed_needs_how -- scripts/builder-codex-pass.sh the Sites regex (`fixed, .+`)
+Break: scripts/__tests__/builder-codex-pass-class-sites.test.sh -- sites_old_format_accepted: bare fixed lines launch when the round's hand-off asked for the bare form (a deployed-release hand-off), and a hand-off that asks for the how refuses them -- scripts/builder-codex-pass.sh the Sites form chosen from the round's hand-off (FIXED_RE)
 
 ### C10 -- #388 and #389: stated limits, recorded (~8 lines)
 
@@ -517,6 +529,69 @@ Acceptance: `bash ci/leak-test.sh` green; no behaviour changes (Decision 13). Bo
 
 `.claude-plugin/plugin.json` `version`: the next free minor at merge time (0.51.0 today; `bash ci/version-check.sh`
 decides). One CHANGELOG entry (section "Version and CHANGELOG").
+
+### C13 -- release publishes only after ci has passed on that commit (~70 lines)
+
+Added by the owner's order of 2026-10-26 (no issue; same batch). Today `.github/workflows/release.yml` runs on every
+push to main beside `ci.yml`, so v0.50.0 was published while ci was red.
+
+1. The trigger: `on: workflow_run: workflows: [ci], types: [completed], branches: [main]`, no `push:`. The job runs
+   only when `github.event.workflow_run.conclusion == 'success'` and `github.event.workflow_run.event == 'push'` (a
+   pull request's ci run, or a red one, releases nothing). The checkout takes `ref: ${{ github.event.workflow_run.head_sha }}`
+   with `fetch-depth: 0`: the commit ci passed, not main's tip, which may be newer. A `workflow_run` workflow's
+   `GITHUB_SHA` is main's tip, so the Tag step and the Decide step read the job's `HEAD_SHA` (set from `head_sha`)
+   and `GITHUB_SHA` is not used.
+2. Why `workflow_run` and not `needs:`. Both are established practice. `needs:` only reaches jobs of the same
+   workflow, so it means moving the release job into `ci.yml`, which would give the read-only workflow
+   `contents: write` (its `permissions:` are `contents: read`); `release.yml`'s own comment keeps ci read-only and
+   release separate. `workflow_run` leaves both files' roles alone and changes one trigger, one `if:`, one `ref:`
+   and the two places that read the commit. It is the simpler change. Cost: `workflow_run` carries no
+   `github.event.before`, so the base of the version comparison changes (step 3).
+3. The base: `release-decide.sh <base> <head>` compares the version at the two commits. A push's `before` is gone, and
+   the commit's parent would lose a release (a red version-bump commit never releases, and its fix commit changes no
+   version against its parent). The Decide step uses the newest tag reachable from `HEAD_SHA^`, the commit's parent, as the base
+   (all-zeros when there is none, as `release-decide.sh` already reads a first push): the version at head differs from
+   the last tagged release's, and the release does not exist, so the next green commit publishes it. The commit's own
+   tag is left out of the search so that a rerun after a failed Publish (tag pushed, no release) still publishes.
+   Pass 1 found that this is not enough: the next green commit of the same version finds that tag as its base, and
+   `release-decide.sh` skipped on an equal version before it looked for the release. It now looks first: an equal
+   version whose tag exists and whose release does not is `release v<version>` (the Data design's release state).
+
+Produces: one workflow trigger, guard and base. Consumes: `ci.yml`'s `name: ci`, `scripts/release-decide.sh`.
+Existing consumers of the workflow text: `release-notes.test.sh:138` (checks the `branches: [main]` line of the
+push trigger: flips) and its Tag step run (`:120`, passes `GITHUB_SHA`: flips to `HEAD_SHA`) and Decide step run
+(`:128`, rewrites `github.event.before`: flips).
+
+Acceptance tests, all in `scripts/__tests__/release-notes.test.sh` (the file that already covers `release.yml`):
+- flip, `:138`: "the workflow runs after ci completes on main with contents: write, and on no push"
+- new, "release_after_ci_only: the trigger is workflow_run on ci's completed, the job needs a success on a push, the
+  checkout is head_sha, and no step reads GITHUB_SHA"
+- new, "release_base_is_last_tag: the Decide step releases the head's version when the fix commit after a red bump
+  commit is the one ci passed, skips when that version's release exists, and releases the first version when there is no
+  tag" (the Decide step's own `run:` text, in a scratch repository with tags and a stub `gh`)
+- new (pass 1 fix), "release_pending_publication: a later commit with the same version publishes it when its tag has no
+  release, and skips once the release exists" and "an unchanged version whose tag has no release decides release; once
+  the release exists, skip" (What can go wrong row 7)
+- flip, the Tag and Decide steps' runs: `HEAD_SHA` in place of `GITHUB_SHA` and `github.event.before`
+
+Catches: a release publishing while ci is red on its commit; a release that never comes after a red version-bump
+commit; a tag on main's tip rather than the commit ci passed.
+
+Red tests on main (addendum, the owner's order passed on by main): releases now wait for a green ci run, so a test red on main
+blocks every release. Two are red today and are fixed here by root cause, as part of this cut. (1)
+`doctor-options.test.sh` "the doctor names each option's value and source" got `[1:1:1:0]`: it pinned
+`maxReviewRounds: none`, an option the manifest no longer declares (`reviewPassCap` replaced it, `plugin.json:189`);
+the line is `reviewPassCap: 5 (from the default)` and the Builder-line check follows the Opus default (already in this
+branch since pass 1; checked red on main and green here). (2) `answer-worker-interrupt.test.sh` hung past 120 s: commit
+ab603a4 made an inbox answer to a mid-turn pane check on for `ANSWER_WORKER_ACK_WAIT` (default 600 s) and end `NOT
+acknowledged` (exit 1) instead of exit 2; `answer-worker.test.sh` was given `ANSWER_WORKER_ACK_WAIT=3` and the
+exit 1, its split-off `answer-worker-interrupt.test.sh` was not, so its "without --interrupt" case waited out the
+default. Fixed in the test (the limit set to 3 s like its sibling, the expected exit 1); no timeout was raised. Test:
+both files green on the PC (`answer-worker-interrupt.test.sh` 9 s).
+
+Break: scripts/__tests__/release-notes.test.sh -- release_after_ci_only: the trigger is workflow_run on ci's completed, the job needs a success on a push, the checkout is head_sha, and no step reads GITHUB_SHA -- .github/workflows/release.yml the success guard on the job
+Break: scripts/__tests__/release-notes.test.sh -- release_base_is_last_tag: the Decide step releases the head's version when the fix commit after a red bump commit is the one ci passed, skips when that version's release exists, and releases the first version when there is no tag -- .github/workflows/release.yml the Decide step's base
+Break: scripts/__tests__/release-notes.test.sh -- release_pending_publication: a later commit with the same version publishes it when its tag has no release, and skips once the release exists -- scripts/release-decide.sh the equal-version branch (a tag with no release)
 
 ## 3. Rule drift, line by line
 
@@ -574,10 +649,29 @@ present line, `--only <section> <reason>` for a not-ported one); that is a host-
   stops the next closing pass until it is unlocked or removed (accepted failure mode 6). A retry is the next
   closing pass, which removes and re-adds. A half write (add or delete failing) dies before any reviewer starts; the
   EXIT trap removes what was made. Two concurrent writes: none, the pass lock (`:938-963`) holds one pass per worktree.
-  Retries owned by the Builder (it reruns the pass).
+  Retries owned by the Builder (it reruns the pass). The copy also holds the unit brief
+  (`.claude/briefs/<unit>.md`): the launcher writes it untracked and no pass commits it, so the pass copies the
+  worktree's current brief in after the artifact delete (a failed copy dies before any reviewer starts, and the EXIT
+  trap removes the copy). Read by the closing reviewers; reset with the copy.
+- Release state (C13): three records, each with one writer. The tag `v<version>` is written by the release workflow's
+  Tag step (`git tag` then `git push`, once per version; a tag that exists is not pushed again). The GitHub release
+  `v<version>` is written by its Publish step (`gh release create --verify-tag`; a release that exists is not created
+  again), and, for its body only, by `release-rewrite.sh` and `release-backfill.sh`. The decision (`release v<version>`
+  or `skip: <why>`) is stored nowhere: `scripts/release-decide.sh` derives it on every run from the version in
+  `plugin.json` at the head and at the base (the newest tag reachable from the head's parent, read-only), the tag and
+  `gh release view`. Half write: Tag succeeds and Publish fails, leaving a tag with no release. Retry: the next green
+  run of that version, the same commit run again or a later commit (whose base is that tag, so the version reads as
+  unchanged), reads "tag, no release" and publishes; an unchanged version whose release exists, or that was never
+  tagged, is skipped. Concurrent writes: two runs for one version both pass Decide; the later Tag step's push
+  of an existing tag at another commit is refused and fails that job, and nothing is written twice. The retry is the
+  next run.
 - `cut` rows: derived on each read from the reviewer's session files and the abandoned marks; nothing stored.
 - main-watch stamps (`$ST/due-<key>`): unchanged store and temp-then-`mv` publish; the change is which text is
-  written and when nothing is written (a held tick). A held tick's retry is the next tick.
+  written and when nothing is written (a held tick). A held tick's retry is the next tick. A stamp is trusted only
+  while its round is the unit's newest or its text already names that newest round as superseding it: `report_send`
+  reads `newest_round` again before each send and removes a stamp a newer round overtook, unsent (pass 3 fix); the
+  next tick's `report_wake` stamps that round superseded, and `report_pending` holds the later rounds meanwhile. A
+  worktree that is gone has no newer round, so its stamps send as written.
 - The issue status table: rows in the Builder's evidence file, written by the Builder, read by `builder_progress` and
   the merge (unchanged readers).
 - `seat.sh status` `pane=`: read-only. GONE lines: printed, not stored.
@@ -636,7 +730,10 @@ host's reference implementation in commit `b4f8dccf`, adapted to the plugin's fi
     plugin's recommended set is defined as the host's configured settings (0.49.0). Test: flip `plugin.test.sh:66`
 12. **A Sites `fixed` line must say how (`fixed, <how>`).** R05; the regexes, die texts and hand-off text change; the
     `findings_so_far` "fixed in pass" tail (host issue 3168 F3) is not ported: the plugin's hand-off groups findings by
-    class (`:1666-1670`), with no per-file history to add it to. Test: "sites_fixed_needs_how: ..."
+    class (`:1666-1670`), with no per-file history to add it to. Compatibility (pass 1 finding): the form a round's
+    Sites lines must take is the one its own fix hand-off asked for; a hand-off written by the deployed release says
+    a bare `fixed`, so a batch it handed off keeps its record valid, and only a hand-off that names `fixed, <how>`
+    holds the Sites to it. Test: "sites_fixed_needs_how: ...", "sites_old_format_accepted: ..."
 13. **#388 and #389 change no behaviour, and the host map's sync records are main's step in the host after the merge.**
     The order says record only; this unit's diff is the plugin's. Test: none, text only (`bash ci/leak-test.sh` checks
     the wording)
@@ -678,6 +775,11 @@ host's reference implementation in commit `b4f8dccf`, adapted to the plugin's fi
 6. A closing copy git refuses to remove (someone locked it) is kept and stops every later fresh closing pass of that
    worktree, each naming it, until it is unlocked or removed by hand; nothing in it is lost. Test:
    "closing_copy_locked_kept: ..."
+7. A round that finishes between `report_send`'s newest-round check and the send in the same tick (`flush_send`) is
+   after the older report's step went out, the same order as a round that finishes just after delivery: the older
+   step is sent, and the new round's own report follows it. No lock with the pass's round writer is taken. Test: none,
+   the order is that of a normal later round; "stamped_round_overtaken_before_send" pins the stamp that waits a tick or
+   more
 
 ## Assumptions (each settled, or a Builder check with the action per outcome)
 
@@ -738,6 +840,15 @@ host's reference implementation in commit `b4f8dccf`, adapted to the plugin's fi
 | a killed closing pass left its copy | a copy folder and git record at the copy path from an earlier pass | the next fresh closing pass removes it, adds a fresh one, and the reviewers run in the new one | a stale closing copy from a killed pass is replaced |
 | a merged unit whose passes wrote class-sites files | NO-GO passes left `<unit>-r<N>-class-sites.txt` and `.md` untracked in the worktree's `.claude/briefs/` | the merge exits 0 and cleanup removes the worktree with no hold | class_sites_files_do_not_hold_cleanup |
 | a closing NO-GO past the cap that is no cap stop | pass 5 final NO-GO naming only an untagged class line | the cap gate prints nothing; pass 6 final launches | past the cap a closing NO-GO with no cappable finding is not a cap stop: the next closing pass launches |
+| the unit brief is untracked (pass 1 fix) | the launcher wrote `.claude/briefs/<unit>.md` and no pass committed it; a closing pass | the closing reviewer's copy holds the worktree's brief | closing_copy_gets_the_untracked_brief |
+| a version tagged but not published (pass 1 fix) | Tag pushed `v1.1.0`, Publish failed; the next green commit keeps version 1.1.0 | Decide prints `release v1.1.0`; once the release exists it prints `skip` | release_pending_publication |
+| a Sites record written under the deployed release (pass 1 fix) | a NO-GO round handed off by the deployed release; Sites lines are bare `- a.sh:1 fixed` | the next pass launches; a hand-off that names `fixed, <how>` still refuses a bare line | sites_old_format_accepted |
+| a round run again after an abandoned launch, past the cap (pass 1 fix) | cap 3; rounds 1 and 2 GO; round 3 has an abandoned `cut` row and a complete closing P2 NO-GO rerun | the cap gate prints `code` (a cap stop), whichever row comes first; a closing GO rerun is still a closing GO | a closing NO-GO rerun of a round with an abandoned cut row is still a cap stop, whichever row comes first and whatever the change |
+| a round finishes after the older round's stamp is written, before its send (pass 3 fix) | r2 NO-GO is stamped "fix round 2" and its send fails; r3 NO-GO finishes before the next tick | r2's fix-round step is never sent: r2 goes out once, superseded by pass 3, then r3 with its own fix round | stamped_round_overtaken_before_send |
+| a checkpoint names many gone runs (pass 3 fix) | 90 `seat.sh run plan-author unit-<n>` names, none running, no results | at most 8 GONE lines and one line counting the rest that names the checkpoint; the checkpoint's goal is kept and the print stays under 10 KB | many gone runs: the GONE block is bounded, the rest counted in one line naming the checkpoint, the goal kept, the print under 10 KB |
+
+The plan author's table holds at most five rows; rows 6 to 11 are the fix rounds', added because a finding marked
+`(not in the plan list)` is added here with its test.
 
 ## Claims to falsify
 
@@ -791,6 +902,10 @@ paths, issue numbers or hashes). Draft:
 - A Builder keeps a table of its issues, so the units view shows each issue as built when its part lands.
 - Before the first review pass a Builder runs the change for real and writes what it ran and saw.
 - Plans now list the claims a reviewer should try to disprove, and plan judges ask whether a plan follows the usual practice for its problem.
+
+### Releases
+
+- A release is now published only after the CI run on that commit has passed, so a red commit no longer releases. A version whose CI was red is published by the next commit that passes.
 ```
 
 ## Merge commit message
@@ -834,7 +949,7 @@ An issue the progress notes leave `partial` moves from `Closes` to `Refs`.
 Code (12): `scripts/builder-codex-pass.sh`, `scripts/unit_folders.py` (new), `scripts/unit-cost.sh`,
 `scripts/dashboard_limit.py`, `scripts/dashboard.sh`, `scripts/main-watch.sh`, `scripts/seat.sh`,
 `hooks/resume-context.sh`, `hooks/dependency-addition-guard.sh` (comment), `hooks/git-safety.sh` (comment),
-`config/routing.json`, `config/recommended.json`.
+`config/routing.json`, `config/recommended.json`; `.github/workflows/release.yml` (C13); `scripts/release-decide.sh` (C13, pass 1 fix).
 Templates and docs (9): `templates/_builder-brief-template.md`, `templates/main-session.md`,
 `templates/global-rules.md`, `README.md`, `docs/review-loop.md`, `docs/configuration.md`, `docs/hooks.md`,
 `CHANGELOG.md`, `.claude-plugin/plugin.json`.
@@ -843,7 +958,7 @@ Tests (17): `scripts/__tests__/builder-codex-pass-threshold.test.sh`, `builder-c
 `builder-codex-pass-class-sites.test.sh`, `builder-codex-pass-fresh-round.test.sh`, `fixtures/main-watch-merge-setup.sh`,
 `fixtures/builder-codex-pass-setup.sh`, `fixtures/merge-unit-local-setup.sh`, `merge-unit-local-cleanup.test.sh`,
 `main-watch-report-wake.test.sh`, `seat-launch.test.sh`, `dashboard-built.test.sh`, `brief-template.test.sh`,
-`seat-plan-marker.test.sh`, `plugin.test.sh`; `hooks/__tests__/resume-context.test.sh`.
+`seat-plan-marker.test.sh`, `plugin.test.sh`, `release-notes.test.sh` (C13); `hooks/__tests__/resume-context.test.sh`.
 
 ## 5. Build order and size (changed lines, code + tests + docs, estimates)
 
@@ -861,11 +976,12 @@ Tests (17): `scripts/__tests__/builder-codex-pass-threshold.test.sh`, `builder-c
 | C9 drift | 112 |
 | C10 #388 #389 | 8 |
 | C11 release | 7 + CHANGELOG |
-| Total | about 890 |
+| C13 release after ci | 70 |
+| Total | about 960 |
 
 Order: C1 before C2 (C2 reads C1's rows), C3 after C2 (same file, later lines), C4, then C5-C8 (independent), C12
 after C4 (the pass script's Sites refusal), C9 after C2, C4 and C12 (template and pass-script lines they also touch),
-C10, C11 last.
+C10, C13, C11 last (C13 adds a CHANGELOG line that C11's entry holds).
 
 ## Done when
 
@@ -906,3 +1022,63 @@ None. The break-gate question is answered (Decision 10).
 - 2026-10-26: plan judge finding 4 (P2) accepted: a `Catches:` line for every step this plan adds to the build, merge
   or review flow (C1, C2, C3, C4, C5, C8, the prove step, the What can go wrong rule, the judge checks, the halfway note,
   the sibling dry run). C3 225 -> 262 lines. Planned size 38 files, 850 lines -> 38 files, 890 lines.
+- 2026-10-26: the owner's order, passed on by main: cut C13 added, no issue, same batch.
+  `.github/workflows/release.yml` publishes only after ci has passed on the same commit. Chosen: a `workflow_run`
+  trigger on ci's completion with a checkout of `head_sha`, not `needs:` on ci's jobs: `needs:` reaches only jobs of
+  its own workflow, so it would move the release job into `ci.yml` (read-only by design, `contents: read`) and give
+  that file `contents: write`; `workflow_run` changes one trigger, one `if:`, one `ref:` and the two places that read
+  the commit. `workflow_run` has no `before`, so the Decide step takes the newest reachable tag as the base (a parent
+  base would lose the release of a red version-bump commit). Tests in `release-notes.test.sh`; two `Break:` lines;
+  a CHANGELOG line. Planned size 38 -> 39 files, 890 -> 960 lines.
+- 2026-10-26: found while building: the `Break:` lines of C2 and C3 name tests that the 120-second per-file cap put
+  in two new files, `builder-codex-pass-cap-gate.test.sh` (cap gate) and `builder-codex-pass-closing-copy.test.sh`
+  (closing copy); their lines now name those files and the full check labels, as does the unit-folders line
+  (`belongs: ...`). The break for C1's `partial_round_keeps_p1_open` is the `whole` definition
+  (`builder-codex-pass.sh:444`): the walk holds a partial round's P1 by two paths (its own unknown P1 and the walk
+  continuing to the earlier P1), so only a break of `whole` itself turns that check red. The C9 Sites break is the
+  `MISSING=` regex (`:1208`), not the first check (`:1203`): the two regexes both refuse a bare `fixed`, so a break of
+  one alone is not caught; the test keeps `a.sh` as `fixed, <how>` so only `:1208` decides.
+- 2026-10-26: found while building: `plugin-option.test.sh`, `doctor-options.test.sh` and `seat.test.sh` pin the
+  Builder's effort and model defaults and needed flips for the Opus-medium default (the plan expected the first two to
+  stay green); `doctor-options.test.sh` also held a stale `maxReviewRounds: none` line from an earlier rename, now
+  `reviewPassCap: 5 (from the default)`. `templates/main-session.md` had one pair of lines joined to stay at the
+  200-line cap `plugin.test.sh` checks. The closing-copy test's Claude case runs a Claude first pass before the
+  closing pass because the pass script reads one reviewer's sessions per run.
+- 2026-10-26: pass 1 findings (NO-GO), all but the junk entries fixed in the fix round after it. (1) The closing copy
+  lacked the untracked unit brief: the pass copies it in (Data design, What can go wrong row 6). (2) Release recovery
+  (classes release-retry, unpublished-tag, data-design): `release-decide.sh` skipped an equal version before it looked
+  for the release, so a tag without a release survived into the next commit; it now publishes a tagged version with no
+  release, and the Data design names the release state, its writers and the retry (row 7). (3) Decision 12's
+  `fixed, <how>` refused records the deployed release accepted: the Sites form follows the round's own hand-off (row
+  8). (4) `cap_gate_reason` let an abandoned launch's `cut` row outlive its complete rerun (classes abandoned-round,
+  incomplete-round): a cut row now holds a round only while none of its reviewers has answered, as `review_stop_id`
+  and the merge's AFTER list read it (row 9). The plan author's cap of five What can go wrong rows does not bind these
+  four; the fix-round rule that adds a finding with its test does. The `release_base_is_last_tag` break is now the
+  parent as the base (`LAST=$(git rev-parse "$HEAD_SHA^" ...)`): the commit's own tag left out of the search is no
+  longer what the rerun case depends on, since the decision publishes a tag with no release on its own.
+- 2026-10-26: addendum to C13 (the owner's order, passed on by main): ci on main is red on two
+  tests, which blocks every release now that releases wait for green ci. Both fixed in this batch by root cause:
+  `doctor-options.test.sh` (a stale `maxReviewRounds` line; already fixed by pass 1's change, red on main, green here)
+  and `answer-worker-interrupt.test.sh` (hung: it lacked the `ANSWER_WORKER_ACK_WAIT` limit and the exit 1 that
+  ab603a4 gave `answer-worker.test.sh`; fixed in the test, no timeout raised). See the C13 section.
+- 2026-10-26: pass 3 findings (NO-GO, both P2, both not in the plan list), fixed in the fix round after it. (1)
+  stale-report-stamp: a round finishing after the older round's stamp was written, before its send, left the stale
+  next step to be sent (a failed send keeps the stamp for later ticks); `report_send` now checks the newest round
+  before each send and drops an overtaken stamp for the next tick to stamp superseded (Data design, What can go wrong
+  row 10, accepted failure mode 7 for the same-tick remainder). (2) unbounded-resume-context: the GONE block had no
+  bound and could take the checkpoint's budget; it is now at most 8 lines and one count line naming the checkpoint
+  (C6, row 11).
+- 2026-10-26: found after pass 4's GO: `hooks/__tests__/agent-startup-context.test.sh` is red on this build and green
+  on main, two checks, and the plan named it nowhere: (1) it counts the Do not -> instead lines (five), and C7 adds the
+  sixth, so the check flips to six; (2) it puts main-session's first one-line top-level bullet into the project's own
+  rules and expects the merge to drop it, and the line join made for the 200-line cap had turned "End each turn with
+  one status line" into that bullet, so it was dropped from the print the check reads. The join moves to two
+  continuation lines of the "Plan before every build" bullet (still several lines), and "End each turn" is two lines
+  again; the file stays at the same line count. `run-shell-tests.sh --changed main --callers` did not select this file
+  (it reads the template through a path, not by name).
+- 2026-10-26: found the same way: `scripts/__tests__/merge-rules.test.sh` is red on this build (3 checks) and green on
+  main. The batch reworded two main-session.md rules (C7's "Do not" line, the plan judge's sentence in Details) and
+  three global-rules.md rules (C9's drift lines) with no `MADE_FROM` line in `scripts/merge-rules.py`, so an owner's
+  saved keep mine of the old wording no longer kept the new one out. Five `MADE_FROM` lines added (0.51.0), and the
+  test's reworded pairs name the new ids; the two new global rules (the halfway cut, the size caps) are new, not
+  reworded, and need none.

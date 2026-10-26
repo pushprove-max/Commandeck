@@ -71,7 +71,7 @@ check "a finding on a file with no same-name test says so" 1 "$(grep -c '^- a.sh
 check "a place the finding's text quotes gets no test line" 0 "$(grep -c 'q.sh:9' <<<"$TPF")"
 check "two different classes add no approach line" 0 "$(hand 21 | grep -c 'came back in two passes in a row')"
 check "the hand-off's sections run findings so far, findings, tests per finding, rulings, touched tests (the round file's and rulings' own headings inside them)" \
-  "Findings so far,What pass 21 found,Sol,Tests per finding,Main's rulings,1. RULING-PROBE: keep the probe,Cleared findings,Test files this build touched" \
+  "Findings so far,What pass 21 found,Sol,Parallel fix groups,Tests per finding,Main's rulings,1. RULING-PROBE: keep the probe,Cleared findings,Test files this build touched" \
   "$(hand 21 | sed -n 's/^## //p' | sed 's/ (.*//' | paste -sd, -)"
 check "the touched-tests list names test files only, not a fixture beside them" "1 0" \
   "$(hand 21 | sed -n '/^## Test files/,$p' | grep -c 'y.test.sh') $(hand 21 | grep -c 'fixture.txt')"

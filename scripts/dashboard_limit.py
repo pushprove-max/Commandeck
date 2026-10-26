@@ -60,6 +60,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from unit_folders import belongs, copy  # noqa: E402
+
 WEEK = 7 * 86400
 FIVE_HOURS = 5 * 3600
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -1356,13 +1359,15 @@ def unit_costs(units, now, cache_dir, projects, sessions):
         if t0 is None:
             continue
         pwt = plan["worktree"] if plan else None
-        got = {w: None if every is None else [t for t in every if t[0][0] >= t0 - 600 and (t[2] or "").startswith(folder(w) + os.sep)]
+        # A fresh closing pass reviews in the unit's closing copy, whose Claude project folder is its own (unit_folders).
+        got = {w: None if every is None else [t for t in every if t[0][0] >= t0 - 600
+                                              and (t[2] or "").startswith((folder(w) + os.sep, folder(copy(w)) + os.sep))]
                for w in {wt, pwt} - {None}}
         if None in got.values() or cx is None or missed:
             out[u["unit"]] = None
             continue
         mine = lambda w: sorted([(r, f, p, a) for a, src in (("claude", got[w]), ("codex", cx)) for r, f, p in src
-                                 if under(f, [w]) and r[0] <= now], key=lambda t: t[0][0])
+                                 if belongs(f, w) and r[0] <= now], key=lambda t: t[0][0])
         build, planned = mine(wt) if wt != pwt else [], mine(pwt) if plan else []
         if wt == pwt and u["stages"]:
             # The Builder took over its plan's worktree (issue 242): the build's requests are the ones from its first stage on.

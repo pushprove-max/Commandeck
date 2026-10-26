@@ -15,7 +15,7 @@
       "effort": "medium",
       "unboxed": true,
       "edits": true,
-      "note": "Orchestration only; never implements. Plans with the owner, launches Builders, merges. Cannot be off: it is the session that runs everything."
+      "note": "Orchestration; main may make a small code fix itself, and builds nothing larger. Plans with the owner, launches Builders, merges. Cannot be off: it is the session that runs everything."
     },
     "plan-author": {
       "agent": "claude",
@@ -55,11 +55,11 @@
     },
     "builder": {
       "agent": "claude",
-      "model": "sonnet",
-      "effort": "high",
+      "model": "opus",
+      "effort": "medium",
       "unboxed": true,
       "edits": true,
-      "note": "One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore (haiku) and general-purpose (sonnet) subagents and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
+      "note": "Opus at medium effort by default. One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore (haiku) and general-purpose (sonnet) subagents and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
     },
     "fixer": {
       "agent": "claude",

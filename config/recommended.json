@@ -3,8 +3,8 @@
   "options": {
     "orchestratorModel": "opus",
     "orchestratorEffort": "medium",
-    "builderModel": "sonnet",
-    "builderEffort": "high",
+    "builderModel": "opus",
+    "builderEffort": "medium",
     "fixerEnabled": true,
     "fixerFirstModel": "builder",
     "fixerFirstEffort": "builder",

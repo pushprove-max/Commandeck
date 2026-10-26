@@ -27,7 +27,7 @@ PLUG=$HOME/.claude/plugins/cache/openai-codex/codex/1.0.0
 mkdir -p "$PLUG/scripts" "$PLUG/prompts"
 printf 'Target: {{TARGET_LABEL}}\nUser focus: {{USER_FOCUS}}\nPrefer one strong finding over several weak ones.\n<structured_output_contract>\nReturn only valid JSON matching the provided schema.\n</structured_output_contract>\n{{REVIEW_COLLECTION_GUIDANCE}}\n{{REVIEW_INPUT}}\n' > "$PLUG/prompts/adversarial-review.md"
 cat > "$PLUG/scripts/codex-companion.mjs" <<'JS'
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 const cwd = args[args.indexOf("--cwd") + 1], promptFile = args[args.indexOf("--prompt-file") + 1];
@@ -35,6 +35,10 @@ const cwd = args[args.indexOf("--cwd") + 1], promptFile = args[args.indexOf("--p
 await new Promise((r) => setTimeout(r, Number(process.env.STUB_SLEEP || 0) * 1000));
 const id = `${process.env.STUB_THREAD}-${promptFile.match(/-prompt-(\d+)\.md$/)[1]}`;
 const reply = process.env.STUB_REPLY || "Clean.\nVERDICT: GO";
+// What the reviewer's folder held when it started (seen-<id>.txt: its cwd, then its top-level names, then its briefs).
+const ls = (d) => (existsSync(d) ? readdirSync(d).sort().join(" ") : "");
+mkdirSync(process.env.CODEX_HOME, { recursive: true });
+writeFileSync(`${process.env.CODEX_HOME}/seen-${id}.txt`, `${cwd}\n${ls(cwd)}\n${ls(`${cwd}/.claude/briefs`)}\n`);
 const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"]).toString().trim();
 const dir = `${process.env.CODEX_HOME}/sessions/2026/10/14`;
 mkdirSync(dir, { recursive: true });
@@ -116,7 +120,7 @@ sites() { # <N>: the section for the pass before pass N, when that pass ended NO
   local m=$(($1 - 1)) r="$B/$U-r$(($1 - 1))-reports.md"
   [ -f "$r" ] && [ "$(grep -v '^[[:space:]]*$' "$r" | tail -n 1)" = "VERDICT: NO-GO" ] || return 0
   grep -q "^## Sites checked (pass $m)" "$B/$U-evidence.md" 2>/dev/null \
-    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$B/$U-evidence.md"
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$B/$U-evidence.md"
 }
 pass() { # <N> <kind>: one pass of the real pass script; what it printed is in $TMP/out
   sites "$1"
@@ -126,14 +130,14 @@ pass() { # <N> <kind>: one pass of the real pass script; what it printed is in $
 input() { sed -n '/^Review input: /,$p' "$B/$U-r$1-prompt-1.md"; } # <N>: what reviewer 1 of round N was handed below the template
 SC=$TMP/scratch FB=$TMP/fb; mkdir -p "$SC" "$FB"
 PROJ=$HOME/.claude/projects/$(printf '%s' "$W" | tr -c 'A-Za-z0-9' '-')
-# Logs every call; a wait answers FRS_IDLE (1 with no answer is a failed wait); the list holds term_frs unless FRS_GONE;
+# Logs every call; a wait answers FRS_IDLE (1 with no answer is a failed wait); the list holds term_frs and term_new unless FRS_GONE;
 # typing the pointer starts the new session's log.
 cat > "$FB/orca-ide" <<'SH'
 #!/usr/bin/env bash
 echo "$*" >> "$FRS_CALLS"
 case "$*" in
   *"terminal wait"*) exit "${FRS_IDLE:-0}" ;;
-  *"terminal list"*) [ -n "${FRS_GONE:-}" ] && echo '{"result":{"terminals":[]}}' || echo '{"result":{"terminals":[{"handle":"term_frs"}]}}' ;;
+  *"terminal list"*) [ -n "${FRS_GONE:-}" ] && echo '{"result":{"terminals":[]}}' || echo '{"result":{"terminals":[{"handle":"term_frs"},{"handle":"term_new"}]}}' ;;
   *"--text /clear"*) [ -z "${FRS_SEND_FAILS:-}" ] || { echo "orca: PROBE-REFUSAL" >&2; exit 1; } ;;
   # The first new session is new-sid; each later one gets a log of its own, as the record already names new-sid.
   *"Your task spec is the file"*) f=$FRS_PROJ/new-sid.jsonl; [ ! -e "$f" ] || f=$FRS_PROJ/new-sid-$(ls "$FRS_PROJ" | wc -l | tr -d ' ').jsonl

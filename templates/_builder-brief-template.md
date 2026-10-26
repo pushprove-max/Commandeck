@@ -39,11 +39,15 @@ and a fix that touches a save updates that save's row in the same commit.
   instruction that stopped it. An Orca call answering `runtime_unavailable` inside the read-only sandbox is by design,
   not a failure to retry or report. A reviewer reads the diff, then this brief, drafts its findings, and only then the
   evidence file, and opens a file outside the diff, the brief and its named callers only to confirm or refute one
-  finding.
+  finding. A reviewer never opens a generated file (a path `.gitattributes` marks `linguist-generated`); it reviews
+  the generator and its test.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
-- Find a line with `grep -n <pattern> <file>` first, then Read that range (`offset` and `limit`); look a symbol
+- The What can go wrong list of the batch or its plan binds: each case has its named test, and a case a pass finds
+  that the list lacks is added to the plan's list, with its test, in the commit of its fix.
+- Find a line with `grep -n <pattern> <file>` first, then Read that range (`offset` and `limit`), never a whole source
+  file over 400 lines; look a symbol
   up by name (a symbol tool such as `find_symbol`) before a grep and a read. Edit a tracked file with Edit,
   never with an inline `python3 -c` or `perl -e` write.
 - An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the
@@ -86,9 +90,16 @@ and a fix that touches a save updates that save's row in the same commit.
 - Tests first: red, then green. A red test that shows a hang sets its own
   short timeout (a few seconds), so it fails fast instead of running to the
   command's time limit.
+- The evidence file opens with an `Issue | Status` table, one `| #<n> | not built |`
+  row per issue of the batch, each set to `built` in the same edit that adds the
+  section of the cut that finishes it. The dashboard counts an issue built from a
+  `built` row, or from a `## #<issue>` section with something written under it.
+  Catches: a build whose evidence is written by cut showing no issue built on the
+  dashboard until the end, and an issue left not built at the merge (the table's
+  not-built rows read as partial).
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
-  next line. The dashboard counts an item built only from that heading and line.
+  next line.
 - A build that changes a setting (a config key, an environment variable, a
   file format) keeps reading the format already deployed from its first
   commit, and has a test that the release accepts the deployed format.
@@ -97,7 +108,7 @@ and a fix that touches a save updates that save's row in the same commit.
   block on it, wait only with `bash {scripts}/wait-test-run.sh <runner-pid>
   <output-file>`: it checks the runner is still alive when the wait ends, and
   a runner that died with no result means rerun the needed file alone, never a
-  second wait. It knows a `<n> passed, <n> failed` last line and node:test's
+  second wait. Never find the runner by name with `pgrep`. It knows a `<n> passed, <n> failed` last line and node:test's
   summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
   wait`: its first output line is the runner pid. `bash {scripts}/ask-main.sh`
   waits 240 s at most per call, and is resumed with the message id it prints.
@@ -175,6 +186,12 @@ the round file `.claude/briefs/{unit}-r<N>-reports.md` from {reviewer}'s own out
 and records the reviewed commit. Never write or edit a round file yourself: the
 merge refuses a round file the script did not write, or one older than the tip.
 
+Before step 1, once the build is done, you are asked: `Prove to me this works`. Run the changed behaviour through its
+real entry point, with an input from the batch's done criteria (a script run on a scratch input, a hook fed its event
+JSON, a page opened locally). Fix what it turns up, then run it again. Under `## Proof` in the evidence file write one
+`Ran:` line (the command or action) and one `Saw:` line (what came back) per thing proved, and a `Fixed:` line per
+fix. Nothing is reverted; never production data or a deploy. Then step 1.
+
 1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
    the first pass and one pass: three reviewers at once, or one when the build
    is under {small-build} changed lines and main did not launch it with `--risky` (the
@@ -202,6 +219,9 @@ merge refuses a round file the script did not write, or one older than the tip.
    no P0 or P1) and
    `REVIEW STOP` (a P0 or P1 open two passes past the cap). After a STOP line, report the `Open finding` lines to
    main, which files them before the merge. After `REVIEW STOP`, ask main the one question the pass names and wait.
+   No later pass launches after `STOP (cap)`, or on a change that is only the plan, brief or metrics, once the cap is
+   reached with no P0 or P1 open: the launch is refused before it commits anything. Catches: a pass spent on a loop
+   that already stopped.
 
 Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
 it runs the launch's own checks (the round cap, main's rulings acknowledged, an
@@ -217,7 +237,7 @@ Pass N shows both lines to its reviewer, and reads only a line that starts
 with those words: no bullet, no backticks.
 After a pass that ends NO-GO, search the repo for the same pattern as each finding before the next pass, and write
 `## Sites checked (pass <N>)` in the evidence file: a `Search: <command>` line for each search, then one line per
-site it found, `- <path>:<line> fixed` or `- <path>:<line> not affected, <why>`. The next pass refuses to start
+site it found, `- <path>:<line> fixed, <how>` or `- <path>:<line> not affected, <why>`. The next pass refuses to start
 without it, and its reviewers treat a missing or wrongly cleared site as a finding. Every hit of the reviewers' own
 `Class search:` lines, which the pass runs and lists in your fix brief, must be among those sites. It also needs
 `## New code checked (pass <N>)`: every read, write or check the fix added, checked against the plan's Data design,
@@ -226,7 +246,8 @@ What can go wrong and failure table, `- <path>:<line> meets <plan line>` or `- <
 its code; the code after that pass owes the same check.
 A finding only main can fix (a settings file entry, a file only main edits)
 goes as one line under `## Main-only (deferred)` in the evidence file: every
-later pass is handed that list as known, so it is not raised again.
+narrowed pass is handed that list as known, so it is not raised again; the closing pass is not, and main files
+what it finds again at the stop.
 When a reviewer finds a way round a guard, list the other ways round the same guard
 and fix them all BEFORE asking for the next pass; one test covers the bug class, not one per way round.
 A fix that changes when a state is trusted (narrows or widens it) reruns the existing
@@ -236,9 +257,13 @@ have in common, put one fence or stamp on the whole class, and add one test that
 far. Write in the evidence file what the class is, and send main nothing for it: the review loop goes on. When
 the class returns a THIRD time, the fix-round hand-off says so: fix the other findings first, then ask main one
 question with `ask-main.sh` naming the class and the redesign you propose, and build what main answers.
+A fix brief with a `## Parallel fix groups` section: run one Agent helper per group, each with `isolation: "worktree"`,
+apply their diffs in group order, fix serially on any overlap, and run the round's tests once on the combined tree;
+it is still one commit and one pass.
 A fix adds a test only if it guards a real regression. Write no test that only
 shows a file, function or setting exists. A shell test file over its time budget
 is a red you trim or split, never a raised limit.
+Ask main and wait only when the class fix would change something the brief names as a stated limit.
 
 A pass that ends NO-GO writes `.claude/briefs/{unit}-fix-r<N>.md` and prints `FIX ROUND <N>: end your turn
 now`: end your turn without fixing anything. The script clears your pane and points a fresh session at that
@@ -266,7 +291,8 @@ above call for.
 ## Done
 
 Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
-with no P0, P1 or P2 named, or a pass that printed `STOP (threshold)` or `STOP (cap)`.
+with no P0, P1 or P2 named, or a pass that printed `STOP (threshold)` or `STOP (cap)`. A STOP line means run no fix
+round: main files what is open and merges. On `REVIEW STOP`, wait for main.
 Print `{UNIT}-DONE` as your last line and stop, but only after a GO the script did not mark `NARROWED GO` (that GO merges nothing: run the `final` pass it names first). An answer from main that
 arrives after it is still yours: read it and act on it. A question or a refusal
 goes on a line of its own that starts QUESTION: or BLOCKED:.

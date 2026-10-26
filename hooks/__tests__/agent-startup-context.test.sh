@@ -109,7 +109,7 @@ check "main offers a merge only for a unit the gate held or refused" 1 "$(grep -
 # Issue 235: long end-of-turn reports cost the owner a read every turn.
 check "main ends each turn with one status line" 1 "$(grep -c 'End each turn with one status line' "$T/ctx")"
 # Issue 230: main met the same guards turn after turn; its rules open with what to do instead, each with its command.
-check "main's rules open with the do-not list, five lines, each with a command" "1 5" \
+check "main's rules open with the do-not list, six lines, each with a command" "1 6" \
   "$(grep -c 'Do not -> instead' "$T/ctx") $(awk '/Do not -> instead/ {p = 1; next} p && /^  - .* -> .*`/ {n++} p && !/^  - / {exit} END {print n + 0}' "$T/ctx")"
 
 # --- a path-scoped rule loads only for its paths, and a Builder never loads agents.md: neither stands in ---

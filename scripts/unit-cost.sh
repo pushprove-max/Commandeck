@@ -21,8 +21,12 @@ UNIT=${1:?unit}
 SINCE=${2:-$(date -d '2 days ago' '+%Y-%m-%d %H:%M')}   # after paths.sh: a Mac's own date has no -d
 D="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$PP_WORKSPACES_SLUG-$UNIT"
 # No Claude transcript is not the end: a unit Codex panes worked on is billed below.
-files=; [ ! -d "$D" ] || files=$(find "$D" -maxdepth 1 -name '*.jsonl' -newermt "$SINCE" | sort)
-[ -n "$files" ] || echo "CLAUDE     no sessions for $UNIT since $SINCE in $D" >&2
+# A fresh closing pass run by a Claude reviewer works in the unit's closing copy, whose project folder is its own.
+CP=$(python3 "$PP_SCRIPTS/unit_folders.py" copy "$PP_WORKSPACES/$UNIT") || CP=
+DC=${CP:+${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "$CP")}
+files=; for d in "$D" ${DC:+"$DC"}; do [ ! -d "$d" ] || files+=$(find "$d" -maxdepth 1 -name '*.jsonl' -newermt "$SINCE" | sort)$'\n'; done
+files=$(grep . <<<"$files" || true)
+[ -n "$files" ] || echo "CLAUDE     no sessions for $UNIT since $SINCE in $D${DC:+ or $DC}" >&2
 
 JQ='
 def txt: if type=="string" then . elif type=="array" then (map(if type=="string" then . else (.text // "") end)|join(" ")) else tostring end;
@@ -105,10 +109,13 @@ fi
 # per-session token total (updated_at is epoch seconds).
 CODEX_DB=${CODEX_HOME:-$HOME/.codex}/state_5.sqlite
 [ -f "$CODEX_DB" ] || { echo "CODEX      not measured (no index at $CODEX_DB)"; [ -n "$files" ]; exit; }
-python3 - "$PP_WORKSPACES/$UNIT" "$(date -d "$SINCE" +%s)" "$CODEX_DB" <<'PY'
+# A closing pass reviews in the unit's closing copy; unit_folders.belongs counts it as the unit's session.
+PYTHONPATH="$PP_SCRIPTS${PYTHONPATH:+:$PYTHONPATH}" python3 - "$PP_WORKSPACES/$UNIT" "$(date -d "$SINCE" +%s)" "$CODEX_DB" <<'PY'
 import sqlite3, sys
-cwd, since = sys.argv[1], int(sys.argv[2])
+from unit_folders import belongs
+wt, since = sys.argv[1], int(sys.argv[2])
 c = sqlite3.connect(sys.argv[3])
-n, tok = c.execute("select count(*), coalesce(sum(tokens_used),0) from threads where cwd=? and updated_at>=?", (cwd, since)).fetchone()
+mine = [t for cwd, t in c.execute("select cwd, coalesce(tokens_used,0) from threads where updated_at>=?", (since,)) if belongs(cwd, wt)]
+n, tok = len(mine), sum(mine)
 print(f"CODEX      {n} sessions, {tok/1e6:.1f}M tokens (index total, all token kinds)")
 PY

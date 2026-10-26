@@ -41,10 +41,10 @@ esac
 EOF
 chmod +x "$T/bin/orca-ide"
 answer() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
-  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=3 PATH="$T/bin:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
 # run <command line> -- a printed answer-worker.sh command, run as written, the way main would paste it.
 run() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
-  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 PATH="$T/bin:$PATH" bash -c "$1" 2>&1); }
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=3 PATH="$T/bin:$PATH" bash -c "$1" 2>&1); }
 
 mkdir -p "$T/askbin" "$T/scratch/handles"; echo term_main > "$T/scratch/handles/main"
 cat > "$T/askbin/orca-ide" <<AEOF
@@ -86,7 +86,7 @@ check "--interrupt to a pane whose ask-main.sh gave up at its deadline is refuse
 rm -rf "$T/scratch/ask-main"; echo working > "$T/state"; : > "$T/typed"
 live term_b msg_a1
 OUT=$(answer term_b "no interrupt"); RC=$?
-check "without --interrupt nothing is typed into a mid-turn pane, even one waiting in ask-main.sh: the answer queues in its inbox" "2 0 1 0" \
+check "without --interrupt nothing is typed into a mid-turn pane, even one waiting in ask-main.sh: the answer queues in its inbox and ends NOT acknowledged (exit 1, issue 351)" "1 0 1 0" \
   "$RC $(wc -l < "$T/typed" | tr -d ' ') $(grep -c 'no interrupt' "$T/inbox") $([ -e "$T/interrupted" ] && echo 1 || echo 0)"
 OUT=$(answer --interrupt term_b "use sqlite"); RC=$?
 check "--interrupt to a pane blocked in ask-main.sh's wait types the answer in with the interrupt flag" "0 1 1" \

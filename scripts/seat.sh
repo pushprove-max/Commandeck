@@ -6,7 +6,7 @@
 #     $SCRATCH/seat-<unit>-<role>.txt. It returns once the pane, its task and that
 #     record exist (phase=launching); the rest runs in the background, logged to
 #     the record's .log, and ends phase=dispatched or phase=failed.
-# seat.sh status <role> <unit> -- the record's phase, handle and task, and its log's last line.
+# seat.sh status <role> <unit> -- the record's phase, handle and task, whether its pane is live, gone or unknown, and its log's last line.
 # seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
 #     -- read the pane's verdict and findings (read-verdict.sh), write them to
 #     --report when the pane could not (a read-only Codex sandbox cannot), or with
@@ -41,7 +41,7 @@ usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 rerun
        seat.sh launch plan-<seat> <unit> <spec-file> [--model <alias>] [--effort <level>]   (the plan seat's model and effort the owner picked; it runs in <unit>, made on its first launch, or a marked <unit>-plan from before 0.18.0)
        seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
        seat.sh wait    <role> <unit> --marker <text> [--timeout-s <n>]
-       seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed)
+       seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed; its pane: live, gone or unknown)
        seat.sh run     <role> <unit> <spec-file> [--marker <text>] [launch options]   (launch, wait, collect; one line back; not for a Builder)
        seat.sh effort  <role> <unit> <handle> <level>
 Open one routing.json seat in the unit's worktree, collect its verdict, or wait for its marker.
@@ -126,7 +126,15 @@ worker_state_kv() {
 }
 kv() { printf '%s\n' "$ST" | sed -n "s/^$1=//p" | head -1; }
 rec() { sed -n "s/^$1=//p" "$REC" 2>/dev/null | tail -1; }
-seat_status() { printf 'phase=%s handle=%s task=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(grep . "$REC.log" 2>/dev/null | tail -1)"; }
+# pane_state -- live or gone: whether the record's handle is in Orca's terminal list; unknown when the record has no handle
+# or the list cannot be read (#382: main sees a Builder whose pane is gone and relaunches it over the old record).
+pane_state() {
+  local h; h=$(rec handle); [ -n "$h" ] || { echo unknown; return; }
+  timeout --kill-after=2 8 orca-ide terminal list --json 2>/dev/null | jq -er --arg h "$h" \
+    '((.result // []) | if type == "array" then . else (.terminals // []) end) | if any(.[]; .handle == $h) then "live" else "gone" end' 2>/dev/null \
+    || echo unknown
+}
+seat_status() { printf 'phase=%s handle=%s task=%s pane=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(pane_state)" "$(grep . "$REC.log" 2>/dev/null | tail -1)"; }
 # settled -- wait out a launch's background part; fails when it ended phase=failed.
 settled() { local p; p=$(rec pid); while [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do sleep 1; done; [ "$(rec phase)" != failed ]; }
 # A record with no session= (a Codex seat, or a Claude pid lookup that failed) takes the log the reader found, so
@@ -413,7 +421,7 @@ launch)
   # Host issue 2999: a heavy fixture added to a test file with time-bound checks slows them past their bound.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan that adds a heavy fixture to a test file with time-bound checks names them on a \`Timed checks:\` line and orders the heavy case after them."
   # Issue 362: builder-launch.sh refuses a plan without these, so the plan author is told before it writes.
-  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, a \`## Claims to falsify\` list (one checkable claim per line), and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
   # Issue 359: the table's shape, the settled claims and the contracts a cut produces and consumes.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The What can go wrong section is a table of case, input or starting state, expected result and test name, at most five rows (\`checked, none\` when empty), and each row's test is among the acceptance tests. Every claim you mark [likely] or [uncertain] is settled in the plan (the command and its output) or is a Builder check before the cut that depends on it, with the action for each outcome. Each cut lists what it Produces and Consumes, and every existing consumer of a contract it changes. A judge finding you accept goes into the plan, one \`## Plan change log\` line each, before the Builder starts."
   # Issue 360: scope is the owner's words. The plan carries them; each judge traces every requirement to them.

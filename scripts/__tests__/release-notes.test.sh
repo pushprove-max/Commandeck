@@ -115,9 +115,11 @@ g tag v1.1.0
 check "a changed version whose tag and release exist decides skip" "skip: release v1.1.0 exists" "$(VIEW=0 decide "$B" "$C")"
 # The Tag step pushed the tag, then Publish failed: a rerun finds the tag but no release, and publishes again.
 check "a tag pushed by a run whose publish failed decides release again" "release v1.1.0" "$(VIEW=1 decide "$B" "$C")"
+check "an unchanged version whose tag has no release decides release; once the release exists, skip" "release v1.1.0|skip: version 1.1.0 did not change" \
+  "$(VIEW=1 decide "$C" "$C")|$(VIEW=0 decide "$C" "$C")"
 # And that rerun's Tag step finds its tag and goes on to Publish, pushing nothing.
 git init -q --bare "$T/origin.git"; g remote add origin "$T/origin.git"
-(cd "$T/r" && DECISION="release v1.1.0" GITHUB_SHA=$C bash -e -c "$(step Tag)") >/dev/null 2>&1
+(cd "$T/r" && DECISION="release v1.1.0" HEAD_SHA=$C bash -e -c "$(step Tag)") >/dev/null 2>&1
 check "a rerun's Tag step with its tag already there exits 0 and pushes nothing" "0 0" "$? $(git -C "$T/origin.git" tag | wc -l | tr -d ' ')"
 check "a first push (no before) releases the version when its tag is free" "release v1.2.0" \
   "$(g tag -d v1.1.0 >/dev/null; setv 1.2.0; decide 0000000000000000000000000000000000000000 "$(g rev-parse HEAD)")"
@@ -125,7 +127,7 @@ rm "$T/r/.claude-plugin/plugin.json"; g add -A; g commit -q -m gone
 decide "$C" "$(g rev-parse HEAD)" >/dev/null; check "a version that cannot be read exits 1" 1 "$?"
 # GitHub runs a step as bash -e: the Decide step must fail with the script, never write an empty decision and pass.
 : > "$T/gh-out"
-(cd "$T/r" && PATH="$T/dbin:$PATH" GITHUB_OUTPUT="$T/gh-out" GITHUB_SHA=$(g rev-parse HEAD) bash -e -c "$(step Decide | sed "s/\${{ github.event.before }}/$C/; s#bash scripts/#bash $REAL/scripts/#")") >/dev/null 2>&1
+(cd "$T/r" && PATH="$T/dbin:$PATH" GITHUB_OUTPUT="$T/gh-out" HEAD_SHA=$(g rev-parse HEAD) bash -e -c "$(step Decide | sed "s#bash scripts/#bash $REAL/scripts/#")") >/dev/null 2>&1
 check "a Decide step whose version cannot be read fails, writing no decision" "1 0" "$? $(grep -c '^decision=' "$T/gh-out")"
 
 # The workflow: the step that decides, and no later step that runs without its output.
@@ -135,8 +137,35 @@ check "the workflow gates every step after release-decide on its output starting
   /release-decide/ { d = n }
   /^        if: .*startsWith\(steps\.decide\.outputs\.decision, .release .\)/ { seen = 1; ok[n] = 1 }
   END { bad = 0; for (i = d + 1; i <= n; i++) if (!ok[i]) bad++; print (d > 0 && bad == 0 && n > d) ? "ok" : "bad " bad }' "$WF" 2>&1)"
-check "the workflow runs on a push to main with contents: write" "1 1" \
-  "$(grep -c '^    branches: \[main\]' "$WF") $(grep -c '^  contents: write' "$WF")"
+check "the workflow runs after ci completes on main with contents: write, and on no push" "1 1 1 0" \
+  "$(grep -c '^    branches: \[main\]' "$WF") $(grep -c '^  contents: write' "$WF") $(grep -c '^  workflow_run:' "$WF") $(grep -c '^  push:' "$WF")"
+# Issue-less cut C13: a release is published only after ci has passed on that commit. GITHUB_SHA is main's tip in a
+# workflow_run workflow, not the commit ci passed, so no step reads it.
+check "release_after_ci_only: the trigger is workflow_run on ci's completed, the job needs a success on a push, the checkout is head_sha, and no step reads GITHUB_SHA" "ci ci 1 1 1 1 0" \
+  "$(sed -n 's/^name: //p' "$REAL/.github/workflows/ci.yml") $(sed -n 's/^    workflows: \[\(.*\)\]$/\1/p' "$WF") $(grep -c '^    types: \[completed\]$' "$WF") \
+$(grep -c "^    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'$" "$WF") \
+$(grep -c '^          ref: ${{ github.event.workflow_run.head_sha }}$' "$WF") $(grep -c '^      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}$' "$WF") \
+$(grep -v '^[[:space:]]*#' "$WF" | grep -c 'GITHUB_SHA')"
+# The Decide step's own run: text, in a scratch repository with tags. The base is the newest tag before the commit.
+git init -q -b main "$T/d"; d() { git -C "$T/d" -c user.name=t -c user.email=t@t "$@"; }
+bump() { mkdir -p "$T/d/.claude-plugin"; echo "{\"version\": \"$1\"}" > "$T/d/.claude-plugin/plugin.json"; echo "$1 $2" > "$T/d/n"; d add -A; d commit -q -m "$2"; }
+dstep() { : > "$T/d-out"; (cd "$T/d" && PATH="$T/dbin:$PATH" GITHUB_OUTPUT="$T/d-out" HEAD_SHA=$(d rev-parse HEAD) bash -e -c "$(step Decide | sed "s#bash scripts/#bash $REAL/scripts/#")") >/dev/null 2>&1; sed -n 's/^decision=//p' "$T/d-out"; }
+bump 1.0.0 first; FIRST=$(dstep); d tag v1.0.0
+bump 1.0.0 work; WORK=$(VIEW=0 dstep)
+bump 1.1.0 red; RED=$(dstep)
+bump 1.1.0 fix; FIX=$(dstep)
+d tag v1.1.0; bump 1.1.0 after; AFTER=$(VIEW=0 dstep)
+# The tagged commit itself, rerun after its Publish failed (tag pushed, no release): it publishes.
+d checkout -q --detach HEAD~1; RERUN=$(dstep); d checkout -q main
+check "release_base_is_last_tag: the Decide step releases the head's version when the fix commit after a red bump commit is the one ci passed, skips when that version's release exists, and releases the first version when there is no tag" \
+  "release v1.0.0|skip: version 1.0.0 did not change|release v1.1.0|release v1.1.0|skip: version 1.1.0 did not change|release v1.1.0" \
+  "$FIRST|$WORK|$RED|$FIX|$AFTER|$RERUN"
+# r1 findings, classes release-retry and unpublished-tag: Tag pushed v1.1.0 and Publish failed, then the next green commit
+# kept the version. Its base is the tag, so the version "did not change", and only the release is missing: it publishes.
+# With the release made the unchanged version still skips.
+PENDING=$(VIEW=1 dstep)
+check "release_pending_publication: a later commit with the same version publishes it when its tag has no release, and skips once the release exists" \
+  "release v1.1.0|skip: version 1.1.0 did not change" "$PENDING|$AFTER"
 
 # The backfill plan: every version once, oldest first, and nothing created.
 git init -q -b main "$T/b"; g() { git -C "$T/b" -c user.name=t -c user.email=t@t "$@"; }

@@ -53,7 +53,7 @@ check "an owner who kept their own AGENT_STARTUP planning step does not get the 
 # out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
 # Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
 ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
-for pair in f45e894e:31f8b10f 401e8893:71c7e94b b1471fa8:ed48665e b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
+for pair in bbe121f7:f45e894e 401e8893:71c7e94b 4083592b:b1471fa8 b2577b20:ae5d50a4 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
   new=${pair%:*} old=${pair#*:}
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"
@@ -64,8 +64,9 @@ GR() { local id=$1; shift; python3 "$REAL/scripts/merge-rules.py" "$REAL/templat
 check "reworded 26b6b2b9: in by default, out under keep mine of c8e23316, in again with --keep 26b6b2b9" "1 0 1" \
   "$(GR 26b6b2b9) $(GR 26b6b2b9 --drop c8e23316) $(GR 26b6b2b9 --drop c8e23316 --keep 26b6b2b9)"
 # 0.48.0 global-rules.md rewordings: the review threshold (issue 366), the reviewers' scope, the ponytail add-on removed
-# (issue 365), units and duplicate agents, planning by size.
-for pair in 26b6b2b9:13e9906d cb6056f9:9243900d 41d1d566:e38a2639 e7926841:e6c9ac28 3b129248:516a9bd8 2424eeef:56860db4; do
+# (issue 365), units and duplicate agents, planning by size. 0.51.0: a plan's `file ~line`, the sibling dry run, the
+# flexibility finding's severity.
+for pair in 26b6b2b9:13e9906d cb6056f9:9243900d 41d1d566:e38a2639 e7926841:e6c9ac28 3b129248:516a9bd8 2424eeef:56860db4 eff13cd5:64f32653 faea5cd0:71b6b9ca a935667e:2fe4fdf9; do
   new=${pair%:*} old=${pair#*:}
   check "reworded global $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(GR "$new") $(GR "$new" --drop "$old") $(GR "$new" --drop "$old" --keep "$new")"

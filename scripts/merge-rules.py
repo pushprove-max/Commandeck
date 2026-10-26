@@ -160,6 +160,11 @@ MADE_FROM = {
     # (issue 365), units and duplicate agents, planning by size
     "26b6b2b9": ("13e9906d",), "cb6056f9": ("9243900d",), "41d1d566": ("e38a2639",), "e7926841": ("e6c9ac28",),
     "3b129248": ("516a9bd8",), "2424eeef": ("56860db4",),
+    # 0.51.0 main-session.md: a Builder whose pane is gone (issue 382) in the "Do not" list; the plan judge names the
+    # established practice and rejects a flow step with no Catches: line
+    "4083592b": ("b1471fa8",), "bbe121f7": ("f45e894e",),
+    # 0.51.0 global-rules.md: a plan's `file ~line`, the sibling dry run, and the flexibility finding's severity
+    "eff13cd5": ("64f32653",), "faea5cd0": ("71b6b9ca",), "a935667e": ("2fe4fdf9",),
 }
 
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.51.0 -- 2026-10-26
+
+### Review loop
+
+- A review round that is missing a reviewer's verdict no longer clears an earlier serious finding: it counts as one still open.
+- Once the pass limit is reached and no serious finding is open, a new pass is refused after the loop has stopped, and so is a pass over a change that touches only the plan. A round that was started again after an abandoned launch is judged by its finished run.
+- The fresh closing reviewer now reads a clean copy of the branch with the earlier rounds' reports and notes left out, and the unit brief kept. The copy is removed when the pass ends, the merge accepts that pass, and its cost is counted with the build.
+- A fix round whose findings touch separate files now lists them as groups that can be fixed side by side.
+- A site marked fixed after a failed pass now has to say how it was fixed in every new round. A round handed off before this release keeps its records valid.
+- When a pass refuses because a searched site is missing from the checked list, it now names the file that holds the full list of sites.
+
+### Main
+
+- A report of an older review round now says which newer round replaced it, and no next step is posted from a check that could not be read or that changed while it ran.
+- A main that restarts is told about every seat run its checkpoint names that stopped with no result.
+- The seat status shows when a pane is gone, and the rules say how to start a Builder again in a new pane.
+
+### Builders and plans
+
+- Builders now run on Opus at medium effort by default.
+- A Builder keeps a table of its issues, so the units view shows each issue as built when its part lands.
+- Before the first review pass a Builder runs the change for real and writes what it ran and saw.
+- Plans now list the claims a reviewer should try to disprove, and plan judges ask whether a plan follows the usual practice for its problem.
+
+### Releases
+
+- A release is now published only after the CI run on that commit has passed, so a red commit no longer releases. A version whose CI was red is published by the next commit that passes. A version that was tagged but not published, because publishing failed, is published by the next commit that passes, even when the version did not change.
+
 ## 0.50.0 -- 2026-10-26
 
 ### Release notes

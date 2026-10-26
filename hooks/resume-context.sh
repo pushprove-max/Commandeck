@@ -124,7 +124,35 @@ cut=""
 # Issue 283: what the stop hook's ten-generation carry walk cut is named in one line, never loaded.
 aged=""
 [ ! -s "$cp.aged-out.md" ] || aged="## items past the ten-generation carry walk: $cp.aged-out.md ($(grep -c . "$cp.aged-out.md") lines; not loaded, Read it when one comes up)"
-left=$(( 10239 - $(bytes "$aged") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
+# #381: a seat run the checkpoint names (`seat.sh run <role> <unit>`, or a bare seat-<unit>-<role> token; seat-*.txt is a
+# record's file name, not a run) that is not running and left no result ran and left nothing: main relaunches it by hand,
+# so this is advice, one line each. Not gone: a live `seat.sh run` process, a `collected=` line in the seat record, or a
+# `seat=` result line in the run log. A process list that cannot be read prints one line and no GONE line.
+gone=""
+names=$( { grep -oE 'seat\.sh run [a-z][a-z-]* [A-Za-z0-9][A-Za-z0-9._-]*' "$cp" | awk '{ sub(/[._-]+$/, "", $4); print $4 "-" $3 }'
+           grep -oE 'seat-[A-Za-z0-9]+(-[A-Za-z0-9]+)+(\.[A-Za-z]+)?' "$cp" | grep -v '\.' | sed 's/^seat-//'; } 2>/dev/null | sort -u)
+scratch=""
+[ -z "$names" ] || scratch=$( { . "$HERE/../scripts/paths.sh" >/dev/null 2>&1 && printf '%s' "$PP_SCRATCH"; } )
+if [ -n "$names" ] && [ -n "$scratch" ]; then
+  if procs=$(ps -axo command= 2>/dev/null); then
+    live=$(grep -oE 'seat\.sh run [a-z][a-z-]* [A-Za-z0-9][A-Za-z0-9._-]*' <<<"$procs" | awk '{ print $4 "-" $3 }')
+    # At most 8 GONE lines, so the block cannot crowd the checkpoint out of the budget; the rest are counted in one line.
+    more=0
+    while read -r n; do
+      grep -qxF -- "$n" <<<"$live" && continue
+      grep -qs '^collected=' "$scratch/seat-$n.txt" && continue
+      grep -qs '^seat=' "$scratch/run-$n.log" && continue
+      [ "$(grep -c '^GONE:' <<<"$gone")" -lt 8 ] || { more=$((more + 1)); continue; }
+      gone="${gone:+$gone
+}GONE: seat run $n is named in the checkpoint but is not running and left no result; relaunch it"
+    done <<<"$names"
+    [ "$more" = 0 ] || gone="$gone
+GONE: $more more seat runs named in $cp are not running and left no result; check each with \`bash scripts/seat.sh status <role> <unit>\`"
+  else
+    gone="runs not checked: the process list could not be read, so the seat runs this checkpoint names may be gone; run \`bash scripts/seat.sh status <role> <unit>\` for each"
+  fi
+fi
+left=$(( 10239 - $(bytes "$aged") - $(bytes "$gone") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
 room=$(( left - $(bytes "$board_ptr") - prompts_ptr ))
 # The resumed checkpoint is a summary, not a copy: past 3,000 bytes it is cut, and its last line names the file.
 [ "$room" -le 3000 ] || room=3000
@@ -150,6 +178,6 @@ prompts=$(python3 "$HERE/../scripts/checkpoint-context.py" messages "$tpath" "$l
 grep -qF 'the resume budget' <<<"$prompts" && cut="${cut:+$cut; }the owner's prompts"
 
 # Issue 283: the payload's size, beside the stop hook's cp_bytes, is what a restart costs the new main.
-out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" ${aged:+"$aged"} "$prompts")
+out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" ${aged:+"$aged"} ${gone:+"$gone"} "$prompts")
 printf '%s\n' "$out"
 echo "$(date +%FT%T) resume: payload_bytes=$(( $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | LC_ALL=C wc -c) + $(printf '%s\n' "$out" | LC_ALL=C wc -c) )) cp=$cp" >> "$HOME/.claude/checkpoints/clear-hook.log" 2>/dev/null

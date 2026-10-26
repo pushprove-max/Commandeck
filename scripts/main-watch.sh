@@ -915,25 +915,64 @@ delivered() {
   grep -qxE -e handled -e close=1 -e 'posted=[0-9]+' "$1" 2>/dev/null
 }
 
+# stop_next <worktree> <unit> <round> -- sets SN_TEXT for the newest round when the merge's own check (builder-codex-pass.sh
+# --verify) says the review loop stopped, and leaves it empty otherwise (#380). Two stops: a REVIEW STOP (a P0 or P1 two
+# passes past the cap) waits for the owner's answer and runs no fix round; a cap stop (rule `cap stop`) is filed one issue
+# per class, then merged by hand. Neither is a fix round. One --verify call; the stamp guard runs the arm once per round.
+# Fails (1) when the check gave no answer: it timed out, or its output does not name <unit>-r<round>-reports.md in one of
+# the four forms --verify ends in (a proof, a REVIEW STOP, ended NO-GO, a design-only pass). The caller must not stamp a
+# next step from that; the next tick asks again, as builder_ready does after a timeout.
+stop_next() {
+  local proof id rc=0
+  SN_TEXT=
+  proof=$(timeout 60 bash "$HERE/builder-codex-pass.sh" --verify "$1" "$2" HEAD 2>&1) || rc=$?
+  [ "$rc" != 124 ] || return 1
+  grep -qF -- "$2-r$3-reports.md" <<<"$proof" && grep -qE 'Builder proof:|REVIEW STOP:|ended NO-GO|is a design-only pass' <<<"$proof" || return 1
+  id=$(sed -n 's/.*REVIEW STOP:.*decision \(review-stop-[A-Za-z0-9._-]*\);.*/\1/p' <<<"$proof" | head -n 1)
+  if [ -n "$id" ]; then
+    SN_TEXT="REVIEW STOP, decision $id: a P0 or P1 is open two passes past the cap. The Builder waits for the owner's answer; no fix round runs and no later pass launches until that row is ANSWERED"
+  elif grep -q '; rule: cap stop$' <<<"$proof"; then
+    SN_TEXT="cap stop: file one issue per Open finding class, then hand merge: $HERE/merge-unit-local.sh $2 --filed '<class>=#<n>' ... (builder-codex-pass.sh --verify lists the Open finding lines)"
+  fi
+}
+
 # report_wake <worktree> <unit> -- every finished round file gets one stamp, due-<key>: unit, round, subject, body.
 # Stamping is all this does: report_send delivers from the stamp alone, and while a unit has a stamp seat() ends nothing
 # for it (a merge removes the worktree, a seat record goes, so no retry may need them).
+# Only the newest round gives a next step, and only from a checked state (#380): an older round is stamped superseded, a
+# stop check that gave no answer holds the report (the next tick asks again), and a round that appeared while the check
+# ran holds it too (the next tick stamps it superseded).
 report_wake() {
-  local n f line verdict kind next key item
+  local n f line verdict kind next key item ck was
+  newest_round "$1" "$2"
   while read -r n f; do
     line=$(round_line "$f") || continue
     verdict=${line%% (*}; kind=${line#*(}; kind=${kind%)}
     key=$(report_key "$2" "$f") || continue; item=$ST/item-$key
     [ ! -e "$ST/due-$key" ] && ! delivered "$item" || continue
-    case "$kind:$verdict" in
+    ck=$kind:$verdict; [ "$n" -ge "${NR_N:-0}" ] || ck=superseded
+    case "$ck" in
+      superseded) next="superseded by pass $NR_N; act on that report" ;;
       "kind not recorded:"*) next="pass kind not recorded" ;;
       final:GO) next="merge: $HERE/merge-unit-local.sh $2" ;;
       review:GO) next="narrowed -- needs a final pass: builder-codex-pass.sh $2 $((n + 1)) final" ;;
-      design:GO) next="design only, merges nothing -- the Builder writes the code, then builder-codex-pass.sh $2 $((n + 1)) final" ;;
-      adversarial:GO) next="a first-pass GO" ;;
-      *:NO-GO) next="fix round $n runs from $2-fix-r$n.md" ;;
+      design:GO)
+        next="design only, merges nothing -- the Builder writes the code, then builder-codex-pass.sh $2 $((n + 1)) final"
+        stop_next "$1" "$2" "$n" || { note "$2 pass $n: stop check unreadable or timed out, report held" "$key"; continue; }
+        [ -z "$SN_TEXT" ] || next=$SN_TEXT ;;
+      adversarial:GO)
+        next="a first-pass GO"
+        stop_next "$1" "$2" "$n" || { note "$2 pass $n: stop check unreadable or timed out, report held" "$key"; continue; }
+        [ -z "$SN_TEXT" ] || next=$SN_TEXT ;;
+      *:NO-GO)
+        next="fix round $n runs from $2-fix-r$n.md"
+        stop_next "$1" "$2" "$n" || { note "$2 pass $n: stop check unreadable or timed out, report held" "$key"; continue; }
+        [ -z "$SN_TEXT" ] || next=$SN_TEXT ;;
       *) next="see the report" ;;
     esac
+    # A round that finished while the check ran makes this answer about an older round: hold it, and the next tick
+    # stamps it superseded.
+    was=$NR_N; newest_round "$1" "$2"; [ "$NR_N" = "$was" ] || continue
     # Published by mv: report_send never reads half a stamp. The temp name is outside the due-* glob. A failed write
     # leaves no stamp; report_pending still holds the unit and its later reports, and the next tick writes it again.
     { printf '%s\n%s\n%s\n%s\n' "$2" "$n" "main-watch: $2 pass $n: $verdict ($kind)" "$f ends $verdict ($kind). Next: $next" \
@@ -953,6 +992,10 @@ report_send() {
   while read -r u n f; do
     key=${f#"$ST/due-"}; item=$ST/item-$key
     if delivered "$item"; then rm -f "$f"; continue; fi
+    # A round that finished after this stamp was written makes its next step stale (#380): the stamp is dropped unsent,
+    # and the next tick's report_wake stamps the round superseded. report_pending holds the later rounds meanwhile.
+    newest_round "$WS/$u" "$u"
+    [ "${NR_N:-0}" -le "$n" ] || grep -qF "Next: superseded by pass $NR_N;" "$f" || { rm -f "$f"; continue; }
     ! report_pending "$u" "$n" || continue
     t=$(sed -n 's/^task=//p' "$item" 2>/dev/null)
     [ -z "$t" ] || [ "$t" = none ] || [ -n "$(jq -r --arg t "$t" 'first(.result.tasks[]? | select(.id == $t) | .id)' <<<"$TASKS")" ] || rm -f "$item"

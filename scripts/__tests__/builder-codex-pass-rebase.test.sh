@@ -56,11 +56,12 @@ check "a closing pass's report carries one timing line per pre-review step" "1 1
 $(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests not run, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
 
 # main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
+# This is the sixth pass, past the default pass cap of five after a closing NO-GO, where the cap gate refuses first.
+cfg '.reviewLoop.passCap = "20"'
 echo main-side > "$REPO/a.sh"; G commit -qam 'a.sh on main'
 printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
   "$(fin 6 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
-
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

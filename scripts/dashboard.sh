@@ -954,7 +954,7 @@ limit() {
   if [ -d "$cx" ]; then ok codex-usage; else nm codex-usage "no Codex sessions at $cx"; fi
   # The day's cost is each project's own: its sessions are the ones run in its main checkout or its worktrees.
   python3 "$HERE/dashboard_limit.py" build "$st" "$CACHE/claude-usage" "$NOW" "$CACHE" "$CLAUDE_DIR/projects" "$cx" \
-    "$(jq -c '.projects | map_values([.path, .workspaces])' "$RUN/parts/projects.json")"
+    "$(jq -c '.projects | map_values([.path, .workspaces, .closingCopies])' "$RUN/parts/projects.json")"
 }
 
 # The Tests card (issue 269): the test runs going now on this machine (ps, lsof) and the finished ones from the Claude
@@ -1143,7 +1143,9 @@ project() {
   wait "$pg" || rc=1
   [ "$rc" = 0 ] && part partSeconds part_seconds || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
-  jq -cs --arg n "$PP_PROJECT" --arg p "$PP_MAIN" --arg w "$PP_WORKSPACES" '{($n): (add + {path: $p, workspaces: $w})}' "$RUN"/parts/*.json > "$RUN/project.json"
+  # closingCopies: where this project's fresh closing review passes run, so the day's cost counts their sessions (unit_folders.py).
+  jq -cs --arg n "$PP_PROJECT" --arg p "$PP_MAIN" --arg w "$PP_WORKSPACES" --arg c "$(python3 "$HERE/unit_folders.py" root 2>/dev/null || true)" \
+    '{($n): (add + {path: $p, workspaces: $w, closingCopies: $c})}' "$RUN"/parts/*.json > "$RUN/project.json"
 }
 
 # registered -- the registry's paths, one a line; with no registry, nothing.

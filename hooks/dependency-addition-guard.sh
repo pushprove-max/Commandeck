@@ -29,7 +29,9 @@
 # deliberately evasive operator (who could trivially bypass any text-matching
 # hook). Evasion-class review findings are out of scope by design: an install
 # handed to another program as text (`bash -c '...'`, `eval '...'`, a body piped
-# to a shell, `ssh host '...'`) is not seen. The `i`
+# to a shell, `ssh host '...'`) is not seen. Stated limit: an install inside a `case` pattern inside a double-quoted
+# command substitution (`echo "$(case x in x) npm install lodash;; esac)"`) is not seen either; the parser does not read
+# `case` syntax. The `i`
 # alias stays out of the loose tier (there it made ordinary compounds
 # false-block); `npm --prefix <dir> i <pkg>` is caught by dropping npm's valued
 # flags before the tight tier reads the command.

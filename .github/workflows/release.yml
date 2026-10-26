@@ -1,26 +1,42 @@
 name: release
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
 # Its own workflow: ci.yml stays read-only. The one decision is scripts/release-decide.sh; no step after it runs
 # without its output starting "release ". The checkout before it neither tags nor publishes.
+# It runs when ci completes on main, and only for a push whose ci run passed: a red commit publishes nothing, and a
+# later green commit publishes the version if it is still unpublished. GITHUB_SHA is main's tip here, not the commit
+# ci passed, so every step reads HEAD_SHA.
 permissions:
   contents: write
 jobs:
   release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-24.04
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       # Every commit and tag: the decision compares two commits and looks for the tag.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+      # The base is the newest tag reachable from the commit's parent (all zeros with none: a first release). The event
+      # has no "before", and the parent itself would lose the release of a version-bump commit whose ci was red. The
+      # commit's own tag is left out so that a rerun after a failed Publish, which finds its tag, publishes. A later commit of
+# the same version finds that tag as its base; release-decide.sh publishes a version whose tag has no release even then.
       # The assignment, not echo's argument, carries the script's exit: bash -e fails the step with it.
       - name: Decide
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          DECISION=$(bash scripts/release-decide.sh "${{ github.event.before }}" "$GITHUB_SHA")
+          LAST=$(git describe --tags --abbrev=0 "$HEAD_SHA^" 2>/dev/null || true)
+          BASE=0000000000000000000000000000000000000000
+          [ -z "$LAST" ] || BASE=$(git rev-parse "$LAST^{commit}")
+          DECISION=$(bash scripts/release-decide.sh "$BASE" "$HEAD_SHA")
           echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
       # A missing changelog section, or one the style guard refuses, fails the job here, before anything is tagged.
       - name: Notes
@@ -35,7 +51,7 @@ jobs:
           DECISION: ${{ steps.decide.outputs.decision }}
         run: |
           TAG=${DECISION#release }
-          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$GITHUB_SHA" && git push origin "$TAG"; }
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$HEAD_SHA" && git push origin "$TAG"; }
       # A release that exists already changes nothing.
       - name: Publish
         if: startsWith(steps.decide.outputs.decision, 'release ')

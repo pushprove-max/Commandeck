@@ -16,11 +16,29 @@ check "the pass runs the reviewer's search and keeps every hit as path:line" "a.
 check "the fix brief lists the hits under Class sites" "1 1" "$(hand 2 | grep -c "^## Class sites (from the reviewers' searches)") $(hand 2 | grep -cx '  - b.sh:1')"
 # The Mac's preflight puts Homebrew's folders back on PATH: an empty Homebrew folder keeps rg off it.
 chk() { (cd "$W" && TMPDIR=$TMP PATH=${2:-$TMP/cli:$PATH} COMMANDECK_BREW_PREFIX=${2:+$TMP/nobrew} COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" "$1" review >/dev/null 2>"$TMP/err"); echo $?; }
-printf '\n## Sites checked (pass 2)\nSearch: rg -n built .\n- a.sh:1 fixed\n\n## New code checked (pass 2)\n- none, a fixture\n' >> "$B/$U-evidence.md"
+printf '\n## Sites checked (pass 2)\nSearch: rg -n built .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass 2)\n- none, a fixture\n' >> "$B/$U-evidence.md"
 check "the next pass refuses while a hit is missing from Sites checked, and names only that hit" "2 1 0" \
   "$(chk 3) $(grep -c 'b.sh:1' "$TMP/err") $(grep -c 'a.sh:1' "$TMP/err")"
-sed -i.bak 's/^- a.sh:1 fixed$/&\n- b.sh:1 not affected, a fixture with no read/' "$B/$U-evidence.md"; rm -f "$B/$U-evidence.md.bak"
+# Issue 391: the refusal names the file the pass reads (the .txt of hits), not the .md the Builder reads in the hand-off.
+check "the missing-sites refusal names the class-sites file the pass reads" "1 0" \
+  "$(grep -c -e "-r2-class-sites\.txt" "$TMP/err") $(grep -c -e 'class-sites\.md' "$TMP/err")"
+sed -i.bak 's/^- a.sh:1 fixed, a fixture$/&\n- b.sh:1 not affected, a fixture with no read/' "$B/$U-evidence.md"; rm -f "$B/$U-evidence.md.bak"
 check "...and starts once every hit is listed" 0 "$(chk 3)"
+# A bare `fixed` says nothing of how it was fixed: the Sites line gives the how, or it is no site line.
+cp "$B/$U-evidence.md" "$TMP/ev.keep"
+sed 's/^- b.sh:1 not affected, .*$/- b.sh:1 fixed/' "$TMP/ev.keep" > "$B/$U-evidence.md"
+check "sites_fixed_needs_how: a bare fixed Sites line is refused and the refusal names the fixed, <how> form" "2 1" \
+  "$(chk 3) $(grep -c -F "fixed, <how>" "$TMP/err")"
+sed 's/^- b.sh:1 not affected, .*$/- b.sh:1 fixed, moved to c.sh/' "$TMP/ev.keep" > "$B/$U-evidence.md"
+check "a class-sites hit listed as fixed, <how> counts as listed" 0 "$(chk 3)"
+# r1 finding, class old-format-case: a batch whose round was handed off by the deployed release was told to write a bare
+# `fixed`, and its record must still launch. The round's own fix hand-off says which form it asked for: a hand-off that names
+# `fixed, <how>` holds the Sites to it, one that does not (the deployed text) accepts the bare form it asked for.
+sed 's/^- b.sh:1 not affected, .*$/- b.sh:1 fixed/; s/^- a.sh:1 fixed, a fixture$/- a.sh:1 fixed/' "$TMP/ev.keep" > "$B/$U-evidence.md"
+cp "$B/$U-fix-r2.md" "$TMP/fix.keep"
+check "sites_old_format_accepted: bare fixed lines launch when the round's hand-off asked for the bare form (a deployed-release hand-off), and a hand-off that asks for the how refuses them" "0 2" \
+  "$(sed 's/`- <path>:<line> fixed, <how>`/`- <path>:<line> fixed`/g' "$TMP/fix.keep" > "$B/$U-fix-r2.md"; chk 3) $(cp "$TMP/fix.keep" "$B/$U-fix-r2.md"; chk 3)"
+cp "$TMP/ev.keep" "$B/$U-evidence.md"
 # The command is the reviewer's text: it runs as rg with no shell, and rg's program-running flags are refused. A search
 # under KNOWN GAPS: has no finding above it.
 R3=$'- [P2] (class: x) x -- a.sh:1 -- why -- cmd\nClass search: rg --pre cat built a.sh\n- [P2] (class: x) y -- a.sh:1 -- why -- cmd\nClass search: rg -n nomatch a.sh\nClass search: rg -nz built a.sh\n- [P2] (class: x) z -- a.sh:1 -- why -- cmd\nClass search: cat a.sh; touch pwned\nKNOWN GAPS:\n- a gap -- a.sh:1 -- needs a bypass\nClass search: rg -n built a.sh\nVERDICT: NO-GO'

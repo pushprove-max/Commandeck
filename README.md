@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.50.0-111111?style=flat-square" alt="Version 0.50.0">
+  <img src="https://img.shields.io/badge/version-0.51.0-111111?style=flat-square" alt="Version 0.51.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -206,8 +206,8 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 |---|---|---|
 | `orchestratorModel` | `project`, `opus`, `sonnet`, `fable` | Main's model (project: Opus) |
 | `orchestratorEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Main's effort (project: medium) |
-| `builderModel` | `project`, `opus`, `sonnet`, `fable` | Each Builder's model (project: Sonnet) |
-| `builderEffort` | `project`, `low`, `medium`, `high`, `max` | Each Builder's effort (project: high) |
+| `builderModel` | `project`, `opus`, `sonnet`, `fable` | Each Builder's model (project: Opus) |
+| `builderEffort` | `project`, `low`, `medium`, `high`, `max` | Each Builder's effort (project: medium) |
 | `maxBuilders` | a number, or empty | The most Builders that run at once over all units (empty: no cap) |
 
 **Fixer**

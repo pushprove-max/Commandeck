@@ -18,7 +18,7 @@ A null effort is omitted from the command.
 | plan-author | Claude / opus | high | `planAuthorModel`, `planAuthorEffort`, `planAuthorEnabled`, `planAuthorFast` | yes: no plan |
 | plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | plan-judge-fable | Claude / fable | high | `planJudgeFable` + `Model`, `Effort`, `Enabled`, `Fast` | yes |
-| builder | Claude / sonnet | high | `builderModel`, `builderEffort` | no: no branch to review or merge |
+| builder | Claude / opus | medium | `builderModel`, `builderEffort` | no: no branch to review or merge |
 | fixer | Claude / opus (first fix round: the Builder's) | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
 | codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
 

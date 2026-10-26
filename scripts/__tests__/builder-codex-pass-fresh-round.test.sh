@@ -130,5 +130,15 @@ check "a fix hand-off that cannot be written names the failure, tells main, leav
   "$(fpass "$W" 15 review "$NOGO") $(grep -c 'NO FIX HAND-OFF after pass 15: writing' "$TMP/out") $(told 15) $(grep -c '^FIX ROUND' "$TMP/out") $(ls "$B/$U-fix-r15.md.tmp" 2>/dev/null | wc -l | tr -d ' ') $(cat "$TMP/frs-calls" 2>/dev/null | grep -c -- '--text /clear')"
 rmdir "$B/$U-fix-r15.md"
 
+# Issue 382: a Builder whose pane is gone is launched again over its old record, which then names the new pane; the next
+# NO-GO pass hands the fix round to that pane and never to the dead one.
+cp "$SC/seat-$U-builder.txt" "$SC/seat-$U-builder.keep"; sed 's/^handle=.*/handle=term_new/' "$SC/seat-$U-builder.keep" > "$SC/seat-$U-builder.txt"
+rm -f "$TMP/frs-calls"; printf 'echo sixteen\n' > "$W/a.sh"
+find "$CODEX_HOME/sessions" -name 'rollout-*-thr-1[1-5]-*.jsonl' -exec touch -t 200001010000 {} + # passes 11-15 age out, as 6-10 did: pass 16 is not past the cap
+R16=$(fpass "$W" 16 review "$NOGO"); helper_done 16
+check "after a relaunch over a dead record, a NO-GO pass hands the fix round to the new pane" "0 1 0" \
+  "$R16 $(grep -c 'terminal send --terminal term_new --text /clear' "$TMP/frs-calls") $(grep -c 'term_frs' "$TMP/frs-calls")"
+mv "$SC/seat-$U-builder.keep" "$SC/seat-$U-builder.txt"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

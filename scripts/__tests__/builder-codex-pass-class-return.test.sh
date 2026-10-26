@@ -62,7 +62,7 @@ rawpass() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO ST
 printf 'echo seven\n' > "$W/a.sh"
 check "after a NO-GO the next pass refuses without a sites section, names it, and starts no round" "2 1 no" \
   "$(rawpass 7 review 'VERDICT: GO') $(grep -c "has no usable '## Sites checked (pass 6)' section" "$TMP/err") $([ -e "$B/$U-r7-reports.md" ] && echo yes || echo no)"
-printf '\n## Sites checked (pass 5)\nSearch: grep -rn x .\n- a.sh:1 fixed\n\n## Sites checked (pass 6)\nSearch: grep -rn y .\n' >> "$B/$U-evidence.md"
+printf '\n## Sites checked (pass 5)\nSearch: grep -rn x .\n- a.sh:1 fixed, a fixture\n\n## Sites checked (pass 6)\nSearch: grep -rn y .\n' >> "$B/$U-evidence.md"
 check "a section for another pass, or one with a search and no site line, does not count" "2 no" \
   "$(rawpass 7 review 'VERDICT: GO') $([ -e "$B/$U-r7-reports.md" ] && echo yes || echo no)"
 printf -- '- b.sh:3 not affected, it only reads the value\n' >> "$B/$U-evidence.md"
@@ -89,6 +89,23 @@ check "the code after a design-only GO is refused without New code checked for t
   "$(rawpass 9 review 'VERDICT: GO') $(grep -c "pass 8 reviewed a design alone" "$TMP/err")"
 printf '\n## New code checked (pass 8)\n- a.sh:1 meets Data design, one fence\n' >> "$B/$U-evidence.md"
 check "...and taken with it" 0 "$(rawpass 9 review 'VERDICT: GO')"
+
+# Issue 379: findings in separate files get ready-made fix groups and the child-worktree rule (the script only names the
+# groups; the Builder runs the helpers). A finding that cites two files joins their groups; findings on one file get no section.
+groups() { awk '/^## Parallel fix groups/ { f = 1; next } /^## / { f = 0 } f' "$B/$U-fix-r$1.md"; } # <N>: the section's body
+PGAB=$'- [P1] (class: pg-a) PG-FIRST -- a.sh:1 -- it breaks -- bash a.sh\n- [P1] (class: pg-b) PG-SECOND -- b.sh:2 -- it breaks -- bash b.sh\nVERDICT: NO-GO'
+# Passes 10 to 12 are the 10th to 12th on record, past the review stop for a P1; each is aged out of the 14-day window
+# (all but the first pass's and the one before) so each is a low count on record, as the closing cases do.
+age() { find "$CODEX_HOME/sessions" -name 'rollout-*.jsonl' ! -name '*-thr-1-*' ! -name "*-thr-$(($1 - 1))-*" -exec touch -t 200001010000 {} +; } # <N>
+age 10; printf 'echo ten\n' > "$W/a.sh"; fpass "$W" 10 review "$PGAB" >/dev/null
+PGONE=$'- [P1] (class: pg-one) PG-ONLY -- a.sh:1 -- it breaks -- bash a.sh\nVERDICT: NO-GO'
+age 11; printf 'echo eleven\n' > "$W/a.sh"; fpass "$W" 11 review "$PGONE" >/dev/null
+check "parallel_fix_groups: a NO-GO with findings citing a.sh and b.sh gives the hand-off two fix groups and the child-worktree rule; findings on one file give no group section" "1 2 0" \
+  "$(groups 10 | grep -c 'isolation: "worktree"') $(grep -c '^- Group [0-9]' "$B/$U-fix-r10.md") $(grep -c '^## Parallel fix groups' "$B/$U-fix-r11.md")"
+PGJOIN=$'- [P1] (class: pg-c) PG-A -- a.sh:1 -- it breaks -- bash a.sh\n- [P1] (class: pg-d) PG-B -- b.sh:2 -- it breaks -- bash b.sh\n- [P1] (class: pg-e) PG-BOTH -- a.sh:1 and b.sh:2 -- it breaks -- bash a.sh\n- [P1] (class: pg-f) PG-C -- c.sh:3 -- it breaks -- bash c.sh\nVERDICT: NO-GO'
+age 12; printf 'echo twelve\n' > "$W/a.sh"; fpass "$W" 12 review "$PGJOIN" >/dev/null
+check "a finding citing two files joins their groups: a.sh and b.sh are one group of three findings, c.sh another" "2 - Group 1 (a.sh, b.sh) 3" \
+  "$(grep -c '^- Group [0-9]' "$B/$U-fix-r12.md") $(grep '^- Group 1 ' "$B/$U-fix-r12.md" | sed 's/:$//') $(groups 12 | awk '/^- Group 1 / { f = 1; next } /^- Group / { f = 0 } f' | grep -c '^  - ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

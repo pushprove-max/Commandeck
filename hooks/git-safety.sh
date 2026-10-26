@@ -186,6 +186,8 @@ DISCARD="(^|[;&|(/]|[[:space:]])git${GITOPTS}[[:space:]]+(checkout|switch|restor
 # the worktree, so a grant never outlives it. The forced remove that uses a grant must be on the fixed list too
 # (WT_REM), so no other call runs between this check and the remove. No session id: owns nothing. Only an absolute
 # path counts: git resolves a relative one from a -C folder or a cd earlier in the command, not the hook's.
+# Stated limit: the hook reads no worktree status before the forced remove, so a forced remove of a worktree this session
+# added deletes whatever it holds, a file marked assume-unchanged or skip-worktree included.
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 WT_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 WT_RAW=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)

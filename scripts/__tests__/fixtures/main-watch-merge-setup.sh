@@ -8,7 +8,10 @@ cat > "$REPO/scripts/builder-codex-pass.sh" <<EOF
 #!/usr/bin/env bash
 echo "\$3" >> "$F/verify-calls"
 [ ! -e "$F/refuse-\$3" ] || { cat "$F/refuse-\$3" >&2; exit 1; }
-echo "Builder proof: \$3-r3-reports.md: the closing pass\$(cat "$F/pad-\$3" 2>/dev/null); rule: \$(cat "$F/rule-\$3" 2>/dev/null || echo closing GO)"
+n=\$(ls "$T/ws/\$3/.claude/briefs" 2>/dev/null | sed -n "s/^\$3-r\\([0-9][0-9]*\\)-reports.md\$/\\1/p" | sort -n | tail -n 1)
+echo "Builder proof: \$3-r\${n:-3}-reports.md: the closing pass\$(cat "$F/pad-\$3" 2>/dev/null); rule: \$(cat "$F/rule-\$3" 2>/dev/null || echo closing GO)"
+# mkround-<unit>: a round that finishes while this check runs (it holds the text of the next round file)
+[ ! -e "$F/mkround-\$3" ] || { n=\$(( \${n:-3} + 1 )); mv "$F/mkround-\$3" "$T/ws/\$3/.claude/briefs/\$3-r\$n-reports.md"; }
 EOF
 # merge-queue.sh prints its own line for each unit it merged and removes its worktree, as the real merge does; a unit
 # named in mq-fail stops it, one in mq-late merges with a later step failed.

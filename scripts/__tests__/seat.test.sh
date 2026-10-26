@@ -17,7 +17,8 @@ check "a read-only seat asked to write a file is refused; a clause ending on the
   "$(run launch codex-reviewer seat-unit "$T/spec-w.md" 2>&1 | grep -c 'spec asks it to write'):$(run launch codex-reviewer seat-unit "$T/spec-p.md" 2>&1 | grep -c 'spec asks it to write')"
 
 seat() { COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch builder seat-builder "$T/spec.md"; }
-jq '.pluginConfigs["commandeck@commandeck"].options.builderModel = "opus"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
+# A model other than routing's default (opus), so that dropping the key changes what the seat is launched with.
+jq '.pluginConfigs["commandeck@commandeck"].options.builderModel = "sonnet"' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"
 seat >"$T/out" 2>&1; check "the first Builder launch opens a pane" 0 $?
 seat >"$T/out" 2>&1; check "a second launch on the same settings reuses it" '0:1' "$?:$(grep -c 'state=reused' "$T/out")"
 jq 'del(.pluginConfigs["commandeck@commandeck"].options.builderModel)' "$HOME/.claude/settings.json" > "$T/s" && mv "$T/s" "$HOME/.claude/settings.json"

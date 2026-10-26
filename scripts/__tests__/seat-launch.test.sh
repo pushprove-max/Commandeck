@@ -92,6 +92,20 @@ check "two launches together under cap 1 open one pane, and one is refused" "1:1
   "$(grep -c . "$T/creates"):$(cat "$T/o2" "$T/o3" | grep -c '^REFUSED: 1 Builders are running')"
 rm -f "$T/pane-up"
 
+# Issue 382: a Builder whose pane is gone is started again by a launch over its old record (no relaunch verb): the record
+# names a pane Orca no longer lists, so the launch is not refused as still running and writes the new pane's handle, and
+# status shows pane=gone first, which is how main knows to do it.
+git -C "$PROJ" worktree add -q "$HOME/orca/workspaces/proj/seat-b4"
+BREC=$SCR/seat-seat-b4-builder.txt; cap '{}'; rm -f "$T/pane-up" "$T/extra"; : > "$T/creates"
+printf 'handle=term_old\ntask=task_old\nrole=builder\nunit=seat-b4\nlaunched=1700000000\nphase=dispatched\n' > "$BREC"
+check "status on a Builder record whose pane is gone says pane=gone" "1:0" \
+  "$(seat_sh status builder seat-b4 2>&1 | grep -c 'handle=term_old .* pane=gone '):$(grep -c . "$T/creates")"
+bl b4 >/dev/null
+check "a builder launch over a record whose pane is gone writes the new pane's handle" "h1 1" \
+  "$(sed -n 's/^handle=//p' "$BREC" | tail -1) $(grep -c . "$T/creates")"
+check "status then shows the new pane live" 1 "$(seat_sh status builder seat-b4 2>&1 | grep -c 'handle=h1 .* pane=live ')"
+rm -f "$T/pane-up"
+
 # Issue 312: each judge's agent key picks its agent. On codex it is the read-only Codex sandbox; on claude the Claude
 # overlay, Sonnet with Write, Edit and NotebookEdit denied. Two judges on Claude stay two seats with two records.
 # The codex stand-in (issue 316): `codex sandbox <words> -- <cmd>` runs <cmd> as the sandboxed seat would (GH_SANDBOXED

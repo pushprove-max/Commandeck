@@ -100,13 +100,17 @@
 - Plan by size: a one-line fix needs no plan; a change across a few files
   gets a short list of steps; anything larger gets a written plan the owner
   approves first.
-- Before building from a plan, run a freshness pass: check that every file and
+- A plan names each file and symbol with an approximate line (`file ~line`).
+  Before building from a plan, run a freshness pass: check that every file and
   symbol it cites still exists, and re-verify a plan older than the last commit
   to those files.
 - A plan names its integration surface: every consumer, registry and sync
   point the change reaches. When a contract has sibling implementations, list
-  each one with a tool, not from memory, and give them one shared helper or a
-  test that names both sides.
+  each one with a symbol tool (the implementations of the contract, and
+  near-duplicates from a code graph), not from memory, and give them one shared
+  helper or a test that names both sides. Preview the same edit to all of them
+  first (a dry run) so none is missed: a text search misses a copy that was
+  renamed.
 - Write the review questions before the code: the brief's "How this will be
   reviewed" lists what the reviewer will check, and the builder answers each in
   the evidence file before reporting.
@@ -115,7 +119,12 @@
   the reviewer.
 - A plan step that adds an abstraction, a config surface, a dependency or a
   file names the simplest alternative it considered and why that loses. A step
-  that adds flexibility the request did not ask for is a review finding.
+  that adds flexibility the request did not ask for is a review finding: P1
+  when it adds a dependency or a config surface, P2 otherwise.
+- A brief whose cuts run past an hour names its halfway cut. At that cut the
+  Builder writes a halfway note of about 200 tokens in the evidence file (what
+  is built, what is left, what is decided) and goes on.
+- A unit over the size caps is not split without the owner's yes.
 - Acceptance criteria that change behaviour name the test file and the exact
   cases. The failing test comes first.
 - "Create a PR" is a request to open a pull request for work already done.

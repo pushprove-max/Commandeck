@@ -12,7 +12,7 @@ echo '{"version": 1, "profile": "claude", "mainCacheTtl": "1h", "workerCacheTtl"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 OUT=$(lib il_options_report)
 check "the doctor names each option's value and source: /config, the project's file, or the default" '1:1:1:1' \
-  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option workerPromptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c "^ok option mainPromptCacheTtl: 1h (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option maxReviewRounds: none (from the default)$' <<<"$OUT")"
+  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option workerPromptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c "^ok option mainPromptCacheTtl: 1h (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option reviewPassCap: 5 (from the default)$' <<<"$OUT")"
 check "one line for each option the manifest declares" "$(jq '.userConfig | length' "$REAL/.claude-plugin/plugin.json")" "$(grep -c '^ok option ' <<<"$OUT")"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"mainPromptCacheTtl": "leave", "workerPromptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
 check "the cache report follows the /config answers over the project's: one leave line per role" 3 "$(cache | grep -cE '^ok prompt cache: (main|workers|relay) leave \(setup sets none\)$')"
@@ -21,7 +21,7 @@ check "the cache report follows the /config answers over the project's: one leav
 jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 check "the doctor's Builder line names the model's source and the effort's, and reads no builder.model from the project's file" 1 \
-  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | tee "$T/doc" | grep -cxF "ok   builder: sonnet (from the default), effort high (from /config); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config")"
+  "$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1 | tee "$T/doc" | grep -cxF "ok   builder: opus (from the default), effort high (from /config); setup.sh --option builderModel=<m> --option builderEffort=<e>, or /plugin config")"
 # The review pass the doctor checks runs on the reviewer's agent key, not the profile: a claude-profile project with
 # codexReviewerAgent=codex checks the Codex pass, and is not failed for a mismatch.
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"codexReviewerAgent": "codex", "codexReviewerModel": "gpt-6.1-sol"}}}}' > "$HOME/.claude/settings.json"

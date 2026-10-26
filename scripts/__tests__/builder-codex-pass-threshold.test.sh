@@ -31,7 +31,7 @@ tpass() { # [--check] <unit> <N> <kind> [reply]: one pass (or its launch checks)
   [ "$1" != --check ] || { c=(--check); shift; }
   ev=$WS/$1/.claude/briefs/$1-evidence.md m=$(($2 - 1))
   [ "$m" -lt 1 ] || grep -q "^## Sites checked (pass $m)" "$ev" \
-    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
   (cd "$WS/$1" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json STUB_THREAD=thr-$1-$2 \
     STUB_REPLY="${4:-VERDICT: GO}" bash "$PASS_SH" ${c[@]+"${c[@]}"} "$1" "$2" "$3" >"$TMP/pout" 2>"$TMP/perr"); echo $?
 }
@@ -174,7 +174,7 @@ mk lt; go lt
 LTP1=$'- [P1] (class: crash) LT-P1 -- lt.txt:1 -- it crashes -- cat lt.txt\nVERDICT: NO-GO'
 for n in 2 3 4 5 6; do tpass lt "$n" final "$LTP1" >/dev/null; done
 # Passes 20 and 8 both follow the NO-GO pass 6, so both need pass 6's lists (tpass writes pass N-1's only).
-printf '\n## Sites checked (pass 6)\nSearch: grep -rn base .\n- a.sh:1 fixed\n\n## New code checked (pass 6)\n- a.sh:1 meets a fixture rule\n' >> "$WS/lt/.claude/briefs/lt-evidence.md"
+printf '\n## Sites checked (pass 6)\nSearch: grep -rn base .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass 6)\n- a.sh:1 meets a fixture rule\n' >> "$WS/lt/.claude/briefs/lt-evidence.md"
 check "a P1 in a pass that ended after a higher-numbered clean pass is a REVIEW STOP naming that pass" "0 0 1" \
   "$(tpass lt 20 final) $(tpass lt 8 final "$LTP1") $(grep -c '^REVIEW STOP: .*decision review-stop-lt-r8' "$TMP/pout")"
 
@@ -218,6 +218,49 @@ echo fixed > "$WS/fc/fc.txt"
 check "freshClosing no: the closing pass is handed the earlier finding and the history files stay open to it, and --verify takes its GO" "0 1 0 0" \
   "$(loop '{"freshClosing":"no"}' tpass fc 3 final) $(prompt fc 3 | grep -c 'FC-P2') \
 $(prompt fc 3 | grep -c 'Do not open the evidence file, the round reports or fix hand-offs') $(loop '{"freshClosing":"no"}' verify fc)"
+
+# 11. Issue 376: a round that is missing a reviewer's verdict never clears an earlier P0 or P1. Three ways a verdict is
+# missing: a short round, a round with no answer at all (a cut row), a reply with no verdict (said none).
+rsi() { (UNIT=u REVIEW_CAP=5; eval "$(sed -n '/^review_stop_id() {/,/^}/p' "$PASS_SH")"; review_stop_id "$1"); } # <rows>: the stop id, cap 5
+row() { # <round> <k> <of> <said>: the row of reviewer k of a round of <of>, which ended at minute <round>
+  printf '@ t%s%s full %s %s %s 2026-01-01T00:0%s:00Z 2026-01-01T00:0%s:30Z c0 whole %s\n' "$1" "$2" "$2" "$3" "$1" "$1" "$1" "$4"
+}
+CUT7='@ t7c cut 0 0 7 2026-01-01T00:07:00Z 2026-01-01T00:07:00Z - - cut'
+GOOD=$(for r in 1 2 3 4 5 6; do row "$r" 1 1 GO; done)
+P1HELD=$(for r in 1 2 3 4 5; do row "$r" 1 1 GO; done; row 6 1 1 NO-GO; echo '- [P1] (class: c) A -- a.sh:1 -- bug -- cat a.sh')
+none() { echo "${1:-none}"; }
+check "partial_round_keeps_p1_open: pass 7 with reviewer 1 of 3 GO does not clear the pass 6 P1; all three GO does" "review-stop-u-r7 none" \
+  "$(rsi "$P1HELD"$'\n'"$(row 7 1 3 GO)") $(none "$(rsi "$P1HELD"$'\n'"$(row 7 1 3 GO; row 7 2 3 GO; row 7 3 3 GO)")")"
+check "a short round holds on its own, with no earlier P1 to keep open" "review-stop-u-r7 none" \
+  "$(rsi "$GOOD"$'\n'"$(row 7 1 3 GO; row 7 3 3 GO)") $(none "$(rsi "$GOOD"$'\n'"$(row 7 1 1 GO)")")"
+check "a reply with no verdict does not count as its reviewer's verdict: the round holds" "review-stop-u-r7 none" \
+  "$(rsi "$GOOD"$'\n'"$(row 7 1 1 none)") $(none "$(rsi "$GOOD"$'\n'"$(row 7 1 1 NO-GO)")")"
+check "a round run again after an abandoned launch clears the P1 before it (the cut row beside a whole set of rows)" "review-stop-u-r7 none none" \
+  "$(rsi "$P1HELD"$'\n'"$CUT7") $(none "$(rsi "$P1HELD"$'\n'"$CUT7"$'\n'"$(row 7 1 1 GO)")") \
+$(none "$(rsi "$P1HELD"$'\n'"$(row 7 1 3 GO; row 7 2 3 GO; row 7 3 3 GO)"$'\n'"$CUT7")")"
+# The same on the reviewer's own session files: a wholly cut-off round (a session with no answer) is on record as a cut row.
+mk cu; go cu
+CUP=$'- [P1] (class: crash) CU-BLOCKER -- cu.txt:1 -- it crashes -- cat cu.txt\nVERDICT: NO-GO'
+for n in 2 3 4 5 6; do tpass cu "$n" final "$CUP" >/dev/null; done
+tpass cu 7 final >/dev/null
+SESS=$(find "$CODEX_HOME/sessions" -name 'rollout-*-thr-cu-7-1.jsonl')
+grep -v task_complete "$SESS" > "$TMP/cut7" && mv "$TMP/cut7" "$SESS"
+check "a round whose every reviewer was cut off is on record as a cut row and holds the P1 before it" "2 1" \
+  "$(tpass --check cu 8 final) $(grep -c 'review-stop-cu-r7' "$TMP/perr")"
+# Its round is run again (the abandoned launch wrote no round file): the launch is not refused by its own abandoned row,
+# and the rerun's rows make the round whole.
+sed 's/thr-cu-7-1/thr-cu-7x-1/g' "$SESS" > "${SESS/thr-cu-7-1/thr-cu-7x-1}" && rm -f "$SESS" "$WS/cu/.claude/briefs/cu-r7-reports.md"
+check "the abandoned round run again launches and clears the P1: no stop" "0 0" \
+  "$(tpass cu 7 final) $(grep -c 'REVIEW STOP' "$TMP/pout")"
+# The no-closing-pass chain: a narrowed pass cut off after the first pass has no verdict, so it holds the merge. Pass 3
+# is launched after the cut-off, so it lists no pass 2 and the record agrees; the cut row is what holds the merge.
+mk vc; loop '{"closingPass":"no"}' go vc >/dev/null
+echo a >> "$WS/vc/vc.txt"; loop '{"closingPass":"no"}' tpass vc 2 review >/dev/null
+SESS=$(find "$CODEX_HOME/sessions" -name 'rollout-*-thr-vc-2-1.jsonl')
+grep -v task_complete "$SESS" > "$TMP/cutv" && mv "$TMP/cutv" "$SESS"
+echo b >> "$WS/vc/vc.txt"; loop '{"closingPass":"no"}' tpass vc 3 review >/dev/null
+check "--verify refuses a cut-off pass after the first pass in the no-closing-pass chain, naming it" "2 1" \
+  "$(loop '{"closingPass":"no"}' verify vc) $(grep -c 'thr-vc-2-1.*was cut off before it answered' "$TMP/verr")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -62,7 +62,7 @@ EOF
 check "a profile value equals the key's manifest default wherever the default is a concrete value" "" \
   "$(jq -r --slurpfile m "$M" '.options | to_entries[] | .key as $k | $m[0].userConfig[$k] as $c
     | select($c.default != null and $c.default != "project" and $c.default != .value) | $k' "$REAL/config/recommended.json" | paste -sd' ' -)"
-check "the profile recommends a Sonnet Builder at high effort (issue 293: Sonnet below high builds below Opus at medium)" "sonnet high" \
+check "the profile recommends an Opus Builder at medium effort (Opus at medium builds as well as Sonnet at high, for less)" "opus medium" \
   "$(jq -r '.options | "\(.builderModel) \(.builderEffort)"' "$REAL/config/recommended.json")"
 check "the set is the 26 role keys (issue 312; the Fable judge has four and no agent key) and the 17 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349), the three prompt-cache options, one for each role (issue 367), and the review workflow's three (blocking severity, pass cap, fresh closing reviewer; issue 373), among them" 43 "$(jq '.userConfig | length' "$M")"
 # The recommended profile (config/recommended.json) is the one place setup's recommended values live. Every option is in it
