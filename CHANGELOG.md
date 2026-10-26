@@ -51,6 +51,12 @@ removed, and a release workflow. A paragraph that closes an issue says so.
   plugin record counts passes and findings by severity yet; measuring the threshold is a follow-up. Closes #366.
 - `scripts/post-fix-checks.sh` runs the post-fix checks at once (the named shell tests and, in a plugin checkout,
   `claude plugin validate` and `claude plugin test`) and reports each exit code; any red fails the round.
+- Fixes from the closing review passes. An evidence heading that names an issue outside the brief no longer crashes
+  the units pane and `/units`: only the brief's issues count as built, and the progress bar stays ten cells wide. The
+  answer to a `REVIEW STOP` is matched by its stop id. A unit the dashboard sees for the first time raises its verdict
+  alert. The forced removal of a temporary worktree is granted only while the session's claim on that worktree still
+  stands. The discard and reset checks read every abbreviation git accepts for a long option (`--forc`, `--har`).
+  Six reworded global rules carry their `MADE_FROM` line, so an owner's "keep mine" still holds after an update.
 
 ## 0.47.0 -- 2026-10-25
 
