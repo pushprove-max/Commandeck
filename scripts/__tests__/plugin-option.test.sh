@@ -3,7 +3,7 @@
 # project, so it beats the one this project saved; with none, the project's saved answer (the dashboard's: this
 # machine's file) runs as it did before 0.22.0, and with neither, the reader's old default; a role key (issue 312) reads
 # /config alone. What this pins, for one
-# picker with a validated value (ponytail, a level), one picker (builderEffort) and one number (dashboardPort): each source present or absent, the
+# picker (builderEffort) and one number (dashboardPort): each source present or absent, the
 # source named, the readers taking the /config answer, another plugin's options and the project's own settings files
 # never read, a /config answer the reader would not take refused, and setup's pre-fill writing only missing keys
 # and the answers given this run.
@@ -22,34 +22,23 @@ O() { L "echo \"\$(pp_option $1)|\$(pp_option $1 source)\""; }
 conf() { jq -n --argjson o "$1" '{pluginConfigs: {"commandeck@commandeck": {options: $o}, "other@elsewhere": {options: {ponytail: true, builderEffort: "max"}}}}' > "$S"; }
 echo '{"version": 1, "profile": "claude"}' > "$P"; echo '{}' > "$S"
 
-check "level: with no answer anywhere, lite" "lite|default" "$(O ponytail)"
 check "picker: with no answer anywhere, the routing file's own, as the doctor shows it" "high|default" "$(O builderEffort)"
 check "number: with no answer anywhere, none (setup's first free port)" "|default" "$(O dashboardPort)"
-check "another plugin's options are never read" "lite|default" "$(conf '{}'; O ponytail)"
+check "another plugin's options are never read" "high|default" "$(conf '{}'; O builderEffort)"
 
 # The format 0.21.0 deployed: the answers in the project file, the dashboard's in the machine file.
-jq '. + {ponytail: "ultra", builder: {effort: "medium"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
-check "level: the project's saved answer, with no /config one" "ultra|$P" "$(O ponytail)"
+jq '. + {builder: {effort: "medium"}}' "$P" > "$T/x" && mv "$T/x" "$P"; echo '{"dashboard": {"bind": "127.0.0.1", "port": "8795"}}' > "$M"
 # A role key (issue 312) reads no answer from the project's file: builder.effort there is an older setup's, not read.
 check "picker: a role key's project answer is not read, routing's own runs" "high|default" "$(O builderEffort)"
 check "number: the machine's saved port, with no /config one" "8795|$M" "$(O dashboardPort)"
 check "and the Builder's launch takes routing's effort, not the project's" high "$(L 'pp_route_json builder | jq -r .effort')"
 
-conf '{"ponytail": "off", "builderEffort": "low", "dashboardPort": 8800}'
-check "level: a /config off beats the project's ultra" "off|/config" "$(O ponytail)"
-# Issue 330: each of the four levels is read as it is; a project value that is no level, an old saved boolean
-# included, takes the default rather than passing for a level (a saved false must not read as off).
-for l in off lite full ultra; do check "level: a /config $l is read as $l" "$l|/config" "$(conf "{\"ponytail\": \"$l\"}"; O ponytail)"; done
+conf '{"builderEffort": "low", "dashboardPort": 8800}'
 # Issue 333: the seats that decide for the owner. Only the three choices are read; the relay alone is the default.
 check "seats: with no answer anywhere, the relay alone" "chiefOfStaff|default" "$(conf '{}'; O autoDecideSeats)"
 check "seats: a /config chiefOfStaff,main is read as it is" "chiefOfStaff,main|/config" "$(conf '{"autoDecideSeats": "chiefOfStaff,main"}'; O autoDecideSeats)"
 check "seats: a value that is no choice reads as the default" "chiefOfStaff|default" "$(conf '{"autoDecideSeats": "everyone"}'; O autoDecideSeats)"
-cp "$P" "$T/P.keep"; conf '{}'
-for v in false:lite true:lite '"bogus":lite'; do
-  jq --argjson v "${v%:*}" '.ponytail = $v' "$T/P.keep" > "$P"
-  check "level: the project's saved ${v%:*} reads as ${v#*:}" "${v#*:}" "$(O ponytail | cut -d'|' -f1)"
-done
-cp "$T/P.keep" "$P"; conf '{"ponytail": "off", "builderEffort": "low", "dashboardPort": 8800}'
+conf '{"builderEffort": "low", "dashboardPort": 8800}'
 check "picker: the /config answer runs" "low|/config" "$(O builderEffort)"
 check "number: the /config port beats the machine's" "8800|/config" "$(O dashboardPort)"
 check "the Builder's launch takes the /config effort" low "$(L 'pp_route_json builder | jq -r .effort')"
@@ -68,14 +57,14 @@ check "and takes /config's: a closing pass runs, three rounds" "yes 3" "$(L 'ech
 conf '{"maxReviewRounds": 0}'
 OUT=$(L 'pp_review_loop maxRounds "" "^[1-9][0-9]*$"; echo "rc=$?"')
 check "a /config number the review loop does not take is refused, and says where it is" "rc=1 1" "$(tail -1 <<<"$OUT") $(grep -c 'maxReviewRounds = "0" in /config' <<<"$OUT")"
-conf '{"promptCacheTtl": "leave"}'; jq '. + {cacheTtl: "5m"}' "$P" > "$T/x" && mv "$T/x" "$P"
-check "a /config 'leave' is an answer, though the project saved 5m" "leave|/config" "$(O promptCacheTtl)"
+conf '{"workerPromptCacheTtl": "leave"}'; jq '. + {workerCacheTtl: "5m"}' "$P" > "$T/x" && mv "$T/x" "$P"
+check "a /config 'leave' is an answer, though the project saved 5m" "leave|/config" "$(O workerPromptCacheTtl)"
 # Issue 256: the Builder cap has no setup question; an owner sets it in /config, or by hand in the project's file.
 check "the Builder cap: none anywhere is no cap" "|default" "$(O maxBuilders)"
 jq '.builder.maxBuilders = 4' "$P" > "$T/x" && mv "$T/x" "$P"
 check "the Builder cap: the project's hand-written one, with no /config answer" "4|$P" "$(O maxBuilders)"
 check "the Builder cap: /config's beats the project's" "2|/config" "$(conf '{"maxBuilders": 2}'; O maxBuilders)"
-conf '{"promptCacheTtl": "leave"}'
+conf '{"workerPromptCacheTtl": "leave"}'
 # A worker pane's settings: worktree-setup.sh writes the 5m only when the answer that runs is 5m.
 git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first && git -C "$T/p" worktree add -q --detach "$T/w"
 ttl() { (cd "$T/w" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u CLAUDE_CONFIG_DIR HOME="$T/home" bash "$REAL/scripts/worktree-setup.sh" "$T/w" --builder --print-settings 2>/dev/null) | jq -r '.env.CLAUDE_CODE_PROMPT_CACHE_TTL // "none"'; }
@@ -101,22 +90,22 @@ check "a replaced routing file keeps the /plugin value" sonnet "$(L "export COMM
 # file before 0.26.0 is not read as one with the plugin's overlay).
 # Owner rows: Codex as shipped, or Claude on opus max; an owner overlay on fable low.
 own() { # <row agent> <overlay yes|no> -- an owner routing file in $T/own-routing.json
-  jq --arg a "$1" --arg ov "$2" '.roles |= with_entries(if (.key | IN("codex-reviewer", "plan-judge-sol", "plan-judge-astra")) then
+  jq --arg a "$1" --arg ov "$2" '.roles |= with_entries(if (.key | IN("codex-reviewer", "plan-judge-sol")) then
       .value |= (.claude as $c
         | if $a == "claude" then {agent: "claude", model: "opus", effort: "max", tools: $c.tools, edits, note}
             + (if $c.headless then {headless: true} else {reviewer: true, unboxed: true} end) else . end
         | if $ov == "yes" then .claude = ($c + {model: "fable", effort: "low"}) else del(.claude) end)
     else . end)' "$REAL/config/routing.json" > "$T/own-routing.json"; }
-seats() { L "export COMMANDECK_ROUTING=$T/own-routing.json; for r in codex-reviewer plan-judge-sol plan-judge-astra; do
+seats() { L "export COMMANDECK_ROUTING=$T/own-routing.json; for r in codex-reviewer plan-judge-sol; do
   j=\$(pp_route_json \$r 2>/dev/null) && jq -r '\"\(.agent) \(if .agent == \"claude\" then .model else \"-\" end) \(.effort)\"' <<<\"\$j\" || echo refused; done" | paste -sd '|' -; }
-keys() { [ "$1" = none ] && conf '{}' || conf "{\"codexReviewerAgent\": \"$1\", \"planJudgeSolAgent\": \"$1\", \"planJudgeAstraAgent\": \"$1\"}"; }
-SHIPPED='codex - medium|codex - high|codex - high' OPUS='claude opus max|claude opus max|claude opus max'
+keys() { [ "$1" = none ] && conf '{}' || conf "{\"codexReviewerAgent\": \"$1\", \"planJudgeSolAgent\": \"$1\"}"; }
+SHIPPED='codex - medium|codex - high' OPUS='claude opus max|claude opus max'
 cp "$P" "$T/P.keep"; jq '.profile = "claude-openai"' "$T/P.keep" > "$P"
 mkdir -p "$T/home/.codex"; echo '{"models": [{"slug": "gpt-6.1-sol"}, {"slug": "gpt-6.1-astra"}]}' > "$T/home/.codex/models_cache.json"
 while read -r row ov key want; do
   own "$row" "$ov"; keys "$key"
-  case $want in shipped) want=$SHIPPED ;; opus) want=$OPUS ;; fable) want='claude fable low|claude fable low|claude fable low' ;;
-    refused) want='refused|refused|refused' ;; esac
+  case $want in shipped) want=$SHIPPED ;; opus) want=$OPUS ;; fable) want='claude fable low|claude fable low' ;;
+    refused) want='refused|refused' ;; esac
   check "a $row row, overlay $ov, Agent key $key: the seat for that agent" "$want" "$(seats)"
 done <<'TABLE'
 codex yes none shipped
@@ -178,18 +167,18 @@ check "a seat denied only Write is not read-only" false "$(L "export COMMANDECK_
 # Classes incomplete-write-denial and caller-mismatch (r3): a Claude seat the owner wrote for a reviewer or judge, as its
 # row or its overlay, keeps the contract of the overlay the plugin ships: Write, Edit and NotebookEdit denied, and its
 # shape (the reviewer headless for builder-codex-pass.sh, the judges panes for plan-tier.sh). Its model and effort stay.
-direct() { # <jq on each of the three rows> -- "<model> <effort> <readonly> <shape>" per seat
+direct() { # <jq on each of the two rows> -- "<model> <effort> <readonly> <shape>" per seat
   jq "$1" "$REAL/config/routing.json" > "$T/d-routing.json"
-  L "export COMMANDECK_ROUTING=$T/d-routing.json; for r in codex-reviewer plan-judge-sol plan-judge-astra; do
+  L "export COMMANDECK_ROUTING=$T/d-routing.json; for r in codex-reviewer plan-judge-sol; do
     pp_route_json \$r | jq -r '\"\(.model) \(.effort) \(.readonly) \(if .argv then \"headless\" else \"pane\" end)\"' || echo refused; done" | paste -sd '|' -; }
-seven() { printf '.roles |= with_entries(if (.key | IN("codex-reviewer", "plan-judge-sol", "plan-judge-astra")) then .value |= (%s) else . end)' "$1"; }
-CONTRACT='opus high true headless|opus high true pane|opus high true pane'
+seven() { printf '.roles |= with_entries(if (.key | IN("codex-reviewer", "plan-judge-sol")) then .value |= (%s) else . end)' "$1"; }
+CONTRACT='opus high true headless|opus high true pane'
 conf '{}'
 check "a pane-shaped Claude row denying only Write: each seat denies all three and has its shape" "$CONTRACT" \
   "$(direct "$(seven '{agent: "claude", model: "opus", effort: "high", unboxed: true, edits: false, tools: ["Write"]}')")"
 check "a headless Claude row denying nothing: each seat denies all three and has its shape" "$CONTRACT" \
   "$(direct "$(seven '{agent: "claude", headless: true, model: "opus", effort: "high", edits: false}')")"
-conf '{"codexReviewerAgent": "claude", "planJudgeSolAgent": "claude", "planJudgeAstraAgent": "claude"}'
+conf '{"codexReviewerAgent": "claude", "planJudgeSolAgent": "claude"}'
 check "a pane-shaped owner overlay: each seat has its shape" "$CONTRACT" \
   "$(direct "$(seven '.claude = {model: "opus", effort: "high", unboxed: true, tools: ["Write", "Edit", "NotebookEdit"]}')")"
 check "a headless owner overlay: each seat has its shape" "$CONTRACT" \
@@ -198,8 +187,8 @@ conf '{}'
 
 # Setup's pre-fill: the owner's answers go into /config only where it has none; a /config answer that differs is named.
 conf '{"builderEffort": "low"}'
-OUT=$(L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\", \"ponytail\": true, \"dashboardPort\": 8791}"')
-check "pre-fill writes the missing keys and keeps the owner's /config answer" '{"builderEffort":"low","ponytail":true,"dashboardPort":8791}' \
+OUT=$(L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\", \"relayPromptCacheTtl\": \"leave\", \"dashboardPort\": 8791}"')
+check "pre-fill writes the missing keys and keeps the owner's /config answer" '{"builderEffort":"low","relayPromptCacheTtl":"leave","dashboardPort":8791}' \
   "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$S")"
 check "and names the /config answer that beats this setup's" 1 "$(grep -c 'builderEffort is low in /config, which beats this answer (high)' <<<"$OUT")"
 check "another plugin's options stay as they were" '{"ponytail":true,"builderEffort":"max"}' "$(jq -c '.pluginConfigs["other@elsewhere"].options' "$S")"
@@ -221,26 +210,33 @@ check "uninstall would take out only the key that had no value" '{"fixerFirstMod
 rm "$S"; echo '{"version": 1, "entries": {}}' > "$M"; L 'il_plugin_options "$HOME/.claude/settings.json" "{}" "{\"builderModel\": \"sonnet\"}"' >/dev/null
 check "pre-fill with no user settings file creates it for a given answer, recorded as setup's" '{"builderModel":"sonnet"}|{"builderModel":"sonnet"}' \
   "$(jq -c '.pluginConfigs["commandeck@commandeck"].options' "$S" 2>&1)|$(jq -c --arg s "$S" '.entries[$s].options["commandeck@commandeck"]' "$M")"
-echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": \"off\"}"' >/dev/null
-check "the plugin's key is the one it is enabled under" '{"ponytail":"off"}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
-check "and that is the one read" "off|/config" "$(O ponytail)"
+echo '{"enabledPlugins": {"commandeck@mirror": true}}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"relayPromptCacheTtl\": \"leave\"}"' >/dev/null
+check "the plugin's key is the one it is enabled under" '{"relayPromptCacheTtl":"leave"}' "$(jq -c '.pluginConfigs["commandeck@mirror"].options' "$S")"
+check "and that is the one read" "leave|/config" "$(O relayPromptCacheTtl)"
 # A disabled install's options left in settings are not the running plugin's: reader and pre-fill take the enabled key.
 echo '{"enabledPlugins":{"commandeck@a-old":false,"commandeck@commandeck":true},"pluginConfigs":{"commandeck@a-old":{"options":{"fullSuiteBeforeFinal":false}},"commandeck@commandeck":{"options":{"fullSuiteBeforeFinal":true}}}}' > "$S"
 check "a disabled install's /config answer is not read over the enabled one's" "true|/config" "$(O fullSuiteBeforeFinal)"
-L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": \"off\"}"' >/dev/null
-check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"ponytail":"off"}|{"fullSuiteBeforeFinal":false}' \
+L 'il_plugin_options "$HOME/.claude/settings.json" "{\"relayPromptCacheTtl\": \"leave\"}"' >/dev/null
+check "and pre-fill writes under the enabled key, not the disabled one" '{"fullSuiteBeforeFinal":true,"relayPromptCacheTtl":"leave"}|{"fullSuiteBeforeFinal":false}' \
   "$(jq -cS '.pluginConfigs["commandeck@commandeck"].options, .pluginConfigs["commandeck@a-old"].options' "$S" | paste -sd'|' -)"
 
 # Uninstall takes out only what pre-fill added, while it still holds setup's value: the owner's /config answers stay.
 mkdir -p "${M%/*}" && echo '{"version": 1, "entries": {}}' > "$M"
 echo '{"theme":"dark","pluginConfigs":{"commandeck@commandeck":{"options":{"builderEffort":"low"}}}}' > "$S"
-L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\", \"ponytail\": true, \"dashboardPort\": 8791}"' >/dev/null
+L 'il_plugin_options "$HOME/.claude/settings.json" "{\"builderEffort\": \"high\", \"relayPromptCacheTtl\": \"leave\", \"dashboardPort\": 8791}"' >/dev/null
 jq '.pluginConfigs["commandeck@commandeck"].options.dashboardPort = 9000' "$S" > "$T/x" && mv "$T/x" "$S"
 L 'il_plugin_options_out "$IL_MACHINE" "$HOME/.claude/settings.json"'
 check "uninstall takes out the option pre-fill added, keeps the owner's own and the one they changed since" \
   '{"pluginConfigs":{"commandeck@commandeck":{"options":{"builderEffort":"low","dashboardPort":9000}}},"theme":"dark"}' "$(jq -cS . "$S")"
-echo '{"theme":"dark"}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"ponytail\": true}" && il_plugin_options_out "$IL_MACHINE" "$HOME/.claude/settings.json"' >/dev/null
+echo '{"theme":"dark"}' > "$S"; L 'il_plugin_options "$HOME/.claude/settings.json" "{\"relayPromptCacheTtl\": \"leave\"}" && il_plugin_options_out "$IL_MACHINE" "$HOME/.claude/settings.json"' >/dev/null
 check "a pluginConfigs pre-fill made goes with it, and the record too" '{"theme":"dark"}:null' "$(jq -c . "$S"):$(jq -c '.entries[] | .options' "$M")"
+
+# Issue 349: the units mod reads three views from /config; the doctor must answer each, and a value they do not take reads auto.
+echo '{"version": 1, "profile": "claude"}' > "$P"
+UV() { for k in unitsBand unitsPane unitsStatus; do O $k; done | paste -sd' ' -; }
+check "unitsBand, unitsPane and unitsStatus read auto by default, a /config off as off, and a value they do not take as auto" \
+  "auto|default auto|default auto|default;off|/config on|/config off|/config;auto|default auto|default auto|default" \
+  "$(conf '{}'; UV);$(conf '{"unitsBand": "off", "unitsPane": "on", "unitsStatus": "off"}'; UV);$(conf '{"unitsBand": "sometimes", "unitsPane": "yes", "unitsStatus": "1"}'; UV)"
 
 echo "plugin-option: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

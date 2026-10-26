@@ -4,13 +4,13 @@
 
 - **Do not -> instead** (what the guards block):
   - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
-  - a long job, or any wait over about 30 s on external state (a directory-size scan included), in main's foreground -> its own pane, or `run_in_background` and `wait-test-run.sh <pid> <file>`; `answer-worker.sh`, `seat.sh run` and the merge already return at once
+  - a test run in main's foreground, whatever its length, or any other command that can run in the background (a directory-size scan, any wait on external state) -> `run_in_background` and `wait-test-run.sh <pid> <file>`, or its own pane; only quick reads stay in the foreground; `answer-worker.sh`, `seat.sh run` and the merge already return at once
   - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
-  - an edit to project code -> a batch brief, then `builder-launch.sh <unit> <brief>`
+  - a large code change in main -> a batch brief, then `builder-launch.sh <unit> <brief>`
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every implementation and review runs as a visible
   CLI in its own Orca worktree. Main writes only intents, briefs, findings and config; reads worker_done payloads
-  and diff summaries, never worktrees or whole source files (serena for symbols); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them.
+  and diff summaries, never worktrees or whole source files (serena for symbols); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them. Main may make a small code fix itself, with the main-edit guard off (`.claude/approvals/main-edits-ok`, which the owner creates); larger work runs as a Builder, and main's code takes the same review and merge rules.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with one foreground `bash scripts/orca-wait.sh`.
   A wake that leaves nothing for the owner to do or decide ends the turn with no text to the owner.
 - **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask nothing: run `plan-tier.sh <batch file>`, use the configured model and effort per seat, and tell the owner in one line the tier, trigger and each seat's model and effort (AGENT_STARTUP.md step 0; tiers: Details). The owner changes the trigger file or `/plugin` settings, or says so in chat for that unit. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
@@ -18,9 +18,9 @@
   what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
   owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one,
   nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
+- **A unit's scope is the owner's words (issue 360)**: with no relay pane running, main turns the owner's request into the order and keeps the relay's five rules. What main adds goes under `## Chief of Staff additions -- NOT ordered` in an order file from `templates/cos-order.md` (`## The owner's words` first), written only when main adds something and checked with `cos-order-check.sh <file>`; the additions go to the owner in one multi-select question, the decoy first. No bundle approvals: a yes covers only the items it names. At a pass-loop alert for pass 4 or more, or a class stop, main tells the owner which part of the scope produces the findings and whether the owner's words asked for it.
 - **Every question for the owner goes to the relay pane** (the worktree ending in
-  `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09);
-  record each ask with `decision.sh add` in the same turn.
+  `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09); record each ask with `decision.sh add` in the same turn.
 - **A reply the duplicate-agent guard blocks is never dropped**: retry it after that seat's turn ends, or send it as
   an orchestration reply, even when the seat's default already matches.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
@@ -62,12 +62,12 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   settings, or says in chat that this unit takes another tier, model or effort. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
-  written. Panel: `plan-author` writes the plan, and `plan-judge-astra` and `plan-judge-sol` both read it. A seat
+  written. Panel: `plan-author` writes the plan, and `plan-judge-fable` and `plan-judge-sol` both read it. A seat
   that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
   (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
   only when the owner named another for that unit. A size target in a
   planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
-  trimming needed content to fit. One judge round and one revision, never a judging loop. Either judge may run
+  trimming needed content to fit. One judge round and one revision, never a judging loop. The Sol judge may run
   on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never
   refuse an answer for a missing tool. Launch each seat under its own role name and the build's unit name: every
   plan seat works in the unit's own worktree `<unit>`, which its first launch cuts from main and marks as
@@ -85,7 +85,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   certifies no plan. The Builder's launch closes the plan panes and adopts `<unit>`; on a rejected plan run `bash
   scripts/plan-worktree-close.sh <unit>`. A REFUSED line names a file not yet on main. A plan is never a build
   order: a plan that exists, is approved or is committed starts no build. A `--risky` launch opens the Builder at
-  once; its merge waits on three reviewers.
+  once; its merge waits on three reviewers. The plan's content (issue 359; `seat.sh` puts the planner's part in its spec): a What can go wrong table (case, input or starting state, expected result, test name; at most five rows, `checked, none` when empty, each row's test among the acceptance tests), every `[likely]` or `[uncertain]` claim settled with its command and output or made a Builder check, and per cut its Produces, Consumes and existing consumers of a changed contract. Main writes each accepted judge finding into the plan before the Builder starts, one `## Plan change log` line each; the judge rechecks only what changed. A judge's spec says: read the plan as a Builder who cannot ask, list every place a wrong guess would change the code, and try to falsify each checkable claim.
 - The merge gate (main-watch, on a Builder's DONE): a closing or first-pass GO on the tip (`--verify`, run once per
   tip; `orca-wait.sh` reads its kept result), a clean tree, no `Merge: hold` line in the brief, no open owner
   decision. A pass merges with `merge-queue.sh <unit>@<tip>` (a train for two or more); never a push. Routine

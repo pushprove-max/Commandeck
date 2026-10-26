@@ -21,13 +21,13 @@ chmod +x "$BIN/codex"
 
 # Issue 316: a judge that read the brief's copy of an issue because gh had no network. Every pane seat's launch makes
 # one gh read as that seat would (a Codex seat inside its sandbox), and refuses with the reason when it fails.
-cap '{"planJudgeSolAgent": "codex", "planJudgeAstraAgent": "codex"}'
+cap '{"planJudgeSolAgent": "codex"}'
 jq -n '{models: [{slug: "gpt-9.1-sol"}, {slug: "gpt-9.1-astra"}]}' > "$HOME/.codex/models_cache.json"
 for u in gu gb; do git -C "$PROJ" worktree add -q "$HOME/orca/workspaces/proj/$u"; done
 echo gu > "$(git -C "$HOME/orca/workspaces/proj/gu" rev-parse --absolute-git-dir)/commandeck-plan-of"
 gl() { : > "$T/creates"; rm -f "$T/pane-up"; srun launch "$1" "${2:-gu}" "${3:-$T/judge-spec.md}" >"$T/out" 2>&1; echo "$?"; }
 echo "error connecting to api.github.com" > "$T/gh-fail"
-for r in plan-author plan-judge-sol plan-judge-astra builder; do
+for r in plan-author plan-judge-sol plan-judge-fable builder; do
   u=gu; [ "$r" != builder ] || u=gb; spec=$T/judge-spec.md; [ "$r" != builder ] || spec=$T/spec.md
   rc=$(gl "$r" "$u" "$spec")
   check "$r with no network for gh is refused at launch with the reason; no pane, no record" "2:1:0:0" \

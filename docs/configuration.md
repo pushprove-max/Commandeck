@@ -17,9 +17,9 @@ A null effort is omitted from the command.
 | orchestrator | Claude / opus | medium | `orchestratorModel`, `orchestratorEffort` | no: it is the session that runs everything |
 | plan-author | Claude / opus | high | `planAuthorModel`, `planAuthorEffort`, `planAuthorEnabled`, `planAuthorFast` | yes: no plan |
 | plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
-| plan-judge-astra | Codex / astra (Claude: sonnet) | high | `planJudgeAstra` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
+| plan-judge-fable | Claude / fable | high | `planJudgeFable` + `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | builder | Claude / sonnet | high | `builderModel`, `builderEffort` | no: no branch to review or merge |
-| fixer | Claude / opus | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
+| fixer | Claude / opus (first fix round: the Builder's) | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
 | codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
 
 Each role setting is a key in `/plugin` config. A per-launch pin
@@ -29,11 +29,13 @@ the role does not take is refused, naming the key. Setup writes the keys
 from its answers (`--option <key>=<value>`). The keys live in your user
 settings file, so a plugin update does not change them.
 
-The fixer runs the fix passes after a review, every one on Opus high by
-default. `fixerFirstModel=builder` and `fixerFirstEffort=builder` run the
-first one on the model and effort the Builder was launched with. The reviewer and both judges can
+The fixer runs the fix passes after a review: the first one on the model and
+effort the Builder was launched with, every later one on Opus high by default.
+`fixerFirstModel=opus` and `fixerFirstEffort=high` run the first one on Opus
+high too. The reviewer and the Sol judge can
 run on Claude (`<role>Agent=claude`): a Claude reviewer or judge cannot write.
-The Claude-only profile sets those three agent keys to `claude`.
+The Claude-only profile sets those two agent keys to `claude`. The Fable judge
+always runs on Claude and has no agent key.
 
 A helper is a built-in subagent type: `Explore` (Haiku) for search and lookup,
 `general-purpose` (Sonnet) for edits, tests and judgment. The model guard
@@ -45,7 +47,7 @@ fills those models in, and asks for a type when a call names none.
 | `.claude/settings.json` | Shared project workflow and selected cache settings. |
 | `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
 | `.claude/settings.local.json` of the main checkout | Claude Code applies it over every worktree session's own settings, so setup puts no lean list there. |
-| `.claude/main-session.settings.json` of the main checkout | Main's lean lists: the ponytail rules and skill and the `ui-themes` and `mattpocock-skills` plugins off. Only a session started with `claude --settings .claude/main-session.settings.json` reads it, so start main that way; workers never do. A key you set there stays; uninstall removes only what setup added. |
+| `.claude/main-session.settings.json` of the main checkout | Main's lean lists: the `ui-themes` and `mattpocock-skills` plugins off. Only a session started with `claude --settings .claude/main-session.settings.json` reads it, so start main that way; workers never do. A key you set there stays; uninstall removes only what setup added. |
 | `~/.claude/settings.json` | Machine-scope permissions when chosen; optional auto-mode entries and status line; the plugin's `/config` options (`pluginConfigs`), which setup fills where they are empty. A `/config` option beats the project's answer, and the doctor names where each value comes from. `maxBuilders`, the most Builders that may run at once over all units, is set there or by hand as `builder.maxBuilders` in the project's `commandeck.json`; setup asks nothing for it. `wakeKinds`, the Orca message types that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`; others are held and shown at the next wake), and `wakeWindowSeconds`, the window in which actionable messages wake main once (default 60; 0 wakes at once), are set there too; setup asks neither. |
 | `~/.claude/CLAUDE.md` | Optional marked global instruction blocks. |
 | `~/.codex/hooks.json`, `~/.codex/config.toml` | Codex hooks, trust, the notify line and `check_for_update_on_startup = false` (no update prompt in launched panes; an owner's own value stays), relocated when CODEX_HOME is set. |
@@ -54,7 +56,7 @@ fills those models in, and asks for a type when a call names none.
 
 Use setup to change answers. Its project keys include `profile`, `testCommand`,
 `strictHooks`, `serena`, `standardContext`, `builder.clearLine`, `issueSizing`,
-`chiefOfStaff`, `ponytail`, `trustAllHooks`, `cacheTtl`, `autoMode`, `workerSkillsOff`,
+`chiefOfStaff`, `trustAllHooks`, `mainCacheTtl`, `workerCacheTtl`, `autoMode`, `workerSkillsOff`,
 `workerPluginsOff`, `keeps`, `reviewLoop` and `autoDecideNever` (your own list of decisions
 that auto-decide never makes for you; setup never asks for it and keeps it on a re-run). Role settings are `/plugin` keys
 only: 0.26.0 reads no `builder.model`, `builder.effort`, `planModels`,
@@ -70,6 +72,8 @@ Review-loop keys are `maxRounds`, `closingPass`, `smallBuild`, `maxReviewMinutes
 Defaults are no cap, a closing pass, one reviewer below 200 changed lines,
 and report flags at 30 review minutes, a third of the clock on tests/idle
 with over 10 minutes, and $30. Those report flags do not block a merge.
+`maxRounds` is not the review cap: from the fifth pass on record, `review`
+runs as the closing pass whatever it is set to ([Review passes](review-loop.md)).
 `generatedFiles` lets merge accept a tail of commits changing only the listed
 generated paths after the reviewed commit; do not list handwritten source.
 

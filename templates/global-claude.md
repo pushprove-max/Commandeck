@@ -108,6 +108,12 @@ A deliverable that leaves the session (a report, a compliance document, a
 published analysis) is checked against its sources first. Routine reads in
 the middle of the work are not fetched twice.
 
+## Compact Instructions
+
+When the context is compacted, keep the task or brief path and the evidence file path, the current cut and its test
+state, the last round file and its open findings, the open decision ids and the files changed. Drop file dumps and tool
+output. Main never compacts (see Main session only).
+
 ## Main session only
 
 Rules for an orchestrating main session (it plans and delegates, and does not

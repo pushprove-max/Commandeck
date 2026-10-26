@@ -46,12 +46,21 @@ check "a red own-lane test stops the final pass before Codex" "2 no" "$(fin 4 "$
 echo 'echo ok' > "$W/scripts/lane-lib.sh"
 check "and once it is green the retry goes on to Codex" "0 yes" "$(fin 4 "$NOGO2") $(round 4)"
 
+# Issue 356: the round file says how long each pre-review step took, so a slow closing pass can be told from a slow
+# reviewer. r2 rebased and ran tests with no suite on; r5 is on top of main and runs only the suite.
+cfg '.fullSuiteBeforeFinal = true | .testCommand = "echo \"1 passed, 0 failed\""'; echo five > "$W/a.sh"
+check "the final pass with the suite on runs" "0 yes" "$(fin 5 "$NOGO2") $(round 5)"
+cfg 'del(.fullSuiteBeforeFinal)'
+check "a closing pass's report carries one timing line per pre-review step" "1 1 1 1" \
+  "$(grep -c '^Pre-review: ' "$B/$U-r2-reports.md") $(grep -cE '^Pre-review: rebase [0-9]+ s, tests [0-9]+ s, suite not run$' "$B/$U-r2-reports.md") \
+$(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests not run, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
+
 # main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
 echo main-side > "$REPO/a.sh"; G commit -qam 'a.sh on main'
 printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
-  "$(fin 5 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
+  "$(fin 6 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

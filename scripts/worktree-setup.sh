@@ -18,8 +18,7 @@
 #    untouched because main is not a worktree.
 #
 # A worker or Builder pane also starts lean (the owner, 2026-10-18): Stripe and the three browser skills off,
-# auto memory off (the brief carries what the unit needs), and a ~1 KB ponytail summary in place of the plugin's
-# full print. --keep <list> (billing: keep Stripe; all: change none of this) is stored in env, so a rerun without
+# auto memory off (the brief carries what the unit needs). --keep <list> (billing: keep Stripe; all: change none of this) is stored in env, so a rerun without
 # the flag keeps it. A rerun deletes every leaf this script owns before it writes the current set; no other leaf is
 # touched, so an owner's own skillOverrides entry stays. On top, the owner's own lists in commandeck.json (setup's
 # answers; the plugin ships no name): workerSkillsOff and workerPluginsOff are cut too, and a --keep word named in
@@ -68,9 +67,9 @@ done
 [ "$KEEPSET" = 1 ] || KEEP=$(jq -r '.env.COMMANDECK_SKILL_KEEP // empty' "$([ "$PRINT" = 1 ] && echo "$WT/.claude/settings.local.json" || echo "$F")" 2>/dev/null || true)
 tmp=$(mktemp)
 # Every leaf the lean-pane settings own: a rerun removes them all before it writes the current set. A move-1 leaf (a
-# browser skill, Stripe) is the run's only while COMMANDECK_DEFAULT_CUTS names it and it holds the run's value. The
-# ponytail off (the run's only beside the summary hook) is owned on a worker only: the relay branch takes ponytail out.
-SUMMARY=$(cd "$PP_SCRIPTS/../templates/ponytail" && pwd)/SUMMARY.md
+# browser skill, Stripe) is the run's only while COMMANDECK_DEFAULT_CUTS names it and it holds the run's value.
+# A pre-0.48 run also wrote a SessionStart summary hook (`cat <plugin>/templates/ponytail/SUMMARY.md`) and an off leaf
+# beside it (issue 365): a rerun drops that hook, matched by its command's tail, and keeps any other hook in the entry.
 DISOWN='def disown: (.env.COMMANDECK_OWNER_CUTS // "" | split(",")) as $o | (.env.COMMANDECK_DEFAULT_CUTS // "" | split(",")) as $r
     | del((.skillOverrides[$o[] | select(contains("@") | not)] | select(. == "off")), (.enabledPlugins[$o[] | select(contains("@"))] | select(. == false)))
     | del((.skillOverrides[$r[] | select(contains("@") | not)] | select(. == "off")), (.enabledPlugins[$r[] | select(. == "stripe@claude-plugins-official")] | select(. == false)))
@@ -94,12 +93,11 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   # Its own watcher scripts and the decision script, each by the full path the
   # startup text names (owner ruling 2026-10-12); no other script.
   COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
-  # Ponytail runs in every seat, the relay pane too (owner, 2026-10-16): the off an earlier run wrote goes, and the
-  # pane follows the owner's own setting; worker panes run it through a summary instead of the plugin. The typescript-lsp plugin is gone, and so is the key for it.
-  # The setup answer for the relay's prompt cache: 1h is written into env by path, so its other env entries stay.
+  # The off an earlier run wrote for the third-party ponytail plugin goes (issue 365). The typescript-lsp plugin is gone, and so is the key for it.
+  # The setup answer for the relay's prompt cache: 5m or 1h is written into env by path, so its other env entries stay.
   jq --arg rttl "$(PP_MAIN=$PROJECT pp_option relayPromptCacheTtl)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" "$DISOWN"'
     disown
-    | (if $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h" else . end)
+    | (if $rttl == "5m" or $rttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = $rttl else . end)
     | .enabledPlugins = ((.enabledPlugins // {}) + $cpoff + $poff | del(.["ponytail@ponytail"], .["typescript-lsp@claude-plugins-official"]))
     | .disableClaudeAiConnectors = true
     | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
@@ -163,11 +161,11 @@ OWNFIX=$(jq -c --argjson fixed "$FIXED" '(.env.COMMANDECK_DEFAULT_CUTS // "" | s
     | select(.value != false or (.key | IN($r[]) | not)))' "$F")
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
-jq --arg ttl "$(PP_MAIN=$PROJECT pp_option promptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+jq --arg ttl "$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
-  | (if $ttl == "5m" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = "5m" else . end)
+  | (if $ttl == "5m" or $ttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = $ttl else . end)
   | .hooks = ((.hooks // {}) | map_values(map(select(((.hooks // []) | length) > 0 and all(.hooks[]; stale) | not))))
   | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false} + $poff | del(.["typescript-lsp@claude-plugins-official"]))
   | .disableClaudeAiConnectors = true
@@ -183,21 +181,16 @@ echo "$WT: node_modules linked where main has them, compact window $WINDOW, memo
 
 # 10. Lean pane (owner, 2026-10-18; probed with `claude -p` that each override hides its name): Stripe and the three
 #     browser skills off unless --keep says otherwise, auto memory off (a file key, so it holds on every relaunch
-#     path), and the ponytail plugin swapped for its summary where the owner has the plugin on and setup said yes.
+#     path).
 #     A browser skill or Stripe leaf the owner set in this file is left as it is, kept or not; the ones the run writes
 #     are named in COMMANDECK_DEFAULT_CUTS, so a keep word takes out only those.
 #     The owner's lists add to the cuts; a plugin another step writes (the business plugins, memoir) is never stored
-#     as the owner's, so a list that drops it does not take that step's leaf out, and a keep word that names it (or
-#     ponytail) deletes the run's own leaf and gives back the one the owner set in this file (OWNFIX, step 8), so the
+#     as the owner's, so a list that drops it does not take that step's leaf out, and a keep word that names it
+#     deletes the run's own leaf and gives back the one the owner set in this file (OWNFIX, step 8), so the
 #     owner's own setting holds. A listed name the owner set in this file is left
-#     as it is; a stored leaf the owner changed by hand is no longer this run's to delete. Ponytail too: its off is
-#     this run's only beside the summary hook, so an owner's own leaf is neither deleted, claimed nor swapped.
+#     as it is; a stored leaf the owner changed by hand is no longer this run's to delete.
 CUTS=$(jq -c '{s: [.workerSkillsOff[]? | strings], p: [.workerPluginsOff[]? | strings], k: (.keeps | if type == "object" then . else {} end)}' "$PROJECT/.claude/commandeck.json" 2>/dev/null) || CUTS='{"s":[],"p":[],"k":{}}'
-PONY=0
-LEVEL=$(PP_MAIN=$PROJECT pp_option ponytail)
-[ "$LEVEL" != off ] \
-  && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1 && PONY=1
-jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "echo \"Ponytail level: $LEVEL\"; cat \"$SUMMARY\"" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
+jq --arg keep "$KEEP" --argjson cuts "$CUTS" --argjson fixed "$FIXED" --argjson ownfix "$OWNFIX" "$DISOWN"'
   def keeps($w): ($keep | split(",") | index($w)) != null;
   ["anthropic-skills:computer-use", "anthropic-skills:built-in-browser", "anthropic-skills:chrome-browser"] as $m1
   | "stripe@claude-plugins-official" as $stripe
@@ -221,17 +214,15 @@ jq --arg keep "$KEEP" --argjson pony "$PONY" --arg sum "echo \"Ponytail level: $
       | .enabledPlugins = ((.enabledPlugins // {}) + ($w1 - $m1 + $op | map({(.): false}) | add // {}))
       | .skillOverrides = ((.skillOverrides // {}) + ($w1 - [$stripe] + $os | map({(.): "off"}) | add // {}))
       | (if $os + $op != [] then .env.COMMANDECK_OWNER_CUTS = ($os + $op | join(",")) else . end)
-      | (if $pony == 1 and ($kp | index("ponytail@ponytail") | not) and ($ep | has("ponytail@ponytail") | not) then .enabledPlugins["ponytail@ponytail"] = false | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $sum}]}]) else . end)
     end' "$F" > "$tmp"
 mv "$tmp" "$F"
-echo "$WT: lean pane: $(if [ "$KEEP" = all ]; then echo "kept whole (--keep all)"; else echo "browser skills off, auto memory off, Stripe $(jq -e '.enabledPlugins["stripe@claude-plugins-official"] == false' "$F" >/dev/null && echo off || echo kept), ponytail $(jq -e '[.hooks.SessionStart[]?.hooks[]?.command | select(test("/templates/ponytail/SUMMARY[.]md\"$"))] != []' "$F" >/dev/null && echo summary || echo untouched), $(jq -r '.env.COMMANDECK_OWNER_CUTS // "" | split(",") | length' "$F") of your listed skills and plugins off"; fi)"
+echo "$WT: lean pane: $(if [ "$KEEP" = all ]; then echo "kept whole (--keep all)"; else echo "browser skills off, auto memory off, Stripe $(jq -e '.enabledPlugins["stripe@claude-plugins-official"] == false' "$F" >/dev/null && echo off || echo kept), $(jq -r '.env.COMMANDECK_OWNER_CUTS // "" | split(",") | length' "$F") of your listed skills and plugins off"; fi)"
 
 # 9. --builder: a Builder runs its own Explore subagents (Agent allowed)
 #    and the Codex companion (node), carries no orchestration rules, and logs
 #    its events through hooks registered here only, so no other session pays
 #    for them. agent-startup-context.sh and agent-model-guard.sh read the env.
-#    Its prompt cache follows the setup answer like every worker's (owner, 2026-10-18,
-#    replacing the 1h pin of 2026-10-11): 5m above, nothing on Leave as is.
+#    Its prompt cache follows the Builder and worker answer: 5m or 1h above, nothing on Leave as is.
 #    Proof on a launched Builder: builder-cache-check.sh.
 if [ "$BUILDER" = 1 ]; then
   RULES="$(cd "$WT" && pwd)/.claude/rules"

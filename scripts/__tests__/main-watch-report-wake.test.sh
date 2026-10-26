@@ -53,4 +53,19 @@ for t in 1 2 3; do more; done
 grep -q 'rn@' "$F/mq-calls" && fail "a narrowed GO was merged"
 gone rn
 
+# Host change (owner order 2026-10-25): a design GO is not a narrowed GO. "a design GO's report names writing the code and the next
+# final pass, not a merge"; "a DONE after a design GO is posted as finished on a design-only pass, not as narrowed, and is
+# not merged".
+: > "$T/sends"
+unit rd; rnd rd 1 design GO; echo "design only: its GO merges nothing" > "$F/refuse-rd"; said_done rd
+for t in 1 2 3; do more; done
+[ "$(posts 'design only, merges nothing -- the Builder writes the code, then builder-codex-pass.sh rd 2 final')" = 1 ] \
+  || fail "a design GO's report did not name writing the code and the next final pass ($(posts 'design only, merges nothing') posts)"
+[ "$(posts 'main-watch: rd pass 1: GO (design)')" = 1 ] || fail "the design report itself was not posted once"
+[ "$(posts 'Finished on a design-only pass; the code is not reviewed yet: builder-codex-pass.sh rd 2 final')" = 1 ] \
+  || fail "a DONE after a design GO was not posted as finished on a design-only pass ($(posts 'Finished on a design-only pass') posts)"
+[ "$(posts 'Finished on a narrowed pass')" = 0 ] || fail "a DONE after a design GO was posted as narrowed"
+grep -q 'rd@' "$F/mq-calls" && fail "a design GO was merged"
+gone rd
+
 echo "PASS main-watch-report-wake.test.sh"

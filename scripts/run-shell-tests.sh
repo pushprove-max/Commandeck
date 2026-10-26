@@ -133,7 +133,12 @@ if [ "${#RESTF[@]}" -gt 0 ]; then
 fi
 
 RES=$(mktemp -d) || exit 2
-trap 'rm -rf "$RES"' EXIT
+# The live record of this run, for the units mod (issue 349): `run <start> <jobs>`, `file <rel>` for every selected
+# file, then `start <rel> <time>` and `end <rel> <ok|FAIL|skip> <secs>` as each file launches and ends. One
+# tab-joined printf per line, so parallel files cannot interleave inside one. Gone when the run exits.
+GD=$(git rev-parse --absolute-git-dir 2>/dev/null) && mkdir -p "$GD/commandeck-test-live" 2>/dev/null && LIVE=$GD/commandeck-test-live/$$.tsv || LIVE=
+trap 'rm -rf "$RES"; [ -z "$LIVE" ] || rm -f "$LIVE"' EXIT
+live() { [ -z "$LIVE" ] || { local IFS=$'\t'; printf '%s\n' "$*" >> "$LIVE"; } 2>/dev/null || true; }
 # A real hook run by a test must not count as a real fire.
 export COMMANDECK_HOOK_FIRE_LOG="$RES/hook-fire-log.jsonl"
 # A test with no orca-ide stub of its own must not close a real pane (host issue 3009): this stub, first on PATH,
@@ -153,15 +158,19 @@ STUB
 chmod +x "$RES/stubbin/orca-ide"
 export PATH="$RES/stubbin:$PATH"
 run_one() {
-  local start rc
+  local start rc secs line
   start=$(date +%s)
+  live start "${REL[$1]}" "$start"
   # review-round.sh's default self-review is a REAL Codex review: every test
   # sets its own stub, and one that does not runs this poison and fails below.
   COMMANDECK_RUNNING_TEST="$2" COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
     timeout "${CAP[$1]}" bash "$2" > "$RES/$1.out" 2>&1; rc=$?
-  echo "$rc $(( $(date +%s) - start ))" > "$RES/$1.rc"
+  secs=$(( $(date +%s) - start ))
+  echo "$rc $secs" > "$RES/$1.rc"
+  line=$(status_line "$1")
+  live end "${REL[$1]}" "${line%% *}" "$secs"
   # One printf per line: parallel files then cannot interleave inside a line.
-  printf -- '-- %s\n' "$(status_line "$1")"
+  printf -- '-- %s\n' "$line"
 }
 # The result line of finished test $1. The live `-- ` line and the sorted
 # report both print it, so the two cannot drift.
@@ -175,8 +184,8 @@ status_line() {
   printf 'FAIL %-58s %ss %s' "$(basename "${TESTS[$1]}")" "$secs" "$why"
 }
 
-# Launch pass: skips are decided here, runnable tests go to the background.
-SKIPWHY=() CAP=() EXCL=()
+# Selection pass: skips are decided here, so the live record can list every selected file before the first launch.
+SKIPWHY=() CAP=() EXCL=() REL=() SEL=() RUN=()
 for i in "${!TESTS[@]}"; do
   t=${TESTS[$i]}
   parked=$(sed -n '1,5p' "$t" | sed -n 's/^# parked: *//p' | head -1)
@@ -187,13 +196,21 @@ for i in "${!TESTS[@]}"; do
     [ -n "$own_lane" ] || { EXCL[i]=1; continue; }
   elif [ -n "$own_lane" ]; then SKIPWHY[i]="own lane: $own_lane"
   fi
+  phys=$(cd "$(dirname "$t")" && pwd -P)/$(basename "$t")
+  REL[i]=${phys#"$ROOTP"/}; SEL+=("$i")
   if [ -n "${SKIPWHY[i]:-}" ]; then
     printf -- '-- skip %-58s %s\n' "$(basename "$t")" "${SKIPWHY[i]}"; continue
   fi
   cap=$(sed -n '1,5p' "$t" | sed -n 's/^# timeout: *\([0-9][0-9]*\).*/\1/p' | head -1)
-  CAP[i]=${cap:-$TIMEOUT}
+  CAP[i]=${cap:-$TIMEOUT}; RUN+=("$i")
+done
+live run "$(date +%s)" "$JOBS"
+for i in ${SEL[@]+"${SEL[@]}"}; do live file "${REL[i]}"; done
+for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${SKIPWHY[i]:-}" ] || live end "${REL[i]}" skip 0; done
+# Launch pass: runnable tests go to the background.
+for i in ${RUN[@]+"${RUN[@]}"}; do
   while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
-  run_one "$i" "$t" &
+  run_one "$i" "${TESTS[$i]}" &
 done
 wait
 

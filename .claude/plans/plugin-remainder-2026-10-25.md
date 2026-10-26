@@ -164,19 +164,43 @@ says otherwise (section "Plan change log").
   and the full suite (:1070-1090, which already times itself into its `Suite:` line); there is no separate precheck
   step. Each step is timed with `SECONDS`; the round file header (:1361, beside `Timing:`) gains `Pre-review: rebase
   <s> s, tests <s> s, suite <s> s` (a step not run says `not run`) (Decision G8-2).
-- 357: `hooks/git-safety.sh`. Ownership is granted only after a successful add on a path that was absent before it:
-  - PreToolUse (today's Bash registration, `hooks/hooks.json:41`): a `git worktree add <path>` whose path resolves
-    under `${TMPDIR:-/tmp}`, `/tmp` or `/private/tmp` and does NOT exist yet appends `pending\t<session_id>\t<realpath
-    of the parent>/<name>` to `$PP_SCRATCH/tmp-worktrees`. A path that exists records nothing.
-  - PostToolUse Bash (new registration in `hooks/hooks.json` PostToolUse :66, `git-safety.sh --record-add`; Claude
-    Code fires PostToolUse only for a call that exited 0): for the same command, when this session has a `pending`
-    line for the path and `git -C <path> rev-parse --git-common-dir` now succeeds, it appends `owned\t<session_id>\t<path>`.
-  - At :223-225 a forced remove is allowed only when an `owned` line of the same session names that path and it is
-    under tmp; every other forced remove is blocked as today. No `session_id` (a Codex pane): nothing recorded,
-    blocked as today.
-  Catches: a forced remove of a tmp worktree another session owns, whose path this session's failed add named.
-  Break: hooks/__tests__/git-safety.test.sh -- forced removal of a worktree the session did not create stays blocked -- hooks/git-safety.sh:~224 the owned-line test
-  Break: hooks/__tests__/git-safety.test.sh -- a failed add on a path another session's worktree holds grants no removal -- hooks/git-safety.sh the PreToolUse absent-path test
+- 357: `hooks/git-safety.sh`. REDESIGNED in fix round 2 (the class stale-worktree-owner came back in passes 1 and
+  2) and again in fix round 4 (pass 4: a record step that ran late claimed a worktree another session had put at
+  the path since; the sweep: `git --version worktree add P` passed the fence, exited 0 and added nothing). Ownership
+  is proved by one add's own exit status AND a claim that no hooked add of the path began after it. One fence, a
+  fixed list in place of a parser: the whole command is `git [-C <dir>] worktree add
+  [-q|--quiet|--detach|--no-checkout|-b <name>|-B <name>]... <path> [<commit>]` or `git [-C <dir>] worktree remove
+  (-f|--force)... <path>`, every word of `[A-Za-z0-9_./~@^:+=,-]`, joined by spaces or tabs: no other git option
+  (`--version`, `--exec-path` and the like print and exit 0 with no add), no second call, no `;`, `&`, `|`,
+  newline, `!`, quote, `$`, backtick, bracket, brace or redirection. For such a command the call's exit status is
+  the command's, so Claude Code's PostToolUse (fired only for a call that exited 0; a non-zero exit fires
+  PostToolUseFailure, checked 2026-10-26 with `claude -p` running `false` and `true`) means git's add itself
+  succeeded, and git's add fails on a path that holds anything (an existing worktree, a file, a non-empty folder).
+  The path is absolute or `~/`, canonical, under `${TMPDIR:-/tmp}`, `/tmp` or `/private/tmp`.
+  - PreToolUse (`hooks/hooks.json:41`) of a fenced add of P, when P does not exist: writes the claim
+    `<parent of P>/.commandeck-add.<name of P>`, this session's id, as a temp file in that folder moved over the
+    claim with one `mv -f` (the parent made if missing; git would make it). P existing: nothing written (the add
+    will fail). The hook never deletes a claim. No other scratch state (the `pending` line and
+    `$PP_SCRATCH/tmp-worktrees` stay gone).
+  - PostToolUse Bash (`hooks/hooks.json` PostToolUse :66, `git-safety.sh --record-add`): the command is a fenced add;
+    the claim beside P holds this session's id; P is now a linked worktree whose toplevel is exactly P; and `git
+    worktree list --porcelain` names P exactly once. Then it writes the session id into `commandeck-owner` in that
+    worktree's own git dir (`<common dir>/worktrees/<name>/`), once (noclobber).
+  - A forced remove is allowed only when the command is a fenced remove (so no other call runs between the check
+    and the remove) and the grant at that path holds this session's id; every other forced remove is blocked as
+    today. No `session_id` (a Codex pane): nothing written, blocked as today.
+  - Reset: git deletes the worktree's git dir on `remove`, on `prune`, and on `add -f` over a missing registered
+    entry, and a new add makes a new folder, so a grant never outlives its worktree. A claim stays until the
+    temporary folder is cleaned; alone it grants nothing. Retry: a forced remove with no grant (a record step that
+    never ran or ran late, a claim or grant file deleted, an add outside the fence) is blocked whatever the reason,
+    and the block message names the one retry: a plain `git worktree remove <path>`, which this hook never blocks and
+    git refuses only while the worktree holds changes.
+  Catches: a forced remove of a tmp worktree another session owns, whose path this session's failed, masked or
+  no-op add named, or which replaced this session's removed worktree before or after this session's record step, or
+  which another session put there after the check.
+  Break: hooks/__tests__/git-safety.test.sh -- forced removal of a worktree the session did not create stays blocked -- hooks/git-safety.sh wt_owned's grant test
+  Break: hooks/__tests__/git-safety.test.sh -- every ownership ordering found so far, in order -- hooks/git-safety.sh the fixed-list test in --record-add
+  Break: hooks/__tests__/git-safety.test.sh -- every ownership ordering found so far, in order -- hooks/git-safety.sh the claim test in --record-add
   The new registration raises the hook list by one: `docs/hooks.md` gains its row. `scripts/__tests__/plugin.test.sh`
   has no hook count (read :133-150 on `9ac91d3`: it checks every registered path, not a number), so nothing there.
 - 358: `collect.py` `lines_changed()` (:486) returns None when the worktree is gone, and merge step 5 removes it
@@ -194,8 +218,11 @@ says otherwise (section "Plan change log").
   Catches: a unit looping on review rounds with nobody told while each pass still posts its own report.
 - 360 (BUILD): the Chief of Staff block in `hooks/agent-startup-context.sh` (:104-145) gains the five rules (scope is
   the owner's words; additions under `## Chief of Staff additions -- NOT ordered`; one multi-select prompt, decoy
-  first; no bundle approvals; at a pass-loop alert for pass 5 or more, or a class stop, tell the owner which part of
-  the scope produces the findings and whether the owner's words asked for it). New `templates/cos-order.md` (two
+  first; no bundle approvals; at a pass-loop alert for pass 4 or more, or a class stop, tell the owner which part of
+  the scope produces the findings and whether the owner's words asked for it). Pass 1 (the owner's later issue-360
+  comments): the alert is reported from pass 4, and with no relay pane `templates/main-session.md` gives main the same
+  five rules; the plan author writes an `Owner's words:` line and each plan judge flags a requirement that does not
+  trace to it (`scripts/seat.sh` spec text). New `templates/cos-order.md` (two
   headings); new `scripts/cos-order-check.sh <file>` flags a file whose first section is not `## The owner's words`,
   or with additions outside the NOT-ordered heading; the rule says run it before sending an order file to main.
   `docs/chief-of-staff.md` gains a short section.
@@ -529,8 +556,10 @@ pane and /units, and nothing in the band").
 - `scripts/release-notes.sh <version>`: prints that version's CHANGELOG section, the text `update.sh:27` prints for
   the newest (`update.sh` calls it). Exit 1 with a message when the section is missing.
 - `scripts/release-decide.sh <before sha> <after sha>`: the one decision path. Prints `release v<version>` when
-  `.claude-plugin/plugin.json`'s version at `<after>` differs from `<before>`'s and tag `v<version>` does not exist;
-  otherwise `skip: <why>`. Exit 0 either way; exit 1 when a version cannot be read.
+  `.claude-plugin/plugin.json`'s version at `<after>` differs from `<before>`'s and tag `v<version>` or its GitHub
+  release (`gh release view`) does not exist, so a run that pushed the tag and then failed to publish is finished by
+  the next (pass 1); otherwise `skip: <why>`. Exit 0 either way; exit 1 when a version cannot be read, and the
+  Decide step fails with it (the decision is assigned first, then written). The Tag step skips a tag that exists.
 - `.github/workflows/release.yml`, on push to `main` (`contents: write`, its own job; `ci.yml` keeps `contents:
   read`): its first step runs `bash scripts/release-decide.sh "${{ github.event.before }}" "$GITHUB_SHA"`, and every
   later step runs only when that output starts `release `. It then tags `v<version>` and publishes the release with
@@ -1115,6 +1144,25 @@ host plan" cell is filled from that plan when its judge says GO. (Revision 5: th
 - Shared files: `templates/_builder-brief-template.md` and `scripts/builder-codex-pass.sh` after G19;
   `hooks/hooks.json` after G10.
 - Size: ~250 changed lines over ~8 files not already in this plan, an estimate until the judged host plan exists.
+- BUILT FROM THE HOST COMMIT (fix round 3; host `da69812c`, merged on host main as `32d4831e`; main's order). F35:
+  the host removed its only hook change (the tokenizer memo) by its own acceptance rule (p50 0.90-0.97 of base
+  against a 0.8 bar), so no hook change is ported; A8's profile is in the evidence. F36: new
+  `scripts/post-fix-checks.sh [<test file>...]` starts the post-fix checks at once, each under `timeout` (540 s, below
+  the Bash tool's 600 s; `POST_FIX_CHECK_TIMEOUT_S` only so a test reaches the timeout in seconds), output to its own
+  log in a new `$PP_SCRATCH/post-fix.XXXXXX/` (kept for the evidence; a failed mkdir exits 2 before any check
+  starts): `shell`, `bash scripts/run-shell-tests.sh <the files>` (no files: no shell check); and in a plugin
+  checkout (`.claude-plugin/plugin.json` at the top), `validate`, `claude plugin validate .`, and `mods`, `claude
+  plugin test .`. It waits for each pid into its own slot and computes the exit once, after the last: 0 all green, 1
+  any red, timed out or interrupted, 2 nothing started. One line per check `post-fix: <name> exit <rc> (<s>s) <log>`
+  (124/137: `timed out after <n>s`), the last 30 lines of each red log, then `post-fix: all green` or `post-fix: <k>
+  of <n> failed: <names>`. INT, TERM or HUP: TERM each check, wait, `post-fix: interrupted: <name> cut off` per
+  unfinished check, exit 1. One home: `templates/_builder-brief-template.md` "While building" names it; the fix
+  brief's touched-test list is unchanged (as the host left its own). The host's npm name for the rerun guard has no
+  plugin site: `hooks/suite-rerun-guard.sh` keys npm, tsc and vitest calls only, not `run-shell-tests.sh`.
+  Catches: post-fix checks run one after another, and a red check's code lost behind a later green one.
+  Break: scripts/__tests__/post-fix-checks.test.sh -- runs every check at once -- scripts/post-fix-checks.sh the start without `&`
+  Break: scripts/__tests__/post-fix-checks.test.sh -- two failures keep their own codes -- scripts/post-fix-checks.sh exit with the last check's status only
+  Break: scripts/__tests__/post-fix-checks.test.sh -- an early failure survives later successes -- scripts/post-fix-checks.sh one failure flag reassigned from each wait
 
 ## Rule drift map
 
@@ -1240,11 +1288,18 @@ unless named. No item adds a conditional write or safety check, so none has a `B
    setup writes no ponytail@ponytail key".
 5. G5-5. The pre-fill example key in plugin-option.test.sh is `relayPromptCacheTtl`, which G17 keeps, so G17 does
    not rewrite G5's cases. Test: plugin-option.test.sh green after G17.
-6. G8-1. Tmp-worktree ownership needs both proofs: the path was absent before the add (PreToolUse `pending`) and the
-   call succeeded with a worktree at the path (PostToolUse `owned`). Test: git-safety.test.sh "removing a tmp
-   worktree this session added is allowed"; "session B's failed add on session A's worktree path, then B's forced
-   remove: blocked, A's worktree and its uncommitted file still there"; "a failed add followed by `; true` grants
-   nothing"; "a pending line with no PostToolUse (the add failed) grants nothing".
+6. G8-1 (REDESIGNED, fix rounds 2 and 4). Tmp-worktree ownership has two proofs, both of one add: the add's own
+   success, which PostToolUse sees only when the command is on the fixed list (G8 357: `git [-C <dir>] worktree add
+   <options from a list> <path> [<commit>]`, nothing else), and the claim beside the path, written by that add's
+   PreToolUse while the path was absent and not replaced since by another hooked add's. A path's look before the add
+   alone (the old `pending` line), a command that exited 0, the worktree at the path when the record step runs, and
+   noclobber alone prove nothing: two sessions can both see the path absent, `; true` hides a failed add,
+   `--version` exits 0 with no add, and a record step can run after the worktree was removed and the path re-added.
+   The grant lives in the worktree's own git dir and goes with it; the forced remove that uses it must be on the
+   fixed list too. Test: git-safety.test.sh "removing a tmp worktree this session added is allowed"; "session B's
+   failed add on session A's worktree path, then B's forced remove: blocked, A's worktree and its uncommitted file
+   still there"; "a failed add followed by `; true` grants nothing"; "every ownership ordering found so far, in
+   order".
 7. G8-2 (CORRECTED). The third timed pre-review step is the full suite, the plugin's only step after the rebase's
    tests. Test: builder-codex-pass-rebase.test.sh "a closing pass's report carries one timing line per pre-review
    step".
@@ -1256,7 +1311,7 @@ unless named. No item adds a conditional write or safety check, so none has a `B
     project's object `projects[PP_PROJECT].units` (not a top-level `units`), its rows' fields under the host's names
     (`inFlight[].stage`, `.round`, `.ageSec`, `.agents`, `.builder.verdict`, `.verdictRound`, `.findings`,
     `.cost.stages`, `.issues`, `.built`, `.startedAt`; `finishedBuilds[].cost.total.usd`), and merge time from
-    `mergedSincePush[].at` (not `mergedAt`); no push chain. Before the port the Builder records the table in the
+    `finishedBuilds[].at` (pass 1: not `mergedSincePush`, which a push empties); no push chain. Before the port the Builder records the table in the
     evidence file against a real `data.js`. A missing field renders nothing. Test: units-sources.test.tsx "a plugin
     snapshot's project units, merge times and costs parse" (the judge's input); "a snapshot without this project, or
     with no unit list, draws nothing and says why"; units.test.tsx "a unit merged today from a plugin snapshot shows
@@ -1470,6 +1525,22 @@ unless named. No item adds a conditional write or safety check, so none has a `B
    the hour before the update shows no toast and no row (no state, no live queue entry). Reading such a log whole is
    what let an earlier `DONE` stand for a later attempt; drawing nothing is the safe side, and it lasts at most an
    hour per unit. Test: units.test.tsx "a log with no ATTEMPT line draws nothing and toasts nothing".
+10. (Fix round 2.) Two one-plain-call adds of the same absent tmp path started in the same few milliseconds can
+   both pass git's own path check and both exit 0 (git takes no lock there). The record step then needs the path
+   named once by `git worktree list --porcelain`, so a second registration seen by either step grants nothing; a
+   record step that runs before the slower git has registered its folder can still grant the first. Both sessions
+   would have had to pick one tmp path at once (`mktemp` names differ), and the outcome is a worktree two gits
+   checked out together. Test: none, it needs two gits inside git's own check window.
+11. (Fix round 3.) The first readable poll of a session toasts no verdict, so a verdict that lands between the
+   session start and that poll is shown in the row and the pane but not toasted. The alternative toasts every
+   verdict already recorded each time a session starts. A unit that drops out of the snapshot's rows for a poll and
+   comes back is new again, and its recorded verdict toasts once more. Test: units-sources.test.tsx "every verdict
+   toast ordering found so far, in order" (its first and last steps).
+12. (Fix round 4.) A worktree re-made at P by something that runs no PreToolUse hook (a person's shell, a script, a
+   Codex pane), in the window between A's fenced add and A's record step, is still claimed by A: nothing replaced
+   A's claim. So is one re-made by a hooked session in the milliseconds between A's record step reading the claim
+   and writing the grant. Each needs a clean remove of A's new worktree and a re-add at the same tmp path inside that
+   window (`mktemp` names differ). Test: none, the window is a few hook milliseconds or a hook queue's delay.
 
 ## 3. Assumptions (each settled, or a Builder check with the action per outcome)
 
@@ -1616,6 +1687,36 @@ enforces); the owner's order keeps it one unit. The pass script falls back to a 
 | skipped pass number (G19) | the third pass on record launched as `... 9 review` with a P2 | not at the cap: runs narrowed, no stop, merge refuses | builder-codex-pass-threshold.test.sh "the pass number is not the count" |
 | severity lowered (G19) | pass 5's record has `[P1]`, the round file edited to `[P3]` | `--verify` still refuses; no stop printed | builder-codex-pass-threshold.test.sh "a severity lowered in the round file changes nothing" |
 | filing missing or closed (G19) | `--filed` absent; names a closed issue; names a class not open; gh exits 1 | refused each time, naming the class or gh's error | builder-codex-pass-threshold.test.sh "a filed issue must be open" |
+| one check hangs (G21) | the mods stub sleeps 60, cap 2 s | `mods timed out after 2s`, the other two exit 0, exit 1, ends in under 20 s | post-fix-checks.test.sh "a hung check is cut off at the cap and named" |
+| run killed (G21) | TERM to the runner while the stubs sleep | no stub alive after 15 s, exit non-zero, logs kept, no green line | post-fix-checks.test.sh "a killed run leaves no check running" |
+| two fail, different codes (G21) | shell 0, validate 2, mods 3 | each line its own code, both red tails printed, exit 1 | post-fix-checks.test.sh "two failures keep their own codes" |
+| early failure, later successes (G21) | shell 2, validate 0, mods 0 | `post-fix: shell exit 2`, `post-fix: 1 of 3 failed: shell`, no green line, exit 1 | post-fix-checks.test.sh "an early failure survives later successes" |
+| not a plugin, no files (G21) | a checkout with no `.claude-plugin/plugin.json`; no test files named | nothing started: exit 2, says why | post-fix-checks.test.sh "a checkout with nothing to check exits 2" |
+| planning cost (G10, pass 2) | an in-flight unit with `builder: null` and `plan.cost.stages` `[{planning, 4}]`; then one with a Builder cost | the row and today's spend read 4; with a Builder, only the Builder's cost | units-sources.test.tsx "a planning unit's spend counts before the Builder starts" |
+| verdict first seen (G10, passes 2-3; third return, redesigned) | one poll sequence of `Seen` states: the session's first poll (`prevSeen` null) with u `1:GO`; the same again; w first seen with `2:NO-GO`; the same again; u now `3:GO`; x first seen with `1:` (no verdict), then x `1:GO`; `prevSeen` reset to null (session start), then w `3:GO` | no toast; none; `w: verdict 2 NO-GO` once; none; `u: verdict 3 GO`; none, then `x: verdict 1 GO`; the poll after the reset toasts nothing, the one after it toasts as before | units-sources.test.tsx "every verdict toast ordering found so far, in order" |
+| stop answered by the route (G19, pass 4) | pass 7 holds a P1 (`REVIEW STOP`, decision `review-stop-p1-r7`); the Builder runs the printed `ask-main.sh "review-stop-p1-r7: <class>"`, orca-wait.sh records it as `p1-msg_<id>` and answer-worker.sh answers that row; then the next pass launches | the launch runs: a ledger row answers the stop when its id is the stop id or its question opens with `<stop id>:` | builder-codex-pass-threshold.test.sh "with r7 answered through ask-main.sh and answer-worker.sh the next pass runs; ..." |
+| backfill push failed (G11, pass 2) | a local `v0.1.0` whose push failed; origin lacks it; no releases | the rerun pushes every missing tag, then each `--verify-tag` release is made | release-notes.test.sh "a local tag whose push failed is pushed by the rerun before the release is made" |
+| relative path (G8, pass 1) | a session owns `<cwd>/w`; then `git -C <other checkout> worktree remove --force w`, and `cd <other> && git worktree remove --force w` | both blocked: only an absolute or `~/` path is ever owned | git-safety.test.sh "a relative path after -C or cd is never owned: both forced removes block" |
+| reused path (G8, pass 1) | A adds and removes a tmp worktree at P; B adds a new one at P; A, then B, run a forced remove of P | A blocked (the grant went with A's worktree), B allowed | git-safety.test.sh "every ownership ordering found so far, in order" (step 1) |
+| failed add, path held (G8, pass 1) | A's add of Q failed; B's worktree now holds Q; A runs a forced remove of Q | blocked: a failed add fires no PostToolUse and grants nothing | git-safety.test.sh "every ownership ordering found so far, in order" (step 2) |
+| concurrent adds, masked failure (G8, pass 2) | A's and B's PreToolUse both see P absent (A's chained add is off the fixed list, so only B writes a claim); B adds P; A's `git worktree add P HEAD; true` fails but exits 0; A's PostToolUse runs before B's; B writes a file in P; A, then B, run a forced remove of P | A blocked (a chained add grants nothing); B's add was one plain call, so B is allowed; B's file is kept by A's block | git-safety.test.sh "every ownership ordering found so far, in order" (step 3) |
+| chained remove (G8, pass 2 sweep) | A owns P; A runs `git worktree list; git worktree remove --force P` (any call before or after the remove) | blocked: only a one-plain-call forced remove uses a grant, so nothing runs between the check and the remove | git-safety.test.sh "every ownership ordering found so far, in order" (step 4) |
+| lost grant, retry (G8, pass 2) | A added P with one plain call; P's `commandeck-owner` (the one piece of ownership state) is deleted between the add and the remove | A's forced remove is blocked and names `git worktree remove <path>`; that plain remove is not blocked and git removes the clean worktree | git-safety.test.sh "every ownership ordering found so far, in order" (step 5) |
+| delayed record step (G8, pass 4) | A's fenced add of P succeeds (its PreToolUse wrote A's claim); before A's PostToolUse, the clean worktree is removed, B's PreToolUse (claim now B) and add re-make P and B writes a file in P; then A's record step, then B's; A, then B, run a forced remove of P | A blocked (the claim names B, so A's late record step grants nothing); B allowed; B's file is kept by A's block | git-safety.test.sh "every ownership ordering found so far, in order" (step 6) |
+| an add that adds nothing (G8, pass 4 sweep) | B's worktree at P has no grant (B's add was chained); A runs `git --version worktree add P HEAD` (exit 0, nothing added) through PreToolUse and PostToolUse; A runs a forced remove of P | blocked: `--version` is off the fixed list, so no claim and no grant | git-safety.test.sh "every ownership ordering found so far, in order" (step 7) |
+| lost claim, retry (G8, pass 4) | A's fenced add of P: its claim is deleted between its PreToolUse and its record step | no grant; A's forced remove is blocked and names `git worktree remove <path>`; that plain remove removes the clean worktree | git-safety.test.sh "every ownership ordering found so far, in order" (step 8) |
+| abbreviated long option (G8, pass 5 sweep) | `git worktree remove --forc P` (`--f`, `--fo`), and the same for the other discard checks: `checkout --forc`, `switch --disc`, `clean --forc`, `branch --del --forc`, `gc --pru=now`, `restore --staged --work`, `reset --har` | blocked: git takes any unambiguous prefix of a long option, so each check reads every prefix of its option (`abbr`); a forced remove that uses a grant must still spell `-f` or `--force` | git-safety.test.sh "blocks: git worktree remove --forc /tmp/wt" and the six beside it |
+| reworded global rule (G19, G5; closing run after pass 6) | an owner kept their own wording of a global rule (`--drop 13e9906d`, or of `c8e23316` before it); this build rewords it (26b6b2b9), and five others in global-rules.md | the reworded rule stays out for that owner and loads again with `--keep <new id>`: each new id has its `MADE_FROM` line in scripts/merge-rules.py | merge-rules.test.sh "reworded global <new>: in by default, out under keep mine of <old>, in again with --keep <new>" (six pairs) and "reworded 26b6b2b9: ... c8e23316 ..." |
+| checkout under -C (G8, pass 1) | `git -C <dir> checkout <a file only that folder has>` | blocked: the one-word lookup is made where git runs | git-safety.test.sh "git -C <dir> checkout <a file only that folder has> blocks" |
+| publish failed after tag (G11, pass 1) | a run pushed tag v1.1.0, then Publish failed; the job reruns | the decision is `release v1.1.0`; the Tag step finds its tag, exits 0 and pushes nothing; a version whose tag and release exist decides skip | release-notes.test.sh "a tag pushed by a run whose publish failed decides release again"; "a rerun's Tag step with its tag already there exits 0 and pushes nothing"; "a changed version whose tag and release exist decides skip" |
+| decide fails (G11, pass 1) | the Decide step's script exits 1 (version unreadable) | the step fails and writes no `decision=` line | release-notes.test.sh "a Decide step whose version cannot be read fails, writing no decision" |
+| idle pane (G10, pass 1) | `unitsPane` on, no live unit; then a unit goes live; then it finishes | no pane opened; the pane opens; the pane closes | units-panes.test.tsx "no live units: no band row, no pane, no status line"; "the pane opens when a unit goes live and closes when the last one finishes" |
+| shared status line (G10, pass 1) | the relay seat with auto-decide off and one unit building, over two polls | `1 building · today $1.00 · auto-decide off` both times | units.test.tsx "the relay keeps its units summary beside the auto-decide mode, across polls" |
+| merged then pushed (G10, pass 1) | a snapshot whose `mergedSincePush` is empty after a push and whose `finishedBuilds` holds today's merge with its cost | the merge row and today's spend stay | units-sources.test.tsx "a push keeps today's merged builds and their spend" |
+| built beyond the brief (G10, pass 7) | a building unit with `issues:[349]`, `built:[349,357]` (an evidence heading also names 357); and `issues:[349,"Rule drift"]`, `built:["Rule drift",357,"Rule drift","other"]` | `██████████  1 of 1 issues built`, no RangeError; then `█████░░░░░  1 of 2 issues built`: only the brief's issues count (as `dashboard/app.js` counts) and the bar stays 10 wide | units-sources.test.tsx "issues built count only the brief's issues, and the bar never overflows" |
+| main-only scope (G9, pass 1) | a project with no relay pane | main's loaded rules carry the order file, the NOT-ordered additions, one multi-select question, no bundle approvals, the pass-4 report; the plan author writes an `Owner's words:` line and the judge flags an untraced requirement | agent-startup-context.test.sh "with no relay pane main keeps the scope rules: the order file, NOT-ordered additions checked, one multi-select question, no bundle approvals, pass 4 reported"; seat-plan-marker.test.sh "a plan-author's prompt asks for the Owner's words line from the order, every requirement traced to it"; "the judge's prompt makes a requirement that does not trace to the owner's words a finding (issue 360)" |
+| pass-4 warning (G9, pass 1) | a fourth NO-GO with no class stop | the relay (and main with no relay) tells the owner at pass 4 | agent-startup-context.test.sh "the relay's scope rules: owner's words only, NOT-ordered additions checked by cos-order-check.sh, one multi-select picker, no bundle approvals, pass 4 reported" |
+| state not in Data design (pass 1) | the live test table, the units atoms and caches, the status-line parts, the setup records, the pass kind line, the worktree grant | each is named with its writer, reader, reset and retry in the brief's Data design | the review pass's data-design check (`DATA_DESIGN` in `builder-codex-pass.sh`); no unit test reads the brief |
 
 ## Claims to falsify
 
@@ -1663,8 +1764,8 @@ enforces); the owner's order keeps it one unit. The pass script falls back to a 
 12. `builder-cache-check.sh` passes a Builder answered 1h whose transcripts hold only 1h writes, whichever project
     it is run from, and nothing in the plugin requires 5m when the worker answer is 1h (`rg -n "only 5m|only
     5-minute|5-minute prompt cache" scripts docs` is empty; revision 4 added `docs` and the two phrases).
-7. `release-decide.sh` says skip when the version did not change or its tag exists, and the workflow runs no tag or
-   publish step without its `release` output.
+7. `release-decide.sh` says skip when the version did not change or its tag and release both exist, and the
+   workflow runs no tag or publish step without its `release` output.
 8. `git-safety.sh` blocks every forced remove of a path the session's own successful add on an absent path did not
    create, a failed add on another session's path included.
 9. The plugin's `FORMAT` asks for a Class search line under blocking findings only; a KNOWN GAPS line carries none.
@@ -2058,3 +2159,45 @@ The prompt-cache old answers need no question: the count on this machine is 0 (G
   - Timed checks, CORRECTED: `install-lib-setup.test.sh` has time-bound checks (:284, :298, :300, written
     `$(command -v timeout) <n>`, so revision 4's `rg` missed them); G17's two main-TTL cases go after them.
   - Size: G10 1,690 -> 1,700, G17 540 -> 550; total ~4,461 lines, 113 files (~4,211 and 105 without G21).
+- 2026-10-26, Builder fix round 1 (the first review pass's findings; nothing else changed):
+  - G8: tmp-worktree ownership REDESIGNED: a pending line at PreToolUse, a grant (the session id) in the new
+    worktree's own git dir at PostToolUse; only absolute or `~/` paths are owned; the one-word checkout lookup
+    follows `-C`. Four rows.
+  - G10: the pane opens only while a unit is live; the status line is shared (`hooks/status-line.ts`); merge times
+    and spend come from `finishedBuilds` (Decision G10-1). Three rows.
+  - G11: decide releases while the tag or the release is missing; the Tag step is idempotent; the Decide step fails
+    with its script. Two rows; Claim 7.
+  - G9 (360): pass 4, main's five rules with no relay pane, the plan's `Owner's words:` line and the judges' trace
+    check. Two rows.
+  - G17: the `/config` precedence replay case in install-lib-setup.test.sh (the row's named test now exists).
+  - The brief's Data design names the state the batch adds (one row).
+- 2026-10-26, Builder fix round 2, design only (the class stale-worktree-owner came back in pass 2: concurrent adds
+  let the session whose add failed but exited 0 write the grant first):
+  - G8 357 REDESIGNED: one fence, a command that is one plain git call. The grant is written only after such an add
+    succeeded (PostToolUse) with the worktree at the path named once by git; a forced remove uses it only when it is
+    such a call too. The `pending` line and `$PP_SCRATCH/tmp-worktrees` go. Decision G8-1 rewritten, the stale
+    pending row rewritten, three rows added (concurrent adds, chained remove, lost grant retry), Accepted failure
+    mode 10 (two gits inside git's own check window), one test for every ordering found so far.
+- 2026-10-26, Builder fix round 3 (pass 3 reviewed the design against unchanged code: its findings were the code not
+  yet written):
+  - G8 357 built as redesigned; G10 planning cost read from `plan.cost` before a Builder; G11 backfill pushes a tag
+    origin lacks. Two rows (planning cost, backfill push failed).
+  - G21 built from the host commit (main's order: host merged): the post-fix runner, no hook change (the host dropped
+    its own); three `Break:` lines, five rows.
+  - G19 built from the judged host plan, not a host commit (main's decision plugin-g19-from-plan: the gate still
+    fails), plus main's delta: a pass clears an earlier P0/P1 only when every reviewer it declared is on record and
+    none names a P0 or P1. Not built, follow-ups: the host's diff exclusions, main-watch's NO-GO wake text, a
+    P0-P2-only class repeat, O6 (no plugin record by severity). The other host differences port after the host merges.
+  - The host merged (implementation `1fd81a93`): ported its in-table differences: the cap needs an open P2; the
+    threshold stop reads what is open over the whole record; the latest pass is the one that ended last; a closing
+    pass gets no author's notes and the host's fresh line, narrowed to the history files (the brief stays open).
+  - missed-verdict-toast, third return (main: redesign; design pass first): Data design "Verdict toasts", the row
+    "verdict first seen", Accepted failure mode 11. The code follows the design pass.
+- 2026-10-26, Builder fix round 4 (pass 4: one P1 stale-worktree-owner, one P2 stop-answer-mismatch):
+  - G19: the launch gate takes the answer the prescribed route leaves, a row whose question opens with the stop id
+    (orca-wait.sh records it under the Orca message id). Row "stop answered by the route".
+  - G10: the verdict-toast code, after pass 4 read the design and named no finding on it.
+  - G8 357, stale-worktree-owner third return (pass 4; main asked, design-only pass first): the claim beside the path,
+    written by an add's PreToolUse while the path is absent and required by the record step; the fence becomes a
+    fixed list of add and remove forms (the sweep's `--version` add). Decision G8-1, three rows (delayed record step,
+    an add that adds nothing, lost claim), Accepted failure mode 12.

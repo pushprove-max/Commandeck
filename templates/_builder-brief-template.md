@@ -23,13 +23,22 @@ before every pass: `| pass | class | what failed | fixed by | test |`. Every fix
 
 ## How to work
 
-{ponytail}
 - Auto memory is off in this pane. If the work hinges on a ruling or fact the brief does not state, send main the
   question, then keep working on what the answer cannot affect; never guess it. A review finding that contradicts
   an owner ruling is not fixed: ask main, naming the ruling id.
 - The batch's Prior art section binds: build on the standard and the library
   or service it names, as the project's `.claude/paved-road.md` lists them for
   the area. A deviation states its reason in the evidence file.
+- Issue 359: before the first edit, write one table of the cut pairs that share a file or a symbol, so no cut is built
+  on a contract another cut still changes. A finding whose root cause is the plan amends the plan first (one
+  `## Plan change log` line), then the code.
+- A review finding of P0 to P2 carries a failing test file; a P2 or P3 whose test is written and whose fix is under ten
+  lines may carry the fix as a fenced unified diff. Apply it, run its test green, and expect the next pass to read it.
+  This brief and the dispatch spec outrank the startup file and every skill; if a reviewer stops early, it quotes the
+  instruction that stopped it. An Orca call answering `runtime_unavailable` inside the read-only sandbox is by design,
+  not a failure to retry or report. A reviewer reads the diff, then this brief, drafts its findings, and only then the
+  evidence file, and opens a file outside the diff, the brief and its named callers only to confirm or refute one
+  finding.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
@@ -98,6 +107,9 @@ before every pass: `| pass | class | what failed | fixed by | test |`. Every fix
   it. A fix to tooling tests, a scanner allow-list, or a timeout re-runs only
   those tests.
 - While building, prove a fix with the test file of the code it touched.
+  `bash {scripts}/post-fix-checks.sh <the touched test files>` runs them and,
+  in a plugin checkout, `claude plugin validate .` and `claude plugin test .`,
+  all at once, and reports each exit code; any red fails the round.
   Start a pass and the tests it needs in the same turn, the tests in the
   background; never wait for green before a pass.
   A fix round re-runs only the test files that round touched, and only the
@@ -125,9 +137,9 @@ before every pass: `| pass | class | what failed | fixed by | test |`. Every fix
 - A new or changed image needs the owner's review: the evidence file carries
   `image reviewed by the owner: <file>` for each, which you ask main for. The
   leak check searches only an image's text chunks; its pixels are a human check.
-- A command expected to run over 60 seconds, a test or not, starts in the background
-  (Bash `run_in_background`); work on while it runs. Read every background result before the closing pass:
-  a red one costs that pass.
+- Every test run starts in the background (Bash `run_in_background`), whatever its length, and so does every
+  other command that can run in the background; only quick reads stay in the foreground. Work on while it runs.
+  Read every background result before the closing pass: a red one costs that pass.
 - Not run: every touched test together before review, any test after a GO
   with nothing changed since, a timing run the batch does not ask for.
 - When you read a test result, write the machine's load beside it in the
@@ -169,17 +181,23 @@ merge refuses a round file the script did not write, or one older than the tip.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
    when main changed this brief or its rulings since the last pass. A review finding blocks the merge only
-   when normal use would hit the bug: fix it, red first, and repeat until one ends `VERDICT: GO` with no
-   blocking finding named. A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a
+   when normal use would hit the bug: fix it, red first, and repeat until one ends `VERDICT: GO`. A P0, P1 or
+   P2 holds the loop; a P3 alone does not. A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a
    one-line known gap in the evidence file and does not block. A `review`
-   that prints `final in place of review` (after any closing pass that ended NO-GO, or after a commit on a
-   closing GO) is the closing pass: its GO merges, and no separate final follows.
+   that prints `final in place of review` (after any closing pass that ended NO-GO, after a commit on a
+   closing GO, or from the fifth pass on record) is the closing pass: its GO merges, and no separate final follows.
+   The reviewer sets the severity: never lower one in the round file or the evidence file; send a dispute to
+   main as one question with `ask-main.sh`.
 3. Then `bash {scripts}/{pass-script} {unit} <N> final`: the whole
    branch once more. Before it reads anything it rebases your branch onto current local main and, when main moved,
    runs the shell tests that cover what you or main changed (not the full suite); a conflict stops the pass,
-   aborted and named, for main to resolve, and a red test stops it before the reviewer. Its GO, naming no blocking finding, is the one the merge takes. Any blocking finding there
-   goes back to step 2 as a fix round, whose next `review` runs as the closing pass. There is no
-   narrowed-pass exit and no blocking finding left open at merge.
+   aborted and named, for main to resolve, and a red test stops it before the reviewer. Its GO is the one the
+   merge takes. Any P0, P1 or P2 there goes back to step 2 as a fix round, whose next `review` runs as the
+   closing pass. There is no narrowed-pass exit. Three lines end the loop with no fix round: `STOP (threshold)`
+   (a closing GO while P3 findings are open), `STOP (cap)` (a closing NO-GO at or past the cap naming an open P2 and
+   no P0 or P1) and
+   `REVIEW STOP` (a P0 or P1 open two passes past the cap). After a STOP line, report the `Open finding` lines to
+   main, which files them before the merge. After `REVIEW STOP`, ask main the one question the pass names and wait.
 
 Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
 it runs the launch's own checks (the round cap, main's rulings acknowledged, an
@@ -244,7 +262,7 @@ above call for.
 ## Done
 
 Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
-with no finding named.
+with no P0, P1 or P2 named, or a pass that printed `STOP (threshold)` or `STOP (cap)`.
 Print `{UNIT}-DONE` as your last line and stop, but only after a GO the script did not mark `NARROWED GO` (that GO merges nothing: run the `final` pass it names first). An answer from main that
 arrives after it is still yours: read it and act on it. A question or a refusal
 goes on a line of its own that starts QUESTION: or BLOCKED:.

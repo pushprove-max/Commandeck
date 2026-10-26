@@ -54,26 +54,35 @@ done <<'EOF'
 builderModel|"project"|Ask "Builder model": Sonnet
 builderEffort|"project"|Ask "Builder effort": High
 orchestratorEffort|"project"|Ask "Main": Opus medium
-fixerEnabled|true|Ask "Fixer": Opus high every round
-fixerFirstModel|"project"|Ask "Fixer": Opus high every round
+fixerEnabled|true|Ask "Fixer": Same as Builder, then Opus high
+fixerFirstModel|"project"|Ask "Fixer": Same as Builder, then Opus high
 codexReviewerModel|"project"|Ask "Reviewer model": Sol medium
 planAuthorEnabled|true|Ask "Plan author": Opus high
 planJudgeSolEnabled|true|Ask "Sol judge": Codex high
-planJudgeAstraEnabled|true|Ask "Astra judge": Codex high
+planJudgeFableEnabled|true|Ask "Fable judge": Claude Fable high
 planAuthorFast|false|Ask "Fast tier", one multi-select question (`multiSelect: true`): None
 maxReviewRounds|"none"|Ask "Review rounds": No cap
 closingPass|true|Ask "Closing pass": Runs
 fullSuiteBeforeFinal|true|Ask "Full suite before the final review": On
-ponytail|"lite"|Ask "Ponytail": Lite
-promptCacheTtl|"5m"|Ask "Prompt cache": 5m for main and workers
-relayPromptCacheTtl|"1h"|Ask "Relay prompt cache": 1h
+mainPromptCacheTtl|"1h"|Ask "Main prompt cache": 1h
+workerPromptCacheTtl|"5m"|Ask "Builder and worker prompt cache": 5m
+relayPromptCacheTtl|"1h"|Ask "Chief of Staff prompt cache": 1h
 dashboardBind|"127.0.0.1"|Ask "Dashboard": On, this machine only
 dashboardPort|"none"|Ask "Dashboard": On, this machine only
 maxBuilders|"none"|-
 wakeKinds|"worker_done,escalation,question,decision_gate,merge_ready"|-
 wakeWindowSeconds|60|-
 EOF
-check "the set is the ten options of the plan's question 9, the Builder cap (issue 256), 25 role keys (issue 312) and the two wake options (issue 318) and the auto-decide seats option (issue 333)" 39 "$(jq '.userConfig | length' "$M")"
+check "the set is the 26 role keys (issue 312; the Fable judge has four and no agent key) and the 15 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349) and the three prompt-cache options, one for each role (issue 367), among them" 41 "$(jq '.userConfig | length' "$M")"
+# The second plan judge is a Claude seat on Fable that cannot write the plan it judges; the Astra judge role and its
+# options are gone, and nothing outside the tests reads them.
+check "the Fable judge is a read-only Claude reviewer on fable at high, and no Astra judge role is left" \
+  "claude fable high true false Write,Edit,NotebookEdit:false:" \
+  "$(jq -r '.roles["plan-judge-fable"] | "\(.agent) \(.model) \(.effort) \(.reviewer) \(.edits) \(.tools | join(","))"' "$REAL/config/routing.json"):$(jq '.roles | has("plan-judge-astra")' "$REAL/config/routing.json"):$(cd "$REAL" && grep -rnE 'planJudgeAstra|plan-judge-astra' scripts hooks config templates skills docs README.md .claude-plugin --exclude-dir=__tests__)"
+# A key setup passes to setup.sh --option that the manifest lacks is refused there, so the question would break.
+check "every option key setup's SKILL.md names is a manifest option" "" \
+  "$( { grep -o -- '--option [A-Za-z]*=' "$REAL/skills/setup/SKILL.md" | sed 's/^--option //; s/=$//'; grep -o '`[A-Za-z]*Fast`' "$REAL/skills/setup/SKILL.md" | tr -d '`'; } | sort -u \
+    | while read -r k; do jq -e --arg k "$k" '.userConfig | has($k)' "$M" >/dev/null || echo "$k"; done)"
 # Issue 318: a settings file from before 0.27.0 has neither wake key and takes the defaults; a kinds list naming no
 # kind would never wake main, and a window that is not whole seconds cannot be compared, so both take the default.
 wopt() { (cd "$TMP" && CLAUDE_CONFIG_DIR=$TMP/cfg COMMANDECK_MAIN=$TMP COMMANDECK_OPTIONS=$1 bash -c '. "$0/scripts/paths.sh" && echo "$(pp_option wakeKinds) $(pp_option wakeWindowSeconds)"' "$REAL"); }
@@ -144,6 +153,9 @@ mkdir -p "$TMP/a root"; ln -s "$REAL/hooks" "$TMP/a root/hooks"
 check "and each one is a runnable word under a root with a space in it" "" \
   "$(jq -r '.hooks[][].hooks[].command' "$H" | while IFS= read -r c; do CLAUDE_PLUGIN_ROOT="$TMP/a root" bash -c "set -- $c; [ -x \"\$1\" ]" 2>/dev/null || echo "$c"; done | head -3)"
 check "every registered hook is an executable file in the repo" "" "$(hook_files | while read -r f; do [ -x "$REAL/$f" ] || echo "$f"; done)"
+# issue 364: the Chief of Staff unfinished-work Stop hook ships unregistered; the script stays for a project that registers it.
+check "the Chief of Staff unfinished-work Stop hook is not registered, and its script stays executable" "0 yes" \
+  "$(hook_files | grep -c 'cos-unfinished-stop\.sh') $([ -x "$REAL/hooks/cos-unfinished-stop.sh" ] && echo yes || echo no)"
 # Main may read any file in a worker's worktree (owner ruling 2026-10-15, restoring 2026-09-25): every
 # hook that runs before main's Read, Grep or Glob lets a worktree path through.
 git init -q "$TMP/main"; mkdir -p "$TMP/main/.claude"; echo '{"version": 1}' > "$TMP/main/.claude/commandeck.json"; W=$TMP/main/orca/workspaces/u/src/a.sh
@@ -195,25 +207,26 @@ check "setup sends no typed follow-up after its pickers" 0 "$(grep -ci 'ask in p
 # A first-time owner sees which answer to take: one option of every question is marked, and a
 # question is titled in words, never by a rule's hash.
 check "every setup question marks exactly one answer (recommended)" "" "$(grep -v ' (recommended)' <<<"$ASKS"; grep '(recommended).*(recommended)' <<<"$ASKS")"
-check "the prompt-cache question says 5m cost less for main and workers, and Leave as is writes nothing" '1:1:1' "$(grep -cxF '    Ask "Prompt cache": 5m for main and workers (recommended) | Leave as is' "$SETUP"):$(grep -cF -- '- 5m for main and workers: Main, Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too. On real sessions a 5-minute cache cost about 5% less for main and 6 to 17% less for worker panes: they seldom pause long enough for a 1-hour cache to pay. Saved in `.claude/settings.json` and each worktree'"'"'s `.claude/settings.local.json`. `--cache-ttl 5m`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a 1-hour value an earlier setup wrote included (on a Claude subscription an unset cache is 1 hour). `--cache-ttl leave`' "$SETUP")"
-check "the relay's question says 5m cost it more than 1h, and Leave as is writes nothing" '1:1:1' "$(grep -cxF '    Ask "Relay prompt cache": 1h (recommended) | Leave as is' "$SETUP"):$(grep -cF -- '- 1h: The relay pane keeps its cache 1 hour. It waits on you between turns, and on real sessions a 5-minute cache cost it about 85% more than 1 hour. Saved in its worktree'"'"'s `.claude/settings.local.json`; its other settings stay. The doctor warns if another file overrides it. `--relay-cache-ttl 1h`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing in the relay'"'"'s settings. `--relay-cache-ttl leave`' "$SETUP")"
+# Issue 367: one prompt-cache question for each role, its default bullet and its Leave as is bullet each ending with the flag.
+check "the main prompt cache question recommends 1h, offers 5m, and Leave as is writes nothing" '1:1:1:1' "$(grep -cxF '    Ask "Main prompt cache": 1h (recommended) | 5m | Leave as is' "$SETUP"):$(grep -cF -- '- 1h: Main keeps its cache 1 hour.' "$SETUP"):$(grep -cF -- '`--main-cache-ttl 1h`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--main-cache-ttl leave`' "$SETUP")"
+check "the Builder and worker prompt cache question recommends 5m, offers 1h, and Leave as is writes nothing" '1:1:1:1' "$(grep -cxF '    Ask "Builder and worker prompt cache": 5m (recommended) | 1h | Leave as is' "$SETUP"):$(grep -cF -- '- 5m: Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too.' "$SETUP"):$(grep -cF -- '`--worker-cache-ttl 5m`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--worker-cache-ttl leave`' "$SETUP")"
+check "the Chief of Staff prompt cache question recommends 1h, offers 5m, and Leave as is writes nothing" '1:1:1:1' "$(grep -cxF '    Ask "Chief of Staff prompt cache": 1h (recommended) | 5m | Leave as is' "$SETUP"):$(grep -cF -- '- 1h: The relay pane keeps its cache 1 hour. It waits on you between turns, and on real sessions a 5-minute cache cost it about 85% more than 1 hour.' "$SETUP"):$(grep -cF -- '`--relay-cache-ttl 1h`' "$SETUP"):$(grep -cF -- '- Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--relay-cache-ttl leave`' "$SETUP")"
+check "no setup text says a 5-minute cache cost main less" 0 "$(grep -c 'about 5% less for main' "$SETUP")"
 # Issue 244: the closing pass runs the full suite only when the owner said so.
 check "setup asks whether the full suite runs before the final review, On recommended, with its flag" '1:1:1' "$(grep -cxF '   Ask "Full suite before the final review": On (recommended) | Off' "$SETUP"):$(grep -c 'one full run of <testCommand> per build; catches failures a static review misses.*`--full-suite on`' "$SETUP"):$(grep -c '`--full-suite off`' "$SETUP")"
 # An update must ask the unanswered cache questions, not replay them.
-check "the update skill asks the Prompt cache questions from setup's text, with only the answered flag" 1 "$(grep -c 'Prompt cache:.*Relay prompt cache:.*setup.sh.* only that flag' "$REAL/skills/update/SKILL.md")"
+check "the update skill asks each role's prompt cache question from setup's text, with only that question's flag" '1:1:1:1' "$(grep -c 'Main prompt cache:.*Builder and worker prompt cache:.*Chief of Staff prompt cache:' "$REAL/skills/update/SKILL.md"):$(grep -c -- '--main-cache-ttl' "$REAL/skills/update/SKILL.md"):$(grep -c -- '--worker-cache-ttl' "$REAL/skills/update/SKILL.md"):$(grep -c -- '--relay-cache-ttl' "$REAL/skills/update/SKILL.md")"
+check "each Needs-you prompt cache line opens with its setup question's title and names its flag" '1:1:1' \
+  "$(grep -c 'NEED+=("Main prompt cache: not answered since 0.48.0.*--main-cache-ttl' "$REAL/scripts/setup.sh"):$(grep -c 'NEED+=("Builder and worker prompt cache: not answered since 0.48.0.*--worker-cache-ttl' "$REAL/scripts/setup.sh"):$(grep -c 'NEED+=("Chief of Staff prompt cache: not answered since 0.48.0.*--relay-cache-ttl' "$REAL/scripts/setup.sh")"
 # Leave must read as a change of nothing: the machine's file serves every project, so a Leave that removed would take another project's lines.
 check "the auto-mode question: Leave changes nothing, and only Take them out removes" '1:1:1' "$(grep -cxF '    Ask "Auto mode": Add two entries (recommended) | Leave as is | Take them out' "$SETUP"):$(grep -cF -- '- Leave as is: Changes nothing in ~/.claude/settings.json; a refusal of a plugin script stays possible. `--auto-mode leave`' "$SETUP"):$(grep -c -- '--auto-mode remove' "$SETUP")"
 check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a-f]{8})"' <<<"$ASKS")"
 
-# The add-on list and the ponytail skill setup installs, as shipped, read without a setup run. The owner wants
-# every add-on kept at its latest, no version pinned; the skill's own rule keeps its name out of code comments.
+# The add-on list as shipped, read without a setup run. The owner wants every add-on kept at its latest, no version pinned.
 check "every add-on has a command and a cost: none is a placeholder" 0 \
   "$(grep -v '^#' "$REAL/config/addons.tsv" | awk -F'\t' '$2 == "" || $3 == "" || /no public source/' | wc -l | tr -d ' ')"
 check "no add-on command names a version" 0 "$(grep -v '^#' "$REAL/config/addons.tsv" | cut -f2 | grep -cE '@[0-9]|==|--version[ =]?[0-9]')"
-check "the ponytail skill says never to write its name in a comment" '1:0' \
-  "$(grep -c 'Never write "ponytail" in a comment' "$REAL/templates/ponytail/SKILL.md"):$(grep -c '`ponytail:` comment' "$REAL/templates/ponytail/SKILL.md")"
-# A worker pane prints this in place of the plugin's whole ponytail text: a startup print is paid for in every pane.
-check "the ponytail summary a worker pane prints is at most 1,200 bytes" ok "$([ "$(wc -c < "$REAL/templates/ponytail/SUMMARY.md")" -le 1200 ] && echo ok || echo long)"
+check "the add-on list names no ponytail and no templates/ponytail folder is shipped" 0:absent "$(grep -ci ponytail "$REAL/config/addons.tsv" || true):$([ -e "$REAL/templates/ponytail" ] && echo present || echo absent)"
 
 # Issue 291: under an account profile Claude Code keeps these in CLAUDE_CONFIG_DIR, and a read of ~/.claude found
 # nothing there. The plugin's own folders (checkpoints, rulings, hook-fire-log) stay under ~/.claude. proof-run.sh

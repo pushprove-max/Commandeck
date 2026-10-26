@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.48.0 -- 2026-10-25
+
+The rest of the open plugin issues: the units mod, per-role prompt cache, a Fable plan judge, the ponytail add-on
+removed, and a release workflow. A paragraph that closes an issue says so.
+
+- The units mod ships. `hooks/units.tsx` draws a band, a side pane and a status line of live units, merges and test
+  runs from the dashboard snapshot and the files the scripts already write; `/units` prints the table and
+  `/units band|pane|status on|off` flips a view for the session. Three options, `unitsBand`, `unitsPane` and
+  `unitsStatus` (`auto|on|off`; `auto` is on in main and the Chief of Staff, off in worker and reviewer panes). It
+  registers only in a project set up with Commandeck. `run-shell-tests.sh` now writes a live table the mod reads, every
+  merge attempt opens its log with an `ATTEMPT` line, and the merge of a plugin unit runs `claude plugin validate` and
+  `claude plugin test` on the merged tree. Closes #349.
+- The ponytail add-on and its option are gone, with the `--ponytail` and `--no-ponytail` flags, its bundled skill and
+  its setup question. Nothing replaces them; a template that still names the flag is flagged by the rules audit.
+  Closes #365.
+- Prompt cache per role. Three questions, `mainPromptCacheTtl`, `workerPromptCacheTtl` and `relayPromptCacheTtl`
+  (`5m|1h|leave`), replace the old two. Answer them again at the next setup; an old `promptCacheTtl` in
+  `.claude/settings.json` can go by hand. Main's value is written only into `.claude/main-session.settings.json`, the
+  workers' and the relay's into each worktree's settings, and `leave` writes nothing. The cache checker proves the
+  worker answer. Closes #367.
+- The Panel's second plan judge is now `plan-judge-fable`, a read-only Claude seat on Fable at high. Its options are
+  `planJudgeFableEnabled`, `planJudgeFableModel`, `planJudgeFableEffort` and `planJudgeFableFast`; the `planJudgeAstra*`
+  options are read by nothing.
+- The first fix round keeps the Builder's model and effort (a `/plugin` key or the setup question still sets Opus high
+  for it). Setup's Fixer question lists "Same as Builder, then Opus high" first.
+- The Chief of Staff unfinished-work Stop hook ships unregistered: `hooks/cos-unfinished-stop.sh` stays in the plugin,
+  `hooks/hooks.json` no longer runs it. A pass that comes back NO-GO four times raises a `pass-loop` alert on the
+  dashboard, and `scripts/cos-order-check.sh` checks the Chief of Staff's order file against its template. Closes #360
+  and #364 (with the rule edits below).
+- Rule text catches up: the unit, worktree and dispatch-ledger rules, resource safety, the adversarial-review lines, the
+  startup file's pane rules, a Compact Instructions block in the global CLAUDE.md template, main's small-fix rule, the
+  batch template's half-write and retry-ownership line in Data design, and every test run starting in the background
+  whatever its length. Reviewers get the reopen rule, the failing-test default and a `Class search:` line under each
+  blocking finding; a plan-only (design) pass is a pass of its own.
+- A closing pass's report carries one `Pre-review:` line for the steps that ran before the review. Closes #356.
+- The plan's claims and decisions reach the reviewer after the diff, and a planner's spec asks for a What can go wrong
+  table, settled claims and each cut's Produces and Consumes. Closes #359.
+- Safer worktree and report handling. A forced `git worktree remove` of a temporary worktree is allowed only for one
+  this session added (`git-safety.sh --record-add` records it). A report for a unit whose worktree is gone counts the
+  unit's squash commit on main for `Lines changed`. Closes #357 and #358.
+- A release workflow, `.github/workflows/release.yml`, with `release-decide.sh`, `release-notes.sh` and
+  `release-backfill.sh` building a release from a version's CHANGELOG section. `update.sh` shows the same notes.
+  Nothing runs them yet. Closes #348.
+- The review threshold. A pass that names no P0, P1 or P2 ends GO, so a P3 never holds the loop. From the fifth pass
+  on record (the cap) a closing NO-GO that names an open P2 but no P0 or P1 ends it too. A P0 or P1 is never capped: one still open two
+  passes past the cap prints `REVIEW STOP` and waits for the owner's answer. The closing reviewer is handed the plan's
+  decisions and accepted failure modes but no earlier finding. What is open at a stop is printed as `Open finding`
+  lines, and `merge-unit-local.sh --filed '<class>=#<n>'` refuses the merge until each class names an open issue. No
+  plugin record counts passes and findings by severity yet; measuring the threshold is a follow-up. Closes #366.
+- `scripts/post-fix-checks.sh` runs the post-fix checks at once (the named shell tests and, in a plugin checkout,
+  `claude plugin validate` and `claude plugin test`) and reports each exit code; any red fails the round.
+
 ## 0.47.0 -- 2026-10-25
 
 Ten fixes to the review loop, the report path, the answer path and the Chief of Staff

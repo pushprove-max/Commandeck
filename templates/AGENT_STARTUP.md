@@ -74,6 +74,9 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 - Stay in your own worktree. Another unit's files are that unit's.
 - Own the work in your scope end to end. Do not leave reachable work half done.
 - Fix every in-scope copy of a bug pattern, not only the one reported.
+- Plan first for multi-step work, and read the real code before editing it.
+  Before editing auth, verification, billing, tenant isolation or deploy
+  tooling, write the plan down and list every caller of what changes.
 - A safety check that refuses an action is never worked round in another shape
   (split, reworded, another tool). Do what the refusal says, or stop that item,
   say so and ask main.

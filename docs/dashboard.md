@@ -175,3 +175,74 @@ step 7:
    `data.js` and see `cos-watch-alerts.sh` wake. Then answer the test decision.
 7. Only then stop the old collector's job, remove its data file and stop its
    old watchers.
+
+## Units mod
+
+The units mod shows your live units, merges and test runs in three places: a
+band above the prompt, a side pane named `Units` and the pinned status line. It
+also toasts a verdict that changed and a unit that merged. `/units` prints the
+same table in the chat. The mod only reads. It writes no file.
+
+It runs in a project that setup has configured (the main checkout has
+`.claude/commandeck.json`) and nowhere else, so other projects on the profile
+are not changed. It loads with the rest of the plugin: there is nothing to add
+to the settings.
+
+### Toggles
+
+Each place has its own option in `/config`: `unitsBand`, `unitsPane` and
+`unitsStatus` (the status line and the toasts for a verdict or a merge). Each is
+`auto`, `on` or `off`. `auto` is on in main and in the Chief of Staff pane, and
+off in Builder, worker and reviewer panes. `/units band|pane|status on|off`
+changes one for the current session. The doctor shows the three values.
+
+### What it reads
+
+- The dashboard snapshot, `~/.commandeck/dashboard/data.js`: this project's
+  units, the verdicts, the cost and the units merged since the last push. The
+  dashboard job writes it every 60 seconds. If it is missing, run
+  `bash "$PLUGIN/scripts/dashboard.sh" --install`.
+- A merge: `merge-unit-local.state` in main's git folder (written while a merge
+  holds main), the `merge-unit-local.queue/` folder beside it (a merge that
+  waits for the lock) and `$PP_SCRATCH/merge-<unit>.log`. A log holds one block
+  per attempt, each starting with an `ATTEMPT unit=<unit>` line. The mod reads
+  only the newest block. A log from before this line existed shows nothing.
+- A test run: `commandeck-test-live/<pid>.tsv` in main's git folder and in each
+  unit's worktree folder. `scripts/run-shell-tests.sh` keeps this table while it
+  runs. A table counts while its process is alive. A run that the plugin hands
+  to another machine shows no progress here.
+- A planning unit: the seat records `$PP_SCRATCH/seat-<unit>-<role>.txt` (a
+  record with a `verdict=` line is done, a launched seat with no verdict is
+  running) and the plan's `Closes:` line, which lists the issues.
+
+### How a merge reads
+
+For each unit, the first rule that matches decides:
+
+1. The merge state names the unit and its process is alive: running, at the
+   state's stage.
+2. A queue entry for the unit holds a live process: running, with no stage yet.
+3. The merge state names the unit, its process is dead and the file is less than
+   an hour old: stopped.
+4. No state, a log less than an hour old, and its newest attempt has a `DONE`
+   line: finished (a toast, no row).
+5. The same, with a `FAILED` line: refused, with its step and reason.
+6. The same, with neither line: stopped.
+7. Otherwise nothing.
+
+The band lists running merges only. A stopped or refused merge shows in the side
+pane and in `/units`.
+
+A merge that runs in the foreground of a pane other than main writes no log, so
+its row shows no file counts until it ends. A plan seat whose pane died before
+collect reads as running until main collects it.
+
+The mod shows these messages instead of failing: `units: no dashboard snapshot`,
+`units: snapshot unreadable`, `units: snapshot too big`, `units: this project
+is not in the dashboard snapshot`, `dashboard data is <n> min old` and `merge
+<unit>: log too big (<n> MB)`. A red mark means the Builder pane sits at its
+prompt.
+
+### Tests
+
+Run `claude plugin test .` and `claude plugin validate .` from the plugin folder.

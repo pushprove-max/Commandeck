@@ -26,7 +26,7 @@ Only Rebase runs `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase`. It
 refuses and changes nothing when the relay worktree has uncommitted changes or
 the rebase conflicts: show its line. `relay: current` or `relay: none`: say nothing.
 
-If update shows a `Prompt cache:` or `Relay prompt cache:` line under Needs you, ask that question from `${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md` word for word, then run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh` with only that flag. Never run setup.sh without the answer.
+If update shows a `Main prompt cache:`, `Builder and worker prompt cache:` or `Chief of Staff prompt cache:` line under Needs you, ask that question from `${CLAUDE_PLUGIN_ROOT}/skills/setup/SKILL.md` word for word, then run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh` with only that question's flag: `--main-cache-ttl`, `--worker-cache-ttl` or `--relay-cache-ttl`. Never run setup.sh without the answer.
 
 - It exits 1 with "back as it was" when the doctor fails: the files are
   restored; tell the owner the doctor's `FAIL` lines.

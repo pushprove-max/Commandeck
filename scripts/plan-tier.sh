@@ -34,8 +34,8 @@ TIER=${PICK%%$'\t'*} WHY=${PICK#*$'\t'}
 on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
 case $TIER in
   'No plan') SEATS=() ;;
-  'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-astra) ;;
-  *) SEATS=(plan-author plan-judge-astra plan-judge-sol) ;;
+  'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-fable) ;;
+  *) SEATS=(plan-author plan-judge-fable plan-judge-sol) ;;
 esac
 # An author that is off is no plan; a judge that is off leaves the other to judge alone, and none leaves the plan unjudged.
 OUT=()

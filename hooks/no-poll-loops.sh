@@ -232,7 +232,8 @@ if [ "$WORKER" = 1 ]; then
   [ "$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')" = "true" ] && exit 0
   # A Builder hand-wrote polls on its test log for up to 4,500 s of agent time in one build.
   # The budget is wait-test-run.sh's default wait, 270 s, under the 5-minute cache; 540 s under the 1-hour one
-  # (setup writes CLAUDE_CODE_PROMPT_CACHE_TTL into each pane's settings). Summed per command, its word a path or not:
+  # (setup writes CLAUDE_CODE_PROMPT_CACHE_TTL into each worker worktree's and the relay's settings.local.json, so each pane
+  # reads its own role's answer; main, the main checkout, is no worker). Summed per command, its word a path or not:
   # every operand of sleep, an orca command's --timeout-ms, a wait-test-run.sh (its max, else 270). A wait inside a
   # loop (its condition or body) repeats, so the one-pass sum bounds nothing: `loop`, refused.
   LIMIT=270; [ "${CLAUDE_CODE_PROMPT_CACHE_TTL:-}" = 1h ] && LIMIT=540

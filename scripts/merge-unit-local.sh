@@ -18,10 +18,13 @@ if SELF_TOP=$(git -C "${SELF%/*}" rev-parse --show-toplevel 2>/dev/null) \
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
 # survives.
 usage() { cat <<'EOF'
-usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] | <unit> --cleanup
+usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] [--filed '<class>=#<n>' ...] | <unit> --cleanup
 Squash-merge a Builder's branch onto local main; run from the main checkout on main.
   --dry-run        run the checks and print the plan; merge and clean up nothing
   --auto <sha>     merge only while the branch tip is still <sha>, the commit main-watch's gate passed
+  --filed '<class>=#<n>'
+                   the OPEN issue that tracks one class of the findings the review left open at its stop
+                   (builder-codex-pass.sh --verify lists them as Open finding lines); one per open class
   --cleanup        step 5 alone, for a unit main already holds (a held cleanup's retry): close its panes, archive
                    its briefs, remove its worktree; holds (exit 5) while a pane is listed or a path is uncommitted,
                    refuses (exit 1) a unit main does not hold
@@ -65,17 +68,21 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$SELF" "$@"
 fi
 UNIT=$1; shift
-DRY_RUN=0 AUTO="" CLEANUP=0
+DRY_RUN=0 AUTO="" CLEANUP=0 FILED=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --auto) AUTO=${2:-}; [[ $AUTO =~ ^[0-9a-f]{7,40}$ ]] || { usage >&2; exit 2; }; shift 2 ;;
+    --filed) [[ ${2:-} =~ ^[^=[:space:]]+=#[0-9]+$ ]] || { usage >&2; exit 2; }; FILED+=("$2"); shift 2 ;;
     --cleanup) CLEANUP=1; shift ;;
     *) usage >&2; exit 2 ;;
   esac
 done
 [ "$CLEANUP" = 0 ] || [ "$DRY_RUN$AUTO" = 0 ] || { usage >&2; exit 2; }
 [[ "$UNIT" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid unit: $UNIT" >&2; exit 2; }
+# Issue 349: each attempt that took the lock opens its output with this line, so a log many attempts were appended to
+# (merge-queue.sh) can be split into attempts; the units mod reads the newest attempt only.
+[ "$DRY_RUN" = 1 ] || echo "ATTEMPT unit=$UNIT pid=$$ started=$(date +%s)"
 fail() { echo "FAILED $1: $2" >&2; exit 1; }
 ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a git checkout"
 [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
@@ -235,9 +242,10 @@ no_holds "step 1 preconditions"
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
 # Builder proof: a Builder runs its own review passes, so its last round file
-# must be the pass script's, GO, for this tip or a clean rebase of it, from a
-# real reviewer session, that names no finding: every finding, P0 to P3, blocks
-# the merge. The proof says which rule let the tip through. Every unit owes the proof: the
+# must be the pass script's, for this tip or a clean rebase of it, from a
+# real reviewer session: a GO that names no open P0, P1 or P2, or a closing NO-GO
+# with no P0 or P1 at the review cap (issue 366). What it leaves open is filed
+# first (check_filed). The proof says which rule let the tip through. Every unit owes the proof: the
 # worktree's own settings file is the Builder's to edit, so it cannot switch it off.
 # A tail of commits after the reviewed one that only rebuild the files the project
 # lists as generated (.claude/commandeck.json generatedFiles, main's copy) keeps
@@ -268,7 +276,31 @@ prove() { # <step> [<what the refusal adds>]: sets PROVED, TAIL and BUILDER_PROO
   done
   rm -f "$verr"
 }
+# Issue 366: a review that stops with findings open (P3s at the threshold, P2s and P3s at the cap) merges only once each
+# open class (the proof's "Open finding: <class> <line>" lines) names an issue GitHub reports OPEN, one per class: a new
+# one, or an OPEN duplicate main commented the finding on. A filing for a class that is not open refuses too. Run after
+# the proof at step 1, before the rebase touches the branch, and at step 3 on the rebased tip's proof. Sets FILED_MSG.
+check_filed() { # <step>
+  local open cls e n st miss="" extra="" twice=""
+  open=$(sed -n 's/^Open finding: \([^ ]*\) .*/\1/p' <<<"$BUILDER_PROOF" | awk '!s[$0]++')
+  for cls in $open; do
+    case $(printf '%s\n' ${FILED[@]+"${FILED[@]}"} | awk -F= -v c="$cls" '$1 == c' | grep -c .) in 0) miss+=" $cls" ;; 1) ;; *) twice+=" $cls" ;; esac
+  done
+  for e in ${FILED[@]+"${FILED[@]}"}; do grep -qxF -- "${e%%=*}" <<<"$open" || extra+=" ${e%%=*}"; done
+  [ -z "$miss" ] || fail "$1" "the review left findings open in class(es):$miss, and no --filed names an issue for each. Search the open issues for a duplicate of each class: an OPEN duplicate's number is accepted after you comment the finding there; otherwise file one issue per class. Then merge with --filed '<class>=#<n>' for each class (builder-codex-pass.sh --verify $WT $UNIT HEAD lists the Open finding lines)"
+  [ -z "$twice" ] || fail "$1" "one issue per class: --filed names more than one issue for$twice"
+  [ -z "$extra" ] || fail "$1" "--filed names class(es) the review left nothing open in:$extra"
+  FILED_MSG=""
+  for e in ${FILED[@]+"${FILED[@]}"}; do
+    n=${e##*=#} cls=${e%%=*}
+    st=$(cd "$ROOT" && gh issue view "$n" --json state -q .state 2>&1) || fail "$1" "gh issue view $n failed, so #$n ($cls) is not known to be OPEN: $(tail -n 1 <<<"$st")"
+    [ "$st" = OPEN ] || fail "$1" "#$n ($cls) is $st on GitHub, not OPEN: file the class on an open issue"
+    FILED_MSG+="Filed: #$n $cls"$'\n'
+  done
+  FILED_MSG=${FILED_MSG%$'\n'}
+}
 prove "step 1 proof" "the branch is untouched"
+check_filed "step 1 filing"
 
 state rebase
 echo "STEP 2 rebase: git -C $WT rebase main"
@@ -286,6 +318,7 @@ prove "step 3 proof"
 echo "$BUILDER_PROOF"
 [ "$TAIL" = 0 ] || echo "step 3 proof: the $TAIL commit(s) after $(git -C "$WT" rev-parse --short=8 "$PROVED") change only files .claude/commandeck.json lists as generated; rule: generated-only tail"
 grep -q '^Builder proof: .*; rule: .' <<<"$BUILDER_PROOF" || fail "step 3 proof" "the Builder's review proof names no rule the tip merges under"
+check_filed "step 3 filing"
 # The unit's issues, closed at its merge (issue 239): each work item (the launch list, $ISSUES) that the commit message
 # names (#N), is on a brief's "Closes:" line or under its "Close as shipped" heading. A work item none of them names
 # stays open and is named. Any other issue they name, and with no launch list every one, is never closed here: it is
@@ -509,6 +542,22 @@ if [ "$DRY_RUN" = 0 ]; then
     drop_copy
     CHECKED="check green: $CHECK_CMD"
   fi
+  # Issue 349: a change to a plugin's mod code or types is checked by the plugin's own validate and test, which no project
+  # testCommand runs. It runs on every path to here (no testCommand, a reused suite proof included), on a copy of the merged tree.
+  PLUGIN_CHANGED=0
+  for f in ${SQUASH_PATHS[@]+"${SQUASH_PATHS[@]}"}; do
+    case $f in hooks/*.ts|hooks/*.tsx|types/*) PLUGIN_CHANGED=1 ;; esac
+  done
+  if [ "$PLUGIN_CHANGED" = 1 ] && git cat-file -e "$TREE:.claude-plugin/plugin.json" 2>/dev/null; then
+    echo "STEP 4 plugin: claude plugin validate . && claude plugin test ."
+    COPY=$(mktemp -d) || fail "step 4 plugin" "could not make a folder for the copy the plugin check runs on"
+    { git worktree add -q --detach "$COPY/tree" HEAD >/dev/null 2>&1 && git -C "$COPY/tree" read-tree -u --reset "$TREE"; } \
+      || fail "step 4 plugin" "could not make the copy the plugin check runs on"
+    pp_link_node_modules "$ROOT" "$COPY/tree"
+    (cd "$COPY/tree" && claude plugin validate . && claude plugin test .) \
+      || fail "step 4 plugin" "claude plugin validate or test is red on the merged tree (output above); fix it in $WT and run another pass"
+    drop_copy
+  fi
   # A build's papers are never committed: the commit holds the squash and
   # nothing else. Main's untracked brief files of the unit are archived now and
   # removed only once the merge is committed; one git tracks is left as it is
@@ -538,7 +587,7 @@ if [ "$DRY_RUN" = 0 ]; then
   no_holds "step 4 merge"
   # --auto's gate holds too, read again under the same lock: a hold or question added during the check counts.
   [ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 4 merge" "--auto: held since the gate passed: $HELD"
-  if ! git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} {LEDGER_FD}<&-; then
+  if ! git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} ${FILED_MSG:+-m "$FILED_MSG"} {LEDGER_FD}<&-; then
     git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged, or was main's index emptied during the run?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
   fi

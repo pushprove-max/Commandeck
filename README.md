@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.47.0-111111?style=flat-square" alt="Version 0.47.0">
+  <img src="https://img.shields.io/badge/version-0.48.0-111111?style=flat-square" alt="Version 0.48.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -50,9 +50,10 @@ Orca with the Chief of Staff pinned, main orchestrating and one worktree per Bui
 - For the Codex reviewer: the Codex CLI and the `openai-codex` Claude Code
   plugin, both signed in
 
-The plan judges run Codex read-only for files, but with network on and your
-`gh` sign-in, so they can write to GitHub and reach any host. Every guard
-still runs in their panes.
+The Sol plan judge runs Codex read-only for files, but with network on and your
+`gh` sign-in, so it can write to GitHub and reach any host. Every guard
+still runs in its pane. The Fable judge is a Claude pane with the write tools
+denied.
 
 Setup checks all of this and prints the exact step for anything missing.
 The full list is in [docs/requirements.md](docs/requirements.md).
@@ -103,19 +104,18 @@ answer first on a rerun) and is asked only when it applies.
 | Global rules, Global CLAUDE | Merge into, add as a block to, or skip `~/.claude/CLAUDE.md` (install or skip when it does not exist). Your own text is never changed |
 | Main | Opus medium or Opus high |
 | Builder model, Builder effort | Sonnet or Opus; then the effort (high on Sonnet, medium on Opus recommended) |
-| Fixer | Opus high every round; the Builder's model and effort for the first fix round, then Opus high; or the Builder's model every round |
+| Fixer | The Builder's model and effort for the first fix round, then Opus high; Opus high every round; or the Builder's model every round |
 | Context | 200K or a larger window |
 | Builder clear line | 180K, 150K, 250K or off: past it the Builder goes on in a fresh session |
 | Issue sizing | 40K, 30K, 60K or off: a large independent issue is proposed as its own unit |
 | Reviewer model, hook trust | Codex reviewer only: Sol medium or Astra high; and whether to trust every hook in the Codex home before each Codex launch |
-| Plan author, Sol judge, Astra judge | The planning seats' model, or off |
+| Plan author, Sol judge, Fable judge | The planning seats' model, or off |
 | Fast tier | Which seats run on the fast tier (none by default; it costs more) |
 | Relay, Relay voice | No relay, or a Chief of Staff pane with a name and a one-line voice |
 | Dashboard | On for this machine only, off, or on under another name (it then listens on the network, behind a login) |
 | Merge check, Full suite | The command that must pass before a merge, or none; and whether the closing review pass runs it once on the build's tip |
 | Strict hooks | Off (safety hooks only) or on (also search before reading, and one test run per change) |
-| Ponytail | Lite, full, ultra or off: the bundled ponytail skill's smallest-change rules in worker panes |
-| Prompt cache, Relay prompt cache | 5 minutes for main and worker panes, 1 hour for the relay pane; each can be left as is |
+| Main prompt cache, Builder and worker prompt cache, Chief of Staff prompt cache | 1 hour for main, 5 minutes for Builders and other worker panes, 1 hour for the relay pane; each 5m, 1h or left as is |
 | Auto mode | Add two lines about the plugin's scripts to the auto-mode classifier's list, leave it, or take setup's lines out |
 | Worker cuts, Keep words | Extra skills and plugins to turn off in worker panes, and words that bring a set back for one unit |
 | Add-ons | All, serena, agent-browser or none |
@@ -138,7 +138,6 @@ and offers a small demo build. Every question in detail:
 | `/commandeck:revoke` | Take out one of setup's settings in an Orca profile, or keep your own value |
 | `/test-audit <folder>... [basic\|full] [N agents]` | A report of tests that are redundant, slow or missing; it changes no test |
 | `/autodecide on\|off\|status` | Let the relay pane decide for you while you are away |
-| `/ponytail` | The bundled ponytail skill, when it is on |
 
 Setup adds `/test-audit` as a project workflow. `/autodecide` is in the seats
 `autoDecideSeats` names; it shows a band and a status-line count while it is
@@ -174,7 +173,11 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
 - **Findings.** Each finding names a file, a line and the failing input, with
   a level (P0 to P3) and a class tag. A finding blocks the merge when normal
   use would hit it. One that needs an odd setup or a deliberate bypass is a
-  known gap and does not block.
+  known gap and does not block. A P3 alone never holds the loop.
+- **Threshold and cap.** A P0, P1 or P2 runs a fix round. From the fifth pass
+  on record, `review` runs as the closing pass, and a P2 or P3 left there is
+  filed as an issue before the merge. A P0 or P1 is never capped: one still
+  open two passes past the cap stops the build and waits for the owner.
 - **Fix rounds.** After a NO-GO the fixer takes the branch in a fresh session.
   Before the next pass, the evidence file must list every other call site of
   the flaw (`## Sites checked`) and each read, write or check the fix added,
@@ -190,7 +193,8 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
 - **Narrowed and closing passes.** Later passes read only the changes since
   the last pass and end `NARROWED GO`. The closing pass rebases onto local
   `main`, reads the whole branch and, when the full suite is on, runs the
-  test command once. Its GO is the one that merges.
+  test command once. It is handed no earlier finding. Its GO is the one that
+  merges.
 
 `maxReviewRounds` caps the passes. More: [docs/review-loop.md](docs/review-loop.md).
 
@@ -216,8 +220,8 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | Option | Values | What it sets |
 |---|---|---|
 | `fixerEnabled` | `true` (default), `false` | Off: every fix round keeps the Builder's model and effort |
-| `fixerFirstModel` | `project`, `builder`, `opus`, `sonnet`, `fable` | The first fix round's model (project: Opus) |
-| `fixerFirstEffort` | `project`, `builder`, `low`, `medium`, `high`, `xhigh`, `max` | The first fix round's effort (project: high) |
+| `fixerFirstModel` | `project`, `builder`, `opus`, `sonnet`, `fable` | The first fix round's model (project: the Builder's launched model) |
+| `fixerFirstEffort` | `project`, `builder`, `low`, `medium`, `high`, `xhigh`, `max` | The first fix round's effort (project: the Builder's launched effort) |
 | `fixerModel` | `project`, `opus`, `sonnet`, `fable` | Later fix rounds' model (project: Opus) |
 | `fixerEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Later fix rounds' effort (project: high) |
 
@@ -241,11 +245,11 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `planAuthorModel` | `project`, `opus`, `sonnet`, `fable` | The plan author's model (project: Opus) |
 | `planAuthorEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | The plan author's effort (project: high) |
 | `planAuthorFast` | `true`, `false` (default) | The fast tier |
-| `planJudgeSolEnabled`, `planJudgeAstraEnabled` | `true` (default), `false` | Whether each judge reads the plan; with both off the plan installs unjudged |
-| `planJudgeSolAgent`, `planJudgeAstraAgent` | `project`, `codex`, `claude` | Who runs each judge |
-| `planJudgeSolModel`, `planJudgeAstraModel` | a family, a model id, or a Claude model | Each judge's model (project: sol and astra, or sonnet on Claude) |
-| `planJudgeSolEffort`, `planJudgeAstraEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Each judge's effort (project: high) |
-| `planJudgeSolFast`, `planJudgeAstraFast` | `true`, `false` (default) | The fast tier |
+| `planJudgeSolEnabled`, `planJudgeFableEnabled` | `true` (default), `false` | Whether each judge reads the plan; with both off the plan installs unjudged |
+| `planJudgeSolAgent` | `project`, `codex`, `claude` | Who runs the Sol judge (the Fable judge always runs on Claude) |
+| `planJudgeSolModel`, `planJudgeFableModel` | a family, a model id, or a Claude model | Each judge's model (project: sol on the Sol judge, or sonnet on Claude; fable on the Fable judge) |
+| `planJudgeSolEffort`, `planJudgeFableEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Each judge's effort (project: high) |
+| `planJudgeSolFast`, `planJudgeFableFast` | `true`, `false` (default) | The fast tier |
 
 **Wakes, relay and panes**
 
@@ -254,9 +258,9 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `wakeKinds` | comma-separated Orca message types | The messages that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`); others wait for the next wake |
 | `wakeWindowSeconds` | a number (default 60) | Messages within this many seconds wake main once; 0 wakes at once |
 | `autoDecideSeats` | `chiefOfStaff` (default), `chiefOfStaff,main`, `off` | The seats that have `/autodecide` |
-| `ponytail` | `off`, `lite` (default), `full`, `ultra` | The ponytail skill's level in worker panes |
-| `promptCacheTtl` | `5m` (default), `leave` | Main's and the worker panes' prompt cache; `leave` writes nothing |
-| `relayPromptCacheTtl` | `1h` (default), `leave` | The relay pane's prompt cache |
+| `mainPromptCacheTtl` | `1h` (default), `5m`, `leave` | Main's prompt cache, for a main started with `claude --settings .claude/main-session.settings.json`; `leave` writes nothing |
+| `workerPromptCacheTtl` | `5m` (default), `1h`, `leave` | Builders' and other worker panes' prompt cache, subagents too |
+| `relayPromptCacheTtl` | `1h` (default), `5m`, `leave` | The relay pane's prompt cache |
 
 **Dashboard**
 
@@ -311,7 +315,8 @@ Uninstall takes out only what setup added. Details:
 - Setup's `--builder-model`, `--builder-effort`, `--codex-model`,
   `--plan-models`, `--plan-fast` and `--codex-fast` flags, and the plugin's
   own agent files (0.26.0). Use `--option <key>=<value>` or `/plugin` config.
-- `--no-ponytail` (0.42.0). Use `--ponytail off`.
+- The ponytail add-on, its `--ponytail` and `--no-ponytail` flags and its
+  `ponytail` option (0.48.0). Nothing replaces them.
 
 What each version changed: [CHANGELOG.md](CHANGELOG.md).
 

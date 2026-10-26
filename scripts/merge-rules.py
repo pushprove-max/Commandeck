@@ -152,6 +152,14 @@ MADE_FROM = {
     "1b63993c": ("31119f58",), "31f8b10f": ("953565b7",), "5686234d": ("f4e12488",),
     "399b22b8": ("70e51fcc",), "45cd53bc": ("70e51fcc",), "71c7e94b": ("607f18a2",),
     "0b0b3a70": ("a726a12f",), "ed48665e": ("8e991ec1",),
+    # 0.48.0 main-session.md: main may make a small code fix (issue 364); every test run starts in the background
+    "b1471fa8": ("ed48665e",), "401e8893": ("71c7e94b",),
+    # and the plan judges: the second judge runs on Fable (issue 349 follow-up); the plan's claims block (issue 359)
+    "f45e894e": ("31f8b10f",),
+    # 0.48.0 global-rules.md: the review threshold (issue 366), the reviewers' scope, the ponytail add-on removed
+    # (issue 365), units and duplicate agents, planning by size
+    "26b6b2b9": ("13e9906d",), "cb6056f9": ("9243900d",), "41d1d566": ("e38a2639",), "e7926841": ("e6c9ac28",),
+    "3b129248": ("516a9bd8",), "2424eeef": ("56860db4",),
 }
 
 

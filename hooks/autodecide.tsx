@@ -1,5 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
+import { registerUnits, startUnits } from './units'
+import { resetStatus, setStatus } from './status-line'
 
 // Auto-decide (issue 333): `/autodecide on` hands the owner's open decisions to the relay pane (or main) until `off`.
 // What the band draws: the start time while on, null while off.
@@ -112,7 +114,7 @@ const active = async ($: EngineInterface, gate: string[]) => {
     const last = Number((await $.store.get(`lastCount:${seat.main}`)) ?? 0)
     await update($, count, () => last)
   }
-  $.ui.status(mode ? 'AUTO-DECIDE ON' : 'auto-decide off')
+  setStatus($, 'autodecide', mode ? 'AUTO-DECIDE ON' : 'auto-decide off')
   return { seat, mode }
 }
 
@@ -121,7 +123,12 @@ let stopPoll: (() => void) | undefined
 export const register: Register = (on, options) => {
   const gate = String(options.autoDecideSeats ?? 'chiefOfStaff').split(',')
 
+  // This is the plugin's one hooks module (the engine takes one), so the units views register here too.
+  registerUnits(on, options)
+
   on('session.start', async ($, e, next) => {
+    resetStatus()
+    await startUnits($)
     const a = await active($, gate)
     if (!a) return next(e)
     await $.command.register({ name: 'autodecide', description: 'Autonomous decisions for the owner: /autodecide on | off | status' })
@@ -157,7 +164,7 @@ export const register: Register = (on, options) => {
       await $.store.set(`mode:${main}`, mode)
       await update($, since, () => mode.since)
       await update($, count, () => 0)
-      $.ui.status('AUTO-DECIDE ON')
+      setStatus($, 'autodecide', 'AUTO-DECIDE ON')
       await $.process.run(['orca-ide', 'tab', 'create', '--url', `file://${mode.log}`, '--worktree', `path:${await $.session.root()}`]).catch(() => undefined)
       return {
         text: `auto-decide ON. Decisions are mine until /autodecide off. Log (open in Orca): ${mode.log}`,
@@ -173,7 +180,7 @@ export const register: Register = (on, options) => {
       await $.store.delete(`mode:${main}`)
       await $.process.run(['rm', '-f', onFile])
       await update($, since, () => null)
-      $.ui.status('auto-decide off')
+      setStatus($, 'autodecide', 'auto-decide off')
       // Appended, not written back whole: a relay-order.sh --auto that read the mode file before the rm above may
       // still be appending its entry (>>), and a write from an earlier read would drop it.
       if (await $.fs.read(m.log).then(() => true, () => false))

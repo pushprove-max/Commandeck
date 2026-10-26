@@ -154,7 +154,7 @@ if [ "$FROM" = 1 ]; then
   # Both judges off in /plugin config (issue 312): the plan installs unjudged, the author's PLAN-DONE plan below.
   # Off is exit 1 alone: a value an Enabled key does not take (2) stops the launch, naming the key.
   if [ -z "$J" ]; then
-    for r in plan-judge-sol plan-judge-astra; do
+    for r in plan-judge-sol plan-judge-fable; do
       rc=0; OFF=$(pp_role_enabled "$r" 2>&1) || rc=$?
       [ "$rc" != 2 ] || nope "${OFF#REFUSED: }"
       [ "$rc" = 1 ] || nope "no plan judge's verdict on $WP in $PP_SCRATCH; run the plan judge on it first"
@@ -288,10 +288,6 @@ T=${T//'{reviewer}'/"${BY^}"}
 T=${T//'{pass-script}'/"builder-codex-pass.sh"}
 T=${T//'{scripts}'/"$PP_SCRIPTS_Q"}
 T=${T//'{design}'/"$DESIGN"}
-# The ponytail option's level; off drops the line.
-PONYLEVEL=$(pp_option ponytail) || exit 2
-if [ "$PONYLEVEL" = off ]; then T=${T/'{ponytail}'$'\n'/}
-else T=${T//'{ponytail}'/"- \`/ponytail $PONYLEVEL\`: the smallest complete change."}; fi
 # Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 [ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}

@@ -22,7 +22,12 @@ check "a retired name in templates/a.md, .claude/briefs/b.md, docs/c.md and hook
   "$(grep 'retired-name --no-ponytail' <<<"$OUT" | cut -d' ' -f1 | sort | tr '\n' ' ')"
 check "and it exits 1" 1 "$RC"
 check "a retired name says what replaced it, then the rule pointer" \
-  "docs/c.md:2 retired-name --no-ponytail, now: --ponytail off|lite|full|ultra $RULE" "$(grep '^docs/c.md' <<<"$OUT")"
+  "docs/c.md:2 retired-name --no-ponytail, now: nothing: the add-on is removed $RULE" "$(grep '^docs/c.md' <<<"$OUT")"
+rm -f "$R"/templates/a.md "$R"/.claude/briefs/b.md "$R"/docs/c.md "$R"/hooks/d.sh
+# Issue 365: the --ponytail flag is retired with the add-on.
+printf 'ok\nrun setup.sh --ponytail lite\n' > "$R/templates/a.md"
+check "a retired --ponytail in a template is flagged with what replaced it" \
+  "templates/a.md:2 retired-name --ponytail, now: nothing: the add-on is removed $RULE" "$(audit | grep '^templates/a.md')"
 rm -f "$R"/templates/a.md "$R"/.claude/briefs/b.md "$R"/docs/c.md "$R"/hooks/d.sh
 
 # The size kinds stay on the always-loaded files: a long doc is a doc.

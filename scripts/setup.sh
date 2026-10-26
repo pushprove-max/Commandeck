@@ -9,7 +9,7 @@
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--max-rounds <n>] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
-#          [--addons <name>[,<name>...]|none] [--ponytail off|lite|full|ultra] [--cache-ttl 5m|leave] [--relay-cache-ttl 1h|leave] [--auto-mode add|leave|remove] [--plan]
+#          [--addons <name>[,<name>...]|none] [--main-cache-ttl 5m|1h|leave] [--worker-cache-ttl 5m|1h|leave] [--relay-cache-ttl 5m|1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
 #   or: setup.sh --questions begin|end
 # Sets the project this runs in up for the plugin. It asks nothing: the setup
@@ -33,11 +33,12 @@
 # paths), or ~/.claude/settings.json for every project. An owner's file setup
 # changes is copied beside it first (<file>.commandeck-bak-<date>). Every add-on
 # (or those --addons names) is installed or updated to its latest by its
-# config/addons.tsv command; the rest are printed. The ponytail skill is installed unless --ponytail off.
-# --cache-ttl 5m writes the prompt-cache lifetime of main and every worker pane (and subagents) as 5 minutes,
-# into the project's .claude/settings.json and each worktree's settings.local.json; leave writes nothing, and keeps
-# what an earlier run wrote. --relay-cache-ttl 1h does the same for the relay pane's worktree; leave writes
-# nothing. Until each is answered, setup writes nothing for it and says so. A
+# config/addons.tsv command; the rest are printed.
+# The prompt-cache lifetime is one answer per role, 5m or 1h (issue 367). --main-cache-ttl writes it into
+# .claude/main-session.settings.json, which only a main started with claude --settings <it> reads;
+# --worker-cache-ttl into each worker worktree's settings.local.json, and the subagents' into the project's
+# .claude/settings.json; --relay-cache-ttl into the relay pane's worktree. leave writes nothing, and keeps what an
+# earlier run wrote. Until each is answered, setup writes nothing for it and says so. A
 # status line is set only when one is given, and the one before it is recorded
 # for uninstall.
 # --auto-mode add puts two lines into the auto-mode classifier's list in ~/.claude/settings.json (every project on
@@ -52,7 +53,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --ponytail --cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --max-rounds --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS=
 for a; do
   if [ -n "$OPT" ]; then [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a; OPT=; continue; fi
@@ -116,7 +117,7 @@ BCLEAR=$(old .builder.clearLine) SIZING=$(old .issueSizing)
 BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clearLine) else {} end' "$IL_CONFIG" 2>/dev/null || true); [ -n "$BUILDER" ] || BUILDER='{}'
 # This run's --option answers, {key: value}: each is saved over the key's value.
 GIVEN='{}'
-OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) PONYTAIL=$(old .ponytail | sed "s/^true$/lite/; s/^false$/off/") CACHE=$(old .cacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
+OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) MCACHE=$(old .mainCacheTtl) WCACHE=$(old .workerCacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
 FULL=$(old .fullSuiteBeforeFinal) TRUSTALL=$(old .trustAllHooks)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
@@ -209,9 +210,9 @@ while [ $# -gt 0 ]; do
                   DROPS=$(jq -c --arg i "$2" --arg v "$([ "$1" = --rules-drop ] && echo keep-mine || echo keep-both)" '.[$i] = $v' <<<"$DROPS") ;; esac; shift 2 ;;
     # The add-ons to install or update this run (config/addons.tsv names), never saved; with none given, every one.
     --addons) ADDONS=${2//,/ } ADDONS_SET=1; [ "$2" != none ] || ADDONS=; shift 2 ;;
-    --ponytail) case $2 in off|lite|full|ultra) PONYTAIL=$2 ;; *) die "--ponytail takes off, lite, full or ultra, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
-    --cache-ttl) case $2 in 5m|leave) CACHE=$2 ;; *) die "--cache-ttl takes 5m or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
-    --relay-cache-ttl) case $2 in 1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --main-cache-ttl) case $2 in 5m|1h|leave) MCACHE=$2 ;; *) die "--main-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --worker-cache-ttl) case $2 in 5m|1h|leave) WCACHE=$2 ;; *) die "--worker-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
+    --relay-cache-ttl) case $2 in 5m|1h|leave) RCACHE=$2 ;; *) die "--relay-cache-ttl takes 5m, 1h or leave, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --auto-mode) case $2 in add|leave|remove) AUTO=$2 ;; *) die "--auto-mode takes add, leave or remove, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --plan|--install-missing) shift ;;
     --worker-skills-off|--worker-plugins-off|--keep-word) CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2 ;;
@@ -261,11 +262,11 @@ RT=$(mktemp); trap 'rm -f "$RT"; [ -n "$PLAN" ] || [ -n "$QUESTIONS" ] || rm -f 
 il_routing_merged "$(pp_routing)" "$IL_ROOT/config/routing.json" > "$RT" && [ -s "$RT" ] || cp "$(pp_routing)" "$RT" 2>/dev/null
 COMMANDECK_ROUTING=$RT pp_routing_valid || die "the routing file $(pp_routing), with the plugin's missing seats added, does not validate (above). Nothing was changed"
 # --- role keys (issue 312): this run's --option answers, checked as every reader checks them ---
-# A profile given this run sets the three agent keys (claude: the reviewer and both judges on Claude); an --option
+# A profile given this run sets the two agent keys (claude: the reviewer and the Sol judge on Claude); an --option
 # naming one beats it. No advisor is asked: every Builder runs with none, and a rerun drops one an older set-up stored.
 if [ -n "$ASKED" ]; then
   a=codex; [ "$PROFILE" != claude ] || a=claude
-  GIVEN=$(jq -c --arg a "$a" '{codexReviewerAgent: $a, planJudgeSolAgent: $a, planJudgeAstraAgent: $a} + .' <<<"$GIVEN")
+  GIVEN=$(jq -c --arg a "$a" '{codexReviewerAgent: $a, planJudgeSolAgent: $a} + .' <<<"$GIVEN")
 fi
 ROLES=$(jq -r '.roles | keys[]' "$RT")
 # rk <key> -- "<role> <field>" of a role key /plugin config lists; fails for any other key.
@@ -348,17 +349,9 @@ if [ "$PROFILE" = claude-openai ]; then
 fi
 [ -z "$DASHBOARD" ] || il_record "$IL_MACHINE" own "$DASH_JOB"
 case $GCLAUDE$GRULES in *install*|*block*|*merge*) il_record "$IL_MACHINE" merge "$IL_GLOBAL" ;; esac
-# The ponytail skill, unless the owner said no. A skill of that name the owner has, or the whole
-# add-on, is the owner's: only a copy an earlier setup made is written again, or taken out on no.
-PONY=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/ponytail PONY_OURS=
-if il_has "$IL_MACHINE" "$PONY/SKILL.md" || { [ ! -e "$PONY" ] && [ ! -L "$PONY" ] \
-  && ! jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; }; then
-  PONY_OURS=1; [ "$PONYTAIL" = off ] || il_record "$IL_MACHINE" own "$PONY/SKILL.md" "$PONY/LICENSE"
-fi
-# No --addons answer: every add-on, each run, so each is updated to its latest. The ponytail plugin only when the
-# owner has it on and wants ponytail: beside a ponytail skill it would load the same rules twice.
+# No --addons answer: every add-on, each run, so each is updated to its latest.
 if [ -z "$ADDONS_SET" ]; then
-  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | { if [ "$PONYTAIL" != off ] && jq -e '.enabledPlugins["ponytail@ponytail"] == true' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" >/dev/null 2>&1; then cat; else grep -vx ponytail; fi; } | paste -sd' ' -)
+  ADDONS=$(grep -v '^#' "$IL_ROOT/config/addons.tsv" | cut -f1 | paste -sd' ' -)
   # Installing serena turns its hooks on, as --addons serena does, unless an earlier or given answer says otherwise.
   SERENA=${SERENA:-true}
 fi
@@ -380,7 +373,7 @@ il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could n
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bc "$BCLEAR" --arg sz "$SIZING" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" --arg trustall "$TRUSTALL" '
+  --arg rules "$RULES" --argjson md "$DROPS"  --arg mcache "$MCACHE" --arg wcache "$WCACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" --arg trustall "$TRUSTALL" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
   + (if $gen == null then {} else {generatedFiles: $gen} end)
@@ -390,8 +383,8 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $own == {} then {} else {ownFiles: $own} end)
   + (if $rules == "" then {} else {rules: $rules} end)
   + (if $md == {} then {} else {mergeDecisions: $md} end)
-  + {ponytail: ($pony | if . == "" then "lite" else . end)}
-  + (if $cache == "" then {} else {cacheTtl: $cache} end)
+  + (if $mcache == "" then {} else {mainCacheTtl: $mcache} end)
+  + (if $wcache == "" then {} else {workerCacheTtl: $wcache} end)
   + (if $auto == "" then {} else {autoMode: $auto} end)
   + (if $full == "" then {} else {fullSuiteBeforeFinal: ($full == "true")} end)
   + (if $trustall == "" then {} else {trustAllHooks: ($trustall == "true")} end)
@@ -411,8 +404,8 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
 # Issue 245: an option the owner set in /config beats this setup's answer, here and in every reader (pp_option).
-CACHE_ON=$(pp_config_option promptCacheTtl || echo "$CACHE") RCACHE_ON=$(pp_config_option relayPromptCacheTtl || echo "$RCACHE")
-[ "$CACHE_ON" != 5m ] || il_cache_ttl "$IL_PROJECT" "$PSET"
+MCACHE_ON=$(pp_config_option mainPromptCacheTtl || echo "$MCACHE") WCACHE_ON=$(pp_config_option workerPromptCacheTtl || echo "$WCACHE") RCACHE_ON=$(pp_config_option relayPromptCacheTtl || echo "$RCACHE")
+case $WCACHE_ON in 5m|1h) il_cache_ttl "$IL_PROJECT" "$PSET" "$WCACHE_ON" ;; esac
 il_auto_mode "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$AUTO_DO"
 il_test_audit "$IL_ROOT" "$WF"
 # Git never sees the running state, so the main checkout stays clean while the plugin runs.
@@ -461,28 +454,21 @@ for f in "${OWN[@]}"; do
   # shellcheck disable=SC2086 # --drop/--keep and ids of 8 hex digits each
   il_own "$IL_PROJECT" "$PP_MAIN/$f" "$IL_ROOT/templates/${f#.claude/}" "$c" $D
 done
-if [ "$(pp_config_option ponytail || echo "$PONYTAIL")" = off ]; then
-  if [ -n "$PONY_OURS" ] && [ -e "$PONY/SKILL.md" ]; then
-    if [ -n "$PLAN" ]; then echo "plan: would remove the ponytail skill an earlier setup installed ($PONY)"
-    else rm -f "$PONY/SKILL.md" "$PONY/LICENSE"; rmdir "$PONY" 2>/dev/null || true; fi
-  fi
-elif [ -n "$PONY_OURS" ]; then
-  for f in SKILL.md LICENSE; do il_write "$PONY/$f" < "$IL_ROOT/templates/ponytail/$f"; done
-fi
 # The answers that are the same in every project go into /config's options where it has none (issue 245); this
 # run's --option answers replace the key's value (issue 312).
 il_plugin_options "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$(jq -nc --argjson rl "$RL" \
-  --arg full "$FULL" --arg pony "$PONYTAIL" --arg cache "$CACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
+  --arg full "$FULL" --arg mcache "$MCACHE" --arg wcache "$WCACHE" --arg rcache "$RCACHE" --arg bind "${DASHBOARD:+${BIND:-127.0.0.1}}" --arg port "${DASHBOARD:+$PORT}" '
   {maxReviewRounds: ($rl.maxRounds // "" | if . == "" then . else tonumber end),
-   closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end), ponytail: ($pony | if . == "" then "lite" else . end),
-   promptCacheTtl: $cache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
+   closingPass: ($rl.closingPass != "no"), fullSuiteBeforeFinal: (if $full == "" then "" else $full == "true" end),
+   mainPromptCacheTtl: $mcache, workerPromptCacheTtl: $wcache, relayPromptCacheTtl: $rcache, dashboardBind: $bind, dashboardPort: ($port | if . == "" then . else tonumber end)}
   | with_entries(select(.value != ""))')" "$GIVEN"
 # Main's model and effort (orchestratorModel, orchestratorEffort) go into the main checkout's own settings file.
 COMMANDECK_OPTIONS=$GIVEN il_main_model "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json"
-# And its lean lists: the ponytail rules and the add-on plugins main never uses are off in main's session only, in
+# And its lean lists: the add-on plugins main never uses are off in main's session only, in
 # its own file; the cuts an earlier setup wrote into main's settings.local.json (which every worktree reads) come out.
 il_main_lean "$IL_PROJECT" "$PP_MAIN/.claude/settings.local.json" off
-il_main_lean "$IL_PROJECT" "$PP_MAIN/$IL_MAIN_LEAN_FILE"
+# Main's prompt-cache answer (issue 367) goes into the same file; an unanswered main writes nothing, like leave.
+il_main_lean "$IL_PROJECT" "$PP_MAIN/$IL_MAIN_LEAN_FILE" "$MCACHE_ON"
 [ -z "$STATUS" ] || il_status_set "$IL_MACHINE" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$STATUS"
 [ -z "${IL_PROFILE_LOCK_FD:-}" ] || { exec {IL_PROFILE_LOCK_FD}<&-; IL_PROFILE_LOCK_FD=; }
 
@@ -490,9 +476,10 @@ il_main_lean "$IL_PROJECT" "$PP_MAIN/$IL_MAIN_LEAN_FILE"
 addon_cmd() { awk -F'\t' -v n="$1" '$1 == n { print $2 }' "$IL_ROOT/config/addons.tsv"; }
 NOTES=() NEED=()
 [ -z "${CUPD:-}" ] || NEED+=("$CUPD")
-case $CACHE_ON in 5m|leave) ;; *) NEED+=("Prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --cache-ttl 5m|leave") ;; esac
+case $MCACHE_ON in 5m|1h|leave) ;; *) NEED+=("Main prompt cache: not answered since 0.48.0; /commandeck:setup asks, or: setup.sh --main-cache-ttl 5m|1h|leave") ;; esac
+case $WCACHE_ON in 5m|1h|leave) ;; *) NEED+=("Builder and worker prompt cache: not answered since 0.48.0; /commandeck:setup asks, or: setup.sh --worker-cache-ttl 5m|1h|leave") ;; esac
 [ "$PROFILE" != claude-openai ] || [ -n "$TRUSTALL" ] || NEED+=("Codex hook trust: not answered yet, so a hook another tool rewrites opens Codex panes on the review menu; /commandeck:setup asks, or: setup.sh --trust-all-hooks on|off")
-[ -z "$NAME" ] || case $RCACHE_ON in 1h|leave) ;; *) NEED+=("Relay prompt cache: not answered since 0.15.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 1h|leave") ;; esac
+[ -z "$NAME" ] || case $RCACHE_ON in 5m|1h|leave) ;; *) NEED+=("Chief of Staff prompt cache: not answered since 0.48.0; /commandeck:setup asks, or: setup.sh --relay-cache-ttl 5m|1h|leave") ;; esac
 [ -z "$SERENA_AUTO" ] || NOTES+=("serena: on, because a serena server is configured on this machine (--no-serena turns it off)")
 for f in "${OWN[@]}"; do
   c=$OWNS flag=--own-startup; [ "$f" = AGENT_STARTUP.md ] || c=$OWNM flag=--own-main-session
@@ -502,7 +489,7 @@ for f in "${OWN[@]}"; do
     *) NOTES+=("$f: yours loads instead of the plugin's whole version (to change that: $flag replace or merge)") ;;
   esac
 done
-NOTES+=("main lean: start main with claude --settings $PP_MAIN/$IL_MAIN_LEAN_FILE to leave ponytail, ui-themes and mattpocock-skills out of main's session; workers never read that file")
+NOTES+=("main lean: start main with claude --settings $PP_MAIN/$IL_MAIN_LEAN_FILE to leave ui-themes and mattpocock-skills out of main's session; workers never read that file")
 [ -e "$PP_MAIN/.claude/paved-road.md" ] || NOTES+=("paved road: no .claude/paved-road.md; start it from $IL_ROOT/templates/paved-road.md")
 [ "$RULES" != merge ] || NOTES+=("rules: sessions leave out the plugin's rules your CLAUDE.md and .claude/rules/ already state word for word$(n=$(jq '[.[] | select(. == "keep-mine")] | length' <<<"$DROPS"); [ "$n" = 0 ] || echo ", and the $n you keep your own wording for")")
 
@@ -622,11 +609,7 @@ done
 echo "serena (read-tracker nudge and pane-budget gate): $(jq -r 'if .serena then "on" else "off" end' "$IL_CONFIG")"
 echo "full suite before the final review: $([ "$FULL" = true ] && echo on || echo off)$([ -n "$TEST" ] || echo ', as no test command is set') (setup.sh --full-suite on|off)"
 [ "$PROFILE" != claude-openai ] || echo "trust every hook in the Codex home before each Codex launch: $([ "$TRUSTALL" = true ] && echo on || echo off) (setup.sh --trust-all-hooks on|off)"
-if [ "$PONYTAIL" = off ]; then echo "ponytail skill: off (--ponytail lite, full or ultra turns it on)"
-elif [ -n "$PONY_OURS" ]; then echo "ponytail skill: installed ($PONY)"
-else echo "ponytail skill: the one already on this machine was left as it is"; fi
-# Read back from the file, so an owner's own value shows as what it is.
-echo "prompt cache: main $(jq -r '.promptCacheTtl // "default"' "$PSET" 2>/dev/null || echo default), subagents $(jq -r '.subagentPromptCacheTtl // "default"' "$PSET" 2>/dev/null || echo default)"
+echo "prompt cache: main ${MCACHE_ON:-not answered}, workers ${WCACHE_ON:-not answered}, relay ${RCACHE_ON:-not answered}"
 for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "$n"; done
 # The config setup wrote is the project's, and so is a merge into the owner's startup files: a unit's
 # worktree has them only once git holds them. Setup never commits.

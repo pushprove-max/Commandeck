@@ -18,6 +18,7 @@ check "a red hang test sets its own short timeout" "A red test that shows a hang
 check "each evidence heading is written the moment its item turns green (#90)" "The moment an item's test turns green, add its section to the evidence file: \`## #<issue> <title>\`, then the guarding test name and file on the next line."
 check "a changed setting keeps reading the deployed format" "keeps reading the format already deployed from its first commit, and has a test that the release accepts the deployed format"
 check "a poll on test output goes to run_in_background, a blocking wait to wait-test-run.sh only (#84)" "start the run with \`run_in_background\`, which tells you when it exits. To block on it, wait only with \`bash {scripts}/wait-test-run.sh <runner-pid> <output-file>\`"
+check "the post-fix checks have one home, the runner that starts them at once and reports each code" "\`bash {scripts}/post-fix-checks.sh <the touched test files>\` runs them and, in a plugin checkout, \`claude plugin validate .\` and \`claude plugin test .\`, all at once, and reports each exit code; any red fails the round."
 check "a refused merge or main's word lifts the no-change rule (#93)" "The rule is lifted when the merge refuses the branch or main tells you to change something"
 check "an answer after the done marker is still read (#93)" "An answer from main that arrives after it is still yours: read it and act on it."
 check "a file that times out twice is one question to main, not a third run" "a second timeout is one question to main"
@@ -75,7 +76,7 @@ check "main's Details hold the large-read example prompt" "Large reads (host iss
 check "main's Details: after a hand merge main runs step 5 of merge-unit-local.sh and removes the worktree" "After a hand merge, or a failed auto-merge you finish by hand, run step 5 of \`merge-unit-local.sh\` yourself: close the unit's panes, then \`merge-unit-local.sh <unit> --cleanup\` (never a forced remove)."
 if [ "$(grep -n '^## Details' "${T%/*}/main-session.md" | cut -d: -f1)" -le 41 ]; then PASS=$((PASS+1)); echo "ok   main's card is still 40 lines (Details heading on line 41)"; else FAIL=$((FAIL+1)); echo "FAIL main's card is over 40 lines"; fi
 # Issue 340: main's waiting rule names the 30-second line, and the card is still 40 lines.
-check "main's card: any wait over about 30 s on external state runs in the background" "a long job, or any wait over about 30 s on external state (a directory-size scan included), in main's foreground -> its own pane, or \`run_in_background\`"
+check "main's card: a test run, a scan or a wait on external state runs in the background, whatever its length" "a test run in main's foreground, whatever its length, or any other command that can run in the background (a directory-size scan, any wait on external state) -> \`run_in_background\`"
 # Issue 345: settings decide. Main asks neither "Write a plan first?" nor "Which model and effort?"; it runs plan-tier.sh,
 # says in one line what it picked, and a plan is still never a build order.
 check "main's card: plan-tier.sh and the configured seats decide, told in one line" "before \`builder-launch.sh\`, ask nothing: run \`plan-tier.sh <batch file>\`, use the"
@@ -97,7 +98,9 @@ KG='A review finding blocks the merge only when normal use would hit the bug'
 GAP='A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a one-line known gap in the evidence file and does not block.'
 check "only a bug normal use would hit blocks the merge, and only a GO naming no blocking finding closes" "$KG"
 check "a bypass or odd-setup finding is a known gap that does not block" "$GAP"
-check "no blocking finding is left open at merge" "There is no narrowed-pass exit and no blocking finding left open at merge."
+# Issue 366: a P0 or P1 is never left open at merge; the loop ends only on one of the three stop lines.
+check "no narrowed-pass exit, and only the three stop lines end the loop" 'There is no narrowed-pass exit. Three lines end the loop with no fix round: `STOP (threshold)`'
+check "a P0 or P1 is never capped: it stops the build for main" '`REVIEW STOP` (a P0 or P1 open two passes past the cap)'
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/global-rules.md" | sed -E 's/ +/ /g')
 check "the global rules carry the same two sentences" "$KG"
 check "the global rules: a bypass or odd-setup finding is a known gap" "$GAP"
@@ -142,5 +145,27 @@ else FAIL=$((FAIL+1)); echo "FAIL a check --wait in the brief has no --ack: $NOA
 ONE='One status per decision: message main only for a decision only main or the owner can make. No progress notes; progress goes in the evidence file.'
 if grep -qF "$ONE" "$T" && grep -qF "$ONE" "$ST"; then PASS=$((PASS+1)); echo "ok   the brief and AGENT_STARTUP.md both carry the one-status-per-decision rule"
 else FAIL=$((FAIL+1)); echo "FAIL the one-status-per-decision rule is missing from the brief or AGENT_STARTUP.md"; fi
+# Rule drift: the rule text a user's global rules, the startup file, main's card and the batch template must carry.
+JOIN() { awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$1" | sed -E 's/ +/ /g'; }
+SAVED=$BODY BODY=$(JOIN "$R/templates/global-rules.md")
+check "global rules carry resource safety: log tail before a relaunch, resume never restart, memory is the limit" "never stop a driver and relaunch it without reading its log tail first. After a crash, resume and never restart:"
+check "global rules: memory, not a pane count, is the limit" "Memory, not a pane count, is the limit (\`config/pane-budget.json\`)."
+check "global rules carry one unit per worktree and the dispatch ledger (serialize only overlaps)" "Never put two workers in one worktree (serialize only overlaps)."
+check "global rules: main verifies a dispatch by status, diff stat, heads and runner totals" "status shows only scope, the diff stat matches each claimed change, the worktree and main heads are as expected, and a pass claim carries runner totals."
+check "global rules: every worker is a pane the owner can open, and Orca's task list is the ledger" "Every worker is an Orca pane the owner can open; Orca's task list is the dispatch ledger."
+check "global rules carry the adversarial review lines: one full scope, no reviewer test, read-verdict" "Every reviewer gets the same full scope."
+check "global rules: no reviewer runs a test at round close, and findings are read with read-verdict.sh" "No reviewer runs a test at round close; each finding's test goes to the fixer. Read a reviewer's findings with \`read-verdict.sh\`, never a raw pane read."
+BODY=$(JOIN "$ST")
+check "the startup file's pane rules carry plan-first, callers before risky edits and confirm before destruction" "Plan first for multi-step work, and read the real code before editing it. Before editing auth, verification, billing, tenant isolation or deploy tooling, write the plan down and list every caller of what changes."
+check "the startup file: confirm before an irreversible action, and no destructive git command unasked" "Confirm first before an irreversible action: a write to production data, a force push, a drop, a delete at scale. Never run a destructive git command unless the owner asked for it."
+BODY=$(JOIN "$R/templates/main-session.md")
+check "main's rules let main make a small code fix with the main-edit guard off" "Main may make a small code fix itself, with the main-edit guard off (\`.claude/approvals/main-edits-ok\`, which the owner creates); larger work runs as a Builder, and main's code takes the same review and merge rules."
+check "main's rules send a large code change to a batch brief" "a large code change in main -> a batch brief, then \`builder-launch.sh <unit> <brief>\`"
+BODY=$(JOIN "$R/templates/_batch-brief-template.md")
+check "the batch template's Data design asks for half-write recovery, concurrent writes and retry ownership" "a half write leaves <what>, recovered by <how>; two concurrent writes <result>; retries owned by <code>, at most <n>"
+BODY=$(JOIN "$T")
+check "every test run starts in the background whatever its length, in the Builder brief" "Every test run starts in the background (Bash \`run_in_background\`), whatever its length, and so does every other command that can run in the background; only quick reads stay in the foreground."
+if grep -qF 'over 60 seconds' "$T"; then FAIL=$((FAIL+1)); echo "FAIL the Builder brief still lets a test under 60 seconds run in the foreground"; else PASS=$((PASS+1)); echo "ok   no 60-second qualifier on background runs"; fi
+BODY=$SAVED
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

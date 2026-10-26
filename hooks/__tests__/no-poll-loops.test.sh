@@ -242,6 +242,9 @@ check "sleep 5m is refused" rc=2 "$(rc_wt 'sleep 5m')"
 check "two wait-test-run.sh waits (540 s) are refused" rc=2 "$(rc_wt 'bash scripts/wait-test-run.sh 1 a.out; bash scripts/wait-test-run.sh 2 b.out')"
 check "an ask of --timeout-ms 240000 passes" rc=0 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 240000')"
 check "--timeout-ms=540000 passes under the 1-hour cache" rc=0 "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000')"
+# Issue 367: each pane's limit follows its own role's TTL, which setup writes per role.
+check "a relay pane at 1h may wait 540 s, a Builder at 5m only 270 s" "rc=0 rc=2" \
+  "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000') $(TTL=5m rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000')"
 check "a sleep 20 and an ask of 200 s (220 s) pass" rc=0 "$(rc_wt 'sleep 20; orca-ide orchestration ask --from t --question q --timeout-ms 200000')"
 check "one wait-test-run.sh wait passes" rc=0 "$(rc_wt 'bash scripts/wait-test-run.sh 123 out.txt')"
 check "sleep 20 && npm test passes" rc=0 "$(rc_wt 'sleep 20 && npm test')"

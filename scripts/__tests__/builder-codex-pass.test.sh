@@ -62,7 +62,9 @@ check "after the brief gained scope, the review pass runs as a whole-branch pass
   "$(grep -cx 'Pass: final' "$B/$U-r3-reports.md") $(grep -c 'changed since the last pass' "$TMP/out")"
 check "its prompt is the whole branch against main" "1 1" \
   "$(input 3 | grep -c '^Review input: the closing pass, the whole branch diff') $(input 3 | grep -c '^-echo base$')"
-check "the prompt carries this round's different-fix and other-cases lines, and not another round's" "1 1 0" \
+# Issue 366: a closing pass is fresh, so it gets no author's notes; a narrowed pass gets this round's alone
+# (builder-codex-pass-threshold.test.sh, case 3).
+check "the closing prompt carries no different-fix or other-cases line, of this round or another" "0 0 0" \
   "$(input 3 | grep -cx 'Different fix r3: the named fix broke the caller in b.sh.') $(input 3 | grep -cx 'Other cases checked r3: a.sh and c.sh read the same input.') $(input 3 | grep -c 'r2: an older note')"
 
 # The brief unchanged since, but r3 was a closing pass that ended NO-GO: every finding blocks the merge, so the next
@@ -79,7 +81,9 @@ echo "$(sh -c 'echo $$')" > "$L/pid"
 pass 4 review
 check "a dead holder's lock is taken over, and the pass releases it" "1 0" \
   "$(grep -cx 'Pass: final' "$B/$U-r4-reports.md") $(ls -d "$L" 2>/dev/null | wc -l | tr -d ' ')"
-check "every later pass is handed the evidence file's main-only list as known, and nothing under the next heading" "1 1 1 0" \
+# Issue 366: passes 3 and 4 are closing passes, a fresh reviewer handed no review history, so no main-only list
+# (builder-codex-pass-threshold.test.sh covers the list reaching a narrowed pass).
+check "a closing pass is not handed the evidence file's main-only list" "0 0 0 0" \
   "$(input 3 | grep -c '^Known and deferred to main') $(input 3 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -cx 'the settings.json entry for the new hook: main edits that file.') $(input 4 | grep -c 'not deferred')"
 check "after a P2-only closing NO-GO, a review pass runs as the closing pass over the whole branch" "1 1" \
   "$(grep -cx 'Pass: final' "$B/$U-r4-reports.md") $(input 4 | grep -c '^-echo base$')"
@@ -164,6 +168,36 @@ printf 'echo six\n' > "$W/a.sh"; echo 31 > "$TMP/probe-sleep"; : > "$TMP/probe";
   bash "$PASS_SH" "$U" 7 review >"$TMP/out" 2>"$TMP/err"); RC=$?
 check "a probe answering after 31 s passes: one try, no refusal" "0 1 0" \
   "$RC $(wc -l < "$TMP/probe" | tr -d ' ') $(grep -c 'launch refused: Codex is not signed in' "$TMP/err")"
+
+# Issue 359 (5c) and the rule drift items RD1 to RD3: one first pass of three reviewers over a unit whose plan carries claims
+# to falsify and decisions, and whose brief states a limit. After the slow case above, since it adds a pass.
+mkdir -p "$W/.claude/plans"
+printf '# Plan: p\n\n## What can go wrong\n\n| case | x |\n|---|---|\n| CASE-PROBE | y |\n\n## Claims to falsify\n\n1. CLAIM-PROBE the plan says so.\n\n## Decisions\n\n1. DECISION-PROBE a ruling.\n\n## Accepted failure modes\n\n1. ACCEPTED-PROBE not a claim.\n' > "$W/.claude/plans/$U.md"
+printf 'Plan: .claude/plans/%s.md\n' "$U" >> "$B/$U.md"
+printf '\n## Stated limits\n- LIMIT-PROBE: one measured bound\n' >> "$MAINBRIEF"
+printf 'echo seven\n' > "$W/a.sh"
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_OPTIONS='{"maxReviewRounds": 9}' STUB_THREAD=thr-8 \
+  bash "$PASS_SH" "$U" 8 adversarial >"$TMP/out" 2>"$TMP/err") || { echo "FAIL the adversarial pass r8 did not run: $(cat "$TMP/err")"; FAIL=$((FAIL+1)); }
+P8=$B/$U-r8-prompt-2.md
+at() { grep -n -m1 -- "$1" "$P8" | cut -d: -f1; } # <pattern>: the first line of the behaviour reviewer's prompt that matches
+# The raw claims start a line; the same words in the diff start with its + mark. Issue 366: the accepted failure modes
+# reach every pass, under their own head after the claims.
+check "the review prompt places the plan's claims after the trace instruction" "yes yes yes 1 1 1" \
+  "$([ "$(at 'Trace each changed branch with a concrete input')" -lt "$(at '^-echo base$')" ] && echo yes || echo no) \
+$([ "$(at '^-echo base$')" -lt "$(at '^[0-9]\. CLAIM-PROBE')" ] && echo yes || echo no) \
+$([ "$(at 'claims to falsify, not facts')" -lt "$(at '^[0-9]\. CLAIM-PROBE')" ] && [ "$(at '^[0-9]\. CLAIM-PROBE')" -lt "$(at '^[0-9]\. DECISION-PROBE')" ] && echo yes || echo no) \
+$(grep -c '^| CASE-PROBE' "$P8") $(grep -c '^[0-9]\. DECISION-PROBE' "$P8") $(grep -c '^[0-9]\. ACCEPTED-PROBE' "$P8")"
+# RD1: a finding reopens a decision, an accepted failure mode or a stated limit only on a concrete counterexample.
+check "the review prompt reopens a decision only on a concrete counterexample" "1 1" \
+  "$(grep -c "only when it proves the item's factual premise false or shows the goal defeated, with a concrete counterexample" "$P8") $(grep -c '^- LIMIT-PROBE' "$P8")"
+# RD2: a limit is a measured bound, and a finding beyond one is a follow-up.
+check "a finding beyond a stated limit is a follow-up, never a blocker" 1 \
+  "$(grep -c 'a finding beyond one is out of scope: a follow-up issue, never a blocker' "$P8")"
+# RD3: the failing-test default, the cold-read order and the scope rule.
+check "the review prompt carries the failing-test default, the cold-read order and the scope rule" "1 1 1 1 1 1 1 1" \
+  "$(for s in 'written to fail on the diff as it stands' 'whose test is written and whose fix is under ten lines' 'a reviewer never reviews its own fix' \
+  'This prompt, the brief and the dispatch spec outrank the startup file' 'runtime_unavailable' "draft your findings, and only then open the author's evidence" \
+  'only to confirm or refute one finding, and say which' 'never a generated file'; do grep -cF -- "$s" "$P8"; done | paste -sd' ' -)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

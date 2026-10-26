@@ -42,5 +42,25 @@ printf '#!/usr/bin/env bash\necho "$1" >> "%s/queue-log"\n[ "$1" != first ] || e
 OUT=$(cd "$REPO" && bash "$QP/scripts/merge-queue.sh" first second 2>&1); RC=$?
 check "a merge that exits 4 stops the queue, not merged, and the next unit never runs" "1 1 0 0" \
   "$RC $(grep -c 'STOPPED at first (not merged)' <<<"$OUT") $(grep -c 'NOT FILED' <<<"$OUT") $(grep -cx second "$TMP/queue-log")"
+# Issue 349: every attempt opens its output with an ATTEMPT line, so a log the queue appends to can be split by attempt. The
+# first request is refused at step 1 (no worktree yet), the second merges; the second's pid= is the state's while it runs.
+SEEN_STATE=$TMP/seen-state
+jq -n --arg c "cp $REPO/.git/merge-unit-local.state $SEEN_STATE" '{testCommand: $c}' > "$REPO/.claude/commandeck.json"
+QLOG=$COMMANDECK_SCRATCH/merge-qa.log
+(cd "$REPO" && bash "$QUEUE" qa >/dev/null 2>&1)
+mk qa; go qa
+(cd "$REPO" && bash "$QUEUE" qa >/dev/null 2>&1)
+check "a unit queued twice appends one ATTEMPT line per attempt, the first attempt's step 1 refusal after its own" "2 yes yes yes" \
+  "$(grep -c '^ATTEMPT unit=qa ' "$QLOG") $(awk '/^ATTEMPT/{n++} /^FAILED step 1 preconditions/ && n == 1 {f=1} /^ATTEMPT/ && n == 2 && f {ok=1} END{print ok ? "yes" : "no"}' "$QLOG") \
+$(awk '/^ATTEMPT/{n++} /^DONE unit=qa/ && n == 2 {ok=1} END{print ok ? "yes" : "no"}' "$QLOG") \
+$([ "$(grep '^ATTEMPT unit=qa ' "$QLOG" | tail -n 1 | sed -n 's/.* pid=\([0-9]*\) .*/\1/p')" = "$(sed -n 's/^pid=//p' "$SEEN_STATE")" ] && echo yes || echo no)"
+echo "$CFG" > "$REPO/.claude/commandeck.json"
+# The squash of a plugin's mod code is also checked by the plugin's own test when the closing pass's green suite stands for the check.
+mkdir -p "$REPO/.claude-plugin"; on_main .claude-plugin/plugin.json '{}'
+mk pq; mkdir -p "$COMMANDECK_WORKSPACES/pq/hooks"; echo 'export {}' > "$COMMANDECK_WORKSPACES/pq/hooks/pq.ts"
+git -C "$COMMANDECK_WORKSPACES/pq" add hooks/pq.ts; git -C "$COMMANDECK_WORKSPACES/pq" commit -qm "feat(pq): a mod change"
+closed pq; : > "$TMP/check-calls"; : > "$TMP/claude-calls"
+check "a merge that reuses the closing pass's green suite still runs claude plugin test on a plugin unit" "0 0 1 2" \
+  "$(merge pq) $(runs) $(grep -c '^STEP 4 check: reused, not run again' "$TMP/out") $(grep -c . "$TMP/claude-calls")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

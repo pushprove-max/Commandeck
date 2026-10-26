@@ -43,23 +43,15 @@
       },
       "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round, no judging loop. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
     },
-    "plan-judge-astra": {
-      "agent": "codex",
-      "model": "astra",
+    "plan-judge-fable": {
+      "agent": "claude",
+      "model": "fable",
       "effort": "high",
       "reviewer": true,
-      "sandbox": "read-only",
-      "network": true,
+      "tools": ["Write", "Edit", "NotebookEdit"],
       "unboxed": true,
       "edits": false,
-      "claude": {
-        "model": "sonnet",
-        "effort": "high",
-        "reviewer": true,
-        "tools": ["Write", "Edit", "NotebookEdit"],
-        "unboxed": true
-      },
-      "note": "The Panel answer's second judge, beside plan-judge-sol: reads the plan and prints its findings. planJudgeAstraAgent=claude runs it as the read-only Claude pane in claude; off, the other judge judges alone."
+      "note": "The Panel answer's second judge, beside plan-judge-sol: a read-only Claude pane on Fable at high that reads the plan and prints its findings; off, the other judge judges alone."
     },
     "builder": {
       "agent": "claude",
@@ -73,10 +65,10 @@
       "agent": "claude",
       "model": "opus",
       "effort": "high",
-      "first": {"model": "opus", "effort": "high"},
+      "first": {"model": "builder", "effort": "builder"},
       "unboxed": true,
       "edits": true,
-      "note": "Not a pane of its own: the Builder's pane on a fix round (builder-fresh-round.sh). The first fix round of a build runs on first, every later one on this model and effort; builder in either means the build's launched Builder model or effort. Off (fixerEnabled=false): every fix round keeps the Builder's launched model and effort."
+      "note": "Not a pane of its own: the Builder's pane on a fix round (builder-fresh-round.sh). The first fix round of a build runs on first (builder: the build's launched Builder model and effort, so it keeps them), every later one on this model and effort; builder in either means the build's launched Builder model or effort. Off (fixerEnabled=false): every fix round keeps the Builder's launched model and effort."
     },
     "codex-reviewer": {
       "agent": "codex",

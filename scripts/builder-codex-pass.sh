@@ -23,16 +23,20 @@
 #     the same commit. A first pass of one reviewer counts only where the size
 #     rule allowed it: the merge counts the commit that pass read itself
 #     (build_size).
-#     A finding blocks the merge only when normal use would hit the bug (issue 325): the pass under merge
-#     ends GO and names no such finding. A bypass or odd-setup finding is a known gap, a plain line with
+#     The review threshold (issue 366): a pass that names no open P0, P1 or P2 ends GO, so a P3 never holds
+#     the merge; from the REVIEW_CAP-th pass on the reviewer's record, a closing NO-GO that names no P0 or P1
+#     merges too (a cap stop); a P0 or P1 is never capped, and one still held two passes past the cap stops
+#     the unit for the owner (REVIEW STOP). What is open at the merge is printed, one Open finding line
+#     each, for main to file. A finding blocks only when normal use would hit the bug (issue 325): a
+#     bypass or odd-setup finding is a known gap, a plain line with
 #     no level and no class tag, which the gate below does not count. With no closing pass (reviewLoop.closingPass no), a
 #     narrowed pass's GO merges when narrowed passes read every commit after
 #     the last first pass. The proof's first line ends with the rule: closing
-#     GO, first-pass GO or no closing pass.
-#     Each pass lists, in its prompt, every earlier pass the reviewer's session
+#     GO, threshold stop, cap stop, first-pass GO or no closing pass.
+#     Each pass but the closing one lists, in its prompt, every earlier pass the reviewer's session
 #     files held for the worktree at its launch (session, end time, findings);
-#     the merge takes a GO only while that list is still exactly the record, so
-#     one pass of a worktree runs at a time.
+#     the merge takes such a pass's GO only while that list is still exactly the record. The closing
+#     pass is handed no earlier finding; every other pass on record must have ended before it began.
 # builder-codex-pass.sh --preflight -- print `<model>\t<companion>` or fail;
 #     builder-launch.sh runs it so a Builder never starts without a working pass.
 # builder-codex-pass.sh --ack-rulings <unit> -- say main's rulings file was read.
@@ -100,14 +104,14 @@ pass_waits() {
 # asks for JSON against a schema only that plugin's own review command
 # attaches; FORMAT replaces that block's content, so the prompt carries one
 # output instruction, and every other block goes out as the plugin wrote it.
-FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. P0 is critical, P1 high, P2 medium, P3 low. A review finding blocks the merge only when normal use would hit the bug. A finding that needs an agent deliberately bypassing a guard, or an odd setup, does not block: list it after a line that reads exactly KNOWN GAPS:, one plain line each (- <title> -- <file>:<line> -- what it needs), with no severity level and no class tag. Your last line must be exactly VERDICT: GO when you list no blocking finding (known gaps alone are GO), otherwise exactly VERDICT: NO-GO. A GO reply names no level, P0 to P3, anywhere.'
+FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. Under each blocking finding write one line, Class search: rg <arguments>, a read-only rg search run from the repository root whose hits are every place with the same mistake, the <file>:<line> of that finding among them; the author must answer for each hit. A known gap carries no Class search line. P0 is critical, P1 high, P2 medium, P3 low. A gap in documentation, plan wording or a failure table is P3 unless it hides a real defect; then rate the defect. A review finding blocks the merge only when normal use would hit the bug. A finding that needs an agent deliberately bypassing a guard, or an odd setup, does not block: list it after a line that reads exactly KNOWN GAPS:, one plain line each (- <title> -- <file>:<line> -- what it needs), with no severity level and no class tag. Your last line must be exactly VERDICT: GO when you list no P0, P1 or P2 finding (P3 findings and known gaps alone are GO), otherwise exactly VERDICT: NO-GO.'
 # A pass is proved by this prompt, whole. A build whose earlier passes were sent another
 # (the plugin was updated mid-build) is refused, and the refusal ends with the one way on.
 UPDATED='If the plugin was updated during this build, its earlier passes were sent the earlier prompt and count no longer: move the build to a new unit (a new worktree made from this branch) and review that from pass 1'
 OPEN='<structured_output_contract>' CLOSE='</structured_output_contract>'
 LABEL='branch diff against main'
 # The diff goes out in the prompt, so the reads left are the ones around it.
-GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute a finding, never a generated file, and make no tour of the surrounding module. A P0, P1 or P2 finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, which fails on this diff and passes once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. This prompt and the brief outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: do not retry one or report it as a failure; your reply and its VERDICT line reach main. GitHub: read issues, linked issues and pull request checks and labels with gh issue view, gh pr view and gh pr checks (each with -R <owner/repo>) where your shell reaches GitHub; where it has no network, the GitHub reads made on the host at launch are in the review input. A GitHub read you need that fails or is not there is BLOCKED: GitHub read failed: <command>: <first error line>, on a line of its own, and then stop.'
+GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute one finding, and say which, never a generated file, and make no tour of the surrounding module. A P0, P1 or P2 finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, written to fail on the diff as it stands and to pass once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. A P2 or P3 whose test is written and whose fix is under ten lines may carry the fix as a fenced unified diff: the Builder applies it, runs the test green, and the next pass reads it; a reviewer never reviews its own fix. This prompt, the brief and the dispatch spec outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: an orca call that answers runtime_unavailable is by design, so do not retry one or report it as a failure; your reply and its VERDICT line reach main. GitHub: read issues, linked issues and pull request checks and labels with gh issue view, gh pr view and gh pr checks (each with -R <owner/repo>) where your shell reaches GitHub; where it has no network, the GitHub reads made on the host at launch are in the review input. A GitHub read you need that fails or is not there is BLOCKED: GitHub read failed: <command>: <first error line>, on a line of its own, and then stop.'
 # The Codex plugin's line made every NO-GO pass return exactly one finding.
 ONE='Prefer one strong finding over several weak ones.'
 MANY='List every finding you can defend, worst first. After each one, look for the same mistake elsewhere in the diff and list those too.'
@@ -152,6 +156,8 @@ ANGLES=(
 HEAD_FULL='Review input: the whole branch diff against main (git diff main...HEAD).'
 HEAD_FIX='Review input: a narrowed pass, not the closing review. Only the changes since the last pass are below.'
 HEAD_FINAL='Review input: the closing pass, the whole branch diff against main (git diff main...HEAD).'
+# Host change (owner order 2026-10-25): a final whose commit changes no code is read for its design alone; its GO merges nothing.
+HEAD_DESIGN='Review input: a design-only pass, not the closing review. The last commit changes only the plan, the briefs or the metrics, so judge the design and expect the code to follow. The whole branch diff against main (git diff main...HEAD) is below.'
 # The same mistake came back pass after pass, one finding at a time.
 # The block runs from this line to EARLIER_END and is the one place the merge
 # looks for what the closing reviewer was handed: no diff line can spell
@@ -170,7 +176,15 @@ FINDING='(^|[^A-Za-z0-9])P[0-3]([^0-9]|$)|\(class:'
 CASES_HEAD='What can go wrong, from the plan: check the code and its tests against each case; a case the code breaks, or whose named test is missing or cannot fail, is a finding. A finding on a case not in this list ends with (not in the plan list).'
 SITES_HEAD='Sites checked: the Builder'"'"'s search for other places with the pattern of the last pass'"'"'s findings, with each site marked fixed or not affected. A site of the pattern that is missing from this list, or marked not affected for a wrong reason, is a finding:'
 NEWCODE_HEAD='New code checked: the Builder'"'"'s check of each read, write or check its last fix added or changed against the plan'"'"'s rules (Data design, What can go wrong, the failure table). A site the fix added that is missing from this list, or that breaks the plan line it names, is a finding:'
-LIMITS_HEAD='Stated limits of this build, set by main. A finding inside a stated limit is not a finding: do not list it:'
+# Issue 359 (5c): the plan's claims to falsify and its decisions, read after the diff and tried against it, never taken as fact.
+CLAIMS_HEAD='From the plan, after the diff: its claims to falsify and its decisions. These are claims to falsify, not facts: try to break each checkable one against the diff and the code, and report a claim the diff or its tests do not hold.'
+# Issue 366 (O2): the plan's accepted failure modes go to every reviewer, the fresh closing one included, after the diff.
+# The host's fresh-closing line, narrowed to the files that hold review history: the plugin's diff still carries the
+# plan, and the unit brief's Data design binds every pass (DATA_DESIGN), so the brief stays open.
+FRESH_HEAD='This is the fresh closing pass. Do not open the evidence file, the round reports or fix hand-offs under .claude/briefs (<unit>-r<N>-*, <unit>-fix-r<N>.md), or git log: they carry the review history this pass is kept clear of. The unit brief itself you may read.'
+ACCEPTED_HEAD='Accepted failure modes, from the plan: each is a cost the plan accepts. A finding that is one of these is not a finding unless it proves the item'"'"'s premise false with a concrete counterexample; otherwise cite the item and do not list the finding:'
+# The host's reopen rule and stated-limits heading: a finding reopens an accepted item only on a concrete counterexample, and a finding beyond a limit is a follow-up.
+LIMITS_HEAD='Stated limits of this build, set by main (every reviewer is handed these; a finding beyond one is out of scope: a follow-up issue, never a blocker). A finding reopens an accepted failure mode, a decision or a stated limit only when it proves the item'"'"'s factual premise false or shows the goal defeated, with a concrete counterexample; otherwise cite the item'"'"'s line and do not list the finding. A finding inside a stated limit is not a finding: do not list it:'
 DEFERRED_HEAD='Known and deferred to main: each item below needs main'"'"'s own hands (a settings file entry, a file only main edits), and main has it. Do not report a listed item again. Report anything else, a new defect in the same file included, and report a listed item that this branch could fix itself, since that is not main-only:'
 # The Builder's own lines for round N in its evidence file, "Different fix r<N>: <why>" and
 # "Other cases checked r<N>: <which>": a fix other than the one a finding named, and the
@@ -183,7 +197,7 @@ DIFF_HARD=${COMMANDECK_PASS_DIFF_HARD:-900000}
 
 # session_proof <session id> <worktree> <sha> [wait-s] -- for the reviewer $BY
 # names, print the verdict line, then
-# "<full|fix|final> <k> <n> <round> <began> <ended> <read> <since> <said>" (the pass's kind, reviewer
+# "<full|fix|final|design> <k> <n> <round> <began> <ended> <read> <since> <said>" (the pass's kind, reviewer
 # k of n, its round, when the record says the turn began and ended, "-" when it does not, and
 # the three parts the no-closing-pass chain follows), then the final
 # reply without its verdict; refuse (exit 2) when the session does not bind them.
@@ -191,9 +205,9 @@ DIFF_HARD=${COMMANDECK_PASS_DIFF_HARD:-900000}
 # The prompt is checked against this script's own text only: the merge
 # reads no plugin file, so a plugin update after a pass does not undo the pass.
 session_proof() {
-  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$FINDING" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
+  python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$FINDING" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
 import glob, json, os, re, subprocess, sys, time
-by, tid, wt, sha, wait, home, head_full, head_fix, head_final, block, updated, finding, *fixed = sys.argv[1:]
+by, tid, wt, sha, wait, home, head_full, head_fix, head_final, head_design, block, updated, finding, *fixed = sys.argv[1:]
 name, where = ("Claude session", "projects") if by == "claude" else ("Codex thread", "sessions")
 def die(msg):
     print(f"REFUSED: {msg}", file=sys.stderr)
@@ -309,7 +323,7 @@ def ours(t):
 if not any(ours(t) for t in user):
     die(f"{name} {tid} was not started with the pass script's prompt. {updated}")
 # The first such line: the script writes it ahead of the findings and the diff.
-heads = {head_full: "full", head_fix: "fix", head_final: "final"}
+heads = {head_full: "full", head_fix: "fix", head_final: "final", head_design: "design"}
 kind = re.search(rf"^({'|'.join(map(re.escape, heads))}) Reviewer ([1-9]) of ([1-9]), round ([1-9][0-9]*)\.$", sent, re.M)
 if not kind:
     die(f"the prompt of {name} {tid} has no review-input line of the pass script")
@@ -336,9 +350,13 @@ verdict = lines[-1].strip()
 # reads "- ", so every reader of the report sees "- [P3]". The gate below does not depend on it.
 lines = [re.sub(r"^(\s*)((?:[-*+]|\d+[.)])\s+)?[*_`]*\[[*_`]*(P[0-3])[*_`]*\][*_`]*",
                 lambda m: f"{m[1]}{'- ' if m[2] else ''}[{m[3]}]", l) for l in lines]
-# A GO beside a tagged finding is not a GO. A known gap (issue 325) carries no level and no class tag, so it is no finding here.
-# Nor is a GO beside the refusal line, quoted or not: a lost GitHub read may sit above it.
-if any(re.search(finding, l) or refusal in l for l in lines[:-1]):
+# A GO beside a finding that holds the loop is not a GO (issue 366): a P0, P1 or P2, or a class tag with no level. A
+# line whose every level is P3 holds nothing. A known gap (issue 325) carries no level and no class tag, so it is no
+# finding here. Nor is a GO beside the refusal line, quoted or not: a lost GitHub read may sit above it.
+def holds(l):
+    levels = re.findall(r"(?:^|[^A-Za-z0-9])P([0-3])(?=[^0-9]|$)", l)
+    return bool(re.search(finding, l)) and (not levels or min(levels) < "3")
+if any(holds(l) or refusal in l for l in lines[:-1]):
     verdict = "VERDICT: NO-GO"
 said = said or verdict[9:]
 print(verdict)
@@ -362,6 +380,57 @@ round_files() {
     [[ $n =~ ^[0-9]+$ ]] && echo "$n $f"
   done
   return 0
+}
+# Issue 366: the review cap. From this many passes on the reviewer's record, a closing NO-GO that names no P0 or P1
+# ends the loop (a cap stop: main files what is open, then merges). A P0 or P1 is never capped; one still held at
+# REVIEW_CAP + 2 passes stops the unit for the owner (REVIEW STOP). A constant: one reader, nothing to parse.
+REVIEW_CAP=5
+# passes_on_record <earlier_passes text> <round> -- the passes on the reviewer's record: its distinct rounds, <round>
+# (the pass launched or verified) among them. Never the round number N, which the Builder chooses.
+passes_on_record() { { awk '$1 == "@" { print $6 }' <<<"$1"; echo "$2"; } | sort -u | grep -c .; }
+# p01_count -- how many lines on stdin name a P0 or P1 (a line's level is the lowest it names).
+p01_count() { grep -cE '(^|[^A-Za-z0-9])P[01]([^0-9]|$)' || true; }
+# p2_count -- how many lines on stdin are P2 findings: a line that starts with the tag, as session_proof writes it.
+p2_count() { grep -cE '^[[:space:]]*(- )?\[P2\]' || true; }
+# review_stop_id <earlier_passes text> -- "review-stop-<unit>-r<N>" when the passes on record reach REVIEW_CAP + 2 and
+# the latest, N (the one that ended last, never the highest N), still holds a P0 or P1; nothing otherwise. The launch
+# gate, the pass's own stop and --verify all ask this one function. A code pass's finding list is the open list, so
+# the walk from the latest pass back ends at the first code pass whose every declared reviewer is on record. A
+# design-only pass never clears a code finding (only the latest of a run of them is read for its own), and a pass with
+# a reviewer missing from the record clears nothing (main's ruling: a pass clears an earlier P0 or P1 only when every
+# reviewer it declared is on record and none names one).
+review_stop_id() {
+  python3 - "$UNIT" "$REVIEW_CAP" "$1" <<'PY'
+import re, sys
+unit, cap, passes = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+rounds, cur = {}, None
+for l in passes.splitlines():
+    f = l.split(" ")
+    if l.startswith("@ ") and len(f) >= 6:
+        cur = rounds.setdefault(int(f[5]), {"kind": f[2], "of": int(f[4]), "got": set(), "held": [], "end": "-"})
+        cur["got"].add(int(f[3]))
+        cur["end"] = max(cur["end"], f[7])
+    elif cur is not None and min(re.findall(r"(?:^|[^A-Za-z0-9])P([0-3])(?=[^0-9]|$)", l) or ["9"]) < "2":
+        cur["held"].append(l)
+if len(rounds) < cap + 2:
+    sys.exit(0)
+held, design_read = [], False
+# Latest first by the time the pass ended, never by its round number, which the Builder picks (a "-" end sorts oldest).
+order = sorted(rounds, key=lambda r: (rounds[r]["end"], r), reverse=True)
+for r in order:
+    p = rounds[r]
+    whole = p["got"] == set(range(1, p["of"] + 1))
+    if p["kind"] == "design":
+        if not design_read:
+            held += p["held"]
+            design_read = whole
+        continue
+    held += p["held"]
+    if whole:
+        break
+if held:
+    print(f"review-stop-{unit}-r{order[0]}")
+PY
 }
 
 # A first pass is ONE reviewer when the commit it reads is under this many
@@ -420,7 +489,7 @@ one_reviewer_allowed() {
 # written, still happened. Any other session in the worktree is not a pass.
 # shortcut: only session files of the last 14 days are read, longer than a unit lives; widen it if one ever outlasts that.
 pass_threads() {
-  python3 - "$BY" "$1" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" <<'PY'
+  python3 - "$BY" "$1" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN" <<'PY'
 import glob, json, os, re, sys, time
 by, wt, home, *heads = sys.argv[1:]
 wt = os.path.realpath(wt)
@@ -540,6 +609,18 @@ earlier_passes() {
     sed 1,2d <<<"$proof" | { grep -E "$FINDING" || true; } | sed 's/^\([[:space:]]*\)@/\1\\@/'
   done <<<"$tids"
 }
+# open_findings <finding lines of the pass under merge> <earlier_passes text> -- issue 366: what is open at a merge, one
+# "Open finding: <class> <line>" each. That is every finding line of the pass under merge, and the P3 lines of every
+# earlier round whose every declared reviewer is on record and said GO (a GO round gets no fix round, so its P3s were
+# never fixed; a NO-GO round's went to its fix round). Deduped by exact line. A class is the first <file>:<line> the
+# line cites, the line dropped; no-file when it cites none.
+open_findings() {
+  { printf '%s\n' "$1"
+    awk '$1 == "@" { r = $6; if (!(r in of)) { of[r] = $5; ok[r] = 1; order[++n] = r } got[r, $4] = 1; if ($11 != "GO") ok[r] = 0; cur = r; next }
+      $0 ~ /(^|[^A-Za-z0-9])P3([^0-9]|$)/ && $0 !~ /(^|[^A-Za-z0-9])P[0-2]([^0-9]|$)/ { p3[cur] = p3[cur] $0 "\n" }
+      END { for (i = 1; i <= n; i++) { r = order[i]; for (k = 1; k <= of[r]; k++) if (!got[r, k]) ok[r] = 0; if (ok[r]) printf "%s", p3[r] } }' <<<"$2"; } \
+    | awk 'NF && !seen[$0]++ { c = "no-file"; if (match($0, "[-A-Za-z0-9_./]+\\.[A-Za-z0-9]+:[0-9]+")) { c = substr($0, RSTART, RLENGTH); sub(/:[0-9]+$/, "", c) } print "Open finding: " c " " $0 }'
+}
 
 if [ "${1:-}" = --verify ]; then
   WT=${2:?worktree} UNIT=${3:?unit} TIP=${4:?tip}
@@ -560,12 +641,27 @@ if [ "${1:-}" = --verify ]; then
   SEEN="" OF="" WHAT="" RULE="" STEPS=""
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
+  # Issue 366 (O4): a P0 or P1 held two passes past the cap waits for the owner, whatever the pass's kind. Asked first,
+  # so the one line orca-wait.sh and main-watch read says so, and not that the pass was design-only or NO-GO.
+  ALLP=$(earlier_passes "$WT") || exit 2
+  COUNT=$(passes_on_record "$ALLP" "$ROUND") STOP_ID=$(review_stop_id "$ALLP") CAPPED="" NOW_LINES=""
+  [ -z "$STOP_ID" ] || die "REVIEW STOP: ${LAST##*/} holds a P0 or P1 two passes past the cap (pass $COUNT on record); decision $STOP_ID; it waits for the owner's answer, no fix round runs"
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
     read -r READ K OF_THIS OF_ROUND BEGAN _ WAS_READ SINCE _ <<<"$(sed -n 2p <<<"$PROOF")"
-    # A finding normal use would hit blocks the merge, and session_proof reads a GO beside any tagged finding as NO-GO.
-    # A finding main cleared is handed to the next reviewer as out of scope; it never turns a NO-GO into a merge.
-    [ "${PROOF%%$'\n'*}" = "VERDICT: GO" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: a finding normal use would hit blocks the merge, and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
+    # The reviewer's record, never the round file, says what this pass found: the Builder can edit a round file.
+    NOW_LINES+=$({ tail -n +3 <<<"$PROOF" | grep -E "$FINDING" || true; })$'\n'
+    # Issue 366: a P0, P1 or P2 holds the merge (session_proof reads a GO beside one as NO-GO), until the cap; a P0 or
+    # P1 is never capped. A finding main cleared is handed to the next reviewer as out of scope; it never turns a
+    # NO-GO into a merge.
+    if [ "${PROOF%%$'\n'*}" != "VERDICT: GO" ]; then
+      [ "$(tail -n +3 <<<"$PROOF" | p01_count)" = 0 ] || die "$NAME $TID (${LAST##*/}) ended NO-GO with a P0 or P1: a P0 or P1 is never capped (pass $COUNT on record). Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
+      [ "$READ" = final ] && [ "$COUNT" -ge "$REVIEW_CAP" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: a P0, P1 or P2 holds the merge below the cap (pass $COUNT on record, cap $REVIEW_CAP), and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
+      # The cap merges an open P2 for main to file. A NO-GO that names none (only P3s, an untagged level, a refusal
+      # line, no finding) is no cap stop: it would merge with nothing to file.
+      [ "$(tail -n +3 <<<"$PROOF" | p2_count)" -gt 0 ] || die "$NAME $TID (${LAST##*/}) ended NO-GO but names no open P2, so it is no cap stop (pass $COUNT on record): only an open P2 is merged at the cap, for main to file. Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
+      CAPPED=1
+    fi
     case $READ in
       # session_proof has just bound this pass to the tip, so nothing was committed after it.
       final) NOW="closing pass" RULE="closing GO" ;;
@@ -574,6 +670,8 @@ if [ "${1:-}" = --verify ]; then
       fix) NOW="narrowed pass" RULE="no closing pass"
         [ "$CLOSING" = no ] || die "${LAST##*/} is a narrowed pass: it read only the changes since the pass before it, and a narrowed pass's GO merges nothing. Run the closing pass: builder-codex-pass.sh $UNIT <N> final"
         STEPS+="$TID $WAS_READ $SINCE"$'\n' ;;
+      # Host change (owner order 2026-10-25): a commit with no code was read for its design, so nothing was merged on it.
+      design) die "${LAST##*/} is a design-only pass (its commit changed only the plan): its GO approves the design and merges nothing. Write the code, then run builder-codex-pass.sh $UNIT $((ROUND + 1)) final" ;;
       *) die "$NAME $TID (${LAST##*/}) is not a pass of builder-codex-pass.sh" ;;
     esac
     # The round file is the Builder's to edit: a thread of another round, GO there, proves nothing about this one.
@@ -601,7 +699,8 @@ if [ "${1:-}" = --verify ]; then
     [ "$mark" != @ ] || [[ $ENDED < $BEGAN ]] \
       || die "the $WHAT (${LAST##*/}) was not built on the passes the reviewer has on record for this worktree: $NAME $EARLIER_TID ended $ENDED, not before the $WHAT began ($BEGAN). Run the closing pass again once every other pass has ended"
   done <<<"$PASSES"
-  for TID in $TIDS; do
+  # Issue 366 (O2): the closing pass is handed no earlier finding, so only the passes before it are checked above.
+  [ "$WHAT" = "closing pass" ] || for TID in $TIDS; do
     # Only the block of earlier passes counts: a finding's words in the diff below it were never handed to the reviewer as a finding.
     BLOCK=$(awk -v head="$EARLIER_HEAD" -v end="$EARLIER_END" '$0 == end { exit } on { print } $0 == head { on = 1 }' "$RHOME/builder-pass-prompts/$TID")
     [ "$(grep -E '^Earlier pass [A-Za-z0-9-]+ ended [^ ]+$' <<<"$BLOCK" | sort)" = "$ON_RECORD" ] \
@@ -635,6 +734,12 @@ if [ "${1:-}" = --verify ]; then
         || die "the closing pass (${LAST##*/}, $NAME $TID) has no green full-suite line for the commit it read ($WAS_READ), and fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)). Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
     done
   fi
+  # Issue 366: what is open is printed before the proof line (main-watch reads the last line), and names the rule.
+  OPEN_LINES=$(open_findings "$NOW_LINES" "$PASSES")
+  if [ "$RULE" = "closing GO" ]; then
+    if [ -n "$CAPPED" ]; then RULE="cap stop"; elif [ -n "$OPEN_LINES" ]; then RULE="threshold stop"; fi
+  fi
+  [ -z "$OPEN_LINES" ] || printf '%s\n' "$OPEN_LINES"
   if [ "$RULE" = "no closing pass" ]; then
     # The owner chose no closing pass at setup: the last first pass anchors the chain, and
     # narrowed passes read every commit after it up to the tip, the one under merge ending GO.
@@ -662,7 +767,8 @@ if [ "${1:-}" = --verify ]; then
     echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
     exit 0
   fi
-  echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
+  ENDED_AS=GO; [ -z "$CAPPED" ] || ENDED_AS="NO-GO with no P0 or P1 at pass $COUNT on record"
+  echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended $ENDED_AS in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
   [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
   exit 0
 fi
@@ -836,6 +942,19 @@ PREV=$(round_files "$WT" "$UNIT" | awk -v n="$N" '$1 < n' | sort -n | tail -1 | 
 PASSES=$(CUT=mark earlier_passes "$WT") || exit 2
 EARLIER=$(awk '$1 == "@" { print "Earlier pass " $2 " ended " $8; next } !seen[$0]++' <<<"$PASSES")
 [ "$KIND" = adversarial ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-codex-pass.sh $UNIT $N adversarial"
+# Issue 366 (O4): no pass of any kind launches, and nothing is committed, while the latest pass on record holds a P0 or
+# P1 two passes past the cap and the owner has not answered its decision in main's ledger. Each stop has its own id,
+# so an answer to one does not cover the next. A ledger that cannot be read refuses: no answer is never read as one.
+# The answer is the row of that id, or the row the printed route leaves: orca-wait.sh records ask-main.sh's question
+# as <unit>-msg_<id> with its subject, "<stop id>: ...", first, and answer-worker.sh answers that row.
+STOP_ID=$(review_stop_id "$PASSES")
+if [ -n "$STOP_ID" ]; then
+  LEDGER=$(COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" list 2>&1) \
+    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 two passes past the cap (decision $STOP_ID), and the owner's decisions ledger cannot be read ($(tail -n 1 <<<"$LEDGER")), so no answer to it can be found. No commit was made"
+  jq -e --arg id "$STOP_ID" --arg s "$UNIT asks" \
+    'any(.[]; .answeredAt != null and (.id == $id or (.source == $s and (.question | startswith($id + ":")))))' <<<"$LEDGER" >/dev/null \
+    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 two passes past the cap; decision $STOP_ID waits for the owner's answer, and no pass runs until that row is ANSWERED. Send main one question if you have not: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". No commit was made"
+fi
 # Main adds scope in a fix round by changing the brief or its rulings. A narrowed
 # pass would read only the fix and leave the new part unread until the closing
 # pass, so the first pass after such a change reads the whole branch as a closing
@@ -863,12 +982,30 @@ if [ "$KIND" = review ]; then
     KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"
   fi
 fi
+# Issue 366: from the cap only a closing pass can end the loop, so a narrowed pass runs as one.
+COUNT=$(passes_on_record "$PASSES" "$N")
+if [ "$KIND" = review ] && [ "$COUNT" -ge "$REVIEW_CAP" ]; then
+  KIND=final; echo "final in place of review: this is pass $COUNT on record, at or past the cap of $REVIEW_CAP, where only the closing pass ends the loop"
+fi
 # Issue 362 (host issue 3168): a fix that mends the named site while the same pattern sits at other call sites costs a
 # round per site. After a NO-GO the next pass needs the Builder's search for the pattern's other sites, in the evidence
 # file under "## Sites checked (pass <M>)": a Search: line, then a line per site found, fixed or not affected and why.
 EV=$WT/.claude/briefs/$UNIT-evidence.md
 plan_rel() { grep -ohE '\.claude/plans/[A-Za-z0-9._-]+\.md' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | head -1 || true; }
 plan_file() { local p; p=$(plan_rel); [ -z "$p" ] || [ ! -f "$WT/$p" ] || echo "$WT/$p"; }
+# plan_section <heading> -- issue 359: the lines under the plan's heading (matched without case), none for a plan without it.
+plan_section() {
+  local PF; PF=$(plan_file)
+  [ -z "$PF" ] || awk -v h="$(tr '[:upper:]' '[:lower:]' <<<"$1")" 'on && /^#/ { on = 0 } on && NF { print } tolower($0) ~ ("^#+[[:space:]]+" h) { on = 1 }' "$PF"
+}
+# plan_only <commit> -- true when the commit changes nothing outside the plan, brief and metrics folders: no code (host change, owner order 2026-10-25).
+plan_only() {
+  local f
+  while IFS= read -r f; do
+    case $f in .claude/plans/*|.claude/briefs/*|.claude/metrics/*) ;; *) return 1 ;; esac
+  done < <(git -C "$WT" show --name-only --format= "$1")
+  return 0
+}
 # evidence_section <heading regex> -- the lines under the evidence file's heading of that name, at any level.
 evidence_section() {
   awk -v h="$1" '/^#+[[:space:]]/ { on = ($0 ~ ("^#+[[:space:]]+" h "[[:space:]]*$")); next } on' "$EV" 2>/dev/null || true
@@ -963,7 +1100,7 @@ elif [ -n "$PREV" ]; then
   # code no pass has seen, so it owes the same check against the plan.
   SM=${PREV##*/}; SM=${SM#"$UNIT-r"}; SM=${SM%-reports.md}
   DC=$(git -C "$WT" log --format='%H %s' HEAD | awk -v s="feat($UNIT): Builder pass r$SM" '{ h = $1; sub(/^[^ ]+ /, "") } !f && $0 == s { print h; f = 1 }')
-  if [ -n "$DC" ] && ! git -C "$WT" show --name-only --format= "$DC" | grep . | grep -qv '^\.claude/plans/'; then
+  if [ -n "$DC" ] && plan_only "$DC"; then
     new_code_checked "$SM" "pass $SM reviewed a design alone (its commit changed only the plan)"
   fi
 fi
@@ -1031,8 +1168,10 @@ stage_and_check
 # the files main changed since the old base run, so a clash with main fails here and not at the merge. Selection is
 # shell-tests-for.sh, never the full suite. A conflict stops the pass: the rebase is aborted, the conflicting files are
 # named, nothing is resolved here.
+# Issue 356: how long each pre-review step took, in whole seconds, for the round file; "not run" for a step that did not.
+T_REBASE='not run' T_TESTS='not run' T_SUITE='not run'
 rebase_and_test() {
-  local old new conflicts files tests own t log=$PP_SCRATCH/$UNIT-rebase-r$N.log pend
+  local old new conflicts files tests own t log=$PP_SCRATCH/$UNIT-rebase-r$N.log pend t0=$SECONDS
   [ "$KIND" = final ] || return 0
   # A red run leaves the unit already on main, so a retry would find nothing to do: the old base stays on record until the tests pass.
   pend=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-rebase-pending-$UNIT
@@ -1045,6 +1184,7 @@ rebase_and_test() {
     die "REBASE CONFLICT: $UNIT does not rebase onto current local main (${conflicts:-no file named}). The rebase was aborted and the branch is as it was; no reviewer was run. Main resolves the conflict, then run the pass again: builder-codex-pass.sh $UNIT $N final"
   fi
   echo "rebased $UNIT onto local main ${new:0:8} (was based on ${old:0:8})"
+  T_REBASE="$((SECONDS - t0)) s" t0=$SECONDS
   echo "$old" > "$pend"
   files=$({ git -C "$WT" diff --name-only "$new...HEAD"; git -C "$WT" diff --name-only "$old" "$new"; } | sort -u)
   tests=$(cd "$WT" && bash "$HERE/shell-tests-for.sh" <<<"$files") || die "shell-tests-for.sh failed in $WT"
@@ -1059,11 +1199,19 @@ rebase_and_test() {
     || die "after the rebase onto main, tests that cover what $UNIT or main changed are red (full output $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
 $(grep -E '^(FAIL|       FAIL)' "$log" | head -10)"
   rm -f "$pend"
+  T_TESTS="$((SECONDS - t0)) s"
   echo "tests after the rebase: $(grep -E '^[0-9]+ passed' "$log" | tail -1)"
 }
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
+PRE=$(git -C "$WT" rev-parse HEAD)
 git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N"
+# Host change (owner order 2026-10-25): a final whose own commit changes no code is a design-only pass; with no commit
+# of its own it is a closing pass. SHA is set here first: under set -u an unset SHA ends the pass, and one inherited from
+# the caller would judge another commit.
+SHA=$(git -C "$WT" rev-parse HEAD)
+# The check reads the pass commit's own tip, before the rebase moves it.
+DESIGN=; [ "$KIND" != final ] || [ "$SHA" = "$PRE" ] || ! plan_only "$SHA" || DESIGN=design
 rebase_and_test
 SHA=$(git -C "$WT" rev-parse HEAD)
 # The suite runs on the tip just committed, before any reviewer starts. Its line goes first in the review input,
@@ -1086,6 +1234,7 @@ if [ -n "${TEST_CMD:-}" ]; then
     echo "The suite changed tracked files, the index or HEAD of $WT: $(git -C "$WT" status --porcelain --untracked-files=no | head -5 | paste -sd' ' -)" >> "$SUITE_LOG"
   fi
   TOTALS=$(grep -E '[0-9]+ (passed|failed)' "$SUITE_LOG" | tail -1 | tr -s ' \t' ' ' | sed 's/^ //; s/ $//' || true)
+  T_SUITE="$((SECONDS - T0)) s"
   SUITE="Suite: $SHA $R ${TOTALS:-no totals printed} $((SECONDS - T0))s $SUITE_LOG cmd:$CMD_SUM"
   # Set on the run's exit, never left empty: a red run whose log names nothing still forces the NO-GO below.
   [ "$R" = pass ] || SUITE_RED="$R (exit $RC)${TOTALS:+, $TOTALS}: $(grep -m5 'FAIL' "$SUITE_LOG" || tail -n 1 "$SUITE_LOG")"
@@ -1119,6 +1268,7 @@ if [ "$KIND" = review ]; then
 else
   RANGE=main...HEAD NOTE=""
   [ "$KIND" = final ] && HEAD_LINE=$HEAD_FINAL || HEAD_LINE=$HEAD_FULL
+  [ -z "$DESIGN" ] || HEAD_LINE=$HEAD_DESIGN
 fi
 # A diff driver or text filter the repo configures is a program: the prompt carries git's own diff.
 DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color -U100000 "$RANGE") || die "cannot diff $RANGE in $WT"
@@ -1140,7 +1290,9 @@ fi
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
   [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ (Stated limits|Cleared findings)/ { on = 1 }' "$f"
 done)
-CASES=$(PF=$(plan_file); [ -z "$PF" ] || awk 'on && /^#/ { on = 0 } on && NF { print } tolower($0) ~ /^#+[[:space:]]+what can go wrong/ { on = 1 }' "$PF")
+CASES=$(plan_section 'what can go wrong')
+# Issue 359 (5c): the plan's claims and decisions go after the diff, so the reviewer reads the trace instruction and the diff first.
+CLAIMS=$({ plan_section 'claims to falsify'; plan_section decisions; })
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
 DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
@@ -1150,7 +1302,15 @@ SUITE_TEXT=""
 holds() { COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" holds "$UNIT" 2>/dev/null \
   || echo "The owner's decisions ledger ($MAIN_OF_WT/.claude/metrics/decisions.jsonl) could not be read, so an open question naming $UNIT cannot be ruled out: end the title of a finding that changes a behaviour the owner may have asked about with [HOLD unknown]."; }
 HOLDS=$(holds)
-REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${EARLIER:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$EARLIER$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${CASES:+$'\n'$CASES_HEAD$'\n'$CASES$'\n'}${SITES:+$'\n'$SITES_HEAD$'\n'$SITES$'\n'}${NEWCODE:+$'\n'$NEWCODE_HEAD$'\n'$NEWCODE$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF
+ACCEPTED=$(plan_section 'accepted failure modes')
+# Issue 366 (O2): the closing pass over code is a fresh reviewer, handed no review history: no earlier finding, no
+# Main-only list, no sites or new-code list and no author's notes on a fix (the host's: no rebuttal or fix history),
+# and is told not to open the files that hold that history. It keeps the diff, the stated limits, the plan's cases,
+# claims and accepted failure modes and the owner's decisions. A narrowed or design-only pass keeps all of it (a design
+# is judged against the findings it answers). The fix hand-off below still lists every finding.
+HANDED=$EARLIER FRESH=
+if [ "$KIND" = final ] && [ -z "$DESIGN" ]; then HANDED= SITES= NEWCODE= DEFERRED= AUTHOR= FRESH=$FRESH_HEAD; fi
+REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${FRESH:+$FRESH$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${HANDED:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$HANDED$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${CASES:+$'\n'$CASES_HEAD$'\n'$CASES$'\n'}${SITES:+$'\n'$SITES_HEAD$'\n'$SITES$'\n'}${NEWCODE:+$'\n'$NEWCODE_HEAD$'\n'$NEWCODE$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF${CLAIMS:+$'\n\n'$CLAIMS_HEAD$'\n'$CLAIMS$'\n'}${ACCEPTED:+$'\n\n'$ACCEPTED_HEAD$'\n'$ACCEPTED$'\n'}
 [ "$BY" != codex ] || { GH_HAND=$(gh_hand_in) || exit 2; REST+=$'\n'$GH_HAND$'\n'; }
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
@@ -1335,7 +1495,7 @@ done
 # shortcut: a change to a file that was already untracked is not seen; sandbox the session when Claude Code can.
 [ "$BY" != claude ] || { [ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] && [ "$(tree)" = "$BEFORE" ]; } \
   || die "the Claude reviewer changed the worktree during the $KIND pass; restore it and run the pass again"
-TIDS=() T_BEGAN=() T_ENDED=() BODY="" VERDICT="VERDICT: GO"
+TIDS=() T_BEGAN=() T_ENDED=() BODY="" VERDICT="VERDICT: GO" THIS=""
 for i in "${!FOCI[@]}"; do
   K=$((i + 1)) RAW=$RUN-$BY-$((i + 1)).json
   TID=$(reviewer_id "$K")
@@ -1348,6 +1508,8 @@ for i in "${!FOCI[@]}"; do
   SAID=$(tail -n +3 <<<"$PROOF")
   read -r _ _ _ _ T_B T_E _ <<<"$(sed -n 2p <<<"$PROOF")"
   T_BEGAN+=("$T_B") T_ENDED+=("$T_E")
+  # This pass as earlier_passes will list it, for the stop below: read from the record, never from the round file.
+  THIS+="@ $TID $(sed -n 2p <<<"$PROOF")"$'\n'$({ grep -E "$FINDING" <<<"$SAID" || true; } | sed 's/^\([[:space:]]*\)@/\1\\@/')$'\n'
   [ "${#FOCI[@]}" = 1 ] || SAID="Reviewer $K of ${#FOCI[@]} (${FOCI[i]%%:*}):"$'\n'$SAID
   TIDS+=("$TID") BODY+=${BODY:+$'\n\n'}$SAID
 done
@@ -1358,12 +1520,35 @@ HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
 TIMING="$(printf '%s\n' "${T_BEGAN[@]}" | sort | sed -n 1p) $(printf '%s\n' "${T_ENDED[@]}" | sort | sed -n '$p')"
 [[ " ${T_ENDED[*]} " != *" - "* ]] || TIMING="${TIMING% *} -"
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
-  printf 'Pass: %s\nTiming: %s\n%s%s\n%s\n\n%s\n' "$KIND" "$TIMING" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+  printf 'Pass: %s\nTiming: %s\nPre-review: rebase %s, tests %s, suite %s\n%s%s\n%s\n\n%s\n' "${DESIGN:-$KIND}" "$TIMING" "$T_REBASE" "$T_TESTS" "$T_SUITE" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
+# Issue 366: whether the loop goes on, read from the reviewers' records and the count, never from N or a round file. A
+# stop ends the pass here: no NARROWED or DESIGN GO line, no class searches, no fix hand-off.
+STOP_ID=$(review_stop_id "$PASSES"$'\n'"$THIS")
+if [ -n "$STOP_ID" ]; then
+  echo "REVIEW STOP: ${OUT##*/} holds a P0 or P1 two passes past the cap (pass $COUNT on record); decision $STOP_ID. Write no fix and run no pass: send main one question, which waits for its answer: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". The next pass launches only once the owner has answered $STOP_ID."
+  exit 0
+fi
+FILE_THEN_MERGE="Print your DONE line and run no fix round: main files one issue per open finding class (builder-codex-pass.sh --verify $WT $UNIT HEAD lists them), then merges: merge-unit-local.sh $UNIT --filed '<class>=#<n>' ..."
+if [ "$KIND" = final ] && [ -z "$DESIGN" ] && [ -z "$SUITE_RED" ]; then
+  # What is open is read over the whole record, as --verify reads it: this pass's findings and the P3s of earlier GO rounds.
+  NOW_FOUND=$(grep -v '^@ ' <<<"$THIS")
+  if [ "$VERDICT" = "VERDICT: GO" ] && [ -n "$(open_findings "$NOW_FOUND" "$PASSES")" ]; then
+    echo "STOP (threshold): ${OUT##*/} names no P0, P1 or P2, so the review loop ends with only P3 findings open. $FILE_THEN_MERGE"
+    exit 0
+  elif [ "$VERDICT" = "VERDICT: NO-GO" ] && [ "$COUNT" -ge "$REVIEW_CAP" ] && [ "$(p01_count <<<"$NOW_FOUND")" = 0 ] \
+    && [ "$(p2_count <<<"$NOW_FOUND")" -gt 0 ]; then
+    echo "STOP (cap): ${OUT##*/} is pass $COUNT on record, at or past the cap of $REVIEW_CAP, and names an open P2 but no P0 or P1, so the review loop ends with its findings open. $FILE_THEN_MERGE"
+    exit 0
+  fi
+fi
 # Issue 352: a narrowed GO with the closing pass on merges nothing; say the next command so no done marker follows it.
 [ "$VERDICT" = "VERDICT: GO" ] && [ "$KIND" = review ] && [ "$CLOSING" != no ] \
   && echo "NARROWED GO: this GO merges nothing. Next: builder-codex-pass.sh $UNIT $((N + 1)) final; print your DONE line only after that pass's GO."
+# Host change (owner order 2026-10-25): a design-only GO approves the design and merges nothing; say the next command too.
+[ "$VERDICT" = "VERDICT: GO" ] && [ -n "$DESIGN" ] \
+  && echo "DESIGN GO: this GO approves the design and merges nothing. Next: write the code, then builder-codex-pass.sh $UNIT $((N + 1)) final; print your DONE line only after that pass's GO."
 # The reviewers' class searches run on every NO-GO, before any hand-off check, so a pass with no hand-off writes them too.
 CS_TXT=$WT/.claude/briefs/$UNIT-r$N-class-sites.txt CS_MD=$WT/.claude/briefs/$UNIT-r$N-class-sites.md
 [ "$VERDICT" != "VERDICT: NO-GO" ] || class_sites "$OUT" "$CS_TXT" "$CS_MD" || die "could not run the reviewers' class searches of ${OUT##*/}"
@@ -1431,6 +1616,7 @@ WRITING=$HAND
   printf -- '- Before pass %s, add `## Sites checked (pass %s)` to the evidence file: search the repo for the same pattern as each finding below, one `Search: <command>` line per search, then one line per site it turned up, `- <path>:<line> fixed` or `- <path>:<line> not affected, <why>`. The next pass refuses to start without it, and its reviewers treat a site of the pattern missing from the list, or wrongly marked not affected, as a finding.\n' "$((N + 1))" "$N"
   printf -- '- Before pass %s, also add `## New code checked (pass %s)` to the evidence file: check every read, write or check your fix adds or changes against the plan'"'"'s Data design, What can go wrong and the failure table, one line each, `- <path>:<line> meets <the plan line it follows>` or `- <path>:<line> no plan rule, <why it is safe>` (`- none, <why>` when the fix added none). A new site follows the rule the plan already has for its kind (a read the plan says is strongly consistent is strongly consistent everywhere). The next pass refuses to start without it, and its reviewers check each line against the plan.\n' "$((N + 1))" "$N"
   printf -- '- A finding marked `(not in the plan list)` is fixed AND added, with its test, to the What can go wrong section of the plan (%s) in the same commit.\n' "$(plan_rel | grep . || echo ".claude/plans/$UNIT.md")"
+  printf -- '- A finding'"'"'s severity is the reviewer'"'"'s: never lower one in a round file or the evidence (the loop'"'"'s stop reads the reviewer'"'"'s record, not the round file). Send a dispute to main as a question.\n'
   printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n'
   printf -- '- A closing (final) pass first rebases this unit onto current local main and, when main moved, runs the shell tests that cover what you or main changed. A conflict or a red test stops it before the reviewer: fix a red test, send a conflict to main as a question.\n\n'
   printf '## Findings so far\n\nEvery finding of this build'"'"'s passes so far, this pass'"'"'s included, by class. A class with several findings, or one that returns, is one flaw seen again and again: fix it as a class.\n\n%s\n' "${FSF:-None with a level or a class tag.}"
@@ -1445,7 +1631,7 @@ WRITING=$HAND
   # main hears nothing for it. A class that comes back after a design fix (the previous hand-off carries this block's
   # second-return line) is a redesign: the Builder asks main one question, through ask-main.sh (issue 335).
   if [ -n "$REPEAT" ]; then
-    printf '\n## The same class again\n\nFindings of class %s came back %s (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser). Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far, in this order. First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone and fix the design until a pass is GO. Only then change the code to match them, and run the next pass on the whole branch (final). Send main nothing for it. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. Start one background read-only agent now (an Explore helper, with the issue in its description): it lists every site in the changed files, and the scripts they source, where the flaw of this class can occur, checked against the class'"'"'s ruling, as a compact list. Fix or justify each site before the next pass, and write one line per site in the evidence file: `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`. If the approach touches an open decision, ask main first.\n' \
+    printf '\n## The same class again\n\nFindings of class %s came back %s (%s). Do not fix them input by input: write in the evidence file the approach that fixes the whole class (for example a fixed list in place of a parser). Fix the design for the whole class (one fence or stamp) and add one test that covers every ordering found so far, in this order. First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone (a commit with no code runs as a design-only pass: its reviewer judges the design, and its GO merges nothing) and fix the design until a pass is GO. Only then change the code to match them, and run the next pass on the whole branch (final). Send main nothing for it. The class fix has one retry path that does not depend on where the state came from, and its test removes each piece of state between two runs (ticks) and shows the retry still happens. Start one background read-only agent now (an Explore helper, with the issue in its description): it lists every site in the changed files, and the scripts they source, where the flaw of this class can occur, checked against the class'"'"'s ruling, as a compact list. Fix or justify each site before the next pass, and write one line per site in the evidence file: `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`. If the approach touches an open decision, ask main first.\n' \
       "${REPEAT% (*}" "$WHEN" "$(sed 's/.* (\(.*\))$/\1/' <<<"$REPEAT")"
     if grep -qF 'Fix the design for the whole class (one fence or stamp)' "$WT/.claude/briefs/$UNIT-fix-r$((N - 1)).md" 2>/dev/null; then
       printf '\nThis class has now returned three times. Fix the other findings first, then ask main one question, which waits for its answer: bash %s/ask-main.sh "%s: third return" "<the redesign you propose>". Build what main answers (a redesign by default; main asks the owner only for a policy call).\n' \

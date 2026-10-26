@@ -110,8 +110,8 @@ fr() { rm -f "$T/sends"; printf 'handle=%s\nunit=u9\nrole=builder\ncmd=export CO
 newbuild() { rm -f "$BR"/*-fix-r*.md; }
 TS="title:Builder — u9,Your task spec"
 fr u9-fix-r1.md sonnet high
-check "first NO-GO on a build: routing's fixer first moves a Sonnet high Builder to Opus high, and the record says fixer=first:routing" \
-  "/clear,/model opus,$TS|model=opus effort=high fixer=first:routing model=opus effort=high round=1" "$SEQ|$NEWREC"
+check "with no /plugin key the first fix round keeps the Builder's launched model and effort, and the record says fixer=first:routing" \
+  "/clear,$TS|model=sonnet effort=high fixer=first:routing model=sonnet effort=high round=1" "$SEQ|$NEWREC"
 fr u9-fix-r2.md sonnet medium
 check "second NO-GO on the same build: the fixer types /model opus and /effort high; the record says model=opus effort=high fixer=later:routing" \
   "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing model=opus effort=high round=2" "$SEQ|$NEWREC"
@@ -134,7 +134,7 @@ opts '{}'; rm -f "$BR/u9-fix-r4.md"
 # Issue 355: the round is the N in the hand-off's name, whatever other fix files the folder holds: fix-r1 is the first
 # fix round, and a lone fix-r7 is a later one (a pruned or sparse set never picks the first-round model).
 BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r1.md sonnet medium; BR=$OBR
-check "a new unit's fix-r1 counts as the first fix round" "fixer=first:routing model=opus effort=high round=1" "$(grep '^fixer=' "$T/rec")"
+check "a new unit's fix-r1 counts as the first fix round" "fixer=first:routing model=sonnet effort=medium round=1" "$(grep '^fixer=' "$T/rec")"
 rm -f "$BR8"/*-fix-r*.md; BR=$BR8; fr u8-fix-r7.md sonnet medium; BR=$OBR
 check "a lone fix-r7 runs on the later-round fixer" "fixer=later:routing model=opus effort=high round=7" "$(grep '^fixer=' "$T/rec")"
 # The filename guard: with two fix files there and a fixer that would switch, a GO continuation and added work switch nothing.

@@ -15,8 +15,7 @@ allowed-tools: Bash(bash *), AskUserQuestion
 3. Show its output whole. A `changed since setup` line names a file the owner
    edited after setup: the plugin's entries are out of it, the owner's edits
    are kept, and it is not byte-for-byte what it was.
-4. The machine's parts (Codex's hooks, the dashboard job, the ponytail skill
-   setup installed, a status line setup set: the one before it comes back) go
+4. The machine's parts (Codex's hooks, the dashboard job, a status line setup set: the one before it comes back) go
    with the last project; the output says which projects still hold them.
 5. The plugin itself is Claude Code's to remove: `claude plugin uninstall commandeck`.
    Run this skill in every project first, while the scripts are still there.

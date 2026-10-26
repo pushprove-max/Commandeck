@@ -42,7 +42,8 @@ check "a refused ledger writer prints its line, and the merge of v still ends 0"
 rmdir "$UL"; mv "$TMP/ul.kept" "$UL"
 check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
   "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
-# Every finding, P0 to P3, blocks the merge: a closing NO-GO of any severity never merges with its findings open.
+# Below the review cap (each of these is pass 2 on record), a closing NO-GO of any severity never merges with its
+# findings open (issue 366: only the cap stop merges a NO-GO, and never one with a P0 or P1).
 H0=$(git -C "$REPO" rev-parse HEAD)
 mk t; go t; STUB_REPLY=$'- [P2] (class: probe) A small thing -- t.txt:1 -- say it plainly -- cat t.txt\nVERDICT: NO-GO' pass t 2 final
 check "a closing NO-GO with P2s only does not merge, and main is unchanged" "1 1 0 $H0" \
@@ -282,5 +283,21 @@ echo moved > "$REPO/moved2.txt"; git -C "$REPO" add moved2.txt; git -C "$REPO" c
 check "a reviewed commit followed by a generated-only commit passes both proof steps and merges" "0 1 1" \
   "$(merge gt) $(grep -c '^DONE unit=gt merged=local' "$TMP/out") $(grep -c 'rule: generated-only tail' "$TMP/out")"
 rm -f "$REPO/.claude/commandeck.json"
+
+# Issue 349: a squash that changes mod code or types is checked with the plugin's own validate and test, on a copy of the
+# merged tree, whether or not the project has a testCommand (none here). A project that is not a plugin is not asked.
+hx() { mkdir -p "$COMMANDECK_WORKSPACES/$1/hooks"; echo 'export {}' > "$COMMANDECK_WORKSPACES/$1/hooks/$1.ts"
+  git -C "$COMMANDECK_WORKSPACES/$1" add "hooks/$1.ts"; git -C "$COMMANDECK_WORKSPACES/$1" commit -qm "feat($1): a mod change"; } # <unit>
+cp -R "$REPO/.claude-plugin" "$TMP/plugin-manifest"; git -C "$REPO" rm -rq .claude-plugin; git -C "$REPO" commit -qm "main: not a plugin"
+mk np; hx np; go np; : > "$TMP/claude-calls"
+check "a project that is not a plugin, with a changed hooks/x.ts, runs no claude plugin test" "0 0" "$(merge np) $(grep -c . "$TMP/claude-calls")"
+cp -R "$TMP/plugin-manifest" "$REPO/.claude-plugin"; git -C "$REPO" add .claude-plugin; git -C "$REPO" commit -qm "main: a plugin"
+mk pu; hx pu; go pu; : > "$TMP/claude-calls"
+check "a plugin unit changing hooks/x.ts with no testCommand runs claude plugin validate and test on the merged tree" "0 1 1 0" \
+  "$(merge pu) $(grep -c '^plugin validate \. @ ' "$TMP/claude-calls") $(grep -c '^plugin test \. @ ' "$TMP/claude-calls") $(grep -c " @ $REPO\$" "$TMP/claude-calls")"
+touch "$TMP/claude-red"; mk pr; hx pr; go pr; HP=$(git -C "$REPO" rev-parse HEAD)
+check "a red claude plugin test refuses the merge and leaves main where it was" "1 1 $HP 0" \
+  "$(merge pr) $(grep -c '^FAILED step 4 plugin' "$TMP/out") $(git -C "$REPO" rev-parse HEAD) $(git -C "$REPO" diff --cached --name-only | wc -l | tr -d ' ')"
+rm -f "$TMP/claude-red"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -109,43 +109,45 @@ check "a value in user settings counts when the environment has none, and the en
   "$(ts X=1 | grep -c '^warn tool search: tool search is off (ENABLE_TOOL_SEARCH=false)'):$(ts ENABLE_TOOL_SEARCH=true | grep -c '^ok tool search')"
 rm -f "$PROJ/.mcp.json" "$HOME/.claude/settings.json"
 
-# --- the relay's prompt cache: the value its pane really runs on, not only the bytes in its own file ---
-mkdir -p "$HOME/.claude" "$T/ws/Chief-of-Staff/.claude"
+# --- the prompt cache per role (issue 367): main's own file, the Builder's worktree, and the value the relay's pane really runs on ---
+mkdir -p "$HOME/.claude" "$T/ws/Chief-of-Staff/.claude" "$T/ws/Builder-fix/.claude"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.json"
-echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude-openai", "mainCacheTtl": "1h", "workerCacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$PROJ/.claude/main-session.settings.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$T/ws/Builder-fix/.claude/settings.local.json"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
 echo '{"permissions":{"allow":[]}}' > "$PROJ/.claude/settings.local.json"
 OUT=$(cache)
-check "the relay's own 1h beats the user's 5m: one ok line and no warn" '1:0' "$(grep -c '^ok prompt cache' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
+check "the relay's own 1h beats the user's 5m: one ok line for each role and no warn" '3:0' "$(grep -c '^ok prompt cache' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
 echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.local.json"
 OUT=$({ cache; shadow; })
 check "a TTL in the main checkout's local file warns, naming the file, and the relay then runs 5m" '1:1' \
   "$(grep -c "^warn prompt cache: $PROJ/.claude/settings.local.json sets CLAUDE_CODE_PROMPT_CACHE_TTL=5m" <<<"$OUT"):$(grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose' <<<"$OUT")"
 echo '{}' > "$PROJ/.claude/settings.local.json"; echo '{}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
 check "a relay file without the key runs on the user's 5m, and the doctor says so" 1 "$(cache | grep -c '^warn prompt cache: the relay pane runs 5m, not the 1h you chose')"
-echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
-echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$HOME/.claude/settings.json"
-check "a user-level 1h beats the 5m setup wrote for main, and the doctor says so" '1:0' "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose'):$(cache | grep -c '^ok')"
-echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$PROJ/.claude/settings.json"; echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.json"
-check "a project-level 1h beats the user's 5m for main" 1 "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose')"
-echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.json"
-check "a 5m in the user and project files is ok" '1:0' "$(cache | grep -c '^ok prompt cache'):$(cache | grep -c '^warn')"
-# No env key anywhere: main runs on the promptCacheTtl settings, and the main checkout's local file is read after the
-# project's, where setup wrote its 5m, so a key there wins.
-echo '{}' > "$HOME/.claude/settings.json"; echo '{"promptCacheTtl":"5m","subagentPromptCacheTtl":"5m"}' > "$PROJ/.claude/settings.json"
-echo '{"promptCacheTtl":"1h"}' > "$PROJ/.claude/settings.local.json"
+echo '{"version": 1, "profile": "claude-openai", "mainCacheTtl": "1h", "workerCacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
 OUT=$(cache)
-check "a promptCacheTtl in main's local file beats the project's 5m: the doctor names the file and the key" '1:0' \
-  "$(grep -c "^warn prompt cache: main runs 1h, not the 5m you chose: promptCacheTtl is 1h in $PROJ/.claude/settings.local.json" <<<"$OUT"):$(grep -c '^ok' <<<"$OUT")"
-echo '{"subagentPromptCacheTtl":"1h"}' > "$PROJ/.claude/settings.local.json"
-check "and so does a subagentPromptCacheTtl there" 1 "$(cache | grep -c '^warn prompt cache: main runs 1h, not the 5m you chose: subagentPromptCacheTtl is 1h in ')"
-echo '{"promptCacheTtl":"5m","subagentPromptCacheTtl":"5m"}' > "$PROJ/.claude/settings.local.json"
-check "a local 5m is ok" '1:0' "$(cache | grep -c '^ok prompt cache'):$(cache | grep -c '^warn')"
-echo '{}' > "$PROJ/.claude/settings.local.json"
+check "main's line names main-session.settings.json, and the claude --settings launch that reads it" '1:0' \
+  "$(grep -c "^ok prompt cache: main 1h (.claude/main-session.settings.json; read only by a main started with claude --settings $PROJ/.claude/main-session.settings.json)$" <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/main-session.settings.json"
+check "main's line warns, naming the file, when that file's TTL is not main's answer" 1 "$(cache | grep -c "^warn prompt cache: main's $PROJ/.claude/main-session.settings.json holds 5m CLAUDE_CODE_PROMPT_CACHE_TTL, not the 1h you chose")"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$PROJ/.claude/main-session.settings.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$HOME/.claude/settings.json"; echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$PROJ/.claude/settings.json"
+check "a user-level or project-level TTL does not change main's line" '1:0' "$(cache | grep -c '^ok prompt cache: main 1h'):$(cache | grep -c '^warn')"
 rm -f "$PROJ/.claude/settings.json"
-echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
-check "with both answers Leave as is the doctor has nothing to check" '1:0' "$(cache | grep -c '^ok prompt cache: setup sets none'):$(cache | grep -c '^warn')"
-rm -f "$HOME/.claude/settings.json" "$PROJ/.claude/settings.local.json"
+# A subagentPromptCacheTtl is read from the project's files, the local one last.
+echo '{"subagentPromptCacheTtl":"1h"}' > "$PROJ/.claude/settings.local.json"
+check "a subagentPromptCacheTtl in main's local file that is not the worker answer warns, naming the file and the key" 1 \
+  "$(cache | grep -c "^warn prompt cache: subagents run 1h, not the 5m you chose: subagentPromptCacheTtl is 1h in $PROJ/.claude/settings.local.json")"
+echo '{"subagentPromptCacheTtl":"5m"}' > "$PROJ/.claude/settings.local.json"
+check "a local subagentPromptCacheTtl equal to the worker answer is ok" '3:0' "$(cache | grep -c '^ok prompt cache'):$(cache | grep -c '^warn')"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$T/ws/Builder-fix/.claude/settings.local.json"
+check "a Builder worktree whose TTL is not the worker answer warns, naming its file" 1 "$(cache | grep -c "^warn prompt cache: workers run 1h, not the 5m you chose: CLAUDE_CODE_PROMPT_CACHE_TTL is 1h in $T/ws/Builder-fix/.claude/settings.local.json")"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$T/ws/Builder-fix/.claude/settings.local.json"
+echo '{}' > "$PROJ/.claude/settings.local.json"
+echo '{"version": 1, "profile": "claude-openai", "mainCacheTtl": "leave", "workerCacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
+check "with every answer Leave as is the doctor prints one leave line per role and no warn" '3:0' "$(cache | grep -cE '^ok prompt cache: (main|workers|relay) leave \(setup sets none\)$'):$(cache | grep -c '^warn')"
+rm -f "$HOME/.claude/settings.json" "$PROJ/.claude/settings.local.json" "$PROJ/.claude/main-session.settings.json"; rm -rf "$T/ws/Builder-fix"
 
 # --- a key in the main checkout's local file shadows the per-worktree one (Claude Code applies it over the worktree's own) ---
 echo '{"version": 1, "profile": "claude-openai", "cacheTtl": "leave", "chiefOfStaff": {"name": "r", "cacheTtl": "leave"}}' > "$PROJ/.claude/commandeck.json"
@@ -210,18 +212,18 @@ printf '{"models": [{"slug": "gpt-9.1-sol"}, {"slug": "gpt-9.1-astra"}]}\n' > "$
 echo "error connecting to api.github.com" > "$T/gh-fail-sandbox"
 OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
 check "the doctor reports a seat type that cannot reach GitHub, with its sandbox and the reason, and exits 1" "1:1:1" \
-  "$(grep -c '^FAIL github read: codex read-only + network (plan-judge-sol, plan-judge-astra): no network in the sandbox: error connecting to api.github.com' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox (orchestrator, plan-author, builder, fixer)$' <<<"$OUT"):$RC"
+  "$(grep -c '^FAIL github read: codex read-only + network (plan-judge-sol): no network in the sandbox: error connecting to api.github.com' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox (orchestrator, plan-author, plan-judge-fable, builder, fixer)$' <<<"$OUT"):$RC"
 rm -f "$T/gh-fail-sandbox"
 OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
 check "with GitHub reachable from every seat the doctor says so for each agent and mode" "1:1" \
-  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol, plan-judge-astra)$' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox' <<<"$OUT")"
-# Same agent and sandbox, other credentials: Astra's routed token is its own seat's, so a read as Sol proves nothing for it.
+  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox' <<<"$OUT")"
+# Same agent and sandbox, other credentials: a second Codex seat's routed token is its own, so a read as Sol proves nothing for it.
 sed -i.bak '2a\
 [ "${GH_TOKEN:-}" != invalid ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }' "$BIN/gh"; rm -f "$BIN/gh.bak"
-jq '.roles["plan-judge-astra"].shellEnv = {GH_TOKEN: "invalid"}' "$REAL/config/routing.json" > "$T/routing.json"
+jq '.roles["plan-judge-fable"] = .roles["plan-judge-sol"] + {shellEnv: {GH_TOKEN: "invalid"}}' "$REAL/config/routing.json" > "$T/routing.json"
 OUT=$(in_proj env COMMANDECK_ROUTING="$T/routing.json" timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
 check "a seat whose own environment cannot read GitHub fails alone, though another seat of its agent and mode reads" "1:1:1" \
-  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-astra): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
+  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-fable): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
 
 # Issue 334: an Orca launch overwrote a profile's settings file and the session-start repair put setup's parts back:
 # the doctor says so, naming the file, when, and what.
@@ -236,6 +238,17 @@ check "a profile file with the owner's choices has a line naming each" \
   "ok profile settings: $T/profile/settings.json: chosen with /commandeck:revoke, a launch does not put setup's value back: Bash(a:*), Bash(b:*), 1 auto-mode line, the status line (removed), option p@m k (kept: \"third\"), option p@m j (removed)" "$(lib il_profile_repair_report)"
 rm -f "$HOME/.commandeck/install/_machine.json"
 check "a profile file never repaired has no line" "" "$(lib il_profile_repair_report)"
+
+# Issue 367, after the timed cases: one line per role, each naming where its TTL is written.
+mkdir -p "$T/ws/Chief-of-Staff/.claude" "$T/ws/Builder-fix/.claude"
+echo '{"version": 1, "profile": "claude-openai", "mainCacheTtl": "1h", "workerCacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$PROJ/.claude/main-session.settings.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"}}' > "$T/ws/Builder-fix/.claude/settings.local.json"
+echo '{"env":{"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"}}' > "$T/ws/Chief-of-Staff/.claude/settings.local.json"
+OUT=$(cache)
+check "the doctor names each role's prompt cache and where it is written" "1:1:1:0" \
+  "$(grep -c '^ok prompt cache: main 1h (.claude/main-session.settings.json;' <<<"$OUT"):$(grep -c "^ok prompt cache: workers 5m (each worktree's .claude/settings.local.json; subagents: subagentPromptCacheTtl in .claude/settings.json)" <<<"$OUT"):$(grep -c '^ok prompt cache: relay 1h ' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
+rm -rf "$T/ws/Builder-fix" "$PROJ/.claude/main-session.settings.json"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

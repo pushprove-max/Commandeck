@@ -30,12 +30,12 @@ Orca version. Orca disables the Auto choice on a host that is too old.
 - **Seat launch flags.** The plugin's Claude seat command (`launch.templates.claude`
   in `config/routing.json`) carries no permission flag: a Claude seat takes the
   mode Orca opens it with, so Auto reaches it through Orca's setting alone. A
-  Codex seat carries `--sandbox` from its role (`read-only` for both plan
-  judges and the code reviewer) and an `--ask-for-approval` word only where a
+  Codex seat carries `--sandbox` from its role (`read-only` for the Sol
+  plan judge and the code reviewer) and an `--ask-for-approval` word only where a
   role sets one; none does. A read-only sandbox stays read-only under Auto,
   since Auto changes who answers an approval, not the sandbox.
-- **Seats that must stay restricted** (the reviewer and both judges are Codex
-  with a read-only sandbox) are unaffected by Auto for what they can write.
+- **Seats that must stay restricted** (the reviewer and the Sol judge are Codex
+  with a read-only sandbox; the Fable judge is a Claude pane with the write tools denied) are unaffected by Auto for what they can write.
 
 ## What was and was not checked
 
@@ -53,5 +53,5 @@ pane) refused under Auto, and one ordinary command allowed.
 Keep Manual or the owner's current choice for main until a probe confirms the
 guards refuse under Auto. Then try Auto for the orchestrator first: it keeps
 every guard, asks less often than Manual, and checks more than Yolo does. Leave
-the Codex judges and reviewer on their read-only sandbox. Changing any
+the Codex judge and reviewer on their read-only sandbox. Changing any
 session's permission mode is the owner's decision, so this note changes none.

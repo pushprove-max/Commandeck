@@ -54,6 +54,11 @@ cfg 'del(.fullSuiteBeforeFinal)'
 
 # Issue 225: each finding carries a class tag, the same tag for the same kind in every pass.
 check "the pass prompt asks for each finding's class" 1 "$(grep -c '\[P<0-3>\] (class: <tag>) <title>' "$B/$U-r14-prompt-1.md")"
+# Host change (owner order 2026-10-25): the reviewer is asked for the search class_sites runs, under blocking findings only.
+check "the pass prompt asks for a Class search line under each blocking finding" "1 1 1" \
+  "$(grep -c 'Under each blocking finding write one line, Class search: rg <arguments>, a read-only rg search run from the repository root whose hits are every place with the same mistake' "$B/$U-r14-prompt-1.md") \
+$(grep -c 'the <file>:<line> of that finding among them; the author must answer for each hit' "$B/$U-r14-prompt-1.md") \
+$(grep -c 'A known gap carries no Class search line' "$B/$U-r14-prompt-1.md")"
 
 
 echo "$PASS passed, $FAIL failed"

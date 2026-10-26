@@ -37,7 +37,7 @@ check "a refused launch: run exits with the launch's code, opens no pane, and se
 # Issue 312: a seat the owner turned off in /plugin config is refused at its launch, by hand too, naming the key, with
 # no pane and no record: plan-tier.sh skips it, and a hand launch must not plan it anyway.
 SET=$HOME/.claude/settings.json; cp "$SET" "$T/settings.keep"
-for r in plan-author:planAuthorEnabled plan-judge-sol:planJudgeSolEnabled plan-judge-astra:planJudgeAstraEnabled; do
+for r in plan-author:planAuthorEnabled plan-judge-sol:planJudgeSolEnabled plan-judge-fable:planJudgeFableEnabled; do
   jq --arg k "${r#*:}" '.pluginConfigs["commandeck@commandeck"].options[$k] = false' "$T/settings.keep" > "$SET"; : > "$T/creates"
   OUT=$(seat_sh launch "${r%%:*}" off-unit "$T/spec.md" 2>&1); RC=$?
   check "${r#*:}=false: seat.sh launch ${r%%:*} is refused naming the key, opens no pane, writes no record" "2:1:0:no" \

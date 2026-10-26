@@ -1,0 +1,47 @@
+name: release
+on:
+  push:
+    branches: [main]
+# Its own workflow: ci.yml stays read-only. The one decision is scripts/release-decide.sh; no step after it runs
+# without its output starting "release ". The checkout before it neither tags nor publishes.
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      # Every commit and tag: the decision compares two commits and looks for the tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # The assignment, not echo's argument, carries the script's exit: bash -e fails the step with it.
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DECISION=$(bash scripts/release-decide.sh "${{ github.event.before }}" "$GITHUB_SHA")
+          echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+      # A missing changelog section fails the job here, before anything is tagged.
+      - name: Notes
+        if: startsWith(steps.decide.outputs.decision, 'release ')
+        env:
+          DECISION: ${{ steps.decide.outputs.decision }}
+        run: bash scripts/release-notes.sh "${DECISION#release v}" > "$RUNNER_TEMP/notes.md"
+      # A rerun after a failed Publish finds its tag pushed already and goes on.
+      - name: Tag
+        if: startsWith(steps.decide.outputs.decision, 'release ')
+        env:
+          DECISION: ${{ steps.decide.outputs.decision }}
+        run: |
+          TAG=${DECISION#release }
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { git tag "$TAG" "$GITHUB_SHA" && git push origin "$TAG"; }
+      # A release that exists already changes nothing.
+      - name: Publish
+        if: startsWith(steps.decide.outputs.decision, 'release ')
+        env:
+          DECISION: ${{ steps.decide.outputs.decision }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${DECISION#release }
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --verify-tag --notes-file "$RUNNER_TEMP/notes.md"

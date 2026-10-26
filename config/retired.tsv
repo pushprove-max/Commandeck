@@ -1,3 +1,5 @@
 # <name>	<what replaced it>: a name the CHANGELOG retired. instruction-lint.py flags it in any instruction file, template, brief, doc or hook.
---no-ponytail	--ponytail off|lite|full|ultra
+--no-ponytail	nothing: the add-on is removed
+--ponytail	nothing: the add-on is removed
+--cache-ttl	--main-cache-ttl 5m|1h|leave and --worker-cache-ttl 5m|1h|leave
 file-open-findings.sh	nothing: the merge no longer files open findings

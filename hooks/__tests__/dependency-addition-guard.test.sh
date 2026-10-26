@@ -127,11 +127,11 @@ check "approval cannot carry npm ci through a link" 2 "$(run "$(bash_p "COMMANDE
 SETUP=$(cd "$(dirname "$0")/../.." && pwd)/scripts/setup.sh
 mkdir -p "$TMP/h"; ln -s "${SETUP%/scripts/setup.sh}" "$TMP/h/plug"
 check "the plugin's own setup preview with --auto-mode add is not blocked" 0 \
-  "$(run "$(bash_p "bash $SETUP --profile claude --test-command 'npm test' --auto-mode add --cache-ttl 5m --plan")")"
+  "$(run "$(bash_p "bash $SETUP --profile claude --test-command 'npm test' --auto-mode add --worker-cache-ttl 5m --plan")")"
 check "the plugin's own setup preview with install answers, named through ~, is not blocked" 0 \
   "$(run_env HOME="$TMP/h" "$(bash_p "bash ~/plug/scripts/setup.sh --test-command 'npm test' --global-claude merge --global-rules install --rules merge --plan")")"
 check "another setup.sh with the same flags still blocks" 2 \
-  "$(run "$(bash_p "bash ./other/setup.sh --test-command 'npm test' --auto-mode add --cache-ttl 5m --plan")")"
+  "$(run "$(bash_p "bash ./other/setup.sh --test-command 'npm test' --auto-mode add --worker-cache-ttl 5m --plan")")"
 check "an install after the plugin's setup on the same line still blocks" 2 \
   "$(run "$(bash_p "bash $SETUP --test-command 'npm test' --plan && npm install lodash")")"
 check "a quoted install run by bash -c beside the plugin's setup still blocks" 2 \
@@ -148,7 +148,7 @@ cp "$SETUP" "$PC/0.25.3/scripts/setup.sh"
 for s in "$EVIL/scripts" "$PC/0.25.3/x/scripts"; do printf '#!/bin/sh\nsh -c "$1"\n' > "$s/setup.sh"; done
 OLD_HOOK=$PC/0.25.2/hooks/dependency-addition-guard.sh
 run_old() { env -u CLAUDE_CONFIG_DIR HOME="$TMP/home" ${2:+CLAUDE_CONFIG_DIR="$2"} bash "$OLD_HOOK" >/dev/null 2>&1 <<<"$1"; echo $?; }
-ISSUE_ARGS="--profile claude-openai --scope machine --global-rules merge --global-claude merge --builder-model sonnet --builder-effort high --standard-context --builder-clear-line 140k --issue-sizing '' --plan-models opus,sonnet,sol,astra --plan-fast '' --name '' --persona '' --dashboard --bind 127.0.0.1 --hosts '' --test-command 'npm test' --full-suite off --no-strict --ponytail lite --cache-ttl 5m --auto-mode add --worker-skills-off '' --worker-plugins-off '' --max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd '' --no-codex-fast"
+ISSUE_ARGS="--profile claude-openai --scope machine --global-rules merge --global-claude merge --builder-model sonnet --builder-effort high --standard-context --builder-clear-line 140k --issue-sizing '' --plan-models opus,sonnet,sol,astra --plan-fast '' --name '' --persona '' --dashboard --bind 127.0.0.1 --hosts '' --test-command 'npm test' --full-suite off --no-strict --worker-cache-ttl 5m --auto-mode add --worker-skills-off '' --worker-plugins-off '' --max-rounds '' --closing-pass yes --small-build '' --max-review-min '' --max-test-percent '' --max-usd '' --no-codex-fast"
 check "issue 311's preview, hook and setup.sh in two version folders, is not blocked" 0 \
   "$(run_old "$(bash_p "bash ~/.claude/plugins/cache/commandeck/commandeck/0.25.3/scripts/setup.sh $ISSUE_ARGS --plan")")"
 check "issue 311's apply, hook and setup.sh in two version folders, is not blocked" 0 \

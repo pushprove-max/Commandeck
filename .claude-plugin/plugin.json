@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.47.0",
+  "version": "0.48.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -45,14 +45,14 @@
     "fixerFirstModel": {
       "type": "string",
       "title": "Fixer model, first fix round",
-      "description": "The model of a build's first fix round. project: Opus. builder: the Builder's launched model.",
+      "description": "The model of a build's first fix round. project: builder, the Builder's launched model (it keeps it).",
       "options": ["project", "builder", "opus", "sonnet", "fable"],
       "default": "project"
     },
     "fixerFirstEffort": {
       "type": "string",
       "title": "Fixer effort, first fix round",
-      "description": "The effort of a build's first fix round. project: high. builder: the Builder's launched effort, a per-build raise included.",
+      "description": "The effort of a build's first fix round. project: builder, the Builder's launched effort, a per-build raise included (it keeps it).",
       "options": ["project", "builder", "low", "medium", "high", "xhigh", "max"],
       "default": "project"
     },
@@ -125,7 +125,7 @@
     "planJudgeSolEnabled": {
       "type": "boolean",
       "title": "Sol judge",
-      "description": "On: the Sol judge reads the plan. Off: the Astra judge judges alone, and with both off the plan installs unjudged.",
+      "description": "On: the Sol judge reads the plan. Off: the Fable judge judges alone, and with both off the plan installs unjudged.",
       "default": true
     },
     "planJudgeSolAgent": {
@@ -154,36 +154,29 @@
       "description": "The Sol judge runs on the fast tier, which costs more. On codex it needs service_tier = \"fast\" in Codex's config.toml.",
       "default": false
     },
-    "planJudgeAstraEnabled": {
+    "planJudgeFableEnabled": {
       "type": "boolean",
-      "title": "Astra judge",
-      "description": "On: the Astra judge reads the plan on the Panel tier. Off: the Sol judge judges alone.",
+      "title": "Fable judge",
+      "description": "On: the Fable judge (a read-only Claude pane) reads the plan on the Panel tier. Off: the Sol judge judges alone.",
       "default": true
     },
-    "planJudgeAstraAgent": {
+    "planJudgeFableModel": {
       "type": "string",
-      "title": "Astra judge agent",
-      "description": "codex, or claude (a read-only Claude pane). project: codex, or claude on the Claude-only profile.",
-      "options": ["project", "codex", "claude"],
+      "title": "Fable judge model",
+      "description": "opus, sonnet or fable. project: fable.",
       "default": "project"
     },
-    "planJudgeAstraModel": {
+    "planJudgeFableEffort": {
       "type": "string",
-      "title": "Astra judge model",
-      "description": "On codex: a family or a model id. On claude: opus, sonnet or fable. project: astra, or sonnet on claude.",
-      "default": "project"
-    },
-    "planJudgeAstraEffort": {
-      "type": "string",
-      "title": "Astra judge effort",
-      "description": "The Astra judge's reasoning effort. project: high.",
+      "title": "Fable judge effort",
+      "description": "The Fable judge's reasoning effort. project: high.",
       "options": ["project", "low", "medium", "high", "xhigh", "max"],
       "default": "project"
     },
-    "planJudgeAstraFast": {
+    "planJudgeFableFast": {
       "type": "boolean",
-      "title": "Astra judge fast tier",
-      "description": "The Astra judge runs on the fast tier, which costs more. On codex it needs service_tier = \"fast\" in Codex's config.toml.",
+      "title": "Fable judge fast tier",
+      "description": "The Fable judge runs on Claude's fast mode, which costs more.",
       "default": false
     },
     "maxReviewRounds": {
@@ -223,13 +216,6 @@
       "description": "The closing review pass runs the project's test command once on the build's tip.",
       "default": true
     },
-    "ponytail": {
-      "type": "string",
-      "title": "Ponytail",
-      "description": "The ponytail skill's smallest-change coding rules in worker panes. off: none. lite: build what was asked, name the smaller option. full: the smallest complete change. ultra: also push back on parts the need does not justify.",
-      "options": ["off", "lite", "full", "ultra"],
-      "default": "lite"
-    },
     "autoDecideSeats": {
       "type": "string",
       "title": "Auto-decide seats",
@@ -237,18 +223,46 @@
       "options": ["chiefOfStaff", "chiefOfStaff,main", "off"],
       "default": "chiefOfStaff"
     },
-    "promptCacheTtl": {
+    "unitsBand": {
       "type": "string",
-      "title": "Prompt cache",
-      "description": "5m: main and worker panes keep their prompt cache 5 minutes. leave: nothing is written.",
-      "options": ["5m", "leave"],
+      "title": "Units band",
+      "description": "The one-line band of live units above the prompt. auto: on in main and the Chief of Staff, off in worker and reviewer panes. on: every pane. off: none. /units band on|off changes it for the session.",
+      "options": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "unitsPane": {
+      "type": "string",
+      "title": "Units pane",
+      "description": "The side pane beside the chat with each live unit's steps, tests and merge. auto: on in main and the Chief of Staff, off in worker and reviewer panes. on: every pane. off: none. /units pane on|off changes it for the session.",
+      "options": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "unitsStatus": {
+      "type": "string",
+      "title": "Units status line",
+      "description": "A status line that appears when a unit's verdict or a merge needs a look. auto: on in main and the Chief of Staff, off in worker and reviewer panes. on: every pane. off: none. /units status on|off changes it for the session.",
+      "options": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "mainPromptCacheTtl": {
+      "type": "string",
+      "title": "Main prompt cache",
+      "description": "How long main keeps its prompt cache, 5m or 1h, written for a main started with claude --settings .claude/main-session.settings.json. leave: nothing is written.",
+      "options": ["5m", "1h", "leave"],
+      "default": "1h"
+    },
+    "workerPromptCacheTtl": {
+      "type": "string",
+      "title": "Builder and worker prompt cache",
+      "description": "How long Builders and every other worker pane keep their prompt cache, 5m or 1h; their subagents follow it. leave: nothing is written.",
+      "options": ["5m", "1h", "leave"],
       "default": "5m"
     },
     "relayPromptCacheTtl": {
       "type": "string",
-      "title": "Relay prompt cache",
-      "description": "1h: the relay pane keeps its prompt cache 1 hour. leave: nothing is written.",
-      "options": ["1h", "leave"],
+      "title": "Chief of Staff prompt cache",
+      "description": "How long the Chief of Staff pane keeps its prompt cache, 5m or 1h. leave: nothing is written.",
+      "options": ["5m", "1h", "leave"],
       "default": "1h"
     },
     "dashboardBind": {

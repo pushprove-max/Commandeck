@@ -12,8 +12,10 @@
   written a handoff file with its decisions, open findings, current commit
   and test evidence.
 - The cache check. `scripts/builder-cache-check.sh`
-  reads a Builder's transcripts and fails unless its main thread wrote only
-  5-minute prompt cache, and its subagents only 5-minute cache.
+  reads a Builder's transcripts and fails unless its main thread and its
+  subagents wrote only the prompt cache of the Builder and worker answer of the
+  Builder's own project (5m or 1h; unanswered reads as 5m); with Leave as is it
+  proves nothing and says so.
 - The price of each build. The build review prices every request at list
   price from one table in `scripts/dashboard_limit.py` and flags a build over
   $30. These are list-price equivalents and a subscription plan bills

@@ -50,7 +50,7 @@ batch adds or changes (a file, a record, a counter, a lock, a log, a setting): w
 it lives, who writes it, who reads it, when it resets, and what a retry runs. Write
 `none: <why no state is added or changed>` when there is none.
 
-- <piece of state>: lives in <where>; written by <who>; read by <who>; reset when <when>; a retry runs <what>
+- <piece of state>: lives in <where>; written by <who>; read by <who>; reset when <when>; a retry runs <what>; a half write leaves <what>, recovered by <how>; two concurrent writes <result>; retries owned by <code>, at most <n>
 
 ## What can go wrong
 

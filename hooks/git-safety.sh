@@ -4,6 +4,10 @@
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# --record-add (PostToolUse, Bash; issue 357): a call that exited 0 may have added a temporary worktree. The same
+# reading of the command runs, but it only records ownership and never blocks. PreToolUse writes the add's claim.
+MODE=pre
+[ "${1-}" != --record-add ] || { MODE=record; exec 2>/dev/null; trap 'exit 0' EXIT; }
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # The strip below walks the command a character at a time (~1 s per 10 KB);
 # a command naming no git call, or none of the screened subcommands, cannot
@@ -140,8 +144,8 @@ fi
 # quote reader was reworked, text for text.
 # Known limits, not screened: eval, bash -c '<string>' and any other shell
 # given a string, xargs, aliases and functions, a script file.
-# Block git reset --hard on main
-if printf '%s\n%s' "$ARGV" "$CMD" | grep -qE "git${GITOPTS}[[:space:]]+reset([[:space:]]+[^;&|()[:space:]]+)*[[:space:]]+--hard([[:space:];&|)]|\$)"; then
+# Block git reset --hard on main, and each prefix git takes for it (`--h`, `--ha`, `--har`)
+if printf '%s\n%s' "$ARGV" "$CMD" | grep -qE "git${GITOPTS}[[:space:]]+reset([[:space:]]+[^;&|()[:space:]]+)*[[:space:]]+--h(a(r(d)?)?)?([[:space:];&|)]|\$)"; then
   echo "Blocked: git reset --hard is dangerous. Use git revert for safe rollbacks." >&2
   exit 2
 fi
@@ -168,6 +172,85 @@ fi
 case "$P" in *checkout*|*switch*|*restore*|*clean*|*stash*|*branch*|*worktree*|*reflog*|*gc*) ;; *) exit 0 ;; esac
 # The subcommand is matched as a whole word, so `git restore-mtime` is not a restore.
 DISCARD="(^|[;&|(/]|[[:space:]])git${GITOPTS}[[:space:]]+(checkout|switch|restore|clean|stash|branch|worktree|reflog|gc)[^;&|()[:space:]]*([[:space:]]+[^;&|()[:space:]]+)*"
+# Temporary worktree ownership (issue 357). A forced remove of a worktree is blocked, except one this session added
+# on a path under the temporary folder. Two proofs, both of one add. The add's own success: only a command on a FIXED
+# LIST shows it (WT_ADD below: `git [-C <dir>] worktree add [-q|--quiet|--detach|--no-checkout|-b <name>|-B <name>]...
+# <path> [<commit>]`, words of [A-Za-z0-9_./~@^:+=,-]; no other git option, as `--version` exits 0 with no add): its exit
+# status is the add's, PostToolUse fires only on exit 0, and git's add fails on a path that holds anything. And the
+# claim: PreToolUse of such an add, while the path is absent, writes this session's id beside it
+# (<parent>/.commandeck-add.<name>, one mv); a later hooked add of the path replaces it. PostToolUse (--record-add)
+# writes the grant only while the claim still names this session, so a record step that runs late cannot take a
+# worktree re-made at the path since. The grant: this session's id in that worktree's own git folder
+# (<main>/.git/worktrees/<name>/commandeck-owner), once, when git names the path once. Git deletes that folder with
+# the worktree, so a grant never outlives it. The forced remove that uses a grant must be on the fixed list too
+# (WT_REM), so no other call runs between this check and the remove. No session id: owns nothing. Only an absolute
+# path counts: git resolves a relative one from a -C folder or a cd earlier in the command, not the hook's.
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+WT_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+WT_RAW=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+WW='[A-Za-z0-9_./~@^:+=,-]+' WN='[A-Za-z0-9_./~@^:+=,][A-Za-z0-9_./~@^:+=,-]*' B='[[:blank:]]+'
+WT_ADD=0; [[ $WT_RAW =~ ^[[:blank:]]*git($B-C$B$WN)?${B}worktree${B}add($B(-q|--quiet|--detach|--no-checkout)|$B-[bB]$B$WN)*$B(/|~/)$WW($B$WN)?[[:blank:]]*$ ]] && WT_ADD=1
+WT_REM=0; [[ $WT_RAW =~ ^[[:blank:]]*git($B-C$B$WN)?${B}worktree${B}remove($B(-f|--force))+$B(/|~/)${WW}[[:blank:]]*$ ]] && WT_REM=1
+wt_canon() { # <absolute path>: the symlinks of its existing part resolved; fails for a relative path or a ".." in the missing part
+  local p=$1 rest=
+  case $p in /*) ;; "~/"*) p=$HOME/${p#"~/"} ;; *) return 1 ;; esac
+  while [ ! -d "$p" ] && [ "$p" != / ] && [ -n "$p" ]; do rest=/${p##*/}$rest; p=${p%/*}; done
+  p=$(cd -P "${p:-/}" 2>/dev/null && pwd -P) || return 1
+  case $rest in */..|*/../*) return 1 ;; esac
+  printf '%s' "${p%/}$rest"
+}
+wt_in_tmp() { # <canonical path>: below the temporary folder
+  local r
+  for r in "$(wt_canon "${TMPDIR:-/tmp}")" /tmp /private/tmp; do
+    case $1 in "${r%/}"/?*) return 0 ;; esac
+  done
+  return 1
+}
+wt_path() { # <words after the subcommand>: the first plain word, past the options that take a value
+  local skip=0 a
+  for a in "$@"; do
+    [ "$skip" = 0 ] || { skip=0; continue; }
+    case $a in -b|-B|--reason) skip=1 ;; -*) ;; *) printf '%s' "$a"; return 0 ;; esac
+  done
+  return 1
+}
+wt_grant() { # <canonical path>: the grant file of the linked worktree whose top folder is exactly that path
+  local o top gd gc
+  o=$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null) || return 1
+  { read -r top; read -r gd; read -r gc; } <<<"$o"
+  [ "$(cd -P "$top" 2>/dev/null && pwd -P)" = "$1" ] && [ -n "$gd" ] && [ "$gd" != "$gc" ] || return 1
+  printf '%s/commandeck-owner' "$gd"
+}
+wt_add() { # <words after add>: a fixed-list add of a tmp path. PreToolUse claims the path while it is absent;
+  # PostToolUse grants while the claim still names this session, the path is a linked worktree and git names it once
+  local raw c k g l n=0; [ "$WT_ADD" = 1 ] && [ -n "$SID" ] || return 0
+  raw=$(wt_path "$@") || return 0
+  c=$(wt_canon "$raw") && wt_in_tmp "$c" || return 0
+  k=${c%/*}/.commandeck-add.${c##*/}
+  if [ "$MODE" = pre ]; then
+    if [ -e "$c" ] || [ -L "$c" ]; then return 0; fi
+    { mkdir -p "${c%/*}" && printf '%s\n' "$SID" > "$k.$$" && mv -f "$k.$$" "$k"; } 2>/dev/null || rm -f "$k.$$"
+    return 0
+  fi
+  [ "$(cat "$k" 2>/dev/null)" = "$SID" ] && g=$(wt_grant "$c") || return 0
+  while IFS= read -r l; do
+    case $l in "worktree "*) [ "$(cd -P "${l#worktree }" 2>/dev/null && pwd -P)" = "$c" ] && n=$((n + 1)) ;; esac
+  done < <(git -C "$c" worktree list --porcelain 2>/dev/null)
+  [ "$n" = 1 ] && ( set -C; printf '%s\n' "$SID" > "$g" ) 2>/dev/null
+  return 0
+}
+wt_owned() { # <words after remove>: a fixed-list remove of the worktree at that path, under tmp, with this session's grant
+  local raw c g; [ "$WT_REM" = 1 ] && [ -n "$SID" ] || return 1
+  raw=$(wt_path "$@") || return 1
+  c=$(wt_canon "$raw") && wt_in_tmp "$c" && g=$(wt_grant "$c") && [ "$(cat "$g" 2>/dev/null)" = "$SID" ]
+}
+# abbr <--option>: an ERE for the option and each shorter prefix git takes for it (`--forc` is --force), down to one
+# letter after the dashes. A prefix git would refuse as ambiguous is read as the option too: that only blocks more.
+abbr() {
+  local o=$1 r= i
+  for ((i = ${#o}; i > 3; i--)); do r="(${o:i-1:1}$r)?"; done
+  printf '%s%s' "${o:0:3}" "$r"
+}
 arg_is() { # <ERE>: one of the call's arguments is exactly this
   local A
   for A in "${ARGS[@]}"; do [[ $A =~ ^($1)$ ]] && return 0; done
@@ -178,9 +261,12 @@ while IFS= read -r CALL; do
   shift # the git word itself
   # GITOPTS guesses which option takes a value; git's own list decides which
   # word is the subcommand, so `git --no-pager log -- stash` stays a log.
+  # GDIR: the folder git runs in, the session's moved by each -C (a cd earlier in the command is not followed).
+  GDIR=${WT_CWD:-.}
   while [ $# -gt 0 ]; do
     case "$1" in
-      -C|-c|--git-dir|--work-tree|--namespace|--config-env) shift; [ $# -gt 0 ] && shift ;;
+      -C) case ${2-} in /*) GDIR=$2 ;; ?*) GDIR=$GDIR/$2 ;; esac; shift; [ $# -gt 0 ] && shift ;;
+      -c|--git-dir|--work-tree|--namespace|--config-env) shift; [ $# -gt 0 ] && shift ;;
       --) break ;; # git has no bare `--` option: `git grep git -- restore` names a file
       -*) shift ;;
       *) break ;;
@@ -196,37 +282,39 @@ while IFS= read -r CALL; do
       # The `--` is optional: two plain words are a commit and a path, and one
       # is a path when it names a file here and no commit. POS = the plain
       # words, less the branch name -b, -B and --orphan take.
-      # shortcut: the one-word case is looked up in the session's folder, not a -C one.
+      # The one-word case is looked up where git runs (GDIR). shortcut: a cd earlier in the command is not followed.
       POS=(); SKIP=0
       for A in "${ARGS[@]}"; do
         [ "$SKIP" = 0 ] || { SKIP=0; continue; }
         case $A in --orphan|-[bB]|-[a-zA-Z]*[bB]) SKIP=1 ;; -*) ;; *) POS+=("$A") ;; esac
       done
-      CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
       { [ "$PATHS" = 1 ] || arg_is '\./?' || [ "${#POS[@]}" -ge 2 ] \
-        || { [ "${#POS[@]}" = 1 ] && ( cd "${CWD:-.}" 2>/dev/null && [ -e "${POS[0]}" ] && ! git rev-parse -q --verify "${POS[0]}^{commit}" >/dev/null 2>&1 ); }; } \
+        || { [ "${#POS[@]}" = 1 ] && ( cd "$GDIR" 2>/dev/null && [ -e "${POS[0]}" ] && ! git rev-parse -q --verify "${POS[0]}^{commit}" >/dev/null 2>&1 ); }; } \
         && WHY="git checkout of paths (after \`--\`, after a commit, or a file's own name) overwrites uncommitted edits. Commit them or copy them aside first; switching branches is not affected."
-      arg_is '--force|-[a-zA-Z]*f[a-zA-Z]*' && WHY="git checkout --force throws away the uncommitted edits a plain checkout would stop for. Commit them or copy them aside first." ;;
+      arg_is "$(abbr --force)|-[a-zA-Z]*f[a-zA-Z]*" && WHY="git checkout --force throws away the uncommitted edits a plain checkout would stop for. Commit them or copy them aside first." ;;
     switch)
-      arg_is '--force|--discard-changes|-[a-zA-Z]*f[a-zA-Z]*' && WHY="git switch --force (--discard-changes) throws away the uncommitted edits a plain switch would stop for. Commit them or copy them aside first." ;;
+      arg_is "$(abbr --force)|$(abbr --discard-changes)|-[a-zA-Z]*f[a-zA-Z]*" && WHY="git switch --force (--discard-changes) throws away the uncommitted edits a plain switch would stop for. Commit them or copy them aside first." ;;
     restore)
-      { arg_is '--staged|-[a-zA-Z]*S[a-zA-Z]*' && ! arg_is '--worktree|-[a-zA-Z]*W[a-zA-Z]*'; } \
+      { arg_is '--staged|-[a-zA-Z]*S[a-zA-Z]*' && ! arg_is "$(abbr --worktree)|-[a-zA-Z]*W[a-zA-Z]*"; } \
         || WHY="git restore of the working tree overwrites uncommitted edits. Only the index-only \`git restore --staged\` passes." ;;
     clean)
-      arg_is '--force|-[a-zA-Z]*f[a-zA-Z]*' && ! arg_is '--dry-run|-[a-zA-Z]*n[a-zA-Z]*' \
+      arg_is "$(abbr --force)|-[a-zA-Z]*f[a-zA-Z]*" && ! arg_is '--dry-run|-[a-zA-Z]*n[a-zA-Z]*' \
         && WHY="git clean -f deletes untracked files (briefs, scratch, handoff files). Preview with \`git clean -n\` and remove what you mean to by name." ;;
     stash)
       case "${ARGS[0]-}" in drop|clear) WHY="git stash ${ARGS[0]} destroys stashed work. Apply it or leave it." ;; esac ;;
     branch)
-      { arg_is '-[a-zA-Z]*D[a-zA-Z]*' || { arg_is '--delete|-[a-zA-Z]*d[a-zA-Z]*' && arg_is '--force|-[a-zA-Z]*f[a-zA-Z]*'; }; } \
+      { arg_is '-[a-zA-Z]*D[a-zA-Z]*' || { arg_is "$(abbr --delete)|-[a-zA-Z]*d[a-zA-Z]*" && arg_is "$(abbr --force)|-[a-zA-Z]*f[a-zA-Z]*"; }; } \
         && WHY="git branch -D deletes a branch whatever it still holds. Use \`git branch -d\`, which refuses an unmerged branch." ;;
     worktree)
-      [ "${ARGS[0]-}" = remove ] && arg_is '--force|-f+' \
-        && WHY="git worktree remove --force deletes a worktree with its uncommitted changes. Remove it without --force." ;;
+      case "${ARGS[0]-}" in
+        add) wt_add "${ARGS[@]:1}" ;;
+        remove) arg_is "$(abbr --force)|-f+" && ! wt_owned "${ARGS[@]:1}" \
+          && WHY="git worktree remove --force deletes a worktree with its uncommitted changes. Remove it without --force: \`git worktree remove <path>\`, which git refuses only while the worktree holds changes. (A temporary worktree this session added, both commands a single plain \`git [-C <dir>] worktree add|remove\` naming its absolute path, is the exception.)" ;;
+      esac ;;
     reflog)
       [ "${ARGS[0]-}" = expire ] && WHY="git reflog expire drops the entries that recover lost commits." ;;
     gc)
-      arg_is '--prune=now' && WHY="git gc --prune=now deletes unreachable objects at once, the ones the reflog could still recover. Plain \`git gc\` keeps the grace period." ;;
+      arg_is "$(abbr --prune)=now" && WHY="git gc --prune=now deletes unreachable objects at once, the ones the reflog could still recover. Plain \`git gc\` keeps the grace period." ;;
   esac
   [ -n "$WHY" ] || continue
   echo "Blocked: $WHY" >&2

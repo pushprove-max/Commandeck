@@ -16,7 +16,8 @@ pass 1 adversarial
 printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n' "$U" > "$SC/seat-$U-builder.txt"
 mkdir -p "$PROJ"; echo "$B/$U-fix-r7.md" > "$PROJ/old-sid.jsonl"; touch -t 209901010000 "$PROJ/old-sid.jsonl"
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 40 >/dev/null)
-CLS=$'- [P2] (class: lost-reply) CLASS-PROBE -- a.sh:1 -- it drops a reply -- bash a.sh\nVERDICT: NO-GO'
+# P1s: a P1 is never capped (issue 366), so the loop runs past the fifth pass on record with a hand-off each NO-GO.
+CLS=$'- [P1] (class: lost-reply) CLASS-PROBE -- a.sh:1 -- it drops a reply -- bash a.sh\nVERDICT: NO-GO'
 printf 'echo two\n' > "$W/a.sh"; fpass "$W" 2 review "$CLS" >/dev/null
 check "the first NO-GO of a class asks for no class fix" 0 "$(hand 2 | grep -c 'The same class again')"
 # F3: every fix brief carries the findings so far, grouped by class, and F2: the classes the failure table lacks.
@@ -32,7 +33,7 @@ $(hand 3 | grep -c 'Send main nothing for it') $(hand 3 | grep -c 'The class fix
 # Owner order 2026-10-25 (host change): a redesign coded unchecked brought a new defect each pass, so the design is
 # reviewed alone, to GO, before any code.
 check "the redesign comes in order: data design and failure table first, a design-only pass to GO, then the code, then a whole-branch pass" "1 1 1" \
-  "$(hand 3 | grep -c 'First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone and fix the design until a pass is GO') \
+  "$(hand 3 | grep -c 'First update the Data design answers in the plan and the failure table in the evidence file so they account for every case found so far, and commit nothing else: run the next pass (final) on that design alone (a commit with no code runs as a design-only pass: its reviewer judges the design, and its GO merges nothing) and fix the design until a pass is GO') \
 $(hand 3 | grep -c 'Only then change the code') $(hand 3 | grep -c 'run the next pass on the whole branch (final)')"
 check "a class in the failure table is not named as missing" "0 1" "$(hand 3 | grep -c '^Classes not yet in the failure table') $(hand 3 | grep -c '^### lost-reply (1 finding)')"
 check "the class-again block starts the background sweep and asks for a Sweep line per site" "1 1" \
@@ -46,7 +47,7 @@ $(grep -c 'send --type question' <<<"$H4") $(grep -c 'orchestration ask' <<<"$H4
 
 # Issue 362: a class that comes back after a pass in between (not only the one before) is the same flaw seen again, and
 # names the pass it was seen in.
-CLO=$'- [P2] (class: other-thing) OTHER-PROBE -- a.sh:1 -- another flaw -- bash a.sh\nVERDICT: NO-GO'
+CLO=$'- [P1] (class: other-thing) OTHER-PROBE -- a.sh:1 -- another flaw -- bash a.sh\nVERDICT: NO-GO'
 printf 'echo five\n' > "$W/a.sh"; fpass "$W" 5 review "$CLO" >/dev/null
 check "a NO-GO of another class is no repeat of the class before it" 0 "$(hand 5 | grep -c 'The same class again')"
 printf 'echo six\n' > "$W/a.sh"; fpass "$W" 6 review "$CLS" >/dev/null
@@ -73,8 +74,10 @@ check "a New code line that names no plan rule and no reason is refused" 2 "$(ra
 printf -- '- a.sh:2 meets What can go wrong, a dropped reply: the reply is kept\n' >> "$B/$U-evidence.md"
 check "with the search, a site line and a New code line under the right pass, the pass runs" "0 yes" \
   "$(rawpass 7 review 'VERDICT: GO') $([ -e "$B/$U-r7-reports.md" ] && echo yes || echo no)"
-check "the reviewers are handed both lists, and told a missing site or a broken plan rule is a finding" "1 1 1 1" \
-  "$(input 7 | grep -c 'b.sh:3 not affected') $(input 7 | grep -c 'Sites checked: the Builder') $(input 7 | grep -c 'a.sh:2 meets What can go wrong, a dropped reply') $(input 7 | grep -c 'New code checked: the Builder')"
+# Issue 366: pass 7 is a closing pass, a fresh reviewer handed neither list; narrowed pass 3 was handed both.
+check "a narrowed pass's reviewers are handed both lists, and told a missing site or a broken plan rule is a finding; a closing pass's are not" "1 1 0 0 0 0" \
+  "$(input 3 | grep -c 'Sites checked: the Builder') $(input 3 | grep -c 'New code checked: the Builder') \
+$(input 7 | grep -c 'b.sh:3 not affected') $(input 7 | grep -c 'Sites checked: the Builder') $(input 7 | grep -c 'a.sh:2 meets What can go wrong, a dropped reply') $(input 7 | grep -c 'New code checked: the Builder')"
 # A redesign is reviewed alone (a pass whose commit is only the plan); the code written after its GO has been read by no
 # pass yet, so it owes the New code check though the pass before it was a GO.
 mkdir -p "$W/.claude/plans"; echo 'Data design: one fence' > "$W/.claude/plans/$U.md"

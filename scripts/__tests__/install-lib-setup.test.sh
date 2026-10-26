@@ -40,8 +40,8 @@ setup_keys() { ASK=$1 GV=$2 lib 'S=$(cat "$0/setup.sh"); HERE=$0; die() { echo "
   eval "$(sed -n "/^# --- routing:/,/^# --- preflight:/p" <<<"$S")" && echo "$GIVEN"' 2>&1; }
 [ ! -e "$PROJ/.claude" ] || { echo "install-lib: the key cases expect no $PROJ/.claude; a case above left one" >&2; exit 1; }
 mkdir "$PROJ/.claude" && echo '{"version": 1, "profile": "claude-openai"}' > "$PROJ/.claude/commandeck.json"
-check "--profile claude puts the reviewer and both judges on Claude" '{"codexReviewerAgent":"claude","planJudgeAstraAgent":"claude","planJudgeSolAgent":"claude"}' \
-  "$(setup_keys claude '{}' | jq -cS '{codexReviewerAgent, planJudgeSolAgent, planJudgeAstraAgent}')"
+check "--profile claude puts the reviewer and the Sol judge on Claude" '{"codexReviewerAgent":"claude","planJudgeSolAgent":"claude"}' \
+  "$(setup_keys claude '{}' | jq -cS '{codexReviewerAgent, planJudgeSolAgent}')"
 check "and an --option naming one of them beats the profile" codex "$(setup_keys claude '{"codexReviewerAgent": "codex"}' | jq -r .codexReviewerAgent)"
 check "a boolean answer is saved as a boolean, so /plugin shows it as its toggle" false "$(setup_keys '' '{"fixerEnabled": "false"}' | jq -r '.fixerEnabled | if type == "boolean" then tostring else "not a boolean" end')"
 for k in orchestrator builder codexReviewer; do
@@ -64,7 +64,7 @@ check "main model: uninstall puts the owner's values back" "$OWN" "$(mm "$KEYS" 
 mm "$KEYS" >/dev/null; jq '.effortLevel = "max"' "$MS" > "$T/x" && mv "$T/x" "$MS"
 check "main model: uninstall leaves an effort the owner changed since, and puts back the model" '{"model":"sonnet","effortLevel":"max"}' "$(mm '{}' off)"
 
-# Main's lean lists (il_main_lean): the ponytail rules and the add-on plugins main never uses are off in the file it is
+# Main's lean lists (il_main_lean): the add-on plugins main never uses are off in the file it is
 # given and nowhere else; a key the owner holds stays theirs; uninstall puts the file back as it was.
 ML=$T/main-lean.json; USR=$H/.claude/settings.json; PSET=$PROJ/.claude/settings.json
 mkdir -p "$H/.claude" "$PROJ/.claude"; echo '{"theme": "dark"}' > "$USR"; echo '{"permissions": {}}' > "$PSET"
@@ -75,38 +75,38 @@ ml() { lib 'il_record "$IL_PROJECT" merge "$1" && il_main_lean "$IL_PROJECT" "$1
 mlrestore() { ml off >/dev/null; lib 'il_restore "$IL_PROJECT"' >/dev/null; }
 fresh() { rm -f "$ML" "$(lib 'echo $IL_PROJECT')"; }
 fresh; BEFORE=$(sha "$USR")$(sha "$PSET"); ml >/dev/null
-check "main lean: ponytail and the add-on plugins are off in main's local settings" '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ponytail@ponytail":false,"ui-themes@ui-themes":false},"skillOverrides":{"ponytail":"off"}}' "$(jq -cS . "$ML")"
+check "main lean: the add-on plugins are off in main's local settings, and no ponytail key is written" '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ui-themes@ui-themes":false}}' "$(jq -cS . "$ML")"
 check "main lean: the user settings file and the project's settings.json are byte for byte as before" "$BEFORE" "$(sha "$USR")$(sha "$PSET")"
 AFTER=$(sha "$ML"); ml >/dev/null
 check "main lean: a rerun changes nothing" "$AFTER" "$(sha "$ML")"
 fresh
-jq -n '{skillOverrides: {ponytail: "on"}, enabledPlugins: {"other@x": true, "ui-themes@ui-themes": true}, keep: 1}' > "$ML"; OWNML=$(jq -cS . "$ML")
+jq -n '{enabledPlugins: {"other@x": true, "ui-themes@ui-themes": true}, keep: 1}' > "$ML"; OWNML=$(jq -cS . "$ML")
 OUT=$(ml); ml >/dev/null
-check "main lean: an owner skillOverrides.ponytail and their own plugin entries are the same after setup and a rerun" '"on" true true' \
-  "$(jq -r '[.skillOverrides.ponytail, .enabledPlugins["other@x"], .enabledPlugins["ui-themes@ui-themes"]] | map(tojson) | join(" ")' "$ML")"
-check "main lean: the keys it left alone are named, and the ones it set are not" '1 0' "$(grep -c 'skillOverrides.ponytail is already set' <<<"$OUT") $(grep -c 'enabledPlugins.other' <<<"$OUT")"
-check "main lean: the keys setup did add still come in beside the owner's" false "$(jq '.enabledPlugins["ponytail@ponytail"]' "$ML")"
+check "main lean: an owner's own plugin entries are the same after setup and a rerun" 'true true' \
+  "$(jq -r '[.enabledPlugins["other@x"], .enabledPlugins["ui-themes@ui-themes"]] | map(tojson) | join(" ")' "$ML")"
+check "main lean: the keys it left alone are named, and the ones it set are not" '1 0' "$(grep -c 'enabledPlugins.ui-themes@ui-themes is already set' <<<"$OUT") $(grep -c 'enabledPlugins.other' <<<"$OUT")"
+check "main lean: the keys setup did add still come in beside the owner's" false "$(jq '.enabledPlugins["mattpocock-skills@claude-plugins-official"]' "$ML")"
 mlrestore
 check "main lean: uninstall puts an owner's file back byte for byte" "$OWNML" "$(jq -cS . "$ML")"
 fresh; ml >/dev/null; mlrestore
 check "main lean: uninstall removes the file setup made, none being there before" absent "$([ -e "$ML" ] && echo present || echo absent)"
-fresh; echo '{"x": 1}' > "$ML"; ml >/dev/null; jq '.skillOverrides.ponytail = "mine"' "$ML" > "$T/x" && mv "$T/x" "$ML"; ml off >/dev/null
-check "main lean: uninstall leaves a value the owner changed since" '"mine"' "$(jq -c .skillOverrides.ponytail "$ML")"
+fresh; echo '{"x": 1}' > "$ML"; ml >/dev/null; jq '.enabledPlugins["ui-themes@ui-themes"] = true' "$ML" > "$T/x" && mv "$T/x" "$ML"; ml off >/dev/null
+check "main lean: uninstall leaves a value the owner changed since" 'true' "$(jq -c '.enabledPlugins["ui-themes@ui-themes"]' "$ML")"
 # What each pane runs on, not what a file holds: in a worktree Claude Code applies main's settings.local.json over the
 # worktree's own (il_shadow_report), so a cut written there would reach every worker and the relay. Setup's calls, on
 # an install whose earlier setup wrote the cuts into main's settings.local.json.
 MLOC=$PROJ/.claude/settings.local.json MFILE=$PROJ/$(lib 'echo $IL_MAIN_LEAN_FILE')
 setup_lean() { lib 'il_record "$IL_PROJECT" merge "$1" "$2" && il_main_lean "$IL_PROJECT" "$1" off && il_main_lean "$IL_PROJECT" "$2"' "$MLOC" "$MFILE"; }
-# runs <file>... -- the plugins and skill the pane runs on: each file over the ones before it.
-runs() { cat "$@" | jq -rs 'reduce .[] as $f ({}; . * $f) | [.enabledPlugins["ponytail@ponytail", "ui-themes@ui-themes", "mattpocock-skills@claude-plugins-official"], .skillOverrides.ponytail] | map(tojson) | join(" ")'; }
-fresh; echo '{"enabledPlugins": {"ponytail@ponytail": true, "ui-themes@ui-themes": true, "mattpocock-skills@claude-plugins-official": true}}' > "$USR"
+# runs <file>... -- the plugins the pane runs on: each file over the ones before it.
+runs() { cat "$@" | jq -rs 'reduce .[] as $f ({}; . * $f) | [.enabledPlugins["ui-themes@ui-themes", "mattpocock-skills@claude-plugins-official"]] | map(tojson) | join(" ")'; }
+fresh; echo '{"enabledPlugins": {"ui-themes@ui-themes": true, "mattpocock-skills@claude-plugins-official": true}}' > "$USR"
 echo '{"x": 1}' > "$MLOC"; lib 'il_record "$IL_PROJECT" merge "$1" && il_main_lean "$IL_PROJECT" "$1"' "$MLOC" >/dev/null; setup_lean >/dev/null
 echo '{}' > "$T/worktree-local.json"
-check "main lean: a worker pane, main's local file applied last, keeps ponytail, ui-themes, mattpocock-skills and the ponytail skill" 'true true true null' \
+check "main lean: a worker pane, main's local file applied last, keeps ui-themes and mattpocock-skills" 'true true' \
   "$(runs "$USR" "$T/worktree-local.json" "$MLOC")"
-check "main lean: main started with --settings on its own file runs without them" 'false false false "off"' "$(runs "$USR" "$MLOC" "$MFILE")"
+check "main lean: main started with --settings on its own file runs without them" 'false false' "$(runs "$USR" "$MLOC" "$MFILE")"
 check "main lean: the cuts are in main's own file, and the owner's key in main's settings.local.json stays" \
-  '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ponytail@ponytail":false,"ui-themes@ui-themes":false},"skillOverrides":{"ponytail":"off"}} {"x":1}' \
+  '{"enabledPlugins":{"mattpocock-skills@claude-plugins-official":false,"ui-themes@ui-themes":false}} {"x":1}' \
   "$(jq -cS . "$MFILE") $(jq -cS . "$MLOC")"
 check "main lean: git never sees main's own file" 1 "$(lib 'printf "%s\n" "${IL_STATE[@]}"' | grep -cxF "$(lib 'echo $IL_MAIN_LEAN_FILE')")"
 fresh; rm -f "$USR" "$PSET" "$MLOC" "$MFILE"; rmdir "$PROJ/.claude" 2>/dev/null
@@ -311,6 +311,53 @@ check "setup: a failed update is under Needs you in setup's report (the line sit
 UL=$(grep -n 'il_codex_update' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1); PL=$(grep -nE 'orca-ide (worktree|terminal) create|open_pane "' "$REAL/scripts/setup.sh" | head -1 | cut -d: -f1)
 check "setup: the Codex update call sits above the first pane-making line" yes "$([ -n "$UL" ] && [ -n "$PL" ] && [ "$UL" -lt "$PL" ] && echo yes)"
 
+# Main's prompt cache (issue 367, il_main_lean's third argument; setup passes its effective answer, /config first):
+# the TTL goes into main's own file and nowhere else, and Leave as is keeps the one setup wrote while the file holds it.
+# This section sits after the timed cases above.
+ML=$T/main-lean.json PM=$(lib 'echo $IL_PROJECT'); MLOC=$PROJ/.claude/settings.local.json PSET=$PROJ/.claude/settings.json
+# ttl [file] -- the TTL in the file (main's own by default); rec -- setup's record of it in the manifest.
+ttl() { jq -r '.env.CLAUDE_CODE_PROMPT_CACHE_TTL // "none"' "${1:-$ML}" 2>/dev/null || echo none; }
+rec() { jq -r --arg p "$ML" '.entries[$p].mainLean.env.CLAUDE_CODE_PROMPT_CACHE_TTL // "none"' "$PM"; }
+mkdir -p "$PROJ/.claude"; echo '{"x": 1}' > "$MLOC"; echo '{"permissions": {}}' > "$PSET"; BEFORE=$(sha "$MLOC")$(sha "$PSET")
+fresh; ml 1h >/dev/null
+check "setup writes main's TTL only into main-session.settings.json: main's settings.local.json and .claude/settings.json get none" "1h:record 1h:$BEFORE" "$(ttl):record $(rec):$(sha "$MLOC")$(sha "$PSET")"
+ml leave >/dev/null
+check "a leave answer keeps the 1h setup wrote, and its record" "1h:1h" "$(ttl):$(rec)"
+ml >/dev/null
+check "an unanswered main writes nothing and keeps the 1h setup wrote, as leave does" "1h:1h" "$(ttl):$(rec)"
+ml 5m >/dev/null
+check "a rerun answered 5m replaces setup's own 1h, in the file and in the record" "5m:5m" "$(ttl):$(rec)"
+ml off >/dev/null
+check "uninstall takes out the TTL setup wrote, and its record" "none:none" "$(ttl):$(rec)"
+fresh; ml 1h >/dev/null; jq '.env.CLAUDE_CODE_PROMPT_CACHE_TTL = "5m"' "$ML" > "$T/x" && mv "$T/x" "$ML"
+OUT=$(ml leave)
+check "a leave answer leaves an owner-changed TTL and drops setup's record, with no note" "5m:none:0" "$(ttl):$(rec):$(grep -c 'note:' <<<"$OUT")"
+fresh; echo '{"env": {"CLAUDE_CODE_PROMPT_CACHE_TTL": "5m", "OTHER": "x"}}' > "$ML"
+OUT=$(ml 1h)
+check "a TTL the owner holds in main's file stays, is named, and is never recorded" "5m:none:1" "$(ttl):$(rec):$(grep -c 'env.CLAUDE_CODE_PROMPT_CACHE_TTL is already set' <<<"$OUT")"
+# Pass 1: only il_main_lean was covered, not setup's order around it. setup_ttl <answer> replays setup.sh's own lines:
+# the effective answer, /config's first (MCACHE_ON=), the answer into /config's options (il_plugin_options), then
+# main's file. cfg <value> -- the owner's /config answer.
+CF=$T/cfg; mkdir -p "$CF"; echo '{"enabledPlugins": {"commandeck@commandeck": true}}' > "$CF/settings.json"
+cfg() { jq --arg v "$1" '.pluginConfigs["commandeck@commandeck"].options.mainPromptCacheTtl = $v' "$CF/settings.json" > "$T/x" && mv "$T/x" "$CF/settings.json"; }
+setup_ttl() { CLAUDE_CONFIG_DIR=$CF lib 'MCACHE=$2 RL={} GIVEN={} FULL= WCACHE= RCACHE= DASHBOARD= S=$(cat "$0/setup.sh")
+  eval "$(grep "^MCACHE_ON=" <<<"$S")" && eval "$(sed -n "/^il_plugin_options \"/,/\"\$GIVEN\"\$/p" <<<"$S")" \
+    && il_record "$IL_PROJECT" merge "$1" && il_main_lean "$IL_PROJECT" "$1" "$MCACHE_ON"' "$ML" "$1" 2>&1; }
+P="a /config answer of leave keeps the 1h setup wrote, and its record, a flag does not beat /config, and a /config 5m then replaces it"
+fresh; BEFORE=$(sha "$MLOC")$(sha "$PSET"); setup_ttl 1h >/dev/null
+check "$P (1: a first setup answered 1h writes main's file, its record and /config's empty option)" "1h:1h:1h" \
+  "$(ttl):$(rec):$(jq -r '.pluginConfigs["commandeck@commandeck"].options.mainPromptCacheTtl' "$CF/settings.json")"
+cfg leave; setup_ttl 1h >/dev/null
+check "$P (2: /config leave keeps both)" "1h:1h" "$(ttl):$(rec)"
+OUT=$(setup_ttl 5m)
+check "$P (3: a 5m flag under /config leave keeps both, and the note names /config)" "1h:1h:1" \
+  "$(ttl):$(rec):$(grep -c 'note: mainPromptCacheTtl is leave in /config, which beats this answer (5m); change it with /config' <<<"$OUT")"
+cfg 5m; setup_ttl leave >/dev/null
+check "$P (4: /config 5m replaces both)" "5m:5m" "$(ttl):$(rec)"
+ml off >/dev/null
+check "$P (5: uninstall takes both out, and main's settings.local.json and .claude/settings.json never changed)" "none:none:$BEFORE" "$(ttl):$(rec):$(sha "$MLOC")$(sha "$PSET")"
+fresh; rm -f "$MLOC" "$PSET"
+
 # The rules audit is setup's closing warning: a project with one dead reference gets one line, a clean one none.
 RA=$T/ra; mkdir -p "$RA/docs"; git init -q -b main "$RA"
 check "setup's rules-audit line: a clean project prints nothing" "" "$(lib "il_rules_audit_line $RA")"
@@ -323,6 +370,10 @@ check "setup's rules-audit line: under setup's set -e a finding warns and setup 
   "$(lib "set -e; il_rules_audit_line $RA | cut -d' ' -f1-4; echo next" | paste -sd: -)"
 check "setup's rules-audit line: under setup's set -e an audit that does not run says so and setup goes on" "rules audit: did not run (exit 2:next" \
   "$(lib "set -e; python3() { return 2; }; il_rules_audit_line $RA | cut -d';' -f1; echo next" | paste -sd: -)"
+
+# A compaction keeps the brief, the evidence path, the last round and its open findings.
+check "the global CLAUDE.md template carries Compact Instructions" "1:1" \
+  "$(grep -c '^## Compact Instructions$' "$REAL/templates/global-claude.md"):$(grep -c 'evidence file path, the current cut and its test' "$REAL/templates/global-claude.md")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

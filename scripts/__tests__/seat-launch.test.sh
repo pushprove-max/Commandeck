@@ -105,7 +105,7 @@ EOF
 chmod +x "$BIN/codex"
 jq '.models += [{slug: "gpt-9.1-astra"}]' "$HOME/.codex/models_cache.json" > "$T/mc" && mv "$T/mc" "$HOME/.codex/models_cache.json"
 jrec() { sed -n 's/^cmd=//p' "$HOME/.commandeck/scratch/"*/"seat-pu-$1.txt" | tail -1; }
-for j in sol:planJudgeSol astra:planJudgeAstra; do
+for j in sol:planJudgeSol; do
   r=plan-judge-${j%%:*} k=${j#*:}
   cap "{\"${k}Agent\": \"codex\"}"; rm -f "$T/pane-up"
   COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
@@ -117,6 +117,11 @@ for j in sol:planJudgeSol astra:planJudgeAstra; do
   check "$r on claude launches Claude Sonnet with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
     "$?:$(jrec "$r" | grep -c 'claude --model sonnet --effort high --disallowedTools Write,Edit,NotebookEdit')"
 done
+# The Fable judge is a Claude seat with no agent key: its routed tools list is the plugin's read-only gate.
+rm -f "$T/pane-up"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-fable pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "plan-judge-fable launches Claude Fable at high with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
+  "$?:$(jrec plan-judge-fable | grep -c 'claude --model fable --effort high --disallowedTools Write,Edit,NotebookEdit')"
 # Pass 8: a judge launched on its own --model needs no default model: with the Sol family's sources taken away one at
 # a time (its cache entry, then the whole cache), the named model still launches.
 cap '{"planJudgeSolAgent": "codex"}'
@@ -127,7 +132,7 @@ for gone in "the Sol cache entry" "the models cache"; do
   check "plan-judge-sol --model gpt-9.1-astra launches with $gone gone" "0:1" "$?:$(jrec plan-judge-sol | grep -c 'codex --model gpt-9.1-astra ')"
 done
 check "two judges on Claude are two seats with two records" "2:2" \
-  "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,astra}.txt | grep -c '^role=plan-judge-')"
+  "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,fable}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,fable}.txt | grep -c '^role=plan-judge-')"
 
 # Issue 315: a tool update rewrote another tool's hook in the Codex home, so its hash is stale and a Codex pane opens
 # on "N hooks need review" and sits there. With trust-all off the launch ends phase=failed within the tui-idle wait and

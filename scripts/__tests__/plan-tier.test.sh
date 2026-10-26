@@ -26,18 +26,18 @@ check "a panel word in an item line still picks Panel" "Panel" "$(tier '## The b
 # off in /plugin config is no seat, and plan-tier says so instead of planning it anyway.
 PANEL=('## The batch' '1. tighten the login check') PJ=('## The batch' '1. rework the screen')
 check "Panel: the author and both judges, each on its agent and model" \
-  "plan-author claude opus,plan-judge-astra codex gpt-6-astra,plan-judge-sol codex gpt-6.1-sol" "$(seats "${PANEL[@]}")"
+  "plan-author claude opus,plan-judge-fable claude fable,plan-judge-sol codex gpt-6.1-sol" "$(seats "${PANEL[@]}")"
 opts '{"planJudgeSolAgent": "claude"}'
 check "a judge on claude runs as itself on the Claude overlay: still two judge seats" \
-  "plan-author claude opus,plan-judge-astra codex gpt-6-astra,plan-judge-sol claude sonnet" "$(seats "${PANEL[@]}")"
+  "plan-author claude opus,plan-judge-fable claude fable,plan-judge-sol claude sonnet" "$(seats "${PANEL[@]}")"
 opts '{"planAuthorEnabled": false}'
 check "plan-author off: No plan, with the skip line naming why" "No plan|1" \
   "$(tier "${PJ[@]}")|$(run "${PJ[@]}" | grep -cxF "launch: builder-launch.sh --skip-plan --reason 'plan-author is off in /plugin config'")"
 opts '{"planJudgeSolEnabled": false}'
-check "sol off: Plan + judge runs the astra judge" "Plan + judge|plan-author claude opus,plan-judge-astra codex gpt-6-astra" \
+check "sol off: Plan + judge runs the fable judge" "Plan + judge|plan-author claude opus,plan-judge-fable claude fable" \
   "$(tier "${PJ[@]}")|$(seats "${PJ[@]}")"
-check "sol off: Panel runs astra alone" "plan-author claude opus,plan-judge-astra codex gpt-6-astra" "$(seats "${PANEL[@]}")"
-opts '{"planJudgeSolEnabled": false, "planJudgeAstraEnabled": false}'
+check "sol off: Panel runs fable alone" "plan-author claude opus,plan-judge-fable claude fable" "$(seats "${PANEL[@]}")"
+opts '{"planJudgeSolEnabled": false, "planJudgeFableEnabled": false}'
 check "both judges off: One planner, the plan unjudged, said" "One planner|plan-author claude opus|1" \
   "$(tier "${PANEL[@]}")|$(seats "${PANEL[@]}")|$(run "${PANEL[@]}" | grep -c 'so the plan installs unjudged')"
 opts '{"planJudgeSolAgent": "gemini"}'
@@ -53,7 +53,7 @@ efforts() { run "$@" | sed -n 's/^effort: //p' | paste -sd, -; }
 # The judges run on Codex: put back the stub the case above removed, or a host with no codex prints plan-author alone.
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/codex"; chmod +x "$T/bin/codex"; opts '{}'
 check "each seat prints its configured effort, so main can say what it picked" \
-  "plan-author high,plan-judge-astra high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
+  "plan-author high,plan-judge-fable high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
 opts '{"planAuthorEffort": "medium"}'
 check "an effort set in /plugin config is the one printed" "plan-author medium" "$(efforts "${PJ[@]}" | cut -d, -f1)"
 echo "$PASS passed, $FAIL failed"

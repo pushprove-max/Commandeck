@@ -1140,10 +1140,11 @@ pp_option() {
   case $1 in
     maxBuilders) p=.builder.maxBuilders ;;
     maxReviewRounds) p=.reviewLoop.maxRounds ;; closingPass) p=.reviewLoop.closingPass d=yes ;;
-    fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;; ponytail) p=.ponytail d=lite ;;
+    fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;;
     autoDecideSeats) p=.autoDecideSeats d=chiefOfStaff ;;
+    unitsBand) p=.units.band d=auto ;; unitsPane) p=.units.pane d=auto ;; unitsStatus) p=.units.status d=auto ;;
     trustAllHooks) p=.trustAllHooks d=false ;;
-    promptCacheTtl) p=.cacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
+    mainPromptCacheTtl) p=.mainCacheTtl ;; workerPromptCacheTtl) p=.workerCacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
     dashboardPort) p=.dashboard.port f=$HOME/.commandeck/install/_machine.json ;;
     wakeKinds) p=.wakeKinds d=worker_done,escalation,question,decision_gate,merge_ready ;;
@@ -1158,10 +1159,10 @@ pp_option() {
   case $1 in
     wakeKinds) v=${v//[[:space:]]/}; [[ ,$v, =~ ,(worker_done|escalation|question|decision_gate|merge_ready|status|dispatch|handoff), ]] || src=default v=$d ;;
     wakeWindowSeconds) [[ $v =~ ^[0-9]+$ ]] || src=default v=$d ;;
-    # Issue 330: a level. Anything else, an old saved true/false included, takes the default (no old-value mapping).
-    ponytail) case $v in off|lite|full|ultra) ;; *) src=default v=$d ;; esac ;;
     # Issue 333: the seats that may decide for the owner; anything else is the default (the relay alone).
     autoDecideSeats) case $v in chiefOfStaff|chiefOfStaff,main|off) ;; *) src=default v=$d ;; esac ;;
+    # Issue 349: the units mod's three views; the doctor shows them, no shell script reads them.
+    unitsBand|unitsPane|unitsStatus) case $v in auto|on|off) ;; *) src=default v=$d ;; esac ;;
   esac
   pp_option_out "${2:-}"
 }

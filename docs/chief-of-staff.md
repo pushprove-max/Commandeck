@@ -57,6 +57,23 @@ decision can be traced to your words. An answer that comes back in under two
 seconds is marked suspect: it may be text another pane typed into the open
 picker.
 
+## Scope of an order
+
+A unit's scope is the owner's words and nothing else. Five rules in the relay's start-up context keep it so:
+what the relay adds goes under `## Chief of Staff additions -- NOT ordered`, never in the owner's words; the
+additions are offered in one multi-select question, the decoy first; a yes covers only the items it names, so
+there are no bundle approvals; and at a pass-loop alert for pass 4 or more, or a class stop, the relay tells the
+owner which part of the scope produces the findings and whether the owner's words asked for it. With no relay pane
+running, main writes the order and keeps the same five rules (its start-up rules carry them).
+
+An order that carries an addition is a file made from `templates/cos-order.md`: the section `## The owner's words`
+first, then the NOT-ordered section. The relay writes the file only when it adds something, and runs
+`scripts/cos-order-check.sh <file>` before it sends the file to main. The check exits 1 and names each fault when the
+first section is not the owner's words or when a section other than the NOT-ordered one holds an addition.
+
+The `pass-loop-<project>/<unit>-r<N>` dashboard alert is what raises the pass-4 case: it fires once for a live unit
+whose newest review pass is 4 or more and NO-GO, and names the finding levels of that pass.
+
 ## Auto-decide
 
 `/autodecide on` in the relay pane hands the owner's open decisions to the relay until `/autodecide off`. The mode

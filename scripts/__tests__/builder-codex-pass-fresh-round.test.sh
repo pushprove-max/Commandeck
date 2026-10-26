@@ -99,6 +99,10 @@ check "a /clear Orca refuses: exit 1, Orca's answer in the log once per attempt 
 # and writes no fix-r file; without a seat the reason is only printed. A hand-off that cannot be written leaves no
 # file at its path and starts no helper, so no /clear is typed into a pane for a half-written brief.
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
+# Issue 366: the P1 of pass 10 open at the seventh pass on record would stop the loop for the owner (REVIEW STOP)
+# with no hand-off. Passes 6 to 10 are aged out of the 14-day session window, so pass 11 is the second on record.
+find "$CODEX_HOME/sessions" -name 'rollout-*-thr-[0-9]-*.jsonl' ! -name '*-thr-1-*' -exec touch -t 200001010000 {} +
+find "$CODEX_HOME/sessions" -name 'rollout-*-thr-10-*.jsonl' -exec touch -t 200001010000 {} +
 told() { cat "$SC/queue/main.jsonl" "$TMP/frs-calls" 2>/dev/null | grep -c "NO FIX HAND-OFF after pass $1"; } # <N>: messages naming it
 rm -f "$TMP/frs-calls"; printf 'echo eleven\n' > "$W/a.sh"
 check "a skipped hand-off names the failed check and tells main: no Orca handle" "0 1 1 0" \

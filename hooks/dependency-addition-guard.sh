@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook (Bash + Edit|Write): block adding a NEW npm dependency
-# without the owner's explicit approval. Rule 2 / ponytail rung 5: prefer the
+# without the owner's explicit approval. Rule 2: prefer the
 # stdlib, an existing helper (shared/, src/utils/), or a few lines of code
 # over a new package. A new dependency is the highest-signal mechanical
 # proxy for over-engineering -- and a supply-chain surface.
@@ -39,7 +39,7 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 
 block() {
   echo "BLOCKED: adding a new dependency ($1) requires the owner's explicit approval first." >&2
-  echo "Rule 2 / ponytail: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
+  echo "Rule 2: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "If the owner has approved this exact package, install it with the token as the COMMAND PREFIX: COMMANDECK_DEP_APPROVED=1 npm install <pkg> (one command per approval; package.json direct edits stay blocked -- the install writes it)." >&2
   echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
   exit 2
@@ -275,7 +275,7 @@ esac
 
 block_manifest() {
   echo "BLOCKED: adding a new dependency ('$1' in $FILE_PATH) requires the owner's explicit approval first." >&2
-  echo "Rule 2 / ponytail: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
+  echo "Rule 2: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "Once the owner has approved THIS package: COMMANDECK_DEP_APPROVED=$1 (exact, comma-separated for several) in .claude/settings.local.json env, or install it with COMMANDECK_DEP_APPROVED=1 npm install <pkg> as the command prefix." >&2
   echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
   exit 2

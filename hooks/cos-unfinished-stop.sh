@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stop hook, Chief-of-Staff pane, and main's pane when no Chief of Staff runs (issue 364): blocks a reply that
+# NOT REGISTERED in hooks/hooks.json (the owner's order, 2026-10-25); the script stays runnable for a project that
+# registers it. Stop hook, Chief-of-Staff pane, and main's pane when no Chief of Staff runs (issue 364): blocks a reply that
 # leaves its own work undone -- "haven't filed it", "want me to ...", "I can also ..." -- once per turn. The pane must
 # do the work now, or keep the line and say in the same sentence why it needs the owner or is out of its authority.
 # The second Stop of a turn (stop_hook_active) always passes, so a justified line never loops. Every other pane passes.

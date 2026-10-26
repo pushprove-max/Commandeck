@@ -79,6 +79,7 @@
       ]},
       {"matcher": "Bash", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/read-tracker.sh\""},
+        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/git-safety.sh\" --record-add"},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/script-over-reads.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/staged-index-warn.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/suite-rerun-guard.sh\" --record-complete"},
@@ -101,7 +102,6 @@
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/context-clear-stop.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-stop-records-decision.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/cos-inbox-waiter-stop.sh\""},
-        {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/cos-unfinished-stop.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/opus-orchestrator-autonomy.sh\" --stop"}
       ]}
     ]

@@ -35,7 +35,10 @@ esac
 STUB
 # gh is never the real one: it records its calls and answers only `issue close`, and that fails once gh-fails exists.
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/gh-calls"\n[ "$1 $2" = "issue close" ] && [ ! -e "%s/gh-fails" ]\n' "$TMP" "$TMP" > "$TMP/bin/gh"
-chmod +x "$TMP/bin/orca-ide" "$TMP/bin/gh"
+# Issue 349: claude is never the real one either. It logs its arguments and where it ran to claude-calls, and exits 1 while
+# claude-red exists (a red `claude plugin test`).
+printf '#!/usr/bin/env bash\necho "$* @ $PWD" >> "%s/claude-calls"\n[ ! -e "%s/claude-red" ]\n' "$TMP" "$TMP" > "$TMP/bin/claude"
+chmod +x "$TMP/bin/orca-ide" "$TMP/bin/gh" "$TMP/bin/claude"
 PATH=$TMP/bin:$PATH
 
 # A proven unit is one the pass script itself ran a first pass on: three

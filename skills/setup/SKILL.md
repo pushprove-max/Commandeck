@@ -119,9 +119,9 @@ Ask them in this order, up to four questions per call.
    On Opus:
    Ask "Builder effort": Medium (recommended) | Low | High | Maximum
    - The Builder's reasoning effort, the small tooling Builder's too; review seats keep their own. Sonnet below high builds below what Opus at medium does. A bundled build keeps most of its cache saving at medium, and the saving shrinks toward max. High: `--option builderEffort=project`, or `--option builderEffort=low`, `medium`; Maximum: `max`.
-   Ask "Fixer": Opus high every round (recommended) | Same as Builder, then Opus high | Builder's model every round
-   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
-   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=builder --option fixerFirstEffort=builder`
+   Ask "Fixer": Same as Builder, then Opus high (recommended) | Opus high every round | Builder's model every round
+   - Same as Builder, then Opus high: the first fix pass after a review runs on the model and effort the Builder was launched with, the later ones on Opus high. `--option fixerEnabled=true --option fixerFirstModel=project --option fixerFirstEffort=project`
+   - Opus high every round: `--option fixerEnabled=true --option fixerFirstModel=opus --option fixerFirstEffort=high`
    - Builder's model every round: no switch; every fix pass runs as the Builder was launched. `--option fixerEnabled=false`
    Ask "Context": 200K (recommended) | Larger
    - 200K: your account's model holds 200K tokens; panes compact sooner. `--standard-context`
@@ -152,13 +152,14 @@ Ask them in this order, up to four questions per call.
    - Sonnet medium: `--option planAuthorEnabled=true --option planAuthorModel=sonnet --option planAuthorEffort=medium`
    - Off: no plan is written for a build. `--option planAuthorEnabled=false`
    Ask "Sol judge": Codex high (recommended) | Claude Sonnet high | Off
-   Ask "Astra judge": Codex high (recommended) | Claude Sonnet high | Off
-   - Codex high: `--option planJudgeSolEnabled=true --option planJudgeSolAgent=codex` (Astra: `planJudgeAstra...`)
+   Ask "Fable judge": Claude Fable high (recommended) | Off
+   - Codex high: `--option planJudgeSolEnabled=true --option planJudgeSolAgent=codex`
    - Claude Sonnet high: the judge runs on Claude, which cannot write. `--option planJudgeSolEnabled=true --option planJudgeSolAgent=claude`
    - Off: the plan is judged without it. `--option planJudgeSolEnabled=false`
-   On the Claude profile, ask Claude Sonnet high (recommended) | Off.
+   - Fable judge, Claude Fable high: `--option planJudgeFableEnabled=true`. Off: `--option planJudgeFableEnabled=false`
+   On the Claude profile, ask the Sol judge Claude Sonnet high (recommended) | Off.
    Ask "Fast tier", one multi-select question (`multiSelect: true`): None (recommended) | Plan author | Judges | Reviewer
-   - A seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Each chosen one is sent as true and the rest as false: Plan author `planAuthorFast`; Judges `planJudgeSolFast` and `planJudgeAstraFast`; Reviewer `codexReviewerFast`, as `--option planAuthorFast=true --option planJudgeSolFast=false ...`. None picked with a seat means that seat alone. Offer a seat that runs on Codex only when the check said "Codex fast mode: available".
+   - A seat runs on its model's fast tier only when chosen here (Claude fast mode, Codex `service_tier=fast`): it answers sooner and costs more. Each chosen one is sent as true and the rest as false: Plan author `planAuthorFast`; Judges `planJudgeSolFast` and `planJudgeFableFast`; Reviewer `codexReviewerFast`, as `--option planAuthorFast=true --option planJudgeSolFast=false ...`. None picked with a seat means that seat alone. Offer a seat that runs on Codex only when the check said "Codex fast mode: available".
 7. An assistant pane?
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`
@@ -189,20 +190,20 @@ Ask them in this order, up to four questions per call.
     Ask "Strict hooks": Off (recommended) | On
     - Off: only the safety hooks (lost work, wrong commits). `--no-strict`
     - On: also search before reading, and one test run per change. `--strict`
-11. The ponytail skill?
-    Ask "Ponytail": Lite (recommended) | Off | Full | Ultra
-    - Lite: the ponytail skill (/ponytail), smallest-change coding rules at the lite level (build what was asked, name the smaller option); costs nothing until asked for. `--ponytail lite`
-    - Full: the smallest complete change. `--ponytail full`
-    - Ultra: also pushes back on parts the need does not justify. `--ponytail ultra`
-    - Off: not installed; a copy an earlier setup installed is removed; the Builder brief names no ponytail line. `--ponytail off`
-    Then, how long Claude keeps a conversation's prompt cache:
-    Ask "Prompt cache": 5m for main and workers (recommended) | Leave as is
-    - 5m for main and workers: Main, Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too. On real sessions a 5-minute cache cost about 5% less for main and 6 to 17% less for worker panes: they seldom pause long enough for a 1-hour cache to pay. Saved in `.claude/settings.json` and each worktree's `.claude/settings.local.json`. `--cache-ttl 5m`
-    - Leave as is: writes nothing; what is set now stays, a 1-hour value an earlier setup wrote included (on a Claude subscription an unset cache is 1 hour). `--cache-ttl leave`
+11. How long Claude keeps a conversation's prompt cache, one answer for each role:
+    Ask "Main prompt cache": 1h (recommended) | 5m | Leave as is
+    - 1h: Main keeps its cache 1 hour. Saved in `.claude/main-session.settings.json`, which only a main started with `claude --settings <that file>` reads. `--main-cache-ttl 1h`
+    - 5m: Main keeps its cache 5 minutes, in the same file. `--main-cache-ttl 5m`
+    - Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--main-cache-ttl leave`
+    Ask "Builder and worker prompt cache": 5m (recommended) | 1h | Leave as is
+    - 5m: Builders, reviewers and every other worker pane keep their cache 5 minutes, subagents too. On real sessions a 5-minute cache cost 6 to 17% less for worker panes: they seldom pause long enough for a 1-hour cache to pay. Saved in each worktree's `.claude/settings.local.json` and, for subagents, `subagentPromptCacheTtl` in `.claude/settings.json`. `--worker-cache-ttl 5m`
+    - 1h: The same panes and subagents keep their cache 1 hour. `--worker-cache-ttl 1h`
+    - Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--worker-cache-ttl leave`
     With a relay:
-    Ask "Relay prompt cache": 1h (recommended) | Leave as is
+    Ask "Chief of Staff prompt cache": 1h (recommended) | 5m | Leave as is
     - 1h: The relay pane keeps its cache 1 hour. It waits on you between turns, and on real sessions a 5-minute cache cost it about 85% more than 1 hour. Saved in its worktree's `.claude/settings.local.json`; its other settings stay. The doctor warns if another file overrides it. `--relay-cache-ttl 1h`
-    - Leave as is: writes nothing in the relay's settings. `--relay-cache-ttl leave`
+    - 5m: The relay pane keeps its cache 5 minutes, in the same file. `--relay-cache-ttl 5m`
+    - Leave as is: writes nothing; what is set now stays, a value an earlier setup wrote included. `--relay-cache-ttl leave`
     Then, the auto-mode classifier (it checks each command in a pane run in auto mode):
     Ask "Auto mode": Add two entries (recommended) | Leave as is | Take them out
     - Add two entries: Your Claude panes run in auto mode. Two plain-English lines go into ~/.claude/settings.json, kept with Claude Code's built-in list, so its safety check knows the plugin's scripts and the relay pane. They apply in every project on this machine. `--auto-mode add`
@@ -218,7 +219,7 @@ Ask them in this order, up to four questions per call.
     - Add one, or typed as the picker's own text answer, as `<word>=<name>[,<name>...]`: `builder-launch.sh --keep <word>` brings those skills and plugins back for one unit. `--keep-word <word>=<names>`, once per word.
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": All (recommended) | serena | agent-browser | None
-    - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open; the ponytail plugin only when you have it and ponytail is on. Sends no `--addons`.
+    - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open. Sends no `--addons`.
     - serena: code navigation by symbol; one language-server process per project. Choosing it also turns on the two hooks that read it (`--serena`): the read-tracker nudge and the pane-budget gate.
     - agent-browser: a browser for agents; a download of a few hundred MB.
     - None: install nothing; setup prints each command to run later.

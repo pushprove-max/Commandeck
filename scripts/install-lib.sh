@@ -268,10 +268,10 @@ il_advisor_off() {
     doc=$(jq '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1"' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].advisorOff = true'
   fi
 }
-# il_cache_ttl <manifest> <settings file> [off] -- prompt-cache lifetimes: 5 minutes for the main conversation and
-# subagents (measured 2026-10-18 on real transcripts: 5 minutes cost main about 5% less than 1 hour, because panes
-# seldom pause 5 to 60 minutes). A key the owner set is left as it is; a value setup itself wrote earlier (a 1 hour
-# of 0.14) is replaced; off takes out only a value setup wrote and nobody changed since.
+# il_cache_ttl <manifest> <settings file> <5m|1h|off> -- the subagents' prompt-cache lifetime (issue 367), the
+# Builder and worker answer; the main conversation's and each pane's own TTL go elsewhere (il_main_lean, worktree-setup.sh).
+# A key the owner set is left as it is; a value setup itself wrote earlier is replaced; off takes out only a value
+# setup wrote and nobody changed since (an older setup's promptCacheTtl too).
 il_cache_ttl() {
   local m=$1 f=$2 doc s r
   doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
@@ -282,7 +282,7 @@ il_cache_ttl() {
       && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" 'del(.entries[$p].cacheTtl)'
   else
     r=$(jq -c --arg p "$f" '.entries[$p].cacheTtl // {}' "$m" 2>/dev/null) || r='{}'
-    s=$(jq -c '{promptCacheTtl: "5m", subagentPromptCacheTtl: "5m"} | with_entries(select(.key as $k | ($d | has($k) | not) or $d[$k] == $r[$k]))' --argjson d "$doc" --argjson r "$r" -n)
+    s=$(jq -c '{subagentPromptCacheTtl: $t} | with_entries(select(.key as $k | ($d | has($k) | not) or $d[$k] == $r[$k]))' --arg t "$3" --argjson d "$doc" --argjson r "$r" -n)
     [ "$s" != '{}' ] || return 0
     doc=$(jq --argjson s "$s" '. + $s' <<<"$doc") && il_write "$f" <<<"$doc" \
       && il_set "$m" --arg p "$f" --argjson s "$s" '.entries[$p].cacheTtl = ((.entries[$p].cacheTtl // {}) + $s)'
@@ -393,39 +393,53 @@ il_shadow_report() {
   [ "$bad" = 0 ] || echo "warn settings: the check could not build a worker or relay pane's settings in a throwaway worktree, so it cannot tell whether $ml shadows them; run the doctor again from a clean main checkout"
   [ "$n" != 0 ] || [ "$bad" != 0 ] || echo "ok settings: $ml sets no key that a worker or relay pane's own settings write differently"
 }
-# il_cache_ttl_report -- the doctor's lines on the prompt-cache answers, each "ok <why>" or "warn <what is wrong and the
-# fix>". Claude Code applies the main checkout's .claude/settings.local.json over a worktree's own, so a TTL there beats
-# the per-worktree answers setup wrote; the relay's own value is the last of: user file, the relay's project and local
-# files, the main checkout's local file (the order Claude Code reads them). The owner's key is reported, never edited.
+# il_cache_ttl_report -- the doctor's lines on the prompt-cache answers (issue 367), one per role, each "ok <why>" or
+# "warn <what is wrong and the fix>". Main's TTL lives in the file only a main started with --settings reads, so no
+# user or project file changes it (a --settings file beats them); a worker pane's is its worktree's local file, and
+# Claude Code applies the main checkout's .claude/settings.local.json over it (il_shadow_report names that file); the
+# relay's own value is the last of: user file, the relay's project and local files, the main checkout's local file
+# (the order Claude Code reads them). The owner's key is reported, never edited.
 il_cache_ttl_report() {
-  local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n=0 f fs=() s w x mt rt
-  mt=$(pp_option promptCacheTtl) rt=$(pp_option relayPromptCacheTtl)
-  [ "$mt" = 5m ] || [ "$rt" = 1h ] || { echo "ok prompt cache: setup sets none"; return 0; }
-  # A TTL in that file is reported by il_shadow_report; here it only keeps the "no file overrides" line from being said.
-  v=$(jq -r --arg k $k '.env[$k] // empty' "$ml" 2>/dev/null)
-  [ -z "$v" ] || n=1
-  if [ -z "$v" ] && [ "$mt" = 5m ]; then
-    # an env key beats the promptCacheTtl keys, so main's answer is the last env key of the user and project files;
-    # with none, it is the last promptCacheTtl key of the user, project and local files (the order Claude Code reads them)
-    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$PP_MAIN/.claude/settings.json"; do [ ! -f "$f" ] || fs+=("$f"); done
-    v=$([ ${#fs[@]} = 0 ] || jq -rs --arg k $k 'map(.env[$k] // empty) | last // empty' "${fs[@]}" 2>/dev/null)
-    if [ -n "$v" ]; then
-      [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: an env $k=$v in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json or $PP_MAIN/.claude/settings.json beats the promptCacheTtl setup wrote; remove that key"; }
-    else
-      [ ! -f "$ml" ] || fs+=("$ml")
-      for s in promptCacheTtl subagentPromptCacheTtl; do
-        w=; for f in ${fs[@]+"${fs[@]}"}; do x=$(jq -r --arg s $s '.[$s] // empty' "$f" 2>/dev/null); [ -z "$x" ] || { v=$x w=$f; }; done
-        [ -z "$w" ] || [ "$v" = 5m ] || { n=1; echo "warn prompt cache: main runs $v, not the 5m you chose: $s is $v in $w, which is read after the one setup wrote; change it to 5m or remove it"; }
+  local k=CLAUDE_CODE_PROMPT_CACHE_TTL ml=$PP_MAIN/.claude/settings.local.json rw=$PP_WORKSPACES/Chief-of-Staff v n f fs=() x mt wt rt
+  mt=$(pp_option mainPromptCacheTtl) wt=$(pp_option workerPromptCacheTtl) rt=$(pp_option relayPromptCacheTtl)
+  case $mt in
+    5m|1h)
+      f=$PP_MAIN/$IL_MAIN_LEAN_FILE
+      v=$(jq -r --arg k $k '.env[$k] // empty' "$f" 2>/dev/null)
+      if [ "$v" = "$mt" ]; then echo "ok prompt cache: main $mt (.claude/main-session.settings.json; read only by a main started with claude --settings $f)"
+      else echo "warn prompt cache: main's $f holds ${v:-no} $k, not the $mt you chose; run setup again, or, if the key is yours, change or remove it"; fi ;;
+    leave) echo "ok prompt cache: main leave (setup sets none)" ;;
+    *) echo "ok prompt cache: main not answered (setup sets none; /commandeck:setup asks)" ;;
+  esac
+  case $wt in
+    5m|1h)
+      n=0
+      for f in "$PP_WORKSPACES"/*/.claude/settings.local.json "$ml"; do
+        [ -f "$f" ] || continue
+        case $f in "$rw"/*) continue ;; esac
+        x=$(jq -r --arg k $k '.env[$k] // empty' "$f" 2>/dev/null)
+        [ -z "$x" ] || [ "$x" = "$wt" ] || { n=1; echo "warn prompt cache: workers run $x, not the $wt you chose: $k is $x in $f; change it to $wt or remove it"; }
       done
-    fi
-    fs=()
-  fi
-  if [ "$rt" = 1h ] && [ -d "$rw" ]; then
-    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
-    v=$(jq -rs --arg k $k 'map(.env[$k] // empty) | last // "unset"' "${fs[@]}" 2>/dev/null)
-    [ "$v" = 1h ] || { n=1; echo "warn prompt cache: the relay pane runs $v, not the 1h you chose; run setup again, or see the line above"; }
-  fi
-  [ "$n" != 0 ] || echo "ok prompt cache: no file overrides the answers setup wrote"
+      # subagents: the last subagentPromptCacheTtl of the project and local files (the order Claude Code reads them)
+      for f in "$PP_MAIN/.claude/settings.json" "$ml"; do
+        [ -f "$f" ] || continue
+        x=$(jq -r '.subagentPromptCacheTtl // empty' "$f" 2>/dev/null)
+        [ -z "$x" ] || [ "$x" = "$wt" ] || { n=1; echo "warn prompt cache: subagents run $x, not the $wt you chose: subagentPromptCacheTtl is $x in $f; change it to $wt or remove it"; }
+      done
+      [ "$n" != 0 ] || echo "ok prompt cache: workers $wt (each worktree's .claude/settings.local.json; subagents: subagentPromptCacheTtl in .claude/settings.json)" ;;
+    leave) echo "ok prompt cache: workers leave (setup sets none)" ;;
+    *) echo "ok prompt cache: workers not answered (setup sets none; /commandeck:setup asks)" ;;
+  esac
+  case $rt in
+    5m|1h)
+      if [ -d "$rw" ]; then
+        for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$rw/.claude/settings.json" "$rw/.claude/settings.local.json" "$ml"; do [ ! -f "$f" ] || fs+=("$f"); done
+        v=$(jq -rs --arg k $k 'map(.env[$k] // empty) | last // "unset"' "${fs[@]}" 2>/dev/null)
+      else v=$rt; fi
+      if [ "$v" = "$rt" ]; then echo "ok prompt cache: relay $rt (the relay worktree's .claude/settings.local.json)"
+      else echo "warn prompt cache: the relay pane runs $v, not the $rt you chose; run setup again, or see the line above"; fi ;;
+    leave) echo "ok prompt cache: relay leave (setup sets none)" ;;
+  esac
 }
 # il_options_report -- the doctor's line for each /config option (issue 245): the value its readers take, and where it
 # comes from: /config, the project's file (the dashboard's: this machine's), or the default.
@@ -490,21 +504,29 @@ il_main_model() {
     && il_set "$m" --arg p "$f" --argjson s "$s" --argjson w "$(jq -c .was <<<"$w")" \
       'if $s == {} then del(.entries[$p].mainModel, .entries[$p].mainModelWas) else .entries[$p].mainModel = $s | .entries[$p].mainModelWas = $w end'
 }
-# IL_MAIN_LEAN -- what main's session turns off to keep its start lean: the ponytail rules and skill (workers keep
-# them) and the add-on plugins main never uses (config/addons.tsv). Written into IL_MAIN_LEAN_FILE, which only a
+# IL_MAIN_LEAN -- what main's session turns off to keep its start lean: the add-on plugins main never uses
+# (config/addons.tsv). Written into IL_MAIN_LEAN_FILE, which only a
 # session started with `claude --settings <it>` reads. Never into main's settings.local.json: Claude Code applies that
 # file over every worktree session's own (docs: settings, "Where Claude Code keeps the local file in a git
 # repository"), so a cut there reaches every worker and the relay.
 IL_MAIN_LEAN_FILE=.claude/main-session.settings.json
-IL_MAIN_LEAN='{"enabledPlugins": {"ponytail@ponytail": false, "ui-themes@ui-themes": false, "mattpocock-skills@claude-plugins-official": false}, "skillOverrides": {"ponytail": "off"}}'
-# il_main_lean <manifest> <settings file> [off] -- IL_MAIN_LEAN written into that file, key by key. A key the owner
-# already holds, with any value, stays and is named (nothing is replaced, so nothing is kept but what setup added:
-# mainLean in the manifest). A rerun keeps its own keys; off (uninstall) takes out those still holding setup's value.
+IL_MAIN_LEAN='{"enabledPlugins": {"ui-themes@ui-themes": false, "mattpocock-skills@claude-plugins-official": false}}'
+# il_main_lean <manifest> <settings file> [off|5m|1h|leave] -- IL_MAIN_LEAN written into that file, key by key, and
+# with main's prompt-cache answer (issue 367) its env CLAUDE_CODE_PROMPT_CACHE_TTL: only a main started with
+# claude --settings <this file> reads it. A key the owner already holds, with any value, stays and is named (nothing
+# is replaced, so nothing is kept but what setup added: mainLean in the manifest). A rerun keeps its own keys; off
+# (uninstall) takes out those still holding setup's value. leave writes no TTL, and keeps the one setup wrote while
+# the file still holds it (with its record, so uninstall takes it out).
 il_main_lean() {
-  local m=$1 f=$2 doc r w want=$IL_MAIN_LEAN
-  [ "${3:-}" != off ] || want='{}'
+  local m=$1 f=$2 doc r w want=$IL_MAIN_LEAN k=CLAUDE_CODE_PROMPT_CACHE_TTL t=${3:-leave}
   doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
   r=$(jq -c --arg p "$f" '.entries[$p].mainLean // {}' "$m" 2>/dev/null) || r='{}'
+  case $t in
+    off) want='{}' ;;
+    5m|1h) ;;
+    *) t=$(jq -r --arg k $k --argjson d "$doc" '.env[$k] as $v | select($v != null and $v == $d.env[$k]) | $v' <<<"$r") ;;
+  esac
+  [ -z "$t" ] || [ "$t" = off ] || want=$(jq -c --arg k $k --arg t "$t" '.env[$k] = $t' <<<"$want")
   [ "$r$want" != '{}{}' ] || return 0
   w=$(jq -c --argjson r "$r" --argjson want "$want" 'def leaves: [paths(type != "object")];
     . as $d | ($r | leaves | map(select(. as $p | ($d | getpath($p)) == ($r | getpath($p))))) as $mine

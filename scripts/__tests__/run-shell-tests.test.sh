@@ -174,5 +174,30 @@ done
 check "... an unreachable PC (4) says it runs the files here, once" 1 "$(PO_STUB=4 bash -c 'cd "$1" && bash "$2" scripts/__tests__/touched.test.sh' _ "$R" "$TMP/stub/scripts/run-shell-tests.sh" 2>&1 | grep -c 'running here, once')"
 rm -f "$R/scripts/__tests__/mac.test.sh"
 
+# Issue 349: a run writes a live table, <git dir>/commandeck-test-live/<pid>.tsv, that the units mod reads: `run`, `file`
+# for every file the run decides on, `start` and `end` as each file launches and ends. Gone when the run exits.
+TAB=$(printf '\t'); LD=$(git -C "$R" rev-parse --absolute-git-dir)/commandeck-test-live
+LREL=scripts/__tests__/live.test.sh
+printf '#!/usr/bin/env bash\ncp "$(git rev-parse --absolute-git-dir)"/commandeck-test-live/*.tsv "$SEEN"\n' > "$R/$LREL"
+export SEEN=$TMP/seen
+(cd "$R" && timeout 30 bash "$RUNNER" "$LREL" >/dev/null 2>&1)
+check "a run's live table lists its files while they run and is gone when the run exits" "1 1 1 0" \
+  "$(grep -c "^run$TAB" "$SEEN") $(grep -c "^file$TAB$LREL\$" "$SEEN") $(grep -c "^start$TAB$LREL$TAB" "$SEEN") $(ls "$LD"/*.tsv 2>/dev/null | wc -l | tr -d ' ')"
+rm -f "$R/$LREL"
+
+# Two files, one marked own-lane. Without the flag the own-lane file is skipped at once (listed, `end skip 0`, before any
+# start); with --own-lane the ordinary file is left out and never enters the table.
+OREL=scripts/__tests__/ord.test.sh LANEREL=scripts/__tests__/lane.test.sh
+printf '#!/usr/bin/env bash\ncp "$(git rev-parse --absolute-git-dir)"/commandeck-test-live/*.tsv "$SEEN-ord"\n' > "$R/$OREL"
+printf '#!/usr/bin/env bash\n# own-lane: fixture\ncp "$(git rev-parse --absolute-git-dir)"/commandeck-test-live/*.tsv "$SEEN-lane"\n' > "$R/$LANEREL"
+(cd "$R" && timeout 30 bash "$RUNNER" "$OREL" "$LANEREL" >/dev/null 2>&1)
+ENDN=$(grep -n "^end$TAB$LANEREL${TAB}skip${TAB}0\$" "$SEEN-ord" | cut -d: -f1); STARTN=$(grep -n "^start$TAB$OREL$TAB" "$SEEN-ord" | cut -d: -f1)
+check "a skipped own-lane file finishes as skip in the live table, and under --own-lane the ordinary file it leaves out never enters it: no flag" \
+  "2 1 1 0" "$(grep -c "^file$TAB" "$SEEN-ord") $([ "${ENDN:-99}" -lt "${STARTN:-0}" ] && echo 1 || echo 0) $(grep -c "^start$TAB$OREL$TAB" "$SEEN-ord") $(ls "$LD"/*.tsv 2>/dev/null | wc -l | tr -d ' ')"
+(cd "$R" && timeout 30 bash "$RUNNER" --own-lane "$OREL" "$LANEREL" >/dev/null 2>&1)
+check "... --own-lane: the table lists the lane file and its start, and no line names the ordinary file" \
+  "1 1 0 0" "$(grep -c "^file$TAB$LANEREL\$" "$SEEN-lane") $(grep -c "^start$TAB$LANEREL$TAB" "$SEEN-lane") $(grep -c 'ord.test.sh' "$SEEN-lane") $(ls "$LD"/*.tsv 2>/dev/null | wc -l | tr -d ' ')"
+rm -f "$R/$OREL" "$R/$LANEREL"
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

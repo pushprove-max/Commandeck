@@ -8,14 +8,14 @@ set -uo pipefail
 mkdir -p "$HOME/.claude"
 
 # --- issue 245: each /config option, its value and where that comes from, so an owner sees which answer runs ---
-echo '{"version": 1, "profile": "claude", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "mainCacheTtl": "1h", "workerCacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"builderEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 OUT=$(lib il_options_report)
-check "the doctor names each option's value and source: /config, the project's file, or the default" '1:1:1' \
-  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option promptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option maxReviewRounds: none (from the default)$' <<<"$OUT")"
+check "the doctor names each option's value and source: /config, the project's file, or the default" '1:1:1:1' \
+  "$(grep -c '^ok option builderEffort: high (from /config)$' <<<"$OUT"):$(grep -c "^ok option workerPromptCacheTtl: 5m (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c "^ok option mainPromptCacheTtl: 1h (from $PROJ/.claude/commandeck.json)$" <<<"$OUT"):$(grep -c '^ok option maxReviewRounds: none (from the default)$' <<<"$OUT")"
 check "one line for each option the manifest declares" "$(jq '.userConfig | length' "$REAL/.claude-plugin/plugin.json")" "$(grep -c '^ok option ' <<<"$OUT")"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
-check "the cache report follows the /config answers over the project's" 1 "$(cache | grep -c '^ok prompt cache: setup sets none$')"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"mainPromptCacheTtl": "leave", "workerPromptCacheTtl": "leave", "relayPromptCacheTtl": "leave"}}}}' > "$HOME/.claude/settings.json"
+check "the cache report follows the /config answers over the project's: one leave line per role" 3 "$(cache | grep -cE '^ok prompt cache: (main|workers|relay) leave \(setup sets none\)$')"
 # Issue 293: the Builder line names where each value comes from, so a launch below the expected effort is traced.
 # Issue 312: a builder.model an older setup left in the project's file is not read; the key or routing's default runs.
 jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"

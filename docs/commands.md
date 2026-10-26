@@ -35,14 +35,7 @@ With no mode it uses Basic. The count is 1–16, default 4. Basic looks
 for mechanical test problems; Full also looks for missing coverage. It writes
 scratch reports, leaves repository files alone and runs no tests.
 
-If you enable the bundled Ponytail skill, invoke it separately:
-
-```text
-/ponytail
-```
-
-It supplies smallest-change coding rules. It is not a seventh Commandeck
-plugin skill. Optional add-ons can expose their own commands.
+Optional add-ons can expose their own commands.
 
 ## rules-audit
 

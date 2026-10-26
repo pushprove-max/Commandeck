@@ -209,6 +209,8 @@ for p in R['passes']:
                  + (f'<details><summary>All {len(every)} findings</summary>{ul(every)}</details>' if every else '') + '</td></tr>')
 if R.get('lines_changed') is not None:
     prows.append(f'<tr><td></td><td colspan="8">Lines changed by the build: {n(R["lines_changed"])}</td></tr>')
+elif 'lines_changed' in R:
+    prows.append('<tr><td></td><td colspan="8">Lines changed: not recorded (the worktree is gone and main holds no squash commit for it)</td></tr>')
 if R.get('closing_pass'):
     prows.append(f'<tr><td></td><td colspan="8">Closing pass: {txt(R["closing_pass"])}</td></tr>')
 

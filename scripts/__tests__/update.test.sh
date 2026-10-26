@@ -20,7 +20,7 @@ echo "Done:"
 echo "add-on serena: installed at its latest"
 echo
 echo "Needs you:"
-echo "  add-on ponytail: the install FAILED (network down); to try again, run in the project: x"
+echo "  add-on ui-themes: the install FAILED (network down); to try again, run in the project: x"
 echo
 echo "Optional. Add-ons not installed; each line is the command and what it costs:"
 EOF
@@ -32,7 +32,7 @@ upd() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDEC
 
 OUT=$(upd)
 check "it shows setup's Needs-you block, the failed install's line whole" "Needs you:
-  add-on ponytail: the install FAILED (network down); to try again, run in the project: x" "$(grep -A1 '^Needs you:$' <<<"$OUT")"
+  add-on ui-themes: the install FAILED (network down); to try again, run in the project: x" "$(grep -A1 '^Needs you:$' <<<"$OUT")"
 check "and not the rest of setup's report" 0 "$(grep -c '^Optional\.\|^add-on serena' <<<"$OUT")"
 # Issue 314: setup updates Codex when a newer one is out; the owner is told, not only on failure.
 check "it says setup's codex line" "codex: updated 0.40.0 -> 0.41.0 (codex update)" "$(grep '^codex: ' <<<"$OUT")"

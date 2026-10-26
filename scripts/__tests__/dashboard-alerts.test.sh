@@ -42,13 +42,14 @@ ALL=$(jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s
       \"api\": {\"limitUsd\": 100, \"spentUsd\": 80, \"goalUsd\": 50}, \"cacheWritePct24h\": 9},
     \"projects\": {\"p\": {\"guardBlocks\": {\"lastHour\": 40, \"perHour\": 1},
       \"units\": {\"inFlight\": [{\"unit\": \"u\", \"stage\": \"building\", \"stageSince\": \"$(iso 10800)\",
-        \"builder\": {\"signals\": [{\"kind\": \"stalled\", \"since\": $NOW}], \"cache24h\": {\"input\": 4000000, \"cachedInput\": 3200000}}}]},
+        \"builder\": {\"verdictRound\": 4, \"verdict\": \"VERDICT: NO-GO\", \"findings\": {\"P0\": 0, \"P1\": 2, \"P2\": 0, \"P3\": 1},
+          \"signals\": [{\"kind\": \"stalled\", \"since\": $NOW}], \"cache24h\": {\"input\": 4000000, \"cachedInput\": 3200000}}}]},
       \"needsOwner\": {\"decisions\": [{\"id\": \"q1\", \"askedAt\": \"$(iso 7200)\", \"question\": \"which?\"}],
         \"unsent\": [{\"id\": \"q0\", \"to\": \"main\", \"state\": \"gave-up\", \"reason\": \"its main folder /x is gone\", \"firstAt\": \"$(iso 60)\"}]},
       \"mainEvents\": {\"carried\": [{\"cp\": \"/x/m1.md\", \"at\": \"$(iso 600)\", \"items\": 2, \"restartedAt\": null}]},
       \"sources\": {\"builder-logs\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}}}}]" \
   --argjson srcs "[{\"projects\": {\"status\": \"stale\", \"staleSince\": \"$(iso 600)\"}}]" --argjson preva '[{}]')
-check "the all-rules fixture fires each of the 17 rules, and every alert's text names its action" "17 17" \
+check "the all-rules fixture fires each of the 18 rules, and every alert's text names its action" "18 18" \
   "$(jq '[.alerts[].id | sub("-[0-9]+$"; "")] | unique | length' <<<"$ALL") $(jq '[.alerts[] | select(.text | test("[.] Action: [a-z]"))] | length' <<<"$ALL")"
 # Issue 295: an answer main never got is the owner's order lost. The host gave up on it, or it has failed for 10 min:
 # a critical alert naming why. One failing for under 10 min is still the host's to retry, and raises none.
@@ -77,5 +78,10 @@ mcpdown() { jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" -
   --argjson se '[]' --argjson parts "[{\"mcpDown\": $1, \"projects\": {}}]" --argjson srcs '[]' --argjson preva '[{}]'; }
 check "a fresh mcp-down stamp raises one alert; an old one, or none, raises none" "1 0 0" \
   "$(mcpdown "[{\"server\": \"serena\", \"at\": $((NOW - 60))}]" | jq '[.alerts[] | select(.id | startswith("mcp-down-serena-"))] | length') $(mcpdown "[{\"server\": \"serena\", \"at\": $((NOW - 700))}]" | jq '[.alerts[] | select(.id | startswith("mcp-down-"))] | length') $(mcpdown '[]' | jq '[.alerts[] | select(.id | startswith("mcp-down-"))] | length')"
+# Issue 364: a unit whose newest review pass is the 4th or later and NO-GO is looping on rounds, with each pass posting its
+# own report and nobody told. One alert per unit and round, naming the top findings; a GO, or a NO-GO before pass 4, none.
+ploop() { units "[{\"unit\": \"u\", \"builder\": {\"verdictRound\": $1, \"verdict\": \"VERDICT: $2\", \"findings\": {\"P0\": 0, \"P1\": 2, \"P2\": 0, \"P3\": 1}}}]" | jq -c '[.alerts[] | select(.id | startswith("pass-loop-")) | .text | sub("[.] Action:.*"; "")]'; }
+check "a pass-4 NO-GO raises pass-loop once and a GO raises none" \
+  '["p: u is on review pass 4 and still NO-GO (P1 x2, P3 x1)"] [] []' "$(ploop 4 NO-GO) $(ploop 4 GO) $(ploop 3 NO-GO)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

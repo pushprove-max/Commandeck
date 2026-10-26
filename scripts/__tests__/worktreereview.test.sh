@@ -297,6 +297,22 @@ page = rendered('elsewhere', r)
 check('a page from an evidence file with no rung lines has no rung column', [False, False, False],
       ['Rung per batch item' in page, '>Rung<' in page, hasattr(review, 'rungs')])
 
+# --- Issue 358: once the merge has removed the worktree, the build's lines come from its squash commit on main. ---
+lc = f'{TMP}/lc'
+def git_in(*args):
+    subprocess.run(['git', '-C', lc, '-c', 'user.name=t', '-c', 'user.email=t@t', *args], check=True, capture_output=True)
+subprocess.run(['git', 'init', '-q', '-b', 'main', lc], check=True)
+git_in('commit', '-q', '--allow-empty', '-m', 'init')
+os.makedirs(f'{lc}/.claude/briefs')
+open(f'{lc}/a.txt', 'w').write('1\n2\n3\n')
+open(f'{lc}/.claude/briefs/gone-unit.md', 'w').write('x\ny\n')
+git_in('add', '-A'); git_in('commit', '-q', '-m', 'feat(gone-unit): three lines')
+check('a removed worktree counts its squash commit on main, the brief left out', 3, collect.lines_changed(f'{TMP}/ws/no-such-wt', lc, 'gone-unit'))
+check('and a unit main holds no squash commit for is not recorded', None, collect.lines_changed(f'{TMP}/ws/no-such-wt', lc, 'other-unit'))
+check('and so is a removed worktree with no --main', None, collect.lines_changed(f'{TMP}/ws/no-such-wt'))
+page = rendered('elsewhere', {**r, 'lines_changed': None})
+check('the page says the lines changed are not recorded, and why', True, 'Lines changed: not recorded (' in page)
+
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)
 PY

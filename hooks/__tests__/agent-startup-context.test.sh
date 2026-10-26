@@ -90,6 +90,15 @@ check "main's launch rule: the Order line quotes that yes with its ruling id, an
 # Issue 290: a picker opened to a quiet owner sat for hours, and a dead watcher went unseen until the owner asked.
 check "the relay opens no picker when the owner has been quiet 30 minutes, and runs the timer check as a fifth job" "1:1:1" \
   "$(grep -c 'owner quiet for 30 minutes or more, open no picker; leave the question on the decision queue and ask when the owner next types' <<<"$REL"):$(grep -c 'scripts/cos-check.sh' <<<"$REL"):$(grep -c 'without all five running' <<<"$REL")"
+# Issue 360: the relay passed its own additions to main as the owner's words; its scope rules name the NOT-ordered
+# section, the order check it runs before sending, the multi-select picker with the decoy first, no bundle approvals,
+# and the owner's answer at a pass-loop alert for pass 4 or more (the owner moved it from pass 5 to pass 4).
+check "the relay's scope rules: owner's words only, NOT-ordered additions checked by cos-order-check.sh, one multi-select picker, no bundle approvals, pass 4 reported" "1:1:1:1:1:1" \
+  "$(grep -c "A unit's scope is the owner's words" <<<"$REL"):$(grep -c 'under `## Chief of Staff additions -- NOT ordered`' <<<"$REL"):$(grep -c 'scripts/cos-order-check.sh <file>. before you send the file to main' <<<"$REL"):$(grep -c 'one multi-select picker, the decoy first' <<<"$REL"):$(grep -c 'No bundle approvals' <<<"$REL"):$(grep -c 'pass-loop alert for pass 4 or more, or a class stop, tell the owner which part of the scope produces the findings and whether the owner.s words asked for it' <<<"$REL")"
+# Pass 1: the rules sat only in the relay's branch, so a project with no relay pane got none of them. Main keeps the
+# same five in its loaded part (MS).
+check "with no relay pane main keeps the scope rules: the order file, NOT-ordered additions checked, one multi-select question, no bundle approvals, pass 4 reported" "1:1:1:1:1:1" \
+  "$(MS | grep -c "A unit's scope is the owner's words (issue 360)\*\*: with no relay pane running"):$(MS | grep -c 'under `## Chief of Staff additions -- NOT ordered` in an order file from `templates/cos-order.md`'):$(MS | grep -c 'checked with `cos-order-check.sh <file>`'):$(MS | grep -c 'one multi-select question, the decoy first'):$(MS | grep -c 'No bundle approvals'):$(MS | grep -c 'pass-loop alert for pass 4 or more, or a class stop, main tells the owner')"
 check "main sends a denied self-modification step to the relay" 1 "$(grep -c 'Denied a self-modification step' "$T/ctx")"
 # Every finding, P0 to P3, blocks the merge: main never merges a NO-GO build, it gets a fix round.
 check "main never merges a NO-GO build: it gets a fix round" "1 0" \

@@ -24,7 +24,7 @@ when setup added it, and restores managed project files. In merged settings
 it removes the plugin's entries and preserves your later edits. A `changed
 since setup` line means that file cannot be restored byte for byte. The last
 project releases the machine's managed Codex hooks, dashboard job, global
-entries, installed Ponytail skill and unchanged managed status line.
+entries and unchanged managed status line.
 
 By default it keeps decision, seat and helper ledgers, scratch, hook logs,
 rulings, relay state and finished-build records. Delete-data removes those

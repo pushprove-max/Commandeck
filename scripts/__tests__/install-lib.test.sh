@@ -192,40 +192,53 @@ check "unreadable: setup's steps refuse it too, record no status line and leave 
   "$(grep -c refused <<<"$OUT"):$(jq -c --arg p "$PB" '.entries[$p].statusLine' "$MM" 2>/dev/null || echo null):$(cmp -s "$PB" "$T/pb.before" && echo same)"
 rm -rf "$H/.commandeck"
 
-# --- the prompt-cache lifetime: 5m, and setup's own earlier 1h moves while an owner's own value stays ---
+# --- the subagents' prompt-cache lifetime (issue 367): the worker answer, and setup's own earlier value moves while an owner's own stays ---
 CM=$T/cm.json CS=$T/cs.json
 ttl() { lib 'il_cache_ttl "$1" "$2" '"${1:-}" "$CM" "$CS" 2>&1; }
 echo '{"entries":{}}' > "$CM"
-echo '{"promptCacheTtl":"1h","subagentPromptCacheTtl":"5m"}' > "$CS"
-jq --arg p "$CS" '.entries[$p].cacheTtl = {promptCacheTtl: "1h", subagentPromptCacheTtl: "5m"}' "$CM" > "$CM.n" && mv "$CM.n" "$CM"
-ttl >/dev/null
-check "an update moves the 1h an earlier setup wrote to 5m, in the file and in the record" '5m:5m:5m'   "$(jq -r .promptCacheTtl "$CS"):$(jq -r .subagentPromptCacheTtl "$CS"):$(jq -r --arg p "$CS" '.entries[$p].cacheTtl.promptCacheTtl' "$CM")"
-echo '{"promptCacheTtl":"1h"}' > "$CS"; echo '{"entries":{}}' > "$CM"
-ttl >/dev/null
-check "a 1h the owner set (no record) stays 1h, and the other key is added" '1h:5m' "$(jq -r .promptCacheTtl "$CS"):$(jq -r .subagentPromptCacheTtl "$CS")"
+echo '{"promptCacheTtl":"5m","subagentPromptCacheTtl":"1h"}' > "$CS"
+jq --arg p "$CS" '.entries[$p].cacheTtl = {subagentPromptCacheTtl: "1h"}' "$CM" > "$CM.n" && mv "$CM.n" "$CM"
+ttl 5m >/dev/null
+check "an update moves the 1h an earlier setup wrote to the worker answer 5m, in the file and in the record" '5m:5m' "$(jq -r .subagentPromptCacheTtl "$CS"):$(jq -r --arg p "$CS" '.entries[$p].cacheTtl.subagentPromptCacheTtl' "$CM")"
+echo '{}' > "$CS"; echo '{"entries":{}}' > "$CM"
+ttl 1h >/dev/null
+check "il_cache_ttl writes subagentPromptCacheTtl with the worker answer and never promptCacheTtl" '1h:null' "$(jq -r .subagentPromptCacheTtl "$CS"):$(jq -r .promptCacheTtl "$CS")"
+echo '{"subagentPromptCacheTtl":"1h"}' > "$CS"; echo '{"entries":{}}' > "$CM"
+ttl 5m >/dev/null
+check "a 1h the owner set (no record) stays 1h" '1h' "$(jq -r .subagentPromptCacheTtl "$CS")"
 ttl off >/dev/null
-check "taking setup's keys out leaves the owner's own 1h" '{"promptCacheTtl":"1h"}' "$(jq -c . "$CS")"
+check "taking setup's keys out leaves the owner's own 1h" '{"subagentPromptCacheTtl":"1h"}' "$(jq -c . "$CS")"
+echo '{"promptCacheTtl":"1h"}' > "$CS"; echo '{"entries":{}}' > "$CM"
+ttl 5m >/dev/null
+check "il_cache_ttl never writes promptCacheTtl, and leaves an owner's own promptCacheTtl as it is" '{"promptCacheTtl":"1h","subagentPromptCacheTtl":"5m"}' "$(jq -cS . "$CS")"
 
 # --- a config from before 0.15.0 holds the cache answer as "recommended" or "default": /commandeck:update replays it ---
 # A replay that read the old word as 5m would move an owner's 1h unasked, and one that said nothing would leave the
-# question unasked for good. setup.sh's own lines (the read, the gate on il_cache_ttl, the Needs-you line) run on a
-# hand-written config, as requirements.test.sh runs one of its lines; il_cache_ttl is a counter, no setup run.
+# question unasked for good. setup.sh's own lines for the worker answer (the read, its /config merge, the gate on
+# il_cache_ttl, the Needs-you line) run on a hand-written config, as requirements.test.sh runs one of its lines;
+# il_cache_ttl is a counter, no setup run. A line that is gone fails the harness loud: a rename cannot make the cases no-ops.
 replay() {
   echo "$1" > "$T/replay.json"
   ( IL_CONFIG=$T/replay.json IL_PROJECT=p PSET=s NEED=() calls=0 CLAUDE_CONFIG_DIR=$T/replay-cc
     il_cache_ttl() { calls=$((calls + 1)); }
     eval "$(sed -n '/^PP_OPTS_KEY=/,/^}/p' "$REAL/scripts/paths.sh")"
-    for l in '^old()' 'CACHE=$(old .cacheTtl)' '^CACHE_ON=' '\[ "$CACHE_ON" != 5m \] || il_cache_ttl' 'Prompt cache: not answered since 0.15.0'; do eval "$(grep -- "$l" "$REAL/scripts/setup.sh")"; done
+    for l in '^old()' 'WCACHE=$(old .workerCacheTtl)' '^MCACHE_ON=' 'case $WCACHE_ON in 5m|1h) il_cache_ttl' 'Builder and worker prompt cache: not answered since 0.48.0'; do
+      s=$(grep -F -- "$l" "$REAL/scripts/setup.sh" || grep -- "$l" "$REAL/scripts/setup.sh") || true
+      [ -n "$s" ] || { echo "setup.sh has no line matching $l"; exit 0; }
+      eval "$s"
+    done
     echo "$calls:${#NEED[@]}" )
 }
 mkdir -p "$T/replay-cc" && echo '{}' > "$T/replay-cc/settings.json"
-check "a stored \"recommended\" is not an answer: nothing is written, and the question is asked" 0:1 "$(replay '{"cacheTtl":"recommended"}')"
-check "a stored \"default\" is the same" 0:1 "$(replay '{"cacheTtl":"default"}')"
+check "a stored \"recommended\" is not an answer: nothing is written, and the question is asked" 0:1 "$(replay '{"workerCacheTtl":"recommended"}')"
+check "a stored \"default\" is the same" 0:1 "$(replay '{"workerCacheTtl":"default"}')"
 check "a config with no answer is asked" 0:1 "$(replay '{"version":1}')"
-check "a stored 5m is written again on every replay, and not asked" 1:0 "$(replay '{"cacheTtl":"5m"}')"
-check "a stored leave writes nothing and is not asked" 0:0 "$(replay '{"cacheTtl":"leave"}')"
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"promptCacheTtl": "5m"}}}}' > "$T/replay-cc/settings.json"
-check "a /config 5m beats a stored leave: the 5m is written, and nothing is asked (issue 245)" 1:0 "$(replay '{"cacheTtl":"leave"}')"
+check "an old stored cacheTtl is no answer: nothing is written and the worker question is asked" 0:1 "$(replay '{"cacheTtl":"5m"}')"
+check "a stored 5m is written again on every replay, and not asked" 1:0 "$(replay '{"workerCacheTtl":"5m"}')"
+check "a stored 1h is written again on every replay, and not asked" 1:0 "$(replay '{"workerCacheTtl":"1h"}')"
+check "a stored leave writes nothing and is not asked" 0:0 "$(replay '{"workerCacheTtl":"leave"}')"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"workerPromptCacheTtl": "5m"}}}}' > "$T/replay-cc/settings.json"
+check "a /config 5m beats a stored leave: the 5m is written, and nothing is asked (issue 245)" 1:0 "$(replay '{"workerCacheTtl":"leave"}')"
 check "and answers a config with none" 1:0 "$(replay '{"version":1}')"
 echo '{}' > "$T/replay-cc/settings.json"
 

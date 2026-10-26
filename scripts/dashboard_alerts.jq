@@ -57,6 +57,13 @@ def builder_warmup_input: 3300000;
             and .stageSince != null and ((.stageSince | ts) as $t | $t != null and $now - $t > 7200))
           | a("stage-\($p)/\(.unit)"; "warn"; "\($p): \(.unit) has been in \(.stage) for \(if .stageExact == false then "at least " else "" end)\(($now - (.stageSince | ts)) / 3600 | r) h"; "check the unit: nudge it, re-scope it, or answer what it waits on")
             + {since: (.stageSince | ts)}),
+        # Issue 364: a unit whose newest review pass is the 4th or later and NO-GO is looping on rounds while each pass
+        # posts its own report. One alert per unit and round; the top findings are the newest report's level counts.
+        ($v.units.inFlight // [] | .[] | select((.builder.verdictRound | type) == "number" and .builder.verdictRound >= 4
+            and ((.builder.verdict // "") | startswith("VERDICT: NO-GO")))
+          | .builder.verdictRound as $n
+          | ([(.builder.findings // {}) | to_entries[] | select(.value > 0) | "\(.key) x\(.value)"] | join(", ")) as $top
+          | a("pass-loop-\($p)/\(.unit)-r\($n)"; "warn"; "\($p): \(.unit) is on review pass \($n) and still NO-GO\(if $top == "" then "" else " (\($top))" end)"; "tell the owner which part of the scope produces the findings; re-scope the unit or stop the class")),
         ($v.needsOwner.decisions // [] | .[] | (.askedAt | ts) as $at | select($at != null and $now - $at > 3600)
           | a("question-\($p)-\(.id)"; "warn"; "\($p): question waiting on \(if .waitsOn == "main" then "main (a Builder's)" else "the owner" end) over 1 h: \(.question)"; "\(if .waitsOn == "main" then "main answers it" else "the owner answers it" end)") + {since: $at}),
         # Issue 295: an answer main never got is the owner's order lost: one the host gave up on, or one failing for 10 min.

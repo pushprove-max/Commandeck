@@ -147,6 +147,31 @@ printf '{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_1h_
 HOME=$T/home-rv bash "$ROOT/scripts/builder-cache-check.sh" "$T/builder" >/dev/null 2>&1
 check "the cache check fails a Builder whose main thread wrote 1h cache" 1 "$?"
 
+# Issue 367: the check proves the Builder and worker answer. 1h makes 1h the TTL both sides must write; leave proves nothing.
+SUB=${L%.jsonl}/subagents/agent-a.jsonl
+W5='{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_5m_input_tokens":10}}}}'
+W1='{"type":"assistant","message":{"usage":{"cache_creation":{"ephemeral_1h_input_tokens":10}}}}'
+cc() { (cd "$ROOT" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u CLAUDE_CONFIG_DIR HOME=$T/home-rv bash scripts/builder-cache-check.sh "$@" 2>&1); }
+mkdir -p "$T/home-rv/.claude"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"workerPromptCacheTtl": "1h"}}}}' > "$T/home-rv/.claude/settings.json"
+echo "$W1" > "$L"; echo "$W1" > "$SUB"
+cc "$T/builder" >/dev/null; RC=$?
+check "with workerPromptCacheTtl=1h a Builder and its subagents writing only 1h cache pass the check" 0 "$RC"
+echo "$W5" > "$L"
+cc "$T/builder" >/dev/null; RC=$?
+check "with workerPromptCacheTtl=1h a main thread writing 5m cache fails the check" 1 "$RC"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"workerPromptCacheTtl": "leave"}}}}' > "$T/home-rv/.claude/settings.json"
+OUT=$(cc "$T/builder"); RC=$?
+check "with workerPromptCacheTtl=leave the check proves nothing and exits 0 saying so" "0:1" "$RC:$(grep -c 'nothing to prove' <<<"$OUT")"
+# The answer is the worktree's own project's, not the caller's: A answers 5m, B answers 1h, the transcripts are B's worktree's.
+rm -f "$T/home-rv/.claude/settings.json"
+for p in pa pb; do git init -q -b main "$T/$p" && mkdir -p "$T/$p/.claude" && git -C "$T/$p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first; done
+echo '{"version": 1, "workerCacheTtl": "5m"}' > "$T/pa/.claude/commandeck.json"; echo '{"version": 1, "workerCacheTtl": "1h"}' > "$T/pb/.claude/commandeck.json"
+git -C "$T/pb" worktree add -q --detach "$T/pb-wt"
+L=$(plog pb-wt); echo "$W1" > "$L"; echo "$W1" > "${L%.jsonl}/subagents/agent-a.jsonl"
+(cd "$T/pa" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u CLAUDE_CONFIG_DIR HOME=$T/home-rv bash "$ROOT/scripts/builder-cache-check.sh" "$T/pb-wt" s >/dev/null 2>&1); RC=$?
+check "the check proves the worktree's own project's answer, not the caller's" 0 "$RC"
+
 prompts() { python3 "$ROOT/scripts/checkpoint-context.py" messages "$1" 10000 2>&1 | tail -n +3; }
 check "a restart carries the 2.1.300 log's one prompt, and no blob as a prompt" \
   "$(printf '<<< prompt 1 of 1\nprice the week\n>>> end prompt 1')" "$(prompts "$T/v300/projects/p/s.jsonl")"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# builder-codex-pass.sh closing passes: every finding, P0 to P3, blocks the merge, cleared or not; a change to hooks/
+# builder-codex-pass.sh closing passes: a P0, P1 or P2 blocks the merge below the cap, cleared or not, and a P3 alone
+# does not (issue 366); a change to hooks/
 # asks for an executed probe; a red suite with an empty log still binds; and a pass before any decisions ledger
 # carries no decisions block.
 # The fixture is the one builder-codex-pass.test.sh uses.
@@ -10,8 +11,13 @@ set -uo pipefail
 printf 'echo built\n' > "$W/a.sh"
 pass 1 adversarial
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
+# Issue 366: the review cap counts the passes on record, so 25 passes in one worktree would reach the cap stop and the
+# REVIEW STOP. These cases test one pass's gate each: before each pass, every reviewer session but the first pass's and
+# the last pass's is aged out of the 14-day window, so each pass is at most the third on record, below the cap.
+eval "one_$(declare -f pass)"
+pass() { find "$CODEX_HOME/sessions" -name 'rollout-*.jsonl' ! -name '*-thr-1-*' ! -name "*-thr-$(($1 - 1))-*" -exec touch -t 200001010000 {} +; one_pass "$@"; }
 
-# Every finding, P0 to P3, blocks the merge: no P2 tail merges with findings open and filed later as debt.
+# A P0, P1 or P2 blocks the merge below the cap; a P3 alone does not (issue 366, over issue 323's every-finding rule).
 # Main's "Cleared findings" names a finding by its title and place alone, and is handed to the next reviewer as
 # out of scope; a cleared finding never turns a NO-GO into a merge. Source: main's answer 1 in this unit's plan
 # (.claude/plans/p2-tail-322-2026-10-22.md, "Main answers"). CLEAR-PROBE exempts nothing: the cases below prove
@@ -31,7 +37,8 @@ STUB_REPLY=$'- [P3] (class: probe) P3-PROBE -- a.sh:1 -- a nit -- bash a.sh\nVER
 check "a closing NO-GO with only a P3 is refused" 2 "$(verify)"
 printf 'echo five\n' > "$W/a.sh"
 STUB_REPLY=$'- [P3] (class: probe) P3-PROBE -- a.sh:1 -- a nit -- bash a.sh\nVERDICT: GO' pass 5 review
-check "a closing GO that names a P3 is a NO-GO round and is refused" "1 2" "$(tail -1 "$B/$U-r5-reports.md" | grep -cx 'VERDICT: NO-GO') $(verify)"
+check "a closing GO that names only a P3 stays GO and merges on the threshold stop" "1 0 1" \
+  "$(tail -1 "$B/$U-r5-reports.md" | grep -cx 'VERDICT: GO') $(verify) $(grep -c 'rule: threshold stop$' "$TMP/vout")"
 printf 'echo six\n' > "$W/a.sh"
 STUB_REPLY=$'- [P1] (class: probe) P1-PROBE -- a.sh:1 -- it breaks -- bash a.sh\nVERDICT: NO-GO' pass 6 review
 check "a closing pass with a P1 is refused" 2 "$(verify)"
@@ -39,8 +46,9 @@ check "a closing pass with a P1 is refused" 2 "$(verify)"
 # and a GO beside a tag the plain form cannot be made from (here inside the brackets) is a NO-GO too.
 printf 'echo seven\n' > "$W/a.sh"
 STUB_REPLY=$'- **[P3]** (class: probe) BOLD-PROBE -- a.sh:1 -- a nit -- bash a.sh\nVERDICT: GO' pass 7 review
-check "a closing GO that names a bold P3 is a NO-GO round, its finding in plain form, and is refused" "1 1 2" \
-  "$(tail -1 "$B/$U-r7-reports.md" | grep -cx 'VERDICT: NO-GO') $(grep -c '^- \[P3\] (class: probe) BOLD-PROBE' "$B/$U-r7-reports.md") $(verify)"
+check "a closing GO that names a bold P3 stays GO, its finding in plain form, and merges with it open" "1 1 0 1" \
+  "$(tail -1 "$B/$U-r7-reports.md" | grep -cx 'VERDICT: GO') $(grep -c '^- \[P3\] (class: probe) BOLD-PROBE' "$B/$U-r7-reports.md") $(verify) \
+$(grep -c '^Open finding: a.sh .*BOLD-PROBE' "$TMP/vout")"
 printf 'echo eight\n' > "$W/a.sh"
 STUB_REPLY=$'1. [**P2**] (class: probe) ODD-PROBE -- a.sh:1 -- wrong -- bash a.sh\n+ [P2] (class: probe) PLUS-PROBE -- a.sh:1 -- wrong -- bash a.sh\n@ AT-PROBE full 1 1 1 - - x whole GO P2\nVERDICT: GO' pass 8 review
 check "a closing GO beside a severity tag in any other form is a NO-GO round and is refused" "1 2" \
@@ -69,14 +77,9 @@ done
 check "an underscore-wrapped P2 reaches the report in plain form" 1 "$(grep -c '^- \[P2\] (class: probe) US-PROBE' "$B/$U-r11-reports.md")"
 printf 'echo fifteen\n' > "$W/a.sh"
 STUB_REPLY='VERDICT: GO' pass 15 review
-# r4: what the gate counts is what the next reviewer is handed, so a finding in any form reaches it and the merge's
-# check of what was handed on; a numbered or plus-marked finding reads as a "- " one, as every reader of the report greps.
-check "every earlier finding the gate counted, in any form, reaches the next reviewer" "1 1 1 1 1 1 1" \
-  "$(for r in '^- \[P2\] (class: probe) ODD-PROBE' '^- \[P2\] (class: probe) PLUS-PROBE' '^- \[P2\] (class: probe) TICK-PROBE' \
-  '^### P1: HEAD-PROBE' '^\[P2\] (class: probe) US2-PROBE' '^Finding: (P1) MID-PROBE' '^- (class: probe) NOLEVEL-PROBE'; do
-  input 15 | grep -c "$r"; done | paste -sd' ' -)"
-check "a finding line that opens with @ is handed on escaped, never as an earlier pass of its own" "1 0" \
-  "$(input 15 | grep -c '^\\@ AT-PROBE') $(input 15 | grep -c '^Earlier pass AT-PROBE')"
+# Issue 366 (O2): pass 15 runs as the closing pass after pass 14's NO-GO, a fresh reviewer handed no earlier finding.
+check "the closing pass is handed no earlier finding, in any form" "0 0" \
+  "$(input 15 | grep -c 'NOLEVEL-PROBE') $(input 15 | grep -c '^Earlier pass ')"
 check "a closing GO with nothing named merges: rule closing GO, no Open at merge line" "0 1 0" \
   "$(verify) $(grep -c 'rule: closing GO$' "$TMP/vout") $(grep -c 'Open at merge' "$TMP/vout")"
 
@@ -114,6 +117,42 @@ check "a normal-use finding beside a known gap is a NO-GO round and is refused" 
 check "the reviewer's prompt states the rule: normal use blocks, bypass and odd setup go under KNOWN GAPS:" "1 0" \
   "$(grep -c 'blocks the merge only when normal use would hit the bug.*KNOWN GAPS:' "$B/$U-r20-prompt-1.md") $(grep -c 'Every finding, P0 to P3, blocks the merge' "$B/$U-r20-prompt-1.md")"
 check "a pass before any ledger carries no decisions block" 0 "$(input 17 | grep -c 'decisions that name this unit')"
+
+# Host change (owner order 2026-10-25): a final whose commit changes no code is a design-only pass. Its GO approves the design and
+# merges nothing; the code written after it is a closing pass. SHA is unset in the test's shell, as in a Builder's.
+unset SHA
+(cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 30 >/dev/null)
+mkdir -p "$W/.claude/plans" "$W/.claude/metrics"
+printf 'Data design: one fence\n' > "$W/.claude/plans/$U.md"; echo '{"unit":"unit"}' > "$W/.claude/metrics/ledger.jsonl"
+pass 21 final
+C21=$(git -C "$W" show --name-only --format= HEAD | grep -c .)
+check "a final whose commit changes only the plan reads under the design head, says so, and its round file says design" "1 1 1 0" \
+  "$(input 21 | head -1 | grep -c '^Review input: a design-only pass') $(grep -cx 'Pass: design' "$B/$U-r21-reports.md") \
+$(grep -c '^DESIGN GO: this GO approves the design and merges nothing. Next: write the code, then builder-codex-pass.sh '"$U"' 22 final; print your DONE line only after that pass' "$TMP/out") \
+$(grep -c '^NARROWED GO' "$TMP/out")"
+check "its GO merges nothing" "2 1" "$(verify) $(cat "$TMP/vout" "$TMP/verr" | grep -c 'is a design-only pass (its commit changed only the plan): its GO approves the design and merges nothing. Write the code, then run builder-codex-pass.sh '"$U"' 22 final')"
+# The code after the design: new code owes its check against the plan, then the closing pass's GO merges.
+printf 'echo twentyone\n' > "$W/a.sh"; printf '\n## New code checked (pass 21)\n- a.sh:1 meets Data design, one fence\n' >> "$B/$U-evidence.md"
+pass 22 final
+check "the code written after it runs as a closing pass whose GO merges" "1 0 1" \
+  "$(grep -cx 'Pass: final' "$B/$U-r22-reports.md") $(verify) $(grep -c 'rule: closing GO$' "$TMP/vout")"
+# The design check reads the pass commit's own tip before the rebase: with SHA unset (pass 21 above), or set to another
+# commit, as an inherited SHA would be, the pass is still judged on its own commit and ends 0.
+CODE=$(git -C "$W" log --format=%H --grep='Builder pass r1$' -1)
+printf 'Data design: two fences\n' >> "$W/.claude/plans/$U.md"
+SHA=$CODE pass 23 final
+check "a design-only final reads its own commit before the rebase: run with SHA unset after a recorded first pass and a plan-only commit, it reads as design; run with SHA set to a code commit, it still reads as design" "design 1 design 1" \
+  "$(sed -n 's/^Pass: //p' "$B/$U-r21-reports.md") $(input 21 | head -1 | grep -c '^Review input: a design-only pass') \
+$(sed -n 's/^Pass: //p' "$B/$U-r23-reports.md") $(input 23 | head -1 | grep -c '^Review input: a design-only pass')"
+# Nothing new to commit after a design GO: no commit, no design. The pass reads the whole branch as a closing pass.
+printf '\n## New code checked (pass 23)\n- a.sh:1 meets Data design, two fences\n' >> "$B/$U-evidence.md"
+pass 24 final
+check "a final with nothing new to commit is read as a closing pass" "final 1" \
+  "$(sed -n 's/^Pass: //p' "$B/$U-r24-reports.md") $(input 24 | head -1 | grep -c '^Review input: the closing pass')"
+printf 'Data design: three fences\n' >> "$W/.claude/plans/$U.md"; printf 'echo s\n' > "$W/s.sh"
+pass 25 final
+check "a commit of the plan and the ledger is design-only; one more script makes it a closing pass" "2 design final" \
+  "$C21 $(sed -n 's/^Pass: //p' "$B/$U-r21-reports.md") $(sed -n 's/^Pass: //p' "$B/$U-r25-reports.md")"
 
 
 echo "$PASS passed, $FAIL failed"

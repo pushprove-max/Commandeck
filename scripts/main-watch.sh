@@ -929,6 +929,7 @@ report_wake() {
       "kind not recorded:"*) next="pass kind not recorded" ;;
       final:GO) next="merge: $HERE/merge-unit-local.sh $2" ;;
       review:GO) next="narrowed -- needs a final pass: builder-codex-pass.sh $2 $((n + 1)) final" ;;
+      design:GO) next="design only, merges nothing -- the Builder writes the code, then builder-codex-pass.sh $2 $((n + 1)) final" ;;
       adversarial:GO) next="a first-pass GO" ;;
       *:NO-GO) next="fix round $n runs from $2-fix-r$n.md" ;;
       *) next="see the report" ;;
@@ -1247,7 +1248,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
     report_notes "$4" "$u" "$w"
     if [ -n "$NARROWED" ]; then
       # Issue 352: the newest report is a narrowed GO, which merges nothing: that is no stop without a report.
-      post "$item" "$task" "main-watch: $u $4 finished on a narrowed pass; needs a final pass" \
+      post "$item" "$task" "main-watch: $u $4 finished on a $GO_PASS pass; needs a final pass" \
         "Seat $4 ($h) on $u stopped with no DONE marker${state:+ (Orca: $state)}.$NUDGED $NEWEST${NARROWED}"
       return 0
     fi
@@ -1257,15 +1258,19 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
 }
 
 # report_notes <role> <unit> <worktree> -- sets NEWEST, a Builder's newest report as a lead for its finish post, and
-# NARROWED, the wording for a newest report that is a narrowed GO (issue 352): that GO merges nothing, and the unit
-# is not finished until the final pass the line names has ended GO. Both are empty for any other seat or report.
+# NARROWED, the wording for a newest report that is a narrowed GO (issue 352) or a design-only GO (host change, owner
+# order 2026-10-25): neither merges anything, and the unit is not finished until the final pass the line names has ended
+# GO. GO_PASS names which (narrowed or design-only). All three are empty for any other seat or report.
 report_notes() {
-  local line; NEWEST= NARROWED=
+  local line; NEWEST= NARROWED= GO_PASS=
   [ "$1" = builder ] || return 0
   newest_round "$3" "$2"
   line=$([ -z "$NR_FILE" ] || round_line "$NR_FILE") && [ -n "$line" ] || return 0
   NEWEST="Newest report: ${NR_FILE##*/}: $line. "
-  [ "$line" != "GO (review)" ] || NARROWED="Finished on a narrowed pass; needs a final pass: builder-codex-pass.sh $2 $((NR_N + 1)) final."
+  case "$line" in
+    "GO (review)") NARROWED="Finished on a narrowed pass; needs a final pass: builder-codex-pass.sh $2 $((NR_N + 1)) final." GO_PASS=narrowed ;;
+    "GO (design)") NARROWED="Finished on a design-only pass; the code is not reviewed yet: builder-codex-pass.sh $2 $((NR_N + 1)) final." GO_PASS=design-only ;;
+  esac
 }
 
 # seat_reported <handle> <role> -- issue 320: the seat's own completion message that reached main (kind reported,

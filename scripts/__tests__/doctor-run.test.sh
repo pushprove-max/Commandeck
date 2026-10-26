@@ -34,7 +34,7 @@ echo 0.41.0 > "$T/codex-version"; : > "$T/codex-update"
 # --- main's settings file against the orchestrator key, in the doctor's whole run ---
 # The project's file as doctor-options.test.sh leaves it before its Builder line: a claude profile, an old builder.model.
 mkdir -p "$HOME/.claude"
-echo '{"version": 1, "profile": "claude", "cacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
+echo '{"version": 1, "profile": "claude", "mainCacheTtl": "1h", "workerCacheTtl": "5m", "chiefOfStaff": {"name": "r", "cacheTtl": "1h"}}' > "$PROJ/.claude/commandeck.json"
 jq '.builder = {model: "sonnet"}' "$PROJ/.claude/commandeck.json" > "$T/cj" && mv "$T/cj" "$PROJ/.claude/commandeck.json"
 echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"orchestratorModel": "opus", "orchestratorEffort": "high"}}}}' > "$HOME/.claude/settings.json"
 echo '{"model": "opus", "effortLevel": "medium"}' > "$PROJ/.claude/settings.local.json"

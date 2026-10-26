@@ -37,9 +37,37 @@ Findings are graded P0 to P3. A review finding blocks the merge only when
 normal use would hit the bug. A finding that needs an agent deliberately
 bypassing a guard, or an odd setup, is a one-line known gap in the evidence
 file and does not block: the reviewer lists it under `KNOWN GAPS:` with no
-level or class tag, and a pass with only known gaps ends GO. The Builder fixes
-a blocking finding and the next `review` runs as the closing pass, until a
-closing pass ends GO with no blocking finding named. A finding main lists under
+level or class tag, and a pass with only known gaps ends GO. A gap in
+documentation, plan wording or a failure table is a P3 unless it hides a real
+defect. A pass whose findings are all P3 ends GO.
+
+A P0, P1 or P2 holds the loop: the Builder fixes it and the next `review`
+runs as the closing pass. The pass count is the passes on record for the
+build, not the number the Builder gives a pass. From the fifth pass on record
+(the cap), `review` runs as the closing pass. The closing pass is handed the
+plan's decisions and accepted failure modes, but no earlier finding. The loop
+stops at the first of these:
+
+- A closing pass ends GO. Each P3 still open, its own or an earlier GO
+  round's, is printed as an `Open finding` line (threshold stop).
+- A closing pass at or past the cap ends NO-GO naming an open P2 and no P0
+  or P1. Its P2 and P3 findings are printed as `Open finding` lines (cap
+  stop). A NO-GO that names no P2 is no cap stop.
+- A P0 or P1 is still open two passes past the cap. The pass prints
+  `REVIEW STOP` with a decision id, no fix round runs, and the next launch
+  refuses until the owner answers that decision: the question the pass
+  prints opens with the decision id, and its answered ledger row releases
+  the stop. Only a pass whose every
+  declared reviewer is on record, none naming a P0 or P1, clears an earlier
+  P0 or P1; a pass with a reviewer missing clears nothing.
+
+Before a merge with `Open finding` lines, main files one issue per class (the
+`file.ext` the finding cites, or `no-file`), or comments the finding on an
+open duplicate. Then it merges with `merge-unit-local.sh <unit> --filed
+'<class>=#<n>' ...`. The merge refuses a class with no filing and an issue
+GitHub does not report as open, and the squash commit names each filing. The
+reviewer sets the severity: the Builder never lowers one, and sends a dispute
+to main as a question. A finding main lists under
 "Cleared findings" in its rulings file is handed to the next reviewer as out
 of scope; it never turns a NO-GO into a merge.
 

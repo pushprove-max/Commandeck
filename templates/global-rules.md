@@ -2,7 +2,6 @@
 
 ## Working and review
 
-- Smallest change first: the least code that fully solves the task.
 - Ask before building backward compatibility, and say how many old records
   need it. Often the count is zero and a one-time migration is cheaper.
 - No AI co-author trailer and no "Generated with" line in a commit message.
@@ -18,6 +17,9 @@
   only the fixes.
 - Every reviewer gets the same full scope. Never split the areas between
   reviewers; each prompt carries the complete finding list and checklist.
+  No reviewer runs a test at round close; each finding's test goes to the
+  fixer. Read a reviewer's findings with `read-verdict.sh`, never a raw pane
+  read.
 - A finding names the file, the line and the exact failing input or command; one
   without them is not reported. A P0, P1 or P2 finding also carries a failing
   test, which the fixer runs red before the fix and ships green. When the test
@@ -28,10 +30,10 @@
 - A review finding blocks the merge only when normal use would hit the bug,
   and goes back to a fix round. A finding that needs an agent deliberately
   bypassing a guard, or an odd setup, is a one-line known gap in the evidence
-  file and does not block. Done is a closing pass that ends GO with no
-  blocking finding named; no blocking finding is left open at merge. Only a
-  finding outside the unit's scope becomes a follow-up issue; never merge an
-  in-scope blocking finding to file it later.
+  file and does not block. Done is one of the pass's stop lines: a closing
+  pass that ends GO (P3 findings alone are GO), or a closing NO-GO at or past
+  the review cap that names an open P2 and no P0 or P1. Main files each finding still open at the
+  merge as an issue first. A P0 or P1 is never left open at merge.
 - No redundant steps: before adding a step to the build, merge, review or push
   flow (a check, a test run, a review pass, a record, a wait, a confirmation),
   name what it catches that no existing step does. If you cannot, don't add
@@ -52,16 +54,21 @@
   upgrade path, a contract another file relies on, a hazard. Never what the
   next line does, who or which tool wrote or reviewed it, a finding's
   P-level, or commented-out code (git keeps it). A new TODO names its issue.
-- Never write `ponytail` in a comment (`// ponytail: ...`), even when the
-  ponytail skill asks for a tag. Explain a simplification in a plain comment.
+- Never write `ponytail` in a comment (`// ponytail: ...`). Explain a
+  simplification in a plain comment.
   A comment that already carries the tag changes only when its lines are edited
   or in a sweep the owner asked for.
 - One unit is one Orca worktree, one branch and one merge. Group issues into
   units by code area, not by issue: every issue that lands in one area is one
   unit with one brief and one review loop. Dispatch a ready brief at once
   unless its planned files overlap another unit's; combine units that overlap.
-  Never put two workers in one worktree. Main closes the unit's panes and
-  removes its worktree in the merge turn.
+  Never put two workers in one worktree (serialize only overlaps). One unit is one
+  squash merge. Main closes the unit's panes and removes its worktree in the
+  merge turn, and reconciles orphaned worktrees at every plan start; briefs run
+  ahead of builds. Main verifies every dispatch: status shows only scope, the
+  diff stat matches each claimed change, the worktree and main heads are as
+  expected, and a pass claim carries runner totals. Every worker is an Orca pane
+  the owner can open; Orca's task list is the dispatch ledger.
 - When a `gh` read fails mid-task, print `BLOCKED: GitHub read failed:
   <command>: <first error line>` on a line of its own and stop. Never go on
   from a brief's copy of an issue: main reads that line and decides.
@@ -69,7 +76,11 @@
   commit or a process main did not start, stop and reconcile before acting.
 - No duplicate agent of any role: reuse a live pane with the same launch title,
   never send a new job into a busy pane, and never stop a driver and relaunch
-  it without reading its log tail first.
+  it without reading its log tail first. After a crash, resume and never
+  restart: `claude --continue` or `codex resume --last`, then "Orca restarted;
+  continue from your last message." Interrupt a resumable pane before closing
+  it; close reviewers after their verdict. Memory, not a pane count, is the
+  limit (`config/pane-budget.json`).
 
 ## Tests and planning
 
@@ -88,7 +99,7 @@
   disagree, and its name says which two.
 - Plan by size: a one-line fix needs no plan; a change across a few files
   gets a short list of steps; anything larger gets a written plan the owner
-  approves first. Every plan takes the smallest change that does the job.
+  approves first.
 - Before building from a plan, run a freshness pass: check that every file and
   symbol it cites still exists, and re-verify a plan older than the last commit
   to those files.

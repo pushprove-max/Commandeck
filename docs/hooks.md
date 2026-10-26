@@ -10,7 +10,7 @@ and event checks:
 
 | Hook | What it does and why |
 |---|---|
-| `git-safety.sh` | Blocks force pushes, remote branch deletion, mirror pushes and hard resets to protect work; it handles quoted command words, but does not interpret arbitrary shell evaluation. |
+| `git-safety.sh` | Blocks force pushes, remote branch deletion, mirror pushes and hard resets to protect work; it handles quoted command words, but does not interpret arbitrary shell evaluation. A forced `git worktree remove` is allowed only for a temporary worktree this session added on a path that did not exist, both commands one plain `git [-C <dir>] worktree add|remove` naming the absolute path: the PreToolUse call of the add writes a claim beside the path (`.commandeck-add.<name>`, the session id), and the PostToolUse call (`--record-add`, only after a call that exited 0) records ownership in the worktree's own git folder only while that claim still names the session. Any prefix git takes for a long option (`--forc` for `--force`) is read as that option. |
 | `main-edit-guard.sh` | Blocks main from writing project code, including code in its worktrees; allows instruction and documentation paths, but caps counted uncommitted files at three even under `.claude/`. |
 | `merge-lock-guard.sh` | While a detached merge holds main (its pid alive in `merge-unit-local.state`, beside the merge lock in the git dir), refuses `git stash`, `checkout`, `reset`, `clean` and the other commands that move main's tree or index, and any edit of a file in main's checkout, naming the running merge. Each git call is judged on the checkout it changes (its `cd`'s, `-C`, `--git-dir`, `--work-tree`, a `bash -c` or `eval` string), so a Builder's worktree is never main. A dead pid is a stale lock and blocks nothing. |
 | `duplicate-agent-guard.sh` | Blocks a second live agent in one worktree and a new job sent to a busy pane. |
@@ -32,8 +32,11 @@ and event checks:
 | `ruling-log.sh` | Records the owner's answers with ids (typed prompts only from main's checkout and the Chief-of-Staff worktree) and flags suspiciously fast picker answers; does not block. |
 | `cos-own-echo.sh` | Acknowledges the relay's own message echoes so they do not cause another turn. In main's checkout, drops Orca's nudge when no actionable message (`wakeKinds`) is unread, or while the wake window is open, or when main already woke inside that window (one wake claim, shared with `main-watch.sh`), and prints the silent-wake line on each wake it passes. |
 | `cos-inbox-waiter-stop.sh` | Holds the relay's stop until all four watchers and `cos-check.sh` are alive. |
-| `cos-unfinished-stop.sh` | Holds a stop once when the Chief of Staff's reply (main's, when no Chief of Staff runs) leaves its own work undone ("haven't filed it", "want me to ..."). |
 | `opus-orchestrator-autonomy.sh` | Loads main's autonomy instructions and blocks an Opus orchestrator stop asking to continue already authorized work. |
+
+`cos-unfinished-stop.sh` ships unregistered: it would hold a stop once when the Chief of Staff's reply (main's, when no
+Chief of Staff runs) leaves its own work undone. A project that wants it adds a `Stop` entry for it, through
+`hooks/lib/run-hook.sh`, to its own settings.
 
 The strict tier is off by default. Setup saves the answer as `strictHooks`
 in `.claude/commandeck.json`:

@@ -30,10 +30,10 @@ check "a NO-GO and the plan author's revision collected after it: installed, the
 author() { printf 'role=plan-author\nplan=%s\nplanhash=%s\nverdict=%s\ncollected=%s\n' "$WS/$2/.claude/plans/$2.md" "$(hash "$2")" "$3" "$1" > "$SCR/seat-$2-plan-author.txt"; }
 # A Panel's judge whose NO-GO is newer than nothing but older than the other judge's GO, on the same plan bytes: its
 # findings are unresolved (no revision came after them), so the later GO does not carry the launch.
-fpunit f4; judged f4 NO-GO 100 sol; judged f4 GO 101 astra; fp f4
+fpunit f4; judged f4 NO-GO 100 sol; judged f4 GO 101 fable; fp f4
 check "a GO beside another judge's NO-GO on the same plan is refused, nothing on main, no Builder" "2:1:none:0" \
   "$RC:$(grep -c '^REFUSED: .*NO-GO' "$T/out"):$(onmain f4):$(grep -c . "$T/seats")"
-printf 'the revision of f4\n%s\n' "$PSZ" > "$WS/f4/.claude/plans/f4.md"; author 150 f4 PLAN-DONE; judged f4 GO 160 astra; fp --dry-run f4
+printf 'the revision of f4\n%s\n' "$PSZ" > "$WS/f4/.claude/plans/f4.md"; author 150 f4 PLAN-DONE; judged f4 GO 160 fable; fp --dry-run f4
 check "a NO-GO answered by a revision the other judge then passed is not a conflict" 0 "$RC"
 # A plan author that stopped PLAN-BLOCKED left a partial plan: not a revision to build.
 fpunit f5; judged f5 NO-GO 200; printf 'half a plan\n%s\n' "$PSZ" > "$WS/f5/.claude/plans/f5.md"; author 300 f5 PLAN-BLOCKED; fp f5
@@ -72,13 +72,13 @@ rm "$P/.claude/plans"; mv "$T/plansdir" "$P/.claude/plans"
 cp -R "$REAL/.claude-plugin" "$T/plug/"   # the manifest lists the Enabled keys, as an installed plugin has it
 fpunit f10; author 100 f10 PLAN-DONE; fp --dry-run f10
 check "a judge on and no verdict: the author's plan alone is refused" "2:1" "$RC:$(grep -c "^REFUSED: no plan judge's verdict" "$T/out")"
-mkdir -p "$HOME/.claude"; echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": false, "planJudgeAstraEnabled": false}}}}' > "$HOME/.claude/settings.json"
+mkdir -p "$HOME/.claude"; echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": false, "planJudgeFableEnabled": false}}}}' > "$HOME/.claude/settings.json"
 fp f10
 check "both judges off: the author's PLAN-DONE plan installs unjudged and the Builder opens" "0:plan of f10:1" "$RC:$(onmain f10):$(grep -cx 'launch builder f10' "$T/seats")"
 fpunit f11; author 100 f11 PLAN-BLOCKED; fp --dry-run f11
 check "both judges off: a PLAN-BLOCKED plan is still refused" 2 "$RC"
 # A value an Enabled key does not take is no answer that the judges are off: the launch stops, as plan-tier.sh does.
-echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": "disabled", "planJudgeAstraEnabled": "disabled"}}}}' > "$HOME/.claude/settings.json"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": "disabled", "planJudgeFableEnabled": "disabled"}}}}' > "$HOME/.claude/settings.json"
 fpunit f12; author 100 f12 PLAN-DONE; fp f12
 check "judges' Enabled keys holding a value they do not take: refused naming the key, nothing on main, no Builder" "2:1:none:0" \
   "$RC:$(grep -c '^REFUSED: /plugin config planJudgeSolEnabled = disabled' "$T/out"):$(onmain f12):$(grep -cx 'launch builder f12' "$T/seats")"
@@ -132,9 +132,9 @@ small n3 149; rulings n3; fp n3
 check "a NO-GO plan at 149 planned lines is taken" "0:plan of n3" "$RC:$(onmain n3)"
 small n4 80; rulings n4; touch -d '2 hours ago' "$P/.claude/briefs/n4-main-rulings.md"; fp n4
 check "rulings written before the judge ran do not stand in for the revision" "2:none" "$RC:$(onmain n4)"
-small n5 80; rulings n5; judged n5 NO-GO 150 astra; fp n5
+small n5 80; rulings n5; judged n5 NO-GO 150 fable; fp n5
 check "a Panel's second judge on the same plan: main's rulings do not stand in" "2:none" "$RC:$(onmain n5)"
-printf '\nan edit after the judge\n' >> "$WS/n5/.claude/plans/n5.md"; rm -f "$SCR/seat-n5-plan-judge-astra.txt"; fp n5
+printf '\nan edit after the judge\n' >> "$WS/n5/.claude/plans/n5.md"; rm -f "$SCR/seat-n5-plan-judge-fable.txt"; fp n5
 check "a small NO-GO plan edited after the judge read it is refused, nothing on main" "2:none" "$RC:$(onmain n5)"
 rm -f "$HOME/.claude/settings.json"
 

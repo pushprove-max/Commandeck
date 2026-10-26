@@ -483,16 +483,25 @@ def reviewed_tree(worktree, unit):
     return {'true': True, 'false': False}.get(said, False if os.path.isdir(worktree) else None)
 
 
-def lines_changed(worktree):
+def lines_changed(worktree, main=None, unit=None):
     """The build's lines changed: insertions plus deletions of HEAD against its fork from main, .claude/briefs/ left out.
 
-    builder-codex-pass.sh's build_size counts a first pass's commit the same way. None when the worktree is gone.
+    builder-codex-pass.sh's build_size counts a first pass's commit the same way. Once the worktree is gone (the merge
+    removes it, issue 358) the unit's squash commit on main is counted instead, found in the main checkout --main names.
+    None when neither exists.
     """
-    def git(*args):
-        done = subprocess.run(['git', '-C', worktree, *args], capture_output=True, text=True)
+    def git(*args, where=worktree):
+        done = subprocess.run(['git', '-C', where, *args], capture_output=True, text=True)
         return done.stdout if done.returncode == 0 else None
+    numstat = ('--numstat', '--no-renames', '--no-ext-diff', '--no-textconv')
+    if not os.path.isdir(worktree):
+        # shortcut: the dashboard's merge-shas list is a per-run temp file this script cannot read; the squash commit's
+        # subject (merge-unit-local.sh titles it feat(<unit>)) finds it.
+        sha = main and unit and (git('log', 'main', '-1', '--format=%H', '-E', f'--grep=^feat\\({re.escape(unit)}\\)', where=main) or '').strip()
+        stat = sha and git('show', *numstat, '--format=', sha, '--', '.', ':(exclude).claude/briefs', where=main)
+        return None if stat is None or not sha else sum(int(count) for row in stat.splitlines() for count in row.split('\t')[:2] if count.isdigit())
     base = git('merge-base', 'main', 'HEAD')
-    stat = base and git('diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv', base.strip(), 'HEAD', '--', '.', ':(exclude).claude/briefs')
+    stat = base and git('diff', *numstat, base.strip(), 'HEAD', '--', '.', ':(exclude).claude/briefs')
     # A file git gives no count for (binary, or marked -diff) adds nothing here; the pass counts such files apart.
     return None if stat is None else sum(int(count) for row in stat.splitlines() for count in row.split('\t')[:2] if count.isdigit())
 
@@ -901,7 +910,7 @@ def main():
         'context': {'peak': max(ctx, default=0), 'mean': sum(ctx) // max(1, len(ctx)), 'calls': len(ctx)},
         'compactions': [c for s in sessions for c in s['compactions']], 'idle_gaps': idle_gaps, 'background_jobs': jobs,
         'helpers': helpers, 'blocked': dict(blocked), 'closing_pass': closing_pass(runs, reviewed_tree(wt, unit)),
-        'lines_changed': lines_changed(wt),
+        'lines_changed': lines_changed(wt, a.main, unit),
         'cut': sorted(({'start': max(w['start'], t0), 'end': min(w['end'], t1), 'seconds': cut_in(w['start'], w['end']), 'reason': w['reason']}
                        for w in cuts if cut_in(w['start'], w['end'])), key=lambda w: w['start']),
         'cut_s': round(cut_s, 1),

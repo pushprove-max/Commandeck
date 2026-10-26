@@ -24,7 +24,7 @@ V=$(jq -r '.version // "(none)"' "$IL_CONFIG" 2>/dev/null) || V="(unreadable)"
 il_profile_lock 60 || die "the install folder $IL_DIR stayed locked (a launch's repair or a revoke); nothing was changed, run this again"
 
 echo "commandeck $(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json") at $IL_ROOT (was at $(jq -r '.root // "?"' "$IL_PROJECT"))"
-awk '/^## / { n++ } n == 1' "$IL_ROOT/CHANGELOG.md"
+bash "$HERE/release-notes.sh" "$(jq -r .version "$IL_ROOT/.claude-plugin/plugin.json")"
 
 # Every recorded path as it is now, for the way back, and the Codex home in
 # use today: setup writes to it, and it is not on record yet if it is a new one.
