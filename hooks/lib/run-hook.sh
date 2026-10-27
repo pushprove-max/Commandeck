@@ -16,5 +16,6 @@ for b in "${COMMANDECK_BREW_PREFIX:-/opt/homebrew}/bin/bash" "${COMMANDECK_BREW_
   [ -z "$p" ] || { PATH=$p; export PATH; }
   exec "$b" "$@"
 done
-echo "commandeck: no Bash 4 or newer on this machine, so this plugin's hooks did not run and checked nothing. /commandeck:setup can install it (on a Mac: brew install bash)."
+# Issue 397: a systemMessage, so the person sees that no hook ran (stdout only reaches the transcript view).
+printf '%s\n' '{"systemMessage":"commandeck: no Bash 4 or newer on this machine, so this plugin'"'"'s hooks did not run and checked nothing. /commandeck:setup can install it (on a Mac: brew install bash)."}'
 exit 0

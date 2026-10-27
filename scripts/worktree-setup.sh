@@ -161,18 +161,25 @@ OWNFIX=$(jq -c --argjson fixed "$FIXED" '(.env.COMMANDECK_DEFAULT_CUTS // "" | s
     | select(.value != false or (.key | IN($r[]) | not)))' "$F")
 MCP_DENY='[{"serverName":"claude-in-chrome"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"}]'
 ALLOW='["Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git ls-files:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(npm run:*)","Bash(npx tsc:*)","Bash(npx vitest:*)","Bash(node --test:*)","Bash(node --max-old-space-size=4096:*)","Bash(orca-ide:*)","Bash(awk:*)","Bash(sed -n:*)","Bash(grep:*)","Bash(rg:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(ls:*)","Bash(wc:*)","Bash(find:*)","Bash(diff:*)","Bash(jq:*)","Bash(sort:*)","Bash(uniq:*)","Bash(cut:*)","Bash(tr:*)","Bash(xargs:*)","Bash(mkdir:*)","Bash(cp:*)","Bash(mv:*)","Bash(printf:*)","Bash(echo:*)","Bash(test:*)","Bash(aws dynamodb get-item:*)","Bash(aws dynamodb query:*)","Bash(aws dynamodb scan:*)","Bash(aws dynamodb describe-table:*)","Bash(aws sts get-caller-identity:*)"]'
-jq --arg ttl "$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+# Issue 399: every worker may call the read-only Codex helper; the script itself refuses judge and reviewer panes.
+ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + ["Bash(bash \($s)/codex-ask.sh:*)"]' <<<"$ALLOW")
+# Issue 397: a worktree whose git dir holds the plan-of mark is a planning worktree: its plan author may start helpers.
+PLAN_WT=false
+[ ! -s "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of" ] || PLAN_WT=true
+jq --argjson plan "$PLAN_WT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent-model-guard.sh\"" --arg ttl "$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
-  def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
+  def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard|agent-model-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
   | (if $ttl == "5m" or $ttl == "1h" then .env.CLAUDE_CODE_PROMPT_CACHE_TTL = $ttl else . end)
   | .hooks = ((.hooks // {}) | map_values(map(select(((.hooks // []) | length) > 0 and all(.hooks[]; stale) | not))))
   | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false} + $poff | del(.["typescript-lsp@claude-plugins-official"]))
   | .disableClaudeAiConnectors = true
   | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
-  | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
+  | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique | if $plan then . - ["Agent"] else . end), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
   | .claudeMdExcludes = ((.claudeMdExcludes // []) + [$ex] | unique)
-  | .hooks = ((.hooks // {}) | .Stop = (((.Stop // []) + [{hooks: [{type: "command", command: $notify}]}]) | unique))' "$F" > "$tmp"
+  | .hooks = ((.hooks // {}) | .Stop = (((.Stop // []) + [{hooks: [{type: "command", command: $notify}]}]) | unique))
+  # Issue 397: every worker pane runs the model guard, whether or not the plugin'"'"'s hooks.json loads there.
+  | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Agent|Task", hooks: [{type: "command", command: $mg}]}] | unique)' "$F" > "$tmp"
 mv "$tmp" "$F"
 # The Stop hook (ruling 2026-09-07) sends an Orca worker_done when any Claude
 # pane in the worktree finishes a turn, the twin of the Codex `notify` hook, so

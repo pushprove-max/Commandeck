@@ -25,6 +25,7 @@ INPUT=$(cat)
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
+. "${BASH_SOURCE[0]%/*}/lib/screen-code.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
 hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
@@ -278,6 +279,27 @@ case "$SCOPE_PATH" in
     fi
   ;;
 esac
+
+# Issue 398: placeholder copy in screen code ("coming soon") is built only when the plan or main's rulings name its
+# complete line. The path made repo-relative by screen_rel decides what is screen code; the unit and main come from
+# that file's own checkout, never the session's working folder. Always-disabled controls are the merge's: one home for
+# their refusal and its per-line approval count.
+if type screen_rel >/dev/null 2>&1 && _sr=$(screen_rel "$FILE_PATH") && [ -n "$_sr" ]; then
+  _rel=${_sr%%$'\n'*} _root=${_sr#*$'\n'}
+  _main=$(pp_project "$_root"; printf '%s' "$PP_PROJECT_DIR")
+  SCREEN_PREFIXES=$(screen_prefixes "$_main")
+  if is_screen "$_rel"; then
+    _copy=""
+    while IFS= read -r _l; do
+      printf '%s' "$_l" | grep -qiE "$PLACEHOLDER_COPY" || continue
+      placeholder_requested "$_rel" "$_l" "${_root##*/}" "$_root" "$_main" || _copy="${_copy:+$_copy; }\"$(_sc_trim "$_l")\""
+    done <<<"$ADDED"
+    if [ -n "$_copy" ]; then
+      echo "BLOCKED: placeholder copy in $FILE_PATH: $_copy. Build only what the plan asks for; a mockup element the plan does not build is left out and sent to main as a question. Allowed only when the plan or main's rulings name the complete line: Placeholder: $_rel | <complete source line> | <why>" >&2
+      exit 2
+    fi
+  fi
+fi
 
 # Type/lint suppression directives in application src/. These escape hatches
 # silence the type check and hide real defects; fix the underlying

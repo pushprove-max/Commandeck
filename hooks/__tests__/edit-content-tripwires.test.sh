@@ -115,6 +115,42 @@ check "an edit that keeps a hook parseable passes" 0 \
 check "the edit that repairs a broken hook passes" 0 \
   "$(run_hook "$(json_edit "$HK/.claude/hooks/broken.sh" "a repeated call's" 'a repeated call is')")"
 
+# --- issues 392 and 398: placeholder copy in screen code -----------------------
+# A project with screenPaths and three unit worktrees whose briefs name a plan committed on main. The hook runs
+# from the worktree, as a Builder session does; the file is always an absolute path.
+SP=$(cd "$TMP" && pwd -P)/screens; mkdir -p "$SP"
+git init -q -b main "$SP/proj"; mkdir -p "$SP/proj/.claude/plans"
+printf '{"version":1,"screenPaths":["web/src/"]}\n' > "$SP/proj/.claude/commandeck.json"
+COPY='<p>Coming soon</p>'
+printf 'Placeholder: web/src/X.tsx | %s | the tab ships in the next plan\n' "$COPY" > "$SP/proj/.claude/plans/u2.md"
+printf 'Placeholder: web/src/X.tsx | Coming soon | why\n' > "$SP/proj/.claude/plans/u3.md"
+git -C "$SP/proj" add -A; git -C "$SP/proj" -c user.name=t -c user.email=t@t commit -qm base
+for u in u1 u2 u3; do
+  git -C "$SP/proj" worktree add -q "$SP/ws/$u" -b "builder/$u"
+  mkdir -p "$SP/ws/$u/.claude/briefs"; printf '## Plan\n.claude/plans/%s.md\n' "$u" > "$SP/ws/$u/.claude/briefs/$u.md"
+done
+run_in()  { (cd "$1" && printf '%s' "$2" | "$HOOK" >/dev/null 2>&1; echo $?); }
+msg_in()  { (cd "$1" && printf '%s' "$2" | "$HOOK" 2>&1 >/dev/null); }
+W1=$SP/ws/u1 W2=$SP/ws/u2 W3=$SP/ws/u3
+check "placeholder copy in screen code is refused, naming the file and the line" "2 1" \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")") $(msg_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")" | grep -cF "placeholder copy in $W1/web/src/X.tsx: \"$COPY\"")"
+check "the same copy is allowed when the plan names its complete line on a Placeholder line" 0 \
+  "$(run_in "$W2" "$(t_edit "$W2/web/src/X.tsx" "$COPY")")"
+check "copy named only by a substring of its line is refused" 2 \
+  "$(run_in "$W3" "$(t_edit "$W3/web/src/X.tsx" "$COPY")")"
+check "placeholder copy outside screen code passes" 0 \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.ts" 'const m = "Coming soon";')")"
+check "a placeholder comment is still caught" 2 \
+  "$(run_in "$W1" "$(t_edit "$W1/src/x.ts" '// placeholder until the API lands')")"
+check "an absolute screen path is screened" 2 \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")")"
+mkdir -p "$W1/web"
+check "a session started in a subdirectory still screens the file" "2 1" \
+  "$(run_in "$W1/web" "$(t_edit "$W1/web/src/X.tsx" "$COPY")") $(msg_in "$W1/web" "$(t_edit "$W1/web/src/X.tsx" "$COPY")" | grep -cF "$W1/web/src/X.tsx")"
+# The file's own checkout decides, never the session's: from u2, whose plan approves the copy, u1's file is refused.
+check "a session in another checkout screens the file by the file's checkout" 2 \
+  "$(run_in "$W2" "$(t_edit "$W1/web/src/X.tsx" "$COPY")")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

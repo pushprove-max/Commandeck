@@ -52,6 +52,9 @@ done
 check "with no Bash 4 or newer no hook exits non-zero" 0 "$BAD"
 check "and each prints the one line and nothing else" 0 "$LINES"
 check "the line says setup can install it" 1 "$(started "$T/none" "${CMDS[0]}" 2>&1 | grep -c 'setup can install')"
+OUT=$(started "$T/none" "${CMDS[0]}" 2>/dev/null); RC=$?
+check "with no Bash 4 the runner's line is a message the person sees" "1:1:1:0" \
+  "$(wc -l <<<"$OUT" | tr -d ' '):$(jq -e . <<<"$OUT" >/dev/null 2>&1 && echo 1 || echo 0):$(jq -r '.systemMessage' <<<"$OUT" 2>/dev/null | grep -c '^commandeck: no Bash 4 or newer on this machine, so this plugin.s hooks did not run and checked nothing'):$RC"
 
 # --- a newer Bash in Homebrew's place: the hook is run under it, payload untouched ---
 # The stand-in answers the launcher's version question as the real one and records every hook it is given.

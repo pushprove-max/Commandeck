@@ -38,7 +38,7 @@
         "model": "sonnet",
         "effort": "high",
         "reviewer": true,
-        "tools": ["Write", "Edit", "NotebookEdit"],
+        "tools": ["Write", "Edit", "NotebookEdit", "Agent"],
         "unboxed": true
       },
       "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round, no judging loop. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
@@ -48,7 +48,7 @@
       "model": "fable",
       "effort": "high",
       "reviewer": true,
-      "tools": ["Write", "Edit", "NotebookEdit"],
+      "tools": ["Write", "Edit", "NotebookEdit", "Agent"],
       "unboxed": true,
       "edits": false,
       "note": "The Panel answer's second judge, beside plan-judge-sol: a read-only Claude pane on Fable at high that reads the plan and prints its findings; off, the other judge judges alone."
@@ -57,9 +57,10 @@
       "agent": "claude",
       "model": "opus",
       "effort": "medium",
+      "helpers": {"Explore": "haiku", "general-purpose": "sonnet", "debugger": "sonnet"},
       "unboxed": true,
       "edits": true,
-      "note": "Opus at medium effort by default. One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own Explore (haiku) and general-purpose (sonnet) subagents and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
+      "note": "Opus at medium effort by default. One pane per batch in its own worktree, with no advisor, a risky batch included (set-up offers none); builds, runs its own helper subagents on the models in helpers (agent-model-guard.sh enforces them in a Builder, plan-author and fix-round pane) and review passes (builder-codex-pass.sh, model from roles.codex-reviewer), hands back a branch. Launched by builder-launch.sh. Cannot be off: with no Builder there is no branch to review or merge."
     },
     "fixer": {
       "agent": "claude",
@@ -82,7 +83,7 @@
         "headless": true,
         "model": "sonnet",
         "effort": "high",
-        "tools": ["Write", "Edit", "NotebookEdit"]
+        "tools": ["Write", "Edit", "NotebookEdit", "Agent"]
       },
       "note": "The review pass. codexReviewerAgent=claude (the Claude-only profile sets it) runs the headless read-only Claude session in claude, on a different family than the Builder's. Fast mode is not set here: it changes what a run costs, so it is the owner's answer (codexReviewerFast in /plugin config, off by default). With a yes the pass preflight needs service_tier = \"fast\" in the Codex config. Cannot be off: the merge gate needs a GO round file."
     }

@@ -89,7 +89,7 @@ check "no setup question, flag or option offers No cap for the review loop" 0 \
 # The second plan judge is a Claude seat on Fable that cannot write the plan it judges; the Astra judge role and its
 # options are gone, and nothing outside the tests reads them.
 check "the Fable judge is a read-only Claude reviewer on fable at high, and no Astra judge role is left" \
-  "claude fable high true false Write,Edit,NotebookEdit:false:" \
+  "claude fable high true false Write,Edit,NotebookEdit,Agent:false:" \
   "$(jq -r '.roles["plan-judge-fable"] | "\(.agent) \(.model) \(.effort) \(.reviewer) \(.edits) \(.tools | join(","))"' "$REAL/config/routing.json"):$(jq '.roles | has("plan-judge-astra")' "$REAL/config/routing.json"):$(cd "$REAL" && grep -rnE 'planJudgeAstra|plan-judge-astra' scripts hooks config templates skills docs README.md .claude-plugin --exclude-dir=__tests__)"
 # A key setup passes to setup.sh --option that the manifest lacks is refused there, so the question would break.
 check "every option key setup's SKILL.md names is a manifest option" "" \
@@ -254,5 +254,10 @@ check "issue 291: proof-run.sh sets HOME once, to a temp folder with CLAUDE_CONF
 check "every .claude/metrics ledger in IL_STATE is deleted by uninstall --delete-data" "" \
   "$(cd "$REAL" && for f in $(grep -o '\.claude/metrics/[a-z-]*\.jsonl' scripts/install-lib.sh | sort -u); do n=${f##*/}; n=${n%.jsonl}
      grep -qE "metrics/\"?\{([a-z-]+,)*$n(,[a-z-]+)*\}\.jsonl" scripts/uninstall.sh || echo "$f"; done)"
+# And every ledger a script names under .claude/metrics is in IL_STATE: a new one left out shows in git status and
+# outlives uninstall --delete-data.
+check "every .claude/metrics ledger a script names is in IL_STATE" "" \
+  "$(cd "$REAL" && for f in $(grep -ho '\.claude/metrics/[a-z-]*\.jsonl' scripts/*.sh | sort -u); do
+     grep -qF "$f" scripts/install-lib.sh || echo "$f"; done)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

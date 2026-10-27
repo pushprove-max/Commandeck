@@ -30,6 +30,13 @@ and a fix that touches a save updates that save's row in the same commit.
 - The batch's Prior art section binds: build on the standard and the library
   or service it names, as the project's `.claude/paved-road.md` lists them for
   the area. A deviation states its reason in the evidence file.
+- Issue 392: a unit that changes screen code (the project's `screenPaths`) writes `## Screenshots` in its evidence file
+  before the closing pass, one row each: `- side-by-side: <mockup> | <screenshot>`, `- screenshot: <path>`, or
+  `- none: no visual change: <reason>`. Put screenshots at absolute paths outside the worktree: an untracked image
+  inside it is refused at step 1 as untracked code.
+- Issue 398: build only what the plan asks for. Never add a disabled, stub or "coming soon" control or message to match
+  a mockup; a mockup element the plan does not build is left out, and you send main the question. A placeholder the
+  plan wants is named on a `Placeholder: <file> | <exact text> | <why>` line.
 - Issue 359: before the first edit, write one table of the cut pairs that share a file or a symbol, so no cut is built
   on a contract another cut still changes. A finding whose root cause is the plan amends the plan first (one
   `## Plan change log` line), then the code.
@@ -62,6 +69,7 @@ and a fix that touches a save updates that save's row in the same commit.
   starts one background read-only agent that lists every site in the changed files, and the scripts they source,
   where the class's flaw can occur, checked against the class's ruling. Fix or justify each site before the next
   pass: the evidence file gets one line per site, `Sweep: <file>:<line>: fixed` or `Sweep: <file>:<line>: safe, <why>`.
+- Use helper subagents wherever the work allows: general-purpose (runs on the configured Sonnet model) for independent build cuts, research and test writing, Explore (runs on the configured Haiku model) for search and proof; this pane keeps only cut ordering, cross-cut contracts and final integration. For a search, a trace or a second opinion you may also ask Codex, read-only: bash <plugin scripts>/codex-ask.sh '<question>' (it cannot edit; writing stays with Sonnet helpers).
 - Use Explore subagents for code searches; they run on Haiku. Put `[#<issue>]`
   in each subagent description, so the event log ties it to its issue.
   Start every fact-gathering helper the build needs in one turn, never one

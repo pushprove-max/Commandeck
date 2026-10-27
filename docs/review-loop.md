@@ -22,6 +22,11 @@ merges and no closing pass is needed. A project that answered "none" to the
 closing pass at setup merges the narrowed pass that ends GO, once narrowed
 passes have read every commit after the first pass.
 
+A closing pass first rebases onto local main and runs the tests that cover
+what changed. When setup recorded a typecheck command (`typecheckCommand`), it
+must be green too: a red typecheck stops the pass before any reviewer runs and
+names the command and its log; with none set, the pass says so and goes on.
+
 Each pass after the first prints the files and lines changed since the last
 pass, and says so when no code line changed (only comments or blank lines). If
 main's brief or rulings for the build changed since the last pass, a `review`
@@ -45,6 +50,11 @@ file and does not block: the reviewer lists it under `KNOWN GAPS:` with no
 level or class tag, and a pass with only known gaps ends GO. A gap in
 documentation, plan wording or a failure table is a P3 unless it hides a real
 defect. A pass whose findings are all P3 ends GO.
+
+Every pass reports placeholder UI as a P1 (class `placeholder-ui`): a control,
+message or screen the change adds that is disabled for good, a stub, or says
+it comes later, unless the plan or main's rulings name it on a
+`Placeholder: <file> | <complete source line> | <why>` line.
 
 A P0, P1 or P2 holds the loop (the blocking severity, P2 by default; set
 `reviewBlockSeverity` to P1 so only a P0 or P1 holds, or to P3 so every

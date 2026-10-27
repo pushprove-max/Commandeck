@@ -44,8 +44,21 @@ The Claude-only profile sets those two agent keys to `claude`. The Fable judge
 always runs on Claude and has no agent key.
 
 A helper is a built-in subagent type: `Explore` (Haiku) for search and lookup,
-`general-purpose` (Sonnet) for edits, tests and judgment. The model guard
-fills those models in, and asks for a type when a call names none.
+`general-purpose` (Sonnet) for edits, tests and judgment. The models come from
+`roles.builder.helpers` in `config/routing.json`. Every worker pane runs the
+model guard: it fills those models in, and asks for a type when a call names
+none. Builder, plan-author and fix-round panes enforce them. Plan-author panes
+may start helpers; plan-judge and reviewer panes may not.
+
+The Codex helper, `scripts/codex-ask.sh [--timeout <s>] '<question>'`, is a
+read-only second opinion for Builder, plan-author and fix-round panes; judge and
+reviewer panes are refused. It runs the model the Codex reviewer route names
+(`codexReviewerModel`), in a read-only sandbox from outside the repository, and
+prints the model that answered above the answer. A setup whose reviews run on
+Claude has no Codex helper. The deadline is `--timeout` seconds (default 300,
+1 to 1800), then a kill 2 s later; the answer is cut at 6000 bytes. Every call
+is a row in `.claude/metrics/codex-helper.jsonl` of the main checkout, and the
+build review counts them.
 
 | Location | Owns |
 |---|---|
@@ -60,7 +73,7 @@ fills those models in, and asks for a type when a call names none.
 | `~/.commandeck/install/` | Per-project and machine manifests, original blobs and saved dashboard bind/port/hosts. |
 | `~/.commandeck/plugin` | Stable link to the plugin folder setup last applied. |
 
-Use setup to change answers. Its project keys include `profile`, `testCommand`,
+Use setup to change answers. Its project keys include `profile`, `testCommand`, `typecheckCommand`, `screenPaths`, `lockfileDeny`,
 `strictHooks`, `serena`, `standardContext`, `builder.clearLine`, `issueSizing`,
 `chiefOfStaff`, `trustAllHooks`, `mainCacheTtl`, `workerCacheTtl`, `autoMode`, `workerSkillsOff`,
 `workerPluginsOff`, `keeps`, `reviewLoop` and `autoDecideNever` (your own list of decisions

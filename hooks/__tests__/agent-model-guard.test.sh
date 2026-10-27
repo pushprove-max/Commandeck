@@ -7,9 +7,10 @@
 # and neither Sonnet nor Haiku carries a job limit, so the hook never refuses a call.
 set -u
 # Run inside a Builder pane, the variable would turn the named-model cases below.
-unset COMMANDECK_BUILDER
+unset COMMANDECK_BUILDER COMMANDECK_SEAT COMMANDECK_ROUTING
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/agent-model-guard.sh"
 PASS=0 FAIL=0
+TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 run() { jq -cn --argjson i "$1" '{tool_name:"Agent", tool_input:$i}' | bash "$HOOK" >/dev/null 2>&1; echo $?; }
 # kept <input> [builder] -- the call's input as the hook leaves it: "none" when it rewrites nothing (the type
@@ -70,13 +71,41 @@ check "Builder: Explore naming opus runs as Haiku, every other argument kept" 1 
 check "Builder: Explore naming sonnet runs as Haiku" 1 "$(as_haiku "$(jq -c '. + {model:"sonnet"}' <<<"$EXPLORE")")"
 check "Builder: unnamed Explore runs as Haiku" 1 "$(as_haiku "$EXPLORE")"
 check "Builder: Explore naming haiku is left alone" "" "$(builder "$(jq -c '. + {model:"haiku"}' <<<"$EXPLORE")")"
-check "Builder: general-purpose naming opus is not rewritten" none "$(kept "$(jq -c '. + {model:"opus"}' <<<"$NOMODEL")" 1)"
+check "a Builder's general-purpose call naming opus runs as Sonnet" sonnet "$(jq -r '.model' <<<"$(kept "$(jq -c '. + {model:"opus"}' <<<"$NOMODEL")" 1)")"
 check "Builder: a fork naming opus is not rewritten" "" "$(builder '{"subagent_type":"fork","model":"opus","description":"x","prompt":"y"}')"
 check "a Builder's unnamed general-purpose runs as Sonnet and is not nudged" "sonnet:none" \
   "$(builder "$NOMODEL" | jq -r '"\(.hookSpecificOutput.updatedInput.model):\(.hookSpecificOutput.additionalContext // "none")"')"
 # A planner seat is no Builder pane: its helpers get the plain fill, Haiku for search and Sonnet for the rest.
 seatfill() { jq -cn --argjson i "$1" '{tool_name:"Agent", tool_input:$i}' | env -u COMMANDECK_BUILDER COMMANDECK_SEAT=plan-author bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.updatedInput.model'; }
 check "a planner seat's Explore and general-purpose run as Haiku and Sonnet" "haiku:sonnet" "$(seatfill "$EXPLORE"):$(seatfill "$NOMODEL")"
+
+# Issue 397: the helper models are roles.builder.helpers; a Builder, plan-author or fix-round pane enforces both.
+GP_OPUS=$(jq -c '. + {model:"opus"}' <<<"$NOMODEL")
+EX_SONNET=$(jq -c '. + {model:"sonnet"}' <<<"$EXPLORE")
+paneas() { jq -cn --argjson i "$2" '{tool_name:"Agent", tool_input:$i}' | env "${@:3}" bash "$HOOK" 2>/dev/null | jq -sr '.[0].hookSpecificOutput.updatedInput.model // "none"'; }
+check "a plan-author pane's general-purpose call naming opus runs as Sonnet and its Explore naming sonnet as Haiku" "sonnet:haiku" \
+  "$(paneas x "$GP_OPUS" COMMANDECK_SEAT=plan-author):$(paneas x "$EX_SONNET" COMMANDECK_SEAT=plan-author)"
+check "a fix round in the Builder's pane enforces both models" "sonnet:haiku" \
+  "$(paneas x "$GP_OPUS" COMMANDECK_SEAT=builder COMMANDECK_BUILDER=1):$(paneas x "$EX_SONNET" COMMANDECK_SEAT=builder COMMANDECK_BUILDER=1)"
+check "a plan-judge seat in a Builder worktree keeps its named model" "none:none" \
+  "$(paneas x "$GP_OPUS" COMMANDECK_SEAT=plan-judge-sol COMMANDECK_BUILDER=1):$(paneas x "$EX_SONNET" COMMANDECK_SEAT=plan-judge-sol COMMANDECK_BUILDER=1)"
+check "a named model outside these panes runs as named (an unnamed one is filled)" "none:none:sonnet" \
+  "$(paneas x "$GP_OPUS" X=1):$(paneas x "$EX_SONNET" X=1):$(paneas x "$NOMODEL" X=1)"
+check "a reviewer-type call naming opus is unchanged in a Builder pane" none \
+  "$(paneas x '{"subagent_type":"codex-reviewer","model":"opus","description":"x","prompt":"y"}' COMMANDECK_BUILDER=1)"
+check "a call already on its configured model passes unchanged" "none" "$(paneas x "$(jq -c '. + {model:"sonnet"}' <<<"$NOMODEL")" COMMANDECK_BUILDER=1)"
+mkdir -p "$TMPD" && jq '.roles.builder.helpers = {Explore: "sonnet", "general-purpose": "haiku", debugger: "sonnet"}' "$(dirname "$HOOK")/../config/routing.json" > "$TMPD/routing.json"
+check "a changed routing setting changes both helper models" "haiku:sonnet" \
+  "$(paneas x "$GP_OPUS" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/routing.json"):$(paneas x "$EXPLORE" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/routing.json")"
+# An overlay written before helpers existed: setup keeps its builder row as it is, so it has no helpers map. The
+# shipped models still apply, or every unnamed helper there runs as named-nothing on Opus again.
+jq 'del(.roles.builder.helpers)' "$(dirname "$HOOK")/../config/routing.json" > "$TMPD/old.json"
+check "an overlay with no helpers map runs the shipped helper models" "sonnet:haiku:haiku" \
+  "$(paneas x "$GP_OPUS" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/old.json"):$(paneas x "$EX_SONNET" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/old.json"):$(paneas x "$EXPLORE" COMMANDECK_ROUTING="$TMPD/old.json")"
+echo '{"roles":' > "$TMPD/bad.json"
+FAILOUT=$(jq -cn --argjson i "$GP_OPUS" '{tool_name:"Agent", tool_input:$i}' | COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/bad.json" bash "$HOOK" 2>/dev/null; echo "rc=$?")
+check "an unreadable routing file changes nothing and is reported" "1:1:rc=0" \
+  "$(head -n1 <<<"$FAILOUT" | jq -e '.systemMessage | contains("could not run")' >/dev/null && echo 1 || echo 0):$(head -n1 <<<"$FAILOUT" | jq -e '.hookSpecificOutput.updatedInput == null' >/dev/null && echo 1 || echo 0):$(tail -n1 <<<"$FAILOUT")"
 
 # The nudge: an untyped helper would run silently on Opus; it is told to name a type, and still runs.
 note() { jq -cn --argjson i "$1" '{tool_name:"Agent", tool_input:$i}' | bash "$HOOK" 2>/dev/null | jq -sr '.[0].hookSpecificOutput.additionalContext // "none"' | grep -c 'Name a subagent type: Explore (runs as Haiku)'; }

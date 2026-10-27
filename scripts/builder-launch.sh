@@ -44,29 +44,35 @@
 # alone to main as "plan(<unit>): plan", then the launch runs as above. A GO with another judge's NO-GO on the same
 # plan bytes is refused. A judge records a plan only when its spec names it (seat.sh). --dry-run checks the same and
 # installs nothing.
-case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -euo pipefail
 USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief> | --from-plan <unit> [<batch-brief>]"
 KEEP=
-RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0 FROM=0
-while :; do
-  case ${1:-} in
-    --risky) RISKY=1; shift ;;
-    --dry-run) DRY=1; shift ;;
-    --small) SMALL=1; shift ;;
-    --skip-plan) SKIP=1; shift ;;
-    --from-plan) FROM=1; shift ;;
-    --keep) KEEP=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
-    --model) PICK=1 BMODEL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
-    --effort) RAISE=1 EFFORT=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
-    --reason) REASON=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
-    *) break ;;
+RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0 FROM=0 POS=()
+# Issue 394: options in any position (GNU style), every argument read before paths.sh is sourced. A value option whose
+# value is missing or starts with -- is refused: taking it would let --reason swallow --dry-run and launch for real.
+needval() { [ $# -ge 2 ] && [[ $2 != --* ]] || { printf '%s needs a value\n%s\n' "$1" "$USAGE" >&2; exit 2; }; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;;
+    --risky) RISKY=1 ;;
+    --dry-run) DRY=1 ;;
+    --small) SMALL=1 ;;
+    --skip-plan) SKIP=1 ;;
+    --from-plan) FROM=1 ;;
+    --keep) needval "$@"; KEEP=$2; shift ;;
+    --model) needval "$@"; PICK=1 BMODEL=$2; shift ;;
+    --effort) needval "$@"; RAISE=1 EFFORT=$2; shift ;;
+    --reason) needval "$@"; REASON=$2; shift ;;
+    -*) printf 'unknown option %s\n%s\n' "$1" "$USAGE" >&2; exit 2 ;;
+    *) POS+=("$1") ;;
   esac
+  shift
 done
+[ "${#POS[@]}" -le 2 ] || { printf 'extra argument %s\n%s\n' "${POS[2]}" "$USAGE" >&2; exit 2; }
 # A reason with no --effort or --skip-plan is the model pick's, checked as it always was.
 [ -z "$REASON" ] || [ "$RAISE" = 1 ] || [ "$SKIP" = 1 ] || PICK=1
-UNIT=${1:?$USAGE}
-BATCH=${2-}
+UNIT=${POS[0]:?$USAGE}
+BATCH=${POS[1]-}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
 [ "$FROM" = 0 ] || BATCH=${BATCH:-$PP_WORKSPACES/$UNIT/.claude/briefs/$UNIT-batch.md}
@@ -76,16 +82,8 @@ pp_unit_name "$UNIT" || exit 2
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
 # Read once: adopting the planning worktree below can move a batch kept there.
 BT=$(cat "$BATCH"; echo .) BT=${BT%.}
-# Every batch says which standard governs it, what library or service already does it, and why we build if we do.
-grep -qiE '^#+[[:space:]]+Prior art' "$BATCH" || { echo "REFUSED: $BATCH has no Prior art section (a '## Prior art' heading): name the governing standard and the library or service the project's .claude/paved-road.md approves, and why we build instead if we do" >&2; exit 2; }
-# has_section <heading, lower case> -- reads a text on stdin: the section of that name holds a line of its own beyond the
-# template's guidance (the paragraph that starts "Required:") and any <placeholder> line.
-has_section() { awk -v h="$1" '/^#+[[:space:]]/ { on = tolower($0) ~ ("^#+[[:space:]]+" h "([[:space:]:]|$)"); req = 0; next } !on { next }
-  /^Required:/ { req = 1 } /^[[:space:]]*$/ { req = 0; next } !req && !/<[^>]*>/ { ok = 1 } END { exit !ok }'; }
-# Issue 341: every batch states its data design; "none: <why>" is an answer. A batch with no Data design heading is
-# refused like an empty one (issue 362: the 0.46.0 exception for batches written before the heading existed is gone).
-has_section 'data design' < "$BATCH" \
-  || { echo "REFUSED: $BATCH has no Data design section (a '## Data design' heading with a line under it): for each piece of state the batch adds or changes, say where it lives, who writes it, who reads it, when it resets and what a retry runs; or 'none: <why no state is added or changed>'" >&2; exit 2; }
+# The batch's own checks (Prior art, Data design) come first, before the Launch line; plan-check.sh holds them (issue 384).
+bash "$HERE/plan-check.sh" --batch-only '' "$BATCH" || exit 2
 WT=$PP_WORKSPACES/$UNIT
 # A new unit opens only on an order that names it (issue 234): the batch's ## Launch section quotes the order.
 LAUNCH=$(sed -n 's/^Launch:[[:space:]]*//p' "$BATCH" | head -1 | sed 's/[[:space:]]*$//')
@@ -106,24 +104,15 @@ plan_ok() {
 # Issue 362: what the plan and the batch must hold before a Builder opens. A list of what can go wrong (the batch's or the
 # plan's) is what every reviewer and fix round works from; the plan's size line is what a small NO-GO plan is judged by;
 # every top-level item under its Decisions or Accepted failure modes names the test that checks it (or says none, why).
-# A Skip batch has no plan: its own list is the only one.
+# A Skip batch has no plan: its own list is the only one. The checks are plan-check.sh's (issue 384), which every judge
+# launch of the plan runs too; a --from-plan plan's mockups resolve in its planning worktree, any other's on main.
 SMALL_PLAN=150 SMALLNOGO=0 PLINES=
 plan_checks() { # <the plan's text, or nothing for a Skip batch>
-  local facts untested
-  has_section 'what can go wrong' < "$BATCH" || { [ -z "${1:-}" ] || has_section 'what can go wrong' <<<"$1"; } \
-    || { echo "REFUSED: neither $BATCH nor ${PLAN:-its plan (none: a Skip batch)} has a What can go wrong section with cases under it (a '## What can go wrong' heading): limits (empty, tiny, huge, cut off mid-way), timing (two actions or replies in either order, retries, timeouts) and odd data (special characters, missing fields, duplicates, old shapes), one named test per case" >&2; exit 2; }
+  local pcout root=$PP_MAIN
+  [ "$FROM" = 0 ] || root=$WT
+  pcout=$(PLAN_CHECK_ROOT=$root bash "$HERE/plan-check.sh" "${1:+-}" "$BATCH" "${PLAN:-}" <<<"${1:-}") || exit 2
   [ -n "${1:-}" ] || return 0
-  facts=$(awk 'function flush() { if (item != "" && !has) print "untested " substr(item, 1, 60); item = ""; has = 0 }
-    /^```/ { f = !f; next } !f {
-      if ($0 ~ /^#+[ \t]/) { flush(); sec = ($0 ~ /^##[ \t]+(Decisions|Accepted failure modes)/) }
-      else if (sec && $0 ~ /^([0-9]+\.|[-*])[ \t]/) { flush(); item = $0; has = ($0 ~ /Test:/) }
-      else if (sec && item != "" && $0 ~ /Test:/) has = 1
-      if ($0 ~ /^[-*] Planned size: ~?[0-9]+ files?, ~?[0-9]+ (changed )?lines?/) { s = $0; gsub(/~/, "", s); split(s, a, /[^0-9]+/); print "size " a[2] " " a[3] }
-    } END { flush() }' <<<"$1")
-  PLINES=$(awk '$1 == "size" { print $3; exit }' <<<"$facts")
-  [ -n "$PLINES" ] || { echo "REFUSED: $PLAN has no size line outside a fenced block: a bullet '- Planned size: <n> files, <n> changed lines'" >&2; exit 2; }
-  untested=$(sed -n 's/^untested /  - /p' <<<"$facts")
-  [ -z "$untested" ] || { printf 'REFUSED: %s has decisions or accepted failure modes with no Test: line (a Test: line naming the test that checks it, or Test: none, <reason>):\n%s\n' "$PLAN" "$untested" >&2; exit 2; }
+  PLINES=$(awk '$1 == "size" { print $3; exit }' <<<"$pcout")
   if [ "$SMALLNOGO" = 1 ]; then
     [ "$PLINES" -lt "$SMALL_PLAN" ] \
       || { echo "REFUSED: --from-plan: plan-judge-sol returned NO-GO on $PLAN and no revision was collected after it; main's rulings stand in for the revision only on a plan under $SMALL_PLAN planned lines (this one says $PLINES)" >&2; exit 2; }

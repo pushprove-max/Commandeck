@@ -99,6 +99,16 @@ test("a plugin snapshot's project units, merge times and costs parse", () => {
 })
 
 // r1 finding: a push takes a merge out of mergedSincePush; finishedBuilds keeps it, so today's merges and spend stay.
+// Issue 390: an hour-old snapshot showed its rows as current; the pane names the data's age beside them.
+test('a stale snapshot shows its age beside its rows', () => {
+  const text = 'window.DASH={"updatedAt":"2026-10-26T14:00:00Z","projects":{"p":{"units":{"inFlight":[{"unit":"u","stage":"building"}]}}}};'
+  const now = Date.UTC(2026, 9, 26, 15, 0, 0)
+  const snap = parseSnapshot(text, now, 'p')
+  expect(snap.staleMin).toBe(60)
+  expect(snap.rows.map(r => r.stage)).toEqual(['building'])
+  expect(paneLines({ now, snap, merges: [], tests: [], notes: { merges: [], tests: [] } }).some(l => l.includes('dashboard data is 60 min old'))).toBe(true)
+})
+
 test("a push keeps today's merged builds and their spend", () => {
   const now = Date.UTC(2026, 9, 25, 20)
   const done = { unit: 'merged-unit', how: 'merged', at: '2026-10-25T19:00:00Z', sha: 'abc', cost: { total: { usd: 12 } } }

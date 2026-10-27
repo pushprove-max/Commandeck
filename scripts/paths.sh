@@ -16,6 +16,8 @@
 # The slug transform (every non-alphanumeric byte to '-') is Claude Code's own
 # project-folder naming, so PP_MAIN_SLUG and PP_WORKSPACES_SLUG also name the
 # ~/.claude/projects folders the ledgers read.
+# Issue 395: every line below is Bash 4; under zsh or dash it failed far from here, so another shell is refused at once.
+[ -n "${BASH_VERSION:-}" ] || { echo "paths.sh: source this from bash; this shell is not bash" >&2; return 1 2>/dev/null || exit 1; }
 pp_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
 # pp_rm_rf <path>... -- rm -rf, removing nothing when any path is in a git folder (a file too), is a .git, or is a
 # folder that holds a .git or a git folder at any depth, holds this project's checkout, or is HOME or / (dashboard.sh's
@@ -78,6 +80,8 @@ PP_SCRIPTS_Q=$(printf '%q' "$PP_SCRIPTS")
 # The project rules a Builder never loads (worktree-setup.sh --builder excludes them; every worker
 # excludes the first).
 PP_BUILDER_RULES_OFF="orchestration agents planning adversarial-reviews worktree-sessions"
+# Issue 397: the standing helper line a plan-author prompt and a fix-round hand-off carry; the Builder brief template holds it word for word.
+PP_HELPER_LINE="Use helper subagents wherever the work allows: general-purpose (runs on the configured Sonnet model) for independent build cuts, research and test writing, Explore (runs on the configured Haiku model) for search and proof; this pane keeps only cut ordering, cross-cut contracts and final integration. For a search, a trace or a second opinion you may also ask Codex, read-only: bash <plugin scripts>/codex-ask.sh '<question>' (it cannot edit; writing stays with Sonnet helpers)."
 
 # The code-graph project for the primary checkout, chosen by root path from
 # list_projects. Each machine indexes the checkout under its own home, so the
@@ -721,7 +725,7 @@ def check_seat($name; $root):
       (keys - ["agent", "inherit", "edits", "note"]) as $x
       | if ($x | length) > 0 then fail("\($name) inherits its model, so \($x[0]) has no place on it") else . end
     else
-      (keys - (slot | keys) - ["agent", "headless", "unboxed", "edits", "note", "triggers", "role", "claude", "first"]) as $x
+      (keys - (slot | keys) - ["agent", "headless", "unboxed", "edits", "note", "triggers", "role", "claude", "first", "helpers"]) as $x
       | if ($x | length) > 0 then fail("\($name) has unknown field \($x[0])") else . end
       | if (.model | is("^[a-z0-9][a-z0-9._-]*$")) | not then fail("\($name).model is missing or not a model id") else . end
       | if has("effort") | not then fail("\($name).effort must be present (null omits it)") else . end
@@ -729,6 +733,7 @@ def check_seat($name; $root):
       | if has("context") and .context != "1m" then fail("\($name).context must be 1m") else . end
       | if ([.fast, .reviewer, .network, .disablePlugins, .headless, .unboxed] | map(select(. != null)) | all(bool)) | not then fail("\($name) has a non-boolean switch") else . end
       | if has("memory") and (.memory | is("^[0-9]+[KMGT]?$") | not) then fail("\($name).memory must look like 12G") else . end
+      | if has("helpers") and ((.helpers | type) != "object" or (.helpers | to_entries | all(.value | is("^[a-z][a-z0-9.-]*$")) | not)) then fail("\($name) has a bad helpers entry \(if (.helpers | type) == "object" then (.helpers | to_entries | map(select(.value | is("^[a-z][a-z0-9.-]*$") | not))[0].key) else "helpers" end)") else . end
       | if has("advisor") and (.advisor | is("^[a-z0-9][a-z0-9._-]*$") | not) then fail("\($name).advisor is not a model alias") else . end
       | if has("tools") and ((.tools | type) != "array" or (.tools | length) == 0 or (.tools | all(is("^[A-Za-z]+$")) | not)) then fail("\($name).tools must be tool names") else . end
       | if has("codexHome") and (.codexHome | is("^~?/[A-Za-z0-9._/-]+$") | not) then fail("\($name).codexHome must be a path") else . end

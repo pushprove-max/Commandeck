@@ -140,6 +140,9 @@ check "the full pass and the behaviour angle prompts both carry the every-orderi
 # later, narrowed pass is not handed the sentence again.
 check "the first pass's prompts lead with the Data design check, and a later pass's do not" "1 1 0" \
   "$(grep -c 'Before anything else, check the Data design section of the unit brief' "$B/$U-r1-prompt-2.md") $(grep -c 'Report as P1 (class: data-design)' "$B/$U-r1-prompt-1.md") $(grep -c 'Data design section of the unit brief' "$B/$U-r4-prompt-1.md")"
+# Issue 398: placeholder UI is a P1 class in every reviewer's prompt, the first pass's angles and a later pass alike.
+check "the review prompt names placeholder UI as P1" "1 1 1" \
+  "$(grep -c 'Report as P1 (class: placeholder-ui)' "$B/$U-r1-prompt-1.md") $(grep -c 'Report as P1 (class: placeholder-ui)' "$B/$U-r1-prompt-2.md") $(grep -c 'Report as P1 (class: placeholder-ui)' "$B/$U-r4-prompt-1.md")"
 # Every pass asks whether the change hand-builds what the project's paved-road registry or a standard covers,
 # and has such a finding cite the registry row.
 # Issue 282: an exception entry with no proof in its test and no ruling id is P1, asked of the first pass and of later ones.
@@ -164,8 +167,8 @@ check "codexReviewerAgent unset: the pass runs the companion on sol" "gpt-6.1-so
 opts '{"codexReviewerModel": "astra"}'
 check "codexReviewerModel=astra: the reviewer runs the astra id" "gpt-6.2-astra" "$(pre)"
 opts '{"codexReviewerAgent": "claude"}'
-check "codexReviewerAgent=claude: the pass runs headless Claude on sonnet and its argv denies Write, Edit and NotebookEdit" \
-  "sonnet:1:1" "$(pre):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -c '^-p$'):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -cx 'Write,Edit,NotebookEdit')"
+check "the headless Claude reviewer cannot start helpers" \
+  "sonnet:1:1" "$(pre):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -c '^-p$'):$(cd "$REPO" && bash -c '. "$1/scripts/paths.sh"; pp_argv codex-reviewer' _ "$REAL" | grep -cx 'Write,Edit,NotebookEdit,Agent')"
 # Class caller-mismatch (r3): an owner's pane-shaped Claude reviewer row still runs as the headless pass, on its model.
 jq '.roles["codex-reviewer"] = {agent: "claude", model: "opus", effort: "high", unboxed: true, edits: false, tools: ["Write", "Edit", "NotebookEdit"]}' \
   "$REAL/config/routing.json" > "$TMP/pane-routing.json"

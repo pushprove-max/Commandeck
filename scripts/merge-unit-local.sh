@@ -106,6 +106,7 @@ release() {
 }
 trap release EXIT
 . "$HERE/../hooks/lib/project.sh"; pp_project "$ROOT"
+. "$HERE/../hooks/lib/screen-code.sh"
 pp_unit_name "$UNIT" || fail "step 1 preconditions" "the unit's name (above)"
 WT=$PP_WORKSPACES/$UNIT
 BRIEF=$WT/.claude/briefs/$UNIT.md
@@ -126,6 +127,9 @@ hold() { CLEANUP_HELD="$WT kept, $1; close the unit's panes and commit or move w
 # `terminal close --worktree --all` reports terminal_close_incomplete for a finished reviewer pane; closing by
 # handle succeeds every time. Reads ARCHIVE, KEPT and MAIN_FILES (step 4's, or --cleanup's own).
 cleanup_step() {
+  # Issue 396: the Builder's task closes first, while pp_task_close can still read its pane; the merge has landed, so a
+  # refusal is its printed line, never this script's exit code.
+  bash "$HERE/unit-close.sh" "$UNIT" merged || true
   echo "STEP 5 cleanup: close the unit's panes by handle (logged in pane-closes.log), stop its Codex helpers, archive its briefs, then orca-ide worktree remove --worktree $WTID --force"
   state cleanup
   # The listing is read and checked first: a failed, empty or malformed one lists no pane, and no pane listed is not
@@ -238,7 +242,80 @@ no_holds() { # <step>
   open=$(grep '^Open question to the owner ' <<<"$holds" || true)
   [ -z "$open" ] || fail "$1" "an open question to the owner names $UNIT; merge once it is answered: $(paste -sd';' - <<<"$open")"
 }
+# Issue 392: a unit changing screen code (the project's screenPaths; web/src/ by default) merges only with evidence a
+# person can look at. The evidence's "## Screenshots" rows are `- side-by-side: <mockup> | <screenshot>`,
+# `- screenshot: <path>` or `- none: no visual change: <reason>`; each named file must exist and be non-empty (a mockup
+# may be an http(s) URL). Existence only, never content. Reads $MERGE_TOUCHES and $WT/$EVIDENCE.
+screen_touches() { # the $MERGE_TOUCHES paths that are screen code (SCREEN_PREFIXES set by the caller)
+  local p
+  while IFS= read -r p; do
+    [ -z "$p" ] || ! is_screen "$p" || echo "$p"
+  done <<<"$MERGE_TOUCHES"
+}
+check_screens() {
+  local first kind a b reason="" n=0 p files=() EVIDENCE=.claude/briefs/$UNIT-evidence.md
+  SCREEN_PREFIXES=$(screen_prefixes "$ROOT")
+  first=$(screen_touches | head -1 || true)
+  [ -n "$first" ] || return 0
+  [ ! -e "$WT/$EVIDENCE" ] || [ -r "$WT/$EVIDENCE" ] || fail "step 1 preconditions" "$EVIDENCE cannot be read"
+  # One tab-separated line per row, values trimmed: kind, first value, second value (side-by-side only, both present,
+  # since read collapses an empty field between tabs).
+  while IFS=$'\t' read -r kind a b; do
+    case $kind in
+      side-by-side) [[ $a =~ ^https?:// ]] || files+=("$a"); files+=("$b"); n=$((n + 1)) ;;
+      screenshot) [ -z "$a" ] || { files+=("$a"); n=$((n + 1)); } ;;
+      none) [ -z "$a" ] || reason=$a ;;
+    esac
+  done < <(awk '/^##? /{ on = ($0 ~ /^## Screenshots[[:space:]]*$/); next } on' "$WT/$EVIDENCE" 2>/dev/null | awk '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    sub(/^- side-by-side: /, "") { i = index($0, "|"); a = trim(substr($0, 1, i - 1)); b = trim(substr($0, i + 1))
+      if (i && a != "" && b != "") print "side-by-side\t" a "\t" b; next }
+    sub(/^- screenshot: /, "") { print "screenshot\t" trim($0); next }
+    sub(/^- none: no visual change:/, "") { print "none\t" trim($0) }')
+  [ "$n" -gt 0 ] || [ -n "$reason" ] \
+    || fail "step 1 preconditions" "screen code changed ($first) and $EVIDENCE has no ## Screenshots side-by-side list, screenshot or no-visual-change row"
+  for p in ${files[@]+"${files[@]}"}; do
+    case $p in /*) a=$p ;; *) a=$WT/$p ;; esac
+    [ -s "$a" ] || fail "step 1 preconditions" "$EVIDENCE names $p, which does not exist"
+  done
+  if [ "$n" -gt 0 ]; then echo "STEP 1 screens: $n rows"; else echo "STEP 1 screens: no visual change declared: $reason"; fi
+}
+# Issue 398: placeholder UI the plan did not ask for. For every added line of a screen file: each PLACEHOLDER_COPY match
+# and each always-disabled control (always_disabled_lines on the file at the branch tip, kept when its line is added)
+# is an occurrence; every occurrence on a line no Placeholder: line approves is an entry. One Placeholder: line
+# approves one added line, so identical added lines are counted against the approvals.
+check_placeholders() {
+  local f base num text t m k cnt dis added i total=0 seen="" shown="" entries=() occ=()
+  SCREEN_PREFIXES=$(screen_prefixes "$ROOT")
+  base=$(git merge-base main "$BRANCH")
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    added=$(git diff -U0 --no-color --no-relative --no-renames "$base" "$BRANCH" -- "$f" | awk '
+      /^@@/ { inh = 1; match($0, /\+[0-9]+/); ln = substr($0, RSTART + 1, RLENGTH - 1) + 0; next }
+      inh && /^\+/ { print ln "\t" substr($0, 2); ln++ }') || fail "step 1 preconditions" "could not read the diff of $f"
+    dis=$(git show "$BRANCH:$f" 2>/dev/null | always_disabled_lines || true)
+    while IFS=$'\t' read -r num text; do
+      [ -n "$num" ] || continue
+      t=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<<"$text")
+      occ=()
+      while IFS= read -r m; do [ -z "$m" ] || occ+=("$m"); done < <(grep -oiE "$PLACEHOLDER_COPY" <<<"$t" || true)
+      k=$(grep -cx "$num" <<<"$dis" || true)
+      for ((i = 0; i < k; i++)); do occ+=(disabled); done
+      [ "${#occ[@]}" -gt 0 ] || continue
+      cnt=$(placeholder_count "$f" "$t" "$UNIT" "$WT" "$ROOT")
+      seen+="$f"$'\t'"$t"$'\n'
+      [ "$(grep -cxF -- "$f"$'\t'"$t" <<<"$seen")" -gt "$cnt" ] || continue
+      for m in "${occ[@]}"; do entries+=("$f:$num: $m in $t"); total=$((total + 1)); done
+    done <<<"$added"
+  done < <(screen_touches)
+  [ "$total" -gt 0 ] || return 0
+  for ((i = 0; i < ${#entries[@]} && i < 20; i++)); do shown+="${shown:+; }${entries[i]}"; done
+  [ "$total" -le 20 ] || shown+="; ... and $((total - 20)) more"
+  fail "step 1 preconditions" "unrequested placeholder UI ($total): $shown; build it, remove it, or have the plan or main's rulings name the complete line on a 'Placeholder: <file> | <complete source line> | <why>' line"
+}
 no_holds "step 1 preconditions"
+check_screens
+check_placeholders
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
 # Builder proof: a Builder runs its own review passes, so its last round file

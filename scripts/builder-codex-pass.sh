@@ -138,7 +138,9 @@ ORDERINGS='When the diff involves timers, background loads, retries, concurrent 
 DATA_DESIGN='Before anything else, check the Data design section of the unit brief: for each piece of state it names (where it lives, who writes it, who reads it, when it resets, what a retry runs), the diff must keep to it. Report as P1 (class: data-design) state the diff adds or changes that the section does not name, an owner, reset or retry the diff contradicts, and a section that is empty or still the template'"'"'s placeholder.'
 # Issue 282: an exception a comment justified hid a real gap for months.
 EXCEPTION='An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the alternative it claims, or the entry cites an owner ruling id. A comment is not proof. Report an entry that has neither as P1.'
-FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $ORDERINGS $EXCEPTION"
+# Issue 398: placeholder UI read as finished work passed two reviews; every pass, first and later, asks for it.
+PLACEHOLDER_UI='Report as P1 (class: placeholder-ui) a control, message or screen the diff adds that is disabled for good, a stub, or says it comes later ("coming soon", "not available yet", "in a later update"), unless the plan or main'"'"'s rulings name it on a Placeholder: line.'
+FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $ORDERINGS $EXCEPTION $PLACEHOLDER_UI"
 # Asked in every pass and by every reviewer, after its focus.
 LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -921,7 +923,7 @@ UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|f
 # The owner's answer (2026-10-25): a pass with no rg refuses at once, so no reviewer's class search is skipped unseen.
 [ "$ACK" = 1 ] || command -v rg >/dev/null || die "no rg (ripgrep) on PATH: after a NO-GO the pass runs each reviewer's Class search line with it. Install ripgrep (brew install ripgrep, or sudo apt-get install -y ripgrep), then run the pass again"
 # Each reviewer leads with its own angle and carries the whole checklist: the rule gives every reviewer the same full scope.
-case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]}"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
+case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]} $PLACEHOLDER_UI"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
 [ "$ACK" = 1 ] || review_gh_check "$WT"  # an acknowledgement reads no GitHub
@@ -1359,6 +1361,21 @@ $(grep -E '^(FAIL|       FAIL)' "$log" | head -10)"
   T_TESTS="$((SECONDS - t0)) s"
   echo "tests after the rebase: $(grep -E '^[0-9]+ passed' "$log" | tail -1)"
 }
+# typecheck_green -- issue 385: a closing (final) pass needs a green typecheck when the project sets one up
+# (typecheckCommand in main's commandeck.json, written by setup), so no closing pass is spent on a tree whose types are
+# red; the merge check runs only testCommand, which need not typecheck. Narrowed passes are not taxed. The rebase-pending
+# file is untouched, so a rerun retests.
+typecheck_green() {
+  local cmd log=$PP_SCRATCH/$UNIT-typecheck-r$N.log
+  [ "$KIND" = final ] || return 0
+  cmd=$(jq -r '.typecheckCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null) || cmd=
+  [ -n "$cmd" ] || { echo "no typecheckCommand set: no typecheck before the closing pass"; return 0; }
+  mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the typecheck log"
+  (cd "$WT" && bash -c "$cmd") >"$log" 2>&1 \
+    || die "a closing pass needs a green typecheck, and \`$cmd\` is red in $WT (log $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
+$(head -10 "$log")"
+  echo "typecheck before the closing pass: green ($cmd)"
+}
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
 PRE=$(git -C "$WT" rev-parse HEAD)
@@ -1370,6 +1387,7 @@ SHA=$(git -C "$WT" rev-parse HEAD)
 # The check reads the pass commit's own tip, before the rebase moves it.
 DESIGN=; [ "$KIND" != final ] || [ "$SHA" = "$PRE" ] || ! plan_only "$SHA" || DESIGN=design
 rebase_and_test
+typecheck_green
 SHA=$(git -C "$WT" rev-parse HEAD)
 # The suite runs on the tip just committed, before any reviewer starts. Its line goes first in the review input,
 # where --verify reads it from the prompt the pass recorded; a red run makes the pass NO-GO whatever the reviewer says.
@@ -1401,7 +1419,7 @@ fi
 RULE_LINE=""
 if [ "$KIND" = adversarial ]; then
   SIZE=$(build_size "$WT" "$SHA") || exit 2
-  ! one_reviewer_fits "$SIZE" || FOCI=("$DATA_DESIGN All three angles, in this one review. ${ANGLES[*]}")
+  ! one_reviewer_fits "$SIZE" || FOCI=("$DATA_DESIGN All three angles, in this one review. ${ANGLES[*]} $PLACEHOLDER_UI")
   RULE_LINE="Reviewers: ${#FOCI[@]} ($(size_words "$SIZE"); $SMALL_WORDS, else three)"
   echo "$RULE_LINE"
 fi
@@ -1803,7 +1821,7 @@ done < <(round_files "$WT" "$UNIT" | sort -n)
 FSF=$({ grep -E "$FINDING" <<<"$EARLIER" || true; grep -E "$FINDING" "$OUT" || true; } | grep -vE '^(Earlier pass |VERDICT)' | awk '
   function cls(l) { if (match(l, /\(class: [^)]*\)/)) return substr(l, RSTART + 8, RLENGTH - 9); return "no class" }
   !seen[$0]++ { c = cls($0); if (!(c in n)) order[++k] = c; n[c]++; list[c] = list[c] $0 "\n" }
-  END { for (i = 1; i <= k; i++) { c = order[i]; printf "### %s (%d finding%s)\n\n%s\n", c, n[c], n[c] == 1 ? "" : "s", list[c] } }')
+  END { for (i = 1; i <= k; i++) { c = order[i]; printf "### %s (%d finding%s)\n\n%s\n", c, n[c], (n[c] == 1 ? "" : "s"), list[c] } }')
 # Written to a temp file and published by rename only when every write succeeded (issue 355): the block runs under
 # set -e, so a failed write exits at once, pass_end removes the temp file and says so, and nothing sits half-written at
 # $HAND.
@@ -1813,6 +1831,8 @@ WRITING=$HAND
   where "the findings say what to fix. Open it only when a finding needs it"
   printf -- '- The evidence file says what is built, verified and left. Open it when a finding needs it, and to update it before the next pass: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Fix what pass %s found (below) red first, the whole class of each bug, then run the next pass as the brief says (round %s).\n' "$N" "$((N + 1))"
+  # Issue 397: the standing helper line, so a fix round hands cuts out instead of doing them on the Builder's model.
+  printf -- '- %s\n' "${PP_HELPER_LINE//<plugin scripts>/$PP_SCRIPTS}"
   # Issue 362: the next pass refuses without this section, and its reviewers get it.
   printf -- '- Before pass %s, add `## Sites checked (pass %s)` to the evidence file: search the repo for the same pattern as each finding below, one `Search: <command>` line per search, then one line per site it turned up, `- <path>:<line> fixed, <how>` or `- <path>:<line> not affected, <why>`. The next pass refuses to start without it, and its reviewers treat a site of the pattern missing from the list, or wrongly marked not affected, as a finding.\n' "$((N + 1))" "$N"
   printf -- '- Before pass %s, also add `## New code checked (pass %s)` to the evidence file: check every read, write or check your fix adds or changes against the plan'"'"'s Data design, What can go wrong and the failure table, one line each, `- <path>:<line> meets <the plan line it follows>` or `- <path>:<line> no plan rule, <why it is safe>` (`- none, <why>` when the fix added none). A new site follows the rule the plan already has for its kind (a read the plan says is strongly consistent is strongly consistent everywhere). The next pass refuses to start without it, and its reviewers check each line against the plan.\n' "$((N + 1))" "$N"

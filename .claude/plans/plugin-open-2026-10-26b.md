@@ -382,26 +382,42 @@ soon</p>`: exit 2); "a session started in a subdirectory still screens the file"
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- with the default, a screen diff under web/src with no evidence is refused -- scripts/merge-unit-local.sh the check_screens call
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a set folder replaces the default -- hooks/lib/screen-code.sh screen_prefixes reads the set folders (replaced by the default alone)
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a named missing screenshot is refused -- scripts/merge-unit-local.sh the file-exists test in check_screens
-Break: hooks/__tests__/edit-content-tripwires.test.sh -- a session started in a subdirectory still screens the file -- hooks/lib/screen-code.sh screen_rel's root (replaced by the working folder's)
+Break: hooks/__tests__/edit-content-tripwires.test.sh -- a session in another checkout screens the file by the file's checkout -- hooks/lib/screen-code.sh screen_rel's root (replaced by the working folder's)
+(Build note: the subdirectory case shares the file's root, so it cannot catch this break; the added case, run from u2
+on u1's file, does.)
 
 ### C5 -- #398: no unrequested placeholder UI, at edit, review and merge (~280 lines)
 
 1. **What placeholder UI is (one home, `hooks/lib/screen-code.sh`).** `PLACEHOLDER_COPY`, case-insensitive:
    `coming soon`, `not available yet`, `not yet available`, `available soon`, `in a later update`, `in a later
    release`, `coming in a later`. `ALWAYS_DISABLED` is a control attribute, not a word: `always_disabled_lines`
-   (an awk program in POSIX awk, so BSD awk runs it; C8's sweep covers its print lists) reads a whole text (a file at
-   the branch tip, or a plan or batch) and prints the line number of every `disabled` token that (a) is an attribute
-   of an opening tag: the scanner walks the text a character at a time, across lines, counting line numbers; outside a
-   tag, a `<` followed by a letter opens one (a JSX or HTML tag); inside it, a `"` or `'` skips to its closing quote
-   (a quoted attribute value), and a `{` opens a JSX expression that runs to its balancing `}` (a depth count; inside
-   it, `"`, `'` and `` ` `` strings are skipped too, so a brace in a string does not count); the tag ends only at a `>`
-   outside every quote and expression. So the `>` of `=>` in `onClick={() => save()}`, and a `>` in `title="a > b"`,
-   end nothing. A `disabled` inside a quote or an expression is not an attribute. (b) It carries a literal true value:
-   it is followed by `={true}` (spaces allowed inside the braces), by `="` or `='` (a string literal disables in HTML
-   and React alike), or by no value at all (the line's end, whitespace then `/>` or `>`, or whitespace then the next
-   attribute's first letter or `{`). Not matched: `disabled={<anything else>}` (behaviour), `:disabled`, `.disabled`,
-   and every `disabled` outside a tag, so `const disabled = busy;` and a destructured `disabled` pass. Each match on a
-   line is one occurrence: two controls on one line are two occurrences.
+   (an awk program in POSIX awk, so BSD awk runs it; C8's sweep covers its print lists) reads a text on stdin (a file
+   at the branch tip, or a plan or batch) and prints, once per occurrence, the number of each line holding a
+   single-line opening tag with a constant `disabled` attribute. Fix round 4 (class jsx-context, found in passes 1 to
+   4; main's answers answer-1793068128-36463 and answer-1793068518-93805) replaces the character scanner of rounds 2
+   and 3 with this fixed pattern. The fence for the class: each line is judged alone, so no construct on one line can
+   add or hide a control on another, and no lexical context (string, comment, template, JSX text, generic) is
+   tracked. On each line, left to right:
+   - A tag is `<NAME` then attributes then `>` (or `/>`), all on that line. `NAME` is a lowercase HTML element that
+     takes `disabled` (`button`, `input`, `select`, `textarea`, `fieldset`, `optgroup`, `option`) or any capitalised
+     component name (`Button`, `IconButton`, `Menu.Item`). Between the name and the `>`, an attribute value is read
+     whole as `"..."`, `'...'` or one `{...}` with no braces inside it, so the `>` of `=>` in `onClick={() => save()}`
+     and the `>` in `title="a > b"` end nothing; any other `<`, `>`, quote or brace ends the try at that `<`. Every
+     `<` on the line starts its own try, one inside another tag's value too (`icon={<Button disabled />}`); a tag's
+     own `disabled` is read with its values replaced, so a control inside a value counts once, for itself.
+   - Inside a tag, each `disabled` attribute name (white space before it) counts when it is bare (the next thing past
+     white space is `/`, `>` or another attribute, not `=`), `={true}` (white space allowed around the `=` and inside
+     the braces) or `=` a quoted string (a string literal disables in HTML and React alike).
+   - Not matched: `disabled={<anything else>}` (behaviour), `data-disabled`, `disabled-x`, `:disabled`, `.disabled`,
+     every `disabled` outside such a tag (`const disabled = busy;`, a destructured `disabled`), and a lowercase tag
+     that is no control (`<div disabled>`). Two controls on one line are two occurrences (the line printed twice).
+   - Stated ceilings (Accepted failure mode 10, and a plain comment on the function): a tag split over lines (a
+     `disabled` on its own line, a value on a later line, a multiline `{...}` value), a value with nested braces, type
+     arguments on the tag (`<Select<O> disabled>`) and an unquoted HTML value (`disabled=disabled`) are missed; a
+     single-line control spelled in a string, template or comment of a screen file is refused, as is a comment
+     between `disabled` and its `=`; a comment inside `{true}` is missed.
+   - No flags: TSX, `.html` screen files, plans and batches are read the same way. The scanner keeps nothing between
+     runs and nothing between lines.
 2. **What "requested" means (Decision 13).** A line in the unit's plan as committed on local main (each
    `.claude/plans/<file>.md` the unit brief's `## Plan` section names, read with `git show main:<path>`) or in main's
    rulings file (`<main>/.claude/briefs/<unit>-main-rulings.md`), of the form `Placeholder: <screen file> | <complete
@@ -419,8 +435,8 @@ Break: hooks/__tests__/edit-content-tripwires.test.sh -- a session started in a 
    question. Allowed only when the plan or main's rulings name the complete line: Placeholder: <file> | <complete source
    line> | <why>`. The unit is the folder name of the file's worktree root and main is `pp_project <root>`'s
    `PP_PROJECT_DIR` (`hooks/lib/project.sh:7-19`), both from `screen_rel`, never the session's working folder. The
-   edit block checks copy only; always-disabled controls are the merge's (an edit's text is not the whole file the tag
-   test reads). Strict tier, as the hook is (L4).
+   edit block checks copy only; always-disabled controls are the merge's (one home for their refusal and its
+   per-line approval count). Strict tier, as the hook is (L4).
 4. **Merge time.** `check_placeholders` in `scripts/merge-unit-local.sh`, called after `check_screens`: for every
    added line (`git diff -U0 <merge-base> <branch>`) of a file `is_screen`, each `PLACEHOLDER_COPY` match and each
    `always_disabled_lines` occurrence (run on `git show <branch>:<file>`, kept where its line number is an added one)
@@ -477,8 +493,9 @@ Acceptance tests:
   (`Placeholder: web/src/pages/X.tsx | disabled={true} | why`, added `<Button disabled={true}>Export</Button>`:
   refused); "a dynamic disabled prop merges" (`disabled={busy}`); "a variable named disabled and a dynamic prop merge"
   (added `const disabled = busy;` then `<Button disabled={disabled}>Export</Button>`, a valid screenshot row, no
-  `Placeholder:` line: merges, no placeholder entry); "a disabled attribute on its own line inside a tag is refused"
-  (`<Button` / `  disabled` / `>Export</Button>` on three added lines: one entry); "a disabled control after an
+  `Placeholder:` line: merges, no placeholder entry); "a disabled attribute on its own line inside a tag is a stated
+  miss" (`<Button` / `  disabled` / `>Export</Button>` on three added lines: merges, no entry; fix round 4 flipped it
+  from refused, Accepted failure mode 10); "a disabled control after an
   arrow-function prop is refused" (added `<Button onClick={() => save()} disabled={true}>Export</Button>` in
   `web/src/pages/X.tsx`, a valid screenshot row, no `Placeholder:` line: refused, one entry naming that line); "a
   disabled control after a quoted > is refused" (added `<input title="a > b" disabled />`, the same evidence: refused,
@@ -493,9 +510,9 @@ Break: hooks/__tests__/edit-content-tripwires.test.sh -- placeholder copy in scr
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- an unrequested always-disabled control is refused and listed -- scripts/merge-unit-local.sh the check_placeholders call
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a disabled control the plan names merges -- hooks/lib/screen-code.sh placeholder_requested reads local main's plan (replaced by the worktree's own copy, which the test's Builder edited)
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a bare-substring approval approves nothing -- hooks/lib/screen-code.sh placeholder_requested's complete-line equality (replaced by a substring test: the approval's middle field found inside the added line)
-Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a disabled control after an arrow-function prop is refused -- hooks/lib/screen-code.sh always_disabled_lines' expression depth count (removed, so the `>` of `=>` ends the tag)
+Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a disabled control after an arrow-function prop is refused -- hooks/lib/screen-code.sh always_disabled_lines' whole `{...}` value in the tag pattern (removed, so the `>` of `=>` ends the try)
 Break: scripts/__tests__/merge-unit-local-screens.test.sh -- an approved and an unapproved control on one line are refused -- scripts/merge-unit-local.sh check_placeholders' per-occurrence loop (replaced by the first match on a line)
-Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a variable named disabled and a dynamic prop merge -- hooks/lib/screen-code.sh always_disabled_lines' inside-a-tag test (removed)
+Break: scripts/__tests__/merge-unit-local-screens.test.sh -- a variable named disabled and a dynamic prop merge -- hooks/lib/screen-code.sh always_disabled_lines' value rule (a `{...}` value counts only as exactly `{true}`; replaced by every `{...}` value read as true)
 Break: scripts/__tests__/builder-launch-resume-launch-line.test.sh -- a batch line naming a literal disabled control is flagged -- scripts/plan-check.sh the always_disabled_lines call in the brief check
 
 ### C6 -- #387: recorded holds are cut, unexplained idle is shown apart (~210 lines)
@@ -839,15 +856,48 @@ L1 is the whole of #386. `docs/review-loop.md` gains the closing-pass typecheck 
   `testCommand`; scripts and hooks only read. A re-run keeps them (`old`). Absent `typecheckCommand`: the gate is off;
   absent `screenPaths`: the default `web/src/`; `"screenPaths": []`: the screen and placeholder checks are off.
 - `config/routing.json` `roles.builder.helpers` (C7): the one home of the helper models; the guard and the docs read it.
+  A routing overlay (`COMMANDECK_ROUTING`) written before C7 has no `helpers` in its builder row (setup's
+  `il_routing_merged` keeps an existing row as it is): the guard then reads the shipped map; only an overlay map that is
+  present but not a non-empty object, or a file jq cannot read, leaves the call unchanged with the one `systemMessage`.
 - `Placeholder: <file> | <complete source line> | <why>` lines (C5): written by main or the plan author in the plan
   (committed on main) or main's rulings file; read by the merge, the tripwire and plan-check. Each approves one added
   line equal to it after trimming. The Builder's own branch copy of the plan is never read for it.
+- `always_disabled_lines` (C5 item 1; fix round 4, class jsx-context) stores nothing: it reads one line at a time
+  and keeps only that line's text and its line number, inside one awk run over one text (the file at the branch tip,
+  or the plan or batch). Fix round 4 drops rounds 2 and 3's context stack, expression-start flag and root stack: no
+  state crosses a line, so no line's result depends on another's. Every merge, plan check and test reruns it from
+  that text alone, so its one retry is the same for every caller and every input: run the merge (or the plan check)
+  again on the new tip. Nothing is left to clear between runs.
 - `<main>/.claude/metrics/codex-helper.jsonl` (new, C10): one row per Codex helper call. Writer: `codex-ask.sh`
   only, one `>>` append of one line under 4 KB, the same rules as `unit-holds.jsonl` (no lock, a fresh line after a
   torn one, a reader skips non-JSON); reader: `collect.py`. A call whose append fails still prints its answer and
   warns.
 - Worktree permissions (C7 item 3a): a planning worktree's `settings.local.json` no longer denies `Agent`; the Claude
   judge and reviewer panes deny it through their routed `tools` list instead.
+- `unit-holds.jsonl` and `codex-helper.jsonl` are project running state like the other ledgers: both in `IL_STATE`
+  (`install-lib.sh`, hidden from git, reported by the doctor when tracked) and removed by `uninstall.sh --delete-data`.
+  `unit-hold.sh` makes the missing `.claude/metrics` folder before its append (a fresh project has none), as
+  `codex-ask.sh` already does.
+- Lockfile reads (C11, #401), three pieces of state:
+  - `.claude/commandeck.json` `lockfileDeny` (true | false; absent means on): writer `setup.sh` only (`--lockfile-deny`
+    or the "Lockfile reads" question), kept on a re-run (`old .lockfileDeny`); reader `setup.sh`, which runs
+    `il_lockfile_deny` on or off from it. Uninstall puts `commandeck.json` back as setup found it (`il_record own`).
+  - `<main>/.claude/settings.json` `.permissions.deny` entries `Read(**/<lockfile name>)`, one per name in
+    `IL_LOCKFILES` the checkout tracks (`git ls-files`): writer `il_lockfile_deny`, after setup's
+    `il_record "$IL_PROJECT" merge "$PSET"` has noted the file's prior bytes; it only appends, never replaces the list,
+    and never adds a rule already there (that rule stays the owner's). Reader: Claude Code's permission check. Removed
+    by `il_lockfile_deny ... off` (`--lockfile-deny off`, and `uninstall.sh`), which takes out exactly the recorded rules.
+  - Manifest `~/.commandeck/install/<project>.json` `.entries[<settings path>].denied`: the rules setup itself added,
+    so off and uninstall can tell them from the owner's. Writer `il_lockfile_deny` only (`+ $n | unique` on add,
+    `del(...)` on off); reader `il_lockfile_deny off`. `--plan` writes neither file (`il_write` previews, `il_set`
+    returns at once).
+  - Order and recovery: on add the record is written first, then settings. Cut off after the record: the rule is
+    recorded but absent; a rerun adds it (it is still missing from the deny list) and records it again (`unique`), and
+    off takes out a recorded rule that is absent with no effect. The reverse order would leave a rule in settings with
+    no record, which every later run reads as the owner's and which off and uninstall then never remove. On off the
+    settings write comes first, then the record is deleted: cut off between, a rerun of off subtracts nothing and
+    deletes the record. The one recovery in each case: run setup (or uninstall) again. Accepted: a recorded rule whose
+    settings write failed, later added by the owner by hand, is taken out by off.
 - No stored data changes shape; no compatibility path.
 
 Failure paths (every changed write and refusal):
@@ -859,13 +909,14 @@ Failure paths (every changed write and refusal):
 | `builder-launch.sh` arguments | missing or `--` value, unknown option, extra argument | exit 2 with the usage line, before `paths.sh` is sourced |
 | `builder-add-work.sh` | no probe / all present / `git grep` fails | exit 2 / exit 4 / exit 1; nothing written or sent |
 | `builder-codex-pass.sh` final | typecheck red | `die` before any reviewer; the rebase-pending file untouched |
-| `merge-unit-local.sh` step 1 | evidence unreadable, screens missing, placeholder UI | `fail` before step 2, the branch untouched |
+| `merge-unit-local.sh` step 1 | evidence unreadable, screens missing, placeholder UI, a screen file's diff unreadable | `fail` before step 2, the branch untouched |
+| `il_lockfile_deny` (setup) | manifest record fails / settings write fails after the record | `return 1`, settings untouched / the rule recorded but absent: a rerun adds it, off is a no-op for it |
 | `unit-close.sh merged` (step 5) | no record, pane working, Orca refuses | the NOT-closed line; the merge's exit code and cleanup unchanged |
 | `unit-close.sh drop` | merged, close refused, pane stuck, second pane listing unreadable or nonempty, remove fails | refuses before anything / stops before panes / keeps the worktree / keeps the worktree / exit 1 after the task is failed (a rerun removes) |
 | `unit-close.sh --sweep` | list unreadable, one close refused | exit 1 naming the run; each refusal listed, the rest still close |
-| `unit-hold.sh` | bad arguments / append fails | exit 2 usage / exit 1 naming the file, no row |
+| `unit-hold.sh` | bad arguments / folder cannot be made or append fails | exit 2 usage / exit 1 naming the file, no row |
 | `paths.sh` | non-bash shell | `return 1` before any variable is set |
-| `agent-model-guard.sh` | routing unreadable, jq fails | call unchanged, one `systemMessage` line, exit 0 |
+| `agent-model-guard.sh` | routing unreadable, jq fails, a helpers map that is not a non-empty object (an overlay with none runs the shipped map) | call unchanged, one `systemMessage` line, exit 0 |
 | `run-hook.sh` | no Bash 4 | one `systemMessage` line, exit 0, no hook ran |
 | `codex-ask.sh` | not a helper pane / reviews on Claude / bad `--timeout` | exit 2 before any Codex call, no row |
 | `codex-ask.sh` | timeout (TERM obeyed, or ignored and killed after the 2 s grace) | exit 1 within `<s>` + 2 s, one `TIMEOUT:` line on stderr, nothing on stdout, a `timeout` or `killed` row |
@@ -961,12 +1012,12 @@ reference implementation in commit `fea64e3e` where one exists, adapted to the p
     always-disabled control is refused and listed"
 15. **Only a literal-true `disabled` attribute on a control counts as always disabled** (inside an opening tag, with no
     value, `={true}` or a string literal); a `disabled={expr}` is behaviour, and a `disabled` outside a tag is a
-    variable, a parameter or a word. The tag test reads the whole file at the branch tip, so an attribute on its own
-    line inside a multi-line tag is still a control, and it ends a tag only at a `>` outside every quoted value and
-    every balanced `{...}` expression, so an arrow-function prop or a quoted `>` before the attribute does not hide it.
-    Test: "a dynamic disabled prop merges", "a variable named disabled and a dynamic prop merge", "a disabled attribute
-    on its own line inside a tag is refused", "a disabled control after an arrow-function prop is refused", "a disabled
-    control after a quoted > is refused"
+    variable, a parameter or a word. Fix round 4: the tag test is a fixed pattern over one line (C5 item 1), so a tag
+    split over lines is a stated miss (Accepted failure mode 10), and inside a tag a quoted value or a `{...}` value is
+    read whole, so an arrow-function prop or a quoted `>` before the attribute does not hide it. Test: "a dynamic
+    disabled prop merges", "a variable named disabled and a dynamic prop merge", "a disabled attribute on its own line
+    inside a tag is a stated miss", "a disabled control after an arrow-function prop is refused", "a disabled control
+    after a quoted > is refused"
 16. **The brief check is a flag, not a refusal, and flags literal disabled controls as well as copy.** A plan may quote
     placeholder UI to plan its removal; the judge decides with the prompt line. Test: "a plan that describes
     placeholder UI as context is flagged and still launches", "a batch line naming a literal disabled control is
@@ -1057,6 +1108,18 @@ reference implementation in commit `fea64e3e` where one exists, adapted to the p
    start helpers: the validator holds overlays to the write tools only (`paths.sh:826`), and refusing older overlays
    would fail every launch that reads them. Test: "the headless Claude reviewer cannot start helpers" (the shipped
    lists carry it)
+10. `always_disabled_lines` is a fixed pattern over one line (fix round 4, class jsx-context; main's answers
+   answer-1793068128-36463 and answer-1793068518-93805), not a TSX parser. Missed: a tag split over lines (a
+   `disabled` on its own line, a value on a later line, a multiline `{...}` value, so changing only the value line of
+   a multiline `disabled={...}` to `true` merges), a value with nested braces, type arguments on the tag
+   (`<Select<O> disabled>`), an unquoted HTML value (`disabled=disabled`) and a comment inside `{true}`; the review's
+   P1 (C5 item 5) is the catch. Falsely refused: a single-line control spelled in a string, template or comment of a
+   screen file (`const s = "<Button disabled>";`), and a comment between `disabled` and its `=`; the recovery is a
+   `Placeholder:` line naming that complete line (why: a source example) or moving the example out of screen code
+   (tests and stories are not screen code); in a plan or batch it is a `FLAG:` line only, exit unchanged. No input
+   on one line changes another line's result. Test: "a disabled attribute on its own line inside a tag is a stated
+   miss", "changing only the value of a multiline disabled attribute to true is a stated miss", "scanner: every line
+   is judged alone, whatever came before it"
 
 ## Assumptions (each settled, or a Builder check with the action per outcome)
 
@@ -1153,6 +1216,29 @@ units (C3), a disabled control the plan names (C5), a variable named `disabled` 
 dynamic prop merge"), a Codex that stops on TERM ("a timeout fails loudly") and an answer with no model header ("an
 answer with no model header fails loudly", C10).
 
+Added by fix round 1 (pass 1 findings marked "not in the plan list"; each test written red first):
+
+| case | input or starting state | expected result | test name |
+|---|---|---|---|
+| a launched brief's plan heading | brief from `builder-launch.sh` naming the plan under `#### Plan`; the plan on main approves `$BTN` in `web/src/pages/X.tsx` | merges, no placeholder entry | a plan named under the launcher's #### Plan heading approves its control (`merge-unit-local-screens.test.sh`) |
+| the hold CLI run as a command, first use | `scripts/unit-hold.sh u hold parked` run directly, its file under a `.claude/metrics` that does not exist | exit 0, the folder made, one `hold` row | the first hold in a fresh project makes the metrics folder, run as a command (`worktreereview.test.sh`) |
+| a routing overlay from before C7 | `COMMANDECK_ROUTING` = shipped routing with `roles.builder.helpers` deleted; Builder pane general-purpose naming opus, Explore naming sonnet; unnamed Explore elsewhere | sonnet, haiku, haiku | an overlay with no helpers map runs the shipped helper models (`agent-model-guard.test.sh`) |
+| source text that renders nothing | `const preview = "<Button disabled>…"`, a template, a `//` comment, a `{/* */}` JSX comment; `<p>Don't stop</p>` then a real control | fix round 4: each of the first four lines (a single-line control spelled in source text is refused, Accepted failure mode 10) and the real control's line | scanner: every line is judged alone, whatever came before it (`merge-unit-local-screens.test.sh`) |
+| a multiline value change | main has `<Button` / `disabled={` / `busy` / `}`; the branch changes only `busy` to `true` | fix round 4: merges, no entry (a stated miss, Accepted failure mode 10; main accepted the flip, answer-1793068518-93805) | changing only the value of a multiline disabled attribute to true is a stated miss (`merge-unit-local-screens.test.sh`) |
+| a background job across a session gap | sessions 0–60 and 600–660, a background job from 10 with no end; no hold | no unexplained idle, 660 s of stage time (a job ended at 100 leaves 100–600 unexplained) | a gap a background job covers is not unexplained idle (`worktreereview.test.sh`) |
+| a setup run cut off between its writes | the manifest cannot be written during `il_lockfile_deny`; then a normal run; then off | settings untouched by the cut run; after the rerun and off only the owner's deny entry is left | a run cut off between its writes is finished by a rerun and taken out by off (`install-lib-setup.test.sh`) |
+| a new ledger missing from IL_STATE | a script names `.claude/metrics/<x>.jsonl` that `install-lib.sh` does not list | the pin names it | every .claude/metrics ledger a script names is in IL_STATE (`plugin.test.sh`) |
+
+Fix rounds 2 and 3 added three scanner rows here (every ordering for the context stack, a script in an `.html`
+screen, a tag's comments); fix round 4 replaced that scanner, so their inputs are lines of the one case below.
+
+Added by fix round 4 (pass 4's jsx-context finding, "not in the plan list"; the class's fourth return, so one case
+holds every ordering found so far, in the order found; written red first):
+
+| case | input or starting state | expected result | test name |
+|---|---|---|---|
+| every ordering that once misled the scanner, one text | in this order: pass 1's `"..."` string, template, `//` comment and `{/* */}` JSX comment each holding `<Button disabled>`, `<p>Don't stop</p>` then a real `<Button disabled>`, a `disabled` / newline / `={busy}` attribute; pass 2's `useState<string>("")` then a string holding `<Button disabled>`; round 2's `<T,>(x: T) => x`, `i <length` and `1 <<x`, a regular expression `/<Button disabled>/`; pass 3's `type F = <U>(u: U) => U` then a string `"</U>"`; pass 4's `type G = <U>(x: "</U>") => U` then `const view = <Button disabled />;`; round 2's `<script>` string then `<input disabled>`; `icon={<Button disabled />}` inside an attribute; round 3's four tag-comment lines; a multiline `<Button` / `disabled={` / `true` / `}` / `>` | exactly the lines whose own text holds a single-line constant-disabled tag (the source-text lines, the real controls, the regular expression, the `<script>` line, the attribute's control, `<A disabled /* c */ ={busy}>` and `<A /* note */ disabled>`), nothing on the multiline tag; and the whole text's output equals each line's output read alone | scanner: every line is judged alone, whatever came before it (`merge-unit-local-screens.test.sh`) |
+
 ## Claims to falsify
 
 - Every existing `builder-launch.sh` refusal message, its exit code and their order are unchanged.
@@ -1172,9 +1258,11 @@ answer with no model header fails loudly", C10).
 - A `Placeholder:` line approves only an added line equal to its middle field after trimming; no substring of a line
   approves it.
 - An added line with one approved and one unapproved control is refused.
-- No `disabled` outside an opening tag, and no `disabled={<expression>}`, is ever reported as placeholder UI.
-- A `>` inside a balanced `{...}` expression or a quoted attribute value never ends an opening tag, so a literal-true
-  `disabled` after it is reported.
+- No `disabled` outside a single-line opening-tag pattern, and no `disabled={<expression>}`, is ever reported as
+  placeholder UI.
+- A `>` inside a `{...}` value without nested braces or a quoted attribute value never ends an opening tag, so a
+  literal-true `disabled` after it on the same line is reported.
+- No line's result depends on any other line: the whole text's output equals each line's output read alone.
 - The tripwire screens an edited file by its path relative to its own worktree root, whatever folder the session
   started in.
 - A plan-author pane has the `Agent` tool; a Claude plan-judge or reviewer pane does not, in a planning worktree or a
@@ -1382,3 +1470,28 @@ None. Main answered the scope of #397 and the three port gaps (#386, #385's type
 - F7: C10 item 1: `timeout -k 2`, TERM at the deadline and KILL after a 2 s grace, with its own `TIMEOUT:` lines for rc 124 and for rc 137 past the deadline (Decision 30, A19 measured on the Mac with a Builder check on the PC, a TERM-ignoring stub case within 5 s, a Break line, Timed checks line, failure paths row, What can go wrong row 5, a claim).
 - F8: the complete-line equality Break line now runs on "a bare-substring approval approves nothing", which goes red under substring matching; the separate-lines case stays an acceptance test without a Break line (C5 Break lines).
 - F9: C10 item 1: an answer with no `model:` header is exit 1 naming the missing header, row `no-model` with a null model, never `unknown` (Decision 31, a case and a Break line, failure paths row, the claim at Claims to falsify fixed). Planned size 51 files, 2019 lines.
+- 2026-10-26 (fix round 2, design-only pass 3): class jsx-context came back in pass 2 (`useState<string>("")` put
+  the scanner in JSX text). C5 item 1's scanner is redesigned around one stack of TSX's own contexts, TSX's
+  expression-start rule for `<` and `/`, and an element proof for an opening tag; attribute expressions are scanned,
+  not skipped; `--markup` skips `<script>` and `<style>` text. Data design bullet (the scanner stores nothing), two
+  What can go wrong rows. No decision, limit or failure path changes.
+- 2026-10-26 (fix round 3, design-only pass 4): class jsx-context came back in pass 3 (round 2's element proof
+  searched the raw text for a closing tag, so a `"</U>"` string proved `type F = <U>(u: U) => U` an element). C5
+  item 1's element proof is now a speculative element read in context: a root saved at its `<`, proven only when
+  the scanner itself reaches its closer through well-formed TSX, otherwise rewound to that `<` as an operator.
+  After a whole element an expression can start. A tag's comments and a `disabled` value are read in the tag's
+  context (the round's sweep). Data design bullet (the root stack replaces the closer list), the all-orderings row
+  gains pass 3's ordering, the .html row's input is fixed, one row added, accepted failure mode 10. No decision,
+  limit or failure path changes.
+- 2026-10-26 (fix round 4, design-only pass 5): class jsx-context came back in pass 4 (the accepted
+  `<U>(x: "</U>")` gap can hide a real control on the next line). Under main's addendum (answer-1793068128-36463)
+  parser rounds end: C5 item 1's scanner is replaced by a fixed pattern over one line, no state across lines, no
+  flags (`--markup` and `--spans` go); main approved it with no per-line exclusion (answer-1793068518-93805).
+  Accepted failure mode 10 is rewritten to its misses and false refusals. Two acceptance tests flip to the stated
+  miss, as main accepted: "a disabled attribute on its own line inside a tag is refused" becomes "... is a stated
+  miss", and "changing only the value of a multiline disabled attribute to true is refused" becomes "... is a stated
+  miss". Decision 15, the Data design bullet, two claims, two Break line sites, the tripwire's reason in C5 item 3
+  and the What can go wrong rows follow; rounds 2 and 3's three scanner rows become lines of one new case. No
+  limit or failure path changes. After the design GO (pass 5), the code's break run showed the "variable named
+  disabled" Break line's site is the value rule, not the tag pattern (removing the tag pattern cannot make
+  `const disabled = busy;` literal-true); its site is corrected.

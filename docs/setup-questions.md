@@ -20,6 +20,9 @@ setup asks, the picker guard's stray-keypress option is off.
 | Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network; unknown DNS names get 403, while machine names and IP addresses are accepted |
 | Merge check | the command that must pass before a merge, or none |
 | Full suite | on (recommended when the whole suite takes under about 10 minutes) or off: one full run of the test command per build, beside the closing review pass; a red run is a NO-GO (`--full-suite on\|off`). On needs a merge check; setup refuses On without one, and sets a saved On off (and says so) when the check is removed |
+| Typecheck | the command that must be green before a closing review pass starts, or none (`--typecheck-command '<cmd>'`) |
+| Lockfile reads | deny (the default) or allow built-in reads of the project's tracked lockfiles: one `Read(**/<lockfile>)` deny rule per name, added to the project's deny list; whole and partial reads are refused (best-effort for the built-in search tools), and shell search such as `rg` still works (`--lockfile-deny on\|off`) |
+| Screen code | the folders that hold screen code (default `web/src/`), or none; a merge that changes a screen file needs screenshot evidence (`--screen-paths '<folder>[,<folder>]'`) |
 | Strict hooks | off or on (see [Hooks](hooks.md)) |
 | Main prompt cache | 1h (or 5m) for main, in `.claude/main-session.settings.json`, which only a main started with `claude --settings <that file>` reads; a value you set stays |
 | Builder and worker prompt cache | 5m (or 1h) for Builders and other worker panes (`CLAUDE_CODE_PROMPT_CACHE_TTL` in each worktree's `settings.local.json`) and their subagents (`subagentPromptCacheTtl` in `.claude/settings.json`); a value you set stays |

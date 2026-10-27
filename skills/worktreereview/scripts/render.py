@@ -23,8 +23,8 @@ R = json.load(open(sys.argv[1]))
 N = json.load(open(sys.argv[2])) if len(sys.argv) > 3 else {}
 OUT = sys.argv[-1]
 def took(x):
-    """A stage's, pass's or idle gap's time without the time cut as waiting on the owner."""
-    return x['end'] - x['start'] - x.get('cut_s', 0)
+    """A stage's, pass's or idle gap's time without the time cut as waiting on the owner or left unexplained."""
+    return x['end'] - x['start'] - x.get('cut_s', 0) - x.get('unexplained_s', 0)
 
 
 TOTAL = max(1, took(R))  # a run cut from end to end still renders
@@ -255,6 +255,25 @@ facts = [f'Largest context in one call: {n(R["context"]["peak"])} tokens; averag
 facts += [f'Compaction at {n(c["before"] or 0)} tokens, down to {n(c["after"] or 0)}, taking {round(c["end"] - c["start"])} s.' for c in R['compactions']]
 if R['blocked']:
     facts.append('Tool calls a guard refused, by hook and reason: ' + '; '.join(f'{k} ({v})' for k, v in sorted(R['blocked'].items(), key=lambda x: -x[1])) + '.')
+# Issue 397: helper count and spend by model, so a regression to helper-less or Opus helpers shows on the page.
+if R['helpers']:
+    by_model = {}
+    for h in R['helpers']:
+        c, usd = by_model.get(nice(h['model']), (0, 0))
+        by_model[nice(h['model'])] = (c + 1, usd + h['tokens'].get('usd', 0))
+    facts.append(f'Helpers: {len(R["helpers"])} started; by model: ' + '; '.join(f'{m} {c}, ${u:,.2f}' for m, (c, u) in by_model.items()) + '.')
+else:
+    facts.append('Helpers: 0 started.')
+# Issue 399: Codex helper calls (codex-ask.sh), counted apart from the Claude helpers above; any outcome but answered is a failure.
+CH = R.get('codex_helpers') or []
+if CH:
+    by_cm = {}
+    for c in CH:
+        by_cm[c['model'] or 'none read'] = by_cm.get(c['model'] or 'none read', 0) + 1
+    facts.append(f'Codex helper: {len(CH)} calls, {round(sum(c["secs"] for c in CH))} s, {sum(c["outcome"] != "answered" for c in CH)} failed; by model: '
+                 + '; '.join(f'{m} {k}' for m, k in by_cm.items()) + '.')
+else:
+    facts.append('Codex helper: none.')
 facts += [f'Helper "{h["what"]}": {nice(h["model"])}, {hm(h["seconds"])}, {M(allof(h["tokens"]))} tokens, ${h["tokens"].get("usd", 0):,.2f}.' for h in R['helpers']]
 method = N.get('method', []) + [
     'Agent tokens and times: its Claude session log, one row per model call, each call counted once.',
@@ -345,6 +364,10 @@ cut_box = (f'<h4>Cut from the clock, waiting on the owner: {dur(R["cut_s"])}</h4
            'on this page counts it, but for two: a helper\'s request and tool subtotals, and command seconds inside a cut Codex pass. '
            'Cost is unchanged. Windows that overlap are cut once.</p>'
            + table(['>From', '>To', '>Length', 'Why'], cut_rows)) if cut_rows else ''
+unexplained_rows = [f'<tr>{at(w["start"])}{at(w["end"])}{td(w["seconds"], hm(w["seconds"]))}</tr>' for w in R.get('unexplained', [])]
+unexplained_box = (f'<h4>Unexplained idle: {dur(R.get("unexplained_s", 0))}</h4><p class="tag">No session open, no Codex run and no hold '
+                   'recorded for two minutes or more. Like the cut windows, no figure, share or flag on this page counts it.</p>'
+                   + table(['>From', '>To', '>Length'], unexplained_rows)) if unexplained_rows else ''
 codex_rows = [f'<tr>{td(p["n"])}{td(took(p), hm(took(p)))}{td(p["commands"])}{td(p["command_s"], sec(p["command_s"]))}'
               + (td(max(took(p) - p['command_s'], 0), hm(max(took(p) - p['command_s'], 0))) if p['threads'] == 1 else '<td class="r">several threads</td>')
               + f'<td>{txt("; ".join(f"{sec(s)} {c.split(chr(92))[0][:70]}" for s, c in p["longest"][:2]))}</td></tr>' for p in R['passes']]
@@ -540,7 +563,7 @@ ul{{margin:6px 0 0 18px;padding:0}} li{{margin:3px 0}} code{{background:#eef2f7;
 <div class="card"><div class="big">{grand / 1e6:.1f}M tokens</div><div class="lab">all models; {100 * cached / max(1, grand):.0f}% were cache reads</div></div>
 <div class="card"><div class="big">${priced:,.2f}</div><div class="lab">list-price equivalent{', without ' + txt(' and '.join(unpriced)) if unpriced else ''}</div></div>
 </div>
-<h2>Where the time went</h2><div class="box">{bars}{cut_box}</div>
+<h2>Where the time went</h2><div class="box">{bars}{cut_box}{unexplained_box}</div>
 <h2>Stage by stage</h2>
 <table><tr><th>Stage and what happened</th><th class="r">Started</th><th class="r">Time (min:sec)</th><th class="r">{txt(AGENT)} calls</th><th class="r">Cache read</th><th class="r">Cache write</th><th class="r">Cache hit</th><th class="r">Output</th><th class="r">List price, all priced models</th><th>Other models in this stage</th></tr>{''.join(rows)}
 <tr><td><b>Whole run</b></td><td></td><td class="r"><b>{hm(TOTAL)}</b></td><td class="r">{n(T['builder'].get('calls', 0))}</td><td class="r">{M(T['builder'].get('cr', 0))}</td><td class="r">{M(T['builder'].get('cw', 0))}</td><td class="r hit">{hit(T['builder'])}</td><td class="r">{M(T['builder'].get('out', 0))}</td><td class="r"><b>${priced:,.2f}</b></td><td></td></tr></table>

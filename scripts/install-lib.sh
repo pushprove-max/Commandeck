@@ -50,7 +50,8 @@ IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin a
 # running. The one list: setup hides these from git, the doctor reports one
 # git tracks, and uninstall takes out the lines setup's manifest recorded.
 IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/main-session.settings.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
-  .claude/metrics/unit-ledger.jsonl .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock .claude/briefs/ .claude/routing-log todo/main-todo.md
+  .claude/metrics/unit-ledger.jsonl .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock
+  .claude/metrics/unit-holds.jsonl .claude/metrics/codex-helper.jsonl .claude/briefs/ .claude/routing-log todo/main-todo.md
   .claude/workflows/test-audit.js)   # setup's copy holds this machine's paths (il_test_audit)
 
 il_sha() { sha256sum < "$1" | cut -d' ' -f1; }
@@ -267,6 +268,30 @@ il_advisor_off() {
   elif ! jq -e '(.env // {}) | has("CLAUDE_CODE_DISABLE_ADVISOR_TOOL")' <<<"$doc" >/dev/null 2>&1; then
     doc=$(jq '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1"' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" '.entries[$p].advisorOff = true'
   fi
+}
+# il_lockfile_deny <manifest> <settings file> <checkout> [off] -- issue 401: an agent read a 329 KB lockfile whole.
+# One `Read(**/<name>)` deny rule per lockfile name the checkout tracks, added to the file's deny list: a rule there
+# already is left, and only the rules setup added are recorded, so off takes out those and nothing of the owner's.
+IL_LOCKFILES='package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock bun.lockb Cargo.lock poetry.lock Pipfile.lock uv.lock Gemfile.lock composer.lock go.sum'
+il_lockfile_deny() {
+  local m=$1 f=$2 doc rec new
+  doc=$(il_read "$f") || return 1; [ -n "${doc//[[:space:]]/}" ] || doc='{}'
+  rec=$(jq -c --arg p "$f" '.entries[$p].denied // []' "$m" 2>/dev/null) || rec='[]'
+  if [ "${4:-}" = off ]; then
+    [ "$rec" != '[]' ] || return 0
+    doc=$(jq --argjson r "$rec" '.permissions.deny = ((.permissions.deny // []) - $r) | if .permissions.deny == [] then del(.permissions.deny) else . end
+      | if .permissions == {} then del(.permissions) else . end' <<<"$doc") && il_write "$f" <<<"$doc" && il_set "$m" --arg p "$f" 'del(.entries[$p].denied)'
+    return
+  fi
+  new=$(git -C "$3" ls-files -z 2>/dev/null | tr '\0' '\n' | awk -v names="$IL_LOCKFILES" 'BEGIN { split(names, n, " "); for (i in n) want[n[i]] = 1 }
+    { b = $0; sub(/.*\//, "", b) } want[b] && !seen[b]++ { print "Read(**/" b ")" }' | sort | jq -Rsc --argjson d "$doc" 'split("\n") | map(select(. != "")) - ($d.permissions.deny // [])')
+  [ "$new" != '[]' ] || return 0
+  doc=$(jq --argjson n "$new" '.permissions.deny = ((.permissions.deny // []) + $n)' <<<"$doc") \
+    || { echo "commandeck: $f is not JSON; fix it and run this again" >&2; return 1; }
+  # The record first: a run cut off before the settings write is finished by the next one, while a rule written with
+  # no record would be the owner's from then on, which off and uninstall never take out.
+  il_set "$m" --arg p "$f" --argjson n "$new" '.entries[$p].denied = ((.entries[$p].denied // []) + $n | unique)' && il_write "$f" <<<"$doc" || return 1
+  echo "lockfiles: $(jq -r 'join(", ")' <<<"$new") added to the deny list in $f: built-in reads of the lockfile are refused, whole or partial (best-effort for the built-in search tools); shell search such as rg still works and is the way to look inside"
 }
 # il_cache_ttl <manifest> <settings file> <5m|1h|off> -- the subagents' prompt-cache lifetime (issue 367), the
 # Builder and worker answer; the main conversation's and each pane's own TTL go elsewhere (il_main_lean, worktree-setup.sh).

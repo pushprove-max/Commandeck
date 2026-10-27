@@ -29,6 +29,14 @@ check "with the line the check lets it through" 0 "$(grep -c "has no 'Launch: ne
 # Host issue 2999: the plan author is told to name a test file's time-bound checks, so a heavy case lands after them.
 check "a plan-author's prompt carries the Timed checks line rule" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'names them on a `Timed checks:` line and orders the heavy case after them')"
+# Issue 397: a plan author is told to hand work to helpers; the Builder brief template carries the same line.
+HLINE=$(bash -c '. "$1/scripts/paths.sh"; printf %s "$PP_HELPER_LINE"' _ "$REAL")
+check "the plan-author prompt carries the helper line" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -cF "${HLINE//<plugin scripts>/$REAL/scripts}")"
+# Issue 399: the line's Codex sentence names the scripts folder's codex-ask.sh, not the placeholder.
+check "the helper line names the Codex helper" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -cF "bash $REAL/scripts/codex-ask.sh '<question>'")"
+check "the Builder brief template carries the helper line word for word" 1 "$(grep -cF "$HLINE" "$REAL/templates/_builder-brief-template.md")"
 # Issue 362: builder-launch.sh refuses a plan with no size line, a decision with no Test: line or no What can go wrong
 # section, so the plan author is told what the plan must hold before it writes.
 check "a plan-author's prompt names the size line, the Test: line, the Break: line, the Claims to falsify list and the What can go wrong section" 1 \

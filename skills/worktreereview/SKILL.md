@@ -102,6 +102,11 @@ checkout>` (review.py passes it through), or no decision and no round archive is
 command seconds inside a cut Codex pass. The page and `result.json` (`cut`, `cut_s`) list every window with its start, end,
 length and reason.
 
+A hold main recorded with `unit-hold.sh <unit> hold|release '<reason>'` is cut the same way, reason `hold`,
+except seconds a Codex run or background job covers. A stretch with no session open, no Codex run and no hold, as
+long as an owner wait or longer, is listed in an "Unexplained idle" box (`result.json`: `unexplained`,
+`unexplained_s`) and is not counted in any stage.
+
 ## The two timing sections
 
 Every page carries them, computed, with no words needed from you:

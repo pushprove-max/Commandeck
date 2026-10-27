@@ -73,4 +73,23 @@ tick $((R + 60))
 [ "$(posts 'wt-r3 builder stopped without reporting')" = 0 ] || fail "stopped: a seat whose session log was written after the tick read it was posted stopped"
 [ "$(posts 'wt-r2 builder stopped without reporting')" = 1 ] || fail "stopped: a seat idle at both readings was not posted"
 
+# Issue 402: a Builder that ends its turn while its own background shell job runs is waiting on it, not stopped. The
+# job's <task-notification> in its session record releases the hold; a job that never reports holds for HOLD_S (1 h)
+# from the record's last write, so a real stop is still posted. No event log: the hold reads the session record alone.
+rm -f "$S"/seat-*.txt; sed -i 's/ .*/ completed/' "$F/tasks"; B=200000
+jlog() { printf '%s' "$T/home/.claude/projects/$(printf '%s' "$T/ws/$1" | sed 's/[^a-zA-Z0-9]/-/g')/s.jsonl"; }
+for u in wt-j1 wt-j2 wt-j3; do
+  bseat $u term_$u task_$u $((B - 1000)); state term_$u working; L=$(jlog $u); mkdir -p "${L%/*}"
+  jq -nc --arg id "bg-$u" '{type: "user", message: {content: "started"}, toolUseResult: {backgroundTaskId: $id}}' > "$L"
+done
+for u in wt-j1 wt-j2; do touch -d "@$((B - 50))" "$(jlog $u)"; done
+touch -d "@$((B - 3700))" "$(jlog wt-j3)"
+tick $((B - 100)); for u in wt-j1 wt-j2 wt-j3; do state term_$u "done"; done; tick $B
+[ "$(posts 'wt-j1 builder stopped without reporting')" = 0 ] || fail "bg job: a Builder waiting on its open background job was posted as stopped"
+[ "$(posts 'wt-j3 builder stopped without reporting')" = 1 ] || fail "bg job: a Builder whose job stayed open past HOLD_S was not posted"
+jq -nc '{type: "user", message: {content: "<task-notification><task-id>bg-wt-j2</task-id><status>completed</status></task-notification>"}}' >> "$(jlog wt-j2)"
+touch -d "@$((B + 30))" "$(jlog wt-j2)"; tick $((B + 60))
+[ "$(posts 'wt-j2 builder stopped without reporting')" = 1 ] || fail "bg job: a Builder still stopped after its job's notification landed was not posted"
+[ "$(posts 'wt-j1 builder stopped without reporting')" = 0 ] || fail "bg job: a Builder whose job is still open was posted after another's notification"
+
 echo "PASS main-watch-helper-hold.test.sh"

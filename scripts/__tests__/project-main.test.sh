@@ -50,6 +50,11 @@ check "off main, the main branch itself is fast-forwarded" "rc=0 release: next" 
 git -C "$O" checkout -q main; git -C "$O" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "local only"; push "release: third"
 check "a diverged main refuses with the reason" "1 rc=1 local only" "$(sync | grep -c 'cannot fast-forward') $(sync | tail -1) $(git -C "$O" log -1 --format=%s main)"
 
+# Issue 395: paths.sh sourced from zsh failed lines later with a parse error; another shell is refused at its first line.
+NB=$(command -v zsh || command -v dash)
+out=$(cd "$T" && "$NB" -c '. "$0"' "$REAL/scripts/paths.sh" 2>&1); rc=$?
+check "sourced from a non-bash shell" "rc=1 paths.sh: source this from bash; this shell is not bash" "rc=$rc $out"
+
 # No script removes a main checkout. dashboard.sh --project took the folder it was handed as its run folder
 # before its DASH_NOW check, and the exit trap then ran rm -rf on it: typed by hand with no DASH_NOW,
 # `dashboard.sh --project ~/repos/commandeck` removed the whole main checkout (2026-10-15).

@@ -165,6 +165,9 @@ MADE_FROM = {
     "4083592b": ("b1471fa8",), "bbe121f7": ("f45e894e",),
     # 0.51.0 global-rules.md: a plan's `file ~line`, the sibling dry run, and the flexibility finding's severity
     "eff13cd5": ("64f32653",), "faea5cd0": ("71b6b9ca",), "a935667e": ("2fe4fdf9",),
+    # 0.52.0 main-session.md: added work names its probes (issue 385); unit-close.sh after a hand merge (issue 396);
+    # unit-hold.sh joined to the no-redundant-steps rule (issue 387)
+    "9ed773b1": ("b1a45843",), "b5d1e56b": ("69cb8485",), "6ae3b0ac": ("4b66daaa",),
 }
 
 

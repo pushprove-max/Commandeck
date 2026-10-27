@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.52.0 -- 2026-10-26
+
+### Launching builds
+
+- Launch options now work in any position, before, between or after the unit name and the batch. An option the launcher does not know, an extra word, or an option missing its value is refused with the usage line, so a dry run can never turn into a real launch.
+- A plan is checked by the same rules as a launch before any plan judge reads it, so no judging round is spent on a missing section or label.
+- A plan names each mockup on its own line, and a launch refuses a plan whose mockup the batch does not carry.
+
+### Builders
+
+- Work added to a running build names a check for each item; work the branch already has is answered "already done" and not sent.
+- A closing review pass waits for a green typecheck when the project sets one up.
+- Helper agents run on the models set next to the Builder role: search helpers on Haiku, other helpers on Sonnet, enforced in build, planning and fix-round panes. Builders, planners and fix rounds are told to hand work to them, and the build review shows helper spend by model and flags a large build that used none.
+- Builders are told to build only what the plan asks for, never a disabled or "coming soon" stand-in.
+- Builders, planners and fix rounds can ask Codex a question, read-only, for a search or a second opinion. Each call has a time limit and an answer limit, names the model that answered, and says so plainly when it fails; the build review shows the calls and their time.
+- Planners can now start helper agents. Plan judges and reviewers still cannot.
+
+### Merging
+
+- A build that changes screen code merges only with a side-by-side list, a screenshot that exists, or a stated reason that nothing visible changed. Setup asks which folders hold screen code.
+- A merge refuses switched-off controls and "coming soon" copy that no plan or ruling asked for, and lists each one. The review treats them as serious findings.
+- A merge closes the build's task, a build removed unmerged closes it as failed, and a sweep closes the ones left open before.
+
+### Setup
+
+- Setup denies built-in reads of the project's tracked lockfiles, whole or partial, one rule per lockfile name, added to the project's own deny list without replacing or repeating a rule. It is best-effort for the built-in search tools; shell search such as rg still works and is the way to look inside. Answer Allow to leave them readable.
+
+### Build review
+
+- Time a build was parked on purpose is cut from the review, and gaps with nothing running are shown apart instead of counting as work.
+
+### Fixes
+
+- A failed review pass no longer ends with an error on a Mac's built-in awk.
+- The shared script file now says so at once when it is loaded from a shell other than bash.
+- The watcher no longer posts "stopped without reporting" while a Builder waits on its own background job, for up to an hour.
+
 ## 0.51.0 -- 2026-10-26
 
 ### Review loop

@@ -93,14 +93,14 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   and path: read it only when you need it.
 - After a hand merge, or a failed auto-merge you finish by hand, run step 5 of `merge-unit-local.sh` yourself: close
   the unit's panes, then `merge-unit-local.sh <unit> --cleanup` (never a forced remove). Leave the worktree and the dashboard
-  keeps the unit on its board.
-- No redundant steps: a step added to the build, merge, review or push flow names what only it catches.
-- Main may set a dispatch's effort (cap `max`), logged in the brief as
-  `effort override: <role> <pinned/default> -> <used>: <reason>`.
-- Work added mid-build goes in that rulings file first; then
-  `builder-add-work.sh <unit>` stops the Builder, and a fresh session of its
-  pane takes the work from a hand-off that stands alone. Added scope after the first review pass is a follow-up
-  unit; file it, or pass `--small --reason '<one line>'` for a change under about 50 lines.
+  keeps the unit on its board. An unmerged unit is removed only by `unit-close.sh <unit> drop '<reason>'`;
+  `unit-close.sh --sweep` lists Builder tasks left open by units already gone, `--sweep --apply` closes them.
+- No redundant steps: a step added to the build, merge, review or push flow names what only it catches. A unit parked on purpose is recorded with `unit-hold.sh <unit> hold|release '<reason>'`, so the build review cuts the parked time.
+- Main may set a dispatch's effort (cap `max`), logged in the brief as `effort override: <role> <pinned/default> -> <used>: <reason>`.
+- Work added mid-build goes in that rulings file first; then `builder-add-work.sh <unit> --unless '<path>:<text>'`
+  (one probe per item; work the branch already holds is answered "already done" and not sent) stops the Builder, and a
+  fresh session of its pane takes the work from a hand-off that stands alone. Added scope after the first review pass is
+  a follow-up unit; file it, or pass `--small --reason '<one line>'` for a change under about 50 lines.
 - A finding class that returns in a second NO-GO in a row (`read-verdict.sh --repeat-class`; `orca-wait.sh`'s next
   line names it) is the Builder's to fix by design, and it sends main nothing for it. A fix-round brief lists every
   variant of the class it fixes. The class fix has one retry path that does not depend on where the state came

@@ -17,6 +17,8 @@ import contextlib, io, itertools, json, math, os, re, subprocess, sys
 from datetime import datetime, timezone
 HERE, TMP = sys.argv[1], sys.argv[2]
 os.environ['HOME'] = TMP + '/home'
+# The session records are the fixture's, under HOME: a profile's CLAUDE_CONFIG_DIR would be read first.
+os.environ.pop('CLAUDE_CONFIG_DIR', None)
 sys.path.insert(0, HERE)
 import collect
 
@@ -312,6 +314,156 @@ check('and a unit main holds no squash commit for is not recorded', None, collec
 check('and so is a removed worktree with no --main', None, collect.lines_changed(f'{TMP}/ws/no-such-wt'))
 page = rendered('elsewhere', {**r, 'lines_changed': None})
 check('the page says the lines changed are not recorded, and why', True, 'Lines changed: not recorded (' in page)
+
+# --- Time with no session open was folded into the neighbouring stage, so a unit parked on purpose read as hours of
+# planning. Holds are written by unit-hold.sh itself (a stub `date` fixes each row's time), then read by the collector
+# through HOLDS. Every fixture: sessions 0-60 and 600-660 of one unit. ---
+hold_sh = os.path.join(HERE, '..', '..', '..', 'scripts', 'unit-hold.sh')
+stub = f'{TMP}/stub-date'
+write(f'{stub}/date', ['#!/bin/sh\necho "$FAKE_AT"\n'])
+os.chmod(f'{stub}/date', 0o755)
+def hold(holds, s, unit, event, reason='parked for the test'):
+    return subprocess.run(['bash', hold_sh, unit, event, reason], capture_output=True, text=True,
+                          env=os.environ | {'COMMANDECK_UNIT_HOLDS': holds, 'FAKE_AT': at(s), 'PATH': stub + os.pathsep + os.environ['PATH']})
+def held(unit, holds, codex_run=None, logs=None):
+    wt = f'{TMP}/ws/{unit}'
+    for i, rows in enumerate(logs or [[user(a), say(b, 'ok')] for a, b in ((0, 60), (600, 660))]):
+        write(f'{TMP}/home/.claude/projects/{re.sub(r"[^A-Za-z0-9]", "-", wt)}/s{i}.jsonl', rows)
+    if codex_run:
+        codex(wt, 'tid-' + unit, codex_run[0], codex_run[1], 'VERDICT: GO')
+    collect.HOLDS = holds
+    sys.argv = ['collect.py', wt, '--out', f'{TMP}/out/{unit}']
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            collect.main()
+        got = json.load(open(f'{TMP}/out/{unit}/result.json'))
+    except BaseException as e:
+        got = {'error': repr(e)[:300]}
+    finally:
+        collect.HOLDS = None
+    return {'cut': [(round(w['start'] - T0), round(w['end'] - T0), round(w['seconds']), w['reason']) for w in got.get('cut', [])],
+            'unexplained': [(round(w['start'] - T0), round(w['end'] - T0), round(w['seconds'])) for w in got.get('unexplained', [])],
+            'stages': round(sum(s['end'] - s['start'] - s.get('cut_s', 0) - s.get('unexplained_s', 0) for s in got.get('stages', []))),
+            'error': got.get('error')}
+holds = f'{TMP}/holds-a.jsonl'
+rcs = [hold(holds, 60, 'uh-a', 'hold').returncode, hold(holds, 600, 'uh-a', 'release').returncode, hold(holds, 30, 'uh-a-2', 'hold').returncode]
+got = held('uh-a', holds)
+check("a hold between two plan sessions is cut and listed: another unit's row is ignored",
+      ([0, 0, 0], [(60, 600, 540, 'hold')], [], 120, None), (rcs, got['cut'], got['unexplained'], got['stages'], got['error']))
+# Sessions 10:00-10:01 and 10:10-10:11, hold 10:01-10:10, a Codex run 10:03-10:05.
+holds = f'{TMP}/holds-b.jsonl'
+hold(holds, 60, 'uh-b', 'hold'), hold(holds, 600, 'uh-b', 'release')
+got = held('uh-b', holds, codex_run=(180, 300))
+check("a Codex run inside a hold stays work: 420 s cut around it, its 120 s in the stage figure, no unexplained row",
+      ([(60, 180, 120, 'hold'), (300, 600, 300, 'hold')], [], 120 + 120, None), (got['cut'], got['unexplained'], got['stages'], got['error']))
+got = held('uh-none', f'{TMP}/no-holds.jsonl')
+check('a gap with no record is unexplained idle, not stage time', ([], [(60, 600, 540)], 120, None),
+      (got['cut'], got['unexplained'], got['stages'], got['error']))
+page = rendered('uh-none', json.load(open(f'{TMP}/out/uh-none/result.json')))
+check('and the page lists it in its own box', True, '<h4>Unexplained idle: ' in page)
+old = {k: v for k, v in json.load(open(f'{TMP}/out/uh-none/result.json')).items() if k not in ('unexplained', 'unexplained_s')}
+for p in old['passes'] + old['stages']:
+    p.pop('unexplained_s', None)
+check('an old result.json with no unexplained keys still renders', False, rendered('uh-none', old).startswith('Traceback'))
+ro = f'{TMP}/read-only'
+os.makedirs(ro)
+os.chmod(ro, 0o555)
+holds = f'{ro}/holds.jsonl'
+r = hold(holds, 60, 'uh-ro', 'hold')
+got = held('uh-ro', holds)
+os.chmod(ro, 0o755)
+check('a failed hold append exits 1 and cuts nothing', (1, True, False, [], [(60, 600, 540)]),
+      (r.returncode, holds in r.stderr, os.path.exists(holds), got['cut'], got['unexplained']))
+holds = f'{TMP}/holds-c.jsonl'
+hold(holds, 30, 'uh-c', 'release'), hold(holds, 60, 'uh-c', 'hold')
+got = held('uh-c', holds)
+check('open hold runs to the end; a release with no hold is ignored', ([(60, 660)], [], None),
+      ([w[:2] for w in got['cut']], got['unexplained'], got['error']))
+# An append cut off before its newline must not swallow the next row: the release after it still closes the hold.
+holds = f'{TMP}/holds-torn.jsonl'
+hold(holds, 60, 'uh-torn', 'hold')
+open(holds, 'a').write('{"unit":')
+r = hold(holds, 600, 'uh-torn', 'release')
+got = held('uh-torn', holds)
+check('a release after a torn append still closes the hold', (0, [(60, 600)], [], None),
+      (r.returncode, [w[:2] for w in got['cut']], got['unexplained'], got['error']))
+# A background job is build work while it runs, whichever session started it and whichever painted the wait, and a job
+# with no recorded end runs to the review's end. Each ordering has a hold 60-600: (a) one session, test 10-600, turn idle
+# 60-600; (b) session A idle 60-600, session B 10-500 starts a test at 20 that never ends; (c) one session, test 20-100
+# ended by a queued notice, turn idle 60-600; (d) as (c) but the test is session B's, idle from 30, while A paints the wait.
+def bg_test(s, tid):
+    return [reply(s, {'type': 'tool_use', 'id': tid, 'name': 'Bash', 'input': {
+                'command': 'bash scripts/run-shell-tests.sh h', 'description': 'Run the touched test file', 'run_in_background': True}}),
+            result(s + 1, tid, f'Command running in background with ID: b{tid[-2:]}. Output is being written to: /tmp/{tid}.output')]
+def notice(s, tid):
+    return {'type': 'user', 'timestamp': at(s), 'message': {'role': 'user', 'content':
+            f'<task-notification><task-id>b{tid[-2:]}</task-id><tool-use-id>{tid}</tool-use-id><status>completed</status></task-notification>'}}
+def queued(s, tid):
+    return {'type': 'attachment', 'timestamp': at(s), 'attachment': {'type': 'queued_command', 'prompt': f'<task-notification><tool-use-id>{tid}</tool-use-id></task-notification>'}}
+idle_a = [user(0), turn_end(60), user(600), say(660, 'ok')]
+orderings = {
+    'a': [[user(0), *bg_test(10, 'toolu_holda'), turn_end(60), notice(600, 'toolu_holda'), say(660, 'ok')]],
+    'b': [idle_a, [user(10), *bg_test(20, 'toolu_holdb'), say(500, 'ok')]],
+    'c': [[user(0), *bg_test(20, 'toolu_holdc'), turn_end(60), queued(100, 'toolu_holdc'), user(600), say(660, 'ok')]],
+    'd': [idle_a, [user(10), *bg_test(20, 'toolu_holdd'), say(30, 'ok'), turn_end(30), queued(100, 'toolu_holdd')]]}
+got = {}
+for k, logs in orderings.items():
+    holds = f'{TMP}/holds-job-{k}.jsonl'
+    hold(holds, 60, f'uh-job-{k}', 'hold'), hold(holds, 600, f'uh-job-{k}', 'release')
+    g = held(f'uh-job-{k}', holds, logs=logs)
+    got[k] = (g['cut'], g['unexplained'], g['stages'], g['error'])
+check('a hold is cut around every background job, whichever session shows the wait',
+      {'a': ([], [], 660, None), 'b': ([], [], 660, None),
+       'c': ([(100, 600, 500, 'hold')], [], 160, None), 'd': ([(100, 600, 500, 'hold')], [], 160, None)}, got)
+# With no hold, a background job still running between two sessions is build time, not unexplained idle: a job left
+# open runs to the review's end; one whose notice lands at 100 leaves only 100-600 unexplained.
+got = {}
+for k, end in (('open', None), ('ended', 100)):
+    first = [user(0), *bg_test(10, f'toolu_gap{k}'), turn_end(60)] + ([queued(end, f'toolu_gap{k}')] if end else [])
+    g = held(f'uh-gap-{k}', f'{TMP}/no-holds.jsonl', logs=[first, [user(600), say(660, 'ok')]])
+    got[k] = (g['unexplained'], g['stages'], g['error'])
+check('a gap a background job covers is not unexplained idle', {'open': ([], 660, None), 'ended': ([(100, 600, 500)], 160, None)}, got)
+# A fresh project has no .claude/metrics folder: the first hold makes it, and the script runs as a command.
+holds = f'{TMP}/fresh/.claude/metrics/unit-holds.jsonl'
+try:
+    r = subprocess.run([hold_sh, 'uh-fresh', 'hold', 'parked'], capture_output=True, text=True,
+                       env=os.environ | {'COMMANDECK_UNIT_HOLDS': holds})
+    r = (r.returncode, json.loads(open(holds).read())['event'] if os.path.exists(holds) else r.stderr[:200])
+except OSError as e:
+    r = repr(e)[:200]
+check('the first hold in a fresh project makes the metrics folder, run as a command', (0, 'hold'), r)
+
+# --- Issue 397: the review shows each helper's model and cost and the count by model, and flags a big build that
+# started no helper (the squash commit on main counts the lines; the flag is over 300, never at 300). ---
+def squashed(unit, n):
+    open(f'{lc}/{unit}.txt', 'w').write(''.join(f'{i}\n' for i in range(n)))
+    git_in('add', '-A'); git_in('commit', '-q', '-m', f'feat({unit}): {n} lines')
+def sized(unit, n, helper=False):
+    squashed(unit, n)
+    if helper:
+        write(f'{TMP}/home/.claude/projects/{re.sub(r"[^A-Za-z0-9]", "-", f"{TMP}/ws/{unit}")}/s1/subagents/agent-a1.jsonl', [user(5), say(30, 'found it')])
+    return collected(unit, [user(0), say(100, 'Done.'), turn_end(110)], '--main', lc)
+HL = 'no helper agent started'
+big, edge, helped = sized('hl-big', 301), sized('hl-edge', 300), sized('hl-helped', 301, True)
+check("the review names each helper's model and cost", True,
+      bool(re.search(r'Helper .{0,200}?: Opus 5\.5, [^,]+, [^ ]+ tokens, \$[\d,.]+\.', rendered('hl-helped', helped))))
+check('the review prints helper count and spend by model', True,
+      bool(re.search(r'Helpers: 1 started; by model: Opus 5\.5 1, \$[\d,.]+\.', rendered('hl-helped', helped))))
+check('a build over 300 changed lines with no helper is flagged', 1, len([f for f in big['flags'] if HL in f and f.startswith('301 changed lines')]))
+check('a build of 300 lines with no helper is not flagged', 0, len([f for f in edge['flags'] if HL in f]))
+check('a build over 300 lines with a helper is not flagged', 0, len([f for f in helped['flags'] if HL in f]))
+
+# --- Issue 399: the review counts a unit's Codex helper calls (codex-ask.sh rows) apart from the Claude helpers. ---
+os.makedirs(f'{lc}/.claude/metrics', exist_ok=True)
+with open(f'{lc}/.claude/metrics/codex-helper.jsonl', 'w') as f:
+    for u, secs, outcome, model in (('cx-two', 3, 'answered', 'gpt-x-test'), ('cx-two', 4, 'timeout', None), ('cx-other', 99, 'answered', 'gpt-x-test')):
+        f.write(json.dumps({'unit': u, 'seat': 'builder', 'model': model, 'start': 'x', 'secs': secs, 'outcome': outcome, 'bytes': 1}) + '\n')
+    f.write('not json\n')
+cx_two = collected('cx-two', [user(0), say(100, 'Done.'), turn_end(110)], '--main', lc)
+cx_none = collected('cx-none', [user(0), say(100, 'Done.'), turn_end(110)], '--main', lc)
+check('the review shows Codex helper calls and time', True,
+      'Codex helper: 2 calls, 7 s, 1 failed; by model: gpt-x-test 1; none read 1.' in rendered('cx-two', cx_two))
+check('a build with no Codex call says none', True, 'Codex helper: none.' in rendered('cx-none', cx_none))
 
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)

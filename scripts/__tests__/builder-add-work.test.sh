@@ -12,6 +12,8 @@ PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected [$2], got [$3])"; fi }
 git init -q -b main "$T/proj" && git -C "$T/proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 U=u1 W=$T/ws/u1 SC=$T/scratch; mkdir -p "$W/.claude/briefs" "$SC/handles" "$T/bin" "$T/home" "$T/proj/.claude/briefs"
+# The worktree is the branch: one commit holding done.txt, which the probes of issue 385 read.
+git init -q -b u1 "$W" && echo PROBE-DONE > "$W/done.txt" && git -C "$W" add done.txt && git -C "$W" -c user.name=t -c user.email=t@t commit -q -m done
 PROJ=$T/home/.claude/projects/$(printf '%s' "$W" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$PROJ"
 printf 'handle=term_aw\ntask=task_aw\nsession=old-sid\n' > "$SC/seat-$U-builder.txt"
 # Logs every call; the pane list holds term_aw in the worktree (none with AW_DOWN=1); typing the pointer starts the new session's log.
@@ -26,9 +28,9 @@ esac
 exit 0
 SH
 chmod +x "$T/bin/orca-ide"
-add() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+add() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
   COMMANDECK_SCRATCH="$SC" COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 AW_CALLS="$T/calls" AW_WT="$W" AW_PROJ="$PROJ" "$@" \
-  bash "$REAL/scripts/builder-add-work.sh" "$U" >"$T/out" 2>"$T/err"); echo $?; }
+  bash "$REAL/scripts/builder-add-work.sh" "$U" --unless 'new.txt:NOT-YET' >"$T/out" 2>"$T/err"); echo $?; }
 calls() { cat "$T/calls" 2>/dev/null | wc -l | tr -d ' '; }
 
 check "with no work written to main's rulings file, nothing is sent" "1 1 0" "$(add) $(grep -c 'write the added work to' "$T/err") $(calls)"
@@ -60,7 +62,20 @@ check "after the first pass, added work is refused as a follow-up unit, and noth
   "$(addx) $(grep -c 'added scope after the first review pass is a follow-up unit; file it, or pass --small for a change under about 50 lines' "$T/err") $(sends) $(ls "$W/.claude/briefs/$U-added-"*.md 2>/dev/null | wc -l | tr -d ' ')"
 check "--small with no reason is refused too" "2 0" "$(addx --small) $(sends)"
 check "--small with a reason hands it over, the reason in the hand-off" "0 1" \
-  "$(addx --small --reason 'REASON-PROBE one field') $(cat "$W/.claude/briefs/$U-added-"*.md | grep -c 'REASON-PROBE one field')"
+  "$(addx --small --reason 'REASON-PROBE one field' --unless 'new.txt:NOT-YET') $(cat "$W/.claude/briefs/$U-added-"*.md | grep -c 'REASON-PROBE one field')"
+
+# Issue 385: added work names a probe per item, and work the branch already holds is answered "already done", not sent.
+rm -f "$T/calls" "$W/.claude/briefs/$U-r1-reports.md"; wait; rm -f "$W/.claude/briefs/$U-added-"*.md
+added() { ls "$W/.claude/briefs/$U-added-"*.md 2>/dev/null | wc -l | tr -d ' '; }
+check "no probe is refused" "2 1 0 0" "$(addx) $(grep -c 'added work needs --unless' "$T/err") $(sends) $(added)"
+SHA12=$(git -C "$W" rev-parse HEAD | cut -c1-12)
+check "work already on the branch is answered already done" "4 1 0 0" \
+  "$(addx --unless 'done.txt:PROBE-DONE') $(grep -c "already done on u1 at $SHA12: done.txt:PROBE-DONE; nothing was sent" "$T/err") $(sends) $(added)"
+check "one of two probes present still sends" "0 1 0" \
+  "$(addx --unless 'done.txt:PROBE-DONE' --unless 'new.txt:NOT-YET') $(grep -cx -- "- Not yet on your branch, by main's probes (<path>:<text>): new.txt:NOT-YET" "$W/.claude/briefs/$U-added-"*.md) $(grep -c 'done.txt:PROBE-DONE' "$W/.claude/briefs/$U-added-"*.md)"
+wait; rm -f "$T/calls" "$W/.claude/briefs/$U-added-"*.md; mv "$W/.git" "$W/.git-off"
+check "a probe that git cannot read is refused" "1 1 0 0" "$(addx --unless 'done.txt:PROBE-DONE') $(grep -c "cannot read the branch in $W" "$T/err") $(sends) $(added)"
+mv "$W/.git-off" "$W/.git"
 wait
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

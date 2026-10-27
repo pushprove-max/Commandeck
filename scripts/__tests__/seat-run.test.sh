@@ -7,7 +7,9 @@ set -uo pipefail
 # The judge these cases run, launched in pu's planning worktree with its plan, by the setup lines of
 # seat-plan-marker.test.sh.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
-echo PLAN-DONE > "$T/screen"; mkdir -p "$PWT/.claude/plans"; echo 'the plan' > "$PWT/.claude/plans/pu.md"
+# The plan passes plan-check.sh, which every launch of a judge sent to it runs first (issue 384).
+GOODPLAN=$'## What can go wrong\n\n- a case: its test\n\n- Planned size: 1 files, 1 changed lines'
+echo PLAN-DONE > "$T/screen"; mkdir -p "$PWT/.claude/plans"; printf '%s\n' "$GOODPLAN" > "$PWT/.claude/plans/pu.md"
 PH=$(sha256sum < "$PWT/.claude/plans/pu.md" | cut -d' ' -f1)
 printf 'Judge the plan.\nEnd on a line of its own.\n' > "$T/judge-spec.md"
 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
@@ -33,7 +35,7 @@ JSPEC=$(sed -n 's/^Your task spec is the file \(.*\)\. Read all of it.*/\1/p' "$
 SNAP=$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' "$JSPEC" 2>/dev/null); echo 'plan B' > "$PWT/.claude/plans/pu.md"
 check "a plan judge reads a read-only copy of the plan, the copy its record hashes, whatever the live plan becomes" "1:0:$PH:ro" \
   "$(grep -c '^Judge the plan below, run one\.$' "$JSPEC" 2>/dev/null):$(grep -c '^Plan: \.claude/plans/pu\.md$' "$JSPEC" 2>/dev/null):$(sha256sum < "$SNAP" 2>/dev/null | cut -d' ' -f1):$([ -f "$SNAP" ] && [ ! -w "$SNAP" ] && echo ro)"
-echo 'the plan' > "$PWT/.claude/plans/pu.md"
+printf '%s\n' "$GOODPLAN" > "$PWT/.claude/plans/pu.md"
 printf 'Judge the plan, run two.\nEnd on a verdict line.\n' > "$T/run-nogo.md"; printf -- '- [P1] a gap\nVERDICT: NO-GO\n' > "$T/screen"
 OUT=$(rrun plan-judge-sol pu "$T/run-nogo.md" 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")
 check "run on NO-GO: exit 1, one line, a report that exists, one wake" "1:1:yes:1" \

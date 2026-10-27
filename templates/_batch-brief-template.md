@@ -37,7 +37,7 @@ Launch: new unit <unit> | add to <unit>
 Order: <the owner's words, verbatim>
 
 `add to <unit>` is not a launch: put the work in that unit's rulings file
-and run `builder-add-work.sh <unit>`.
+and run `builder-add-work.sh <unit> --unless '<path>:<text>'`, one probe per item.
 
 ## Prior art
 

@@ -207,5 +207,33 @@ echo '{"skillOverrides":{"anthropic-skills:chrome-browser":"on"},"enabledPlugins
 run "$T/wt/w27" --keep other >/dev/null 2>&1; a=$(jq -c "$MV" "$(f w27)"); run "$T/wt/w27" --keep tools >/dev/null 2>&1
 check "the owner's own on for a move-1 name is left as it is, with or without the word" '["on",true,"off"]:["on",true,"off"]' "$a:$(jq -c "$MV" "$(f w27)")"
 
+# --- Issue 397: every worker pane runs the model guard; a planning worktree may start helpers ---
+# guard <wt> <payload> [env...] -- the Agent|Task command the worktree's settings register, run with the settings' env.
+guard() { local w=$1 i=$2; shift 2; local cmd; cmd=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Agent|Task") | .hooks[0].command' "$(f "$w")" | head -n1)
+  jq -cn --argjson i "$i" '{tool_name:"Agent", tool_input:$i}' | env -u COMMANDECK_SEAT -u COMMANDECK_BUILDER "$@" $(jq -r '.env | to_entries[] | select(.key == "COMMANDECK_BUILDER") | "\(.key)=\(.value)"' "$(f "$w")") sh -c "$cmd" 2>/dev/null | jq -sr '.[0].hookSpecificOutput.updatedInput.model // "none"'; }
+EXP='{"subagent_type":"Explore","description":"x","prompt":"y"}'; GPO='{"subagent_type":"general-purpose","model":"opus","description":"x","prompt":"y"}'
+git -C "$P" worktree add -q "$T/wt/g1"; git -C "$P" worktree add -q "$T/wt/g2"; git -C "$P" worktree add -q "$T/wt/g3"; git -C "$P" worktree add -q "$T/wt/g4"
+run "$T/wt/g1" --builder >/dev/null 2>&1
+check "a Builder worktree created the normal way runs Explore on Haiku and general-purpose on Sonnet" haiku:sonnet "$(guard g1 "$EXP"):$(guard g1 "$GPO")"
+run "$T/wt/g2" >/dev/null 2>&1
+check "a worker worktree registers the model guard too" 1 "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Agent|Task")] | length' "$(f g2)")"
+# Issue 399: the auto-mode classifier must not stop a Codex helper call; the script refuses judge and reviewer panes itself.
+check "a worker worktree allows the Codex helper" "1:1" \
+  "$(jq --arg e "Bash(bash $(printf '%q' "$REAL/scripts")/codex-ask.sh:*)" '[.permissions.allow[] | select(. == $e)] | length' "$(f g2)"):$(jq --arg e "Bash(bash $(printf '%q' "$REAL/scripts")/codex-ask.sh:*)" '[.permissions.allow[] | select(. == $e)] | length' "$(f g1)")"
+run "$T/wt/g2" >/dev/null 2>&1; run "$T/wt/g1" --builder >/dev/null 2>&1
+check "a rerun registers it once" 1:1 "$(jq '[.hooks.PreToolUse[] | select(.matcher == "Agent|Task")] | length' "$(f g2)"):$(jq '[.hooks.PreToolUse[] | select(.matcher == "Agent|Task")] | length' "$(f g1)")"
+echo plan-unit > "$(git -C "$T/wt/g3" rev-parse --absolute-git-dir)/commandeck-plan-of"
+run "$T/wt/g3" >/dev/null 2>&1
+check "a planning worktree's settings allow helpers" "false:true:sonnet" \
+  "$(jq '.permissions.deny | index("Agent") != null' "$(f g3)"):$(jq '.permissions.deny | index("WebSearch") != null' "$(f g3)"):$(guard g3 "$GPO" COMMANDECK_SEAT=plan-author)"
+check "an unmarked worker worktree still denies helpers" true "$(jq '.permissions.deny | index("Agent") != null' "$(f g2)")"
+echo plan-unit > "$(git -C "$T/wt/g4" rev-parse --absolute-git-dir)/commandeck-plan-of"
+run "$T/wt/g4" >/dev/null 2>&1
+check "a planning worktree's printed settings match the written ones" true "$(run "$T/wt/g4" --print-settings 2>/dev/null | jq -s --slurpfile w "$(f g4)" '.[0] == $w[0]')"
+# The routing validator: a helpers entry that is not a model name fails the whole file.
+jq '.roles.builder.helpers.Explore = "Haiku 4"' "$REAL/config/routing.json" > "$T/bad-routing.json"
+check "a helpers entry that is not a model name fails the routing file" "1:1" \
+  "$(COMMANDECK_ROUTING=$T/bad-routing.json bash -c '. "$0/scripts/paths.sh"; pp_routing_valid' "$REAL" 2>&1 | grep -c 'builder has a bad helpers entry Explore'):$(COMMANDECK_ROUTING=$REAL/config/routing.json bash -c '. "$0/scripts/paths.sh"; pp_routing_valid >/dev/null 2>&1 && echo 1' "$REAL" 2>/dev/null)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

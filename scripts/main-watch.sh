@@ -256,11 +256,14 @@ builder_card() {
 # that logged a row within STALL_S, or a pass started within HOLD_S. A Builder that ended its turn to wait on
 # it is waiting, not stopped (#41). A pass logs only its start and end rows, so its start is the clock; a helper
 # silent past STALL_S, or a pass killed with no end row, died, so the Builder's stop is real and is posted.
+# Issue 402: an open background shell job of the Builder's own session holds too, for HOLD_S at most from the session
+# record's last write; the job's <task-notification> ends it, and a job that never reports stops holding.
 helper_out() {
-  [ -f "$WS/$1/.claude/builder-events.jsonl" ] || return 1
-  builder_card "$1" "$2" | jq -e --argjson now "$NOW" --argjson s "$STALL_S" --argjson hold "$HOLD_S" \
+  [ -f "$WS/$1/.claude/builder-events.jsonl" ] && builder_card "$1" "$2" | jq -e --argjson now "$NOW" --argjson s "$STALL_S" --argjson hold "$HOLD_S" \
     'any(.waiting[]; (.kind == "subagent" and ($now - (.seenAt | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $s))
-      or (.kind == "codex" and ($now - (.since | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $hold)))' >/dev/null 2>&1
+      or (.kind == "codex" and ($now - (.since | sub("\\.[0-9]+"; "") | fromdateiso8601) | . >= 0 and . < $hold)))' >/dev/null 2>&1 && return 0
+  pp_session_summary "$WS/$1"
+  [ "$PP_SESSION_BG" != null ] && [ "$PP_SESSION_BG" -gt 0 ] && [ $((NOW - PP_SESSION_AT)) -lt "$HOLD_S" ]
 }
 
 # stopped_nudge <unit> <handle> <item> -- issue 258: a Builder that ended its turn with no DONE line or verdict is

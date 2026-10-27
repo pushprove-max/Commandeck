@@ -92,6 +92,9 @@ check "a NO-GO pass from another pane hands the fix round to the Builder's pane,
 helper_done 10
 check "and the helper types into the seat record's pane, not the caller's" "1 0" \
   "$(grep -c 'terminal send --terminal term_frs --text /clear' "$TMP/frs-calls") $(grep -c 'term_other' "$TMP/frs-calls")"
+# Issue 397: the hand-off tells the Builder to hand cuts to helpers.
+check "the fix-round hand-off carries the helper line" 1 \
+  "$(grep -cF "$(bash -c '. "$1/scripts/paths.sh"; printf %s "${PP_HELPER_LINE//<plugin scripts>/$PP_SCRIPTS}"' _ "$REAL")" "$B/$U-fix-r10.md")"
 # A hand-off the pane never took reaches main, with Orca's own answer. The send's output went to /dev/null
 # and the log was the only trace, so main never heard that fix round 2 of commandeck-speedups-0-7-2 had not started.
 rm -f "$TMP/frs-calls"
@@ -139,6 +142,22 @@ R16=$(fpass "$W" 16 review "$NOGO"); helper_done 16
 check "after a relaunch over a dead record, a NO-GO pass hands the fix round to the new pane" "0 1 0" \
   "$R16 $(grep -c 'terminal send --terminal term_new --text /clear' "$TMP/frs-calls") $(grep -c 'term_frs' "$TMP/frs-calls")"
 mv "$SC/seat-$U-builder.keep" "$SC/seat-$U-builder.txt"
+
+# Issue 393: BSD awk refuses a comparison left bare in a print list ("syntax error"), so a NO-GO pass on macOS lost its
+# per-class findings step. Every print list in the shell scripts parenthesizes its comparisons.
+check "no awk print list in the shell scripts holds an unparenthesized comparison" "" \
+  "$(grep -rnE --include='*.sh' 'printf?[[:space:]].*,[^,()]*([=!]=|[<>])[^,()]*\?' "$REAL/scripts" "$REAL/hooks" "$REAL/skills" | grep -v '/__tests__/')"
+# Last: the same NO-GO pass under BSD awk, where one is installed (macOS); elsewhere nothing is counted.
+if /usr/bin/awk --version 2>/dev/null | grep -q '^awk version'; then
+  AWKD=$TMP/bsd-awk; mkdir -p "$AWKD"; ln -sf /usr/bin/awk "$AWKD/awk"
+  rm -f "$TMP/frs-calls"; printf 'echo seventeen\n' > "$W/a.sh"
+  find "$CODEX_HOME/sessions" -name 'rollout-*-thr-16-*.jsonl' -exec touch -t 200001010000 {} +
+  R17=$(PATH=$AWKD:$PATH fpass "$W" 17 review "$NOGO"); helper_done 17
+  check "a NO-GO pass under BSD awk prints no awk error and hands the fix round over" "0 0 1" \
+    "$R17 $(cat "$TMP/out" "$TMP/err" 2>/dev/null | grep -c 'awk:') $(grep -c 'terminal send --terminal term_frs --text /clear' "$TMP/frs-calls")"
+else
+  echo "note: no BSD awk here"
+fi
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

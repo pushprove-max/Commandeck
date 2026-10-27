@@ -7,21 +7,42 @@
 # types /clear and points the new session at a hand-off that stands alone, the rulings inlined, since a worker
 # cannot read main's checkout. A pane that never settles keeps the work in its old session.
 # After the unit's first review pass only a change main marks --small, with a reason, is added (issue 304).
-# Exit 0 handed over (the /clear follows in the background), 1 not sent, 2 refused, 3 no live Builder pane.
+# Added work names one probe per item, --unless '<path>:<text>' (issue 385): the item is on the branch when <path> at
+# the branch's committed HEAD holds <text>. Every probe found answers "already done" and sends nothing, so a Builder is
+# never handed work it has; a send with no probe is refused; the hand-off lists the probes not yet on the branch.
+# Exit 0 handed over (the /clear follows in the background), 1 not sent, 2 refused, 3 no live Builder pane, 4 already
+# done.
 # Self-test: bash scripts/__tests__/builder-add-work.test.sh
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
-UNIT=${1:?usage: builder-add-work.sh <unit> [--small --reason '<one line>']}
-SMALL=""
-[ "${2:-}" != --small ] || { [ "${3:-}" = --reason ] && [ -n "${4:-}" ] && SMALL=$4 \
-  || { echo "builder-add-work: --small takes --reason '<one line>'; nothing was sent" >&2; exit 2; }; }
+USAGE="usage: builder-add-work.sh <unit> --unless '<path>:<text>' [--unless ...] [--small --reason '<one line>']"
+UNIT=${1:?$USAGE}; shift
+SMALL="" SMALLF=0 PROBES=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --unless) [[ ${2:-} == ?*:?* ]] || { echo "builder-add-work: --unless takes '<path>:<text>'; nothing was sent" >&2; exit 2; }; PROBES+=("$2"); shift 2 ;;
+    --small) SMALLF=1; shift ;;
+    --reason) SMALL=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    *) echo "$USAGE" >&2; exit 2 ;;
+  esac
+done
+[ "$SMALLF" = 0 ] || [ -n "$SMALL" ] || { echo "builder-add-work: --small takes --reason '<one line>'; nothing was sent" >&2; exit 2; }
+[ "$SMALLF" = 1 ] || SMALL=""
 WT=$PP_WORKSPACES/$UNIT RUL=$PP_MAIN/.claude/briefs/$UNIT-main-rulings.md
 [ -d "$WT/.claude/briefs" ] || { echo "builder-add-work: no Builder worktree at $WT" >&2; exit 1; }
 # Issue 304: scope that changes behaviour after the first pass makes every later pass review a moving target.
 [ ! -e "$WT/.claude/briefs/$UNIT-r1-reports.md" ] || [ -n "$SMALL" ] || { echo "builder-add-work: $UNIT has had its first review pass, and added scope after the first review pass is a follow-up unit; file it, or pass --small for a change under about 50 lines (--small --reason '<one line>'). Nothing was sent" >&2; exit 2; }
 [ -s "$RUL" ] || { echo "builder-add-work: write the added work to $RUL first; nothing was sent" >&2; exit 1; }
+# Issue 385: added work the branch already holds reopened a converged loop. Only committed work counts (HEAD).
+[ "${#PROBES[@]}" -gt 0 ] || { echo "builder-add-work: added work needs --unless '<path>:<text>' for each item, so work already on the branch is never sent; nothing was sent" >&2; exit 2; }
+ABSENT=()
+for P in "${PROBES[@]}"; do
+  git -C "$WT" grep -qF -e "${P#*:}" HEAD -- "${P%%:*}" 2>/dev/null; rc=$?
+  case $rc in 0) ;; 1) ABSENT+=("$P") ;; *) echo "builder-add-work: cannot read the branch in $WT (git grep exit $rc); nothing was sent" >&2; exit 1 ;; esac
+done
+[ "${#ABSENT[@]}" -gt 0 ] || { echo "builder-add-work: already done on $(git -C "$WT" rev-parse --abbrev-ref HEAD) at $(git -C "$WT" rev-parse HEAD | cut -c1-12): ${PROBES[*]}; nothing was sent" >&2; exit 4; }
 H=$(pp_seat_pane "unit-$UNIT" "$WT")
 [ -n "$H" ] || { echo "builder-add-work: no live Builder pane for $UNIT; nothing was sent" >&2; exit 3; }
 HAND=$WT/.claude/briefs/$UNIT-added-$(date +%Y%m%d-%H%M%S).md
@@ -32,6 +53,7 @@ HAND=$WT/.claude/briefs/$UNIT-added-$(date +%Y%m%d-%H%M%S).md
   printf -- '- Read the brief whole, it still binds you: %s\n' "$WT/.claude/briefs/$UNIT.md"
   printf -- '- Read the evidence file whole, it says what is built, verified and left: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   printf -- '- Build the added work below with the rest, then acknowledge it before your next pass: builder-codex-pass.sh --ack-rulings %s\n' "$UNIT"
+  printf -- '- Not yet on your branch, by main'"'"'s probes (<path>:<text>): %s\n' "${ABSENT[*]}"
   [ -z "$SMALL" ] || printf -- '- Main added it after the first review pass as a small change, under about 50 lines: %s\n' "$SMALL"
   echo
   printf '## Main'"'"'s rulings, the added work included (%s)\n\n' "$RUL"; cat "$RUL"

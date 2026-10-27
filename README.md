@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.51.0-111111?style=flat-square" alt="Version 0.51.0">
+  <img src="https://img.shields.io/badge/version-0.52.0-111111?style=flat-square" alt="Version 0.52.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -19,7 +19,9 @@ It splits the work into roles:
   plans with you, launches builds and merges them. It does not write the code.
 - **Plan author and plan judges.** Optional seats that write a plan for a
   larger build and judge it before the build starts.
-- **Builder.** One session per batch of work, in its own git worktree.
+- **Builder.** One session per batch of work, in its own git worktree. It may
+  start Sonnet and Haiku helpers, and ask the reviewer's Codex a read-only question
+  (`scripts/codex-ask.sh`; the Codex helper cannot edit).
 - **Fixer.** The session that fixes a Builder's branch after a review finds a
   problem.
 - **Reviewer.** A separate Codex or Claude session that reads what the
@@ -110,6 +112,7 @@ answer first on a rerun) and is asked only when it applies.
 | Relay, Relay voice | No relay, or a Chief of Staff pane with a name and a one-line voice |
 | Dashboard | On for this machine only, off, or on under another name (it then listens on the network, behind a login) |
 | Merge check, Full suite | The command that must pass before a merge, or none; and whether the closing review pass runs it once on the build's tip |
+| Typecheck, Screen code | The typecheck that must be green before a closing review pass, or none; and the folders of screen code, whose changes merge only with screenshot evidence |
 | Strict hooks | Off (safety hooks only) or on (also search before reading, and one test run per change) |
 | Auto mode | Add two lines about the plugin's scripts to the auto-mode classifier's list, leave it, or take setup's lines out |
 | Worker cuts, Keep words | Extra skills and plugins to turn off in worker panes, and words that bring a set back for one unit |

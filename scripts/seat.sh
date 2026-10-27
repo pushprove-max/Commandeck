@@ -306,6 +306,14 @@ launch)
       exit 2
     }
   fi
+  # Issue 384: a judge never reads a plan the launcher would refuse. Every launch of a judge that certifies the plan (the
+  # condition of the plan copy below), a re-judge included, runs the launcher's own checks before any worktree, pane,
+  # task or record exists. Its batch is the planning worktree's, else main's briefs folder's, else none.
+  if [[ $ROLE == plan-judge-* ]] && grep -qxF "Plan: .claude/plans/$UNIT.md" "$SPEC" && [ -f "$WT/.claude/plans/$UNIT.md" ]; then
+    PCB=
+    for b in "$WT/.claude/briefs/$UNIT-batch.md" "$PP_MAIN/.claude/briefs/$UNIT-batch.md"; do [ ! -e "$b" ] || { PCB=$b; break; }; done
+    bash "$PP_SCRIPTS/plan-check.sh" "$WT/.claude/plans/$UNIT.md" "$PCB" >/dev/null || exit 2
+  fi
   # A Claude pane in a worktree takes the MAIN repo's ~/.claude.json project
   # entry. serena or codebase-memory disabled there left a worker with no
   # symbol tools and nothing said so (2026-09-18).
@@ -422,11 +430,17 @@ launch)
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan that adds a heavy fixture to a test file with time-bound checks names them on a \`Timed checks:\` line and orders the heavy case after them."
   # Issue 362: builder-launch.sh refuses a plan without these, so the plan author is told before it writes.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, a \`## Claims to falsify\` list (one checkable claim per line), and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
+  # Issue 384: the judge launch runs plan-check.sh and refuses what it refuses, so the author runs it first.
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Before PLAN-DONE run \`plan-check.sh .claude/plans/<unit>.md <batch>\` and fix every REFUSED: line; name each mockup on its own \`Mockup: <path or URL>\` line and make sure the batch carries it."
   # Issue 359: the table's shape, the settled claims and the contracts a cut produces and consumes.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The What can go wrong section is a table of case, input or starting state, expected result and test name, at most five rows (\`checked, none\` when empty), and each row's test is among the acceptance tests. Every claim you mark [likely] or [uncertain] is settled in the plan (the command and its output) or is a Builder check before the cut that depends on it, with the action for each outcome. Each cut lists what it Produces and Consumes, and every existing consumer of a contract it changes. A judge finding you accept goes into the plan, one \`## Plan change log\` line each, before the Builder starts."
   # Issue 360: scope is the owner's words. The plan carries them; each judge traces every requirement to them.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The plan opens with an \`Owner's words:\` line copied word for word from the order (the batch's \`Order:\` line), and every requirement it plans traces to those words or to an addition the owner approved by name."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan or batch line that describes existing placeholder UI (a disabled control, 'coming soon' copy) as context is a finding: an open problem until the plan removes it or names it on a \`Placeholder:\` line."
+  # Issue 397: a plan author may start helpers, and is told to.
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" ${PP_HELPER_LINE//<plugin scripts>/$PP_SCRIPTS}"
   # The host's reopen rule and its stated-limits heading: when a finding may reopen an accepted item, and what a limit is.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A review finding reopens an accepted failure mode, a decision or a stated limit only when it proves the item's factual premise false or shows the goal defeated, with a concrete counterexample; reviewers cite the item's line otherwise. A \`## Stated limits\` section opens with \`(every reviewer is handed these; a finding beyond one is out of scope: a follow-up issue, never a blocker)\`, and each limit is a measured bound: the number, the command, the date."
   # Two reviewer seats of one unit are handed the same spec, so the spec cannot

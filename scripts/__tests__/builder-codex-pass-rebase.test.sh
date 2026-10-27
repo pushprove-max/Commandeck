@@ -55,13 +55,25 @@ check "a closing pass's report carries one timing line per pre-review step" "1 1
   "$(grep -c '^Pre-review: ' "$B/$U-r2-reports.md") $(grep -cE '^Pre-review: rebase [0-9]+ s, tests [0-9]+ s, suite not run$' "$B/$U-r2-reports.md") \
 $(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests not run, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
 
-# main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
-# This is the sixth pass, past the default pass cap of five after a closing NO-GO, where the cap gate refuses first.
+# Issue 385: a closing pass needs a green typecheck when the project sets one up (typecheckCommand), checked before any
+# reviewer; a project with none is told so and goes on. These passes are past the default cap of five.
 cfg '.reviewLoop.passCap = "20"'
+cfg '.typecheckCommand = "echo \"src/x.ts(1,1): error TS2322: TYPE-PROBE\"; exit 1"'; echo six > "$W/a.sh"
+check "a closing pass on a red typecheck is refused before any reviewer" "2 1 1 no" \
+  "$(fin 6 "$NOGO2") $(grep -c 'a closing pass needs a green typecheck, and `echo .*` is red in' "$TMP/err") $(grep -cx 'src/x.ts(1,1): error TS2322: TYPE-PROBE' "$TMP/err") $(round 6)"
+cfg 'del(.typecheckCommand)'
+check "a closing pass with no typecheckCommand runs no typecheck and says so" "0 1 yes" \
+  "$(fin 6 "$NOGO2") $(grep -cx 'no typecheckCommand set: no typecheck before the closing pass' "$TMP/out") $(round 6)"
+cfg '.typecheckCommand = "true"'; echo seven > "$W/a.sh"
+check "a green typecheck lets the closing pass run" "0 1 yes" \
+  "$(fin 7 "$NOGO2") $(grep -cx 'typecheck before the closing pass: green (true)' "$TMP/out") $(round 7)"
+cfg 'del(.typecheckCommand)'
+
+# main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
 echo main-side > "$REPO/a.sh"; G commit -qam 'a.sh on main'
 printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
-  "$(fin 6 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
+  "$(fin 8 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

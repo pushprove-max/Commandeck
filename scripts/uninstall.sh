@@ -39,7 +39,7 @@ if [ -s "$IL_PROJECT" ]; then
   ! il_has "$IL_PROJECT" "$IL_AGENTS" || il_block "$IL_AGENTS"
   ! il_has "$IL_PROJECT" "$IL_EXCLUDE" || il_lines "$IL_PROJECT" "$IL_EXCLUDE"
   S=$PP_MAIN/.claude/settings.json
-  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_workflows "$IL_PROJECT" "$S" off; il_advisor_off "$IL_PROJECT" "$S" off; il_cache_ttl "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
+  ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_workflows "$IL_PROJECT" "$S" off; il_advisor_off "$IL_PROJECT" "$S" off; il_lockfile_deny "$IL_PROJECT" "$S" "" off; il_cache_ttl "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
   S=$PP_MAIN/.claude/settings.local.json
   ! il_has "$IL_PROJECT" "$S" || [ ! -e "$S" ] || { il_main_model "$IL_PROJECT" "$S" off; il_main_lean "$IL_PROJECT" "$S" off; il_allow_set "$IL_PROJECT" "$S" '[]'; }
   S=$PP_MAIN/$IL_MAIN_LEAN_FILE
@@ -86,7 +86,7 @@ fi
 if [ -n "$DELETE" ]; then
   # Only the plugin's own ledgers (and their locks): the folder may hold the
   # owner's or another tool's files, which setup never recorded.
-  pp_rm_rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,unit-ledger,subagent-usage}.jsonl* "$PP_SCRATCH"
+  pp_rm_rf "$PP_MAIN/.claude/metrics/"{decisions,seat-events,unit-ledger,subagent-usage,unit-holds,codex-helper}.jsonl* "$PP_SCRATCH"
   rmdir "$PP_MAIN/.claude/metrics" 2>/dev/null || true
   # These three are kept by folder name. A project set up at another path
   # under the same name (this checkout moved) writes them now: they are its.

@@ -178,6 +178,16 @@ Ask them in this order, up to four questions per call.
    Ask "Full suite before the final review": On (recommended) | Off
    - On: one full run of <testCommand> per build; catches failures a static review misses. The closing review pass runs it on the build's tip, and a red run is a NO-GO. Recommended when the whole suite takes under about 10 minutes. `--full-suite on`
    - Off: the closing pass runs no tests; the merge check still runs. `--full-suite off`
+   Then ask "Typecheck before the closing pass": <detected> (recommended) | None | Type my own
+   - The command that must be green before a closing review pass starts. `--typecheck-command '<cmd>'`
+   - None: no typecheck; the closing pass says so and goes on. `--typecheck-command ''`
+   Detect it first: `npm run typecheck` when package.json has that script, else `npx tsc --noEmit` when a `tsconfig.json` is at the root. With none detected, None is the one marked "(recommended)".
+   Then ask "Screen code": `web/src/` (recommended when it exists) | None | Type my own
+   - The folders that hold screen code; a merge that changes a screen file there needs screenshot evidence. `--screen-paths 'web/src/'` (several: `--screen-paths 'app/ui/,web/src/'`)
+   - None: the merge's screen and placeholder checks are skipped. `--screen-paths ''`
+   Then, when the project tracks a lockfile (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and the like), ask "Lockfile reads": Deny (recommended) | Allow
+   - Deny: one `Read(**/<lockfile>)` rule per lockfile name is added to the project's `.claude/settings.json` deny list: built-in reads of the lockfile are refused, whole or partial (best-effort for the built-in search tools); shell search such as `rg` still works and is the way to look inside. `--lockfile-deny on`
+   - Allow: setup adds no rule, and takes out the ones it added before. `--lockfile-deny off`
 10. Strict hooks?
     Ask "Strict hooks": Off (recommended) | On
     - Off: only the safety hooks (lost work, wrong commits). `--no-strict`

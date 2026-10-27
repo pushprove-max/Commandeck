@@ -376,5 +376,37 @@ check "setup's rules-audit line: under setup's set -e an audit that does not run
 check "the global CLAUDE.md template carries Compact Instructions" "1:1" \
   "$(grep -c '^## Compact Instructions$' "$REAL/templates/global-claude.md"):$(grep -c 'evidence file path, the current cut and its test' "$REAL/templates/global-claude.md")"
 
+# Issue 401: an agent read a 329 KB lockfile whole. Setup denies full reads of the project's tracked lockfiles, one
+# Read rule per lockfile name, added to the project's deny list and never replacing or doubling it; uninstall takes
+# out only the rules setup added.
+LK=$T/lk LKM=$T/lk-manifest.json LKS=$T/lk/.claude/settings.json
+git init -q -b main "$LK"; mkdir -p "$LK/web"; echo '{}' > "$LK/package-lock.json"; echo '{}' > "$LK/web/package-lock.json"
+git -C "$LK" add -A; git -C "$LK" -c user.name=t -c user.email=t@t commit -qm locks
+newm() { echo '{"version": 1, "entries": {}}' > "$LKM"; }; newm
+lockdeny() { lib 'il_lockfile_deny "$1" "$2" "$3" ${4:+"$4"}' "$LKM" "$LKS" "$LK" "$@"; }
+deny() { jq -c '.permissions.deny // "none"' "$LKS" 2>/dev/null || echo nofile; }
+out=$(lockdeny)
+check "setup on a project with a package-lock.json in two folders adds one Read(**/package-lock.json) rule" '["Read(**/package-lock.json)"]' "$(deny)"
+check "the setup message says built-in reads are refused, whole or partial, and shell search still works" 1 \
+  "$(grep -c 'built-in reads of the lockfile are refused, whole or partial (best-effort for the built-in search tools); shell search such as rg still works and is the way to look inside' <<<"$out")"
+out=$(lockdeny)
+check "a second run adds nothing" '["Read(**/package-lock.json)"]:' "$(deny):$out"
+echo '{"permissions": {"deny": ["Bash(rm:*)"]}, "x": 1}' > "$LKS"; newm
+lockdeny >/dev/null
+check "an existing deny entry survives" '["Bash(rm:*)","Read(**/package-lock.json)"]:1' "$(deny):$(jq -r .x "$LKS")"
+lockdeny off
+check "uninstall takes out only the rule setup added" '["Bash(rm:*)"]' "$(deny)"
+# A run cut off between its two writes (here the manifest cannot be written) leaves no rule uninstall cannot take out:
+# the record is written first, so a rerun finishes the run and off takes the rule out. A rule written to settings with
+# no record would read as the owner's from then on.
+mkdir -p "$T/lkm"; LKM=$T/lkm/m.json; newm; chmod 555 "$T/lkm"
+lockdeny >/dev/null 2>&1; cut=$(deny); chmod 755 "$T/lkm"
+lockdeny >/dev/null; lockdeny off
+check "a run cut off between its writes is finished by a rerun and taken out by off" '["Bash(rm:*)"]:["Bash(rm:*)"]' "$cut:$(deny)"
+LKM=$T/lk-manifest.json
+git -C "$LK" rm -q package-lock.json web/package-lock.json; git -C "$LK" -c user.name=t -c user.email=t@t commit -qm none; rm -rf "$LK/.claude"; newm
+lockdeny >/dev/null
+check "a project with no lockfile gets no rule" nofile "$(deny)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { [ -z "${INSTALL_LIB_TEST_CASE-}" ] || [ "$PASS" -gt 0 ]; }

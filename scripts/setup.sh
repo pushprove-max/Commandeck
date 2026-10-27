@@ -2,13 +2,13 @@
 # setup.sh --profile claude|claude-openai [--scope project|machine]
 #          [--name <n>] [--persona <text>] [--strict|--no-strict]
 #          [--serena|--no-serena] [--standard-context|--no-standard-context]
-#          [--test-command <cmd>] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
+#          [--test-command <cmd>] [--typecheck-command <cmd>] [--screen-paths '<folder>[,<folder>...]'] [--bind <address>] [--port <n>] [--dashboard|--no-dashboard]
 #          [--hosts <name>[,<name>...]] [--status-line <command>]
 #          [--builder-clear-line <tokens>|off] [--issue-sizing <tokens>|off]   (<tokens>: 140000, 140k)
 #          [--recommended] [--option <key>=<value> ...] (any /plugin config key: builderModel=sonnet, unitsBand=off;
 #          --recommended saves every value of config/recommended.json first, and any later answer beats it)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
+#          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--lockfile-deny on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--main-cache-ttl 5m|1h|leave] [--worker-cache-ttl 5m|1h|leave] [--relay-cache-ttl 5m|1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
@@ -54,7 +54,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --typecheck-command --screen-paths --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --lockfile-deny --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS= REC= AGENTS=
 for a; do
   if [ -n "$OPT" ]; then
@@ -125,7 +125,10 @@ BUILDER=$(jq -c '.builder | if type == "object" then del(.model, .effort, .clear
 # This run's --option answers, {key: value}: each is saved over the key's value.
 GIVEN='{}'
 OWNS=$(old '.ownFiles["AGENT_STARTUP.md"]') OWNM=$(old '.ownFiles[".claude/main-session.md"]') RULES=$(old .rules) MCACHE=$(old .mainCacheTtl) WCACHE=$(old .workerCacheTtl) RCACHE=$(old .chiefOfStaff.cacheTtl) AUTO=$(old .autoMode)
-FULL=$(old .fullSuiteBeforeFinal) TRUSTALL=$(old .trustAllHooks)
+FULL=$(old .fullSuiteBeforeFinal) TRUSTALL=$(old .trustAllHooks) LOCKDENY=$(old .lockfileDeny)
+# Issue 385: the typecheck a closing pass waits for. Issue 392: the folders of screen code, kept as a JSON array ("[]"
+# is the answer None; no key is the default web/src/).
+TYPECHECK=$(old .typecheckCommand) SCREENS=$(jq -c '.screenPaths // empty' "$IL_CONFIG" 2>/dev/null || true)
 DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADDONS= ADDONS_SET=
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
@@ -311,6 +314,8 @@ while [ $# -gt 0 ]; do
     --name) NAME=$2; shift 2 ;;
     --persona) PERSONA=$2; shift 2 ;;
     --test-command) TEST=$2; shift 2 ;;
+    --typecheck-command) TYPECHECK=$2; shift 2 ;;
+    --screen-paths) SCREENS=$(jq -cn --arg s "$2" '$s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))'); shift 2 ;;
     # This run's address is saved over /config's, as an --option answer is ('' is no answer).
     --bind) BIND=$2; [ -z "$2" ] || GIVEN=$(jq -c --arg v "$2" '.dashboardBind = $v' <<<"$GIVEN"); shift 2 ;;
     --port) PORT=$2; [ -z "$2" ] || GIVEN=$(jq -c --arg v "$2" '.dashboardPort = $v' <<<"$GIVEN"); shift 2 ;;
@@ -359,6 +364,7 @@ while [ $# -gt 0 ]; do
     # The closing pass's full run of the test command (builder-codex-pass.sh), saved as fullSuiteBeforeFinal.
     --full-suite) full_suite_answer "$2"; shift 2 ;;
     # Issue 315: on trusts every hook in the Codex home before each Codex launch; off keeps the plugin's own hooks only.
+    --lockfile-deny) case $2 in on) LOCKDENY=true ;; off) LOCKDENY=false ;; *) die "--lockfile-deny takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     --trust-all-hooks) case $2 in on) TRUSTALL=true ;; off) TRUSTALL=false ;; *) die "--trust-all-hooks takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     # off is saved as the word: no build is small, so every first pass has three reviewers.
     --small-build) rl smallBuild "$2" '^(off|[1-9][0-9]*)$' "$1" "a whole number of changed lines, or off"; shift 2 ;;
@@ -525,9 +531,11 @@ il_routing_seats "$IL_PROJECT" "$(il_abs "$(pp_routing)")" "$RT" || die "could n
 jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" --arg serena "$SERENA" --arg standard "$STANDARD" \
   --arg test "$TEST" --arg name "$NAME" --arg persona "$PERSONA" --arg bc "$BCLEAR" --arg sz "$SIZING" --argjson rl "$RL" --argjson gen "$GEN" --argjson cuts "$CUTS" --argjson ob "$BUILDER" \
   --argjson own "$(jq -cn --arg s "$OWNS" --arg m "$OWNM" '{"AGENT_STARTUP.md": $s, ".claude/main-session.md": $m} | with_entries(select(.value != ""))')" \
-  --arg rules "$RULES" --argjson md "$DROPS"  --arg mcache "$MCACHE" --arg wcache "$WCACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" --arg trustall "$TRUSTALL" '
+  --arg rules "$RULES" --argjson md "$DROPS"  --arg mcache "$MCACHE" --arg wcache "$WCACHE" --arg rcache "$RCACHE" --arg auto "$AUTO" --arg full "$FULL" --arg trustall "$TRUSTALL" --arg tc "$TYPECHECK" --arg sp "$SCREENS" --arg ld "$LOCKDENY" '
   {version: $v, profile: $profile, strictHooks: ($strict == "true"), serena: ($serena == "true"), standardContext: ($standard == "true")}
   + (if $test == "" then {} else {testCommand: $test} end)
+  + (if $tc == "" then {} else {typecheckCommand: $tc} end)
+  + (if $sp == "" then {} else {screenPaths: ($sp | fromjson)} end)
   + (if $gen == null then {} else {generatedFiles: $gen} end)
   + ($ob + ({clearLine: $bc} | with_entries(select(.value != ""))) | if . == {} then {} else {builder: .} end)
   + (if $sz == "" then {} else {issueSizing: $sz} end)
@@ -540,8 +548,10 @@ jq -n --argjson v "$IL_VERSION" --arg profile "$PROFILE" --arg strict "$STRICT" 
   + (if $auto == "" then {} else {autoMode: $auto} end)
   + (if $full == "" then {} else {fullSuiteBeforeFinal: ($full == "true")} end)
   + (if $trustall == "" then {} else {trustAllHooks: ($trustall == "true")} end)
+  + (if $ld == "" then {} else {lockfileDeny: ($ld == "true")} end)
   + $cuts
   + {chiefOfStaff: ({name: $name, persona: $persona, cacheTtl: $rcache} | with_entries(select(.value != "")))}' | il_write "$IL_CONFIG"
+[ "$SCREENS" != '[]' ] || echo "no screen paths: the merge's screen and placeholder checks are skipped"
 if [ -z "$PLAN" ]; then ln -sfn "$IL_ROOT" "$IL_LINK"
 elif [ "$(readlink "$IL_LINK" 2>/dev/null)" != "$IL_ROOT" ]; then echo "plan: would point $IL_LINK at $IL_ROOT"; fi
 # allow_out <manifest> <settings file> -- the plugin's rules out of a file setup put them in before.
@@ -555,6 +565,8 @@ il_allow_set "$SM" "$SETTINGS" "$(il_allow "$IL_ROOT")"
 [ -z "$WAS" ] || [ "$WAS" = "$SCOPE" ] || echo "permissions: moved from $WAS scope to $SCOPE scope ($SETTINGS)"
 il_workflows "$IL_PROJECT" "$PSET"
 ! pp_route_json orchestrator | jq -e '.advisor == null' >/dev/null || il_advisor_off "$IL_PROJECT" "$PSET"
+# Issue 401: on unless answered off; off takes out only the rules setup added.
+il_lockfile_deny "$IL_PROJECT" "$PSET" "$PP_MAIN" "$([ "$LOCKDENY" != false ] || echo off)"
 # Issue 245: an option the owner set in /config beats this setup's answer, here and in every reader (pp_option).
 MCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option mainPromptCacheTtl || echo "$MCACHE") WCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option workerPromptCacheTtl || echo "$WCACHE") RCACHE_ON=$(COMMANDECK_OPTIONS=$GIVEN pp_config_option relayPromptCacheTtl || echo "$RCACHE")
 # The same for the full run before the final review: /config's answer is the one in force, the project's file is the fallback.

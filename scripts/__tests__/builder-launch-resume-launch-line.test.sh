@@ -75,5 +75,53 @@ touch "$T/list-down"
 check "a launch while Orca's list cannot be read records none, and does not fail" '{"COMMANDECK_BUILDER":"1"}' "$(rmp term_other)"
 rm -f "$T/list-down"
 
+# Issue 394: options in any position. args <word>... -- a launch with those words as given; RC and $T/out as build's.
+args() { : > "$T/seats"; : > "$T/orca.log"; (cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH PATH="$T/bin:$PATH" COMMANDECK_WORKSPACES=$WS \
+  bash "$T/plug/scripts/builder-launch.sh" "$@" </dev/null >"$T/out" 2>&1); RC=$?; }
+DRYOK=
+for pos in 1 2 3; do
+  batchfor u21
+  case $pos in 1) args --dry-run u21 "$T/batch.md" ;; 2) args u21 --dry-run "$T/batch.md" ;; 3) args u21 "$T/batch.md" --dry-run ;; esac
+  DRYOK+="$RC:$(grep -c . "$T/seats"):$(grep -c '^#### Launch$' "$T/out"):$([ -e "$WS/u21" ] && echo wt || echo none) "
+done
+check "dry-run in every position launches nothing" "0:0:1:none 0:0:1:none 0:0:1:none " "$DRYOK"
+batchfor u22; args u22 "$T/batch.md" --keep billing
+check "keep after the batch takes effect" "0:billing" "$RC:$(cat "$T/keep-at-open" 2>/dev/null)"
+batchfor u23; args u23 "$T/batch.md" stray
+check "an extra argument is refused" "2:1:0" "$RC:$(grep -c '^extra argument stray$' "$T/out"):$(grep -c . "$T/seats")"
+batchfor u24; args u24 --bogus "$T/batch.md"
+check "an unknown option is refused naming it" "2:1:0" "$RC:$(grep -c '^unknown option --bogus$' "$T/out"):$(grep -c . "$T/seats")"
+batchfor u25; args u25 "$T/batch.md" --model
+check "a trailing option with no value is refused" "2:1:1" "$RC:$(grep -c '^--model needs a value$' "$T/out"):$(grep -c '^usage: builder-launch.sh' "$T/out")"
+batchfor u26; args --skip-plan u26 "$T/batch.md" --reason --dry-run
+check "a value option given a flag is refused and launches nothing" "2:1:0:0:none" \
+  "$RC:$(grep -c '^--reason needs a value$' "$T/out"):$(grep -c . "$T/seats"):$(grep -c 'worktree create' "$T/orca.log"):$([ -e "$WS/u26" ] && echo wt || echo none)"
+
+# Issue 392: a plan names each mockup on a Mockup: line, and the batch (the Builder's brief) carries it.
+# mockplan <unit> <plan's extra lines> [batch's extra line] -- the unit's plan committed on main, its batch naming it.
+mockplan() { printf 'plan\n%s\n%s\n' "$PSZ" "$2" > "$P/.claude/plans/$1.md"; git -C "$P" add -A .claude/plans && git -C "$P" commit -qm "plan $1"
+  batchfor "$1"; sed -i.bak "s#\.claude/plans/toy\.md#.claude/plans/$1.md#" "$T/batch.md"; rm -f "$T/batch.md.bak"
+  [ -z "${3-}" ] || printf '\n%s\n' "$3" >> "$T/batch.md"; }
+mkdir -p "$P/docs"; echo png > "$P/docs/m1.png"
+mockplan u27 'Mockup: docs/m1.png'; args u27 "$T/batch.md"
+check "a plan mockup missing from the batch is refused" "2:1:0" \
+  "$RC:$(grep -c 'REFUSED: .claude/plans/u27.md names the mockup docs/m1.png (a Mockup: line) and .* does not carry it' "$T/out"):$(grep -c . "$T/seats")"
+mockplan u28 'Mockup: docs/none.png' 'Mockup: docs/none.png'; args u28 "$T/batch.md"
+check "a mockup file that does not exist is refused" "2:1:0" "$RC:$(grep -c 'REFUSED: .* names the mockup docs/none.png, which does not exist' "$T/out"):$(grep -c . "$T/seats")"
+mockplan u29 'Mockup: docs/m1.png' 'Mockup: docs/m1.png'; args u29 "$T/batch.md"
+check "a plan mockup in the batch launches" "0:1" "$RC:$(grep -cx 'launch builder u29' "$T/seats")"
+mockplan u30 $'```\nMockup: docs/fenced.png\n```'; args u30 "$T/batch.md"
+check "a fenced Mockup line is not a mockup" "0:1" "$RC:$(grep -cx 'launch builder u30' "$T/seats")"
+
+# Issue 398: a plan or batch line that states existing placeholder UI as context is flagged on stderr; the launch goes on.
+mockplan u31 'The export page shows a Coming soon banner today.'; args u31 "$T/batch.md"
+check "a plan that describes placeholder UI as context is flagged and still launches" "0:1:1" \
+  "$RC:$(grep -c '^FLAG: .claude/plans/u31.md line 3 describes placeholder UI: an open problem, not a fact' "$T/out"):$(grep -cx 'launch builder u31' "$T/seats")"
+mockplan u32 '' 'Context: <Button disabled={true}>Export</Button> already ships as a layout stub.'; args u32 "$T/batch.md"
+check "a batch line naming a literal disabled control is flagged" "0:1:1" \
+  "$RC:$(grep -c '^FLAG: ' "$T/out"):$(grep -c '^FLAG: .*batch.* line [0-9]* describes placeholder UI' "$T/out")"
+mockplan u33 'Placeholder: web/src/X.tsx | <p>Coming soon</p> | its feature ships next release'; args u33 "$T/batch.md"
+check "a plan's Placeholder line is not flagged" "0:0" "$RC:$(grep -c '^FLAG: ' "$T/out")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
