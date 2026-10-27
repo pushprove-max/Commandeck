@@ -21,9 +21,11 @@ f7c75c86 8361fb71 8ade2fb3 f6e2fbb0 2848b779 48b02596 a4d1bca5 6743a4ac 5f6ba6aa
 # status line, two-NO-GOs and picker rules four more, and 0.23.0's merge gate and no-redundant-steps rules two more,
 # and 0.44.0's rule that a reply the duplicate-agent guard blocks is never dropped and 0.45.0's archive-a-memory rule two more,
 # and 0.46.0's large-read rule, the class stop split into two rules (second NO-GO, third return) and the
-# hand-merge cleanup rule three more, and 0.47.0's newest-report rule one more, and 0.48.0's owner's-words scope rule one more.
+# hand-merge cleanup rule three more, and 0.47.0's newest-report rule one more, and 0.48.0's owner's-words scope rule one more,
+# and the clear-line rule reworded for the one snapshot call one more: its new id has no MADE_FROM pair (owner,
+# 2026-10-27: a saved choice for a reworded rule is not migrated), so a kept 0.7.1 wording no longer holds it out.
 check "an owner who kept their own wording for every 0.7.1 main rule gets only the rule added since" \
-  "18 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
+  "19 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
 check "the relay rule an owner kept their own wording for in 0.7.1 stays out" 0 \
   "$(MS --drop 34ec1023 | grep -c 'goes to the relay pane')"
 check "a rule reworded alone stays out under its 0.7.1 id" 0 \

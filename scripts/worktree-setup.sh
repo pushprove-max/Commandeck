@@ -43,6 +43,7 @@ MAIN=$PP_MAIN
 # The plugin's hooks, by full path: an installed plugin is not in the project,
 # so neither $MAIN/hooks nor $CLAUDE_PROJECT_DIR/hooks is where they are.
 HOOKS=$(cd "$PP_SCRIPTS/../hooks" && pwd)
+. "$HOOKS/lib/project.sh"   # pp_standing_wt
 [ -d "$WT" ] || { echo "no such worktree: $WT" >&2; exit 1; }
 [ "$(cd "$WT" && git rev-parse --git-dir)" != "$(cd "$WT" && git rev-parse --git-common-dir)" ] \
   || { echo "refusing: $WT is the main checkout" >&2; exit 1; }
@@ -166,7 +167,14 @@ ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + ["Bash(bash \($s)/codex-ask.sh:*)"]' 
 # Issue 397: a worktree whose git dir holds the plan-of mark is a planning worktree: its plan author may start helpers.
 PLAN_WT=false
 [ ! -s "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of" ] || PLAN_WT=true
-jq --argjson plan "$PLAN_WT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent-model-guard.sh\"" --arg ttl "$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+# Issue 416: the Fast-lane and Research-lane worktrees (found by folder name, as the relay is) are workers with three
+# differences: the 1-hour cache whatever the workers' answer, in this worktree's own file only; no Stop notify hook,
+# which would wake main every lane turn; and, for the Research lane, high effort.
+SEAT=$(basename "$(cd "$WT" && git rev-parse --show-toplevel)") LANE=false
+! pp_standing_wt "$SEAT" || LANE=true
+TTL=$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)
+[ "$LANE" = false ] || TTL=1h
+jq --argjson plan "$PLAN_WT" --argjson lane "$LANE" --arg seat "$SEAT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent-model-guard.sh\"" --arg ttl "$TTL" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard|agent-model-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
@@ -177,7 +185,8 @@ jq --argjson plan "$PLAN_WT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent
   | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
   | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique | if $plan then . - ["Agent"] else . end), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
   | .claudeMdExcludes = ((.claudeMdExcludes // []) + [$ex] | unique)
-  | .hooks = ((.hooks // {}) | .Stop = (((.Stop // []) + [{hooks: [{type: "command", command: $notify}]}]) | unique))
+  | (if $lane then . else .hooks = ((.hooks // {}) | .Stop = (((.Stop // []) + [{hooks: [{type: "command", command: $notify}]}]) | unique)) end)
+  | (if $seat == "Research-lane" then .effortLevel = "high" else . end)
   # Issue 397: every worker pane runs the model guard, whether or not the plugin'"'"'s hooks.json loads there.
   | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Agent|Task", hooks: [{type: "command", command: $mg}]}] | unique)' "$F" > "$tmp"
 mv "$tmp" "$F"

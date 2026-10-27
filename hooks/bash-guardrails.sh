@@ -98,6 +98,14 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 # Without the helper no end word is checked and every bare node --test would pass.
 type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; exit 2; }
+# The one fence for a rewrite that replaces the call's text (a worker's search): the replacement must run exactly what
+# the call would. Any `$`, backtick, backslash, newline or process substitution in the RAW text, quoted or not,
+# refuses it (each can run or reshape something the replacement drops). The rest is read only through strip_quoted,
+# which tracks quotes left to right; callers add their own shape checks on RW_TEXT.
+rewrite_safe() { # <raw command>: sets RW_TEXT to the quote-stripped text
+  case "$1" in *['$`\']*|*$'\n'*|*'<('*|*'>('*) return 1 ;; esac
+  RW_TEXT=$(strip_quoted "$1")
+}
 ODD=$(strip_odd_end "$CMD")
 [ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
 
@@ -214,10 +222,12 @@ seg_words() {
 # that open a compound command, so `do rg x` and `(curl ...` read as the tool.
 load_words() {
   mapfile -t WORDS < <(seg_words "$1")
+  WORDS_DROPPED=0 # 1 when a word or prefix was removed: a rebuild from WORDS would not run the segment as typed
   while [ ${#WORDS[@]} -gt 0 ]; do
+    [ "${WORDS[0]}" = "${WORDS[0]#"${WORDS[0]%%[!({]*}"}" ] || WORDS_DROPPED=1
     WORDS[0]=${WORDS[0]#"${WORDS[0]%%[!({]*}"}
     case "${WORDS[0]}" in
-      ''|do|then|else|elif|if|while|until|'!'|time) WORDS=("${WORDS[@]:1}") ;;
+      ''|do|then|else|elif|if|while|until|'!'|time) WORDS_DROPPED=1; WORDS=("${WORDS[@]:1}") ;;
       *) break ;;
     esac
   done
@@ -516,9 +526,9 @@ for i in "${!SRCH_TEXT[@]}"; do
           SHORT_VALUED=$GREP_SHORT_VALUED; LONG_VALUED=$GREP_LONG_VALUED ;;
     *) continue ;;
   esac
-  PATTERN=""; HAVE_PATTERN=0; FILES_MODE=0; STDIN=${SRCH_PIPE[i]}; PATHS=(); OPTS_DONE=0
+  PATTERN=""; HAVE_PATTERN=0; FILES_MODE=0; STDIN=${SRCH_PIPE[i]}; PATHS=(); PATH_IDX=(); OPTS_DONE=0; NWORDS=${#WORDS[@]}
   while [ $# -gt 0 ]; do
-    W=$1; shift
+    W=$1; shift; WIDX=$((NWORDS - $# - 1))
     case "$W" in
       '<'|'<<'|'<<<'|[0-9]'<') STDIN=1; shift; continue ;;
       '<'*|[0-9]'<'*) STDIN=1; continue ;;
@@ -546,17 +556,18 @@ for i in "${!SRCH_TEXT[@]}"; do
           continue ;;
       esac
     fi
-    PATHS+=("$W")
+    PATHS+=("$W"); PATH_IDX+=("$WIDX")
   done
   # The first operand is the pattern only when no -e/-f/--files names one, wherever that flag sits.
-  [ "$HAVE_PATTERN" = 0 ] && [ ${#PATHS[@]} -gt 0 ] && PATTERN=${PATHS[0]} && PATHS=("${PATHS[@]:1}")
-  BAD=""
+  [ "$HAVE_PATTERN" = 0 ] && [ ${#PATHS[@]} -gt 0 ] && PATTERN=${PATHS[0]} && PATHS=("${PATHS[@]:1}") && PATH_IDX=("${PATH_IDX[@]:1}")
+  BAD="" NBAD=1 BAD_IDX=""
   if [ ${#PATHS[@]} -eq 0 ]; then
     [ "$STDIN" = 1 ] && [ "$TOOL" = rg ] && continue
     BAD="(no path)"
   else
-    for P in "${PATHS[@]}"; do
-      LOOP_LIST=""
+    NBAD=0
+    for PI in "${!PATHS[@]}"; do
+      P=${PATHS[PI]}; LOOP_LIST=""
       if [[ $P =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$ ]]; then
         # A read-bound variable is one fed-in path per search: bounded.
         [[ ${SRCH_READ[i]} == *" ${BASH_REMATCH[1]} "* ]] && continue
@@ -564,12 +575,35 @@ for i in "${!SRCH_TEXT[@]}"; do
       fi
       if [ -n "$LOOP_LIST" ]; then
         read -ra LOOP_WORDS <<< "$LOOP_LIST"
-        for V in "${LOOP_WORDS[@]}"; do search_bounded "$V" || { BAD=$V; break 2; }; done
+        for V in "${LOOP_WORDS[@]}"; do search_bounded "$V" || { BAD=${BAD:-$V}; NBAD=$((NBAD + 1)); break 2; }; done
       else
-        search_bounded "$P" || { BAD=$P; break; }
+        # Every operand is checked: the rewrite below replaces one, so a second unbounded one keeps the refusal.
+        search_bounded "$P" || { BAD=${BAD:-$P}; BAD_IDX=${PATH_IDX[PI]}; NBAD=$((NBAD + 1)); }
       fi
     done
     [ -z "$BAD" ] && continue
+  fi
+  # A worker's missing, `.`, root or literal-parent path is rewritten to the checkout root with the output capped at 200
+  # lines (the cap bounds the 2026-09-10 flood); only when the whole call is this one simple search with one unbounded
+  # operand. The rewrite single-quotes every word, so a call the shell would expand or chain (rewrite_safe, no
+  # unquoted `| ; & < > ( )` or ~ * ? [ {) would search for something else: it stays refused below, as main's does.
+  # The subshell keeps pipefail local, and the drain after head lets the search finish, so the exit is the search's
+  # own (0, 1 or 2), never head's and never 141. No PIPESTATUS: the Bash tool's shell may be zsh.
+  # Refused too: a word load_words dropped (`!`, `time`, a leading `(`) or a `#` comment, which the rebuild would not carry.
+  SIMPLE_SEARCH=0
+  # strip_quoted removes a comment, so it is read off the raw text: any `#` that starts a word (even in quotes) refuses.
+  if [ "$WORDS_DROPPED" = 0 ] && [[ $CMD != *[[:space:]]'#'* && $CMD != '#'* ]] && rewrite_safe "$CMD"; then
+    case "$RW_TEXT" in *['|;&<>()~*?[{']*) ;; *) SIMPLE_SEARCH=1 ;; esac
+  fi
+  if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ] && [ "$NBAD" = 1 ] && [ "$SIMPLE_SEARCH" = 1 ]; then
+    SEARCH_ROOT=$(git rev-parse --show-toplevel)
+    [ -z "$BAD_IDX" ] || WORDS[BAD_IDX]=$SEARCH_ROOT # the operand's own position, never a pattern word equal to it
+    CAPPED=""; for W in "${WORDS[@]}"; do CAPPED+="$(shq "$W") "; done
+    [ "$BAD" = "(no path)" ] && CAPPED+=$(shq "$SEARCH_ROOT")
+    jq -cn --arg c "( set -o pipefail; { ${CAPPED% }; } 2>&1 | { head -n 200; cat >/dev/null; } )" --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
+      --arg r "a worker's $TOOL over an unbounded path ($BAD) was rewritten to search the checkout root with the output capped at 200 lines" \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecisionReason: $r, updatedInput: ($ti + {command: $c})}}'
+    exit 0
   fi
   # The advice names a directory that is there: the first one of the checkout.
   TRYDIR=$(cd "$SEARCH_BASE" 2>/dev/null && ls -d */ 2>/dev/null | head -1); TRYDIR=${TRYDIR%/}; TRYDIR=${TRYDIR:-src}

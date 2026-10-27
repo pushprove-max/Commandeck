@@ -85,7 +85,7 @@ check "main's card: plan-tier.sh and the configured seats decide, told in one li
 check "main's card: the owner changes the trigger file or /plugin settings, or says so in chat" "The owner changes the trigger file or \`/plugin\` settings, or says so in chat for that unit."
 check "main's Details: neither question is asked" "ask neither \"Write a plan"
 check "main's Details: a seat runs on its printed model and effort" "Each seat runs on its printed model and effort"
-if ! grep -qF -e 'ask the owner "Write a plan' -e 'Then ask "Which model and effort?"' "${T%/*}/main-session.md" && grep -qF 'ask no question. Run `plan-tier.sh <batch file>`' "${T%/*}/AGENT_STARTUP.md"; then PASS=$((PASS+1)); echo "ok   neither main-session.md nor AGENT_STARTUP.md tells main to ask the plan or model question"; else FAIL=$((FAIL+1)); echo "FAIL a template still tells main to ask the plan or model question"; fi
+if ! grep -qF -e 'ask the owner "Write a plan' -e 'Then ask "Which model and effort?"' "${T%/*}/main-session.md" && grep -qF 'the "Plan before every build" rule in `templates/main-session.md`' "${T%/*}/AGENT_STARTUP.md"; then PASS=$((PASS+1)); echo "ok   neither main-session.md nor AGENT_STARTUP.md tells main to ask the plan or model question"; else FAIL=$((FAIL+1)); echo "FAIL a template still tells main to ask the plan or model question"; fi
 check "a plan is still never a build order" "A plan is never a build order: with no build word from the owner, STOP at the plan file."
 # Issue 333: an auto-decided answer has no ruling; main checks it against its ledger row, and still checks every other
 # relayed answer against the ruling log. r2 (class delivery-retry): the ledger row alone, the one record relay-order.sh's

@@ -17,7 +17,8 @@ restarted() { grep -qE -- '^--user restart |^bootstrap gui/[0-9]+ .*/LaunchAgent
 helpers() { cat "$F/runs" "$F/lc" | grep -cE -- '--restart$|-restart\.plist$' || true; }
 for os in Linux Darwin; do
   export COMMANDECK_HOST_OS=$os; : > "$F/sd"; : > "$F/runs"; : > "$F/lc"; rm -f "$S/main-watch/job-sum"
-  sleep 60 & M=$!; echo "$M" > "$J.pid"
+  # The merge job's wrapper is dead and its merge lives in the group the pid names: the job lives.
+  set -m; bash -c 'sleep 60 & wait' & M=$!; set +m; sleep 0.3; kill -KILL "$M"; wait "$M" 2>/dev/null || true; echo "$M" > "$J.pid"
   out=$(mw --install 2>&1) || fail "the $os install failed: $out"
   j=$(mw --job-file)
   grep -qE '^KillMode=process$|<key>AbandonProcessGroup</key><true/>' "$j" || fail "a restart of the $os job kills the merge it started: $(cat "$j")"
@@ -28,7 +29,7 @@ for os in Linux Darwin; do
   restarted && fail "the $os restart job did not wait for the merge job"
   echo 0 > "$J.rc"; wait "$H" || fail "the $os restart job failed"
   restarted || fail "the $os restart job did not restart the watcher once the merge job ended: $(cat "$F/sd" "$F/lc")"
-  kill "$M" 2>/dev/null || true; N=$((N + 60)); tick $N
+  kill -- -"$M" 2>/dev/null || true; N=$((N + 60)); tick $N
   [ "$(helpers)" = 1 ] || fail "a $os tick restarted a watcher already loaded from its job file"
   # A lost restart (the job file is not the one last loaded), then each piece of state removed between two ticks.
   for piece in job-sum merge-job restart-job; do

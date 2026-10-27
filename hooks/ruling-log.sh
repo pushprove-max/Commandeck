@@ -93,14 +93,14 @@ answer_decisions() {
 
 case "$EVENT" in
   UserPromptSubmit)
-    # The log holds the owner's rulings: a prompt is logged only from main's checkout or the Chief-of-Staff
-    # worktree (the relay, found as cos-own-echo.sh finds it), the panes the owner types in. Builders', reviewers' and
+    # The log holds the owner's rulings: a prompt is logged only from main's checkout or the Chief-of-Staff, Fast-lane
+    # or Research-lane worktree (found by folder name, pp_standing_wt), the panes the owner types in. Builders', reviewers' and
     # Codex passes' prompts are the orchestrator's words. ruling-log-archive.sh keeps the same panes' rows.
     [ "${COMMANDECK_REVIEWER:-}" != 1 ] || exit 0
     root=${CLAUDE_PROJECT_DIR:-$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)}
     gitdir=$(git -C "${root:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
     [ "$gitdir" = "$(git -C "${root:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] \
-      || [ "$(basename "$(git -C "${root:-.}" rev-parse --show-toplevel 2>/dev/null)")" = Chief-of-Staff ] || exit 0
+      || pp_standing_wt "$(basename "$(git -C "${root:-.}" rev-parse --show-toplevel 2>/dev/null)")" || exit 0
     # Machine text (lib/ruling-typed.jq: notification blocks, Orca banners, the checkpoint resume, main-watch's
     # wakes, known machine preambles) is not the owner, so it is not logged: no ruling, and it answers no ask. Any
     # other text beside it, or quoting it, is the owner's reply. The resume prompt matches only as the whole command

@@ -37,10 +37,10 @@ own .claude/main-session.md || MAIN_ONLY="$PLUGIN/templates/main-session.md"
 HELD=$(mktemp) || exit 0
 SENT=0
 exec 3>&1 >>"$HELD"; trap 'cat "$HELD" >&3; rm -f "$HELD"' EXIT
-fit() { # fit <file> -- stdin whole if it fits under the cap, else one pointer line
+fit() { # fit <file> [<what to read>] -- stdin whole if it fits under the cap, else one pointer line (naming the part to read, if given)
   local s LC_ALL=C; s=$(cat)
   if [ $(( SENT + $(wc -c < "$HELD") + ${#s} + 800 )) -le 10240 ]; then printf '%s\n' "$s"
-  else echo "[left out to fit the 10,240-byte startup print: Read $1 (${#s} bytes) before anything else]"; fi
+  else echo "[left out to fit the 10,240-byte startup print: Read $1${2:+ $2} (${#s} bytes) before anything else]"; fi
 }
 # inject <file> -- stdin to stdout. A plugin template names the plugin's scripts
 # by their repo path and the default clear line; a session runs in the project,
@@ -171,15 +171,26 @@ elif [ "$LINKED" = 1 ]; then
     echo
     echo "# .claude/rules/worktree-sessions.md (you are in a linked worktree; these bind you)"
     # Strip a leading frontmatter block; a file without one passes through whole.
-    awk 'NR==1 && /^---[[:space:]]*$/ {fm=1; next} fm && /^---[[:space:]]*$/ {fm=0; next} !fm' \
-      "$REPO_ROOT/.claude/rules/worktree-sessions.md" | fit "$REPO_ROOT/.claude/rules/worktree-sessions.md"
+    # Kept in WS_SHOWN: this printed text rides every turn, so the count below adds it.
+    WS_RULES="$REPO_ROOT/.claude/rules/worktree-sessions.md"
+    WS_SHOWN=$(awk 'NR==1 && /^---[[:space:]]*$/ {fm=1; next} fm && /^---[[:space:]]*$/ {fm=0; next} !fm' "$WS_RULES")
+    printf '%s\n' "$WS_SHOWN" | fit "$WS_RULES"
+  fi
+  # The Fast and Research lanes (issue 416) are worker seats with one more line each; not for the lane's own reviewer.
+  if [ "${COMMANDECK_REVIEWER:-}" != 1 ]; then
+    case ${TOP##*/} in
+      Fast-lane) echo "# Fast lane: small work only. No batch, plan or Builder: make the change here and commit it, review the committed tip with \`bash $(printf '%q' "$PLUGIN")/scripts/fast-lane.sh review\`, which runs one fresh read-only reviewer and records its session, then tell main to run \`fast-lane.sh land\`. Any change after the review needs a new review." ;;
+      Research-lane) echo "# Research lane: no builds and no commits. Start each session with \`git merge --ff-only main\`; answer with findings and their sources." ;;
+    esac
   fi
 elif [ "$MAIN" = 1 ]; then
   echo
   echo "# ${MAIN_ONLY#"$REPO_ROOT"/} (main only; worker panes never load it)"
   # Line 1, the persona, already leads the output. The file's own Details
   # section stays on disk, under the 10 KB limit.
-  tail -n +2 "$MAIN_ONLY" | awk '/^## Details \(not injected\)/ {exit} 1' | rules_cut "$MAIN_ONLY" | inject "$MAIN_ONLY" | fit "$MAIN_ONLY"
+  # Left out, the card is read by its own line range: the whole file is mostly Details.
+  CARD_END=$(awk '/^## Details \(not injected\)/ {print NR - 1; f = 1; exit} END {if (!f) print NR}' "$MAIN_ONLY")
+  tail -n +2 "$MAIN_ONLY" | awk '/^## Details \(not injected\)/ {exit} 1' | rules_cut "$MAIN_ONLY" | inject "$MAIN_ONLY" | fit "$MAIN_ONLY" "lines 2-$CARD_END, up to its Details heading"
   echo "[Details (not injected): Read $MAIN_ONLY from its '## Details (not injected)' heading when a bullet points there]"
   # The rules the plugin moved below its Details are not in an owner's own file (a merge copies only the part above them).
   [ "$MAIN_ONLY" = "$PLUGIN/templates/main-session.md" ] || echo "[Details (not injected): the plugin's own rules a bullet points to are in $PLUGIN/templates/main-session.md, from its '## Details (not injected)' heading]"
@@ -199,14 +210,18 @@ fi
 ALWAYS=("$REPO_ROOT/CLAUDE.md" "$HOME/.claude/CLAUDE.md")
 [ "${AGENT_KIND:-claude}" = codex ] || [ "$COS" = 1 ] || ALWAYS+=("$STARTUP")
 [ "$MAIN" = 1 ] && ALWAYS+=("$MAIN_ONLY")
+[ -n "${WS_RULES:-}" ] && ALWAYS+=("$WS_RULES")
 RULES=(); for RULE in "$REPO_ROOT"/.claude/rules/*.md; do [ ! -f "$RULE" ] || RULES+=(--against "$RULE"); done
-[ ${#RULES[@]} = 0 ] || while IFS= read -r RULE; do ALWAYS+=("$RULE"); done < <(python3 "$PLUGIN/scripts/merge-rules.py" /dev/null "${RULES[@]}" --sources 2>/dev/null)
+[ ${#RULES[@]} = 0 ] || while IFS= read -r RULE; do [ "$RULE" = "${WS_RULES:-}" ] || ALWAYS+=("$RULE"); done < <(python3 "$PLUGIN/scripts/merge-rules.py" /dev/null "${RULES[@]}" --sources 2>/dev/null)
 TOTAL=0 COUNT=0 BIGGEST="" BIGGEST_BYTES=0
 for FILE in "${ALWAYS[@]}"; do
   [ -f "$FILE" ] || continue
   if [ "$MAIN" = 1 ] && [ "$FILE" = "$MAIN_ONLY" ]; then
     # Only the injected part rides every turn; its Details stay on disk.
     BYTES=$(awk '/^## Details \(not injected\)/ {exit} 1' "$FILE" | wc -c | tr -d ' ')
+  elif [ "$FILE" = "${WS_RULES:-}" ]; then
+    # A worker counts the worker rules as printed, frontmatter stripped.
+    BYTES=$(printf '%s\n' "$WS_SHOWN" | wc -c | tr -d ' ')
   else
     BYTES=$(wc -c < "$FILE" | tr -d ' ')
   fi

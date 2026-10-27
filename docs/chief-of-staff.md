@@ -14,6 +14,11 @@ the orchestrator and never the relay; its start-up text says where the relay
 pane is, or that none exists yet. Without one, the orchestrator asks you
 directly.
 
+Setup also makes two standing worktrees, `Fast-lane` and `Research-lane`, whether or not you chose a relay, and
+opens no pane in them. They are seats you work in yourself, found by folder name as the relay is, and they get the
+relay's exemptions (no pane budget, your prompts logged as rulings, pickers allowed) but not its persona or watchers.
+See [What each pane starts with](worker-panes.md).
+
 The pane keeps four watchers and a timer check running in the background. Each one prints what
 it found and exits, which wakes the pane:
 

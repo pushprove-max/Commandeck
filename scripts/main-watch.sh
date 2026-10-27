@@ -85,10 +85,13 @@ others_job() {
   [ -n "$o" ] && [ "$(pp_norm "$o")" != "$(pp_norm "$PP_MAIN")" ] && [ -d "$o" ] && printf '%s\n' "$o"
 }
 job_file() { [ "$(hs_os)" = Darwin ] && echo "$HOME/Library/LaunchAgents/$HS_PREFIX$JOB.plist" || echo "$HOME/.config/systemd/user/$UNIT"; }
+# job_alive <pid> -- 0 while a merge job lives: its group (merge_start's pid is the group the merge inherits, so a killed
+# wrapper does not end a running merge) or, for a .pid written before that, the process. An empty pid is dead.
+job_alive() { [ -n "$1" ] && { kill -0 -- -"$1" 2>/dev/null || kill -0 "$1" 2>/dev/null; }; }
 # merge_live -- 0 while a merge job merge_start started has written no exit and its pid lives.
 merge_live() {
   local p
-  for p in "$ST"/mergejob-*.pid; do [ -f "$p" ] && [ ! -e "${p%.pid}.rc" ] && kill -0 "$(cat "$p")" 2>/dev/null && return 0; done
+  for p in "$ST"/mergejob-*.pid; do [ -f "$p" ] && [ ! -e "${p%.pid}.rc" ] && job_alive "$(cat "$p")" && return 0; done
   return 1
 }
 # restart_job -- (re)load the job from its file, then keep that file's cksum in job-sum: a job file whose cksum is
@@ -1066,7 +1069,7 @@ merge_collect() {
     if ! rc=$(cat "${log%.log}.rc" 2>/dev/null); then
       # shortcut: a pid the system gave to another process since reads as the job still running; rare, and the next
       # merge of the unit writes a new record.
-      pid=$(cat "${log%.log}.pid" 2>/dev/null) && kill -0 "$pid" 2>/dev/null && continue
+      pid=$(cat "${log%.log}.pid" 2>/dev/null) && job_alive "$pid" && continue
       post "merge-$u-$tip" "" "main-watch: the merge job for $u ended with no exit; it may have merged part way" \
         "The merge of $u at ${tip:0:8} stopped before it wrote its exit (log $log). Look for $u in main's log first; merge it by hand only if it is not there: $HERE/merge-unit-local.sh $u" once
     # The unit name is matched as written: in a pattern, a.b would also match axb's line.
@@ -1092,7 +1095,8 @@ merge_start() {
   local log=$ST/mergejob-$NOW.log m args=("${MERGE[@]}")
   [ "${#MERGE[@]}" = 1 ] || args=(--train "${MERGE[@]}")
   for m in "${MERGE[@]}"; do printf '%s\n%s\n' "${m#*@}" "$log" > "$ST/merge-${m%@*}"; done
-  (cd "$PP_MAIN" && COMMANDECK_FOREGROUND=1 nohup bash -c '"$@" > "$0" 2>&1; echo $? > "${0%.log}.rc"' "$log" \
+  # set -m: the job is its own process group (id = its pid, inherited by merge-queue): .pid names that group.
+  (cd "$PP_MAIN" || exit; set -m; COMMANDECK_FOREGROUND=1 nohup bash -c '"$@" > "$0" 2>&1; echo $? > "${0%.log}.rc"' "$log" \
     bash "$HERE/merge-queue.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & echo $! > "${log%.log}.pid")
 }
 

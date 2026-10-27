@@ -35,7 +35,7 @@
 ## Main never compacts: write the checkpoint, the hook restarts main
 
 THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K line", or a batch ends: finish the step, write
-`~/.claude/checkpoints/<session_id>.md` in one Write from `templates/checkpoint.md`, then END THE TURN. NEVER type or send a `/clear`.
+`~/.claude/checkpoints/<session_id>.md` in ONE `state-snapshot.sh --out <that file> --goal --stage --next` call (the line prints it), then END THE TURN. NEVER type or send a `/clear`.
 
 ## Details (not injected)
 

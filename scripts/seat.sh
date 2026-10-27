@@ -439,6 +439,8 @@ launch)
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan or batch line that describes existing placeholder UI (a disabled control, 'coming soon' copy) as context is a finding: an open problem until the plan removes it or names it on a \`Placeholder:\` line."
+  # Issue 413: a judge prints its inputs in one call from the frozen copy; with no copy it is never pointed at the live plan.
+  [[ $ROLE != plan-judge-* || -z ${SNAP:-} ]] || SPEC_TEXT+=" Print your inputs in one call with \`bash $PP_SCRIPTS/peek.sh --unit $UNIT --plan $SNAP\`: it reads the read-only copy your spec's Plan: line names, never the live plan."
   # Issue 397: a plan author may start helpers, and is told to.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" ${PP_HELPER_LINE//<plugin scripts>/$PP_SCRIPTS}"
   # The host's reopen rule and its stated-limits heading: when a finding may reopen an accepted item, and what a limit is.

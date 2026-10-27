@@ -35,12 +35,12 @@ NOTES=$({ flock -w 10 9 || exit 0; f=$COS_KEY.inbox-seq; [ -f "$f" ] && IFS= rea
   tail -n +2 "$f" > "$ARCH" && printf '%s\n' "$first" > "$f.new" && mv "$f.new" "$f"; cat "$ARCH"; } 9>>"$COS_KEY.inbox-seq.lock")
 [ -n "$NOTES" ] || rm -f "$ARCH"
 # Every pane logs its prompts there, workers' too (main-watch's Signal WARM to a Builder): the owner types only in
-# main and in the Chief-of-Staff worktree, so only rows whose cwd is exactly one of those two count. Workers'
+# main and in the Chief-of-Staff, Fast-lane and Research-lane worktrees, so only rows whose cwd is exactly one of those count. Workers'
 # checkouts can sit anywhere around main (inside it, beside it, under a workspaces set there), so no prefix test:
 # both sides go through pnorm, as the resolver keeps inner // and /./ in main and workspaces.
 QUIET=$(tail -n 500 "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}" 2>/dev/null \
-  | jq -nRr --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" --arg ws "$PP_WORKSPACES" "$PP_PNORM"'[($main | pnorm), ($mainp | pnorm), ($ws + "/Chief-of-Staff" | pnorm)] as $own
-      | [inputs | fromjson? | select(.void != true) | select(.cwd // "" | pnorm | IN($own[])) | .utc // empty]
+  | jq -nRr --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" --arg ws "$PP_WORKSPACES" "$PP_PNORM"'[($main | pnorm), ($mainp | pnorm)] as $own | ($ws | pnorm) as $w
+      | [inputs | fromjson? | select(.void != true) | select(.cwd // "" | pnorm | IN($own[]) or (startswith($w + "/") and (.[($w | length) + 1:] | test("^(Chief-of-Staff|Fast-lane|Research-lane)$")))) | .utc // empty]
     | last | if . then "\((now - fromdateiso8601) / 60 | floor) min" else "unknown" end' 2>/dev/null)
 DOWN=${DOWN:- none}
 LINE="cos-check: watchers down: ${DOWN# } | missed messages: $MISSED | held FYI notes: $(grep -c '^[0-9]' <<<"$NOTES") (above, now cleared) | owner quiet ${QUIET:-unknown}"

@@ -19,9 +19,10 @@ ROOT=${CLAUDE_PROJECT_DIR:-$(jq -r '.cwd // empty' <<<"$INPUT")}
 GITDIR=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
 COMMON=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 TOP=$(git -C "${ROOT:-.}" rev-parse --show-toplevel 2>/dev/null)
-# The Chief-of-Staff worktree is the owner's relay pane (owner rulings 2026-10-09):
-# the owner sits in it, so its picker reaches him and it asks under main's rules.
-if [ "$GITDIR" = "$COMMON" ] || [ "${TOP##*/}" = Chief-of-Staff ]; then
+# The Chief-of-Staff worktree is the owner's relay pane (owner rulings 2026-10-09), and the Fast-lane and
+# Research-lane worktrees are seats he sits in too (issue 416): its picker reaches him and it asks under main's rules.
+. "${BASH_SOURCE[0]%/*}/lib/project.sh"
+if [ "$GITDIR" = "$COMMON" ] || pp_standing_wt "${TOP##*/}"; then
   # Main's pickers must lead with the decoy: an Orca alert typed into
   # an open picker answers its first option, at any latency.
   . "${BASH_SOURCE[0]%/*}/lib/ask-decoy.sh"

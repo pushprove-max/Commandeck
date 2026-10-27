@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.53.0-111111?style=flat-square" alt="Version 0.53.0">
+  <img src="https://img.shields.io/badge/version-0.54.0-111111?style=flat-square" alt="Version 0.54.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -29,6 +29,9 @@ It splits the work into roles:
   for that exact commit is GO.
 - **Chief of Staff (optional).** A relay pane: you talk to it, and it carries
   your decisions to main.
+- **Fast lane and Research lane.** Two standing worktrees setup makes beside the
+  relay: the Fast lane does small work and has it reviewed before main lands
+  that exact commit; the Research lane answers questions and never builds.
 
 You choose the work, answer decisions and push the finished commits. The
 merge is local; Commandeck never pushes.
@@ -103,7 +106,7 @@ answer first on a rerun) and is asked only when it applies.
 | Permissions | This project (`.claude/settings.local.json`, which git never sees) or every project (`~/.claude/settings.json`) |
 | Your rules | Only with a `CLAUDE.md` or `.claude/rules/`: merge (the plugin's rules you already state are left out; you choose for each rule that says the same in other words or disagrees) or keep both |
 | Own startup, Own main | Only with your own `AGENT_STARTUP.md` or `.claude/main-session.md`: merge, replace or skip |
-| Global rules, Global CLAUDE | Merge into, add as a block to, or skip `~/.claude/CLAUDE.md` (install or skip when it does not exist). Your own text is never changed |
+| Global rules, Global CLAUDE | Merge into, add as a block to, or skip `~/.claude/CLAUDE.md` (install or skip when it does not exist). Your own text is never changed. Rarely needed rule text stays in the plugin's details file, behind one-line pointers |
 | Settings | The recommended set (every `/plugin` config option at its recommended value), choose groups (models, plan seats, reviewer, review workflow, caches, builders and wakes, unit views, auto-decide) or keep saved. `--option <key>=<value>` sets any one |
 | Context | 200K or a larger window |
 | Builder clear line | 180K, 150K, 250K or off: past it the Builder goes on in a fresh session |

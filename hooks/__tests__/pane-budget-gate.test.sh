@@ -198,5 +198,24 @@ check "no checkpoints folder, standard context at 141001: the marker is written 
 H=$BOX/home3; mkdir -p "$H/.claude"; : > "$H/.claude/checkpoints"
 check "a marker write that fails says so" 1 "$(prompt_hook | grep -c 'marker NOT written')"
 rm -f "$BOX/m/.claude/commandeck.json"
+# Issue 416: the Fast-lane and Research-lane worktrees run long like main and the relay; an ordinary worker does not.
+printf '{"context":10,"compactions":2}\n' > "$BOX/budget.json"
+for w in Fast-lane Research-lane; do git -C "$BOX/m" worktree add -q "$BOX/$w" >/dev/null 2>&1; done
+check "the gate passes in a lane and still fires in an ordinary worker" "0 0 2" \
+  "$(for d in Fast-lane Research-lane lw; do CLAUDE_PROJECT_DIR="$BOX/$d" PANE_BUDGET_CONFIG="$BOX/budget.json" "$HOOK" < "$BOX/input" >/dev/null 2>&1; echo -n "$? "; done | sed 's/ $//')"
+
+# #409: past the line the one flagged state-snapshot.sh call fills the checkpoint. Each value is a word or one
+# single-quoted string; the quotes are stripped before the character ban, so nothing else rides a value.
+H=$BOX/home; CPF=$H/.claude/checkpoints/msid.md; : > "$H/.claude/checkpoints/msid.past-line"
+SNAP="bash $ROOT/scripts/state-snapshot.sh --out $CPF"
+snapgate() { gate "$BOX/m" Bash "$(jq -cn --arg c "$1" '{command:$c}')"; }
+check "flagged snapshot allowed past the line; a chained command refused: the flagged call and a quoted value with a space" "0 0 0" \
+  "$(snapgate "$SNAP --goal 'ship U' --stage 'U=build it'") $(snapgate "$SNAP --force --goal word --next U=merge --open-item 'a \$b; c'") $(snapgate "$SNAP --goal 'x --out /tmp/other.md'")"
+check "flagged snapshot allowed past the line; a chained command refused: a chain, a substitution, a quote escape, a second line, a redirect" "2 2 2 2 2" \
+  "$(snapgate "$SNAP --goal 'x'; rm y") $(snapgate "$SNAP --goal \"\$(id)\"") $(snapgate "$SNAP --goal 'a'\\''b'") $(snapgate "$SNAP --goal 'x'
+rm y") $(snapgate "$SNAP --goal 'x' > /tmp/z")"
+check "other path refused: another --out, a flag before --out, a value with no flag, a flag with no value" "2 2 2 2" \
+  "$(snapgate "bash $ROOT/scripts/state-snapshot.sh --out /tmp/other.md --goal 'x'") $(snapgate "bash $ROOT/scripts/state-snapshot.sh --goal 'x' --out $CPF") $(snapgate "$SNAP 'x'") $(snapgate "$SNAP --goal")"
+rm -f "$H/.claude/checkpoints/msid.past-line"
 
 echo "$PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

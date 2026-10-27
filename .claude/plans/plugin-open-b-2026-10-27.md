@@ -173,6 +173,10 @@ cases after :102):
 - "a rewritten search returns rg's own exit" (#418): run the rewritten command against a 3-file fixture in bash, and
   in zsh when it is installed. `rg -q 'a^' .` gives 1, `rg '[' .` gives 2, a 300-line match gives 0 with exactly 200
   lines printed.
+- "a negated search is never rewritten": `! rg -q 'a^' .`, `time rg -q foo .`, a two-line call and `rg foo . # note`
+  give exit 2 and no updatedInput (a word `load_words` drops, or a comment, would not be carried by the rebuild).
+- "a rewrite replaces the operand, never a pattern equal to it": `rg -q -e 'a^' . -e .` keeps both patterns, and the
+  rewritten command exits as the original does. The rewrite sets the operand's own word position.
 
 Break: hooks/__tests__/bash-guardrails.test.sh -- "main still blocked" -- hooks/bash-guardrails.sh:<C1 rewrite> remove the linked-worktree test
 Break: hooks/__tests__/bash-guardrails.test.sh -- "$f still blocked" -- hooks/bash-guardrails.sh:<C1 rewrite> skip the `rewrite_safe` call
@@ -192,11 +196,11 @@ Break: hooks/__tests__/bash-guardrails.test.sh -- "a rewritten search returns rg
    and is rewritten, bounded by the `timeout`.
 3. #407. A worker call (git dir differs from the common dir, :33-34) whose only refusal is a looped sleep is
    rewritten, as on the host (host :484-496):
-   - The command becomes `timeout <L> bash -c <shq of the whole call>`, and the Bash `timeout` field becomes
-     `(L+10)*1000`.
-   - L = `LIMIT` - 10 - the call's waits outside the loop. With the loop as the call's only wait, L is 260, or 530
-     on the 1-hour cache.
-   - L under 30 keeps today's refusal.
+   - The command becomes `timeout <LIMIT-10> bash -c <shq of the whole call>` (260, or 530 on the 1-hour cache),
+     and the Bash `timeout` field becomes `LIMIT*1000`. The wrapper runs the whole call, its earlier waits included,
+     so it is never shortened by them: that would count them twice.
+   - L = `LIMIT` - 10 - the call's waits outside the loop is the room the loop has after them. L under 30 keeps
+     today's refusal.
    - Exit 124 means "wait again". `permissionDecisionReason` says so.
    - Main's sleep loop stays refused (:488).
 4. #408. A foreground `orca-ide orchestration check ... --wait` (:470-475) is no longer refused, in any pane. It is
@@ -218,9 +222,12 @@ Tests (`hooks/__tests__/no-poll-loops.test.sh`, worker cases through `run_wt`/`r
   - "quoted loop rewritten intact": `while ! grep -q 'done x' f; do sleep 5; done`; the inner text is byte-identical
     after `bash -c` unquoting.
   - "worker loop shares the call's wait budget" (TTL unset, so `LIMIT` = 270): `sleep 231;` before the loop gives
-    exit 2 (L = 29); `sleep 100;` before it is rewritten with `timeout 160` and Bash timeout 170000.
-  - "a loop left exactly 30 s is still rewritten": `sleep 230;` before the loop is rewritten with `timeout 30` and
-    Bash timeout 40000 (L = 270 - 10 - 230 = 30, the bound).
+    exit 2 (L = 29); `sleep 100;` before it is rewritten with `timeout 260` and Bash timeout 270000.
+  - "a loop left exactly 30 s is still rewritten": `sleep 230;` before the loop is rewritten with `timeout 260` and
+    Bash timeout 270000 (L = 270 - 10 - 230 = 30, the bound).
+  - "an earlier wait is not counted twice": `sleep 200; for n in 1; do sleep 1; done; echo finished` gives
+    `timeout 260` and 270000, or `timeout 530` and 540000 on the 1-hour cache; a short form of it, run as rewritten,
+    prints `finished` and exits 0.
   - "a non-numeric sleep in a worker loop is refused" (#417): `while true; do sleep inf; done`, `... sleep
     infinity ...` and `... sleep $T ...`, each at timeout 600000, give exit 2.
   - "a suffix sleep in a worker loop is rewritten under the budget": `sleep 1h`.
@@ -244,11 +251,13 @@ Break: hooks/__tests__/no-poll-loops.test.sh -- "a non-numeric sleep in a worker
      the command's. Otherwise it prints "still running pid=<p> log=<f>; wait with: bash <path>/bgrun.sh wait <f>",
      exit 3.
    - `bgrun.sh wait <log> [--max S] [--lines N]`: `rc=<n>` and the tail, exit = the command's. Still running: exit
-     3. No child and no `.rc`: "died with no exit code", exit 1.
+     3. No live process in the job's process group and no `.rc`: "died with no exit code", exit 1. The child is
+     started as its own process group, so a command that outlives a killed child still reads as running.
 2. `hooks/no-poll-loops.sh`:
    - The prefilter (:75) gains `bgrun`.
    - `plain_wait` (:326-338) counts a `bgrun.sh` segment: its last `--max` before any `--`, or else 25 for a run and
-     `LIMIT` for `wait`.
+     `LIMIT` for `wait`. A `--max` that is there but not a number (`--max "$MAX"`, a bare `--max`) is unread, never
+     the default; so is a `wait-test-run.sh` third operand that is not a number.
    - A looped `bgrun.sh` is refused like a looped `wait-test-run.sh` (C2 item 1).
 3. `templates/_builder-brief-template.md` (background tests, :113-120): one sentence. "Any other background job: `bash
    {scripts}/bgrun.sh -- <cmd>` returns its exit and tail in the same call when it ends within 25 s; otherwise wait
@@ -343,8 +352,8 @@ Break: scripts/__tests__/seat-run.test.sh -- "a plan judge's prompt points peek 
    - With no new flag, the output is byte-identical to today's.
    - With any new flag:
      - The checkpoint is generated as today if absent (the host kept this).
-     - The plugin's Goal placeholder (`TODO one line:`, :93) is replaced, and the named units' TODO cells (:78) are
-       filled.
+     - The Goal placeholder of either producer (the generator's `TODO one line:`, :93, or `templates/checkpoint.md`'s
+       `<one line: …>`) is replaced, and the named units' TODO cells (:78) are filled.
      - `- Q-<n>: <text>` is appended at the end of `## Queue`, numbered past the highest `Q-<n>` in BOTH the current
        checkpoint and the inherited one, as the host does (host `state-snapshot.sh:119-121`, :156, :160). The
        inherited one is the first line of `~/.claude/checkpoints/<sid>.resumed-from` (written by
@@ -379,11 +388,11 @@ Break: scripts/__tests__/seat-run.test.sh -- "a plan judge's prompt points peek 
    template).
    - Where: after the already-restarted check (:45-50) and before the carry block (:59). It runs whenever the
      checkpoint is fresh, with or without a `<sid>.resumed-from` record.
-   - What it reads: the generator's two placeholders, the line `TODO one line:` under `## Goal` (`state-snapshot.sh:93`)
-     and a `| TODO |` cell in a unit row (:78). Item 1's refusal reads the same two patterns. The other sections'
+   - What it reads: the two placeholders, a Goal line starting `TODO one line:` (the generator, `state-snapshot.sh:93`)
+     or `<one line:` (`templates/checkpoint.md`), and a `| TODO |` cell in a unit row (:78). Item 1's refusal reads the same two patterns. The other sections'
      TODO prompts (:105-137) and the explanatory sentence (:86) are not read: they are main's notes, not restart
-     fields. A hand-written checkpoint from `templates/checkpoint.md` holds neither pattern (`rg -n TODO
-     templates/checkpoint.md` hits only the TODO LIST line :81, 2026-10-27), so it is unaffected.
+     fields. A hand-written checkpoint from `templates/checkpoint.md` whose Goal is still `<one line: …>` is refused
+     the same way (fix r3: it was missed, and the flagged call left that Goal unfilled).
    - Outcome: the first stop blocks once (`decision:"block"`, the :69-78 style, reason under 400 bytes as the :168
      case pins), naming the unfilled fields and the flagged call. A stop with `stop_hook_active` true logs to
      `clear-hook.log`, prints "context-clear: <cp> still has unfilled fields; main is not restarted" and exits 0 with
@@ -506,7 +515,8 @@ Break: hooks/__tests__/pane-budget-gate.test.sh -- "other path refused" -- hooks
        review: run fast-lane.sh review");
      - the session's commit is not the recorded sha, its cwd is not the lane, or its first prompt is not the kept
        prompt copy (the check of :329-335, since any one-line `codex exec` in the lane ends GO when asked to);
-     - the session has more than one turn, or its reply's last line is not exactly `VERDICT: GO`;
+     - the session has more than one turn, or its reply's last line is not exactly `VERDICT: GO`, or a line above it
+       carries a P0, P1 or P2 finding tag (a GO beside a blocking finding is no GO, as `builder-codex-pass.sh` reads it);
      - the lane tip (`git -C $PP_WORKSPACES/Fast-lane rev-parse HEAD`) differs from the recorded sha ("Fast lane
        moved since its review (reviewed <A>, tip <B>): review the new tip").
      A `verdict=` line in the record is ignored. Otherwise `land` runs `git merge --ff-only <sha>`, the exact
@@ -630,22 +640,34 @@ Break: hooks/__tests__/agent-startup-context.test.sh -- "main's left-out card is
 ### C8 -- release (~25 lines, 3 files)
 
 `CHANGELOG.md` gets one entry, and `.claude-plugin/plugin.json` the version, plus any other file `bash
-ci/version-check.sh` names. `README.md` lines that describe changed behaviour: `:30` (setup's worktrees, C6) and
+ci/version-check.sh` names, and the `README.md:4` version badge (image and alt text; `scripts/__tests__/plugin.test.sh`
+"the README's badge shows the manifest's version", which version-check.sh does not name). `README.md` lines that describe changed behaviour: `:30` (setup's worktrees, C6) and
 `:105-106` (always-on text, C7). Produces: the release entry and the version. Consumes: every other cut, done.
 
 ## Data design
 
-- `$PP_SCRATCH/bgrun/<epoch>-<pid>.log` and `<log>.rc` (new, C3).
-  - Writer: the command's own child. The log is appended as the command runs. `.rc` is written to `<log>.rc.tmp`
-    then renamed when the command ends.
-  - Readers: `bgrun.sh` and `bgrun.sh wait`.
+- `$PP_SCRATCH/bgrun/<epoch>-<pid>.log`, `<log>.pid` and `<log>.rc` (new, C3).
+  - Writer: the command's own child writes the log (appended as the command runs) and `.rc` (written to
+    `<log>.rc.tmp`, then renamed, when the command ends). The parent `bgrun.sh` starts the child as its own process
+    group (`set -m`), so the command inherits it, and writes `.pid`, the child's pid and so the group's id, to
+    `<log>.pid.tmp` and renames it, right after starting the child.
+  - Readers: `bgrun.sh` and `bgrun.sh wait`. `.rc` present: done, its value is the exit. No `.rc`: `.pid` names a
+    group with a live process (the child, or the command after a killed child): still running; `.pid` empty or
+    its group empty: "died with no exit code". Neither `.pid` nor `.rc`: "no such bgrun log". A command that
+    leaves the group itself (its own `setsid` or job control) is not seen once the child is gone.
   - Reset: the scratch folder's own cleanup, as for every scratch file.
-  - Retry: a rerun is a new log. A child killed before `.rc` reads "died with no exit code", and the retry is the
-    same command.
+  - Retry: a rerun is a new log. A child killed while its command runs reads still running until the command
+    ends, then "died with no exit code": the command has stopped, but its outcome is unknown, so its effects are
+    checked before the retry, the same command. A parent stopped before `.pid` is renamed leaves a running child
+    no wait can name until its `.rc` lands (then `wait` reads it); the retry is the same command.
 - Main's checkpoint `~/.claude/checkpoints/<session>.md` (changed writer, C5). The same file and shape. The flags
   fill cells in it, and every save is a temp file then a rename, so a failed save leaves the old file whole.
+  The unit table is read by its header row, so the generator's six-column table and `templates/checkpoint.md`'s
+  three-column one both fill.
   - Readers are unchanged (C5 consumers).
-  - Retry: the same call. A refusal writes nothing.
+  - Retry: the same call. A refusal writes nothing. A replay after a completed save is a no-op for what it already
+    wrote: an `--open-item` whose exact text is already a `- Q-<n>:` line in the current checkpoint's Queue is not
+    added again, and only the Goal placeholder and `TODO` cells are ever filled, so a filled cell is left as it is.
   - The first-crossing auto-run (C5 item 2) writes it once, guarded by the existing marker
     `~/.claude/checkpoints/<sid>.past-line`.
 - The Fast-lane review record `$PP_SCRATCH/fast-lane.review` (new, C6 item 7): `sha=<40 hex>`, `by=codex|claude`
@@ -671,13 +693,13 @@ ci/version-check.sh` names. `README.md` lines that describe changed behaviour: `
 | guard | before | after |
 |---|---|---|
 | bash-guardrails unbounded search | refused in every pane | worker: a lone simple search is rewritten to the root, capped, with its own exit (C1); main, `$var`, `$()`, two operands, any pipe: refused as before |
-| no-poll-loops worker sleep loop | refused | rewritten under `timeout L` within the call's budget when every looped sleep is a finite number; `inf`, `infinity`, unreadable operands and looped asks, test waits and bgrun waits are refused (C2, C3) |
+| no-poll-loops worker sleep loop | refused | rewritten under `timeout <LIMIT-10>` for the whole call, with at least 30 s left after its other waits, when every looped sleep is a finite number; `inf`, `infinity`, unreadable operands and looped asks, test waits and bgrun waits are refused (C2, C3) |
 | no-poll-loops foreground inbox wait | refused | rewritten to the background (C2) |
 | no-poll-loops worker wait budget | counts sleep, asks, test waits | also `bgrun.sh` runs and waits (C3) |
 | pane-budget-gate past the clear line | the bare snapshot, carry, the checkpoint, Task tools | also the snapshot with the four flags, quoted values stripped before the ban (C5) |
 | pane-budget-gate, worker-ask-guard, ruling-log | relay exempt | relay and both lanes exempt (C6) |
 | context-clear-stop restart | a fresh checkpoint restarts (carry checked only with a resumed-from record) | also refused while the Goal placeholder or a unit TODO cell remains, with or without the record (C5) |
-| Fast-lane landing | none (new) | only the recorded commit whose reviewer session (that commit, the lane, the kept prompt) ends `VERDICT: GO` lands, by sha; a moved tip or a record with no session file is refused (C6) |
+| Fast-lane landing | none (new) | only the recorded commit whose reviewer session (that commit, the lane, the kept prompt) ends `VERDICT: GO` with no P0-P2 finding above it lands, by sha; a moved tip or a record with no session file is refused (C6) |
 
 Unchanged: `builder-search-guard.sh`, main's searches and sleep loops, every refusal not named above.
 
@@ -856,6 +878,26 @@ Moved out of the table by its five-row cap, tests unchanged among the acceptance
   record never lands")
 - a reviewer session of an older commit under a record edited to the tip (C6, "a reviewer session of another commit
   never lands")
+- fix round 1: a `.pid` file with no number in it (C3, "an empty pid file reads died, never still running")
+- fix round 1: a checkpoint call replayed with the same `--open-item` (C5, "replaying the flagged call does not
+  queue the item twice: held once", "... a new text gets the next number")
+- fix round 1: a checkpoint whose units table has only three columns (C5, "the template's three-column unit table is
+  filled: exit 0 and the row")
+- fix round 1: a negated, timed, two-line or commented worker search (C1, "a negated search is never rewritten")
+- fix round 1: a pattern word equal to the unbounded operand (C1, "a rewrite replaces the operand, never a pattern
+  equal to it")
+- fix round 1: a wait before a worker loop shortening the wrapper (C2, "an earlier wait is not counted twice")
+- fix round 3: a checkpoint from `templates/checkpoint.md` whose Goal is `<one line: …>` (C5, "the hand template's
+  Goal placeholder is filled", "a hand-template checkpoint with its Goal placeholder unfilled is refused naming Goal",
+  "a hand-template checkpoint with its Goal placeholder never restarts main")
+- fix round 3: a Fast-lane reviewer reply listing a P0-P2 finding above `VERDICT: GO` (C6, "a GO beside a blocking
+  finding never lands", "a P3 finding alone still lands")
+- fix round 4: a worker's `bgrun.sh --max "$MAX"`, `bgrun.sh wait <log> --max "$MAX"` or `wait-test-run.sh <pid>
+  <file> "$MAX"` (C3, "an unreadable bgrun --max is refused, not counted as the default (MAX=600 would outwait the
+  cache)", "a readable or absent bgrun --max still passes", "an unreadable wait-test-run.sh max is refused, not
+  counted as 270; an absent or numeric one passes")
+- fix round 4: a bgrun child killed while its command runs on (C3, "a killed wrapper whose command lives on reads
+  still running, never died", "once that command ends with no exit code recorded: exit 1, died")
 
 ## Claims to falsify
 
@@ -871,7 +913,7 @@ Moved out of the table by its five-row cap, tests unchanged among the acceptance
 - `sleep inf` and `sleep infinity` in a worker loop are refused.
 - `bgrun.sh wait` returns the command's own exit code and output, test footer or not.
 - `state-snapshot.sh` with no new flag writes byte-identical output to today's.
-- After one flagged `state-snapshot.sh` call that exits 0, the checkpoint holds no `TODO one line:` Goal line and no
+- After one flagged `state-snapshot.sh` call that exits 0, the checkpoint holds no `TODO one line:` or `<one line:` Goal line and no
   `| TODO |` cell in a live unit's row.
 - A new `Q-<n>` is above every Q number in the current checkpoint and the one its `<sid>.resumed-from` names.
 - The Stop hook never restarts main from a checkpoint holding the Goal placeholder or a unit `| TODO |` cell, with
@@ -1003,3 +1045,18 @@ A cut left partial changes its `Closes #N` to `Refs #N` and its progress note to
 - 2026-10-27, round 2, owner's answer on #405 and #414: they stay open with `Refs`, fourteen issues close; the plan was already so, unchanged.
 - 2026-10-27, round 2, main's Fast-lane follow-up: `fast-lane.sh reviewed <sha> '<VERDICT line>'` is replaced by `fast-lane.sh review`, which runs the reviewer and records only sha, route and session; `land` reads the verdict, commit, cwd and prompt from the reviewer's own session file as `builder-codex-pass.sh` `session_proof` (:219-361) does for `merge-unit-local.sh` `prove()` (:347-357), and refuses a missing record, another sha or a non-GO. New A10 (settled by probe), new Accepted failure mode 7 (the same-user forgery ceiling), the lane line, data design, guard row, two claims and two moved-out bullets updated; `fast-lane.test.sh` case "a review record names only the lane's tip" is replaced by "a reviewer session of another commit never lands", and "a hand-typed GO with no reviewer record never lands" is added (the previous design merged it), each with its Break line.
 - 2026-10-27, round 2: size line 52 files, 1550 changed lines; C5, C6 and C7 headers re-sized.
+- 2026-10-27, build: C7's consumer line "`brief-template.test.sh`: no pinned sentence is touched" was wrong: its check at :88 pinned step 0's text in `templates/AGENT_STARTUP.md`, which C7 item 2 turns into a stub. That check now pins the step-0 stub; the full rule stays pinned in `templates/main-session.md` (:84).
+- 2026-10-27, build: the claim "`scripts/merge-rules.py` and its test are not changed by this unit" was wrong for the test. With no MADE_FROM pair (the owner's answer), C5's reworded clear-line rule is a new id, so `merge-rules.test.sh:25`'s "an owner who kept their own wording for every 0.7.1 main rule" count goes from 18 to 19: that is the owner's accepted outcome, not a regression. `merge-rules.py` is unchanged.
+- 2026-10-27, build: C2 item 4 said the foreground inbox wait is rewritten "in any pane". Only main's was ever refused: the worker branch (`hooks/no-poll-loops.sh`, `WORKER=1`) exits before that block, and a worker's foreground `check --wait` is a deliberate blocking wait its brief names, counted in its budget. So the rewrite is main's only, and a worker's wait passes unchanged as before.
+- 2026-10-27, fix r1 (C3): bgrun writes `.pid` through `.pid.tmp` and `mv`, and an empty `.pid` reads as died (`kill -0 0` tests the caller's own group); the Data design bgrun entry names `.pid`; new test "an empty pid file reads died, never still running".
+- 2026-10-27, fix r1 (C5): state-snapshot finds the unit table's columns by its header row, so `templates/checkpoint.md`'s three-column table fills, and an `--open-item` already queued (or repeated in one call) is skipped, so a replay is a no-op; Data design entry and three new tests.
+- 2026-10-27, fix r1 (C1): the worker search rewrite is refused when `load_words` dropped a word (`!`, `time`, a keyword, a leading `(` or `{`) or the call has a `#` comment, and it replaces the unbounded operand by its word position, never the last word equal to it; two new tests.
+- 2026-10-27, fix r1 (C2): the loop wrapper is `timeout <LIMIT-10>` with Bash timeout `LIMIT*1000`, because it runs the whole call and its earlier waits were counted twice; L = LIMIT-10-earlier waits is now the eligibility test only. The `sleep 100` and `sleep 230` cases now expect `timeout 260` and 270000 (F6's 160/170000 and 30/40000 are replaced); new test "an earlier wait is not counted twice".
+- 2026-10-27, fix r1: six moved-out bullets in What can go wrong for the round's new cases.
+- 2026-10-27, fix r3 (C5): the Goal placeholder of both producers (`TODO one line:` and the hand template's `<one line:`) is filled, refused when left, and refused by the Stop readiness check; C5 items 1 and 5 and a claim name both; three new checks.
+- 2026-10-27, fix r3 (C6): `fast-lane.sh land` refuses a GO whose reply lists a P0, P1 or P2 level on any line above it, builder-codex-pass.sh's own rule; C6 item 7 and the guard row say so; two new checks per route.
+- 2026-10-27, fix r4 (C3): `plain_wait` reads a `bgrun.sh --max` that is there but not a number, and a `wait-test-run.sh` third operand that is not a number, as unread (exit 2), never the default; C3 item 2 says so; three new checks.
+- 2026-10-27, fix r4 (C3): bgrun starts its child as its own process group and `.pid` names that group, so a command that outlives a killed child reads still running, not "died"; C3 item 1, the Data design bgrun entry (writer, readers, retry) and the failure table's two bgrun rows say so; three new checks.
+- 2026-10-27, fix r4: two moved-out bullets in What can go wrong for the round's new cases.
+- 2026-10-27, fix r4 (class site outside the cuts): `scripts/main-watch.sh` merge_start starts its merge job as its own process group, and merge_live and merge_collect read a job alive while its group (or, for a `.pid` written before, its process) lives, the same rule as bgrun; two checks in main-watch-merge-gate and main-watch-merge-restart.
+- 2026-10-27, after pass 5 (C8): the `README.md:4` version badge follows the manifest to 0.54.0; the last full run (`--changed <base> --callers`) found it red in `scripts/__tests__/plugin.test.sh`, a caller this build never listed; C8 names the badge.

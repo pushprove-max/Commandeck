@@ -48,6 +48,7 @@ and a fix that touches a save updates that save's row in the same commit.
   evidence file, and opens a file outside the diff, the brief and its named callers only to confirm or refute one
   finding. A reviewer never opens a generated file (a path `.gitattributes` marks `linguist-generated`); it reviews
   the generator and its test.
+- Several looks in one call: `bash {scripts}/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>`.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
@@ -81,7 +82,8 @@ and a fix that touches a save updates that save's row in the same commit.
   one turn, one per area the change touches (callers, siblings, tests), unless
   the brief already carries the map. A helper that must edit works in its own
   child worktree (the Agent tool's worktree isolation); apply its diff here with
-  `git apply` and remove that worktree.
+  `git apply` and remove that worktree. In an isolated worktree a helper runs plain
+  single commands from its root: no pipes, `cd &&` or heredocs.
 - Every helper prompt, Explore included, carries three caps: at most 15 lines,
   an answer by the 20th tool call with what it has, and one `NOT FOUND: <what
   it searched, where>` line for anything it did not find. Before sending a
@@ -120,6 +122,8 @@ and a fix that touches a save updates that save's row in the same commit.
   summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
   wait`: its first output line is the runner pid. `bash {scripts}/ask-main.sh`
   waits 240 s at most per call, and is resumed with the message id it prints.
+  Any other background job: `bash {scripts}/bgrun.sh -- <cmd>` returns its exit and tail in the same call when it
+  ends within 25 s; otherwise wait with the line it prints.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product

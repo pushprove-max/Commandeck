@@ -54,6 +54,13 @@ warning; this repository's CI runs it.
 | `duplicate-subject`, `stale-model`, `open-conflict` | The same rule under two headings, a pinned model id, an "OPEN conflict" marker. |
 | `memory-over-limit`, `dead-index`, `orphan-memory`, `superseded-memory` | The memory folder's `MEMORY.md` is too long, links a missing file, or leaves a memory unindexed or superseded. |
 
+## peek
+
+`bash scripts/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>` prints several reads in one call, each under
+an `== <item> ==` header (400 lines per item, 60 KB in all). `--unit <unit> [--plan <file>] [--closing]` prints a
+reviewer's inputs: the diff stat, the brief, the plan without its change log and the paved road. It exits 2 on the
+checkout root or its parent.
+
 ## /autodecide
 
 `/autodecide on|off|status` lets the relay pane decide for the owner while the owner is away. It is on until `off`,

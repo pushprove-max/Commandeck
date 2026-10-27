@@ -156,6 +156,7 @@ Ask them in this order, up to four questions per call.
    Ask "Relay": None (recommended) | Chief of Staff | <saved name, if any>
    - None: no assistant pane. `--name '' --persona ''`
    - Chief of Staff: a pane that relays between you and the orchestrator, so you can talk to one place. `--name 'Chief of Staff'`
+   Setup also makes the `Fast-lane` and `Research-lane` worktrees, with or without a relay and without a pane. They are not asked; the report says "Lane:" for each.
    A typed name is sent as `--name <n>`. With a relay:
    Ask "Relay voice": Plain and brief (recommended) | Write my own | <saved line, if any>
    - its one line on how it should sound. `--persona <text>`

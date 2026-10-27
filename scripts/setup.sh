@@ -672,6 +672,7 @@ if [ -n "$PLAN" ]; then
     else case $c in see\ *) echo "plan: would list the add-on $a: $c" ;; *) echo "plan: would install the add-on $a, or update it to its latest, in $PP_MAIN: $c" ;; esac; fi
   done
   [ -z "$NAME" ] || [ -d "$PP_WORKSPACES/Chief-of-Staff" ] || echo "plan: would create $NAME's worktree $PP_WORKSPACES/Chief-of-Staff and open its pane"
+  for L in Fast-lane Research-lane; do [ -d "$PP_WORKSPACES/$L" ] || echo "plan: would create the $L worktree $PP_WORKSPACES/$L (no pane is opened)"; done
   [ -s "$PP_RUN_FILE" ] || echo "plan: would use this terminal's Orca run, or create one for this project"
   for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "plan: $n"; done
   echo "plan: that is every change; nothing was written. The same command without --plan makes them."
@@ -733,6 +734,26 @@ if [ -n "$NAME" ]; then
   fi
   echo "The session in this main checkout is the orchestrator, NOT the relay: talk to $NAME only in the pane of the Chief-of-Staff worktree."
 fi
+
+# --- the standing lanes: a Fast lane and a Research lane, made once ---
+# Two more worktrees the owner sits in (issue 416), made whether or not a relay was chosen and found by folder name, as
+# the relay is (pp_standing_wt). Each takes the relay block's branches: a folder of another project is left alone, one
+# that exists is not made again (only its settings are written again), else it is created where a Builder's is
+# (pp_worktree_new) and given its settings. No pane is opened: the owner opens a lane's when he wants it.
+for L in Fast-lane Research-lane; do
+  LW=$PP_WORKSPACES/$L
+  S_WT="orca-ide worktree create --repo path:$(printf '%q' "$PP_MAIN") --name $L --base-branch main --parent-worktree path:$(printf '%q' "$PP_MAIN") --setup run"
+  S_SET="bash $(printf '%q' "$HERE")/worktree-setup.sh $(printf '%q' "$LW")"
+  if [ -e "$LW" ] && [ "$(git -C "$LW" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" != "$(git -C "$PP_MAIN" rev-parse --path-format=absolute --git-common-dir)" ]; then
+    echo "Lane: $LW is not a worktree of this project; nothing was done with it. Move it aside and run setup again."
+  elif [ -d "$LW" ]; then
+    echo "Lane: the $L worktree is $LW (already there; nothing was created)."
+    bash "$HERE/worktree-setup.sh" "$LW" >/dev/null 2>&1 || NEED+=("Lane: $L's settings were not written. Run: $S_SET")
+  elif ! pp_worktree_new "$L" 2>/dev/null; then NEED+=("Lane: $L has no worktree yet. Run, in this order:" "  $S_WT" "  $S_SET")
+  elif ! bash "$HERE/worktree-setup.sh" "$LW" >/dev/null 2>&1; then NEED+=("Lane: $L's worktree is $LW but its settings were not written. Run: $S_SET")
+  else echo "Lane: created the $L worktree $LW."
+  fi
+done
 
 # --- the project files setup created or changed, from the writes themselves ---
 [ "$EXCLUDE_WAS" = "$(il_sha "$IL_EXCLUDE" 2>/dev/null || true)" ] || grep -qF "	$IL_EXCLUDE" "$IL_WROTE" || printf 'changed\t%s\n' "$IL_EXCLUDE" >> "$IL_WROTE"

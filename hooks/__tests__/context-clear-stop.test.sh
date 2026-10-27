@@ -331,5 +331,51 @@ check "main's nudge at 141K says PAST the 140K line" 1 \
     | env -i PATH="$BOX/bin" HOME="$BOX/home" bash "$ROOT/hooks/lib/run-hook.sh" "$ROOT/hooks/context-line.sh" 2>/dev/null | grep -c 'PAST the 140K line')"
 rm "$BOX/repo/.claude/commandeck.json"
 
+# #409: past the line main's one step is a flagged state-snapshot.sh call. The first prompt past the line writes the
+# skeleton once; that skeleton is not restart-ready, so a turn that ends without the flagged call never restarts main.
+rm -f "$CPD"/s1.* "$BOX/launched" "$BOX/calls"
+printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":210000,"input_tokens":1}}}' > "$BOX/t-s1.jsonl"
+prompt_s1() { (cd "$BOX/repo" && printf '{"session_id":"s1","transcript_path":"%s","prompt":"go"}' "$BOX/t-s1.jsonl" \
+  | env -i PATH="$BOX/bin:$PATH" HOME="$BOX/home" CALLS="$BOX/calls" bash "$ROOT/hooks/context-line.sh" 2>&1); }
+stop_s1() { (cd "$BOX/repo" && printf '{"session_id":"s1","transcript_path":"%s","stop_hook_active":%s}' "$BOX/t-s1.jsonl" "$1" \
+  | env -i PATH="$BOX/bin" HOME="$BOX/home" CALLS="$BOX/calls" ORCA_TERMINAL_HANDLE=old-pane \
+      COMMANDECK_RESTART_HELPER="$BOX/stub-helper.sh" bash "$HOOK" > "$BOX/s1.out" 2>"$BOX/s1.err"); }
+OUT=$(prompt_s1)
+check "first crossing writes the snapshot once: the skeleton is written and the line names the flagged call" "1:1" \
+  "$(grep -c '^TODO one line:' "$CPD/s1.md"):$(grep -c 'state-snapshot.sh --out .*s1.md --goal' <<<"$OUT")"
+rm -f "$CPD/s1.md"
+OUT=$(prompt_s1)
+check "first crossing writes the snapshot once: a later prompt past the line writes none" "no:1" \
+  "$([ -e "$CPD/s1.md" ] && echo yes || echo no):$(grep -c 'state-snapshot.sh --out .*s1.md --goal' <<<"$OUT")"
+
+# The judge's sequence: the skeleton is there, no resumed-from record, the turn ends with no flagged call.
+rm -f "$CPD"/s1.*; prompt_s1 >/dev/null
+sed 's/^| (no live units) .*$/| U | TODO | -- | -- | none | TODO |/' "$CPD/s1.md" > "$CPD/s1.new" && mv "$CPD/s1.new" "$CPD/s1.md"
+stop_s1 false
+check "an unfilled automatic snapshot never restarts main: the first stop blocks naming Goal, under 400 bytes" "block:1:yes" \
+  "$(jq -r .decision "$BOX/s1.out"):$(jq -r .reason "$BOX/s1.out" | grep -c 'Goal'):$([ "$(jq -r .reason "$BOX/s1.out" | wc -c)" -lt 400 ] && echo yes)"
+stop_s1 true; sleep 1
+check "an unfilled automatic snapshot never restarts main: the second stop exits 0, says so and launches nothing" "none:1:no" \
+  "$([ -s "$BOX/s1.out" ] && echo out || echo none):$(grep -c 'context-clear: .* still has unfilled fields; main is not restarted' "$BOX/s1.err"):$([ -e "$BOX/launched" ] && echo yes || echo no)"
+(cd "$BOX/repo" && env -i PATH="$BOX/bin:$PATH" HOME="$BOX/home" bash "$ROOT/scripts/state-snapshot.sh" --out "$CPD/s1.md" --goal 'ship U' --stage 'U=build it' --next 'U=merge it' >/dev/null 2>&1)
+stop_s1 false
+wait_for '[ -e "$BOX/launched" ] && [ ! -e "$INFLIGHT" ]'
+check "an unfilled automatic snapshot never restarts main: once the flagged call has filled it, the next stop restarts" yes \
+  "$([ -e "$BOX/launched" ] && echo yes || echo no)"
+rm -f "$CPD"/s1.* "$BOX/launched"
+
+# The hand template ships its own Goal placeholder, `<one line: ...>`; a checkpoint written from it with the units
+# filled but the Goal left is no more a restart point than the generator's skeleton.
+prompt_s1 >/dev/null
+sed -e 's/^| (no live units) .*$/| U | build it | -- | -- | none | merge it |/' \
+    -e 's/^TODO one line:.*$/<one line: the batch, the standing rulings that bind it>/' "$CPD/s1.md" > "$CPD/s1.new" && mv "$CPD/s1.new" "$CPD/s1.md"
+stop_s1 false
+check "a hand-template checkpoint with its Goal placeholder never restarts main: the first stop blocks naming Goal alone" "block:1:0" \
+  "$(jq -r .decision "$BOX/s1.out"):$(jq -r .reason "$BOX/s1.out" | grep -c 'unfilled Goal\.'):$(jq -r .reason "$BOX/s1.out" | grep -c 'unit stage')"
+stop_s1 true; sleep 1
+check "a hand-template checkpoint with its Goal placeholder never restarts main: the second stop launches nothing" "none:no" \
+  "$([ -s "$BOX/s1.out" ] && echo out || echo none):$([ -e "$BOX/launched" ] && echo yes || echo no)"
+rm -f "$CPD"/s1.* "$BOX/launched"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

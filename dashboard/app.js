@@ -13,7 +13,7 @@
   const STUCK_SEC = 7200;
   const STAGES = ['planning', 'building','review', 'fixing', 'waiting-main'];
   // The long-lived worktree's stage, from dashboard.sh: a seat, never a unit in flight.
-  const SEATS = new Map([['chief-of-staff', 'Chief-of-Staff seat']]);
+  const SEATS = new Map([['chief-of-staff', 'Chief-of-Staff seat'], ['fast-lane', 'Fast lane'], ['research-lane', 'Research lane']]);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   let data = null;
   let inflight = null;

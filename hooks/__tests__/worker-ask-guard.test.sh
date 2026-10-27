@@ -38,6 +38,9 @@ check "a directory outside git is left alone" 0 "$(hook "$BOX/plain")"
 COS=$BOX/wt/Chief-of-Staff
 git -C "$MAIN" worktree add -q "$COS" -b cos
 check "the Chief-of-Staff worktree may ask (the owner sits in it)" 0 "$(hook "$COS")"
+# Issue 416: the Fast-lane and Research-lane worktrees are seats the owner sits in too.
+for l in Fast-lane Research-lane; do git -C "$MAIN" worktree add -q "$BOX/wt/$l" -b "b-$l"; done
+check "a lane asks under main's rules; an ordinary worker is still refused" "0 0 2" "$(hook "$BOX/wt/Fast-lane") $(hook "$BOX/wt/Research-lane") $(hook "$WT")"
 check "the cwd is used when CLAUDE_PROJECT_DIR is unset" 2 \
   "$(jq -cn --arg d "$WT" '{tool_name:"AskUserQuestion",cwd:$d}' | env -u CLAUDE_PROJECT_DIR bash "$HOOK" >/dev/null 2>&1; echo $?)"
 

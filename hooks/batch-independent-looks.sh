@@ -161,6 +161,7 @@ if [ -n "$TUID" ] && [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ]; then
 fi
 # Reset, and mark the session told: it hears this once.
 printf '%s 0 1\n' "$NOW" > "$STATE" 2>/dev/null || true
+PEEK_DIR=$(cd "${BASH_SOURCE[0]%/*}/../scripts" 2>/dev/null && pwd) || PEEK_DIR=scripts
 ADVICE=$(cat <<EOF
 BATCHING: that is $THRESHOLD turns in a row carrying one read-only look each.
 Each turn replays the whole context, so $THRESHOLD single-call turns cost about
@@ -174,6 +175,8 @@ gets discarded and redone, which costs more than running it sequentially.
 Keep sequential: dependencies, waits, approvals, interdependent edits, anything
 irreversible, and adaptive investigation where each result picks the next
 question. If this streak was all of those, it was the right shape -- carry on.
+
+Several file reads in one call: bash $PEEK_DIR/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>
 
 Said once per session.
 EOF

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ruling-log-archive.sh -- the one-off move of the ruling log's non-ruling rows to <log>.archive-2026-10-24.jsonl
-# beside it: prompt rows from any folder but main's checkout and the Chief-of-Staff worktree (the panes ruling-log.sh
+# beside it: prompt rows from any folder but main's checkout and the standing worktrees, Chief-of-Staff, Fast-lane and Research-lane (the panes ruling-log.sh
 # logs), void prompt rows, and machine-text prompts (hooks/lib/ruling-typed.jq, the test ruling-log.sh applies to new
 # prompts). Picker answers, typed prompts and unreadable lines stay, in order, byte for byte.
 # Nothing is deleted. The log is rewritten in place under its own lock (the one ruling-log.sh appends under), so a
@@ -29,7 +29,7 @@ split() { # <in> <tag>: writes $TMP/<tag>.keep and $TMP/<tag>.arch, prints the l
     (try fromjson catch null) as $r
     | if ($r | type) != "object" or $r.source != "prompt" then "k"
       elif $r.void == true then "a"
-      elif ($r.cwd // "" | . == $main or . == $mainp or startswith($main + "/") or startswith($mainp + "/") or test("/Chief-of-Staff(/|$)")) | not then "a"
+      elif ($r.cwd // "" | . == $main or . == $mainp or startswith($main + "/") or startswith($mainp + "/") or test("/(Chief-of-Staff|Fast-lane|Research-lane)(/|$)")) | not then "a"
       elif ($r.answer // "" | machine_prompt) then "a"
       else "k" end' "$1" > "$TMP/$2.dec" || die "could not read $1"
   python3 -I -c '

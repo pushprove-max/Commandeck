@@ -4,7 +4,9 @@ Main is instructed to checkpoint and restart instead of compacting. Past the
 clear line, a Stop hook asks for a checkpoint at
 `~/.claude/checkpoints/<session-id>.md`, using `templates/checkpoint.md`: the
 goal, live units, waits, queue, rulings and how to resume.
-`scripts/state-snapshot.sh` fills the mechanical fields. A fresh checkpoint
+`scripts/state-snapshot.sh` fills the mechanical fields, and its `--goal`,
+`--stage`, `--next` and `--open-item` flags fill the judgment ones in one call.
+An unfilled checkpoint does not restart main. A fresh checkpoint
 is under 30 minutes old.
 
 In Orca, the hook can open a fresh main pane, supply the resume prompt and

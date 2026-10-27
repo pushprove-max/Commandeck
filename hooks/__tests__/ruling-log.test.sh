@@ -31,27 +31,28 @@ prompt "resume from the checkpoint /x/cp.md (its text, board.sh and the run-use 
 check "the handoff's resume prompt, with its first-line instruction, is machine text: not logged" 4 "$(rows)"
 
 # The log holds the owner's rulings: machine text and prompts typed into any other pane are not logged. A reviewer's
-# prompt in main's checkout, a Builder's in a unit worktree and a Research worktree's (the plugin knows only the
-# Chief-of-Staff worktree) are the orchestrator's words; a picker answer stays logged from every pane.
+# prompt in main's checkout, a Builder's in a unit worktree and a worktree named Research's are the orchestrator's
+# words; a picker answer stays logged from every pane. The Chief-of-Staff, Fast-lane and Research-lane worktrees are
+# seats the owner types in (issue 416): a lane's prompt is logged, an ordinary worker's is not.
 for machine in "<task-notification><task-id>x</task-id></task-notification>" "  <system-reminder>hook said this</system-reminder>" \
                "=== Transcript of a conversation between a human and an assistant ===" "Here is a note offered by a side agent: > green"; do
   prompt "$machine"; check "machine text is not logged: ${machine:0:30}" 4 "$(rows)"
 done
 git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
-for w in unit-a Chief-of-Staff Research; do git -C "$T/p" worktree add -q "$T/$w" -b "b-$w"; done
+for w in unit-a Chief-of-Staff Research Research-lane; do git -C "$T/p" worktree add -q "$T/$w" -b "b-$w"; done
 promptin() { (cd "$1" && jq -n --arg p "$2" --arg c "$1" '{hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: $c, prompt: $p}' | bash "$HOOK" >/dev/null 2>&1); }
 promptin "$T/unit-a" "go"
 check "a unit worktree's prompt is not logged" 4 "$(rows)"
-promptin "$T/Research" "go"
-check "a Research worktree's prompt is not logged" 4 "$(rows)"
+promptin "$T/Research-lane" "go"; R1=$(rows); promptin "$T/Research" "go"
+check "a lane's prompt is logged; an ordinary worker's is not" "5 5" "$R1 $(rows)"
 (cd "$T/p" && jq -n '{hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "go"}' | COMMANDECK_REVIEWER=1 bash "$HOOK" >/dev/null 2>&1)
-check "a reviewer's prompt in main's checkout is not logged" 4 "$(rows)"
+check "a reviewer's prompt in main's checkout is not logged" 5 "$(rows)"
 promptin "$T/Chief-of-Staff" "relay that to main"
-check "a prompt typed in the Chief-of-Staff worktree is logged" "5 relay that to main" "$(rows) $(tail -1 "$COMMANDECK_RULING_LOG" | jq -r .answer)"
+check "a prompt typed in the Chief-of-Staff worktree is logged" "6 relay that to main" "$(rows) $(tail -1 "$COMMANDECK_RULING_LOG" | jq -r .answer)"
 (cd "$T/unit-a" && jq -n --arg c "$T/unit-a" '{hook_event_name: "PostToolUse", session_id: "s9", cwd: $c,
   tool_input: {questions: [{header: "H", question: "Which?", options: [{label: "old"}, {label: "new"}]}]},
   tool_response: {answers: {"Which?": "new"}}}' | bash "$HOOK" >/dev/null 2>&1)
-check "a picker answer from a unit worktree is logged" "6 ask" "$(rows) $(tail -1 "$COMMANDECK_RULING_LOG" | jq -r .source)"
+check "a picker answer from a unit worktree is logged" "7 ask" "$(rows) $(tail -1 "$COMMANDECK_RULING_LOG" | jq -r .source)"
 
 # A prompt closes a plain-chat ask only when it names it: an unrelated line, or one typed in another session,
 # closed every open ask. Named is the id, or the id without its day, as whole words in any case or spacing.

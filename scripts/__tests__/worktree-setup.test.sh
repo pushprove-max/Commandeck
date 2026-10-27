@@ -235,5 +235,32 @@ jq '.roles.builder.helpers.Explore = "Haiku 4"' "$REAL/config/routing.json" > "$
 check "a helpers entry that is not a model name fails the routing file" "1:1" \
   "$(COMMANDECK_ROUTING=$T/bad-routing.json bash -c '. "$0/scripts/paths.sh"; pp_routing_valid' "$REAL" 2>&1 | grep -c 'builder has a bad helpers entry Explore'):$(COMMANDECK_ROUTING=$REAL/config/routing.json bash -c '. "$0/scripts/paths.sh"; pp_routing_valid >/dev/null 2>&1 && echo 1' "$REAL" 2>/dev/null)"
 
+# --- the standing lanes (issue 416): a Fast-lane and a Research-lane worktree are workers with three differences ---
+# The 1-hour cache in the lane's own file only, no Stop hook that wakes main every lane turn, and high effort for Research.
+for w in Fast-lane Research-lane lanep; do git -C "$P" worktree add -q "$T/wt/$w"; done
+echo '{"version": 1, "profile": "claude", "workerCacheTtl": "5m"}' > "$P/.claude/commandeck.json"
+for w in Fast-lane Research-lane lanep; do run "$T/wt/$w" >/dev/null 2>&1; done
+check "a lane's settings carry the 1-hour cache; an ordinary worker's keep 5m" '"1h":"1h":"5m"' "$(tenv Fast-lane):$(tenv Research-lane):$(tenv lanep)"
+echo '{"version": 1, "profile": "claude"}' > "$P/.claude/commandeck.json"
+for w in Fast-lane lanep; do echo '{}' > "$T/wt/$w/.claude/settings.local.json"; run "$T/wt/$w" >/dev/null 2>&1; done
+check "a lane has the 1-hour cache even when the owner gave no worker answer" '"1h":null' "$(tenv Fast-lane):$(tenv lanep)"
+notify() { jq '[.hooks.Stop[]?.hooks[]?.command | select(test("claude-worker-notify"))] | length' "$T/wt/$1/.claude/settings.local.json"; }
+check "a lane registers no main-waking Stop hook; an ordinary worker does" '0:0:1' "$(notify Fast-lane):$(notify Research-lane):$(notify lanep)"
+check "the Research lane runs at high effort; the Fast lane and a worker set none" '"high":null:null' \
+  "$(jq -c '.effortLevel // null' "$T/wt/Research-lane/.claude/settings.local.json"):$(jq -c '.effortLevel // null' "$T/wt/Fast-lane/.claude/settings.local.json"):$(jq -c '.effortLevel // null' "$T/wt/lanep/.claude/settings.local.json")"
+# The drift check: every site that names the standing folders names the same three as pp_standing_wt. A shell site
+# must call the function; a jq site spells the set in an alternation, which must equal the function's.
+SET=$(bash -c '. "$0/hooks/lib/project.sh"; for n in Chief-of-Staff Fast-lane Research-lane Builder-probe main Fast-lane2 Research Chief; do pp_standing_wt "$n" && echo "$n"; done | sort | paste -sd, -' "$REAL")
+check "pp_standing_wt is true for the three folders and no look-alike" 'Chief-of-Staff,Fast-lane,Research-lane' "$SET"
+DRIFT=
+for s in hooks/pane-budget-gate.sh hooks/worker-ask-guard.sh hooks/ruling-log.sh scripts/install-lib.sh scripts/dashboard.sh scripts/worktree-setup.sh; do
+  grep -q 'pp_standing_wt' "$REAL/$s" || DRIFT="$DRIFT $s(no call)"
+done
+for s in scripts/ruling-log-archive.sh scripts/cos-check.sh; do
+  got=$(grep -oE '\(Chief-of-Staff(\|[A-Za-z-]+)+\)' "$REAL/$s" | tr -d '()' | tr '|' '\n' | sort | paste -sd, -)
+  [ "$got" = "$SET" ] || DRIFT="$DRIFT $s($got)"
+done
+check "every standing-worktree list names the same three folders" "" "$DRIFT"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

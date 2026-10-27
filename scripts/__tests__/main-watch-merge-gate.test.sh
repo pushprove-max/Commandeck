@@ -52,7 +52,12 @@ grep -q 'orph@' "$F/mq-calls" && fail "a unit whose merge job died was merged ag
 sleep 300 & echo $! > "$S/main-watch/mergejob-live.pid"; LIVE=$!
 unit slow; printf '%s\n%s\n' "$(tip slow)" "$S/main-watch/mergejob-live.log" > "$S/main-watch/merge-slow"; said_done slow; tick $((N + 120)); kill "$LIVE"
 [ "$(posts 'merge job for slow')" = 0 ] || fail "a merge job still running was posted as dead"
-for u in orph slow stale; do gone $u; rm -f "$S/main-watch/merge-$u"; done
+# A merge job whose wrapper died while its merge runs is not told as ended: .pid names a group, and the merge lives in it.
+N=$((N + 1000)); unit wrap; set -m; bash -c 'sleep 300 & wait' & G=$!; set +m; sleep 0.3; kill -KILL "$G"; wait "$G" 2>/dev/null || true
+echo "$G" > "$S/main-watch/mergejob-wrap.pid"; printf '%s\n%s\n' "$(tip wrap)" "$S/main-watch/mergejob-wrap.log" > "$S/main-watch/merge-wrap"
+said_done wrap; tick $((N + 60)); tick $((N + 120)); kill -- -"$G" 2>/dev/null || true
+[ "$(posts 'merge job for wrap')" = 0 ] || fail "a merge job whose wrapper died while its merge ran was posted as ended"
+for u in orph slow stale wrap; do gone $u; rm -f "$S/main-watch/merge-$u"; done
 # An earlier build's job files (merge-<epoch>.log, .rc, .pid) are no unit's record: nothing is posted for them.
 N=$((N + 1000)); echo 0 > "$S/main-watch/merge-123.rc"; echo 1 > "$S/main-watch/merge-123.pid"; echo "merge-queue: x merged; ok" > "$S/main-watch/merge-123.log"; tick $N
 [ "$(posts '123\.')" = 0 ] || fail "an earlier build's merge job file was read as a unit's merge record"

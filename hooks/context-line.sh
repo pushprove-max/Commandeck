@@ -44,15 +44,22 @@ ctx=$(context_size "$transcript") || exit 0
 HOOK_FIRE_ADVISE=1
 # Issue 275: pane-budget-gate.sh lets main past its line write only the checkpoint.
 # A first run has no checkpoints folder; a marker not written lets every tool through, so that is said.
+# The first crossing (no marker and no checkpoint yet) writes the skeleton once, about 6 s (measured), so main's one
+# step past the line is the flagged call that fills it (#409).
+CP=$HOME/.claude/checkpoints/$sid.md; first=0
+[[ $sid =~ ^[A-Za-z0-9_-]+$ ]] && [ ! -e "$HOME/.claude/checkpoints/$sid.past-line" ] && [ ! -e "$CP" ] && first=1
 [[ ! $sid =~ ^[A-Za-z0-9_-]+$ ]] || { mkdir -p "$HOME/.claude/checkpoints" && : > "$HOME/.claude/checkpoints/$sid.past-line"; } 2>/dev/null \
   || echo "Past-line marker NOT written ($HOME/.claude/checkpoints/$sid.past-line): no tool is held back, so the checkpoint Write is your next tool call."
+SNAP=$(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)/state-snapshot.sh
+[ "$first" = 1 ] && bash "$SNAP" --out "$CP" >/dev/null 2>&1
+STEP="bash $SNAP --out ${CP/#$HOME/\~} --goal '<one line>' --stage <unit>=<text> --next <unit>=<text> (stage and next for every live unit; --open-item '<text>' repeats; no quote or \$ inside a value; it writes the file first when none exists)"
 # 40K past the line the step is over: a session that kept "finishing the step"
 # reached 320K, so past this point the checkpoint Write is the next tool call.
 # On a 200K window (standardContext) less than 40K is left before auto-compact,
 # so that point is the line itself (issue 267).
 PAST=$((LINE + 40000)); pp_flag standardContext 2>/dev/null && PAST=$LINE
 if [ "$ctx" -gt "$PAST" ]; then
-  echo "CONTEXT $((ctx / 1000))K is $(((ctx - LINE) / 1000))K PAST the $((LINE / 1000))K line: the NEXT tool call is the checkpoint Write (~/.claude/checkpoints/<session>.md from $TPL/checkpoint.md), then end the turn; the Stop hook restarts main. Never type /clear. No other look first."
+  echo "CONTEXT $((ctx / 1000))K is $(((ctx - LINE) / 1000))K PAST the $((LINE / 1000))K line: the NEXT tool call writes the checkpoint in ONE call: $STEP; then end the turn; the Stop hook restarts main. Never type /clear. No other look first."
   exit 0
 fi
-echo "CONTEXT $((ctx / 1000))K is over the $((LINE / 1000))K line: finish this step, write ~/.claude/checkpoints/<session>.md from $TPL/checkpoint.md, then end the turn; the Stop hook restarts main ($TPL/main-session.md, Main never compacts)."
+echo "CONTEXT $((ctx / 1000))K is over the $((LINE / 1000))K line: finish this step, write the checkpoint in ONE call: $STEP; then end the turn; the Stop hook restarts main ($TPL/main-session.md, Main never compacts)."

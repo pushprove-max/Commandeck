@@ -26,6 +26,8 @@ check "a quoted | and => with echo separators are looks" nudge \
   "$(looks3 $'rg -n "foo|bar" a.ts | head -5; echo ---; sed -n \'1,5p\' b.ts | rg \'=>\'')"
 check "a for loop of gh issue view is a look" nudge "$(looks3 'for n in 1 2; do gh issue view $n; done')"
 check "git rev-parse and ls-files are looks" nudge "$(looks3 'git rev-parse HEAD; git ls-files templates')"
+check "the batching advice names peek.sh" 1 \
+  "$(fresh; turn ls >/dev/null; turn ls >/dev/null; sleep 0.3; jq -cn --arg s "$S" '{session_id: $s, tool_name: "Bash", tool_input: {command: "ls"}}' | bash "$HOOK" 2>/dev/null | grep -c 'scripts/peek.sh')"
 check "a real redirect resets the streak, and the next look starts from one" quiet/quiet "$(two_then 'rg -n "a|b" f > out.txt')"
 check "a command substitution inside double quotes is not a look" quiet/quiet "$(two_then 'echo "$(touch x)"')"
 check "a quote inside the other kind of quote hides no command" quiet/quiet "$(two_then "echo \"'\"; touch out.txt; echo \"'\"")"

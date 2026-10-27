@@ -31,6 +31,13 @@ pp_cos_key() {
     [ -e "$COS_KEY.$f" ] || [ ! -e "${COS_KEY%.*}.$f" ] || mv "${COS_KEY%.*}.$f" "$COS_KEY.$f"
   done
 }
+# pp_standing_wt <folder>: 0 for the folder names of the seats the owner sits in, found by name as the relay is:
+# the Chief-of-Staff relay and the Fast-lane and Research-lane worktrees (issue 416). The one list; the two jq
+# sites (ruling-log-archive.sh, cos-check.sh) spell the same three, and worktree-setup.test.sh fails on a site that drifts.
+pp_standing_wt() {
+  case ${1-} in Chief-of-Staff|Fast-lane|Research-lane) return 0 ;; esac
+  return 1
+}
 # pp_flag <key>: 0 when the project's .claude/commandeck.json (setup writes it)
 # has "<key>": true. Read with builtins: a strict-tier hook asks on every call,
 # and a jq start per hook per call would cost more than the hooks it switches off.

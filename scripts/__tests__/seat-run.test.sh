@@ -35,6 +35,9 @@ JSPEC=$(sed -n 's/^Your task spec is the file \(.*\)\. Read all of it.*/\1/p' "$
 SNAP=$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' "$JSPEC" 2>/dev/null); echo 'plan B' > "$PWT/.claude/plans/pu.md"
 check "a plan judge reads a read-only copy of the plan, the copy its record hashes, whatever the live plan becomes" "1:0:$PH:ro" \
   "$(grep -c '^Judge the plan below, run one\.$' "$JSPEC" 2>/dev/null):$(grep -c '^Plan: \.claude/plans/pu\.md$' "$JSPEC" 2>/dev/null):$(sha256sum < "$SNAP" 2>/dev/null | cut -d' ' -f1):$([ -f "$SNAP" ] && [ ! -w "$SNAP" ] && echo ro)"
+# The judge prints its inputs with peek.sh from that same copy, so its bundle never reads the live plan (issue 413).
+check "a plan judge's prompt points peek at its frozen copy" "1" \
+  "$(grep -cF "peek.sh --unit pu --plan $SNAP" "$(sed -n 's/^prompt=//p' "$JREC" | tail -1)" 2>/dev/null)"
 printf '%s\n' "$GOODPLAN" > "$PWT/.claude/plans/pu.md"
 printf 'Judge the plan, run two.\nEnd on a verdict line.\n' > "$T/run-nogo.md"; printf -- '- [P1] a gap\nVERDICT: NO-GO\n' > "$T/screen"
 OUT=$(rrun plan-judge-sol pu "$T/run-nogo.md" 2>/dev/null); RC=$?; RP=$(sed -n 's/.* report=//p' <<<"$OUT")

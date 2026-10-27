@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.54.0 -- 2026-10-27
+
+### Setup
+
+- Setup now makes two standing worktrees beside the relay: a Fast lane for small work it reviews itself, and a Research lane that never builds. Main lands only the Fast-lane commit that was reviewed; a change made after the review waits for a new one. Both keep the one-hour prompt cache and are treated like the relay by the guards. Running setup again creates neither twice.
+
+### Helpers and workers
+
+- One command prints several files, line ranges, plan sections or search hits, and a reviewer's whole input bundle, in a single call.
+- A background job started through the new run-and-return command hands back its exit code and last lines in the same call when it ends quickly; a longer one prints the exact command that collects them.
+- In a worker, a search over the whole checkout is rewritten to a capped search instead of refused, and it keeps its own exit code. A wait loop is wrapped in a time limit instead of refused, when the call's waits fit the prompt cache.
+- A wait loop that sleeps forever is still refused.
+
+### Main session
+
+- A foreground inbox wait is moved to the background instead of refused.
+- One snapshot call now fills the checkpoint's goal, stage, next step and queue, and refuses until nothing is left to fill by hand. The first time main crosses its clear line, the snapshot is written for it, and main is not restarted until its goal and unit fields are filled. New queue items never reuse a number from the checkpoint main resumed from.
+- Rarely needed startup and rule text moved behind short pointers, so every session starts with less text. When main's card does not fit the startup print, main reads only the card, not the whole file.
+- If you saved a "drop this rule" or "keep my version" choice for a rule that moved behind a pointer, or for the reworded clear-line rule, save that choice again: the old choice no longer applies.
+
 ## 0.53.0 -- 2026-10-27
 
 ### Planning

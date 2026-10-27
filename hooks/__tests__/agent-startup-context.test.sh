@@ -16,7 +16,7 @@ export HOME=$T/home; mkdir -p "$HOME"; unset CLAUDE_CONFIG_DIR # the caller's pr
 project() { git init -q -b main "$1" && git -C "$1" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first; mkdir -p "$1/.claude/rules"; jq -n "{version: 1, profile: \"claude\"} + ($2)" > "$1/.claude/commandeck.json"; }
 commit() { git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm "$2"; }
 # ctx <dir> [builder] -- the session-start context of a seat in that checkout.
-ctx() { (cd "$1" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_SCRATCH ${2:+COMMANDECK_BUILDER=1} bash "$REAL/hooks/agent-startup-context.sh" </dev/null 2>/dev/null); }
+ctx() { (cd "$1" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_SCRATCH -u COMMANDECK_BUILDER ${2:+COMMANDECK_BUILDER=1} bash "$REAL/hooks/agent-startup-context.sh" </dev/null 2>/dev/null); }
 ex() { jq -n --arg x "$2" '{claudeMdExcludes: [$x]}' > "$1"; }
 # one1 <template> <n> -- its nth one-line top-level bullet that names no path the session hook rewrites.
 one1() { awk '/^- / && !/scripts\/|hooks\/|templates\/|200K/ { if (p) print p; p = $0; next } { if (p && ($0 == "" || /^- /)) print p; p = "" }' "$1" | sed -n "${2}p"; }
@@ -63,6 +63,15 @@ check "keep both for a reworded rule loads it, though keep mine was saved for th
 # The relay pane says why its servers read as blocked "by enterprise policy".
 git -C "$P" worktree add -q "$T/wt/Chief-of-Staff"
 check "the relay pane explains the enterprise-policy block" 1 "$(ctx "$T/wt/Chief-of-Staff" | grep -c 'enterprise policy')"
+# Issue 416: a lane is a working seat. It gets the worker startup set and one line for what the lane is for, and never
+# the relay's persona, its startup replacement or its watchers; an ordinary worker gets no lane line.
+for l in Fast-lane Research-lane plainw; do git -C "$P" worktree add -q "$T/wt/$l"; done
+lane() { ctx "$T/wt/$1" | awk -v w="$2" '/^## Rules for every pane/ { s++ } /^# Chief of Staff|not injected for the Chief-of-Staff pane|^# Wake-ups/ { r++ } /^# (Fast|Research) lane: / { l = $0 } END { print s + 0, r + 0, substr(l, 1, w) }'; }
+check "a lane gets the worker startup set and its lane line, never the relay persona" \
+  "1 0 # Fast lane: small work only.:1 0 # Research lane: no builds and no commits.:1 0 " \
+  "$(lane Fast-lane 29):$(lane Research-lane 42):$(lane plainw 0)"
+check "the Fast lane's line names both calls; the Research lane's names the fast-forward" "1:1:1" \
+  "$(ctx "$T/wt/Fast-lane" | grep -c 'fast-lane.sh review.*fast-lane.sh land'):$(ctx "$T/wt/Fast-lane" | grep -c 'Any change after the review needs a new review'):$(ctx "$T/wt/Research-lane" | grep -c 'git merge --ff-only main')"
 # Main blocked on its own prompt reads nothing the relay sends, and a self-modification step main is denied goes to
 # the relay to apply, never back to the owner as a question.
 check "the relay reads to-main's open-prompt line as main waiting on the owner, and applies main's denied steps" "1:1" \
@@ -168,6 +177,42 @@ check "main, once its settings exclude them, gets the merged main-session rule t
 # so main is told where they are: the plugin's own template.
 check "main with its own main-session.md is pointed at the plugin template's Details for the moved rules" 1 \
   "$(ctx "$P4" | grep -c "^\[Details.*$REAL/templates/main-session.md")"
+
+# Issue 403: task-only text sits in templates/rules-details.md behind a `Details, <path>, <Section>.` stub, so the
+# always-on files carry less. A stub that names no section loses the text it points to.
+DET=$REAL/templates/rules-details.md
+STUBS=$(cat "$REAL/templates/AGENT_STARTUP.md" "$REAL/templates/global-rules.md" | tr '\n' ' ' | sed -E 's/ +/ /g' \
+  | grep -oE 'Details, `?[^ ,`]*rules-details\.md`?, [A-Z][A-Za-z ]*[a-z]' | sed 's/^.*md`\{0,1\}, //')
+N=0 R=0; while IFS= read -r T1; do [ -n "$T1" ] || continue; N=$((N+1)); grep -qxF -- "## $T1" "$DET" && R=$((R+1)); done <<<"$STUBS"
+check "every Details stub names a section that exists in rules-details.md" "3 3" "$N $R"
+# The seven unpinned planning bullets and the two main-only steps moved verbatim: found under the section their stub names,
+# and in no always-on file.
+SEC() { awk -v s="## $1" '$0 == s {p = 1; next} /^## / {p = 0} p' "$DET" 2>/dev/null; }
+GONE='3e7415fc 97c20446 6895053b 0e7bd99a 45f0fd15 99a98f43 f1c7b025'
+IN_SEC=$(python3 "$REAL/scripts/merge-rules.py" <(SEC 'Planning and evidence') --units | cut -f1 | sort | tr '\n' ' ')
+IN_RULES=$(python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/global-rules.md" --units | cut -f1 | grep -cE "^($(tr ' ' '|' <<<"$GONE"))$")
+check "every moved rule is findable from its stub: the seven ids sit under Planning and evidence and no longer in global-rules.md" "$(printf '%s\n' $GONE | sort | tr '\n' ' ')0" "$IN_SEC$IN_RULES"
+flat() { tr '\n' ' ' | sed -E 's/ +/ /g'; }
+ALWAYS_FILES=$(cat "$REAL/templates/AGENT_STARTUP.md" "$REAL/templates/global-rules.md" "$REAL/templates/global-claude.md" "$REAL/templates/main-session.md" | flat)
+L1='which the brief, the evidence and `.claude/routing-log` record'; L2="Never re-run it, and never stash, reset or check out in main under it"
+check "the two moved steps are under their sections and in no always-on file" "1 1 0 0" \
+  "$(SEC 'Launching a Builder' | flat | grep -cF -- "$L1") $(SEC 'Merging a unit' | flat | grep -cF -- "$L2") $(grep -cF -- "$L1" <<<"$ALWAYS_FILES") $(grep -cF -- "$L2" <<<"$ALWAYS_FILES")"
+always_bytes() { printf '%s\n' "$1" | sed -n 's/^# always-on context: .*files, \([0-9]*\) bytes.*/\1/p'; }
+# L2's clean project: before this change main's count there was 11366 bytes (startup 5845 + the card 5521).
+P7=$T/p7; project "$P7" '{}'
+check "the always-on bytes drop below the 11366 they were" yes "$([ "$(always_bytes "$(ctx "$P7")")" -lt 11366 ] && echo yes || echo no)"
+# A card that does not fit is read by its own line range, not the whole file (the file's Details is most of it).
+P8=$T/p8; project "$P8" '{}'
+{ echo '# Our startup'; echo; for i in $(seq 1 90); do echo "- house rule $i: keep this line about eighty characters long, words."; done; } > "$P8/AGENT_STARTUP.md"
+CARD_N=$(( $(grep -n '^## Details (not injected)' "$REAL/templates/main-session.md" | cut -d: -f1) - 1 ))
+check "main's left-out card is read by its line range, not the whole file" "1 0" \
+  "$(ctx "$P8" | grep -c "^\[left out to fit the 10,240-byte startup print: Read $REAL/templates/main-session.md lines 2-$CARD_N, up to its Details heading (") $(ctx "$P8" | grep -c "^\[left out to fit the 10,240-byte startup print: Read $REAL/templates/main-session.md (")"
+# A worker's count includes the worktree rules it prints (frontmatter stripped), once.
+P9=$T/p9; project "$P9" '{}'
+printf -- '---\ndescription: worker rules\n---\n\n- Stay in your worktree.\n- Never stash without a tag.\n' > "$P9/.claude/rules/worktree-sessions.md"; commit "$P9" ws
+git -C "$P9" worktree add -q "$T/wt/p9"
+WS_BYTES=$(awk 'f; /^---$/ && ++n == 2 {f = 1}' "$P9/.claude/rules/worktree-sessions.md" | wc -c | tr -d ' ')
+check "a worker's always-on count includes the worktree rules it prints" "$(( $(wc -c < "$REAL/templates/AGENT_STARTUP.md") + WS_BYTES ))" "$(always_bytes "$(ctx "$T/wt/p9")")"
 
 # Issue 226: the limit panel reads the login of main's newest session, so main records its Claude config folder.
 P5=$T/p5; project "$P5" '{}'

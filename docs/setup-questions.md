@@ -16,7 +16,7 @@ setup asks, the picker guard's stray-keypress option is off.
 | Context | 200K or a larger window |
 | Builder clear line | 180K tokens of context (the default), another count, or off: past it the Builder writes a handoff and goes on in a fresh session of its pane, and its card on the dashboard shows its context against the line |
 | Issue sizing | 40K tokens (the default), another count, or off: an issue the batch brief sizes as sharing no files and needing more reading than this is proposed as its own unit when the Builder is launched; off keeps today's grouping |
-| Relay | none, or a Chief of Staff pane with a name and one line on how it should sound |
+| Relay | none, or a Chief of Staff pane with a name and one line on how it should sound. Not asked, always made: the `Fast-lane` and `Research-lane` worktrees (no pane); a rerun finds them and only writes their settings again |
 | Dashboard | on for this machine only (listens on 127.0.0.1), off, or on plus another name it answers to (a tailnet's): that choice listens on the network; unknown DNS names get 403, while machine names and IP addresses are accepted |
 | Merge check | the command that must pass before a merge, or none |
 | Full suite | on (recommended when the whole suite takes under about 10 minutes) or off: one full run of the test command per build, beside the closing review pass; a red run is a NO-GO (`--full-suite on\|off`). On needs a merge check; setup refuses On without one, and sets a saved On off (and says so) when the check is removed |

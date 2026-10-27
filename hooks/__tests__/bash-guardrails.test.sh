@@ -101,6 +101,97 @@ sel "a here-document written to a file is a note" && check "a here-document writ
 sel "a here-document written to a file after the end word is a note" && check "a here-document written to a file after the end word is a note" 0 \
   "$(run_hook "$(json $'cat <<\'EOF\' > notes.md\nrg -n foo\nEOF')")"
 
+# --- a worker's unbounded search is rewritten to the checkout root, capped at 200 lines, with its own exit ---
+# A throwaway main checkout and a linked worktree of it: the hook tells them apart by git-dir vs git-common-dir.
+GBOX=$(mktemp -d)
+trap 'rm -rf "$MAIN_TMP" "$READ_TMP" "$GBOX"' EXIT
+git -C "$GBOX" init -q -b main main
+git -C "$GBOX/main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$GBOX/main" worktree add -q "$GBOX/wt" -b u1
+in_dir() { (cd "$1" && json "$2" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR "$HOOK" 2>/dev/null); }
+WT_ROOT=$(cd "$GBOX/wt" && git rev-parse --show-toplevel)
+WL="worker root rewrite capped; main still blocked; \$f still blocked"
+CAP='2>&1 | { head -n 200; cat >/dev/null; } )'
+OUT=$(in_dir "$GBOX/wt" "rg -n foo")
+sel "$WL" && {
+  check "$WL: no path becomes the root, capped" "( set -o pipefail; { 'rg' '-n' 'foo' '$WT_ROOT'; } $CAP" "$(jq -r '.hookSpecificOutput.updatedInput.command' <<<"$OUT")"
+  check "$WL: no permissionDecision" false "$(jq -r '.hookSpecificOutput | has("permissionDecision")' <<<"$OUT")"
+  check "$WL: dot becomes the root, capped" "( set -o pipefail; { 'rg' 'foo' '$WT_ROOT'; } $CAP" \
+    "$(in_dir "$GBOX/wt" 'rg foo .' | jq -r '.hookSpecificOutput.updatedInput.command')"
+  check "$WL: a literal parent becomes the root, capped" "( set -o pipefail; { 'rg' 'foo' '$WT_ROOT'; } $CAP" \
+    "$(in_dir "$GBOX/wt" "rg foo $GBOX" | jq -r '.hookSpecificOutput.updatedInput.command')"
+  check "$WL: main still blocked" 2 "$(in_dir "$GBOX/main" 'rg foo .' >/dev/null; echo $?)"
+  check "$WL: \$f still blocked" 2 "$(in_dir "$GBOX/wt" 'rg foo "$f"' >/dev/null; echo $?)"
+}
+# A rewrite runs a different search than the one asked for when it leaves an unbounded operand or re-quotes what the
+# shell would expand; those stay refused.
+RW="a rewrite never changes what the search covers or matches"
+sel "$RW" && {
+  check "$RW: a second unbounded operand" 2 "$(in_dir "$GBOX/wt" 'rg -n foo . /' >/dev/null; echo $?)"
+  check "$RW: a variable pattern" 2 "$(in_dir "$GBOX/wt" 'rg -n "$needle" .' >/dev/null; echo $?)"
+  check "$RW: an unquoted glob" 2 "$(in_dir "$GBOX/wt" 'rg foo* .' >/dev/null; echo $?)"
+}
+# A rewrite replaces the call's text, so it must run exactly what the call would: anything the shell would expand,
+# split or run keeps the refusal the call had before the rewrite.
+RR="a rewrite runs exactly what the call would"
+refused_worker() { # <label> <dir> <command>
+  local O; O=$(in_dir "$2" "$3"; echo "rc=$?")
+  check "$RR: $1" "refused rc=2" "$(grep -q updatedInput <<<"$O" && echo rewritten || echo refused) ${O##*$'\n'}"
+}
+sel "$RR" && {
+  refused_worker "a command substitution pattern" "$GBOX/wt" 'rg -n "$(touch x)" .'
+  refused_worker "a backtick" "$GBOX/wt" 'rg -n "`touch x`" .'
+  refused_worker "a backslash" "$GBOX/wt" 'rg -n a\ b .'
+  refused_worker "a quote kind hiding a glob" "$GBOX/wt" "rg \"a'b\" * \"c'd\""
+  refused_worker "a piped second command" "$GBOX/wt" 'rg -n foo . | sort -o /tmp/x'
+  refused_worker "a command substitution from a plain checkout" "$GBOX/main" 'rg -n "$(touch x)" .'
+  refused_worker "mixed quotes and a glob from a plain checkout" "$GBOX/main" "rg \"a'b\" * \"c'd\""
+  check "$RR: a worker's rg -n foo . is still rewritten" "( set -o pipefail; { 'rg' '-n' 'foo' '$WT_ROOT'; } $CAP" \
+    "$(in_dir "$GBOX/wt" 'rg -n foo .' | jq -r '.hookSpecificOutput.updatedInput.command')"
+}
+# #418: the rewritten text runs the search to its end, so its exit is rg's own (0, 1 or 2), never head's or 141.
+RX="a rewritten search returns rg's own exit"
+sel "$RX" && {
+  RXBOX=$(mktemp -d)
+  printf 'a\nb\nc\n' >"$RXBOX/one.txt"; printf 'd\ne\n' >"$RXBOX/two.txt"; seq 1 300 | sed 's/^/hit /' >"$RXBOX/flood.txt"
+  # rx_run <shell> <dir> <rg args...>: the hook's rewritten command run in <shell> inside <dir>; prints "<exit> <lines>".
+  rx_run() {
+    local SH=$1 D=$2 CMD OUT N; shift 2
+    CMD=$(in_dir "$GBOX/wt" "rg $*" | jq -r '.hookSpecificOutput.updatedInput.command')
+    CMD=${CMD//"$WT_ROOT"/$D}
+    OUT=$(cd "$D" && timeout 20 "$SH" -c "$CMD"; echo "rc=$?")
+    N=$(printf '%s\n' "${OUT%rc=*}" | grep -c .)
+    echo "${OUT##*rc=} $N"
+  }
+  for SH in bash zsh; do
+    command -v "$SH" >/dev/null 2>&1 || continue
+    check "$RX: $SH, no match gives 1" "1 0" "$(rx_run "$SH" "$RXBOX" -q "'a^'" .)"
+    check "$RX: $SH, a bad pattern gives 2" "2 1" "$(rx_run "$SH" "$RXBOX" "'['" . | sed 's/ [0-9]*$/ 1/')"
+    check "$RX: $SH, a 300-line match gives 0 with 200 lines" "0 200" "$(rx_run "$SH" "$RXBOX" -N hit .)"
+  done
+  rm -rf "$RXBOX"
+}
+# The rewrite is rebuilt from the parsed words, so a word the parser drops (a leading `!` or `time`, a second line, a
+# trailing comment) would vanish from what runs: those calls stay refused (exit 2, no updatedInput).
+NG="a negated search is never rewritten"
+sel "$NG" && {
+  for C in "! rg -q 'a^' ." "time rg -q foo ." $'rg foo .\nrg bar .' 'rg foo . # note'; do
+    O=$(in_dir "$GBOX/wt" "$C"; echo "rc=$?")
+    check "$NG: $C" "refused rc=2" "$(grep -q updatedInput <<<"$O" && echo rewritten || echo refused) ${O##*$'\n'}"
+  done
+}
+# The rewrite replaces the operand it judged unbounded, by position, never a pattern word equal to it.
+IX="a rewrite replaces the operand, never a pattern equal to it"
+sel "$IX" && {
+  IXBOX=$(mktemp -d); printf 'a\n' >"$IXBOX/one.txt"
+  IXCMD=$(in_dir "$GBOX/wt" "rg -q -e 'a^' . -e ." | jq -r '.hookSpecificOutput.updatedInput.command')
+  check "$IX: both -e patterns survive" "1 1" "$(case $IXCMD in *"'a^'"*) echo 1 ;; *) echo 0 ;; esac) $(grep -o "'-e' '\.'" <<<"$IXCMD" | grep -c .)"
+  IXCMD=${IXCMD//"$WT_ROOT"/$IXBOX}
+  ORIG=$(cd "$IXBOX" && rg -q -e 'a^' . -e . ; echo $?)
+  check "$IX: the rewritten exit equals the original's" "$ORIG" "$(cd "$IXBOX" && timeout 20 bash -c "$IXCMD"; echo $?)"
+  rm -rf "$IXBOX"
+}
+
 # --- raw pane reads keep main's context lean ------
 sel "pane read with no limit blocks" && check "pane read with no limit blocks" 2 \
   "$(run_hook "$(json 'orca-ide terminal read --terminal term_abc --json')")"

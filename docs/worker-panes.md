@@ -10,6 +10,8 @@ writes the settings into its `.claude/settings.local.json`.
 | Main | The worktree setup script does not change main. |
 | Worker or Builder | Disables business plugins, memoir, selected connectors and code/browser tools; disables auto memory; drops Stripe and three browser skills unless kept. |
 | Chief of Staff | Disables code and business plugins, selected MCP servers and connectors; uses relay-only permissions. |
+| Fast lane | A worker with a 1-hour prompt cache, no Stop hook that wakes main, and no pane budget. For small work only: commit in the lane, run `bash $PLUGIN/scripts/fast-lane.sh review`, then main runs `fast-lane.sh land`, which merges only the reviewed commit. |
+| Research lane | A worker with a 1-hour prompt cache, no Stop hook that wakes main, no pane budget and `effortLevel` high. It builds nothing and commits nothing; each session starts with `git merge --ff-only main`. |
 
 A brief must carry facts the worker needs because auto memory is off.
 The exact tool and plugin lists live in `scripts/worktree-setup.sh`.

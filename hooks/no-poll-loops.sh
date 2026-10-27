@@ -17,8 +17,11 @@
 # acknowledges it, so the batch replays on every check and later messages queue
 # behind it. A worker is held to one more thing (issue 214): a FOREGROUND call
 # may not wait past the prompt cache, since the next reply then rewrites it. Its
-# stated waits are summed against one budget, and a wait in a loop, which states
-# no end, is refused. A background call or a Monitor ends the turn and its exit
+# stated waits are summed against one budget. A loop of finite sleeps is rewritten
+# to run under `timeout` within what that budget has left (#407; exit 124 means
+# wait again), and any other wait in a loop, which states no end, is refused. In
+# main, a foreground `check --wait` is rewritten to run in the background (#408).
+# A background call or a Monitor ends the turn and its exit
 # wakes the pane, so neither is held. The script of `bash -c`, `sh -c`, `zsh -c`,
 # `eval` and `env -S` is summed by the same rules (issue 216), and `$'sleep'` is
 # the word sleep (issue 215). These are cost guards for agents that cooperate,
@@ -32,6 +35,8 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 [ -z "$CMD" ] && exit 0
 WORKER=0
 [ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ] || WORKER=1
+# One single-quoted word (the same function as hooks/bash-guardrails.sh).
+shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
 # A HEREDOC BODY IS DATA BEING WRITTEN, NOT A COMMAND BEING RUN.
 # `cat >> report.md <<'EOF' ... bash scripts/orca-wait.sh ... EOF`
@@ -72,7 +77,7 @@ esac
 # skips it; quote characters are dropped for that test, so `sl''eep` cannot
 # slip past.
 P=${CMD_CODE//[\'\"\\]/}
-case "$P" in *sleep*|*orca-wait*|*orchestration*|*timeout-ms*|*wait-test-run*) ;; *) [ "$TOOL" = "Monitor" ] && [ "$WORKER" = 0 ] || exit 0 ;; esac
+case "$P" in *sleep*|*orca-wait*|*orchestration*|*timeout-ms*|*wait-test-run*|*bgrun*) ;; *) [ "$TOOL" = "Monitor" ] && [ "$WORKER" = 0 ] || exit 0 ;; esac
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 if type strip_quoted >/dev/null 2>&1; then
   BARE=$(strip_quoted "$CMD_CODE")
@@ -234,12 +239,13 @@ if [ "$WORKER" = 1 ]; then
   # The budget is wait-test-run.sh's default wait, 270 s, under the 5-minute cache; 540 s under the 1-hour one
   # (setup writes CLAUDE_CODE_PROMPT_CACHE_TTL into each worker worktree's and the relay's settings.local.json, so each pane
   # reads its own role's answer; main, the main checkout, is no worker). Summed per command, its word a path or not:
-  # every operand of sleep, an orca command's --timeout-ms, a wait-test-run.sh (its max, else 270). A wait inside a
-  # loop (its condition or body) repeats, so the one-pass sum bounds nothing: `loop`, refused.
+  # every operand of sleep, an orca command's --timeout-ms, a wait-test-run.sh (its max, else 270), a bgrun.sh (its
+  # --max, else 25 for a run and the limit for wait); a max given but not a number is unread, never the default. A wait inside a loop (its condition or body) repeats, so the
+  # one-pass sum bounds nothing: `loop`, refused, unless the loop holds only finite sleeps (rewritten below).
   LIMIT=270; [ "${CLAUDE_CODE_PROMPT_CACHE_TTL:-}" = 1h ] && LIMIT=540
   # A shell string (`bash -c`, `eval`, `env -S`) is one quoted word in JOINED: its script is read from the raw words
   # of CMD_CODE (shlex), by the same rules and recursively (issue 216). One shlex cannot read is a wait not read.
-  WAITED=$(printf '%s' "$JOINED" | NPL_RAW=$CMD_CODE python3 -I -c 'import os, shlex, sys; exec(os.environ["NPL_WORDS"])
+  WAITED=$(printf '%s' "$JOINED" | NPL_RAW=$CMD_CODE NPL_LIMIT=$LIMIT python3 -I -c 'import os, shlex, sys; exec(os.environ["NPL_WORDS"])
 UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 ESC = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
 def ansi_c(m):
@@ -295,40 +301,60 @@ def raw_tokens(text):
             out.append(t)
     return out
 def script_wait(text, depth=0):
-    # (total, looped, unread) of a script, read as raw words; None for one that cannot be read.
+    # (total, loop kind, unread, other) of a script, read as raw words; unread for one that cannot be read.
     if depth > 8:
-        return 0, False, True
+        return 0, 0, True, True
     try:
         return walk(raw_tokens(text), True, False, depth + 1)
     except ValueError:
-        return 0, False, True
+        return 0, 0, True, True
 STRINGS = [False]
-def secs(a):
+def val(a):
     # The whole operand first: 0x1d is hex, not 1 day.
     v = num(a)
     if v is None and a[-1:] in UNIT and len(a) > 1 and num(a[:-1]) is not None:
         v = num(a[:-1]) * UNIT[a[-1]]
+    return v
+def secs(a):
+    v = val(a)
     return None if v is None else math.ceil(min(v, 10**9))
+def finite(a):
+    # A number of seconds `timeout` can bound; `inf` and `infinity` say wait forever (#417).
+    v = val(a)
+    return v is not None and v != math.inf
 def wait(words, raw, only, d):
-    # (seconds, looped) for one command; seconds None when a wait cannot be read. A shell string is counted only
-    # on raw words (JOINED holds it as QUOTED); `only` counts nothing else, as the JOINED walk counted it.
+    # (seconds, loop kind, finite sleeps only, other wait) for one command; seconds None when a wait cannot be read.
+    # A shell string is counted only on raw words (JOINED holds it as QUOTED); `only` counts nothing else, as the
+    # JOINED walk counted it. The loop kind is that of a loop inside the string: 1 a finite sleep, 2 anything else.
     if not words:
-        return 0, False
+        return 0, 0, True, False
     name, args = words[0].rsplit("/", 1)[-1], words[1:]
     s = " ".join(args) if name == "eval" else string_run(name, args) if name in SHELLS or name == "env" else None
     if s is not None:
         STRINGS[0] = True
         if not raw:
-            return 0, False
-        t, lp, un = script_wait(s, d)
-        return (None if un else t), lp
-    return (0 if only else plain_wait(name, args)), False
+            return 0, 0, True, False
+        t, lk, un, oth = script_wait(s, d)
+        return (None if un else t), lk, not (un or oth), oth
+    if only:
+        return 0, 0, True, False
+    n = plain_wait(name, args)
+    sl = name == "sleep" and all(finite(a) for a in args)
+    return n, 0, sl, (n is None or n > 0) and not sl
 def plain_wait(name, args):
     if name == "sleep":
         n = [secs(a) for a in args]
         return None if None in n else sum(n)
     if name == "wait-test-run.sh":
-        return int(args[2]) if len(args) > 2 and args[2].isdigit() else 270
+        return (int(args[2]) if args[2].isdigit() else None) if len(args) > 2 else 270  # an explicit max that is no number is unread, not 270
+    if name == "bgrun.sh":
+        # Its last --max before any `--` (the job after it is no wait of ours), else 25 for a run and the whole limit for wait.
+        a = args[:args.index("--")] if "--" in args else args
+        k = [k for k, x in enumerate(a) if x == "--max"]
+        if k:  # an explicit --max with no value, or none that is a number, is unread, never the default
+            v = a[k[-1] + 1] if k[-1] + 1 < len(a) else ""
+            return int(v) if v.isdigit() else None
+        return int(os.environ["NPL_LIMIT"]) if a[:1] == ["wait"] else 25
     if name in ("orca", "orca-ide"):
         vals = [v for k, a in enumerate(args) for v in
                 ([a.split("=", 1)[1]] if a.startswith("--timeout-ms=") else args[k + 1:k + 2] if a == "--timeout-ms" else [])]
@@ -336,12 +362,15 @@ def plain_wait(name, args):
         return None if None in n else sum(math.ceil(min(v, 10**12) / 1000) for v in n)
     return 0
 def walk(tokens, raw, only, d):
-    depth, cmd, total, looped, unread = 0, [], 0, False, False
+    # (total, loop kind, unread, other): the total counts the waits outside a loop; the loop kind is 0 none, 1 a loop
+    # whose waits are all finite sleeps, 2 a loop that waits on anything else (an ask, a test wait, an unreadable operand).
+    depth, cmd, total, kind, unread, oth = 0, [], 0, 0, False, False
     for w in tokens + [";"]:
         if w in SEPS:
-            n, lp = wait(run(cmd), raw, only, d)
-            unread = unread or n is None
-            total, looped, cmd = total + (n or 0), looped or lp or ((n is None or n > 0) and depth > 0), []
+            n, lk, fin, ot = wait(run(cmd), raw, only, d)
+            unread, oth = unread or n is None, oth or ot
+            kind = max(kind, lk, (1 if fin else 2) if depth > 0 and (n is None or n > 0) else 0)
+            total, cmd = total + (0 if depth > 0 else n or 0), []
         elif cmd:
             cmd.append(w)
         elif w in ("while", "until", "for", "select"):
@@ -351,20 +380,36 @@ def walk(tokens, raw, only, d):
             depth = max(depth - 1, 0)
         elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p"):
             cmd = [w]
-    return total, looped, unread
-total, looped, unread = walk(TOK.findall(sys.stdin.read()), False, False, 0)
+    return total, kind, unread, oth
+total, kind, unread, _ = walk(TOK.findall(sys.stdin.read()), False, False, 0)
 if STRINGS[0]:
-    t, lp, un = 0, False, False
+    t, lk, un = 0, 0, False
     try:
-        t, lp, un = walk(raw_tokens(os.environ["NPL_RAW"]), True, True, 0)
+        t, lk, un, _ = walk(raw_tokens(os.environ["NPL_RAW"]), True, True, 0)
     except ValueError:
         un = True
-    total, looped, unread = total + t, looped or lp, unread or un
-print("loop" if looped else "unread" if unread else total)')
+    total, kind, unread = total + t, max(kind, lk), unread or un
+print("loop" if kind == 2 else "unread" if unread else "sleeploop:%d" % total if kind else total)')
   # A decoder that crashed printed nothing: a wait not read, never an allow.
-  case $WAITED in loop|unread) ;; ''|*[!0-9]*) WAITED=unread ;; esac
+  case $WAITED in loop|unread|sleeploop:[0-9]*) ;; ''|*[!0-9]*) WAITED=unread ;; esac
+  # #407, #417: a loop whose waits are all finite sleeps runs under `timeout L bash -c <the call>`, L being what the
+  # call's other waits leave of the one budget (LIMIT, less the 10 s the Bash timeout field adds). Under 30 s of room the
+  # loop would only time out at once: refused as a loop. The wrapper runs the WHOLE call, those earlier waits included,
+  # so it gets the whole LIMIT - 10 (the room is only the eligibility test): the call stays inside LIMIT and the loop
+  # always has its 30 s after the earlier waits.
+  case $WAITED in sleeploop:*)
+    L=$((LIMIT - 10 - ${WAITED#sleeploop:}))
+    if [ "$L" -ge 30 ]; then
+      W=$((LIMIT - 10))
+      jq -cn --arg c "timeout $W bash -c $(shq "$CMD")" --argjson t $((LIMIT * 1000)) --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
+        --arg r "a sleep loop in a worker pane is capped with the whole call at ${W} s so the call stays inside the prompt cache; exit 124 means wait again" \
+        '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecisionReason: $r, updatedInput: ($ti + {command: $c, timeout: $t})}}'
+      exit 0
+    fi
+    WAITED=loop ;;
+  esac
   if [ "$WAITED" = loop ]; then
-    printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache. A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
+    printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache (a sleep loop of finite sleeps is rewritten under a cap instead; an ask, a test wait, a bgrun wait or a sleep that is not a finite number in a loop is not). A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
     exit 2
   fi
   if [ "$WAITED" = unread ]; then
@@ -470,8 +515,10 @@ is_wait_command() {
 if [ "$TOOL" = "Bash" ] && is_wait_command; then
   BG=$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')
   if [ "$BG" != "true" ]; then
-    printf 'BLOCKED: a foreground Orca wait blocks the owner'"'"'s typing for up to ten minutes\n(owner ruling 2026-09-10).\n%s\n' "$SINGLE_SHOT_FIX" >&2
-    exit 2
+    # #408: the wait runs in the background instead of being refused (the whole tool_input, one field changed).
+    jq -cn --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
+      --arg r "a foreground Orca wait blocks typing; it now runs in the background (owner ruling 2026-09-10)" \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecisionReason: $r, updatedInput: ($ti + {run_in_background: true})}}'
   fi
   exit 0
 fi

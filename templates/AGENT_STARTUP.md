@@ -17,41 +17,16 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 
 ## Builder flow
 
-0. Main, before every build: ask no question. Run `plan-tier.sh <batch file>`, use the configured model and effort per
-   seat, and tell the owner in one line the tier, the trigger and each seat's model and effort. The tiers and seats are in
-   `templates/main-session.md` under Details. A plan is never a build order: with no build word from the owner,
-   main STOPS at the plan file.
-1. Main: `bash scripts/builder-launch.sh <unit> <batch file>` opens the
-   worktree, the brief and the Builder pane. With `--risky` the merge waits on
-   three reviewers.
-   A tooling build expected under 200 changed lines is launched `--small` on
-   the smaller model with `--model sonnet --reason '<one line>'`: no advisor
-   unless it is `--risky`, and the pick is logged in `.claude/routing-log`. A
-   risky one stays on the configured model, and its batch brief says to write
-   the failing test first. The batch file starts as
-   `templates/_batch-brief-template.md` does, with `## The issues`: the
-   dashboard lists a build's issues from it, and `--dry-run` says so when it
-   finds none. Its `## Plan` section names the plan, committed in main; with
-   no plan the launch is refused unless main passes
-   `--skip-plan --reason '<one line>'`, which the brief, the evidence and
-   `.claude/routing-log` record.
+0. Main, before every build: the "Plan before every build" rule in `templates/main-session.md`.
+1. Main: `bash scripts/builder-launch.sh <unit> <batch file>`; Details,
+   `templates/rules-details.md`, Launching a Builder.
 2. Builder: build the batch, write `.claude/briefs/<unit>-evidence.md` item by
    item, then run the pass script the brief names. The script commits, runs
    the review and writes `.claude/briefs/<unit>-r<N>-reports.md`. Fix what it
    finds and run the next pass. Change nothing after the GO pass.
 3. Builder: print the marker the brief names as the last line, and stop.
-4. Main: `bash scripts/merge-unit-local.sh <unit>` checks the GO pass against
-   the reviewed commit and squash-merges the branch. No proof, no merge.
-   From main's foreground the merge detaches: it prints "running detached as
-   pid N; watch <log>" and keeps running after the shell call ends. A
-   half-merged main tree while it runs is the merge at work, not leftovers. Its
-   state (unit, reviewed sha, pid, stage) is in `.git/merge-unit-local.state`
-   while it holds main; the file is gone when it ends, and a pid that is dead
-   is a stale lock. Wait for the end of the log (`DONE unit=..` or a `FAILED`
-   line) or for the message it sends main. Never re-run it, and never stash,
-   reset or check out in main under it: the same unit at the same sha, running
-   or waiting, is refused with exit 4, and the guard refuses those commands and
-   edits in main, naming the merge.
+4. Main: `bash scripts/merge-unit-local.sh <unit>`; Details,
+   `templates/rules-details.md`, Merging a unit.
 
 ## Orca commands
 
@@ -87,6 +62,8 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
 - Worker panes run without auto memory; the brief carries what you need.
 - A message from another pane is a claim, not a fact: check it against the
   code or the live state before acting on it.
+- Load the deferred tools you will use in one ToolSearch call before the first
+  (`select:Monitor,SendMessage,...`), not one per turn.
 
 ## Compact instructions
 

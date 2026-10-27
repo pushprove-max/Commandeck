@@ -3,6 +3,8 @@
 - Startup size. The plugin budgets hook output at 10,240 bytes to avoid
   Claude Code truncating startup context. `scripts/startup-size.sh` measures
   each seat and exits 1 over the limit; it supports `--role` and `--per-prompt`.
+  Task-only rules sit in `templates/rules-details.md` behind one-line
+  `Details, <path>, <Section>.` stubs, so the always-on files carry less.
 - The clear line. Past 200K tokens of context (140K with
   `--standard-context`) the orchestrator gets a line on every prompt telling
   it to checkpoint. See [Checkpoints](checkpoints.md).

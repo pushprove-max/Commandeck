@@ -321,7 +321,7 @@ units() {
     wt=${wt%/}; [ -e "$wt/.git" ] || continue
     u=${wt##*/}
     # A merged unit leaves the in-flight list even while its worktree stays (finishedBuilds lists it). Seats are not units.
-    case $u in Chief-of-Staff) ;; *) ! merged "$u" || continue ;; esac
+    pp_standing_wt "$u" || ! merged "$u" || continue
     # A plan seat's worktree, marked by seat.sh, is the unit's Planning stage until the Builder's launch adopts it and
     # drops the mark: <unit> itself, or <unit>-plan for a unit planned before 0.18.0, whose card the unit's own
     # worktree carries when it is there: one unit, one card.
@@ -331,8 +331,8 @@ units() {
       "${u%-plan}") [ ! -e "$PP_WORKSPACES/$po/.git" ] || continue ;;
       *) po= ;;
     esac
-    # The relay pane's worktree is a seat, not a unit. Exact name only; app.js SEATS names the same stage.
-    case $u in Chief-of-Staff) seat=chief-of-staff ;; *) seat= ;; esac
+    # The relay's and the lanes' worktrees are seats, not units. Exact names only (pp_standing_wt); app.js SEATS names the same stages.
+    seat=; ! pp_standing_wt "$u" || seat=$(printf '%s' "$u" | tr 'A-Z' 'a-z')
     ag=null
     [ -z "$ps" ] || ag=$(jq -c --arg p "$wt" '[.result.worktrees[]? | select(.path == $p) | (.agents // [])[] | "\(.agentType):\(.state)"] | join(" ")' <<<"$ps")
     branch=null dirty=null diff=null

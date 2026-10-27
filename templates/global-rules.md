@@ -8,6 +8,7 @@
 - No new feature flag without the owner's OK.
 - Talk to the owner in plain English: the result first, no jargon they did
   not use.
+- No short 'I will now...' line before a tool call.
 - Severity: P0 is data loss, a security hole or a broken main path; P1 is
   wrong behaviour a user will hit; P2 is wrong behaviour on an edge or a
   misleading message; P3 is polish. Don't inflate a finding.
@@ -95,8 +96,9 @@
 - An exception, allowlist or exemption entry in a guard or its test stands
   only when the same test proves the alternative it claims, or the entry cites
   an owner ruling id. A comment is not proof.
-- Name a drift guard for what it guards: it fails when two copies of one fact
-  disagree, and its name says which two.
+- **Planning and evidence** (drift-guard names, review questions, the evidence
+  file, the halfway cut, size caps, acceptance tests, "Create a PR"): Details,
+  ~/.commandeck/plugin/templates/rules-details.md, Planning and evidence.
 - Plan by size: a one-line fix needs no plan; a change across a few files
   gets a short list of steps; anything larger gets a written plan the owner
   approves first.
@@ -111,21 +113,7 @@
   helper or a test that names both sides. Preview the same edit to all of them
   first (a dry run) so none is missed: a text search misses a copy that was
   renamed.
-- Write the review questions before the code: the brief's "How this will be
-  reviewed" lists what the reviewer will check, and the builder answers each in
-  the evidence file before reporting.
-- Write the evidence file as the work goes: a section per item, added when that
-  item's check passes. It is the resume point after a crash and the proof for
-  the reviewer.
 - A plan step that adds an abstraction, a config surface, a dependency or a
   file names the simplest alternative it considered and why that loses. A step
   that adds flexibility the request did not ask for is a review finding: P1
   when it adds a dependency or a config surface, P2 otherwise.
-- A brief whose cuts run past an hour names its halfway cut. At that cut the
-  Builder writes a halfway note of about 200 tokens in the evidence file (what
-  is built, what is left, what is decided) and goes on.
-- A unit over the size caps is not split without the owner's yes.
-- Acceptance criteria that change behaviour name the test file and the exact
-  cases. The failing test comes first.
-- "Create a PR" is a request to open a pull request for work already done.
-  It is never an order to build something new.

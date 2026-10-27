@@ -48,6 +48,28 @@ if [ "$fresh" = 1 ] && [ -f "$cp.restarted" ] && [ "$(cksum < "$cp")" = "$(cat "
   echo "context-clear: main was already restarted for this checkpoint; close this pane by hand (its tab is pinned)" >&2
   exit 0
 fi
+# #409: the automatic first-crossing snapshot is a skeleton, and only the flagged state-snapshot.sh call fills it. A
+# checkpoint still holding a Goal placeholder (the generator's "TODO one line:" or the hand template's "<one line:") or
+# a unit's TODO cell is no restart point, whether or not it resumed from another. The other sections' TODO prompts
+# are main's notes, not restart fields. The first stop blocks once, naming the fields and the call; the second logs
+# and leaves main where it is.
+if [ "$fresh" = 1 ]; then
+  unfilled=""
+  grep -qE '^(TODO one line:|<one line:)' "$cp" && unfilled="Goal"
+  grep -qE '^\| .*\| TODO \|' "$cp" && unfilled+="${unfilled:+ and }unit stage/next cells"
+  if [ -n "$unfilled" ]; then
+    echo "$(date +%FT%T) stop-hook: $cp still has unfilled fields ($unfilled); main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    if [ "$active" != true ]; then
+      HOOK_FIRE_BLOCK=1
+      snap="$(cd "$(dirname "$0")/../scripts" && pwd)/state-snapshot.sh"
+      jq -n --arg r "CHECKPOINT NOT READY: ${cp/#$HOME/\~} has unfilled $unfilled. Fill them in one call: bash ${snap/#$HOME/\~} --out ${cp/#$HOME/\~} --goal '<one line>' --stage <unit>=<text> --next <unit>=<text>; then end the turn." '{decision:"block", reason:$r}'
+      exit 0
+    fi
+    HOOK_FIRE_ADVISE=1
+    echo "context-clear: $cp still has unfilled fields; main is not restarted" >&2
+    exit 0
+  fi
+fi
 # A resumed main keeps, or closes with a reason, every open item of the
 # checkpoint it resumed from: a restart that drops one loses that work
 # for good. Checked before anything is published or launched. Issue 252: the

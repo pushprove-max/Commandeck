@@ -52,14 +52,17 @@ case "$1 $2" in
   "terminal list") echo '{"result": []}' ;;
   "terminal create") { ( exec 8<"$HOME/.commandeck/install"; flock -n 8 ) && echo "create: lock free" || echo "create: lock held"; } >> "$HOME/log"
     echo '{"result": {"handle": "term_relay"}}' ;;
-  "worktree create") mkdir -p "$PP_WORKSPACES/Chief-of-Staff"; echo '{}' ;;
+  "worktree create") n=; p=; for a in "$@"; do [ "$p" = --name ] && n=$a; p=$a; done
+    if [ -z "$n" ]; then mkdir -p "$PP_WORKSPACES/Chief-of-Staff"
+    else echo "lane-wt $n" >> "$HOME/log"; git worktree add -q -b "$n" "$PP_WORKSPACES/$n"; fi
+    echo '{}' ;;
 esac
 EOF
 chmod +x "$T/bin/orca-ide"
 # Setup's side, its relay block run alone: a fresh relay worktree under the update is left to it, not opened.
 SR=$T/setup-relay; mkdir -p "$SR/scripts"; echo 'exit 0' > "$SR/scripts/worktree-setup.sh"; ln -s "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/paths.sh" "$SR/scripts/"
 git -C "$PROJ" commit -q --allow-empty -m init
-RELAY=$(sed -n '/^# --- the relay: /,/^# --- the project files/p' "$REAL/scripts/setup.sh")
+RELAY=$(sed -n '/^# --- the relay: /,/^# --- the standing lanes: /p' "$REAL/scripts/setup.sh")
 srelay() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH "$@" bash -c '. "$0/paths.sh" && PP_WORKSPACES=$1 && export PP_WORKSPACES && pp_worktree_new() { orca-ide worktree create; }; HERE=$2 NAME=Kit NEED=(); eval "$3"; printf "need: %s\n" "${NEED[@]}"' "$REAL/scripts" "$SR/ws" "$SR/scripts" "$RELAY" 2>&1); }
 : > "$HOME/log"; OUT=$(srelay IL_RELAY_PANE="$SR/relay-pane")
 check "setup under the update: the new relay's pane is left to the update, with its place, name and command" \
@@ -90,6 +93,23 @@ rm "$PL/CHANGELOG.md"; ln -s "$REAL/CHANGELOG.md" "$PL/"
 echo 'echo "doctor: broken"; exit 1' > "$PL/scripts/doctor.sh"
 : > "$HOME/log"; OUT=$(upd)
 check "an update that goes back opens no pane" 0 "$(grep -c create "$HOME/log")"
+
+# --- issue 416: setup makes the Fast lane and the Research lane, once, with no relay chosen and no pane ---
+# Setup's lanes block run alone, as the relay block is (not a setup run). The stub orca-ide makes a real git worktree of
+# the project at the named folder, and worktree-setup.sh notes each folder it is run on.
+SL=$T/setup-lanes; mkdir -p "$SL/scripts"; ln -s "$REAL/scripts/codex-helpers.sh" "$REAL/scripts/paths.sh" "$SL/scripts/"
+echo 'echo "settings $1" >> "$HOME/log"' > "$SL/scripts/worktree-setup.sh"
+LANES=$(sed -n '/^# --- the standing lanes: /,/^# --- the project files/p' "$REAL/scripts/setup.sh")
+slanes() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH bash -c '. "$0/paths.sh" && PP_WORKSPACES=$1 && export PP_WORKSPACES && pp_worktree_new() { orca-ide worktree create --name "$1"; }; HERE=$2 NAME= NEED=(); eval "$3"; printf "need: %s\n" "${NEED[@]}"' "$REAL/scripts" "$SL/ws" "$SL/scripts" "$LANES" 2>&1); }
+: > "$HOME/log"; OUT=$(slanes)
+check "a fresh setup creates both lanes with no manual step" "lane-wt Fast-lane
+settings $SL/ws/Fast-lane
+lane-wt Research-lane
+settings $SL/ws/Research-lane:need: :2" \
+  "$(cat "$HOME/log"):$(grep '^need:' <<<"$OUT"):$(git -C "$PROJ" worktree list --porcelain | grep -c "^worktree $SL/ws/\(Fast\|Research\)-lane$")"
+: > "$HOME/log"; OUT=$(slanes)
+check "a second setup run creates no lane again" "0:2:2:need: " \
+  "$(grep -c '^lane-wt' "$HOME/log"):$(grep -c '^settings ' "$HOME/log"):$(grep -c 'already there' <<<"$OUT"):$(grep '^need:' <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

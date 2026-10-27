@@ -30,11 +30,22 @@ check "single delayed Bash || command passes" 0 \
 bg() { jq -cn --arg cmd "$1" --argjson bg "$2" '{tool_name:"Bash",tool_input:{command:$cmd,run_in_background:$bg}}'; }
 check "orca-ide check --wait in the background passes" 0 \
   "$(run_hook "$(bg 'orca-ide orchestration check --run run_1 --wait --timeout-ms 600000 --json' true)")"
-# owner ruling 2026-09-10: a foreground wait blocks his typing for ten minutes.
-check "orca-ide check --wait in the foreground blocks" 2 \
-  "$(run_hook "$(bg 'orca-ide orchestration check --wait --types worker_done,question --timeout-ms 540000 --json' false)")"
-check "orca-ide check --wait with no background field blocks" 2 \
-  "$(run_hook "$(jq -cn '{tool_name:"Bash",tool_input:{command:"orca-ide orchestration check --wait --timeout-ms 60000 --json | jq ."}}')")"
+# owner ruling 2026-09-10: a foreground wait blocks his typing for ten minutes. #408: it is rewritten to run in the
+# background, not refused. rw_main prints "<exit>:<updatedInput.run_in_background>:<permissionDecision present>".
+rw_main() {
+  local o rc
+  o=$(cd "$TEST_REPO" && printf '%s\n' "$1" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR "$HOOK" 2>/dev/null); rc=$?
+  printf '%s:%s' "$rc" "$(jq -r '.hookSpecificOutput | "\(.updatedInput.run_in_background):\(has("permissionDecision"))"' <<<"$o" 2>/dev/null)"
+}
+check "orca-ide check --wait in the foreground is rewritten to the background" 0:true:false \
+  "$(rw_main "$(bg 'orca-ide orchestration check --wait --types worker_done,question --timeout-ms 540000 --json' false)")"
+check "orca-ide check --wait with no background field is rewritten to the background" 0:true:false \
+  "$(rw_main "$(jq -cn '{tool_name:"Bash",tool_input:{command:"orca-ide orchestration check --wait --timeout-ms 60000 --json | jq ."}}')")"
+check "a foreground inbox wait is rewritten to the background: command kept, rest of tool_input kept, no permissionDecision" "orca-ide orchestration check --wait --timeout-ms 60000:keep:true:false" \
+  "$(cd "$TEST_REPO" && jq -cn '{tool_name:"Bash",tool_input:{command:"orca-ide orchestration check --wait --timeout-ms 60000",description:"keep"}}' | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR "$HOOK" 2>/dev/null \
+    | jq -r '.hookSpecificOutput | "\(.updatedInput.command):\(.updatedInput.description):\(.updatedInput.run_in_background):\(has("permissionDecision"))"')"
+check "a call already in the background exits 0 with no output" "0:" \
+  "$(cd "$TEST_REPO" && o=$(bg 'orca-ide orchestration check --wait --timeout-ms 60000' true | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR "$HOOK" 2>&1); echo "$?:$o")"
 check "a commit message quoting the wait passes in the foreground" 0 \
   "$(run_hook "$(jq -cn '{tool_name:"Bash",tool_input:{command:"git commit -q -F - <<EOF\ntooling: the wait\n\n`orca-ide orchestration check --wait` without the flag exits 2.\nEOF"}}')")"
 check "orca-ide check without --wait passes in the foreground" 0 \
@@ -151,8 +162,8 @@ check "an append documenting a sleep loop passes" 0 \
   "$(run_hook "$(bg $'cat >> report.md <<\'EOF\'\nNever do this:\n  while true; do sleep 30; gh pr view 1; done\n  sleep 30; gh pr view 1; sleep 30; gh pr view 1;\nEOF' false)")"
 # The body must not hide a real command that follows it, or the strip becomes
 # the hole: everything after the delimiter is code again.
-check "a foreground wait AFTER a documenting heredoc still blocks" 2 \
-  "$(run_hook "$(bg $'cat >> report.md <<\'EOF\'\n  orca-ide orchestration check --wait --json\nEOF\norca-ide orchestration check --wait --json' false)")"
+check "a foreground wait AFTER a documenting heredoc is still seen: rewritten to the background" 0:true:false \
+  "$(rw_main "$(bg $'cat >> report.md <<\'EOF\'\n  orca-ide orchestration check --wait --json\nEOF\norca-ide orchestration check --wait --json' false)")"
 
 # A comment is not run: a loop that is only written in one is not a poll.
 check "a # inside a word starts no comment: the loop after it still blocks" 2 \
@@ -226,10 +237,18 @@ check "a bare check named in a commit message passes" 0 "$(run_hook "$(bg 'git c
 # stated waits are summed against one budget (270 s, wait-test-run.sh's default; 540 s under the 1-hour cache), and a
 # foreground sleep loop, which states no end, is refused. A background call or a Monitor ends the turn: not held.
 rc_wt() { run_wt "$(bg "$1" "${2:-false}")" | tail -1; }
+# #407: a worker's sleep loop is rewritten, not refused. rw_wt prints "<exit>:<rewritten|none>": rewritten when the
+# hook printed a `timeout <L> bash -c ...` command. rwf_wt <field> <cmd> prints one field of the printed updatedInput.
+RW=rc=0:rewritten
+rw_wt() {
+  local o; o=$(run_wt "$(bg "$1" "${2:-false}")")
+  printf '%s:%s' "$(tail -1 <<<"$o")" "$(sed '$d' <<<"$o" | jq -r '.hookSpecificOutput.updatedInput.command | if startswith("timeout ") then "rewritten" else "none" end' 2>/dev/null || echo none)"
+}
+rwf_wt() { run_wt "$(bg "$2" false)" | sed '$d' | jq -r ".hookSpecificOutput.updatedInput.$1" 2>/dev/null; }
 OUT=$(run_wt "$(bg 'until grep -q passed /tmp/t.log; do sleep 5; done' false)")
-check "a worker's foreground sleep loop on a test log is refused, naming run_in_background and wait-test-run.sh" rc=2:1 \
-  "$(tail -1 <<<"$OUT"):$(grep -c 'run_in_background' <<<"$OUT" | tr -d ' ')$(grep -q 'wait-test-run.sh' <<<"$OUT" || echo ' no wait-test-run.sh')"
-check "a worker's while kill -0 sleep loop is refused" rc=2 "$(rc_wt 'while kill -0 123; do sleep 5; done')"
+check "a worker's foreground sleep loop on a test log is rewritten, the reason saying exit 124 means wait again" $RW:1 \
+  "$(rw_wt 'until grep -q passed /tmp/t.log; do sleep 5; done'):$(grep -c '124' <<<"$OUT" | tr -d ' ')"
+check "a worker's while kill -0 sleep loop is rewritten" $RW "$(rw_wt 'while kill -0 123; do sleep 5; done')"
 check "a worker's ask of --timeout-ms 600000 is refused" rc=2 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
 check "and its --resume rerun" rc=2 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000 --resume m1')"
 check "and under the 1-hour cache" rc=2 "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
@@ -255,13 +274,13 @@ check "a here-document whose body is a long ask is data, passes" rc=0 \
 check "a worker's plain command passes" rc=0 "$(rc_wt 'sleep 1 && date')"
 # r1 findings: a sleep named by its path is still sleep; a wait in a loop repeats, so its one-pass sum is no bound;
 # sleep sums all its operands; only a command that runs a --timeout-ms waits on it.
-check "a worker's /bin/sleep loop is refused" rc=2 "$(rc_wt 'while kill -0 $$; do /bin/sleep 5; done')"
-check "a worker's sleep loop past an inner loop named done is refused" rc=2 "$(rc_wt 'while true; do for done in a; do :; done; sleep 5; done')"
-check "a worker's sleep loop past an echo of \${done} is refused" rc=2 "$(rc_wt 'while true; do echo ${done}; sleep 5; done')"
+check "a worker's /bin/sleep loop is rewritten" $RW "$(rw_wt 'while kill -0 $$; do /bin/sleep 5; done')"
+check "a worker's sleep loop past an inner loop named done is rewritten" $RW "$(rw_wt 'while true; do for done in a; do :; done; sleep 5; done')"
+check "a worker's sleep loop past an echo of \${done} is rewritten" $RW "$(rw_wt 'while true; do echo ${done}; sleep 5; done')"
 check "/bin/sleep 400 is refused" rc=2 "$(rc_wt '/bin/sleep 400')"
 check "a wait-test-run.sh in a loop is refused" rc=2 "$(rc_wt 'for n in 1 2; do bash scripts/wait-test-run.sh $$ /dev/null; done')"
 check "an ask in a loop is refused" rc=2 "$(rc_wt 'for n in 1 2; do orca-ide orchestration ask --from t --question q --timeout-ms 240000; done')"
-check "a sleep in a while condition is refused" rc=2 "$(rc_wt 'while sleep 5; do date; done')"
+check "a sleep in a while condition is rewritten" $RW "$(rw_wt 'while sleep 5; do date; done')"
 check "sleep 200 200 (400 s) is refused" rc=2 "$(rc_wt 'sleep 200 200')"
 check "sleep 2m 100 (220 s) passes" rc=0 "$(rc_wt 'sleep 2m 100')"
 check "a search for a --timeout-ms pattern passes" rc=0 "$(rc_wt "rg -n -- '--timeout-ms=600000' .")"
@@ -276,9 +295,12 @@ check "main: a /bin/sleep loop is refused" 2 "$(run_hook "$(json 'while true; do
 for c in 'env -u FOO orca-ide orchestration ask --from t --question q --timeout-ms 600000' 'command -- sleep 400' \
   'timeout --signal=TERM 600 sleep 400' 'timeout -s TERM -k 5 600 sleep 400' 'env -i -C /tmp sleep 400' 'nice -n 5 sleep 400' \
   '> /dev/null orca-ide orchestration ask --from t --question q --timeout-ms 600000' '2>&1 sleep 400' 'sleep>/dev/null 400' \
-  'sleep 5m>/dev/null' 'sleep 4e2' 'sleep +400' 'sleep 0x190' 'sleep 4e0m 100' 'while true; do sleep 4e2; done' \
-  'while true; do sleep +1; done' 'sleep $T' 'orca-ide orchestration ask --from t --question q --timeout-ms 6e5'; do
+  'sleep 5m>/dev/null' 'sleep 4e2' 'sleep +400' 'sleep 0x190' 'sleep 4e0m 100' \
+  'sleep $T' 'orca-ide orchestration ask --from t --question q --timeout-ms 6e5'; do
   check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+done
+for c in 'while true; do sleep 4e2; done' 'while true; do sleep +1; done'; do
+  check "worker: $c is rewritten" $RW "$(rw_wt "$c")"
 done
 for c in 'sleep .5' 'sleep 1e1 2>/dev/null' 'env -u FOO sleep 200' 'sleep 100 >&2'; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
@@ -289,7 +311,7 @@ for c in 'while true; do env -u X sleep 30; done' 'while true; do sleep +5; done
   check "main: $c is refused" 2 "$(run_hook "$(json "$c")")"
 done
 for c in 'env -u X orca-ide orchestration check --wait --json' '>/dev/null orca-ide orchestration check --wait --json'; do
-  check "main: a foreground wait behind a wrapper or redirection blocks: $c" 2 "$(run_hook "$(bg "$c" false)")"
+  check "main: a foreground wait behind a wrapper or redirection is rewritten to the background: $c" 0:true:false "$(rw_main "$(bg "$c" false)")"
 done
 for c in '>/dev/null orca orchestration check' 'env -u X orca orchestration check' 'while true; do orca orchestration check; done'; do
   check "a bare check blocks: $c" 2 "$(run_hook "$(bg "$c" true)")"
@@ -300,8 +322,8 @@ done
 # r3 findings: a quoted argument keeps its position (a wrapper's option value, a redirection target), a descriptor
 # duplication is one redirection, env's argv0 takes a value, and `command -v`/`-V` looks a name up without running it.
 check "a bare check behind a quoted redirection target blocks" 2 "$(run_hook "$(bg '>"/dev/null" orca orchestration check' true)")"
-check "main: a foreground wait behind a quoted wrapper option blocks" 2 \
-  "$(run_hook "$(bg 'env -u "FOO" orca-ide orchestration check --wait --timeout-ms 600000' false)")"
+check "main: a foreground wait behind a quoted wrapper option is rewritten to the background" 0:true:false \
+  "$(rw_main "$(bg 'env -u "FOO" orca-ide orchestration check --wait --timeout-ms 600000' false)")"
 check "main: a chain of quoted sleeps is refused" 2 "$(run_hook "$(json 'sleep "30"; gh pr checks 1; sleep "30"; gh pr checks 1')")"
 check "a wait loop behind a leading 2>&1 blocks" 2 "$(run_hook "$(bg 'while true; do 2>&1 bash scripts/orca-wait.sh; done' true)")"
 for c in 'env -a custom sleep 400' 'env --argv0 custom sleep 400' 'env -P /bin sleep 400' 'command -p sleep 400' \
@@ -321,13 +343,15 @@ for c in 'while true; do "done"; sleep 5; gh pr view 1; done' 'while true; do "s
   'while true; do \sleep 5; gh pr view 1; done' 's\leep 30; gh pr checks 1; s\leep 30; gh pr checks 1'; do
   check "main: a sleep loop behind quoting blocks: $c" 2 "$(run_hook "$(json "$c")")"
 done
-for c in 'while true; do "done"; sleep 100; done' 's\leep 400' '\sleep 400' '"sl"eep 400'; do
+for c in 's\leep 400' '\sleep 400' '"sl"eep 400'; do
   check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
 done
+check "worker: a sleep loop behind a quoted done is rewritten" $RW "$(rw_wt 'while true; do "done"; sleep 100; done')"
 # r6 finding: an empty pair of quotes changes no word bash passes; it only keeps a reserved word from reading as one.
-for c in 'sleep"" 400' "sleep'' 400" 'sleep 400""' 'sl""eep 400' 'while true; do done""; sleep 100; done'; do
+for c in 'sleep"" 400' "sleep'' 400" 'sleep 400""' 'sl""eep 400'; do
   check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
 done
+check "worker: a sleep loop behind done\"\" is rewritten" $RW "$(rw_wt 'while true; do done""; sleep 100; done')"
 for c in 'orca orchestration check""' 'orca orchestration"" check' 'orca"" orchestration check'; do
   check "a bare check behind an empty pair of quotes blocks: $c" 2 "$(run_hook "$(bg "$c" true)")"
 done
@@ -353,9 +377,10 @@ for c in "bash -c 'sleep 400'" 'sh -c "sleep 400"' "zsh -c 'sleep 300'" "eval 's
   "sleep 200; bash -c 'sleep 100'" "env -u X -S 'sleep 400'"; do
   check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
 done
-check "worker: a sleep loop inside bash -c is refused as a loop" 1 \
-  "$(run_wt "$(bg "bash -c 'for i in 1 2; do sleep 1; done'" false)" | grep -c 'inside a loop')"
-check "worker: bash -c inside a loop is refused as a loop" rc=2 "$(rc_wt "for i in 1 2; do bash -c 'sleep 1'; done")"
+check "worker: a sleep loop inside bash -c is rewritten" $RW "$(rw_wt "bash -c 'for i in 1 2; do sleep 1; done'")"
+check "worker: bash -c inside a loop is rewritten" $RW "$(rw_wt "for i in 1 2; do bash -c 'sleep 1'; done")"
+check "worker: a test wait inside bash -c in a loop is still refused as a loop" 1 \
+  "$(run_wt "$(bg "for i in 1 2; do bash -c 'bash scripts/wait-test-run.sh 1 a.out'; done" false)" | grep -c 'inside a loop')"
 for c in "bash -c 'sleep 100'" "bash -c 'echo hi'" "eval 'echo sleep 400'" "bash scripts/x.sh 'sleep 400'"; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
 done
@@ -383,6 +408,58 @@ printf '#!/bin/sh\n[ "$1" = -I ] && exit 1\nexec %s "$@"\n' "$(command -v python
 chmod +x "$TEST_REPO/crashpy/python3"
 check "worker: a crashed wait reader refuses, not allows" 1 \
   "$(PATH="$TEST_REPO/crashpy:$PATH" run_wt "$(bg 'sleep 400' false)" | grep -c 'cannot read')"
+
+# #407 / #417: a worker's sleep loop runs under `timeout L bash -c <the call>`, L being what the call's other waits leave
+# of the one budget (LIMIT - 10), and the Bash timeout field becomes (L + 10) * 1000. No permissionDecision is sent.
+# bgt <cmd> -- a foreground call with the Bash timeout field set, as a model sends one.
+bgt() { jq -cn --arg cmd "$1" '{tool_name:"Bash",tool_input:{command:$cmd,description:"keep",run_in_background:false,timeout:600000}}'; }
+LOOP='while true; do sleep 5; done'
+# put <field> <cmd> -- one field of the printed updatedInput ("none" when nothing was rewritten).
+put() { run_wt "$(bgt "$2")" | sed '$d' | jq -r ".hookSpecificOutput.updatedInput.$1 // \"none\"" 2>/dev/null || echo none; }
+check "worker loop rewritten; main loop blocked" "$RW 2" \
+  "$(rw_wt "$LOOP") $(run_hook "$(bg 'while true; do sleep 5; gh pr view 1; done' false)")"
+check "worker loop rewrite: timeout 260, Bash timeout 270000, the call's other fields kept, no permissionDecision" \
+  "timeout 260 bash -c|270000|keep|false" \
+  "$(put command "$LOOP" | cut -c1-19)|$(put timeout "$LOOP")|$(put description "$LOOP")|$(run_wt "$(bgt "$LOOP")" | sed '$d' | jq -r '.hookSpecificOutput | has("permissionDecision")')"
+check "worker loop rewrite under the 1-hour cache: timeout 530, Bash timeout 540000" "timeout 530 bash -c|540000" \
+  "$(TTL=1h put command "$LOOP" | cut -c1-19)|$(TTL=1h put timeout "$LOOP")"
+check "worker loop rewrite: the reason says exit 124 means wait again" 1 "$(run_wt "$(bgt "$LOOP")" | grep -c 'exit 124 means wait again')"
+QL="while ! grep -q 'done x' f; do sleep 5; done"
+check "quoted loop rewritten intact" "$QL" "$(eval "set -- $(put command "$QL")"; printf '%s' "$5")"
+check "worker loop shares the call's wait budget: 29 s left is refused, 160 s left is rewritten" "rc=2:none:timeout 260 bash -c:270000" \
+  "$(rw_wt "sleep 231; $LOOP"):$(put command "sleep 100; $LOOP" | cut -c1-19):$(put timeout "sleep 100; $LOOP")"
+check "a loop left exactly 30 s is still rewritten, the whole call getting the whole allowance" "timeout 260 bash -c:270000" \
+  "$(put command "sleep 230; $LOOP" | cut -c1-19):$(put timeout "sleep 230; $LOOP")"
+# An earlier wait is inside the wrapper too, so the wrapper must not be cut down by it.
+EARLY='sleep 200; for n in 1; do sleep 1; done; echo finished'
+check "an earlier wait is not counted twice: timeout 260, Bash timeout 270000" "timeout 260 bash -c:270000" \
+  "$(put command "$EARLY" | cut -c1-19):$(put timeout "$EARLY")"
+check "an earlier wait is not counted twice: the 1-hour cache gives 530 and 540000" "timeout 530 bash -c:540000" \
+  "$(TTL=1h put command "$EARLY" | cut -c1-19):$(TTL=1h put timeout "$EARLY")"
+RAN=$(eval "$(put command 'sleep 2; for n in 1; do sleep 1; done; echo finished')" 2>&1; echo "rc=$?")
+check "an earlier wait is not counted twice: the rewritten call runs to the end" "finished rc=0" "$(echo $RAN)"
+for c in 'while true; do sleep inf; done' 'while true; do sleep infinity; done' 'while true; do sleep $T; done'; do
+  check "a non-numeric sleep in a worker loop is refused: $c" rc=2 "$(run_wt "$(bgt "$c")" | tail -1)"
+done
+check "a suffix sleep in a worker loop is rewritten under the budget" "timeout 260 bash -c" \
+  "$(put command 'while true; do sleep 1h; done' | cut -c1-19)"
+check "a test wait in a worker loop stays refused" rc=2 "$(run_wt "$(bgt 'until false; do bash scripts/wait-test-run.sh 1 a.out; done')" | tail -1)"
+
+# #406: bgrun.sh runs and waits count against the same worker budget. A run waits its last --max before any `--`
+# (else 25); a `wait` waits its --max (else the whole LIMIT). A command after `--` is the job's, never a wait.
+check "bgrun waits count against the worker wait budget: one passes, two (540 s) are refused naming it, a run plus a wait is refused" \
+  "rc=0 rc=2:1 rc=2" \
+  "$(rc_wt 'bash scripts/bgrun.sh wait /tmp/a.log') $(OUT=$(run_wt "$(bg 'bash scripts/bgrun.sh wait /tmp/a.log; bash scripts/bgrun.sh wait /tmp/b.log' false)"); echo "$(tail -1 <<<"$OUT"):$(grep -c 'up to 540 s in all' <<<"$OUT")") $(rc_wt 'bash scripts/bgrun.sh --max 25 -- true; bash scripts/bgrun.sh wait /tmp/a.log')"
+check "a bgrun run counts its --max, and the job after -- is not a wait" "rc=0 rc=0 rc=2" \
+  "$(rc_wt 'bash scripts/bgrun.sh -- npm test') $(rc_wt 'bash scripts/bgrun.sh --max 100 --lines 5 -- sleep 999') $(rc_wt 'bash scripts/bgrun.sh --max 200 -- true; bash scripts/bgrun.sh --max 100 -- true')"
+check "an unreadable bgrun --max is refused, not counted as the default (MAX=600 would outwait the cache)" "rc=2 rc=2 rc=2 rc=2" \
+  "$(MAX=600 rc_wt 'bash scripts/bgrun.sh --max "$MAX" -- sleep 999') $(MAX=600 rc_wt 'bash scripts/bgrun.sh wait /tmp/job.log --max "$MAX"') $(rc_wt 'bash scripts/bgrun.sh --max') $(rc_wt 'bash scripts/bgrun.sh wait /tmp/job.log --max')"
+check "a readable or absent bgrun --max still passes" "rc=0 rc=0 rc=0" \
+  "$(rc_wt 'bash scripts/bgrun.sh --max 25 -- sleep 999') $(rc_wt 'bash scripts/bgrun.sh -- true') $(rc_wt 'bash scripts/bgrun.sh --max 25 -- true --max "$MAX"')"
+check "an unreadable wait-test-run.sh max is refused, not counted as 270; an absent or numeric one passes" "rc=2 rc=0 rc=0" \
+  "$(MAX=600 rc_wt 'bash scripts/wait-test-run.sh 1 a.out "$MAX"') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out 100')"
+check "a bgrun wait inside a worker loop is refused as a loop" 2:1 \
+  "$(OUT=$(run_wt "$(bg 'for i in 1 2; do bash scripts/bgrun.sh wait /tmp/a.log; done' false)"); echo "$(tail -1 <<<"$OUT" | sed 's/rc=//'):$(grep -c 'inside a loop' <<<"$OUT")")"
 
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.

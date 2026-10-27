@@ -19,6 +19,7 @@ IL_PROJECT=$IL_DIR/$PP_MAIN_SLUG.json
 IL_MACHINE=$IL_DIR/_machine.json
 # The real folder, not the stable link: setup run through the link would point the link at itself.
 IL_ROOT=$(cd "$PP_SCRIPTS/.." && pwd -P)
+. "$IL_ROOT/hooks/lib/project.sh" 2>/dev/null || :   # pp_standing_wt: the doctor's cache check skips the relay's and the lanes' worktrees
 # A path that outlives a session (a checkpoint, a notify wrapper) names the plugin
 # by this link, never by its versioned cache folder: setup points it at IL_ROOT.
 IL_LINK=$HOME/.commandeck/plugin
@@ -442,6 +443,8 @@ il_cache_ttl_report() {
       for f in "$PP_WORKSPACES"/*/.claude/settings.local.json "$ml"; do
         [ -f "$f" ] || continue
         case $f in "$rw"/*) continue ;; esac
+        # A lane runs 1h whatever the workers' answer (issue 416); its own line is below.
+        case $f in "$PP_WORKSPACES"/*) x=${f%/.claude/settings.local.json}; ! pp_standing_wt "${x##*/}" || continue ;; esac
         x=$(jq -r --arg k $k '.env[$k] // empty' "$f" 2>/dev/null)
         [ -z "$x" ] || [ "$x" = "$wt" ] || { n=1; echo "warn prompt cache: workers run $x, not the $wt you chose: $k is $x in $f; change it to $wt or remove it"; }
       done
@@ -455,6 +458,13 @@ il_cache_ttl_report() {
     leave) echo "ok prompt cache: workers leave (setup sets none)" ;;
     *) echo "ok prompt cache: workers not answered (setup sets none; /commandeck:setup asks)" ;;
   esac
+  # The Fast and Research lanes keep the 1-hour cache whatever the workers' answer: one line each, with the value it runs.
+  for x in Fast-lane Research-lane; do
+    [ -d "$PP_WORKSPACES/$x" ] || continue
+    v=$(jq -r --arg k $k '.env[$k] // empty' "$PP_WORKSPACES/$x/.claude/settings.local.json" 2>/dev/null)
+    if [ "$v" = 1h ]; then echo "ok prompt cache: $x 1h (its own .claude/settings.local.json)"
+    else echo "warn prompt cache: the $x pane runs ${v:-the default}, not 1h; run setup again"; fi
+  done
   case $rt in
     5m|1h)
       if [ -d "$rw" ]; then
