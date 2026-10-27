@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.52.1 -- 2026-10-26
+
+### Fixes
+
+- Every new command added in 0.52.0 now answers `--help` with its usage instead of an error.
+- The checks run again on the Mac's built-in shell, and a check that compared clock minutes no longer fails when a minute turns over mid-check.
+
 ## 0.52.0 -- 2026-10-26
 
 ### Launching builds
