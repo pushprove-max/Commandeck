@@ -604,13 +604,16 @@ fi
 
 codex_report() {
   jq -rs --argjson n "$ORDINAL" '
+    # The fence rule of fence.sh: backticks or tildes, indented or not, closed by the same character at least as long.
     def strip_fences:
       reduce (split("\n")[]) as $line
-        ({inside: false, lines: []};
-          if ($line | test("^[\\t ]*```")) then .inside = (.inside | not)
-          elif (.inside | not) then .lines += [$line]
-          else .
-          end)
+        ({run: null, lines: []};
+          ($line | capture("^[\\t ]*(?<run>`{3,}|~{3,})(?<rest>.*)$") // null) as $m
+          | if .run == null then (if $m then .run = $m.run else .lines += [$line] end)
+            elif $m and $m.run[0:1] == .run[0:1] and ($m.run | length) >= (.run | length) and ($m.rest | test("^[\\t ]*$"))
+            then .run = null
+            else .
+            end)
       | .lines | join("\n");
     # The latest answer (ordinal 0) is the one given after the last user
     # message: an earlier verdict is history while a follow-up turn runs.

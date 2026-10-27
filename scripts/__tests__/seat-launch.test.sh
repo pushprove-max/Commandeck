@@ -126,11 +126,18 @@ for j in sol:planJudgeSol; do
   # Issue 316: the judge's network rides Codex's read-only permission profile; --sandbox would override that profile.
   check "$r on codex launches the read-only Codex profile with network, and no --sandbox" "0:1:1:0" \
     "$?:$(jrec "$r" | grep -c "codex --model gpt-9.1-${j%%:*} ."):$(jrec "$r" | grep -c 'permissions.ghread.network.enabled=true -c .default_permissions="ghread"'):$(jrec "$r" | grep -c -- '--sandbox')"
+  # Issue 400: a Codex judge or reviewer starts no sub-agents, as on the host.
+  check "$r on codex launches with multi_agent off" "1" "$(jrec "$r" | grep -o -- '--disable multi_agent' | grep -c .)"
   cap "{\"${k}Agent\": \"claude\"}"; rm -f "$T/pane-up"
   COMMANDECK_SEAT_FORCE=1 srun launch "$r" pu "$T/judge-spec.md" >"$T/out" 2>&1
   check "$r on claude launches Claude Sonnet with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
     "$?:$(jrec "$r" | grep -c 'claude --model sonnet --effort high --disallowedTools Write,Edit,NotebookEdit')"
+  check "$r on claude has no multi_agent word" "0" "$(jrec "$r" | grep -c multi_agent)"
 done
+# Issue 400: only a reviewer loses sub-agents; a Codex builder (an overlay routing it to Codex) keeps them.
+jq '.roles.builder.agent = "codex" | .roles.builder.model = "gpt-9.1-sol"' "$REAL/config/routing.json" > "$T/codex-builder.json"
+BCMD=$(COMMANDECK_ROUTING=$T/codex-builder.json bash -c '. "$1/scripts/paths.sh" && pp_route builder && printf "%s\n" "$RT_CMD"' _ "$REAL")
+check "a Codex seat that is not a reviewer keeps multi_agent" "1:0" "$(grep -c '^codex ' <<<"$BCMD"):$(grep -c multi_agent <<<"$BCMD")"
 # The Fable judge is a Claude seat with no agent key: its routed tools list is the plugin's read-only gate.
 rm -f "$T/pane-up"
 COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-fable pu "$T/judge-spec.md" >"$T/out" 2>&1

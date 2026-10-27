@@ -29,22 +29,8 @@ pp_route codex-reviewer || exit 2
 WT=$(git rev-parse --show-toplevel 2>/dev/null) || WT=$PWD
 UNIT=$(basename "$WT")
 ROWS=$PP_MAIN/.claude/metrics/codex-helper.jsonl
-WORK=$(mktemp -d) || { echo "codex-ask: FAILED: cannot make a temp folder" >&2; exit 1; }
-trap 'pp_rm_rf "$WORK"' EXIT
-ANS=$WORK/answer ERR=$WORK/stderr
-: > "$ANS"
-
-PROMPT="You are a read-only helper for the repository at $WT. Read it by absolute path; you cannot write, and must not try. Answer in at most 6000 characters, plain text. Question: $Q"
-pp_codex_retrust
-START=$(date -u +%Y-%m-%dT%H:%M:%SZ) T0=$SECONDS RC=0
-# Outside the repository, Codex never discovers its .codex/config.toml, hooks or rules; the sandbox is always read-only.
-(cd "$WORK" && PATH="$PP_SCRIPTS/codex-no-helpers:$PATH" timeout -k 2 "$SECS" codex exec --ephemeral --skip-git-repo-check -s read-only \
-  -m "$RT_MODEL" -c "model_reasoning_effort=\"$RT_EFFORT\"" -o "$ANS" "$PROMPT") </dev/null >/dev/null 2>"$ERR" || RC=$?
-ELAPSED=$((SECONDS - T0))
-# The first model: line of Codex's stderr header; --json events carry none.
-MODEL=$(sed -n 's/^model: *//p' "$ERR" | head -1 | sed 's/[[:space:]]*$//')
-BYTES=$(wc -c < "$ANS" | tr -d ' ')
-
+# Starting values, so a failure before Codex runs still writes its row; the run overwrites them.
+MODEL= ELAPSED=0 BYTES=0 START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 record() { # <outcome> -- one >> append of one line under 4 KB; a torn last line gets a fresh one
   local row lead=
   row=$(jq -nc --arg unit "$UNIT" --arg seat "${COMMANDECK_SEAT:-builder}" --arg model "$MODEL" --arg start "$START" \
@@ -57,6 +43,30 @@ record() { # <outcome> -- one >> append of one line under 4 KB; a torn last line
 fail() { # <outcome> <message>
   record "$1"; echo "codex-ask: $2" >&2; exit 1
 }
+
+# Issue 400: a fixed /tmp template, so an inherited TMPDIR cannot put the folder inside a worktree, whose
+# .codex/config.toml Codex would then load; a folder inside the repository or any of its worktrees is refused.
+WORK=$(mktemp -d /tmp/commandeck-codex-ask.XXXXXX) || fail failed "FAILED: cannot make a temp folder"
+trap 'pp_rm_rf "$WORK"' EXIT
+REAL_WORK=$(cd "$WORK" && pwd -P) || fail failed "FAILED: cannot read the temp folder $WORK"
+while IFS= read -r tree; do
+  tree=$(cd "$tree" 2>/dev/null && pwd -P) || continue
+  case $REAL_WORK/ in "$tree"/*) fail failed "FAILED: working folder $REAL_WORK is inside $tree; Codex would load that tree's config" ;; esac
+done < <(printf '%s\n' "$WT"; git -C "$WT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+ANS=$WORK/answer ERR=$WORK/stderr
+: > "$ANS"
+
+PROMPT="You are a read-only helper for the repository at $WT. Read it by absolute path; you cannot write, and must not try. Answer in at most 6000 characters, plain text. Question: $Q"
+pp_codex_retrust
+START=$(date -u +%Y-%m-%dT%H:%M:%SZ) T0=$SECONDS RC=0
+# Outside the repository, Codex never discovers its .codex/config.toml, hooks or rules, and --ignore-rules keeps the
+# user's execpolicy rules files out too; the sandbox is always read-only.
+(cd "$WORK" && PATH="$PP_SCRIPTS/codex-no-helpers:$PATH" timeout -k 2 "$SECS" codex exec --ephemeral --skip-git-repo-check --ignore-rules -s read-only \
+  -m "$RT_MODEL" -c "model_reasoning_effort=\"$RT_EFFORT\"" -o "$ANS" "$PROMPT") </dev/null >/dev/null 2>"$ERR" || RC=$?
+ELAPSED=$((SECONDS - T0))
+# The first model: line of Codex's stderr header; --json events carry none.
+MODEL=$(sed -n 's/^model: *//p' "$ERR" | head -1 | sed 's/[[:space:]]*$//')
+BYTES=$(wc -c < "$ANS" | tr -d ' ')
 
 if [ "$RC" = 124 ]; then
   fail timeout "TIMEOUT: no answer within $SECS s"

@@ -99,6 +99,10 @@ check "the report names rules already in setup's block from an earlier run, none
   "$(python3 "$REAL/scripts/merge-rules.py" <(printf '%s\n' "$TPL") --against <(printf '%s' "$OWN") --report | head -1)"
 check "the merged text still holds both rules from setup's earlier block" 2 \
   "$(python3 "$REAL/scripts/merge-rules.py" <(printf '%s\n' "$TPL") --against <(printf '%s' "$OWN") | grep -c 'for this test')"
+# The one fence rule (fence.sh): a tilde fence is one rule whatever blank lines it holds, and a shorter backtick line
+# inside it does not close it.
+check "a tilde fence holding a blank line and a backtick line is one rule" 2 \
+  "$(printf '# H\n\n~~~\na\n\nb\n```\n~~~\n\n- rule two\n' | python3 "$REAL/scripts/merge-rules.py" - --units | wc -l | tr -d ' ')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

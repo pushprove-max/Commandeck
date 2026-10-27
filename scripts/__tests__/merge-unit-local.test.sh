@@ -257,8 +257,8 @@ check "a dashboard step with a login and no password, and an off-list line: the 
 check "the refused dashboard step never ran --install, and the off-list line is named" "0 1" \
   "$(grep -c -- 'dashboard.sh --install' "$TMP/post-calls") $(grep -c 'not on the post-merge list (exit 5): rm -rf ~/x' "$TMP/out")"
 check "the finished-builds row holds each step's exit" '[{"step":"dashboard.sh --install","exit":5},{"step":"rm -rf ~/x","exit":5}]' "$(row pa)"
-mk pb; post pb $'dashboard.sh --install\nmain-watch.sh --install'; go pb; : > "$TMP/post-calls"; : > "$TMP/password-set"
-check "with a password set both steps run, the merge ends 0 and the row shows exit 0 for each" \
+mk pb; post pb $'~~~\ndashboard.sh --install\n  ```\nmain-watch.sh --install\n  ```\n~~~'; go pb; : > "$TMP/post-calls"; : > "$TMP/password-set"
+check "with a password set both steps run (fence lines of either kind are no step), the merge ends 0 and the row shows exit 0 for each" \
   '0 2 [{"step":"dashboard.sh --install","exit":0},{"step":"main-watch.sh --install","exit":0}]' \
   "$(merge pb) $(grep -cE '^(dashboard|main-watch).sh --install$' "$TMP/post-calls") $(row pb)"
 check "one line says what each step did" 1 "$(grep -c '^step 4 post-merge: dashboard.sh --install exit 0; main-watch.sh --install exit 0 (logs ' "$TMP/out")"

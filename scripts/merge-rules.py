@@ -33,6 +33,7 @@ import sys
 
 BLOCK = re.compile(r"<!-- commandeck:[^>]*?begin -->.*?<!-- commandeck:[^>]*?end -->\n?", re.S)
 BULLET = re.compile(r"([-*+]|\d+[.)])\s")
+FENCE = re.compile(r"\s*(`{3,}|~{3,})(.*)")
 FRONT = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(\n|\Z)", re.S)
 MERGE = re.compile(r"^<!-- commandeck:merge:begin -->\n(.*?)^<!-- commandeck:merge:end -->$", re.S | re.M)
 # A root `key: value` read for sure: the key plain or quoted with no escapes, the value empty, quoted, or plain
@@ -177,7 +178,7 @@ def dropped(i, drop, keep):
 
 def parse(text):
     """[(kind, lines)]: kind is h (heading), u (a rule) or b (a blank line)."""
-    out, cur, fence = [], None, False
+    out, cur, fence = [], None, ""
 
     def flush():
         nonlocal cur
@@ -185,16 +186,18 @@ def parse(text):
             out.append(("u", cur))
         cur = None
 
+    # The fence rule of fence.sh: backticks or tildes, indented or not, closed by the same character at least as long.
     for line in text.split("\n"):
+        run = FENCE.match(line)
         if fence:
             cur.append(line)
-            if line.lstrip().startswith("```"):
-                fence = False
+            if run and run.group(1)[0] == fence[0] and len(run.group(1)) >= len(fence) and not run.group(2).strip():
+                fence = ""
                 flush()
             continue
-        if line.lstrip().startswith("```"):
+        if run:
             flush()
-            cur, fence = [line], True
+            cur, fence = [line], run.group(1)
         elif not line.strip():
             flush()
             out.append(("b", [line]))

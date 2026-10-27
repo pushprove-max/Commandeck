@@ -140,6 +140,14 @@ check "copy named only by a substring of its line is refused" 2 \
   "$(run_in "$W3" "$(t_edit "$W3/web/src/X.tsx" "$COPY")")"
 check "placeholder copy outside screen code passes" 0 \
   "$(run_in "$W1" "$(t_edit "$W1/web/src/X.ts" 'const m = "Coming soon";')")"
+# Issue 400: the host's phrase and comment rule. A comment-only line ships nothing to a screen; code after a leading
+# comment that closes on the line does.
+check "under construction copy in screen code is refused" 2 \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" '<p>Under construction</p>')")"
+check "a comment line in screen code is not placeholder copy" 0 \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" '// Export lands under construction')")"
+check "copy after a closed JSX comment is refused" 2 \
+  "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" '{/* tab */} <p>Coming soon</p>')")"
 check "a placeholder comment is still caught" 2 \
   "$(run_in "$W1" "$(t_edit "$W1/src/x.ts" '// placeholder until the API lands')")"
 check "an absolute screen path is screened" 2 \

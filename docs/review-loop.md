@@ -26,6 +26,10 @@ A closing pass first rebases onto local main and runs the tests that cover
 what changed. When setup recorded a typecheck command (`typecheckCommand`), it
 must be green too: a red typecheck stops the pass before any reviewer runs and
 names the command and its log; with none set, the pass says so and goes on.
+The typecheck has a 300 s limit: a run past it stops the pass and names the
+check that gave no result. A fresh worktree's typecheck cache is copied from a
+sibling worktree when the project's typecheck keeps one, so its first run is
+not cold.
 
 Each pass after the first prints the files and lines changed since the last
 pass, and says so when no code line changed (only comments or blank lines). If
@@ -54,7 +58,9 @@ defect. A pass whose findings are all P3 ends GO.
 Every pass reports placeholder UI as a P1 (class `placeholder-ui`): a control,
 message or screen the change adds that is disabled for good, a stub, or says
 it comes later, unless the plan or main's rulings name it on a
-`Placeholder: <file> | <complete source line> | <why>` line.
+`Placeholder: <file> | <complete source line> | <why>` line. A plan or batch
+line that describes placeholder UI is refused at launch unless it sits in a
+fenced block, is a `Placeholder:` line, or cites the issue that tracks it.
 
 A P0, P1 or P2 holds the loop (the blocking severity, P2 by default; set
 `reviewBlockSeverity` to P1 so only a P0 or P1 holds, or to P3 so every

@@ -72,6 +72,11 @@ check "Builder: Explore naming sonnet runs as Haiku" 1 "$(as_haiku "$(jq -c '. +
 check "Builder: unnamed Explore runs as Haiku" 1 "$(as_haiku "$EXPLORE")"
 check "Builder: Explore naming haiku is left alone" "" "$(builder "$(jq -c '. + {model:"haiku"}' <<<"$EXPLORE")")"
 check "a Builder's general-purpose call naming opus runs as Sonnet" sonnet "$(jq -r '.model' <<<"$(kept "$(jq -c '. + {model:"opus"}' <<<"$NOMODEL")" 1)")"
+# Issue 400: as on the host, a general-purpose call may run on the search model, named in any case or as a full id.
+check "a Builder's general-purpose call naming haiku keeps Haiku" "" "$(builder "$(jq -c '. + {model:"haiku"}' <<<"$NOMODEL")")"
+check "a Builder's general-purpose call naming claude-haiku-4-5 keeps it" "" "$(builder '{"subagent_type":"general-purpose","model":"claude-haiku-4-5"}')"
+check "a Builder's Explore naming claude-sonnet-5-5 runs as Haiku" haiku \
+  "$(builder "$(jq -c '. + {model:"claude-sonnet-5-5"}' <<<"$EXPLORE")" | jq -r '.hookSpecificOutput.updatedInput.model')"
 check "Builder: a fork naming opus is not rewritten" "" "$(builder '{"subagent_type":"fork","model":"opus","description":"x","prompt":"y"}')"
 check "a Builder's unnamed general-purpose runs as Sonnet and is not nudged" "sonnet:none" \
   "$(builder "$NOMODEL" | jq -r '"\(.hookSpecificOutput.updatedInput.model):\(.hookSpecificOutput.additionalContext // "none")"')"
@@ -97,6 +102,10 @@ check "a call already on its configured model passes unchanged" "none" "$(paneas
 mkdir -p "$TMPD" && jq '.roles.builder.helpers = {Explore: "sonnet", "general-purpose": "haiku", debugger: "sonnet"}' "$(dirname "$HOOK")/../config/routing.json" > "$TMPD/routing.json"
 check "a changed routing setting changes both helper models" "haiku:sonnet" \
   "$(paneas x "$GP_OPUS" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/routing.json"):$(paneas x "$EXPLORE" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/routing.json")"
+# A partial map (paths.sh accepts one) has no Explore entry: the absent model is skipped, not an error that keeps opus.
+jq '.roles.builder.helpers = {"general-purpose": "sonnet"}' "$(dirname "$HOOK")/../config/routing.json" > "$TMPD/partial.json"
+check "a partial helper map still runs a general-purpose call naming opus as Sonnet" sonnet \
+  "$(paneas x "$GP_OPUS" COMMANDECK_BUILDER=1 COMMANDECK_ROUTING="$TMPD/partial.json")"
 # An overlay written before helpers existed: setup keeps its builder row as it is, so it has no helpers map. The
 # shipped models still apply, or every unnamed helper there runs as named-nothing on Opus again.
 jq 'del(.roles.builder.helpers)' "$(dirname "$HOOK")/../config/routing.json" > "$TMPD/old.json"

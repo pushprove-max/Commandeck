@@ -1234,7 +1234,7 @@ break_gate() {
   local PF BREAKS RUNS NOBREAK= line bt bl
   PF=$(plan_file); [ -n "$PF" ] || return 0
   [ -z "$(round_files "$WT" "$UNIT")" ] || return 0
-  BREAKS=$(awk '/^```/ { fence = !fence; next } !fence && /^Break: / { sub(/^Break: /, ""); print }' "$PF")
+  BREAKS=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^Break: / { sub(/^Break: /, ""); print }' "$PF")
   RUNS=$(evidence_section "Break runs")
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -1364,17 +1364,59 @@ $(grep -E '^(FAIL|       FAIL)' "$log" | head -10)"
 # typecheck_green -- issue 385: a closing (final) pass needs a green typecheck when the project sets one up
 # (typecheckCommand in main's commandeck.json, written by setup), so no closing pass is spent on a tree whose types are
 # red; the merge check runs only testCommand, which need not typecheck. Narrowed passes are not taxed. The rebase-pending
-# file is untouched, so a rerun retests.
+# file is untouched, so a rerun retests. Issue 386: the run is seeded warm (seed_typecheck_cache) and bounded at
+# COMMANDECK_TYPECHECK_TIMEOUT_S (300 s); a run past it stops the pass naming the check that gave no result.
+# Catches: a typecheck that hangs (a watch-mode command, a lock never released) blocking the closing pass with no end.
 typecheck_green() {
-  local cmd log=$PP_SCRATCH/$UNIT-typecheck-r$N.log
+  local cmd log=$PP_SCRATCH/$UNIT-typecheck-r$N.log cap=${COMMANDECK_TYPECHECK_TIMEOUT_S:-300} rc=0 t0
   [ "$KIND" = final ] || return 0
   cmd=$(jq -r '.typecheckCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null) || cmd=
   [ -n "$cmd" ] || { echo "no typecheckCommand set: no typecheck before the closing pass"; return 0; }
   mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the typecheck log"
-  (cd "$WT" && bash -c "$cmd") >"$log" 2>&1 \
+  seed_typecheck_cache
+  t0=$SECONDS
+  (cd "$WT" && timeout -k 10 "$cap" bash -c "$cmd") >"$log" 2>&1 || rc=$?
+  # 137 counts as a timeout only past the deadline: a typecheck killed by something else stays red.
+  if [ "$rc" = 124 ] || { [ "$rc" = 137 ] && [ $((SECONDS - t0)) -ge "$cap" ]; }; then
+    die "no result from: typecheck. \`$cmd\` ran past ${cap}s in $WT and was stopped (log $log); no reviewer was run. Run the pass again: builder-codex-pass.sh $UNIT $N final"
+  fi
+  [ "$rc" = 0 ] \
     || die "a closing pass needs a green typecheck, and \`$cmd\` is red in $WT (log $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
 $(head -10 "$log")"
   echo "typecheck before the closing pass: green ($cmd)"
+}
+# seed_typecheck_cache -- issue 386 (the host's seed_info): a fresh worktree's typecheck cache is copied from a sibling
+# worktree, whose buildinfo paths resolve the same at the same depth. For each *.tsbuildinfo path under a sibling (not
+# under node_modules or .git) that is absent in $WT and that git ignores there, the newest sibling copy goes to a temp
+# file, dated older than any source so the typecheck re-reads every input against it, and is renamed into place. Any
+# failure leaves the path absent, which is a cold compile; it never fails the pass.
+# Catches: a fresh worktree's first closing-pass typecheck compiling cold beside a usable cache, pushing a slow project
+# toward the time limit and a no-result refusal.
+seed_typecheck_cache() {
+  local sib rel src n=0
+  while IFS= read -r rel; do
+    [ ! -e "$WT/$rel" ] || continue
+    git -C "$WT" check-ignore -q -- "$rel" 2>/dev/null || continue
+    src=
+    for sib in "${WT%/*}"/*/; do
+      [ "${sib%/}" != "$WT" ] && [ -f "$sib$rel" ] || continue
+      [ -n "$src" ] && [ ! "$sib$rel" -nt "$src" ] || src=$sib$rel
+    done
+    [ -n "$src" ] || continue
+    # The copy is dated 1980, older than any source: `tsc -b` trusts a buildinfo newer than every input without
+    # reading the sources, so a fresh-dated copy would pass this worktree's changed code unchecked.
+    if { mkdir -p "$(dirname "$WT/$rel")" && cp "$src" "$WT/$rel.$$" && touch -t 198001010000 "$WT/$rel.$$" \
+      && mv -f "$WT/$rel.$$" "$WT/$rel"; } 2>/dev/null; then
+      n=$((n + 1))
+    else
+      rm -f "$WT/$rel.$$"
+    fi
+  done < <(for sib in "${WT%/*}"/*/; do
+      [ "${sib%/}" != "$WT" ] || continue
+      (cd "$sib" 2>/dev/null && find . \( -name node_modules -o -name .git \) -prune -o -name '*.tsbuildinfo' -type f -print 2>/dev/null) || true
+    done | sed 's#^\./##' | sort -u)
+  [ "$n" = 0 ] || echo "typecheck cache: seeded $n file(s) from the worktrees beside $WT"
+  return 0
 }
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.

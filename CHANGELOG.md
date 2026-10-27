@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.53.0 -- 2026-10-27
+
+### Planning
+
+- A plan or batch that describes placeholder UI is refused at launch, unless the line approves it, sits in a quoted block, or names the issue that tracks it.
+- Plan checks read every Markdown code block form (backtick or tilde, indented or not) as a quoted block.
+
+### Builders
+
+- Helper agents may run on the search model when a call names it; any other model still runs as the configured one.
+- The read-only Codex helper always works from a temporary folder outside the project, refuses to run inside any of its worktrees, and loads no rules files.
+
+### Reviews
+
+- Codex plan judges and reviewers start with sub-agents switched off.
+- The typecheck before a closing pass has a five-minute limit. A run past it stops the pass and says the typecheck gave no result.
+- A new build's first typecheck reuses the typecheck cache of a neighbouring build, so it runs about as fast as later ones. The reused cache never hides a type error in the new build's changed code.
+
+### Merging
+
+- Comments in screen code no longer count as placeholder UI, and "under construction" now does.
+
 ## 0.52.1 -- 2026-10-26
 
 ### Fixes

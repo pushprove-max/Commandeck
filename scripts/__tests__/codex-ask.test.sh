@@ -50,8 +50,8 @@ row() { jq -sr "$1" "$ROWS" 2>/dev/null; }
 fresh; ask ok -- 'where is X?'
 check "a call returns Codex's answer and the model that gave it" "0:2:codex-ask: model gpt-x-test, :the stub answer:1:answered:gpt-x-test" \
   "$RC:$(grep -c '' "$T/out"):$(head -1 "$T/out" | cut -c1-29):$(sed -n 2p "$T/out"):$(row length):$(row '.[0].outcome'):$(row '.[0].model')"
-check "the call runs read-only outside the repository" "1:1:1:1:1:0:0:1" \
-  "$(grep -c -- ' -s read-only ' "$LOG"):$(grep -c -- '--ephemeral' "$LOG"):$(grep -c -- '--skip-git-repo-check' "$LOG"):$(grep -c -- ' -m gpt-x-test ' "$LOG"):$(grep -c 'mcp_servers.fake.enabled=false' "$LOG"):$(sed -n 's/^cwd: //p' "$LOG" | grep -c "^$T/wt"):$(sed -n 's/^cwd: //p' "$LOG" | grep -c "^$P"):$(grep -c "read-only helper for the repository at $W" "$LOG")"
+check "the call runs read-only outside the repository" "1:1:1:1:1:0:0:1:1" \
+  "$(grep -c -- ' -s read-only ' "$LOG"):$(grep -c -- '--ephemeral' "$LOG"):$(grep -c -- '--skip-git-repo-check' "$LOG"):$(grep -c -- ' -m gpt-x-test ' "$LOG"):$(grep -c 'mcp_servers.fake.enabled=false' "$LOG"):$(sed -n 's/^cwd: //p' "$LOG" | grep -c "^$T/wt"):$(sed -n 's/^cwd: //p' "$LOG" | grep -c "^$P"):$(grep -c "read-only helper for the repository at $W" "$LOG"):$(grep -c -- '--ignore-rules' "$LOG")"
 
 fresh; ask ok COMMANDECK_SEAT=plan-author -- 'q'
 check "a plan-author pane may ask" 0 "$RC"
@@ -85,6 +85,20 @@ fresh; S=$SECONDS; ask ignore -- --timeout 1 'q'; D=$((SECONDS - S))
 sleep 1
 check "a Codex that ignores TERM is killed after the grace" "1:1:1:0:killed:0:1" \
   "$RC:$(grep -c 'TIMEOUT' "$T/err"):$(grep -c 'killed after the 2 s grace' "$T/err"):$(wc -c < "$T/out" | tr -d ' '):$(row '.[0].outcome'):$(pgrep -f "$MARK" | wc -l | tr -d ' '):$([ "$D" -le 5 ] && echo 1 || echo "slow $D")"
+
+# Issue 400: the working folder is under /tmp whatever TMPDIR says, and one inside a worktree is refused (a Codex run
+# there would load that tree's .codex/config.toml); the refusal is a failed row like any other failure.
+fresh; mkdir -p "$W/tmpx"; ask ok TMPDIR="$W/tmpx" -- 'q'
+check "an inherited TMPDIR inside the repository is ignored" "0:1:0" \
+  "$RC:$(sed -n 's/^cwd: //p' "$LOG" | grep -Ec '^(/private)?/tmp/commandeck-codex-ask\.'):$(sed -n 's/^cwd: //p' "$LOG" | grep -c "^$W")"
+mkdir -p "$T/mt"; cat > "$T/mt/mktemp" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in *commandeck-codex-ask*) mkdir -p "$INSIDE" && echo "$INSIDE" ;; *) exec /usr/bin/mktemp "$@" ;; esac
+EOF
+chmod +x "$T/mt/mktemp"
+fresh; ask ok INSIDE="$W/inside" PATH="$T/mt:$T/bin:$PATH" -- 'q'
+check "a working folder inside a worktree is refused" "1:1:0:1:failed:null" \
+  "$RC:$(grep -c "codex-ask: FAILED: working folder $W/inside is inside $W; Codex would load that tree's config" "$T/err"):$(cat "$LOG" 2>/dev/null | grep -c '^cwd:'):$(row length):$(row '.[0].outcome'):$(row '.[0].model')"
 
 # L7: the real Codex, the shipped route, the real Codex home; asked to write a file it cannot.
 # A host with no Codex (the test PC) says so and counts nothing, never a silent pass.

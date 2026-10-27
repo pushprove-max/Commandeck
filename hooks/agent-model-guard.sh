@@ -11,7 +11,8 @@
 #     this hook never refuses a call
 #   - except in a Builder, plan-author or fix-round pane (helper-pane.sh): every
 #     call of a type in roles.builder.helpers runs as its model there, a named
-#     model included
+#     model included; a call whose named model, in any case or as a full id,
+#     holds its type's model or the search (Explore) model keeps it (issue 400)
 #   - an untyped call, which would run as Opus, is told to name a type
 #     (additionalContext), never refused
 #   - a helpers map that cannot be read leaves the call as it is and says so
@@ -31,7 +32,9 @@ if ! OUT=$(jq -c --arg pane "$PANE" --slurpfile r "$ROUTING" --slurpfile d "$SHI
   | ($r[0].roles.builder.helpers // $d[0].roles.builder.helpers
      | if type == "object" and length > 0 then . else error("no helpers map") end) as $h
   | .tool_input as $in | ($in.subagent_type // "") as $t
-  | ($pane == "1" and ($h | has($t)) and ($in.model // "") != $h[$t]) as $enforce
+  | (($in.model // "") | ascii_downcase) as $n
+  | ([$h[$t] // empty, $h.Explore // empty] | map(ascii_downcase) | any(. as $f | $n | contains($f))) as $kept
+  | ($pane == "1" and ($h | has($t)) and ($kept | not)) as $enforce
   | (if $enforce then $h[$t] elif ($in.model // "") != "" then null else $h[$t] // "opus" end) as $m
   | ($t == "") as $nudge
   | select($m != null or $nudge)

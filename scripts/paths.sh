@@ -886,7 +886,9 @@ def words($root):
      shellenv: (if .shellEnv then ["-c", "shell_environment_policy.set={" + (.shellEnv | to_entries | map("\(.key)=\"\(.value)\"") | join(",")) + "}"] else [] end),
      mcp: [(.mcpDisabled // [])[] | "-c", "mcp_servers.\(.).enabled=false"],
      skills: (if .disabledSkills then ["-c", "skills.config=[" + ($root.launch.skillSets[.disabledSkills] | map("{path=\"\(.)\",enabled=false}") | join(",")) + "]"] else [] end),
-     plugins: (if .disablePlugins then ["--disable", "plugins"] else [] end),
+     # Reviewer and judge seats start no helpers: a Codex one loses sub-agents here, a Claude one denies Agent in tools.
+     plugins: ((if .disablePlugins then ["--disable", "plugins"] else [] end)
+       + (if .agent == "codex" and .reviewer then ["--disable", "multi_agent"] else [] end)),
      projectdoc: (if .projectDocMaxBytes != null then ["-c", "project_doc_max_bytes=\(.projectDocMaxBytes)"] else [] end)} as $w
   | $root.launch.templates[template_of] | split(" ") | map(select(. != "") | if test("^\\{[a-z]+\\}$") then $w[.[1:-1]][] else . end);
 def shellword:
@@ -1395,23 +1397,8 @@ pp_argv() { # <headless role> [effort] -- its command, one argv word per line
 # the fenced test blocks no parsed finding owns -- a finding in a shape the
 # parser missed. A fence is read as refute.sh reads it.
 #
-# ONE FENCE RULE FOR EVERY READER OF A REVIEWER REPORT.
-# surviving_severity below, close-round.sh's stable ids and read-verdict.sh's
-# verdict line all put this ahead of their awk program, so no two of them can
-# disagree about what is fixture text. A fence opens on a line of three or more
-# backticks or tildes, indented or not, and closes only on a line of the same
-# character, at least as long, with nothing after it -- so a longer outer fence
-# holds shorter delimiter text without closing. fence(line) returns 1 when the
-# line opens a fence, 2 when it closes one and 0 otherwise; flen is non-zero
-# while inside one.
-PP_AWK_FENCE='
-  function fence(line,   run, ch) {
-    if (!match(line, /^[[:space:]]*(```+|~~~+)/)) return 0
-    run = substr(line, RSTART, RLENGTH); sub(/^[[:space:]]*/, "", run); ch = substr(run, 1, 1)
-    if (!flen) { fch = ch; flen = length(run); return 1 }
-    if (ch == fch && length(run) >= flen && substr(line, RSTART + RLENGTH) ~ /^[[:space:]]*$/) { flen = 0; return 2 }
-    return 0
-  }'
+# The one fence rule for every reader of a report or plan (PP_AWK_FENCE) lives in fence.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/fence.sh"
 # pp_ask_lines <reply text> -- every `QUESTION:` or `BLOCKED:` line outside a fence (decoration stripped), in order, by the
 # one fence rule above: a closed fence quotes an example, a blockquote line never starts with the word, and a fence that
 # never closes quotes nothing (a missed question costs more than a spare one). Both Stop hooks read their asks with it.

@@ -174,10 +174,10 @@ Break: scripts/__tests__/seat-launch.test.sh -- plan-judge-sol on codex launches
 
 Produces: the working-folder refusal (exit 1, a `FAILED:` line). Consumes: `git worktree list --porcelain`. Consumers
 of a changed contract: none. The answer, header, exit codes and metrics row shape are unchanged, and a refusal is a
-`failed` row like any other `FAILED:` (the existing failure path at :65-70). The rows' one reader is the operator
-(`docs/configuration.md:60`; `rg -n 'codex-helper\.jsonl' --glob '!**/__tests__/**' scripts hooks templates` finds
-the writer and the file's name in a path list at `scripts/install-lib.sh:54`, 2026-10-27), so the mktemp failure's new
-row changes no consumer.
+`failed` row like any other `FAILED:` (the existing failure path at :65-70). The rows' readers are the
+operator (`docs/configuration.md:60`) and the build review (`codex_helpers_for` in
+`skills/worktreereview/scripts/collect.py`, which reads a null model as none; pass 1 found it, the earlier search
+left `skills/` out), so the two new `failed` rows change no consumer. The metrics file is changed state: Data design.
 
 Acceptance tests (`scripts/__tests__/codex-ask.test.sh`, after :86, before the real-Codex case):
 - "the call runs read-only outside the repository" (flip-free extension: its argv check at :54 also counts
@@ -348,7 +348,8 @@ Break: scripts/__tests__/builder-launch-resume-launch-line.test.sh -- plan-check
    - For each relative path: skip it when `$WT/<rel>` exists, and skip it unless `git -C "$WT" check-ignore -q --
      <rel>` (never a tracked or unignored file). The source is the newest of the siblings' copies (`-nt`). Create the
      parent folder first, as the host does (host `typecheck.sh:134`): `mkdir -p "$(dirname "$WT/<rel>")"`, so a fresh
-     worktree with no `.cache/` takes the seed (F1). Then copy it to `<rel>.$$` and `mv -f` it into place:
+     worktree with no `.cache/` takes the seed (F1). Then copy it to `<rel>.$$`, date the copy 1980
+     (`touch -t 198001010000`, so `tsc -b` checks every source against it, pass 1) and `mv -f` it into place:
      `{ mkdir -p ... && cp ... && mv -f ...; } 2>/dev/null || rm -f "$WT/<rel>.$$"`. Any failure (mkdir, copy or
      rename) removes the temp file and leaves the path absent, which is a cold compile. A folder made before a failed
      copy stays, empty and ignored. No associative arrays (Bash 3.2).
@@ -408,6 +409,7 @@ Break: scripts/__tests__/builder-codex-pass-rebase.test.sh -- a closing pass see
 Break: scripts/__tests__/builder-codex-pass-rebase.test.sh -- a seed that cannot be copied leaves a cold typecheck and the pass runs -- scripts/builder-codex-pass.sh the failure fallback of the seed copy (its `|| rm -f` branch replaced by `|| die`)
 Break: scripts/__tests__/builder-codex-pass-rebase.test.sh -- a present typecheck cache is never overwritten -- scripts/builder-codex-pass.sh the exists skip in seed_typecheck_cache
 Break: scripts/__tests__/builder-codex-pass-rebase.test.sh -- only an ignored typecheck cache is seeded -- scripts/builder-codex-pass.sh the check-ignore skip in seed_typecheck_cache
+Break: scripts/__tests__/typecheck-seed-build-mode.test.sh -- a seeded build-mode typecheck still reports the worktree's type error -- scripts/builder-codex-pass.sh the touch -t 198001010000 of the seed copy
 
 ### C6 -- #402 recorded, release (~13 lines, 2 files)
 
@@ -426,8 +428,19 @@ Produces: the release entry and the version. Consumes: every other cut, done. Co
   folders (`mkdir -p`); after a failed copy they stay, empty. Reader: the project's typecheck. Reset: the worktree's
   removal. Retry: a rerun finds the file present and seeds nothing. A torn copy cannot land: the copy goes to
   `<rel>.$$` and is renamed into place. A copy of a sibling's file caught mid-write by its own tsc is still safe: tsc
-  reads an unreadable buildinfo as none and compiles cold (A5).
-- No other state is added or changed. C1-C4 change pure functions of their input, and #402 is unchanged.
+  reads an unreadable buildinfo as none and compiles cold (A5). The copy is dated 1980 before the rename, older than
+  any source: `tsc -b` calls a project current when its buildinfo is newer than every input and then reads no source,
+  so a fresh-dated copy passed the worktree's changed code unchecked (pass 1). Dated old, every input is newer, and tsc
+  checks each source against the copy's recorded file hashes: unchanged files stay warm, changed ones are checked.
+- Helper metrics rows `<main>/.claude/metrics/codex-helper.jsonl` (changed writer, C2). Where they live: main's
+  checkout, one JSON line per `codex-ask.sh` call. Writer: `record` in `scripts/codex-ask.sh`, one `>>` append of one
+  line (a torn last line gets a fresh one). C2 adds rows for two exits that wrote none before: the temp-folder failure
+  and the inside-a-worktree refusal, each outcome `failed`, `model` null, `secs` 0, `bytes` 0, the existing shape.
+  Readers: the build review (`codex_helpers_for` in `skills/worktreereview/scripts/collect.py`, rows of its unit; a
+  line that is not JSON is skipped, a null model is read as none) and the operator (`docs/configuration.md`). Reset:
+  `uninstall.sh` removes the file; nothing else does. Retry: a rerun is a new call and appends its own row, so a
+  refused call and its retry are two rows, as every call is one.
+- No other state is added or changed. C1, C3 and C4 change pure functions of their input, and #402 is unchanged.
 
 ## Guards changed (each blocks more than before; what it blocked before and after)
 
@@ -573,6 +586,16 @@ Moved out of the table by its five-row cap, tests unchanged among the acceptance
 - a partial helper map with no Explore entry (C3, "a partial helper map still runs a general-purpose call naming opus as Sonnet")
 - a Claude judge with no `multi_agent` word (C1)
 
+Added by pass 1 (beyond the table's cap; each with its test):
+- a seeded buildinfo newer than the worktree's changed sources, `typecheckCommand = "tsc -b"` (C5, pass 1
+  cache-false-green and stale-typecheck): the seeded run reports the worktree's TS2322 as a cold run does, and a
+  worktree that matches the sibling stays green, with the real compiler.
+  Test: scripts/__tests__/typecheck-seed-build-mode.test.sh -- "a seeded build-mode typecheck still reports the
+  worktree's type error", "a seeded build-mode typecheck of a worktree that matches the sibling is green"
+- a plan or batch that quotes placeholder UI in a tilde fence, an indented fence, or a longer fence holding a shorter
+  delimiter (C4, pass 1 fence-parser): plan-check passes it, and a size line quoted in such a fence is not the plan's.
+  Test: scripts/__tests__/plan-check-placeholder-fences.test.sh (all five checks)
+
 ## Claims to falsify
 
 - The plugin registers no Stop or SubagentStop hook that runs a project command.
@@ -675,3 +698,9 @@ A cut left partial changes its `Closes #N` to `Refs #N` and its progress note to
 - 2026-10-27, F6: `Catches:` lines on C4's B1 check, C5's cache discovery (item 1) and C5's timeout gate (item 2).
 - 2026-10-27: size line 240 -> 288 changed lines (C2 ~42, C3 ~16, C4 ~125, C5 ~80); the four new plan lines that quote placeholder copy cite #400 so the revised plan-check passes this plan.
 - 2026-10-27, F7: C3's family match drops absent map entries (`$h.Explore // empty`) before `ascii_downcase`, so a partial map still enforces. New test "a partial helper map still runs a general-purpose call naming opus as Sonnet" and its Break line; Main answers, Decision 7, a moved-out What can go wrong case, a claim; size 288 -> 292 (C3 ~16 -> ~20).
+- 2026-10-27, build: "plan-check alone exits 2 on a placeholder context line" runs u31's line in a plan that passes every other plan-check (a What can go wrong section added), so only the placeholder refusal can exit 2; its break run (loop behind a pipe) was green on u31's bare plan, which plan-check refuses for the missing section anyway.
+- 2026-10-27, fix r1: C5's seed copy is dated 1980 before its rename (a fresh-dated copy let `tsc -b` skip changed
+  sources); new test file typecheck-seed-build-mode.test.sh and its Break line. Data design names the helper metrics
+  file C2 writes new rows to, and C2's reader sentence names the build review. Plan-check and the Break-line gate use the
+  one fence rule (`PP_AWK_FENCE`, moved from paths.sh to scripts/fence.sh), and the Post-merge reader drops tilde and
+  indented fence lines as it drops backtick ones; new test file plan-check-placeholder-fences.test.sh. Two What can go wrong cases.

@@ -65,8 +65,35 @@ cfg 'del(.typecheckCommand)'
 check "a closing pass with no typecheckCommand runs no typecheck and says so" "0 1 yes" \
   "$(fin 6 "$NOGO2") $(grep -cx 'no typecheckCommand set: no typecheck before the closing pass' "$TMP/out") $(round 6)"
 cfg '.typecheckCommand = "true"'; echo seven > "$W/a.sh"
-check "a green typecheck lets the closing pass run" "0 1 yes" \
-  "$(fin 7 "$NOGO2") $(grep -cx 'typecheck before the closing pass: green (true)' "$TMP/out") $(round 7)"
+check "a green typecheck lets the closing pass run" "0 1 yes 0" \
+  "$(fin 7 "$NOGO2") $(grep -cx 'typecheck before the closing pass: green (true)' "$TMP/out") $(round 7) $(grep -c '^typecheck cache: seeded' "$TMP/out")"
+
+# Issue 386: a fresh worktree's typecheck cache is copied from a sibling worktree (same depth, so its paths resolve),
+# only where absent and ignored, by temp file and rename; a failed copy is a cold compile, never a failed pass.
+SIB=$(dirname "$W")/sib; mkdir -p "$SIB/.cache"; echo SEED > "$SIB/.cache/tc.tsbuildinfo"
+echo '.cache/' >> "$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+rm -rf "$W/.cache"
+cfg '.typecheckCommand = "grep -qx SEED .cache/tc.tsbuildinfo"'; echo eight > "$W/a.sh"
+check "a closing pass seeds the typecheck cache from a sibling worktree" "0 1 yes" \
+  "$(fin 8 "$NOGO2") $(grep -c "^typecheck cache: seeded 1 file(s) from the worktrees beside $W" "$TMP/out") $(round 8)"
+echo OWN > "$W/.cache/tc.tsbuildinfo"
+cfg '.typecheckCommand = "grep -qx OWN .cache/tc.tsbuildinfo"'; echo nine > "$W/a.sh"
+check "a present typecheck cache is never overwritten" "0 0 OWN" \
+  "$(fin 9 "$NOGO2") $(grep -c '^typecheck cache: seeded' "$TMP/out") $(cat "$W/.cache/tc.tsbuildinfo")"
+rm -rf "$W/.cache"; chmod 000 "$SIB/.cache/tc.tsbuildinfo"
+cfg '.typecheckCommand = "test ! -e .cache/tc.tsbuildinfo"'; echo ten > "$W/a.sh"
+check "a seed that cannot be copied leaves a cold typecheck and the pass runs" "0 0 0" \
+  "$(fin 10 "$NOGO2") $(grep -c '^typecheck cache: seeded' "$TMP/out") $(ls "$W/.cache/" 2>/dev/null | grep -c '^tc\.tsbuildinfo\.')"
+chmod 644 "$SIB/.cache/tc.tsbuildinfo"; rm -rf "$SIB/.cache"; mkdir -p "$SIB/build"; echo SEED > "$SIB/build/x.tsbuildinfo"
+cfg '.typecheckCommand = "true"'; echo eleven > "$W/a.sh"
+check "only an ignored typecheck cache is seeded" "0 0 absent" \
+  "$(fin 11 "$NOGO2") $(grep -c '^typecheck cache: seeded' "$TMP/out") $([ -e "$W/build/x.tsbuildinfo" ] && echo present || echo absent)"
+rm -rf "$SIB"
+# A typecheck that never ends (a watch-mode command, a held lock) stops the pass naming the check, within its limit.
+cfg '.typecheckCommand = "sleep 30"'; echo twelve > "$W/a.sh"; S0=$SECONDS
+R=$(COMMANDECK_TYPECHECK_TIMEOUT_S=1 fin 12 "$NOGO2"); D=$((SECONDS - S0))
+check "a typecheck past its time limit names the check that gave no result" "2 1 no 1" \
+  "$R $(grep -c '^REFUSED: no result from: typecheck\. `sleep 30` ran past 1s' "$TMP/err") $(round 12) $([ "$D" -le 20 ] && echo 1 || echo "slow $D")"
 cfg 'del(.typecheckCommand)'
 
 # main changes what the unit changed: a conflict stops the pass, names the file, and leaves the branch as it was.
@@ -74,6 +101,6 @@ echo main-side > "$REPO/a.sh"; G commit -qam 'a.sh on main'
 printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a.sh on the unit'
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
-  "$(fin 8 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
+  "$(fin 12 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

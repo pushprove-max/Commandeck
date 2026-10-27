@@ -138,5 +138,12 @@ reply $'Pass 3 ended.\nVERDICT: GO\nU-DONE'
 check "a marker alone on the last line after a VERDICT line reads marker=1" "marker=1" "$(mark)"
 reply $'U-DONE\nVERDICT: GO'
 check "a marker followed by a VERDICT line reads marker=0" "marker=0" "$(mark)"
+# A Codex log's verdict message is chosen by the one fence rule (fence.sh): a later message whose only VERDICT line
+# sits in a tilde fence is a quoted sample, so the earlier real verdict stays the answer.
+jq -cn '{type: "response_item", payload: {type: "message", role: "user", content: []}},
+  {type: "response_item", payload: {type: "message", role: "assistant", phase: "final", content: [{type: "output_text", text: "Done.\nVERDICT: GO"}]}},
+  {type: "response_item", payload: {type: "message", role: "assistant", phase: "final", content: [{type: "output_text", text: "Sample:\n~~~\nVERDICT: NO-GO\n~~~"}]}}' > "$T/tilde-rollout.jsonl"
+check "a Codex log's tilde-fenced sample verdict is not the answer" "VERDICT: GO" \
+  "$(eval "$(sed -n '/^codex_report() {$/,/^}$/p' "$REAL/scripts/read-verdict.sh")"; ORDINAL=0 codex_report "$T/tilde-rollout.jsonl" | tail -1)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

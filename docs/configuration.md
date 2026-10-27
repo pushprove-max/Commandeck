@@ -47,14 +47,19 @@ A helper is a built-in subagent type: `Explore` (Haiku) for search and lookup,
 `general-purpose` (Sonnet) for edits, tests and judgment. The models come from
 `roles.builder.helpers` in `config/routing.json`. Every worker pane runs the
 model guard: it fills those models in, and asks for a type when a call names
-none. Builder, plan-author and fix-round panes enforce them. Plan-author panes
-may start helpers; plan-judge and reviewer panes may not.
+none. Builder, plan-author and fix-round panes enforce them, except that a
+`general-purpose` call there may name the search model (in any case, or as a
+full model id) and keeps it. Plan-author panes may start helpers; plan-judge and
+reviewer panes may not: Codex judge and reviewer seats launch with sub-agents
+off, and Claude ones have `Agent` denied.
 
 The Codex helper, `scripts/codex-ask.sh [--timeout <s>] '<question>'`, is a
 read-only second opinion for Builder, plan-author and fix-round panes; judge and
 reviewer panes are refused. It runs the model the Codex reviewer route names
-(`codexReviewerModel`), in a read-only sandbox from outside the repository, and
-prints the model that answered above the answer. A setup whose reviews run on
+(`codexReviewerModel`), in a read-only sandbox from a temporary folder under
+`/tmp`, and prints the model that answered above the answer. A temporary folder
+inside the repository or any of its worktrees is refused, and no rules files are
+loaded. A setup whose reviews run on
 Claude has no Codex helper. The deadline is `--timeout` seconds (default 300,
 1 to 1800), then a kill 2 s later; the answer is cut at 6000 bytes. Every call
 is a row in `.claude/metrics/codex-helper.jsonl` of the main checkout, and the

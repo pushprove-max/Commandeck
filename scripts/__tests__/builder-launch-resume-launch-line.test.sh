@@ -113,15 +113,25 @@ check "a plan mockup in the batch launches" "0:1" "$RC:$(grep -cx 'launch builde
 mockplan u30 $'```\nMockup: docs/fenced.png\n```'; args u30 "$T/batch.md"
 check "a fenced Mockup line is not a mockup" "0:1" "$RC:$(grep -cx 'launch builder u30' "$T/seats")"
 
-# Issue 398: a plan or batch line that states existing placeholder UI as context is flagged on stderr; the launch goes on.
+# Issue 398: a plan or batch line that states existing placeholder UI as context carries it on as a fact. Issue 400: as
+# on the host, the launch refuses it unless the line is fenced, a Placeholder: line, or cites the issue tracking it.
 mockplan u31 'The export page shows a Coming soon banner today.'; args u31 "$T/batch.md"
-check "a plan that describes placeholder UI as context is flagged and still launches" "0:1:1" \
-  "$RC:$(grep -c '^FLAG: .claude/plans/u31.md line 3 describes placeholder UI: an open problem, not a fact' "$T/out"):$(grep -cx 'launch builder u31' "$T/seats")"
+check "a plan that describes placeholder UI as context is refused and launches nothing" "2:1:0" \
+  "$RC:$(grep -c '^REFUSED: .claude/plans/u31.md line 3 describes placeholder UI' "$T/out"):$(grep -cx 'launch builder u31' "$T/seats")"
 mockplan u32 '' 'Context: <Button disabled={true}>Export</Button> already ships as a layout stub.'; args u32 "$T/batch.md"
-check "a batch line naming a literal disabled control is flagged" "0:1:1" \
-  "$RC:$(grep -c '^FLAG: ' "$T/out"):$(grep -c '^FLAG: .*batch.* line [0-9]* describes placeholder UI' "$T/out")"
+check "a batch line naming a literal disabled control is refused" "2:1:0" \
+  "$RC:$(grep -c '^REFUSED: .*batch.* line [0-9]* describes placeholder UI' "$T/out"):$(grep -c . "$T/seats")"
 mockplan u33 'Placeholder: web/src/X.tsx | <p>Coming soon</p> | its feature ships next release'; args u33 "$T/batch.md"
-check "a plan's Placeholder line is not flagged" "0:0" "$RC:$(grep -c '^FLAG: ' "$T/out")"
+check "a plan's Placeholder line passes" "0:0" "$RC:$(grep -c '^REFUSED: ' "$T/out")"
+mockplan u34 $'```\nThe export page shows a Coming soon banner today.\n```'; args u34 "$T/batch.md"; FENCED="$RC:$(grep -cx 'launch builder u34' "$T/seats")"
+mockplan u35 'The export page shows a Coming soon banner today (#12).'; args u35 "$T/batch.md"
+check "a fenced or issue-citing placeholder line passes" "0:1:0:1" "$FENCED:$RC:$(grep -cx 'launch builder u35' "$T/seats")"
+# plan-check alone, as seat.sh runs it before a judge, on u31's line in a plan that passes every other check: the
+# refusal exits the script, not a pipeline subshell that lets it go on to print its size line and exit 0.
+printf 'plan\n%s\nThe export page shows a Coming soon banner today.\n\n## What can go wrong\n\n- a case: its test\n' "$PSZ" > "$T/pc-plan.md"
+bash "$REAL/scripts/plan-check.sh" "$T/pc-plan.md" '' >"$T/pc.out" 2>"$T/pc.err"; RC=$?
+check "plan-check alone exits 2 on a placeholder context line" "2:1:1:0" \
+  "$RC:$(grep -c . "$T/pc.err"):$(grep -c '^REFUSED: .*pc-plan.md line 3 describes placeholder UI' "$T/pc.err"):$(grep -c '^size ' "$T/pc.out")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

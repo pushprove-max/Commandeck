@@ -6,7 +6,8 @@
 # batch found, whose plan's own checks still run. The label names the plan in every message (default: the plan path).
 # With a batch: Prior art and Data design (the batch's own). With a plan or a Skip batch: What can go wrong (the
 # batch's or the plan's); with a plan, its size line, a Test: line under each Decisions and Accepted failure modes item,
-# and its Mockup: lines (issue 392). --batch-only runs the batch checks alone.
+# and its Mockup: lines (issue 392); with either, no line that describes placeholder UI (issue 400). --batch-only runs
+# the batch checks alone.
 # A relative Mockup: path resolves against the plan file's checkout, or PLAN_CHECK_ROOT (default: this folder's
 # checkout) for stdin.
 # Pass: prints "size <files> <lines>" when a plan was read, exit 0. Fault: the first REFUSED: line on stderr, exit 2.
@@ -46,18 +47,23 @@ if [ -n "$BATCH" ]; then
 fi
 [ "$ONLY" = 0 ] || exit 0
 # Issue 398: a plan or batch that states existing placeholder UI as context carried it on as a fact into the next brief.
-# Each such line (placeholder copy, or a literal always-disabled control in a tag) that is not a Placeholder: line is
-# flagged; the exit is unchanged.
+# Issue 400: as on the host, such a line (placeholder copy, or a literal always-disabled control in a tag) is refused
+# unless it sits in a fenced block, is a Placeholder: line, or cites the issue that tracks it (#<n>).
 . "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/screen-code.sh"
-flag_placeholders() { # <label> <text>
-  local n
-  { grep -inE "$PLACEHOLDER_COPY" <<<"$2" | cut -d: -f1; always_disabled_lines <<<"$2"; } | sort -nu | while IFS= read -r n; do
-    sed -n "${n}p" <<<"$2" | grep -qE '^[[:space:]]*(- )?Placeholder: ' \
-      || echo "FLAG: $1 line $n describes placeholder UI: an open problem, not a fact: plan its removal, name it on a Placeholder: line, or file it" >&2
+. "$(dirname "${BASH_SOURCE[0]}")/fence.sh"
+refuse_placeholders() { # <label> <text>
+  local n cands fenced
+  cands=$({ grep -inE "$PLACEHOLDER_COPY" <<<"$2" | cut -d: -f1; always_disabled_lines <<<"$2"; } | sort -nu)
+  fenced=$(awk "$PP_AWK_FENCE"'fence($0) || flen { print NR }' <<<"$2")
+  # The loop runs in this shell, not behind a pipe, so refuse's exit 2 ends the script.
+  for n in $cands; do
+    ! grep -qx "$n" <<<"$fenced" || continue
+    ! sed -n "${n}p" <<<"$2" | grep -qE '^[[:space:]]*(- )?Placeholder: |#[0-9]+' || continue
+    refuse "$1 line $n describes placeholder UI: plan its removal, approve it on a Placeholder: line, or cite the issue that tracks it (#<n>)"
   done
 }
-[ -z "$SRC" ] || flag_placeholders "$PLAN" "$PT"
-[ -z "$BATCH" ] || flag_placeholders "$BATCH" "$BT"
+[ -z "$SRC" ] || refuse_placeholders "$PLAN" "$PT"
+[ -z "$BATCH" ] || refuse_placeholders "$BATCH" "$BT"
 # Issue 362: what the plan and the batch must hold before a Builder opens. A list of what can go wrong (the batch's or the
 # plan's) is what every reviewer and fix round works from; the plan's size line is what a small NO-GO plan is judged by;
 # every top-level item under its Decisions or Accepted failure modes names the test that checks it (or says none, why).
@@ -65,9 +71,9 @@ flag_placeholders() { # <label> <text>
 { [ -n "$BATCH" ] && has_section 'what can go wrong' <<<"$BT"; } || { [ -n "$SRC" ] && has_section 'what can go wrong' <<<"$PT"; } \
   || refuse "neither ${BATCH:-the batch (none found)} nor ${PLAN:-its plan (none: a Skip batch)} has a What can go wrong section with cases under it (a '## What can go wrong' heading): limits (empty, tiny, huge, cut off mid-way), timing (two actions or replies in either order, retries, timeouts) and odd data (special characters, missing fields, duplicates, old shapes), one named test per case"
 [ -n "$SRC" ] || exit 0
-# Lines inside a fenced block (a line starting with three backticks opens or closes one) are never the plan's own.
-facts=$(awk 'function flush() { if (item != "" && !has) print "untested " substr(item, 1, 60); item = ""; has = 0 }
-  /^```/ { f = !f; next } !f {
+# Lines inside a fenced block (fence.sh's rule: backticks or tildes, indented or not) are never the plan's own.
+facts=$(awk "$PP_AWK_FENCE"'function flush() { if (item != "" && !has) print "untested " substr(item, 1, 60); item = ""; has = 0 }
+  fence($0) || flen { next } {
     if ($0 ~ /^#+[ \t]/) { flush(); sec = ($0 ~ /^##[ \t]+(Decisions|Accepted failure modes)/) }
     else if (sec && $0 ~ /^([0-9]+\.|[-*])[ \t]/) { flush(); item = $0; has = ($0 ~ /Test:/) }
     else if (sec && item != "" && $0 ~ /Test:/) has = 1

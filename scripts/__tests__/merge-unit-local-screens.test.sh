@@ -181,6 +181,15 @@ whole=$(always_disabled_lines <<<"$ORDER" | tr '\n' ' ')
 alone=$(n=0; while IFS= read -r l; do n=$((n + 1)); always_disabled_lines <<<"$l" | sed "s/.*/$n/"; done <<<"$ORDER" | tr '\n' ' ')
 check "scanner: every line is judged alone, whatever came before it" \
   "1 2 3 4 6 10 13 17 18 19 20 21 23 |1 2 3 4 6 10 13 17 18 19 20 21 23 " "$whole|$alone"
+# Issue 400: the merge screens each added line's code part (screen_code_part), as the host does: a comment-only line
+# has none, while an inline JSX comment inside a real element starts with code and is screened whole.
+cu p16 $X "$(sed -n 3p <<<"$ORDER")"$'\n''{/* Coming soon: <Button disabled>Export</Button> */}'; rc=$(merge p16)
+check "placeholder copy and a disabled control in a comment-only line merge" "0 0" "$rc $(grep -c 'unrequested placeholder UI' "$TMP/out")"
+back
+cu p17 $X "$(sed -n 4p <<<"$ORDER")"; rc=$(merge p17)
+check "an inline JSX comment inside a real element is still refused" "1 1 1" \
+  "$rc $(refused 'unrequested placeholder UI (1)') $(grep -c "$X:1: disabled in" "$TMP/out")"
+back
 
 # --- Issue 396: step 5 closes the Builder's task before the panes close; a refused close changes neither the merge's
 # exit code nor its cleanup. A stub unit-close.sh in the copied scripts logs into the orca-ide call log. ---

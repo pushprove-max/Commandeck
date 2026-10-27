@@ -280,12 +280,13 @@ check_screens() {
   done
   if [ "$n" -gt 0 ]; then echo "STEP 1 screens: $n rows"; else echo "STEP 1 screens: no visual change declared: $reason"; fi
 }
-# Issue 398: placeholder UI the plan did not ask for. For every added line of a screen file: each PLACEHOLDER_COPY match
-# and each always-disabled control (always_disabled_lines on the file at the branch tip, kept when its line is added)
-# is an occurrence; every occurrence on a line no Placeholder: line approves is an entry. One Placeholder: line
-# approves one added line, so identical added lines are counted against the approvals.
+# Issue 398: placeholder UI the plan did not ask for. For every added line of a screen file, on its code part
+# (screen_code_part: a comment-only line has none, issue 400): each PLACEHOLDER_COPY match and each always-disabled
+# control (always_disabled_lines, which judges each line alone) is an occurrence; every occurrence on a line no
+# Placeholder: line approves is an entry. One Placeholder: line approves one added line, so identical added lines are
+# counted against the approvals.
 check_placeholders() {
-  local f base num text t m k cnt dis added i total=0 seen="" shown="" entries=() occ=()
+  local f base num text t c m k cnt added i total=0 seen="" shown="" entries=() occ=()
   SCREEN_PREFIXES=$(screen_prefixes "$ROOT")
   base=$(git merge-base main "$BRANCH")
   while IFS= read -r f; do
@@ -293,13 +294,13 @@ check_placeholders() {
     added=$(git diff -U0 --no-color --no-relative --no-renames "$base" "$BRANCH" -- "$f" | awk '
       /^@@/ { inh = 1; match($0, /\+[0-9]+/); ln = substr($0, RSTART + 1, RLENGTH - 1) + 0; next }
       inh && /^\+/ { print ln "\t" substr($0, 2); ln++ }') || fail "step 1 preconditions" "could not read the diff of $f"
-    dis=$(git show "$BRANCH:$f" 2>/dev/null | always_disabled_lines || true)
     while IFS=$'\t' read -r num text; do
       [ -n "$num" ] || continue
       t=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<<"$text")
+      c=$(screen_code_part "$t")
       occ=()
-      while IFS= read -r m; do [ -z "$m" ] || occ+=("$m"); done < <(grep -oiE "$PLACEHOLDER_COPY" <<<"$t" || true)
-      k=$(grep -cx "$num" <<<"$dis" || true)
+      while IFS= read -r m; do [ -z "$m" ] || occ+=("$m"); done < <(grep -oiE "$PLACEHOLDER_COPY" <<<"$c" || true)
+      k=0; [[ $c != *disabled* ]] || k=$(always_disabled_lines <<<"$c" | wc -l | tr -d ' ')
       for ((i = 0; i < k; i++)); do occ+=(disabled); done
       [ "${#occ[@]}" -gt 0 ] || continue
       cnt=$(placeholder_count "$f" "$t" "$UNIT" "$WT" "$ROOT")
@@ -717,7 +718,7 @@ if [ "$DRY_RUN" = 0 ]; then
     # shellcheck disable=SC2086 # the line's one argument, split on purpose
     (cd "$ROOT" && bash "$HERE/${line%% *}" ${line#* }) > "$POST_LOG-$i.log" 2>&1 &
     POST_PIDS[i]=$!
-  done < <(awk '/^#+[[:space:]]*Post-merge[[:space:]]*$/ { on = 1; next } /^#/ { on = 0 } on && !/^```/' "$BRIEF")
+  done < <(awk '/^#+[[:space:]]*Post-merge[[:space:]]*$/ { on = 1; next } /^#/ { on = 0 } on && !/^[[:space:]]*(```|~~~)/' "$BRIEF")
   for i in "${!POST_STEPS[@]}"; do
     [ -z "${POST_PIDS[i]}" ] || { wait "${POST_PIDS[i]}" && POST_RCS[i]=0 || POST_RCS[i]=$?; }
   done

@@ -39,7 +39,7 @@ screen_rel() {
 }
 
 # Issue 398: copy that says a thing comes later. Case-insensitive ERE.
-PLACEHOLDER_COPY='coming soon|not available yet|not yet available|available soon|in a later update|in a later release|coming in a later'
+PLACEHOLDER_COPY='coming soon|not available yet|not yet available|available soon|in a later update|in a later release|coming in a later|under construction'
 
 # always_disabled_lines: reads a text on stdin (TSX, an .html file, a plan) and prints, once per occurrence, the number
 # of each line holding a single-line opening tag with a constant disabled attribute: bare, ={true} or ="..." / ='...'.
@@ -49,8 +49,9 @@ PLACEHOLDER_COPY='coming soon|not available yet|not yet available|available soon
 # another tag's value counts for itself). Each line is judged alone: nothing is kept from one line to the next.
 # Ceiling (plan Accepted failure mode 10): this is a fixed pattern, not a TSX parser. Missed: a tag split over lines,
 # a value with nested braces, type arguments on the tag, an unquoted HTML value, a comment inside {true}. Refused: a
-# single-line control spelled in a string, template or comment, and a comment between disabled and its =; approve
-# such a line on a Placeholder: line, or move the example out of screen code.
+# single-line control spelled in a string, template or trailing comment, and a comment between disabled and its =;
+# approve such a line on a Placeholder: line, or move the example out of screen code. A control spelled in a
+# comment-only line is not refused: callers screen screen_code_part's output (issue 400).
 always_disabled_lines() {
   awk '
   {
@@ -63,6 +64,19 @@ always_disabled_lines() {
       while (match(t, /[ \t]disabled[ \t]*(=[ \t]*(T|"")|[ \t]*[\/>]|[ \t]+[^= \t])/)) { print NR; t = substr(t, RSTART + RLENGTH - 1) }
     }
   }'
+}
+
+# screen_code_part <line>: prints the code on a source line (issue 400, the host's rule): nothing for a comment line
+# (//, /*, * or {/* first), the code after a leading comment that closes on the line, and the line itself otherwise. A
+# // comment never closes; a trailing comment stays in the printed code.
+_SC_COMMENT_RE='^[[:space:]]*(//|/\*|\*|\{/\*)'
+screen_code_part() {
+  local c=${1}
+  while [[ $c =~ $_SC_COMMENT_RE ]]; do
+    if [[ $c =~ ^[[:space:]]*// || $c != *'*/'* ]]; then return 0; fi
+    c=${c#*'*/'}; c=${c#"${c%%[![:space:]]*}"}; c=${c#\}}
+  done
+  printf '%s' "$c"
 }
 
 _sc_trim() { local s=$1; s=${s#"${s%%[![:space:]]*}"}; s=${s%"${s##*[![:space:]]}"}; printf '%s' "$s"; }

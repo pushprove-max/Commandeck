@@ -291,7 +291,8 @@ if type screen_rel >/dev/null 2>&1 && _sr=$(screen_rel "$FILE_PATH") && [ -n "$_
   if is_screen "$_rel"; then
     _copy=""
     while IFS= read -r _l; do
-      printf '%s' "$_l" | grep -qiE "$PLACEHOLDER_COPY" || continue
+      # Issue 400: a comment-only line ships nothing to a screen; the approval still names the complete line.
+      screen_code_part "$_l" | grep -qiE "$PLACEHOLDER_COPY" || continue
       placeholder_requested "$_rel" "$_l" "${_root##*/}" "$_root" "$_main" || _copy="${_copy:+$_copy; }\"$(_sc_trim "$_l")\""
     done <<<"$ADDED"
     if [ -n "$_copy" ]; then
