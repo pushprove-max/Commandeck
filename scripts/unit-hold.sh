@@ -7,6 +7,7 @@
 # Pairing is the reader's: no read here beyond the file's last byte, and no retry (the caller re-runs).
 set -uo pipefail
 usage() { echo "usage: unit-hold.sh <unit> hold|release '<one-line reason>'" >&2; exit 2; }
+case "${1:-}" in --help|-h) (usage) 2>&1; exit 0 ;; esac
 [ $# -eq 3 ] || usage
 unit=$1 event=$2 reason=$3
 [[ $unit =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || usage

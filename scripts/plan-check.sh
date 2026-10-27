@@ -13,6 +13,7 @@
 # Writes nothing.
 set -uo pipefail
 USAGE="usage: plan-check.sh [--batch-only] <plan file | - | ''> <batch or ''> [<label>]"
+case "${1:-}" in --help|-h) echo "$USAGE"; exit 0 ;; esac
 ONLY=0
 [ "${1-}" != --batch-only ] || { ONLY=1; shift; }
 [ $# -ge 2 ] && [ $# -le 3 ] || { echo "$USAGE" >&2; exit 2; }

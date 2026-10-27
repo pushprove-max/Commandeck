@@ -17,6 +17,7 @@ set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
 usage() { echo "usage: unit-close.sh <unit> merged | <unit> drop '<reason>' | --sweep [--apply]" >&2; exit 2; }
+case "${1:-}" in --help|-h) (usage) 2>&1; exit 0 ;; esac
 OPEN='pending|ready|dispatched|blocked'
 # merged_sha <unit> -- the unit's mergeSha from the ledger when it is an ancestor of local main.
 merged_sha() {

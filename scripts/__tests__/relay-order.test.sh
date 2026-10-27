@@ -101,12 +101,15 @@ OUT=$(auto pick-a "memcached" "it is already deployed." "" "load grows tenfold" 
 check "--auto with an empty trade-off refuses and changes nothing" "2 null 1" "$RC $(dec list | jq -r '.[] | select(.id == "pick-a") | .answeredAt') $(grep -c . "$ALOG")"
 OUT=$(auto pick-a "memcached" "it is already deployed." "Redis is richer, but a second service costs more" "load grows tenfold" ""); RC=$?
 check "--auto with an empty reversibility refuses and changes nothing" "2 null 1" "$RC $(dec list | jq -r '.[] | select(.id == "pick-a") | .answeredAt') $(grep -c . "$ALOG")"
+HM0=$(date +%H:%M)
 OUT=$(auto pick-a "memcached" "it is already deployed." "Redis is richer, but a second service costs more" "load grows tenfold" "yes, one config line"); RC=$?
+# The entry's minute may be either side of a minute boundary the call crossed; any other minute is still wrong.
+HM=$(date +%H:%M); grep -q "^### $HM0: pick-a" "$ALOG" && HM=$HM0
 check "--auto with the mode on: the ledger answer is the words (auto-decided), the seen mark is written, main gets one question naming the id" \
   "0 memcached (auto-decided) 1 question 1" \
   "$RC $(ans pick-a) $(grep -c '^pick-a@' "$SEEN") $(jq -rs 'map(.type) | join(",")' "$T/sent") $(jq -rs 'map(select(.subject == "auto-decided for the owner on pick-a")) | length' "$T/sent")"
 check "the log gains one entry (one ### line) with the ledger's question and options, the pick, the why with trade-off and would-change, and the reversibility" \
-  "1|### $(date +%H:%M): pick-a, $(printf %s 'Which cache should the build use for the long first question of this batch?' | cut -c1-60) (auto-decided)|- **Options**: redis / memcached|- **Picked**: memcached|- **Why**: it is already deployed. Trade-off weighed: Redis is richer, but a second service costs more. Would pick differently if: load grows tenfold.|- **Reversible**: yes, one config line" \
+  "1|### $HM: pick-a, $(printf %s 'Which cache should the build use for the long first question of this batch?' | cut -c1-60) (auto-decided)|- **Options**: redis / memcached|- **Picked**: memcached|- **Why**: it is already deployed. Trade-off weighed: Redis is richer, but a second service costs more. Would pick differently if: load grows tenfold.|- **Reversible**: yes, one config line" \
   "$(grep -c '^### ' "$ALOG")|$(grep '^### ' "$ALOG")|$(grep -F -e '- **Options**' -e '- **Picked**' -e '- **Why**' -e '- **Reversible**' "$ALOG" | paste -sd'|' -)"
 check "the entry holds the ledger's whole question" 1 "$(grep -c -x -F -- '- **Question**: Which cache should the build use for the long first question of this batch?' "$ALOG")"
 check "a question with no options listed says the default" "- **Options**: none listed, default: keep" "$(auto pick-b "rename" "clearer." "churn." "a caller breaks" "yes" >/dev/null; grep -F -- '- **Options**: none' "$ALOG")"

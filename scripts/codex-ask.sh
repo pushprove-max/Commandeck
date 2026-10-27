@@ -6,6 +6,7 @@
 # not, is one row in <main>/.claude/metrics/codex-helper.jsonl. Judge and reviewer panes are refused.
 set -uo pipefail
 usage() { echo "usage: codex-ask.sh [--timeout <seconds, 1-1800>] '<question>'  (or - for the question on stdin)" >&2; exit 2; }
+case "${1:-}" in --help|-h) (usage) 2>&1; exit 0 ;; esac
 SECS=300
 if [ "${1:-}" = --timeout ]; then
   [ $# -ge 3 ] && [[ $2 =~ ^[1-9][0-9]*$ ]] && [ "$2" -le 1800 ] || usage

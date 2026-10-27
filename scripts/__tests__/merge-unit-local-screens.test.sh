@@ -144,7 +144,8 @@ back
 # in source text is refused (lines 1-4, 10, 13, 18), a real one is never hidden (17, after pass 4's generic), and a
 # tag split over lines is missed (7-8, 25-29). Plan Accepted failure mode 10.
 . "$REAL/hooks/lib/screen-code.sh"
-ORDER=$(cat <<'TSX'
+# Not $(cat <<...): Bash 3.2 mis-parses a lone apostrophe in a heredoc inside $(...).
+IFS= read -r -d '' ORDER <<'TSX' || true
 const preview = "<Button disabled>Export</Button>";
 const example = `<button disabled>Export</button>`;
 // Example: <Button disabled>Export</Button>
@@ -175,7 +176,7 @@ const view = <Button disabled />;
   }
 >Export</Button>
 TSX
-)
+ORDER=${ORDER%$'\n'}
 whole=$(always_disabled_lines <<<"$ORDER" | tr '\n' ' ')
 alone=$(n=0; while IFS= read -r l; do n=$((n + 1)); always_disabled_lines <<<"$l" | sed "s/.*/$n/"; done <<<"$ORDER" | tr '\n' ' ')
 check "scanner: every line is judged alone, whatever came before it" \
