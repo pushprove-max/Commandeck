@@ -1056,7 +1056,7 @@ seats() {
     | (.relay | objects) |= . + {context: ($rc | tonumber? // null), line: null}' <<<"$out"
 }
 
-# Main's compactions and unhealed carry failures over 24 h, and its last restart (issues 292, 300): the reader is
+# Main's compactions, unhealed carry failures and given-up restarts over 24 h, and its last restart (issues 292, 300): the reader is
 # dashboard_limit.py main-events. A main with no session folder yet has no events.
 main_events() {
   local out

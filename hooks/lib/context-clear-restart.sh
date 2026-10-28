@@ -32,20 +32,36 @@ main_panes() {
 # Issue 316: a main that cannot read GitHub is not opened. The old pane is the only one holding the context, so it stays.
 why=$(pp_gh_read orchestrator "$PP_MAIN" 2>&1) \
   || { rm -f "$cp.restarted"; echo "$(date +%FT%T) restart: REFUSED: main cannot read GitHub: $why; old pane $old left up, next stop retries" >>"$log"; exit 1; }
-# Without a snapshot a leftover main pane is indistinguishable from the late one.
-before=$(main_panes) || adopt_tries=0
-created=$(orca-ide terminal create --worktree "path:$PP_MAIN" --title "$title" --command "$cmd" --json 2>>"$log")
-new=$(printf '%s' "$created" | jq -r '.. | objects | select(has("handle")) | .handle' 2>/dev/null | head -1)
-if [ -z "$new" ]; then
+# open_main <command> -- sets new to the pane create opened, or empty.
+open_main() {
+  local before created adopt_tries=""
+  # Without a snapshot a leftover main pane is indistinguishable from the late one.
+  before=$(main_panes) || adopt_tries=0
+  created=$(orca-ide terminal create --worktree "path:$PP_MAIN" --title "$title" --command "$1" --json 2>>"$log")
+  new=$(printf '%s' "$created" | jq -r '.. | objects | select(has("handle")) | .handle' 2>/dev/null | head -1)
+  [ -z "$new" ] || return 0
   echo "$(date +%FT%T) restart: create answered no handle: $(printf '%s' "$created" | tr '\n' ' ' | cut -c1-400)" >>"$log"
   # Orca can open the pane after create has already timed out (2026-09-26); a
   # retry would then open a second main. Only a main pane absent before create is ours.
   for ((i = 0; i < ${adopt_tries:-${COMMANDECK_RESTART_ADOPT_TRIES:-15}}; i++)); do
     new=$(main_panes | grep -vxF -e "$before" -e '' | head -1)
-    [ -n "$new" ] && { echo "$(date +%FT%T) restart: create answered no handle; adopted late pane $new" >>"$log"; break; }
+    [ -n "$new" ] && { echo "$(date +%FT%T) restart: create answered no handle; adopted late pane $new" >>"$log"; return 0; }
     sleep "${COMMANDECK_RESTART_ADOPT_EVERY_S:-3}"
   done
-fi
+}
+# give_up <why> -- the typed prompt and the relaunch both failed, or a replacement that got no prompt could not be
+# closed: no stop retries this session (context-clear-stop.sh
+# reads the mark), and this one log line is what dashboard_limit.py main-events turns into the crit alert asking the
+# owner to restart main by hand.
+give_up() {
+  : > "${cp%.md}.restart-failed"
+  echo "$(date +%FT%T) restart: AUTO RESTART FAILED for $cp: $1; main waits for the owner to restart it by hand" >>"$log"
+}
+# The resume marker as context-clear-stop.sh wrote it (same slug expression): the first pane's SessionStart takes it,
+# so a relaunch below must put it back for the second pane to resume.
+mark="${cp%/*}/resume-pending.$(printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null)" | tr -c 'A-Za-z0-9' '-')"
+markbody=$(cat "$mark" 2>/dev/null)
+open_main "$cmd"
 if [ -z "$new" ]; then
   # No new pane exists, so the Stop hook's "already restarted" marker is false;
   # left behind, it blocked every later restart of this checkpoint.
@@ -58,19 +74,49 @@ sleep "${COMMANDECK_RESTART_SETTLE_S:-3}"
 # The restart is complete only once the replacement ACCEPTS the prompt. A refused
 # send used to be logged as a success and the old pane closed anyway, which
 # destroyed the only pane holding the context.
-sent=$(orca-ide terminal send --terminal "$new" \
-  --text "resume from the checkpoint $cp (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from $cp; the old pane $old closes now." \
-  --enter --json 2>>"$log")
-if ! printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1; then
+prompt="resume from the checkpoint $cp (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from $cp; the old pane $old closes now."
+sent=$(orca-ide terminal send --terminal "$new" --text "$prompt" --enter --json 2>>"$log")
+sent_ok=0
+printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1 && sent_ok=1
+# While a paired phone has a pane open, Orca answers every typed send with ok:true, accepted:false and types nothing
+# (host fix 3a7cc613), for minutes. Read as a success, the old main closed beside a new one that never got its prompt.
+# The prompt then rides in a second pane's launch command. The proof that main took it is <cp>.delivered, which
+# resume-context.sh writes only after it printed the checkpoint context, naming the token from the marker this helper
+# put back: the replacement started with that token, and nothing older (removed here) counts.
+jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$sent" && sent_ok=0 phone=1
+# A pane whose close is refused stays up, so the refusal below names it; it never counts as a success.
+if [ -n "${phone:-}" ] && pp_pane_close "$new" "restart: unprompted new"; then
+  echo "$(date +%FT%T) restart: typed resume prompt not accepted by $new (accepted:false); relaunching with the prompt in the command" >>"$log"
+  # Whole or not at all: a marker cut after its first line has no token, and resume-context.sh gives that to any main.
+  [ -z "$markbody" ] || { printf '%s\n' "$markbody" > "$mark.$$" && mv "$mark.$$" "$mark"; } 2>>"$log" || rm -f "$mark.$$"
+  token=$(sed -n 2p <<<"$markbody")
+  rm -f "$cp.delivered"
+  # Orca types the command into a shell: the prompt goes single-quoted, its own quotes closed and escaped.
+  open_main "$cmd '${prompt//\'/\'\\\'\'}'"
+  for ((i = 0; i < 40; i++)); do
+    [ -n "$new" ] && [ -n "$token" ] || break
+    [ "$(head -1 "$cp.delivered" 2>/dev/null)" = "$token" ] && { sent_ok=1; break; }
+    sleep "${COMMANDECK_RESTART_SETTLE_S:-3}"
+  done
+  relaunched=1
+  if [ "$sent_ok" = 0 ] && [ -z "$new" ]; then
+    rm -f "$cp.restarted"; give_up "the relaunch with the prompt opened no pane"; exit 1
+  fi
+  [ "$sent_ok" = 1 ] || sent='{"error":{"code":"the relaunched main never confirmed it got this checkpoint context"}}'
+fi
+if [ "$sent_ok" = 0 ]; then
   pp_wake_log context-restart "$new" "resume prompt" refused "$(printf '%s' "$sent" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)"
   echo "$(date +%FT%T) restart: resume prompt REFUSED by $new ($(printf '%s' "$sent" | jq -r '.error.code // .error // "unknown"' 2>/dev/null)); old pane $old LEFT UP" >>"$log"
   # Only a closed replacement re-arms the retry (as a failed create does);
   # left open, it would stand as a second main beside the retry's pane.
-  if pp_pane_close "$new" "restart: unprompted new"; then
-    rm -f "$cp.restarted"
-    echo "$(date +%FT%T) restart: closed unprompted $new; next stop retries" >>"$log"
+  # A refused close leaves that pane and its .restarted standing, so no stop retries either way: the helper gives up.
+  if ! pp_pane_close "$new" "restart: unprompted new"; then
+    echo "$(date +%FT%T) restart: close of unprompted $new REFUSED; close it by hand" >>"$log"
+    give_up "$new got no resume prompt and Orca refused to close it"
+  elif [ -n "${relaunched:-}" ]; then
+    rm -f "$cp.restarted"; give_up "Orca did not accept the typed resume prompt and the relaunched main never resumed"
   else
-    echo "$(date +%FT%T) restart: close of unprompted $new REFUSED; close it by hand, then delete $cp.restarted to retry" >>"$log"
+    rm -f "$cp.restarted"; echo "$(date +%FT%T) restart: closed unprompted $new; next stop retries" >>"$log"
   fi
   exit 1
 fi

@@ -172,6 +172,8 @@ MADE_FROM = {
     # 0.56.0 global-rules.md: the closing pass gets no earlier findings; a fixer's passing test does not end a finding;
     # a zero diff reported done is a failure
     "0daaf070": ("cb6056f9",), "b1915c88": ("ecd4b33d",), "0d7babbc": ("e7926841",),
+    # 0.57.0 main-session.md: the restart waits for a helper agent however long, and a failed restart is not retried
+    "d2e4dc5b": ("3e156378",),
 }
 
 

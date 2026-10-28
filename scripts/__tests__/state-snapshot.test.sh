@@ -111,5 +111,31 @@ check "a failed save is never reported as saved: nonzero exit, the message, no p
   "$RC:$(grep -c 'could not save the checkpoint' <<<"$RES"):$(grep -cxF "$CPD/s.md" <<<"$RES")"
 check "a failed save is never reported as saved: the old file is whole" 1 "$(grep -c '^TODO one line:' "$CPD/s.md")"
 
+# test: issue 431: the checkpoint leaves out the worktrees the project config keeps, and only those
+# Same hand-written config and kept name (Fast-lane) as close-done-panes.test.sh's sweep: both scripts read one list.
+cat > "$R/scripts/board.sh" <<'EOF'
+#!/usr/bin/env bash
+cat <<'BOARD'
+RUN=run_x  WS=/w  SCRATCH=/s  ROOT=/r
+main: abc1234 a thing | 0 dirty | 0 unpushed
+
+== worktrees
+  U [max/U] dirty=0
+  Fast-lane [max/F] dirty=0
+  Research [max/R] dirty=0
+BOARD
+EOF
+mkdir -p "$R/.claude"
+units() { grep -E '^\| (U|Fast-lane|Research) ' "$1" | cut -d' ' -f2 | paste -sd' ' -; }
+printf '%s' '{"keepWorktrees":["Fast-lane"]}' > "$R/.claude/commandeck.json"
+snap --out "$CPD/k1.md" >/dev/null
+check "a kept worktree is omitted and an ordinary one is listed" "U Research" "$(units "$CPD/k1.md")"
+printf '%s' '{"version":1}' > "$R/.claude/commandeck.json"
+snap --out "$CPD/k2.md" >/dev/null
+check "a missing key keeps the standing worktrees: only the ordinary one is listed" "U" "$(units "$CPD/k2.md")"
+printf '%s' '{"keepWorktrees":[]}' > "$R/.claude/commandeck.json"
+snap --out "$CPD/k3.md" >/dev/null
+check "only an explicit empty array keeps nothing: every worktree is listed" "U Fast-lane Research" "$(units "$CPD/k3.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

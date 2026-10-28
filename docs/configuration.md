@@ -86,6 +86,8 @@ that auto-decide never makes for you; setup never asks for it and keeps it on a 
 only: 0.26.0 reads no `builder.model`, `builder.effort`, `planModels`,
 `planFast`, `codexModels` or `codexFast` an older setup saved there.
 
+`keepWorktrees` is a JSON array of standing worktree names. The pane sweep never closes a pane in these worktrees and the checkpoint does not list them. When the key is missing (or the file is missing or does not parse), the standing worktrees the plugin creates are kept: `Research`, `E2EWalkthroughs`, `Fast-lane`, `Research-lane` and `Chief-of-Staff`. Only an explicit empty array, `[]`, keeps nothing. Setup writes no default and keeps your list as saved.
+
 `autoDecideSeats` is a `/plugin` key: `chiefOfStaff` (default), `chiefOfStaff,main` or `off`. It names the seats
 that have `/autodecide`, the band and the rules; a seat not listed never reads the mode. A change applies to the
 next session. With both seats listed, they share one mode: `/autodecide on` or `off` in one seat shows in the other

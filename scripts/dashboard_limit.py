@@ -67,6 +67,8 @@ WEEK = 7 * 86400
 FIVE_HOURS = 5 * 3600
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 HISTORY_KEEP = 14 * 86400
+# Every resume prompt opens this way: the restart helper's (context-clear-restart.sh) and the owner's by hand.
+RESUME = "resume from the checkpoint "
 
 
 @contextlib.contextmanager
@@ -1605,40 +1607,53 @@ def main_events(now, proj, log):
     checkpoint <cp>` line, or a `could not copy` line: the hook did not heal it. The log is machine-wide and in local
     time, so a checkpoint counts only when its session has a transcript under `proj`. carried lists each checkpoint the
     hook carried automatically ({cp, at, items, restartedAt}: the first restart after it, else null): a rejected
-    checkpoint whose main was never restarted. resumedAt is the newest <session id>.resumed-from record of such a
-    session, main's last restart. An unreadable file raises OSError.
+    checkpoint whose main was never restarted. restartFailures lists each checkpoint whose restart helper gave up
+    ({cp, at}, the `restart: AUTO RESTART FAILED for <cp>:` line): no stop retries it, so main waits for the owner.
+    resumedAt, main's last restart, is the newer of the newest <session id>.resumed-from record of such a session and
+    the newest main prompt opening RESUME: a restart by hand carries no resume token, so only its prompt proves it.
+    An unreadable file raises OSError.
     """
     since = now - 86400
-    comp = []
+    comp, prompts = [], []
     for name in (os.listdir(proj) if os.path.isdir(proj) else []):
         path = os.path.join(proj, name)
         if not name.endswith(".jsonl") or os.path.getmtime(path) < since:
             continue
         with open(path, errors="replace") as f:
             for line in f:
-                if '"compact_boundary"' not in line:
+                if '"compact_boundary"' not in line and RESUME not in line:
                     continue
                 try:
                     r = json.loads(line)
                 except ValueError:
                     continue
-                at = epoch(r.get("timestamp")) if isinstance(r, dict) and r.get("subtype") == "compact_boundary" else None
-                if at is not None and at >= since:
+                if not isinstance(r, dict):
+                    continue
+                at = epoch(r.get("timestamp"))
+                if at is None or at < since:
+                    continue
+                if r.get("subtype") == "compact_boundary":
                     meta = r.get("compactMetadata") or {}
                     comp.append({"sid": r.get("sessionId") or name[:-6], "at": iso(at), "trigger": meta.get("trigger"), "preTokens": meta.get("preTokens")})
+                # A typed or launch-argument prompt is a plain string; a tool result quoting the phrase is a list.
+                elif r.get("type") == "user" and str((r.get("message") or {}).get("content")).startswith(RESUME):
+                    prompts.append(at)
     ours = lambda cp: os.path.exists(os.path.join(proj, os.path.basename(cp)[:-3] + ".jsonl"))
-    failed, healed, carried = {}, set(), {}
+    failed, healed, carried, gave_up = {}, set(), {}, {}
     try:
         with open(log, errors="replace") as f:
             for line in f:
                 m = re.match(r"(\S+) stop-hook: (?:carry-over check failed for (\S+) against |could not copy \d+ missing items into (\S+?);|(\d+) items carried automatically into the checkpoint (\S+))", line)
+                g = None if m else re.match(r"(\S+) restart: AUTO RESTART FAILED for (\S+?): ", line)
                 try:
-                    at = datetime.fromisoformat(m[1]).timestamp() if m else None
+                    at = datetime.fromisoformat((m or g)[1]).timestamp() if m or g else None
                 except ValueError:
                     at = None
                 if at is None or at < since:
                     continue
-                if m[5]:
+                if g:
+                    gave_up[g[2]] = at
+                elif m[5]:
                     healed.add(m[5])
                     carried[m[5]] = (at, int(m[4]))
                 elif m[2]:
@@ -1651,12 +1666,13 @@ def main_events(now, proj, log):
         pass
     resumed = [os.path.getmtime(p) for p in glob.glob(os.path.join(os.path.dirname(log), "*.resumed-from"))
                if os.path.exists(os.path.join(proj, os.path.basename(p)[:-len(".resumed-from")] + ".jsonl"))]
-    restarts_at = sorted(resumed)
+    restarts_at = sorted(resumed + prompts)
     return {"compactions": sorted(comp, key=lambda c: c["at"]),
             "carried": [{"cp": cp, "at": iso(at), "items": n, "restartedAt": next((iso(r) for r in restarts_at if r > at), None)}
                         for cp, (at, n) in sorted(carried.items(), key=lambda x: x[1][0]) if ours(cp)],
             "carryFailed": [{"at": iso(at), "cp": cp} for cp, at in sorted(failed.items(), key=lambda x: x[1]) if cp not in healed and ours(cp)],
-            "resumedAt": iso(max(resumed)) if resumed else None}
+            "restartFailures": [{"at": iso(at), "cp": cp} for cp, at in sorted(gave_up.items(), key=lambda x: x[1]) if ours(cp)],
+            "resumedAt": iso(restarts_at[-1]) if restarts_at else None}
 
 
 def main(argv):

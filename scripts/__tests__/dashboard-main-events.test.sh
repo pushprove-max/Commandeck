@@ -78,5 +78,22 @@ check "a fresh mcp-down-serena stamp in the health folder lists one mcp-down-ser
 echo "$(( $(date +%s) - 700 ))" > "$HOME/.commandeck/mcp-health/mcp-down-serena"
 check "a stamp over 10 minutes old lists none" '[]' "$(mcpdown "$(collect)")"
 rm -f "$HOME/.commandeck/mcp-health/mcp-down-serena"
+
+# Host fix 3a7cc613: a restart the helper gave up on (its one "AUTO RESTART FAILED for <cp>" line) is never retried, so
+# main waits past its line for the owner: one crit alert naming the prompt to restart by hand. A .resumed-from does not
+# exist for a restart by hand (it carries no token), so a later main prompt opening "resume from the checkpoint "
+# resolves it; one before the failure does not, nor does a tool result quoting the phrase. Another project's line is dropped.
+touch -d "@$((NOW - 30000))" "$CPD/m3.resumed-from"
+echo '{"type":"user"}' > "$PD/m8.jsonl"
+printf '%s\n' "$(lt $((NOW - 600))) restart: AUTO RESTART FAILED for $CPD/m8.md: the relaunch with the prompt opened no pane; main waits for the owner to restart it by hand" \
+  "$(lt $((NOW - 600))) restart: AUTO RESTART FAILED for $CPD/zz.md: the relaunch with the prompt opened no pane; main waits for the owner to restart it by hand" >> "$CPD/clear-hook.log"
+rprompt() { jq -cn --arg t "$(iso "$1")" --arg c "resume from the checkpoint $CPD/m8.md" "{type:\"user\",sessionId:\"m9\",timestamp:\$t,message:{content:$2}}"; }
+rprompt $((NOW - 900)) '$c' > "$PD/m9.jsonl"
+rprompt $((NOW - 60)) '[{type:"tool_result",content:$c}]' >> "$PD/m9.jsonl"
+failed() { jq -c '[.alerts[] | select(.id | startswith("main-restart-failed-")) | [(.id | sub("-[0-9]{9,}$"; "")), .severity, (.text | test("restart main by hand: claude .resume from the checkpoint .*/m8\\.md"))]]' <<<"$1"; }
+check "a given-up restart raises one crit alert naming the prompt; a resume prompt before it and a quoted one do not end it" \
+  '[["main-restart-failed-demo-m8","crit",true]]' "$(failed "$(collect)")"
+rprompt $((NOW - 30)) '$c' >> "$PD/m9.jsonl"
+check "the owner's resume prompt after it ends the alert" '[]' "$(failed "$(collect)")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -29,6 +29,12 @@ IL_CONFIG=$T/commandeck.json; echo '{"version":1,"autoDecideNever":["touching th
 eval "$(grep '^CUTS=' "$SETUP")"
 check "an autoDecideNever list in commandeck.json is carried over by a setup re-run, beside the worker cuts" \
   '["touching the billing config","a new vendor"]:["x"]' "$(jq -c .autoDecideNever <<<"$CUTS"):$(jq -c .workerSkillsOff <<<"$CUTS")"
+# Issue 431: the owner's keep list rides the same way. An explicit empty list must survive too: dropped, it would read
+# as a missing key, which keeps the standing worktrees the owner chose not to keep.
+for k in '["Fast-lane"]' '[]'; do
+  echo "{\"version\":1,\"keepWorktrees\":$k}" > "$IL_CONFIG"; eval "$(grep '^CUTS=' "$SETUP")"
+  check "a keepWorktrees list $k is carried over by a setup re-run as saved" "$k" "$(jq -c .keepWorktrees <<<"$CUTS")"
+done
 echo '{"version":1}' > "$IL_CONFIG"; eval "$(grep '^CUTS=' "$SETUP")"
 check "with none saved, none is invented" '{}' "$CUTS"
 

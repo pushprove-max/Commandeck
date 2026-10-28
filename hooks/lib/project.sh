@@ -63,8 +63,8 @@ pp_clear_line() {
   elif pp_flag standardContext; then printf 140000
   else printf 200000; fi
 }
-# The size past which a background agent no longer holds main's restart: under
-# the auto-compact point, 165K on a 200K window, 480K on 1M. COMMANDECK_CLEAR_CEILING overrides.
+# The size past which a restart a background agent holds tells main to TaskStop it or let it finish (a restart never
+# kills one): under the auto-compact point, 165K on a 200K window, 480K on 1M. COMMANDECK_CLEAR_CEILING overrides.
 pp_clear_ceiling() {
   if [ -n "${COMMANDECK_CLEAR_CEILING-}" ]; then printf '%s' "$COMMANDECK_CLEAR_CEILING"
   elif pp_flag standardContext; then printf 165000

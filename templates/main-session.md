@@ -185,14 +185,14 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 - Checkpoint: WRITING IT IS MAIN'S WHOLE JOB HERE; the restart is automatic.
   Its fields, its 5KB cap and its id are in templates/checkpoint.md. The owner can start the same handoff
   below the line with /handoff (skills/handoff).
-- Restart: a keystroke aimed at main's own pane lands in a different Claude pane
-  instead (probe, 2026-09-12), hence never `/clear`.
-  `hooks/context-clear-stop.sh` opens a NEW pane, types the resume
-  prompt there, and closes the old pane only once that prompt is accepted. The
-  resumed main has a NEW session id and a NEW pane handle, and background tasks
-  died with the old pane. The restart waits while an in-harness helper agent is
-  still running (until the ceiling, 480K or 165K on a 200K window, then it restarts and logs the ids it kills). Nothing needs arming: main-watch.sh and Orca's nudge wake the resumed
-  main. If the hook says NOT BOUND, run the `run-use` it names first.
+- Restart: a keystroke aimed at main's own pane lands in a different Claude pane instead (probe, 2026-09-12), hence
+  never `/clear`. `hooks/context-clear-stop.sh` opens a NEW pane, types the resume prompt there, and closes the old
+  pane only once that prompt is accepted. The resumed main has a NEW session id and a NEW pane handle, and background
+  tasks died with the old pane. The restart waits while an in-harness helper agent is still running, however long;
+  past the ceiling (480K, or 165K on a 200K window) it tells main to TaskStop the agent or let it finish. A restart
+  whose typed prompt and relaunch both fail, or whose unprompted new pane cannot be closed, is not retried: the
+  dashboard raises a crit alert and the owner restarts main by hand. Nothing needs arming: main-watch.sh and Orca's
+  nudge wake the resumed main. If the hook says NOT BOUND, run the `run-use` it names first.
 - Fresh start: an Orca nudge is answered with `orca-wait.sh` instead of
   board.sh; every later call is built on board.sh output, never on a
   remembered path, run id or handle: it prints the run, worktrees with

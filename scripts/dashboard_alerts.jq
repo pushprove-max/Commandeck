@@ -88,6 +88,12 @@ def builder_warmup_input: 3300000;
           | ((.compactions // [])[] | select($rs == null or (.at | ts) > $rs)
               | a("main-compact-\($p)-\(.sid[0:8])"; "crit"; "\($p): main session \(.sid[0:8]) compacted (\(.trigger), \((.preTokens // 0) / 1000 | round)K tokens): main is meant to restart before compaction"; "read the stop hook log for why main did not restart first")
                 + {since: (.at | ts)}),
+            # A restart the helper gave up on: no stop retries it, so main waits past its line for the owner. The
+            # action names the prompt because that prompt is the only proof a restart by hand leaves (main-events);
+            # a prompt in the same second as the failure (the relaunched pane's own) does not end it.
+            ((.restartFailures // [])[] | select($rs == null or (.at | ts) >= $rs)
+              | a("main-restart-failed-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's automatic restart failed (Orca did not accept the typed resume prompt and the relaunch did not resume), so main waits past its clear line"; "restart main by hand: claude 'resume from the checkpoint \(.cp)'")
+                + {since: (.at | ts)}),
             ((.carryFailed // [])[] | select(($rs == null or (.at | ts) > $rs) and $now - (.at | ts) > 120)
               | a("carry-failed-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's checkpoint \(.cp | split("/")[-1]) failed the carry-over check and the hook did not carry its items"; "restate the dropped items in the checkpoint, then restart main")
                 + {since: (.at | ts)}),

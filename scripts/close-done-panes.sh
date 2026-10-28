@@ -78,17 +78,17 @@ CLAIMED=$(awk 'FNR == 1 { if (!v) printf "%s", h; h = ""; v = 0 }
   END { if (!v) printf "%s", h }' "$SCRATCH"/seat-*.txt 2>/dev/null || true)
 NOW=$(( $(date +%s) * 1000 ))
 rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$WT_JSON" \
-  --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --rawfile prot <(printf '%s' "$PROTECT") --rawfile claim <(printf '%s' "$CLAIMED") \
+  --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --rawfile prot <(printf '%s' "$PROTECT") --rawfile claim <(printf '%s' "$CLAIMED") --rawfile keep <(pp_keep_worktrees) \
   --argjson now "$NOW" --argjson cutoff "$(( NOW - QUIET_SECONDS * 1000 ))" \
   --argjson orphan "$(( NOW - ORPHAN_SECONDS * 1000 ))" "$PP_PNORM"'
   ($prot | split("\n")) as $prot | ($ws | pnorm) as $ws | ($main | pnorm) as $main
-  | ($claim | split("\n")) as $claim
+  | ($claim | split("\n")) as $claim | ($keep | split("\n") | map(select(. != ""))) as $keep
   | ($ts.result | if type == "array" then . else .terminals end) as $ts
   | [ $wl.result.worktrees[]
       | select(.cliProvenance.kind == "created-by-cli" and .isMainWorktree != true
                and (.path | pnorm | startswith($ws + "/"))
-               and (.displayName | IN("Research", "E2EWalkthroughs") | not)
-               and (.path | split("/") | last | IN("Research", "E2EWalkthroughs") | not))
+               and (.displayName | IN($keep[]) | not)
+               and (.path | split("/") | last | IN($keep[]) | not))
       | .path | pnorm ] as $owned
   | [ $ps.result.worktrees[]? | .agents[]? ] as $agents
   | $ts[]

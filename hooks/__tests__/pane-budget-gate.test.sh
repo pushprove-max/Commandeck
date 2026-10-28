@@ -2,7 +2,7 @@
 set -u
 export COMMANDECK_HOOK_TIER=strict COMMANDECK_SERENA=1
 ROOT=$(git rev-parse --show-toplevel); HOOK="$ROOT/hooks/pane-budget-gate.sh"; PASS=0; FAIL=0
-check() { [ "$2" = "$3" ] && { PASS=$((PASS+1)); echo "ok   $1"; } || { FAIL=$((FAIL+1)); echo "FAIL $1"; }; }
+check() { [ "$2" = "$3" ] && { PASS=$((PASS+1)); echo "ok   $1"; } || { FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; }; }
 BOX=$(mktemp -d); trap 'rm -rf "$BOX"' EXIT; mkdir -p "$BOX/w/.claude/briefs" "$BOX/w/.claude/plans"; printf '{"context":10,"compactions":2}\n' > "$BOX/budget.json"; printf '{"transcript_path":"%s/log.jsonl","tool_name":"Edit"}\n' "$BOX" > "$BOX/input"; yes '{"type":"assistant"}' | head -3 > "$BOX/log.jsonl"
 run() { CLAUDE_PROJECT_DIR="$BOX/w" PANE_BUDGET_CONFIG="$BOX/budget.json" "$HOOK" < "$BOX/input" 2>&1; }
 OUT=$(run); RC=$?; check "over-budget edit blocks" 2 "$RC"; check "block names handoff" 0 "$(printf '%s' "$OUT" | grep -q 'w-handoff.md' && echo 0 || echo 1)"; check "block lists all four recovery options" 4 "$(printf '%s\n' "$OUT" | grep -oE 'simplify the unit|reset the pane|reassign to a fresh pane|escalate to main' | wc -l)"; printf '## decisions\n## unresolved findings\n## current commit\n## test evidence\n' > "$BOX/w/.claude/briefs/w-handoff.md"; check "handoff permits edit" 0 "$(run >/dev/null; echo $?)"
@@ -166,6 +166,25 @@ done
 check "an allowed command chained to another is refused" "2 2 2" \
   "$(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b; rm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b\nrm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a $(rm -rf x)"}')"
 check "the task-list tools are allowed" 0 "$(gate "$BOX/m" TaskUpdate '{"taskId":"1","status":"completed"}')"
+# Host fix 3a7cc613: ask-stop-records-decision.sh holds a turn that asks the owner until `decision.sh add` runs, and the
+# restart hold tells main to TaskStop a running agent; past the line both were refused, so neither could ever be done.
+# The add goes by the path the hold prints (hooks/../scripts), with quoted values and no metacharacter outside them.
+check "past the line, decision.sh add by the path the ask hold prints is allowed" "0 0" \
+  "$(gate "$BOX/m" Bash "$(jq -cn --arg c "bash $ROOT/hooks/../scripts/decision.sh add q-1 'Ship it now? Or wait' 'wait' main" '{command:$c}')") $(gate "$BOX/m" Bash "$(jq -cn --arg c "bash $ROOT/scripts/decision.sh add q-2 'Which one?' none main --options 'a|b'" '{command:$c}')")"
+# A question is the owner's words, apostrophes and all: the gate reads shell quoting as bash does (a closed-and-
+# escaped quote, the '"'"' form, a double-quoted string, a backslash), so each spelling bash takes as one word passes.
+DEC="bash $ROOT/scripts/decision.sh add q-1"
+decgate() { gate "$BOX/m" Bash "$(jq -cn --arg c "$DEC $1 wait main" '{command:$c}')"; }
+check "past the line, a question holding an apostrophe passes, however it is quoted" "0 0 0 0 0" \
+  "$(decgate "'What'\\''s next?'") $(decgate "'Can we ship the owner'\"'\"'s fix?'") $(decgate "\"What's next? (a; b)\"") $(decgate "\"Say \\\"hi\\\" now\"") $(decgate "What\\'s\\ next")"
+check "past the line, quoting that runs or chains something is still refused" "2 2 2 2 2 2" \
+  "$(decgate "\"\$(id)\"") $(decgate "\"\`id\`\"") $(decgate "'open") $(decgate "\"open") $(decgate "'a'\\''b'; rm -rf x") $(decgate "\"\${HOME}\"")"
+check "past the line, TaskStop is allowed" 0 "$(gate "$BOX/m" TaskStop '{"task_id":"abc123"}')"
+for c in "bash $ROOT/scripts/decision.sh answer q-1 yes" "python3 $ROOT/scripts/decision.sh add q-1 'q?' d main" \
+  "bash /p/scripts/decision.sh add q-1 'q?' d main" "bash $ROOT/scripts/decision.sh add q-1 'q?' d" \
+  "bash $ROOT/scripts/decision.sh add q-1 'q?' d main; rm -rf x" "bash $ROOT/scripts/decision.sh add q-1 \$(rm -rf x) d main"; do
+  check "past the line, refused: $c" 2 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
+done
 check "a worker pane with the marker is never refused" 0 "$(gate "$BOX/lw" Bash '{"command":"git status"}')"
 check "a reviewer is never refused" 0 "$(COMMANDECK_REVIEWER=1 gate "$BOX/m" Bash '{"command":"git status"}')"
 rm "$H/.claude/checkpoints/msid.past-line"
@@ -204,15 +223,17 @@ for w in Fast-lane Research-lane; do git -C "$BOX/m" worktree add -q "$BOX/$w" >
 check "the gate passes in a lane and still fires in an ordinary worker" "0 0 2" \
   "$(for d in Fast-lane Research-lane lw; do CLAUDE_PROJECT_DIR="$BOX/$d" PANE_BUDGET_CONFIG="$BOX/budget.json" "$HOOK" < "$BOX/input" >/dev/null 2>&1; echo -n "$? "; done | sed 's/ $//')"
 
-# #409: past the line the one flagged state-snapshot.sh call fills the checkpoint. Each value is a word or one
-# single-quoted string; the quotes are stripped before the character ban, so nothing else rides a value.
+# #409: past the line the one flagged state-snapshot.sh call fills the checkpoint. Each value is one shell word,
+# quoted as bash quotes it; the gate reads the quoting as bash does, so nothing else rides a value.
 H=$BOX/home; CPF=$H/.claude/checkpoints/msid.md; : > "$H/.claude/checkpoints/msid.past-line"
 SNAP="bash $ROOT/scripts/state-snapshot.sh --out $CPF"
 snapgate() { gate "$BOX/m" Bash "$(jq -cn --arg c "$1" '{command:$c}')"; }
 check "flagged snapshot allowed past the line; a chained command refused: the flagged call and a quoted value with a space" "0 0 0" \
   "$(snapgate "$SNAP --goal 'ship U' --stage 'U=build it'") $(snapgate "$SNAP --force --goal word --next U=merge --open-item 'a \$b; c'") $(snapgate "$SNAP --goal 'x --out /tmp/other.md'")"
-check "flagged snapshot allowed past the line; a chained command refused: a chain, a substitution, a quote escape, a second line, a redirect" "2 2 2 2 2" \
-  "$(snapgate "$SNAP --goal 'x'; rm y") $(snapgate "$SNAP --goal \"\$(id)\"") $(snapgate "$SNAP --goal 'a'\\''b'") $(snapgate "$SNAP --goal 'x'
+check "flagged snapshot allowed past the line: a value holding an escaped quote, single or double quoted" "0 0" \
+  "$(snapgate "$SNAP --goal 'a'\\''b'") $(snapgate "$SNAP --goal \"it's done\"")"
+check "flagged snapshot allowed past the line; a chained command refused: a chain, a substitution, a second line, a redirect" "2 2 2 2" \
+  "$(snapgate "$SNAP --goal 'x'; rm y") $(snapgate "$SNAP --goal \"\$(id)\"") $(snapgate "$SNAP --goal 'x'
 rm y") $(snapgate "$SNAP --goal 'x' > /tmp/z")"
 check "other path refused: another --out, a flag before --out, a value with no flag, a flag with no value" "2 2 2 2" \
   "$(snapgate "bash $ROOT/scripts/state-snapshot.sh --out /tmp/other.md --goal 'x'") $(snapgate "bash $ROOT/scripts/state-snapshot.sh --goal 'x' --out $CPF") $(snapgate "$SNAP 'x'") $(snapgate "$SNAP --goal")"

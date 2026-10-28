@@ -54,8 +54,8 @@ BOARD=$(bash "$(dirname "${BASH_SOURCE[0]}")/board.sh" 2>&1)
 # The heredoc is unquoted so line 40 can interpolate the board; that means bash
 # also runs any backtick in the template text below. Every command shown to main
 # keeps its backticks escaped, or generating a checkpoint executes it.
-python3 - "$OUT" "$NEW" <<PY
-import re, sys, datetime
+KEEP_WT=$(pp_keep_worktrees) python3 - "$OUT" "$NEW" <<PY
+import os, re, sys, datetime
 board = """$(printf '%s' "$BOARD" | sed 's/\\/\\\\/g; s/"/\\"/g')"""
 out = sys.argv[1]
 
@@ -73,7 +73,8 @@ def section(name):
     return body
 
 units = [l.split()[0] for l in section("worktrees") if l.startswith("  ") and not l.strip().startswith("brief")]
-units = [u for u in units if u not in ("Research", "E2EWalkthroughs")]
+keep = os.environ.get("KEEP_WT", "").splitlines()
+units = [u for u in units if u not in keep]
 seats, tasks, loops = {}, {}, {}
 for l in section("seats"):
     p = l.split()

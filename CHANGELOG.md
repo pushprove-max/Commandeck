@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.57.0 -- 2026-10-28
+
+### Main restarts
+
+- When the typed resume prompt is not taken (a paired phone holding the pane), the restart opens a second pane with the prompt in its start command. The old main closes only once that new main has its checkpoint context.
+- When both ways fail, or a new pane that got no prompt cannot be closed, the restart is not tried again: the dashboard raises a critical alert naming the command to restart main by hand. The alert clears once a main session starts with that resume prompt.
+- A restart never stops a running helper agent. It waits for the agent, however long, and past the context ceiling it tells main to stop the agent or let it finish.
+- Past the context line main can still record a question for the owner and stop a helper agent. Before, the line refused both, so a turn that asked the owner could not end.
+- Past the context line, an allowed command reads its quoting as the shell does: a question or value holding an apostrophe (`'What'\''s next?'` or `"What's next?"`) passes, and a quoted value is no longer refused on macOS.
+
+### Panes
+
+- The worktrees whose panes are never closed and that the checkpoint does not list are one list, `keepWorktrees`, in the project config. A missing key keeps the standing worktrees the plugin creates (Research, E2EWalkthroughs, Fast-lane, Research-lane and Chief-of-Staff), so an existing project needs no change. Only an explicit empty list keeps nothing. Setup carries your list over as saved.
+
 ## 0.56.0 -- 2026-10-28
 
 ### Tests

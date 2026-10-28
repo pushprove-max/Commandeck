@@ -60,5 +60,15 @@ check "a checkpoint that names no run adds nothing to the block" 0 "$(grep -c '^
 OUT=$(RPATH="$T/ps-none:$PATH" resume "$CPD/many.md")
 check "many gone runs: the GONE block is bounded, the rest counted in one line naming the checkpoint, the goal kept, the print under 10 KB" "yes 1 1 yes" \
   "$([ "$(grep -c '^GONE: seat run ' <<<"$OUT")" -le 10 ] && echo yes) $(grep -c "^GONE: [0-9]* more seat runs named in $CPD/many.md " <<<"$OUT") $(grep -c 'keep this goal' <<<"$OUT") $([ "$(printf '%s\n' "$OUT" | LC_ALL=C wc -c)" -le 10240 ] && echo yes)"
+# Host fix 3a7cc613: <cp>.delivered is the restart helper's proof that a relaunched main got its context: the marker's
+# token, then the session id, written only once the context printed. A print that fails leaves none.
+MARKF=$CPD/resume-pending.$(printf '%s' "$R" | tr -c 'A-Za-z0-9' '-')
+tokresume() { printf '%s\ntokA\n' "$CPD/small.md" > "$MARKF"; rm -f "$CPD/small.md.delivered"
+  (cd "$R" && printf '{"session_id":"new-sid","transcript_path":"%s"}' "$T/transcript.jsonl" \
+    | env -u CLAUDE_PROJECT_DIR HOME="$H" COMMANDECK_RESUME_TOKEN=tokA COMMANDECK_BOARD_CMD=true COMMANDECK_SCRATCH="$T" bash "$REAL/hooks/resume-context.sh" "$@"); rm -f "$CPD/new-sid.resumed-from"; }
+tokresume >/dev/null 2>&1
+check "a printed resume writes the receipt: the token, then the session" "tokA new-sid" "$(paste -sd' ' "$CPD/small.md.delivered" 2>/dev/null)"
+tokresume >&- 2>/dev/null
+check "a resume whose print failed writes no receipt" no "$([ -e "$CPD/small.md.delivered" ] && echo yes || echo no)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

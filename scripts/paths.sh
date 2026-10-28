@@ -1073,6 +1073,17 @@ pp_review_loop() {
   [[ $v =~ $3 ]] || { echo "$PP_MAIN/.claude/commandeck.json has reviewLoop.$1 = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
   echo "$v"
 }
+# pp_keep_worktrees -- the standing worktrees (issue 431) the sweep never closes a pane in and the checkpoint does not
+# list: keepWorktrees in this project's config, a JSON array of names, printed one per line. Only an explicit empty
+# array keeps nothing. No file, no key, a value that is not an array or a file that does not parse keeps the
+# worktrees the plugin creates, so a project that updated without re-running setup loses no protection (main's
+# answer, 2026-10-28). This is the one home of that default.
+pp_keep_worktrees() {
+  local f=$PP_MAIN/.claude/commandeck.json v
+  v=$(jq -r '.keepWorktrees | if type == "array" then .[] | strings else error end' "$f" 2>/dev/null) \
+    || v=$(printf '%s\n' Research E2EWalkthroughs Fast-lane Research-lane Chief-of-Staff)
+  [ -z "$v" ] || printf '%s\n' "$v"
+}
 # Issue 245: the settings that are the same in every project are also the plugin's options (userConfig in
 # .claude-plugin/plugin.json), set in /config. The owner's /config answer beats the project's saved one. It is read
 # from the user's settings file, not CLAUDE_PLUGIN_OPTION_*: that reaches hooks only, and may carry the manifest's

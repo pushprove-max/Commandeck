@@ -20,7 +20,7 @@ PSLUG=$(printf '%s' "$(git -C "$BOX/repo" rev-parse --show-toplevel)" | tr -c 'A
 
 # A PATH holding only what the hook and helper call, so setsid is absent on
 # every host, the PC included.
-for t in bash sh env jq git date stat dirname basename cat ps grep perl touch printf rm rmdir sleep head tr cut sed awk mkdir ls wc tail sort python3 cksum mv paste timeout iconv; do
+for t in bash sh env jq git date stat dirname basename cat ps grep perl touch printf rm rmdir sleep head tr cut sed awk mkdir ls wc tail sort python3 cksum mv paste timeout iconv comm; do
   p=$(command -v "$t") && ln -s "$p" "$BOX/bin/$t"
 done
 [ ! -e "$BOX/bin/setsid" ] || { echo "FAIL setup: setsid leaked onto the test PATH"; exit 1; }
@@ -376,6 +376,28 @@ stop_s1 true; sleep 1
 check "a hand-template checkpoint with its Goal placeholder never restarts main: the second stop launches nothing" "none:no" \
   "$([ -s "$BOX/s1.out" ] && echo out || echo none):$([ -e "$BOX/launched" ] && echo yes || echo no)"
 rm -f "$CPD"/s1.* "$BOX/launched"
+
+# Host fix 3a7cc613: a restart never kills an in-session helper agent. It waits while one runs, past the ceiling too,
+# and says so; an agent ends at its task-notification or at a successful TaskStop (its structured result, never a
+# shell's stdout). A session whose restart helper gave up (<sid>.restart-failed) is never restarted again.
+LAUNCH='{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully.\nagentId: abc123 (internal ID)"}]}]},"toolUseResult":{"status":"async_launched"}}'
+STOPPED='{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]},"toolUseResult":{"message":"Successfully stopped task: abc123 (agent)","task_id":"abc123"}}'
+QUOTED='{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]},"toolUseResult":{"stdout":"Successfully stopped task: abc123","stderr":""}}'
+agents() { # <transcript rows...> -- one stop 500 tokens past a 10-token line and a 20-token ceiling: launched | held
+  rm -f "$CPD"/sid.* "$CPD/resume-pending.$PSLUG" "$BOX/launched"; echo '# checkpoint' > "$CPD/sid.md"
+  [ -z "${GAVE_UP-}" ] || : > "$CPD/sid.restart-failed"
+  { printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}'; printf '%s\n' "$@"; } > "$BOX/transcript.jsonl"
+  (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","stop_hook_active":false}' "$BOX/transcript.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" CALLS="$BOX/calls" ORCA_TERMINAL_HANDLE=old-pane COMMANDECK_CLEAR_LINE=10 \
+        COMMANDECK_CLEAR_CEILING=20 COMMANDECK_RESTART_HELPER="$BOX/stub-helper.sh" bash "$HOOK" > /dev/null 2> "$BOX/agents.err")
+  if [ -e "$CPD/resume-pending.$PSLUG" ]; then wait_for '[ -e "$BOX/launched" ] && [ ! -e "$INFLIGHT" ]'; echo launched; else echo held; fi
+}
+check "past the ceiling a running agent still holds the restart" held "$(agents "$LAUNCH")"
+check "and main is told to TaskStop it or let it finish, naming it" 1 "$(grep -c 'restart still waits for 1 background agent(s) (abc123).*Stop each with TaskStop, or let it finish' "$BOX/agents.err")"
+check "an agent stopped with TaskStop no longer holds it" launched "$(agents "$LAUNCH" "$STOPPED")"
+check "the stop text quoted in a shell's output ends nothing" held "$(agents "$LAUNCH" "$QUOTED")"
+check "a session whose restart helper gave up is not restarted again" held "$(GAVE_UP=1 agents)"
+check "and main is told the owner restarts it by hand" 1 "$(grep -c 'the automatic restart failed .*the owner restarts main by hand' "$BOX/agents.err")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

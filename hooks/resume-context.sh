@@ -179,5 +179,10 @@ grep -qF 'the resume budget' <<<"$prompts" && cut="${cut:+$cut; }the owner's pro
 
 # Issue 283: the payload's size, beside the stop hook's cp_bytes, is what a restart costs the new main.
 out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" ${aged:+"$aged"} ${gone:+"$gone"} "$prompts")
-printf '%s\n' "$out"
+# <cp>.delivered is context-clear-restart.sh's proof that a relaunched main got this context: written only once it is
+# printed, naming the token this session was started with, then the session. Ancestry above is written before, so it
+# cannot serve. A failed write leaves no receipt; the helper then keeps the old pane up.
+if printf '%s\n' "$out"; then
+  { printf '%s\n%s\n' "$token" "$sid" > "$cp.delivered.$$" && mv "$cp.delivered.$$" "$cp.delivered"; } 2>/dev/null || rm -f "$cp.delivered.$$"
+fi
 echo "$(date +%FT%T) resume: payload_bytes=$(( $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | LC_ALL=C wc -c) + $(printf '%s\n' "$out" | LC_ALL=C wc -c) )) cp=$cp" >> "$HOME/.claude/checkpoints/clear-hook.log" 2>/dev/null

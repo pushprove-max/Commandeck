@@ -22,39 +22,69 @@ if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
   CP=${PAST%.past-line}.md
   T0=$(jq -r '.tool_name // empty' <<<"$INPUT"); FP=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")
   CMD=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
-  # One command, read word by word: no chain, substitution, quote, glob or second line; [bash|python3] and the
-  # plugin's own script; then `--out <this checkpoint> [--force]` and only --goal/--stage/--next/--open-item pairs, or
-  # `carry <file> <file>`, nothing else. A value is one word or one single-quoted string holding no quote: the strings
-  # are replaced by Q before the character ban, so a quoted value may hold spaces and nothing else rides on it.
+  # One command, read word by word: no chain, substitution, glob or second line; [bash|python3] and the plugin's own
+  # script; then `--out <this checkpoint> [--force]` and only --goal/--stage/--next/--open-item pairs, or
+  # `carry <file> <file>`, nothing else.
+  # Or `decision.sh add <id> <question> <default> <source> [flags]`: ask-stop-records-decision.sh holds a turn that asks
+  # the owner until that call runs (host fix 3a7cc613).
   one() {
-    local W i=0 s n k rest=$CMD stripped= re="^([^']*[[:space:]])'([^']*)'([[:space:]].*|)\$"
-    [[ $CMD != *$'\n'* ]] || return 1
-    while [[ $rest =~ $re ]]; do stripped+="${BASH_REMATCH[1]}Q"; rest=${BASH_REMATCH[3]}; done
-    stripped+=$rest
-    [[ $stripped != *[\;\&\|\`\$\<\>\\\'\"\(\)\*\?\[\{]* ]] && read -ra W <<<"$stripped" || return 1
+    local W i=0 s n k
+    [[ $CMD != *$'\n'* ]] && words "$CMD" || return 1
     case ${W[0]-} in bash|python3) i=1 ;; esac
     s=${W[i]-} n=$((${#W[@]} - i))
-    case ${s##*/}:${W[0]-} in state-snapshot.sh:python3|checkpoint-context.py:bash) return 1 ;; esac
-    [ -n "$s" ] && [ "${s/#\~/$HOME}" -ef "${BASH_SOURCE[0]%/*}/../scripts/${s##*/}" ] || return 1
+    case ${s##*/}:${W[0]-} in state-snapshot.sh:python3|checkpoint-context.py:bash|decision.sh:python3) return 1 ;; esac
+    [ -n "$s" ] && [ "$s" -ef "${BASH_SOURCE[0]%/*}/../scripts/${s##*/}" ] || return 1
     case ${s##*/} in
       state-snapshot.sh)
-        [ "$n" -ge 3 ] && [ "${W[i+1]}" = --out ] && [ "${W[i+2]/#\~/$HOME}" = "$CP" ] || return 1
+        [ "$n" -ge 3 ] && [ "${W[i+1]}" = --out ] && [ "${W[i+2]}" = "$CP" ] || return 1
         k=$((i + 3)); [ "${W[k]-}" != --force ] || k=$((k + 1))
         while [ "$k" -lt "${#W[@]}" ]; do
           case ${W[k]} in --goal|--stage|--next|--open-item) [ $((k + 1)) -lt "${#W[@]}" ] || return 1; k=$((k + 2)) ;; *) return 1 ;; esac
         done ;;
       checkpoint-context.py) [ "$n" = 4 ] && [ "${W[i+1]}" = carry ] && [[ ${W[i+2]} != -* && ${W[i+3]} != -* ]] ;;
+      decision.sh) [ "$n" -ge 6 ] && [ "${W[i+1]}" = add ] ;;
       *) return 1 ;;
     esac
+  }
+  # words <cmd> -- splits the command into W as bash would: single quotes, double quotes holding no $ or `, and
+  # backslash escapes, so a value may hold an apostrophe ('What'\''s next?', "What's next?"). A leading unquoted ~ or ~/
+  # is $HOME, as bash expands it. Any unquoted metacharacter, a $ or ` in double quotes, or an open quote refuses.
+  words() {
+    local c=$1 w= dq=0 has=0 ch
+    W=()
+    while [ -n "$c" ]; do
+      ch=${c:0:1} c=${c:1}
+      if [ "$dq" = 1 ]; then
+        case $ch in
+          '"') dq=0 ;;
+          '$'|'`') return 1 ;;
+          '\') case ${c:0:1} in '$'|'`'|'"'|'\') w+=${c:0:1} c=${c:1} ;; *) w+='\' ;; esac ;;
+          *) w+=$ch ;;
+        esac
+        continue
+      fi
+      case $ch in
+        "'") [[ $c == *"'"* ]] || return 1; w+=${c%%"'"*} c=${c#*"'"} has=1 ;;
+        '"') dq=1 has=1 ;;
+        '\') [ -n "$c" ] || return 1; w+=${c:0:1} c=${c:1} has=1 ;;
+        ' '|$'\t') [ "$has" = 0 ] || { W+=("$w"); w= has=0; } ;;
+        ';'|'&'|'|'|'`'|'$'|'<'|'>'|'('|')'|'*'|'?'|'['|'{') return 1 ;;
+        '~') case $has:${c:0:1} in 0:/|0:' '|0:$'\t'|0:) w+=$HOME ;; *) w+='~' ;; esac; has=1 ;;
+        *) w+=$ch has=1 ;;
+      esac
+    done
+    [ "$dq" = 0 ] || return 1
+    [ "$has" = 0 ] || W+=("$w")
   }
   case $T0 in
     Write|Edit) [ "$FP" = "$CP" ] && exit 0 ;;
     Read) { [ "$FP" = "$CP" ] || [ "$FP" = "$(head -1 "${CP%.md}.resumed-from" 2>/dev/null)" ] \
       || [ "$FP" -ef "${BASH_SOURCE[0]%/*}/../templates/checkpoint.md" ]; } && exit 0 ;;
     Bash) one && exit 0 ;;
-    TaskCreate|TaskUpdate|TaskList|TaskGet|TodoWrite) exit 0 ;;
+    # TaskStop: context-clear-stop.sh holds the restart while a helper agent runs and tells main to stop it.
+    TaskCreate|TaskUpdate|TaskList|TaskGet|TaskStop|TodoWrite) exit 0 ;;
   esac
-  echo "BLOCKED: main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out with --goal/--stage/--next/--open-item, checkpoint-context.py carry and the task-list tools also pass), then end the turn; the Stop hook restarts main." >&2
+  echo "BLOCKED: main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out with --goal/--stage/--next/--open-item, checkpoint-context.py carry, decision.sh add to record an ask, TaskStop and the task-list tools also pass), then end the turn; the Stop hook restarts main." >&2
   exit 2
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).

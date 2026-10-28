@@ -133,8 +133,9 @@ DROPS=$(jq -c '.mergeDecisions // {}' "$IL_CONFIG" 2>/dev/null || echo '{}') ADD
 # merge-unit-local.sh reads the owner's list of generated files; setup rebuilds the file, so the list is carried over (empty output counts as null).
 GEN=$(jq -c '.generatedFiles // null' "$IL_CONFIG" 2>/dev/null || echo null); GEN=${GEN:-null}
 # The owner's worker cuts (worktree-setup.sh writes them): carried over as saved, and each answer below changes one.
-# autoDecideNever (issue 333) rides with them: the owner's own never-decide list, which setup asks nothing about.
-CUTS=$(jq -c '{workerSkillsOff, workerPluginsOff, keeps, autoDecideNever} | with_entries(select(.value != null))' "$IL_CONFIG" 2>/dev/null || true); [ -n "$CUTS" ] || CUTS='{}'
+# autoDecideNever (issue 333) rides with them: the owner's own never-decide list, which setup asks nothing about. So does
+# keepWorktrees (issue 431): setup writes no default, since a missing key already keeps the standing worktrees.
+CUTS=$(jq -c '{workerSkillsOff, workerPluginsOff, keeps, autoDecideNever, keepWorktrees} | with_entries(select(.value != null))' "$IL_CONFIG" 2>/dev/null || true); [ -n "$CUTS" ] || CUTS='{}'
 RL=$(jq -c '.reviewLoop | if type == "object" then . else {} end' "$IL_CONFIG" 2>/dev/null || echo '{}')
 # rl <key> <answer> <regex> <flag> <what it takes> -- a review-loop answer: an empty one takes the
 # default back (nothing saved), any other is saved exactly as typed once the loop's reader would take it.

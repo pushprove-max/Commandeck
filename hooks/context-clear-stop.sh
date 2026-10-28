@@ -28,6 +28,13 @@ ctx=$(context_size "$transcript") || ctx=0
 # /handoff (skills/handoff) leaves this marker to restart below the line.
 handoff="$HOME/.claude/checkpoints/$sid.handoff"
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || [ -f "$handoff" ] || exit 0
+# The restart helper gave up on this session (the typed prompt and the relaunch both failed): no stop retries it; the
+# owner restarts main by hand, told by the dashboard's crit alert.
+if [ -e "$HOME/.claude/checkpoints/$sid.restart-failed" ]; then
+  HOOK_FIRE_ADVISE=1
+  echo "context-clear: the automatic restart failed (log $HOME/.claude/checkpoints/clear-hook.log); the owner restarts main by hand, so no stop retries it" >&2
+  exit 0
+fi
 cp="$HOME/.claude/checkpoints/$sid.md"
 fresh=0
 [ -f "$cp" ] && [ "$(( $(date +%s) - $(stat -c %Y "$cp") ))" -lt 1800 ] && fresh=1
@@ -134,27 +141,34 @@ if [ "$fresh" = 1 ]; then
   fi
 fi
 # In-harness background agents live in this pane and die with it: hold
-# the restart while any async launch has no task-notification yet, and let the
-# stop pass so their notifications wake main. Past the ceiling (under the
-# auto-compact point, lib/project.sh) a hung agent cannot hold main any longer: restart and name it.
+# the restart while any async launch has no task-notification or successful TaskStop yet, and let the
+# stop pass so their notifications wake main. A restart never kills one (host fix 3a7cc613): past the ceiling
+# (under the auto-compact point, lib/project.sh) the hold stands and main is told to stop the agent or let it finish.
 CEILING=$(pp_clear_ceiling 2>/dev/null) || CEILING=
 CEILING=${CEILING:-${COMMANDECK_CLEAR_CEILING:-480000}}   # the helper did not load
 # A launch is this pane's own only when it is the result of a tool call that
 # is not a shell command and its text opens with the launch line: main prints
 # Builders' session logs, and a launch quoted there is another pane's agent,
-# whose notification never arrives here.
+# whose notification never arrives here. A TaskStop ends one only by its structured result
+# (toolUseResult.message), never by a shell's stdout that quotes it.
 running=$(comm -23 \
   <(grep -F 'Async agent launched' "$transcript" | jq -Rr 'fromjson? | select(.type == "user" and ((.toolUseResult | type) != "object" or (.toolUseResult | has("stdout") | not)))
       | .message.content | arrays | .[] | select(.type == "tool_result") | .content
       | if type == "array" then (.[] | select(.type == "text") | .text) elif type == "string" then . else empty end
       | select(startswith("Async agent launched")) | (capture("agentId: (?<id>[0-9a-f]+)") | .id)' 2>/dev/null | sort -u) \
-  <(grep -F '<task-notification>' "$transcript" | grep -F '<status>' | grep -o '<task-id>[0-9a-f][0-9a-f]*</task-id>' | sed 's/<[^>]*>//g' | sort -u) | tr '\n' ' ')
+  <({ grep -F '<task-notification>' "$transcript" | grep -F '<status>' | grep -o '<task-id>[0-9a-f][0-9a-f]*</task-id>' | sed 's/<[^>]*>//g'
+      grep -F 'Successfully stopped task' "$transcript" | jq -Rr 'fromjson? | select(.type == "user") | .toolUseResult | objects
+        | .message | strings | capture("^Successfully stopped task: (?<id>[0-9a-f]+)") | .id' 2>/dev/null; } | sort -u) | tr '\n' ' ')
 if [ "$fresh" = 1 ] && [ -n "$running" ]; then
+  n=$(wc -w <<< "$running" | tr -d ' ')
+  echo "$(date +%FT%T) stop-hook: held: $n background agents running ($running)" >> "$HOME/.claude/checkpoints/clear-hook.log"
+  HOOK_FIRE_ADVISE=1
   if [ "${ctx:-0}" -le "$CEILING" ] 2>/dev/null; then
-    echo "$(date +%FT%T) stop-hook: held: $(wc -w <<< "$running" | tr -d ' ') background agents running ($running)" >> "$HOME/.claude/checkpoints/clear-hook.log"
-    exit 0
+    echo "context-clear: restart waits for $n background agent(s) still running (${running% }): a restart kills them. Main restarts at the first stop after they all finish." >&2
+  else
+    echo "context-clear: $((ctx / 1000))K is past the $((CEILING / 1000))K ceiling and the restart still waits for $n background agent(s) (${running% }): a restart kills them. Stop each with TaskStop, or let it finish; main restarts at the first stop after." >&2
   fi
-  echo "$(date +%FT%T) stop-hook: ceiling $CEILING passed at ctx=$ctx; restart kills background agents: $running" >> "$HOME/.claude/checkpoints/clear-hook.log"
+  exit 0
 fi
 if [ "$fresh" = 1 ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && command -v orca-ide >/dev/null 2>&1; then
   # One restart in flight per pane: the helper needs 12 s or more, and a
@@ -180,8 +194,10 @@ if [ "$fresh" = 1 ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && command -v orca-ide
   # every project on the machine, and another project's main must not take it.
   # Its second line is a one-time token the replacement is started with: any
   # other main session that starts in this checkout first leaves it alone.
+  # Written whole or not at all: a marker cut after its first line has no token, and resume-context.sh gives that to any main.
   token=$$-$(date +%s)-$RANDOM
-  printf '%s\n%s\n' "$cp" "$token" > "$HOME/.claude/checkpoints/resume-pending.$(printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null)" | tr -c 'A-Za-z0-9' '-')"
+  pending="$HOME/.claude/checkpoints/resume-pending.$(printf '%s' "$(git rev-parse --show-toplevel 2>/dev/null)" | tr -c 'A-Za-z0-9' '-')"
+  { printf '%s\n%s\n' "$cp" "$token" > "$pending.$$" && mv "$pending.$$" "$pending"; } 2>>"$HOME/.claude/checkpoints/clear-hook.log" || rm -f "$pending.$$"
   # Keystrokes sent to main's own pane never reach its input box (proved with a
   # probe on 2026-09-12: the same send lands in any other Claude pane), so a
   # typed /clear cannot work at any moment. owner ruling 2026-09-12: "you can do
