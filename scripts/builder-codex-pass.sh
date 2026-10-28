@@ -141,8 +141,12 @@ EXCEPTION='An exception, allowlist or exemption entry in a guard or its test sta
 # Issue 398: placeholder UI read as finished work passed two reviews; every pass, first and later, asks for it.
 PLACEHOLDER_UI='Report as P1 (class: placeholder-ui) a control, message or screen the diff adds that is disabled for good, a stub, or says it comes later ("coming soon", "not available yet", "in a later update"), unless the plan or main'"'"'s rulings name it on a Placeholder: line.'
 FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the changed lines. $SETTINGS $CALLERS $LATER $ORDERINGS $EXCEPTION $PLACEHOLDER_UI"
-# Asked in every pass and by every reviewer, after its focus.
-LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area)."
+# Asked in every pass and by every reviewer, after its focus. The test rules go in whole: the Claude reviewer runs
+# --restricted, so it cannot open a file outside the review worktree, and a Codex sandbox may not either.
+TEST_RULES=$(<"$HERE/../templates/test-rules.md") && [ -n "$TEST_RULES" ] || die "the plugin has no test rules file $HERE/../templates/test-rules.md; every reviewer is asked to judge tests by it"
+LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path.
+
+$TEST_RULES"
 # The Claude reviewer's template: the same slots and the same two lines this
 # script replaces, so one function fills both.
 CLAUDE_TEMPLATE="You are reviewing a code change. Target: {{TARGET_LABEL}}.

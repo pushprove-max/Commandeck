@@ -37,6 +37,10 @@ check "the pass's codex-start row carries the reviewer's resolved model and effo
 # goes unchecked when that reviewer misses it.
 check "each of the three reviewers' prompts carries all three angles" "1 1 1 1 1 1 1 1 1" \
   "$(for p in 1 2 3; do for a in 1 2 3; do grep -c "Angle $a of 3, " "$B/$U-r1-prompt-$p.md"; done; done | paste -sd' ' -)"
+# The Claude reviewer runs --restricted, its file tools kept inside the review worktree, so a rules file named by
+# its home path is one it cannot open: every prompt carries the test rules' text, each rule of the file in it.
+check "each reviewer's prompt carries every line of the test rules file" "0 0 0" \
+  "$(for p in 1 2 3; do grep -vxFf "$B/$U-r1-prompt-$p.md" "$REAL/templates/test-rules.md" | grep -c .; done | paste -sd' ' -)"
 
 # A round of one comment line: the pass names the file and its count, and says no code changed.
 printf '# fixed: the finding\n' >> "$W/a.sh"

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.58.0 -- 2026-10-28
+
+### Tests
+
+- The plugin ships a test rules file. It covers never weakening a test, and what a test must encode: a test that cannot fail when the rule it guards changes is wrong, and a test is deleted or merged only when another named test catches the same failure.
+- Builders read the test rules before they write, change or delete a test.
+- Every reviewer judges each new, changed or deleted test by these rules. The rules are in the review prompt in full, so a reviewer that can only read the project still applies them.
+
 ## 0.57.0 -- 2026-10-28
 
 ### Main restarts

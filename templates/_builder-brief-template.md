@@ -101,7 +101,8 @@ and a fix that touches a save updates that save's row in the same commit.
   or rule a change touches, on a hand-written config.
 - Tests first: red, then green. A red test that shows a hang sets its own
   short timeout (a few seconds), so it fails fast instead of running to the
-  command's time limit.
+  command's time limit. Before you write, change or delete a test, read
+  ~/.commandeck/plugin/templates/test-rules.md.
 - The evidence file opens with an `Issue | Status` table, one `| #<n> | not built |`
   row per issue of the batch, each set to `built` in the same edit that adds the
   section of the cut that finishes it. The dashboard counts an issue built from a
