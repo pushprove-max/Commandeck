@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.58.0-111111?style=flat-square" alt="Version 0.58.0">
+  <img src="https://img.shields.io/badge/version-0.59.0-111111?style=flat-square" alt="Version 0.59.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -137,7 +137,7 @@ and offers a small demo build. Every question in detail:
 | `/commandeck:handoff` | Save a checkpoint and restart main in a fresh pane |
 | `/commandeck:worktreereview <unit>` | An HTML report of where a build's time, tokens and cost went |
 | `/commandeck:revoke` | Take out one of setup's settings in an Orca profile, or keep your own value |
-| `/test-audit <folder>... [basic\|full] [N agents]` | A report of tests that are redundant, slow or missing; it changes no test |
+| `/test-audit <folder>... [basic\|full\|prune] [N agents]` | A report of tests that are redundant, slow or missing; it changes no test. `prune` proposes only removals and merges, each naming the test that still covers it |
 | `/autodecide on\|off\|status` | Let the relay pane decide for you while you are away |
 
 Setup adds `/test-audit` as a project workflow. `/autodecide` is in the seats

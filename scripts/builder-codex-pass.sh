@@ -343,10 +343,14 @@ def ours(t):
 if not any(ours(t) for t in user):
     die(f"{name} {tid} was not started with the pass script's prompt. {updated}")
 # The first such line: the script writes it ahead of the findings and the diff.
+# Issue 430: a whole-branch line names main...HEAD, or <sha>...HEAD for a unit with a review base.
+form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD")
 heads = {head_full: "full", head_fix: "fix", head_final: "final", head_design: "design"}
-kind = re.search(rf"^({'|'.join(map(re.escape, heads))}) Reviewer ([1-9]) of ([1-9]), round ([1-9][0-9]*)\.$", sent, re.M)
+kind = re.search(rf"^({'|'.join(map(form, heads))}) Reviewer ([1-9]) of ([1-9]), round ([1-9][0-9]*)\.$", sent, re.M)
 if not kind:
     die(f"the prompt of {name} {tid} has no review-input line of the pass script")
+read_as = next(v for h, v in heads.items() if re.fullmatch(form(h), kind.group(1)))
+base = re.search(r"git diff ([0-9a-f]{40})\.\.\.HEAD", kind.group(1))
 lines = (reply or "").strip().splitlines()
 # Issue 316: a reviewer that lost GitHub ends its reply on that line, in place of a verdict. A fixed slot, never a
 # fence parse: the line anywhere else is no refusal, and no GO either (below).
@@ -382,12 +386,12 @@ if any(holds(l) or refusal in l for l in lines[:-1]):
 said = said or verdict[9:]
 print(verdict)
 # What the no-closing-pass chain follows: the commit Codex says it read, where a narrowed pass's
-# range began ("whole" for a whole-branch pass), and the verdict as the reply gave it. "?" is
-# a part the record does not hold; only that rule refuses on one.
+# range began ("whole" for a whole-branch pass from main, "base:<sha>" from a review base), and the verdict as the
+# reply gave it. "?" is a part the record does not hold; only that rule refuses on one.
 sha_of = lambda t: t if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", t or "") else "?"
 since = re.match(r"\nThe range is git diff ([0-9a-f]+)\.\.HEAD\. ", sent[kind.end():])
-print(heads[kind.group(1)], kind.group(2), kind.group(3), kind.group(4), stamp(began), stamp(ended),
-      sha_of(got), sha_of(since and since.group(1)) if heads[kind.group(1)] == "fix" else "whole", said)
+print(read_as, kind.group(2), kind.group(3), kind.group(4), stamp(began), stamp(ended),
+      sha_of(got), sha_of(since and since.group(1)) if read_as == "fix" else f"base:{base.group(1)}" if base else "whole", said)
 print("\n".join(lines[:-1]).rstrip())
 PY
 }
@@ -467,12 +471,25 @@ PY
 # changed lines and main did not launch the build with --risky, else three.
 # The owner's number, asked at setup; 200 when not answered; off makes no build small.
 SMALL_BUILD=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') || exit 2
+# Issue 433: the most new tests one unit's change may add before a pass (the owner's 40); off turns the cap off.
+NEW_TEST_CAP=$(pp_review_loop newTestCap 40 '^(off|[1-9][0-9]*)$') || exit 2
 # Whether a closing pass over the whole branch runs (asked at setup): with "no",
 # a narrowed GO that follows the first pass over every commit merges.
 CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 # Whether the closing pass is a fresh reviewer, handed no review history (freshClosingReviewer). With "no" it is
 # handed the history like any pass, and the merge checks what it was handed.
 FRESHC=$(pp_review_loop freshClosing yes '^(yes|no)$') || exit 2
+# review_base <worktree> -- issue 430: where a whole-branch pass reads from: the full sha in main's
+# <unit>-review-base.md (builder-launch.sh --review-base writes it; the Builder never edits main's briefs), or "main"
+# when the unit has none, so every range stays main...HEAD.
+review_base() {
+  local m f b
+  m=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || die "$1 is not a git worktree, so its review base cannot be read"
+  f=${m%/.git}/.claude/briefs/$UNIT-review-base.md
+  [ -e "$f" ] || { echo main; return 0; }
+  b=$(tr -d '[:space:]' < "$f") && [[ $b =~ ^[0-9a-f]{40}$ ]] || die "$f must hold one 40-hex commit; set it with builder-launch.sh $UNIT --review-base <sha>"
+  echo "$b"
+}
 # build_size <worktree> <commit> -- print "<lines changed> <files with no count> <risky>" of the
 # commit against its fork from main: insertions plus deletions, .claude/briefs/
 # left out as the merge leaves it out (collect.py's lines_changed counts the
@@ -485,7 +502,8 @@ FRESHC=$(pp_review_loop freshClosing yes '^(yes|no)$') || exit 2
 # and a read that failed is never one.
 build_size() {
   local base changed main risky=0
-  base=$(git -C "$1" merge-base main "$2" 2>/dev/null) || die "cannot find where commit $2 left main in $1, so its lines changed cannot be counted"
+  base=$(review_base "$1") || exit 2
+  [ "$base" != main ] || base=$(git -C "$1" merge-base main "$2" 2>/dev/null) || die "cannot find where commit $2 left main in $1, so its lines changed cannot be counted"
   # Per file, each side whole (no rename pairing, no attribute's own diff or text filter). A file git gives no
   # count for (binary, or marked -diff) is the second number: its size is unknown, so it never reads as small.
   changed=$(git -C "$1" diff --numstat --no-renames --no-ext-diff --no-textconv "$base" "$2" -- . ':(exclude).claude/briefs') || die "cannot count the lines changed between $base and $2 in $1"
@@ -527,7 +545,9 @@ import glob, json, os, re, sys, time
 by, wt, home, here, *heads = sys.argv[1:]
 sys.path.insert(0, here)
 from unit_folders import belongs
-head = re.compile(rf"^(?:{'|'.join(map(re.escape, heads))}) Reviewer [1-9] of [1-9], round ([1-9][0-9]*)\.$", re.M)
+# Issue 430: a whole-branch line names main...HEAD, or <sha>...HEAD for a unit with a review base.
+form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD")
+head = re.compile(rf"^(?:{'|'.join(map(form, heads))}) Reviewer [1-9] of [1-9], round ([1-9][0-9]*)\.$", re.M)
 def claude(path):
     # The first row with a cwd places the session; its first prompt says whether it was a pass.
     here = False
@@ -683,6 +703,9 @@ if [ "${1:-}" = --verify ]; then
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
   SEEN="" OF="" WHAT="" RULE="" STEPS=""
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
+  # The range field a whole-branch pass of this unit records (session_proof): "whole" from main, "base:<sha>" from a review base.
+  BASE_RANGE=$(review_base "$WT") || exit 2
+  [ "$BASE_RANGE" = main ] && BASE_RANGE=whole || BASE_RANGE=base:$BASE_RANGE
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
   # Issue 366 (O4): a P0 or P1 held two passes past the cap waits for the owner, whatever the pass's kind. Asked first,
   # so the one line orca-wait.sh and main-watch read says so, and not that the pass was design-only or NO-GO.
@@ -692,6 +715,10 @@ if [ "${1:-}" = --verify ]; then
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
     read -r READ K OF_THIS OF_ROUND BEGAN _ WAS_READ SINCE _ <<<"$(sed -n 2p <<<"$PROOF")"
+    # Issue 430: a whole-branch GO merges only when its range began at the unit's review base, else it skipped the
+    # work the unit was asked to re-review.
+    case $READ in full|final) [ "$SINCE" = "$BASE_RANGE" ] \
+      || die "$NAME $TID (${LAST##*/}) read the range ${SINCE/#whole/main...HEAD}, not the unit's review base ($BASE_RANGE). Run the closing pass again: builder-codex-pass.sh $UNIT <N> final" ;; esac
     # The reviewer's record, never the round file, says what this pass found: the Builder can edit a round file.
     NOW_LINES+=$({ tail -n +3 <<<"$PROOF" | grep -E "$FINDING" || true; })$'\n'
     # Issue 366: a finding at or above the blocking severity holds the merge (session_proof reads a GO beside one as NO-GO), until the cap; a P0 or
@@ -790,7 +817,11 @@ if [ "${1:-}" = --verify ]; then
     # It was handed every earlier finding (checked above), so its GO is the last word on them.
     # All of it is read from the reviewer's records: the commit each pass read and where each narrowed range began.
     AGAIN="Fix it, then run another narrowed pass: builder-codex-pass.sh $UNIT <N> review"
-    read -r C_ENDED C_TID COVERED _ <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9 }' <<<"$PASSES" | sort | tail -1)"
+    read -r C_ENDED C_TID COVERED C_RANGE <<<"$(awk '$1 == "@" && $3 == "full" { print $8, $2, $9, $10 }' <<<"$PASSES" | sort | tail -1)"
+    # Issue 430: the anchor, whatever its verdict, must have read from the unit's review base: narrowed passes cover
+    # only the commits after it, so a range it skipped is never read.
+    [ "$C_RANGE" = "$BASE_RANGE" ] \
+      || die "the first pass $C_TID read the range ${C_RANGE/#whole/main...HEAD}, not the unit's review base ($BASE_RANGE), and the narrowed passes after it read only later commits. Run: builder-codex-pass.sh $UNIT <N> adversarial"
     # Each pass after the first one, oldest first, then the pass under merge.
     # A cut-off pass is listed unless its round was run again and answered (the rows of that rerun judge the round).
     AFTER=$(awk -v c="$C_ENDED" '$1 == "@" && $8 > c { n++; line[n] = $8 " " $2 " " $3 " " $9 " " $10 " " $11; rnd[n] = $6; kind[n] = $3 }
@@ -1267,6 +1298,13 @@ table_gate() {
     || die "the Data design of $UNIT's brief is not 'none', and ${EV#"$WT/"} has no '## Failure table' with a row under its header. Under that heading write one row per save: '| Save | Steps | Left behind if it stops after each step | The one recovery |', then a row of four cells for each save. Then run the pass again."
 }
 [ "$KIND" != adversarial ] || { break_gate; table_gate; }
+# Issue 433: a change adding more tests than the cap reached review with no count named. Counted over the unit's own
+# change as this pass will commit it (new-test-count.sh), before every pass.
+if [ "$NEW_TEST_CAP" != off ]; then
+  NEWT=$(cd "$WT" && bash "$HERE/new-test-count.sh" main) || die "cannot count the new tests of $UNIT (new-test-count.sh)"
+  [ "$(head -1 <<<"$NEWT")" -le "$NEW_TEST_CAP" ] \
+    || die "the change adds $(head -1 <<<"$NEWT") new tests, over the new-test cap of $NEW_TEST_CAP (reviewLoop.newTestCap). Each new test names the bug it catches; cut the extras, or list them under ## Extra tests in the evidence file and cut them below the cap. The first ten: $(sed -n '2,11p' <<<"$NEWT" | paste -sd'|' - | sed 's/|/; /g')"
+fi
 # Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
 # so the Builder learns of a refusal before a launch costs a retry.
 stage_and_check() {
@@ -1487,9 +1525,15 @@ if [ "$KIND" = review ]; then
   RANGE=$FROM..HEAD HEAD_LINE=$HEAD_FIX
   NOTE="The range is git diff $FROM..HEAD. Check that each earlier finding is fixed, that the fix is right, and that it breaks nothing beside it."
 else
-  RANGE=main...HEAD NOTE=""
+  # Issue 430: from the unit's review base when main set one, so work already on main is read again.
+  RANGE=$(review_base "$WT")...HEAD || exit 2
+  NOTE=""
   [ "$KIND" = final ] && HEAD_LINE=$HEAD_FINAL || HEAD_LINE=$HEAD_FULL
   [ -z "$DESIGN" ] || HEAD_LINE=$HEAD_DESIGN
+  HEAD_LINE=${HEAD_LINE//main...HEAD/$RANGE}
+  # A whole-branch GO on a range with nothing in it read nothing (a review-only unit cut from main).
+  ! git -C "$WT" diff --quiet --no-ext-diff "$RANGE" -- . ':(exclude).claude/briefs' \
+    || die "the range $RANGE has no change outside .claude/briefs, so a whole-branch pass would read nothing. Commit the work first, or have main set the unit's review base: builder-launch.sh $UNIT --review-base <sha>"
 fi
 # A diff driver or text filter the repo configures is a program: the prompt carries git's own diff.
 DIFF=$(git -C "$WT" diff --no-ext-diff --no-textconv --no-color -U100000 "$RANGE") || die "cannot diff $RANGE in $WT"
@@ -1502,7 +1546,7 @@ if [ "${#DIFF}" -gt "$DIFF_HARD" ]; then
 fi
 # Issue 250: a change to a hook is checked by running the hook, not only by reading it.
 if git -C "$WT" diff --name-only "$RANGE" -- 'hooks/*.sh' | grep -q .; then
-  NOTE+="${NOTE:+ }This change touches hooks/. Run at least one probe of a changed hook from the review worktree and put its output in the report: bash $HERE/hook-probe.sh <hook> '<command>' [--tool <tool> '<tool_input json>'] prints allow, refuse (<exit>) or ask, and the hook's message. If your sandbox refuses the probe's scratch folder, list the probes you would run instead."
+  NOTE+="${NOTE:+ }This change touches hooks/. Run at least one probe of a changed hook from the review worktree and put its output in the report: bash $HERE/hook-probe.sh <hook> '<command>' for a Bash hook, or bash $HERE/hook-probe.sh <hook> '<tool_input json>' --tool <tool> for any other tool (Write, Edit), prints allow, refuse (<exit>) or ask, and the hook's message. If your sandbox refuses the probe's scratch folder, list the probes you would run instead."
 fi
 # The limits main stated, from the brief and from its rulings: without them each
 # pass raised the same accepted limit again with a new wrapping case. Read from
@@ -1926,7 +1970,7 @@ WRITING=$HAND
   if [ "${#RULINGS[@]}" -gt 0 ]; then for f in "${RULINGS[@]}"; do printf 'From %s:\n\n' "$f"; cat "$f"; echo; done
   else echo 'None for this unit.'; fi
   printf '\n## Test files this build touched\n\nA fix round re-runs only the files it touches.\n\n'
-  { git -C "$WT" diff --name-only main...HEAD | grep -E '\.test\.' || true; } | sed 's/^/- /'
+  { git -C "$WT" diff --name-only "$(review_base "$WT")...HEAD" | grep -E '\.test\.' || true; } | sed 's/^/- /'
 } > "$HAND.tmp"
 [ ! -d "$HAND" ]
 mv -f "$HAND.tmp" "$HAND"

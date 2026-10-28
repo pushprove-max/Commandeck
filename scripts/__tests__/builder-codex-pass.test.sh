@@ -269,5 +269,52 @@ check "pass 1 runs for a unit whose data design is none" "rc=0" "$(tgate)"
 printf 'no data design heading at all\n' > "$GW/.claude/briefs/g.md"
 check "a brief with no Data design section owes no table" "rc=0" "$(tgate)"
 
+# Issue 430: a unit main asks to re-review work already on main reads from its review base, the sha in main's
+# <unit>-review-base.md. Each unit below is a worktree of its own, cut from main, one reviewer (a small build).
+newunit() { # <unit>
+  git -C "$REPO" worktree add -q "$TMP/ws/$1" -b "builder/$1" main && mkdir -p "$TMP/ws/$1/.claude/briefs"
+  echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$TMP/ws/$1/.claude/settings.local.json"
+  printf 'Fix #1.\nbash x/builder-codex-pass.sh %s 1 adversarial\n' "$1" > "$REPO/.claude/briefs/$1-builder-brief.md"
+  cp "$REPO/.claude/briefs/$1-builder-brief.md" "$TMP/ws/$1/.claude/briefs/$1.md"
+}
+upass() { # <unit> <N> <kind> [reply]: one pass of <unit>; its output in $TMP/out and $TMP/err; prints its exit code
+  local ev=$TMP/ws/$1/.claude/briefs/$1-evidence.md m=$(($2 - 1))
+  [ "$m" -lt 1 ] || grep -q "^## Sites checked (pass $m)" "$ev" 2>/dev/null \
+    || printf '\n## Sites checked (pass %s)\nSearch: grep -rn base .\n- a.sh:1 fixed, a fixture\n\n## New code checked (pass %s)\n- a.sh:1 meets a fixture rule\n' "$m" "$m" >> "$ev"
+  (cd "$TMP/ws/$1" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-$1-$2 STUB_REPLY="${4:-VERDICT: GO}" \
+    bash "$PASS_SH" "$1" "$2" "$3" >"$TMP/out" 2>"$TMP/err"); echo $?
+}
+uverify() { (cd "$REPO" && PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --verify "$TMP/ws/$1" "$1" "$(git -C "$TMP/ws/$1" rev-parse HEAD)" >"$TMP/vout" 2>"$TMP/verr"); echo $?; }
+# Base X, then work Y merged on main after it: the unit is cut from main holding Y and adds its own change.
+X=$(git -C "$REPO" rev-parse main)
+printf 'echo merged\n' > "$REPO/y.sh"; git -C "$REPO" add y.sh; git -C "$REPO" commit -qm 'work already on main'
+newunit rb; echo "$X" > "$REPO/.claude/briefs/rb-review-base.md"; printf 'echo rb\n' > "$TMP/ws/rb/rb.sh"
+RC1=$(upass rb 1 adversarial); printf 'echo rb2\n' > "$TMP/ws/rb/rb.sh"; RC2=$(upass rb 2 final)
+check "a closing pass with a review base reads base...HEAD, work already on main included (issue 430)" "0 0 1 1 0" \
+  "$RC1 $RC2 $(grep -c "^Review input: the closing pass, the whole branch diff against main (git diff $X\.\.\.HEAD)\. Reviewer 1 of 1, round 2\.$" "$TMP/ws/rb/.claude/briefs/rb-r2-prompt-1.md") $(grep -c '^+echo merged$' "$TMP/ws/rb/.claude/briefs/rb-r2-prompt-1.md") $(uverify rb)"
+# The same GO, with main's base now another commit: its range skipped the work the unit was asked to re-review.
+git -C "$REPO" rev-parse main > "$REPO/.claude/briefs/rb-review-base.md"
+check "--verify refuses a closing GO whose range does not start at the unit's review base (issue 430)" "2 1" \
+  "$(uverify rb) $(grep -c "read the range base:$X, not the unit's review base (base:$(git -C "$REPO" rev-parse main))" "$TMP/verr")"
+# A review-only unit cut from main with nothing committed: its range is empty, so a GO would have read nothing.
+newunit re
+check "a whole-branch pass whose range is empty refuses and starts no pass (issue 430)" "2 1 0" \
+  "$(upass re 1 adversarial) $(grep -c 'has no change outside .claude/briefs, so a whole-branch pass would read nothing' "$TMP/err") $(ls "$CODEX_HOME"/seen-thr-re-1-* 2>/dev/null | wc -l | tr -d ' ')"
+# closingPass=no: the first pass anchors the chain, and it read main...HEAD before main set the base, so X..Y was never read.
+jq '.reviewLoop.closingPass = "no"' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
+newunit rn; printf 'echo rn\n' > "$TMP/ws/rn/rn.sh"
+upass rn 1 adversarial $'- [P2] (class: probe) ANCHOR-PROBE -- rn.sh:1 -- a word -- bash rn.sh\nVERDICT: NO-GO' >/dev/null
+echo "$X" > "$REPO/.claude/briefs/rn-review-base.md"; printf 'echo rn2\n' > "$TMP/ws/rn/rn.sh"; upass rn 2 review >/dev/null
+check "with no closing pass, --verify refuses when the first pass read main...HEAD and not the unit's review base (issue 430)" "2 1" \
+  "$(uverify rn) $(grep -c "read the range main\.\.\.HEAD, not the unit's review base (base:$X).*builder-codex-pass.sh rn <N> adversarial" "$TMP/verr")"
+jq 'del(.reviewLoop.closingPass)' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
+
+# Issue 433: a change adding more tests than the cap reached review with no count named.
+jq '.reviewLoop.newTestCap = "1"' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
+newunit nt; mkdir -p "$TMP/ws/nt/t"; printf 'check "first new" 0 0\ncheck "second new" 0 0\n' > "$TMP/ws/nt/t/x.test.sh"
+check "a pass over the new-test cap refuses with the count (issue 433)" "2 1 1 0" \
+  "$(upass nt 1 adversarial) $(grep -c 'the change adds 2 new tests, over the new-test cap of 1 (reviewLoop.newTestCap)' "$TMP/err") $(grep -c 'first new; second new' "$TMP/err") $(ls "$CODEX_HOME"/seen-thr-nt-1-* 2>/dev/null | wc -l | tr -d ' ')"
+jq 'del(.reviewLoop.newTestCap)' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

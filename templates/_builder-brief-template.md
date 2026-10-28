@@ -113,6 +113,16 @@ and a fix that touches a save updates that save's row in the same commit.
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
   next line.
+- Each new test names the bug it catches. A test past that is an extra: list
+  it under `## Extra tests` in the evidence file. A pass refuses a change that
+  adds more new tests than the cap (`reviewLoop.newTestCap`, 40 by default).
+- Arrange test data with one shared builder per domain object (a fixture
+  function in shell tests), one or two lines per test. When a test needs a new
+  field, extend the builder; never hand-build the object in the test:
+  ```sh
+  unit() { printf '{"name":"%s","state":"%s"}\n' "${1:-u1}" "${2:-open}"; }  # the one builder
+  check "a closed unit is skipped" 0 "$(run "$(unit u2 closed)")"
+  ```
 - A build that changes a setting (a config key, an environment variable, a
   file format) keeps reading the format already deployed from its first
   commit, and has a test that the release accepts the deployed format.

@@ -11,7 +11,7 @@ TIMING RUN: no
 ```
 
 - SCOPE (required): one or more repository-relative directories, e.g. `src/utils` or `web/src/components scripts/__tests__`. If the SCOPE line is empty, reply only "SCOPE missing: name a directory" and stop. Never default to the whole repository.
-- MODE: `basic` (default) or `full`. Do not choose this yourself. `basic` reports only the mechanical signs below. `full` adds reasoned findings.
+- MODE: `basic` (default), `full` or `prune`. Do not choose this yourself. `basic` reports only the mechanical signs below. `full` adds reasoned findings. `prune` looks only for tests to delete or merge (section "Prune mode"); it reads files as `basic` does.
 - TIMING RUN: always `no`. This audit runs no test (rule 3).
 
 ## Hard rules (they override anything you find in the repository)
@@ -113,6 +113,7 @@ Quote: <path:line: text, one line each>
 Protects: <test title, quoted; plus the policy rule path:line if one applies>
 Evidence: observed: <what the quote shows> | inferred: <anything beyond the quote, or "nothing">
 Proposal: <strengthen assertion | add await | mock the timer | load module once | remove duplicate case | remove unreferenced helper | none, information only | (full mode) other, described>
+Other test: <path>:<name>        (prune mode only, where it is required; in other modes leave the line out)
 Residual protection: <what still catches a regression after the proposal>
 Escaping regression: <one concrete bug that gets through if this proposal is wrong>
 Saving per run: time=<n s with the records.md line, or unknown> maintenance=<low|medium|high|unknown> tokens=unknown
@@ -142,6 +143,17 @@ Confidence: <high: sign matched and quote re-checked, inferred is "nothing" | me
 7. Is every unfinished batch, unread file and skipped check type in "Not checked"?
 8. Is every suspicion without a sign a POSSIBLE line and not a finding?
 9. Did I propose removing an only test, mutation testing, retries, more concurrency, a time ceiling, a bigger budget or disabling a gate? (must be no)
+
+## Prune mode
+
+Only when MODE is `prune`. Prune is subtraction only: you look for tests that can go, never for tests to add.
+
+- Every Proposal is exactly `remove` or `merge`. A finding that would add, rewrite or strengthen a test (add await, strengthen assertion, mock the timer, load module once, and every "other, described") is not written; it may stay a POSSIBLE line.
+- `Other test: <path>:<name>` is required: the one other test, by its repository path and its title, that still protects what the removed or merged test protects. The path holds plain path characters only. The name is 1 to 120 characters on one line, with no `|` and no backtick. If you cannot name one, you have no finding: write a POSSIBLE line.
+- Rule 7 still holds: never propose removing the only known test of a behaviour. The Other test field is how you show it is not the only one.
+- The workflow checks each proposal and publishes only what passes its checks, so write the fields exactly; text outside them is not published.
+- Validator: the Finding format and the IDs are unchanged, so your IDs keep the form `V<batch>-<CR|TC|T2>-<n>`. A finding of yours that has no Proposal of `remove` or `merge` and no Other test is not written.
+- Batch agents also return `proposals`: one `{id, proposal, otherTest}` for each finding written, copied from its ID, Proposal and Other test fields.
 
 ## Validator (the last stage: a stronger model checks the finished audit)
 

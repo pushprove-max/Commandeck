@@ -2,41 +2,14 @@
 export COMMANDECK_HOOK_TIER=strict
 # Self-test for new-test-file-guard.sh: a new test file gets consolidation
 # advice when another test file already covers a subject it imports.
-#
-# WHAT EACH GROUP PINS, and why it is the case that can fail:
-#   - resolved paths, not basenames: `foo/date.ts` and `bar/date.ts` share a
-#     basename and are different subjects. A guard that compared basenames would
-#     advise on the second one, and the advice would look correct.
-#   - EVERY import, not the first: a file whose first import is untested and
-#     whose second is covered must still be noticed, or import order is a free
-#     escape hatch.
-#   - no exemption by name: a `*guard*` / `*parity*` file gets advice like any
-#     other, because renaming does not change the consolidation opportunity.
-#   - the allow paths: helpers, fixtures, test-utils, imports inside __tests__,
-#     an existing file, a non-test path, an Edit payload, malformed JSON. Each
-#     is a legitimate write that stays silent, and without them a guard that
-#     advised on everything would pass every case above.
-#   - what the file LOADS: a type-only import executes nothing, so it is not a
-#     subject and does not cover one. A dynamic `import(` written across lines
-#     does load, so it is. Both directions are pinned, with two value-import
-#     controls, because a `specs()` that returned nothing would pass every
-#     type-only case on its own.
-#   - the grammar a text matcher has to guess at: an import-type expression, a
-#     `$` in a type name, a string literal that opens a comment, a module named
-#     inside a template literal, `import x = require()`, and a re-export. Each
-#     was answered wrongly in one direction or the other before the TypeScript
-#     parser decided them, and each direction costs something different -- a
-#     wrong advice adds noise to a legitimate write, while a missed warning
-#     hides a consolidation opportunity.
-#   - a path that is not a regular file, and one the walk can name but not
-#     examine: a device or FIFO named `*.test.ts` is never opened, so the guard
-#     answers instead of reading forever, and an entry that cannot be statted is
-#     skipped rather than crashing the guard.
-#   - the Codex lane: codex-dispatch.sh turns an `apply_patch` `Add File` into
-#     one Write payload, so the same advice must be visible there too.
-#
-# The repo is a throwaway with a planted module tree, so every outcome is exact
-# and nothing here reads the machine's real Codex home or the real suite.
+# Each group pins a case that can fail: subjects are resolved paths, not
+# basenames; EVERY import counts, not the first; no exemption by name (a
+# `*guard*` file is advised too); the allow paths (helpers, fixtures, existing
+# files, Edit payloads, bad JSON) stay silent; only what a file LOADS counts
+# (type-only imports do not, multi-line `import(` does); grammar a text matcher
+# would guess at is decided by the TypeScript parser; a non-regular path is never
+# read; the Codex lane's `Add File` payload gets the same advice.
+# The repo is a throwaway with a planted module tree, so every outcome is exact.
 set -u
 
 HOOKS="$(cd "$(dirname "$0")/.." && pwd)"

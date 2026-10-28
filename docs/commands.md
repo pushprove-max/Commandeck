@@ -32,7 +32,9 @@ folders, a mode and optionally a worker count:
 ```
 
 With no mode it uses Basic. The count is 1–16, default 4. Basic looks
-for mechanical test problems; Full also looks for missing coverage. It writes
+for mechanical test problems; Full also looks for missing coverage. Prune
+looks only for tests to delete or merge, and each proposal names the other
+test that still protects the behavior. It writes
 scratch reports, leaves repository files alone and runs no tests.
 
 Optional add-ons can expose their own commands.

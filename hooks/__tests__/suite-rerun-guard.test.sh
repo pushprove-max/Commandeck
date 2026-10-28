@@ -40,5 +40,12 @@ check "the main checkout prints nothing" 0 "$(hits "$(run "$T/p" s4 'npm test')"
 check "a reviewer pane prints nothing" 0 "$(hits "$(run "$T/wk" s5 'npm test' COMMANDECK_REVIEWER=1)")"
 check "a call with no session id prints nothing" 0 "$(hits "$(run "$T/wk" - 'npm test')")"
 
+# A one-file run in a per-file loop is the narrow run a worker is told to use: the guard blocks only a same-tree
+# rerun of a recorded suite, so neither form may be refused on a tree with no recorded run.
+run "$T/p" - 'for f in a.test.ts b.test.ts; do npx vitest run "$f"; done' >/dev/null
+check "a one-file vitest run named by a shell variable in a per-file loop passes (issue 429)" 0 "$(cat "$T/rc")"
+run "$T/p" - 'npx vitest run src/a.test.ts' >/dev/null
+check "a one-file vitest run named by a literal path passes (issue 429)" 0 "$(cat "$T/rc")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -284,5 +284,17 @@ check "an edit after the run's snapshot, kept or reverted, is never recorded or 
   "0>1 t 0 | 0>1 t 0 | 0>1 t 0 | 0 p 0 0 | 0 p 0 0 | 0>1 t 0 | 1 t | 0 t" \
   "$TOK1 | $TOK2 | $TOK3 | $TOK4 | $TOK4B | $TOK5 | $TOKA | $TOKB"
 
+# The line cap (issue 436): a shell test file that regrew past 500 lines fails before it runs, with the cap named,
+# and the run exits non-zero; one at the cap still runs.
+C=$TMP/cap; mkdir -p "$C/scripts/__tests__"
+{ printf '#!/usr/bin/env bash\necho at >> "$RAN"\n'; for _ in $(seq 498); do echo :; done; } > "$C/scripts/__tests__/at.test.sh"
+{ printf '#!/usr/bin/env bash\necho over >> "$RAN"\n'; for _ in $(seq 499); do echo :; done; } > "$C/scripts/__tests__/over.test.sh"
+git -C "$C" init -q && git -C "$C" add -A && git -C "$C" -c user.name=t -c user.email=t@t commit -qm base
+: > "$RAN"; OUT=$(cd "$C" && timeout 30 bash "$RUNNER" scripts/__tests__/over.test.sh 2>&1); RC=$?
+check "a shell test file over the line cap fails with the cap named (issue 436)" "1 1 0" \
+  "$([ "$RC" -ne 0 ] && echo 1 || echo 0) $(grep -c 'FAIL over.test.sh over the 500-line cap for one shell test file' <<<"$OUT") $(grep -c over "$RAN")"
+: > "$RAN"; OUT=$(cd "$C" && timeout 30 bash "$RUNNER" scripts/__tests__/at.test.sh 2>&1); RC=$?
+check "a shell test file at the cap runs (issue 436)" "0 at" "$RC $(cat "$RAN")"
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -87,7 +87,9 @@ The runner needs Bash 4+ and GNU tools. CI uses Ubuntu's jq 1.7; verify against
 that version when changing jq programs. Test concurrency and per-file timeout
 can be set with `COMMANDECK_SHELL_TEST_JOBS` and
 `COMMANDECK_SHELL_TEST_TIMEOUT`. Defaults are half the CPUs (at least one)
-and 120 seconds, except a test's own timeout marker.
+and 120 seconds, except a test's own timeout marker. One `*.test.sh` file holds
+at most 500 lines (`COMMANDECK_SHELL_TEST_MAX_LINES`): the runner fails a longer
+file before it runs and names the cap. Split such a file by section.
 
 Contributions should branch from `main`, keep one change per pull request,
 and add a test that fails without a behavior fix. Open an issue first for a

@@ -44,6 +44,7 @@ set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 HERE=$(cd "$(dirname "$0")" && pwd)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
+MAX_LINES=${COMMANDECK_SHELL_TEST_MAX_LINES:-500}
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
 CALLER_PWD=$PWD
@@ -287,7 +288,7 @@ status_line() {
 }
 
 # Selection pass: skips are decided here, so the live record can list every selected file before the first launch.
-SKIPWHY=() CAP=() EXCL=() REL=() SEL=() RUN=()
+SKIPWHY=() CAP=() EXCL=() REL=() SEL=() RUN=() OVER=()
 for i in "${!TESTS[@]}"; do
   t=${TESTS[$i]}
   parked=$(sed -n '1,5p' "$t" | sed -n 's/^# parked: *//p' | head -1)
@@ -303,12 +304,16 @@ for i in "${!TESTS[@]}"; do
   if [ -n "${SKIPWHY[i]:-}" ]; then
     printf -- '-- skip %-58s %s\n' "$(basename "$t")" "${SKIPWHY[i]}"; continue
   fi
+  # A shell test file regrew past the cap with nobody told (issue 436): it fails before it runs, and the report names
+  # the cap.
+  case $t in *.test.sh) [ "$(wc -l < "$t")" -le "$MAX_LINES" ] || { OVER[i]=1; continue; } ;; esac
   cap=$(sed -n '1,5p' "$t" | sed -n 's/^# timeout: *\([0-9][0-9]*\).*/\1/p' | head -1)
   CAP[i]=${cap:-$TIMEOUT}; RUN+=("$i")
 done
 live run "$(date +%s)" "$JOBS"
 for i in ${SEL[@]+"${SEL[@]}"}; do live file "${REL[i]}"; done
 for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${SKIPWHY[i]:-}" ] || live end "${REL[i]}" skip 0; done
+for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${OVER[i]:-}" ] || live end "${REL[i]}" FAIL 0; done
 # Launch pass: runnable tests go to the background.
 for i in ${RUN[@]+"${RUN[@]}"}; do
   while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
@@ -323,6 +328,10 @@ for i in "${!TESTS[@]}"; do
   [ -z "${EXCL[i]:-}" ] || continue
   if [ -n "${SKIPWHY[i]:-}" ]; then
     SKIP=$((SKIP + 1)); printf 'skip %-58s %s\n' "$(basename "$t")" "${SKIPWHY[i]}"; continue
+  fi
+  if [ -n "${OVER[i]:-}" ]; then
+    FAIL=$((FAIL + 1)); FAILED+=("$t")
+    printf 'FAIL %s over the %s-line cap for one shell test file: split it by section\n' "$(basename "$t")" "$MAX_LINES"; continue
   fi
   # No result file: the run was killed, or its result could not be written. A failure, never a skip.
   if [ ! -f "$RES/$i.rc" ]; then

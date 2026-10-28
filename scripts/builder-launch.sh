@@ -28,6 +28,9 @@
 # as the builderModel key in /plugin config takes); the pick and its reason go to
 # $COMMANDECK_ROUTING_LOG, default <main>/.claude/routing-log, as one
 # routing-override line, written by the call that opens the Builder.
+# --review-base <sha> (issue 430): the commit every whole-branch pass of the unit reads from in place of main, for a
+# unit asked to re-review work already on main. It must be a commit on local main; its full sha goes to main's
+# .claude/briefs/<unit>-review-base.md, which the Builder never edits and builder-codex-pass.sh reads.
 # --effort raises this one Builder above the setup default (medium unless set-up chose another): medium or high
 # only, with a reason. The brief and the evidence file get one line, "effort override: builder <default> -> <used>:
 # <reason>", which the dashboard reads to mark the build raised. Every launch prints the effort it uses, on stderr.
@@ -45,9 +48,9 @@
 # plan bytes is refused. A judge records a plan only when its spec names it (seat.sh). --dry-run checks the same and
 # installs nothing.
 set -euo pipefail
-USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] <unit> <batch-brief> | --from-plan <unit> [<batch-brief>]"
+USAGE="usage: builder-launch.sh [--risky] [--dry-run] [--small] [--keep <billing|all|a keep word>[,...]] [--model <alias> --reason '<one line>'] [--effort medium|high --reason '<one line>'] [--skip-plan --reason '<one line>'] [--review-base <sha>] <unit> <batch-brief> | --from-plan <unit> [<batch-brief>]"
 KEEP=
-RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0 FROM=0 POS=()
+RBASE='' RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY='' SKIP=0 FROM=0 POS=()
 # Issue 394: options in any position (GNU style), every argument read before paths.sh is sourced. A value option whose
 # value is missing or starts with -- is refused: taking it would let --reason swallow --dry-run and launch for real.
 needval() { [ $# -ge 2 ] && [[ $2 != --* ]] || { printf '%s needs a value\n%s\n' "$1" "$USAGE" >&2; exit 2; }; }
@@ -63,6 +66,7 @@ while [ $# -gt 0 ]; do
     --model) needval "$@"; PICK=1 BMODEL=$2; shift ;;
     --effort) needval "$@"; RAISE=1 EFFORT=$2; shift ;;
     --reason) needval "$@"; REASON=$2; shift ;;
+    --review-base) needval "$@"; RBASE=$2; shift ;;
     -*) printf 'unknown option %s\n%s\n' "$1" "$USAGE" >&2; exit 2 ;;
     *) POS+=("$1") ;;
   esac
@@ -79,6 +83,12 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${BATCH:?$USAGE}"
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
+# A mistyped or unmerged review base would make every pass diff a wrong range: refused before anything is created.
+if [ -n "$RBASE" ]; then
+  ASKED=$RBASE
+  RBASE=$(git -C "$PP_MAIN" rev-parse -q --verify "$RBASE^{commit}") && git -C "$PP_MAIN" merge-base --is-ancestor "$RBASE" refs/heads/main \
+    || { echo "REFUSED: --review-base $ASKED is not a commit on main in $PP_MAIN; nothing was opened" >&2; exit 2; }
+fi
 [ -s "$BATCH" ] || { echo "empty batch brief: $BATCH" >&2; exit 2; }
 # Read once: adopting the planning worktree below can move a batch kept there.
 BT=$(cat "$BATCH"; echo .) BT=${BT%.}
@@ -380,4 +390,8 @@ printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
   && printf '%s\n' "$ISSUES" > "$PP_MAIN/.claude/briefs/$UNIT-issues.json" \
   || { echo "could not keep main's copy of the brief and its work items for $UNIT" >&2; exit 1; }
+# Issue 430: written whole (temp file, then mv); a retry of the launch writes the same value again.
+[ -z "$RBASE" ] || { printf '%s\n' "$RBASE" > "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" \
+  && mv -f "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" "$PP_MAIN/.claude/briefs/$UNIT-review-base.md"; } \
+  || { echo "could not write main's review base for $UNIT" >&2; exit 1; }
 open_builder

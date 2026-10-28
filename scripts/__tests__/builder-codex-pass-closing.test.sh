@@ -88,6 +88,12 @@ mkdir -p "$W/hooks" && printf 'exit 0\n' > "$W/hooks/h.sh"
 pass 16 review
 check "a pass over a change to hooks/ asks for an executed probe; one with no hook change does not" "1 0" \
   "$(grep -c 'hook-probe.sh <hook>' "$B/$U-r16-prompt-1.md") $(grep -c 'hook-probe.sh' "$B/$U-r15-prompt-1.md")"
+# plugin-open-7 pass 5: the prompt named `<hook> '<command>' [--tool <tool> '<tool_input json>']`, a form hook-probe.sh
+# refuses with its usage line, so a reviewer probing a Write or Edit hook ran nothing. Each form the prompt names runs.
+ran=$(grep -o "hook-probe.sh <hook> '<[a-z_ ]*>'\( --tool <tool>\)\{0,1\}" "$B/$U-r16-prompt-1.md" | while IFS= read -r f; do
+  f=${f#hook-probe.sh }; f=${f//<hook>/$W/hooks/h.sh}; f=${f//\'<command>\'/true}; f=${f//\'<tool_input json>\'/\{\}}
+  bash "$REAL/scripts/hook-probe.sh" ${f//<tool>/Write} 2>&1 | head -1; done | tr '\n' ' ')
+check "every hook-probe form the pass prompt names runs the hook, a Bash command and a Write tool_input alike" "allow allow " "$ran"
 
 # r1: a red run that printed nothing still binds: the NO-GO follows the run's exit, not its log text.
 cfg '.fullSuiteBeforeFinal = true | .testCommand = "exit 1"'; printf 'echo seventeen\n' > "$W/a.sh"

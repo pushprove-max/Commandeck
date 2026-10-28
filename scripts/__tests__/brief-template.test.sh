@@ -173,5 +173,9 @@ check "the Builder template asks for a Ran: and a Saw: line per thing proved und
 BODY=$(JOIN "$R/templates/main-session.md")
 check "the plan judge is asked for the established practice, and a flow step with no Catches: line is rejected" "The judge also names the established practice for the problem and says whether the plan follows it (an unjustified departure is a finding, a justified cheaper one is not), and rejects a step added to the build, merge, review or push flow with no \`Catches:\` line."
 BODY=$SAVED
+# Issues 433 and 434: a Builder added tests with no bug named and hand-built the same test data in every case.
+BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$T" | sed -E 's/ +/ /g')
+check "the Builder template asks each new test to name its bug and lists extras (issue 433)" "Each new test names the bug it catches. A test past that is an extra: list it under \`## Extra tests\` in the evidence file."
+check "the Builder template makes a shared builder the default for test data, with an example (issue 434)" "Arrange test data with one shared builder per domain object (a fixture function in shell tests), one or two lines per test. When a test needs a new field, extend the builder; never hand-build the object in the test: \`\`\`sh unit() {"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

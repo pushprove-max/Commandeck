@@ -43,7 +43,7 @@ in `.claude/commandeck.json`:
 
 | Hook | What it does and why |
 |---|---|
-| `test-skip-only-blocker.sh` | Blocks focused, skipped and todo tests that could hide failures. |
+| `test-skip-only-blocker.sh` | Blocks focused, skipped and todo tests that could hide failures. A runner alias counts as the runner: a name bound by `const`, `let` or `var` to `it`, `test`, `describe` or `context`, or imported as `it as <name>`, on one line at the start of a statement in the text the file will hold (a declaration quoted or commented mid-line binds nothing). A typed or multi-line rename, or an alias made in another module, is not seen. |
 | `suite-rerun-guard.sh` | Blocks the same completed test/type-check command on an unchanged tree within 30 minutes; recognizes npm test/typecheck, tsc and Vitest. |
 | `edit-content-tripwires.sh` | Blocks new CRLF, deferred-work markers and specified TypeScript/lint suppressions, with the exemptions and reason annotations in its rule table. In screen code (the project's `screenPaths`) it also blocks placeholder copy such as "coming soon" or "under construction" in code (a comment-only line is not screened; a trailing comment, and code after a closed leading comment, are) unless the plan or main's rulings name the complete line on a `Placeholder: <file> \| <complete source line> \| <why>` line. |
 | `file-size-cop.sh` | Blocks a whole-file Write crossing 500 lines for TS or 400 for TSX; an Edit crossing the cap warns and asks for a follow-up. |

@@ -22,6 +22,14 @@ merges and no closing pass is needed. A project that answered "none" to the
 closing pass at setup merges the narrowed pass that ends GO, once narrowed
 passes have read every commit after the first pass.
 
+The whole branch is `main...HEAD`, unless main launched the unit with
+`builder-launch.sh --review-base <sha>`: then every whole-branch pass reads
+`<sha>...HEAD`, so work already on main is read again. The sha must be a commit
+on main; it is kept in main's `.claude/briefs/<unit>-review-base.md`. A
+whole-branch pass whose range holds no change refuses before any reviewer
+starts, and the merge refuses a GO whose range did not start at the unit's
+base. With no closing pass, the first pass must have read from that base too.
+
 A closing pass first rebases onto local main and runs the tests that cover
 what changed. When setup recorded a typecheck command (`typecheckCommand`), it
 must be green too: a red typecheck stops the pass before any reviewer runs and

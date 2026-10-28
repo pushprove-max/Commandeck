@@ -8,7 +8,7 @@
 #          [--recommended] [--option <key>=<value> ...] (any /plugin config key: builderModel=sonnet, unitsBand=off;
 #          --recommended saves every value of config/recommended.json first, and any later answer beats it)
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
-#          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--lockfile-deny on|off] [--small-build <lines>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
+#          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--lockfile-deny on|off] [--small-build <lines>|off] [--new-test-cap <n>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
 #          [--addons <name>[,<name>...]|none] [--main-cache-ttl 5m|1h|leave] [--worker-cache-ttl 5m|1h|leave] [--relay-cache-ttl 5m|1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
@@ -54,7 +54,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --typecheck-command --screen-paths --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --lockfile-deny --small-build --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
+TAKES=' --profile --scope --name --persona --test-command --typecheck-command --screen-paths --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --lockfile-deny --small-build --new-test-cap --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
 INSTALL= ASKED= OPT= PLAN= QUESTIONS= REC= AGENTS=
 for a; do
   if [ -n "$OPT" ]; then
@@ -369,6 +369,8 @@ while [ $# -gt 0 ]; do
     --trust-all-hooks) case $2 in on) TRUSTALL=true ;; off) TRUSTALL=false ;; *) die "--trust-all-hooks takes on or off, not '$2'. Nothing was changed" ;; esac; shift 2 ;;
     # off is saved as the word: no build is small, so every first pass has three reviewers.
     --small-build) rl smallBuild "$2" '^(off|[1-9][0-9]*)$' "$1" "a whole number of changed lines, or off"; shift 2 ;;
+    # Issue 433: the most new tests one unit's change may add before a pass (40 when not set); off turns the cap off.
+    --new-test-cap) rl newTestCap "$2" '^(off|[1-9][0-9]*)$' "$1" "a whole number of new tests, or off"; shift 2 ;;
     --max-review-min) rl maxReviewMinutes "$2" "$OFFNUM" "$1" "a number of minutes, or off"; shift 2 ;;
     --max-test-percent) rl maxTestPercent "$2" "$OFFNUM" "$1" "a number (percent), or off"; shift 2 ;;
     --max-usd) rl maxUsd "$2" "$OFFNUM" "$1" "a number of dollars, or off"; shift 2 ;;

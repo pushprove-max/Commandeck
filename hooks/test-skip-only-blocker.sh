@@ -28,21 +28,52 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 case "$FILE_PATH" in
   */hooks/__tests__/*.sh|hooks/__tests__/*.sh) exit 0 ;;
 esac
-case "$FILE_PATH" in
-  *.test.*|*.spec.*|*__tests__*|*/e2e/*) ;;
-  *) exit 0 ;;
-esac
+. "${BASH_SOURCE[0]%/*}/lib/test-path.sh" 2>/dev/null && declare -F is_test_path >/dev/null \
+  || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/test-path.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+is_test_path "$FILE_PATH" || exit 0
+
+# RUNNER ALIASES. `const itCompat = it; itCompat.only(...)` focused a suite past the literal names. A name bound by
+# `const|let|var <name> = <runner>...` or `import { <runner> as <name> }` counts as a runner, read from the text the
+# file will hold: a Write's content; an Edit or MultiEdit applied in order to the file on disk (a missing file is the
+# new text alone), so a declaration already on disk counts and one the edit removes does not. An alias made in
+# another module still slips (accepted: resolving names across files needs a parser).
+ABS=$FILE_PATH
+case "$ABS" in /*) ;; *) ABS="$(echo "$INPUT" | jq -r '.cwd // "."')/$ABS" ;; esac
+RESULT=$CONTENT
+[ -f "$ABS" ] && RESULT=$(jq -r --rawfile disk "$ABS" '
+  def swap($s; $o; $n; $all):
+    if $o == "" then $s + $n
+    elif $all then $s | split($o) | join($n)
+    else ($s | index($o)) as $i | if $i == null then $s else $s[:$i] + $n + $s[$i + ($o | length):] end end;
+  .tool_input as $t
+  | if $t.content != null then $t.content
+    else reduce ([$t | select(.new_string != null or .old_string != null)] + ($t.edits // []))[] as $e
+      ($disk; swap(.; $e.old_string // ""; $e.new_string // ""; $e.replace_all == true)) end' <<<"$INPUT" 2>/dev/null) \
+  || RESULT=$CONTENT
+# D2a, the fixed statement-start list: a one-line rename binds only after start of text, a newline, `;`, `{`, `}` or
+# `*/`. Nothing is stripped or lexed: every stripper so far misread a regex, a division or a quote and blanked a real
+# alias. A declaration quoted or commented mid-line follows a quote, `//`, `/*`, `/` or a backtick, none a statement
+# start, so it binds nothing (one at a statement start inside a literal binds: blocking only). Simple renames only:
+# a typed or multi-line rename binds nothing, a known gap.
+ALIASES=$(jq -rn --arg t "$RESULT" '
+  "[A-Za-z_][A-Za-z0-9_]*" as $name | "(?:it|test|describe|context)" as $runner | "(?:\\A|[\\n;{}]|\\*/)[ \\t]*" as $start
+  | [ ($t | scan($start + "(?:export[ \\t]+)?(?:const|let|var)[ \\t]+(" + $name + ")[ \\t]*=[ \\t]*" + $runner + "\\b") | .[0]),
+      ($t | scan($start + "import[ \\t]+(?:type[ \\t]+)?\\{([^}\\n]*)\\}") | .[0]
+          | scan("\\b" + $runner + "[ \\t]+as[ \\t]+(" + $name + ")") | .[0]) ]
+  | unique | join("|")' 2>/dev/null)
+RUNNERS="describe|it|test|context${ALIASES:+|$ALIASES}"
 # Focus/skip fns must be matched as CALLS: bare \bfit\b matched the English word
 # "fit" in an assertion message and blocked a legit test (2026-07-06). The paren
 # is ADJACENT for the same reason -- `does not fit (see the spec)` in a message
 # still matched `fit[[:space:]]*\(`, and nobody writes the Jasmine form with a
 # space before its arguments.
-PATTERN='\b(describe|it|test|context)\.(only|skip)\b|\b(xit|xdescribe|fit|fdescribe)\(|\b(it|test)\.todo\b'
+PATTERN='\b('"$RUNNERS"')\.(only|skip)\b|\b(xit|xdescribe|fit|fdescribe)\(|\b(it|test)\.todo\b'
 # `// skip-ok: <reason>` is the approved-skip marker -- an assertion
 # counter honours exactly this form, so a skip
 # annotated the sanctioned way must not be refused by its sibling guard. The
-# marker is per LINE: annotating one skip does not license the next.
-OFFENDERS=$(echo "$CONTENT" | grep -E "$PATTERN" | grep -vE '//[[:space:]]*skip-ok:')
+# marker is per LINE: annotating one skip does not license the next. A quote or backtick after it means the marker
+# sits in a string (`const s = "// skip-ok: x"; it.skip(`), so it licenses nothing.
+OFFENDERS=$(echo "$CONTENT" | grep -E "$PATTERN" | grep -vE "//[[:space:]]*skip-ok:[^\"'\`]*\$")
 if [ -n "$OFFENDERS" ]; then
   MATCH=$(printf '%s\n' "$OFFENDERS" | grep -oE "$PATTERN" | head -1)
   echo "BLOCKED: '$MATCH' in $FILE_PATH skips or focuses tests -- that masks failures and disables coverage." >&2
