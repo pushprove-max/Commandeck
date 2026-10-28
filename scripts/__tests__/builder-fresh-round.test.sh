@@ -91,7 +91,7 @@ rm -f "$T/clearfail"
 
 # Issue 313, the fixer: a fix round is /clear in the same pane, which keeps the model and effort it opened with. A
 # build's first fix round runs on the Builder's launched model and effort (a per-build raise included), every later
-# one on Opus high, a /plugin config key beating either; the count is the build's fix hand-offs, so it resets per
+# one on Opus medium, a /plugin config key beating either; the count is the build's fix hand-offs, so it resets per
 # build, and only a fix hand-off switches anything. Caught: a later round left on a weaker Builder model, and a GO
 # continuation or added work moved to the fixer's model. Issue 278: the new session's pane gets its title back.
 BR=$T/ws/u9/.claude/briefs; mkdir -p "$BR" "$T/home/.claude"
@@ -112,9 +112,9 @@ TS="title:Builder — u9,Your task spec"
 fr u9-fix-r1.md sonnet high
 check "with no /plugin key the first fix round keeps the Builder's launched model and effort, and the record says fixer=first:routing" \
   "/clear,$TS|model=sonnet effort=high fixer=first:routing model=sonnet effort=high round=1" "$SEQ|$NEWREC"
-fr u9-fix-r2.md sonnet medium
-check "second NO-GO on the same build: the fixer types /model opus and /effort high; the record says model=opus effort=high fixer=later:routing" \
-  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing model=opus effort=high round=2" "$SEQ|$NEWREC"
+fr u9-fix-r2.md sonnet low
+check "second NO-GO on the same build: the fixer types /model opus and /effort medium; the record says model=opus effort=medium fixer=later:routing" \
+  "/clear,/model opus,/effort medium,$TS|model=opus effort=medium fixer=later:routing model=opus effort=medium round=2" "$SEQ|$NEWREC"
 newbuild; opts '{"fixerFirstModel": "builder", "fixerFirstEffort": "builder"}'; fr u9-fix-r1.md sonnet high
 check "a /plugin override wins on the first pass: fixerFirstModel=builder keeps the Builder's launched model and effort, a raised Sonnet high Builder included" \
   "/clear,$TS|model=sonnet effort=high fixer=first:config model=sonnet effort=high round=1" "$SEQ|$NEWREC"
@@ -136,7 +136,7 @@ opts '{}'; rm -f "$BR/u9-fix-r4.md"
 BR8=$T/ws/u8/.claude/briefs; mkdir -p "$BR8"; OBR=$BR; BR=$BR8; fr u8-fix-r1.md sonnet medium; BR=$OBR
 check "a new unit's fix-r1 counts as the first fix round" "fixer=first:routing model=sonnet effort=medium round=1" "$(grep '^fixer=' "$T/rec")"
 rm -f "$BR8"/*-fix-r*.md; BR=$BR8; fr u8-fix-r7.md sonnet medium; BR=$OBR
-check "a lone fix-r7 runs on the later-round fixer" "fixer=later:routing model=opus effort=high round=7" "$(grep '^fixer=' "$T/rec")"
+check "a lone fix-r7 runs on the later-round fixer" "fixer=later:routing model=opus effort=medium round=7" "$(grep '^fixer=' "$T/rec")"
 # The filename guard: with two fix files there and a fixer that would switch, a GO continuation and added work switch nothing.
 newbuild; echo x > "$BR/u9-fix-r1.md"; echo x > "$BR/u9-fix-r2.md"; opts '{"fixerModel": "sonnet", "fixerEffort": "medium"}'
 fr u9-after-r3.md opus high
@@ -157,9 +157,9 @@ printf 'f\nVERDICT: NO-GO\n' > "$BR/u9-r3-reports.md"; printf 'f\nVERDICT: GO\n'
 fr u9-handoff.md opus high
 check "the newest round file is the highest N, not the last name sorted: r10 ended GO, so nothing is switched" "/clear,$TS|" "$SEQ|$NEWREC"
 rm -f "$BR/u9-r10-reports.md"
-fr u9-handoff.md sonnet medium
+fr u9-handoff.md sonnet low
 check "a plain hand-off after a NO-GO round 3 switches to the later-round fixer and records fixer=later round=3" \
-  "/clear,/model opus,/effort high,$TS|model=opus effort=high fixer=later:routing model=opus effort=high round=3" "$SEQ|$NEWREC"
+  "/clear,/model opus,/effort medium,$TS|model=opus effort=medium fixer=later:routing model=opus effort=medium round=3" "$SEQ|$NEWREC"
 rm -f "$BR"/u9-r*-reports.md; printf 'f\nVERDICT: NO-GO\n' > "$BR/u9-r1-reports.md"
 fr u9-handoff.md sonnet high
 check "a plain hand-off after a NO-GO round 1 records fixer=first round=1" \

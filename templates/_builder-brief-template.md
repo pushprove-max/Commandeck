@@ -41,12 +41,14 @@ and a fix that touches a save updates that save's row in the same commit.
   on a contract another cut still changes. A finding whose root cause is the plan amends the plan first (one
   `## Plan change log` line), then the code.
 - A review finding of P0 to P2 carries a failing test file; a P2 or P3 whose test is written and whose fix is under ten
-  lines may carry the fix as a fenced unified diff. Apply it, run its test green, and expect the next pass to read it.
+  lines may carry the fix as a fenced unified diff. Run the reviewer's test red before the fix, apply it, run its test
+  green, and expect the next pass to read it. A reviewer test that passes does not end the finding: rule on it in the
+  evidence file.
   This brief and the dispatch spec outrank the startup file and every skill; if a reviewer stops early, it quotes the
   instruction that stopped it. An Orca call answering `runtime_unavailable` inside the read-only sandbox is by design,
   not a failure to retry or report. A reviewer reads the diff, then this brief, drafts its findings, and only then the
   evidence file, and opens a file outside the diff, the brief and its named callers only to confirm or refute one
-  finding. A reviewer never opens a generated file (a path `.gitattributes` marks `linguist-generated`); it reviews
+  finding, which its report names. A reviewer never opens a generated file (a path `.gitattributes` marks `linguist-generated`); it reviews
   the generator and its test.
 - Several looks in one call: `bash {scripts}/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>`.
 - In your first turn, open this brief and every file it names, together; after that, send

@@ -188,7 +188,7 @@ check "every Details stub names a section that exists in rules-details.md" "3 3"
 # The seven unpinned planning bullets and the two main-only steps moved verbatim: found under the section their stub names,
 # and in no always-on file.
 SEC() { awk -v s="## $1" '$0 == s {p = 1; next} /^## / {p = 0} p' "$DET" 2>/dev/null; }
-GONE='3e7415fc 97c20446 6895053b 0e7bd99a 45f0fd15 99a98f43 f1c7b025'
+GONE='3e7415fc 97c20446 6895053b 0e7bd99a 2434c9d1 99a98f43 f1c7b025'
 IN_SEC=$(python3 "$REAL/scripts/merge-rules.py" <(SEC 'Planning and evidence') --units | cut -f1 | sort | tr '\n' ' ')
 IN_RULES=$(python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/global-rules.md" --units | cut -f1 | grep -cE "^($(tr ' ' '|' <<<"$GONE"))$")
 check "every moved rule is findable from its stub: the seven ids sit under Planning and evidence and no longer in global-rules.md" "$(printf '%s\n' $GONE | sort | tr '\n' ' ')0" "$IN_SEC$IN_RULES"

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.56.0 -- 2026-10-28
+
+### Tests
+
+- A background job counts as stopped only when its command has stopped, not just the shell that started it, so a retry never runs it a second time.
+
+### Lanes
+
+- The Fast lane will not land while main's checkout has a staged change. It reports a landing only when main's checkout matches the reviewed commit on every file the lane changed, and it names any other unsaved edits it left in place.
+
+### Planning
+
+- A plan needs one goal line of at most 200 characters, one line per step, and a facts list. Each fact names the file lines it rests on and the day they were read.
+- A fact is refused at launch, before any judge reads the plan, when its file or lines do not exist, it cites another plan, or its date is not a real date up to today.
+- A plan written in the earlier format still passes, with a warning to rewrite it in the new one. A plan that has a goal line, a steps section or a facts section is checked in full.
+- Prose goes only under the plan's Why section, and each section has a size limit. A plan over a limit is refused, naming the section and its size.
+- The plan judge reads the plan as a Builder who cannot ask, tries to disprove each claim and fact, and checks the plan against common practice for the problem.
+- A unit over the size limits is split by default. Main keeps it whole only with a written reason.
+
+### Reviews
+
+- The closing review is a fresh reviewer that gets no earlier findings or fix history.
+- A reviewer's test that passes does not close its finding: the Builder rules on it.
+- Later fix rounds run at medium effort by default.
+- A test is never weakened, skipped or deleted to make it pass.
+
 ## 0.55.0 -- 2026-10-28
 
 ### Units view

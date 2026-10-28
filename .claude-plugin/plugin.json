@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -66,7 +66,7 @@
     "fixerEffort": {
       "type": "string",
       "title": "Fixer effort, later fix rounds",
-      "description": "The effort of a build's second and later fix rounds. project: high.",
+      "description": "The effort of a build's second and later fix rounds. project: medium.",
       "options": ["project", "low", "medium", "high", "xhigh", "max"],
       "default": "project"
     },

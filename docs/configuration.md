@@ -19,7 +19,7 @@ A null effort is omitted from the command.
 | plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | plan-judge-fable | Claude / fable | high | `planJudgeFable` + `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | builder | Claude / opus | medium | `builderModel`, `builderEffort` | no: no branch to review or merge |
-| fixer | Claude / opus (first fix round: the Builder's) | high | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
+| fixer | Claude / opus (first fix round: the Builder's) | medium | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
 | codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
 
 Each role setting is a key in `/plugin` config. A per-launch pin
@@ -36,9 +36,9 @@ names no model for it, a saved model that agent cannot run goes back to the
 default, and setup says so.
 
 The fixer runs the fix passes after a review: the first one on the model and
-effort the Builder was launched with, every later one on Opus high by default.
-`fixerFirstModel=opus` and `fixerFirstEffort=high` run the first one on Opus
-high too. The reviewer and the Sol judge can
+effort the Builder was launched with, every later one on Opus medium by default.
+`fixerFirstModel=opus` and `fixerFirstEffort=medium` run the first one on Opus
+medium too. The reviewer and the Sol judge can
 run on Claude (`<role>Agent=claude`): a Claude reviewer or judge cannot write.
 The Claude-only profile sets those two agent keys to `claude`. The Fable judge
 always runs on Claude and has no agent key.

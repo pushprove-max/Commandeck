@@ -41,6 +41,7 @@ done
 [ "$prompt" != - ] || prompt=$(cat)
 id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 reply=$'Clean.\n'$STUB_VERDICT
+[ -z "${STUB_HOOK-}" ] || eval "$STUB_HOOK"
 d=$CODEX_HOME/sessions/2026/10/27; mkdir -p "$d"
 { jq -cn --arg id "$id" --arg cwd "$dir" --arg sha "$(git -C "$dir" rev-parse HEAD)" '{type: "session_meta", payload: {id: $id, cwd: $cwd, git: {commit_hash: $sha}}}'
   jq -cn --arg p "$prompt" '{type: "response_item", payload: {type: "message", role: "user", content: [{type: "input_text", text: $p}]}}'
@@ -138,6 +139,99 @@ for r in codex claude; do
   GOT="$(land) $(main_tip)"
   check "$r: a P3 finding alone still lands" "0 $D3" "$GOT"
 done
+
+# Issue 428: landed means main's index is the reviewed commit and every file the lane changes is its text on disk. A
+# staged change is refused before main moves. An unstaged edit on a path the lane changes is refused, main untouched;
+# one on any other path is allowed and named. STUB_HOOK edits main's checkout while the reviewer runs.
+route codex
+lane_commit base >/dev/null; review 'VERDICT: GO'; land >/dev/null
+START=$(main_tip)
+echo staged >> "$PROJ/base.txt"; git -C "$PROJ" add base.txt
+lane_commit s1 >/dev/null; review 'VERDICT: GO'
+check "a staged change in main's checkout is refused, main untouched" "2 1 $START" \
+  "$(land) $(grep -c 'staged change' "$T/land.out") $(main_tip)"
+git -C "$PROJ" reset -q --hard
+echo v2 >> "$FAST/base.txt"; git -C "$FAST" commit -q -am v2
+STUB_HOOK='echo edit > "$COMMANDECK_MAIN/base.txt"' review 'VERDICT: GO'
+check "an edit to a lane path made while the reviewer ran never lands" "2 $START edit" \
+  "$(land) $(main_tip) $(cat "$PROJ/base.txt")"
+git -C "$PROJ" checkout -q -- base.txt
+W=$(lane_commit u1)
+STUB_HOOK='echo local >> "$COMMANDECK_MAIN/a-codex.txt"' review 'VERDICT: GO'
+check "an unstaged edit on a path the lane does not change lands and is named" "0 $W 1 local" \
+  "$(land) $(main_tip) $(grep -c 'unstaged edits land did not touch: a-codex.txt$' "$T/land.out") $(tail -1 "$PROJ/a-codex.txt")"
+git -C "$PROJ" checkout -q -- a-codex.txt
+
+# A refusal after the merge leaves main at the reviewed commit and keeps the record. A retry then checks the paths the
+# first attempt's merge changed (the record's base=), not the empty range from main's new HEAD; with no base, or one
+# that is not an ancestor of the reviewed commit, every tracked path. A post-merge hook edits a lane path after main
+# moves, before land checks the checkout.
+R=$(lane_commit r1); review 'VERDICT: GO'
+printf '#!/usr/bin/env bash\necho hook > r1.txt\n' > "$PROJ/.git/hooks/post-merge"; chmod +x "$PROJ/.git/hooks/post-merge"
+GOT="$(land) $(main_tip)"
+rm -f "$PROJ/.git/hooks/post-merge"
+GOT+=" $(land) $(grep -c "is not $R at: r1.txt\$" "$T/land.out")"
+ROOTC=$(git -C "$PROJ" commit-tree -m unrelated "$(git -C "$PROJ" hash-object -t tree /dev/null)")
+sed -i.bak "s/^base=.*/base=$ROOTC/" "$REC"
+GOT+=" $(land)"
+grep -v '^base=' "$REC" > "$REC.tmp"; mv "$REC.tmp" "$REC"
+GOT+=" $(land) $([ -e "$REC" ] && echo kept) $(cat "$PROJ/r1.txt")"
+git -C "$PROJ" checkout -q -- r1.txt
+GOT+=" $(land) $([ -e "$REC" ] && echo kept || echo gone)"
+check "a retry after a refusal past the merge still refuses the dirty lane path, then lands once it is clean" \
+  "2 $R 2 1 2 2 kept hook 0 gone" "$GOT"
+
+# The lane-path check must see every path the lane changes as git names it: a non-ASCII name (not quoted), a path the
+# lane deletes or renames away (recreated on disk after the merge it is untracked, and a delete is not a diff), and a
+# name with a glob in it (a literal path, not a pattern). Each case leaves main clean and landed, hook removed.
+HOOK=$PROJ/.git/hooks/post-merge
+hook() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$HOOK"; chmod +x "$HOOK"; }
+reset_main() { rm -f "$HOOK"; git -C "$PROJ" reset -q --hard; git -C "$PROJ" clean -fdq; }
+
+reset_main
+lane_commit café >/dev/null; review 'VERDICT: GO'
+hook 'echo dirty > café.txt'
+GOT="$(land)"
+rm -f "$HOOK"; git -C "$PROJ" checkout -q -- café.txt
+GOT+=" $(land)"
+check "a dirty non-ASCII lane path is refused, then lands once it is clean" "2 0" "$GOT"
+
+reset_main
+lane_commit removed >/dev/null; review 'VERDICT: GO'; GOT="$(land)"
+git -C "$FAST" rm -q removed.txt; git -C "$FAST" commit -q -m rm
+RM=$(git -C "$FAST" rev-parse HEAD); review 'VERDICT: GO'
+hook 'echo back > removed.txt'
+GOT+=" $(land) $(grep -c "is not $RM at: removed.txt\$" "$T/land.out")"
+rm -f "$HOOK"
+GOT+=" $(land)"
+cp "$REC" "$T/rec.removed"
+rm "$PROJ/removed.txt"
+GOT+=" $(land) $([ -e "$REC" ] && echo kept || echo gone)"
+check "a path the lane deletes and the checkout recreates is refused, also on a retry, then lands once it is gone" \
+  "0 2 1 2 0 gone" "$GOT"
+# With no base= the retry has no record of the paths the lane deleted, so it cannot see the recreated file and lands.
+cp "$T/rec.removed" "$REC"; sed -i.bak '/^base=/d' "$REC"; echo back > "$PROJ/removed.txt"
+GOT="$(land) $([ -e "$REC" ] && echo kept || echo gone) $([ -e "$PROJ/removed.txt" ] && echo present)"
+rm -f "$PROJ/removed.txt"
+check "a retry with no base= cannot see a recreated deleted path (a documented limit)" "0 gone present" "$GOT"
+
+reset_main
+lane_commit oldname >/dev/null; review 'VERDICT: GO'; GOT="$(land)"
+git -C "$FAST" mv oldname.txt newname.txt; git -C "$FAST" commit -q -m mv
+review 'VERDICT: GO'
+hook 'echo oldname > oldname.txt'
+GOT+=" $(land)"
+rm -f "$HOOK"; rm "$PROJ/oldname.txt"
+GOT+=" $(land)"
+check "a path the lane renames away and the checkout recreates is refused, then lands once it is gone" "0 2 0" "$GOT"
+
+reset_main
+lane_commit g1 >/dev/null; review 'VERDICT: GO'; GOT="$(land)"
+G=$(lane_commit 'g*')
+STUB_HOOK='echo local >> "$COMMANDECK_MAIN/g1.txt"' review 'VERDICT: GO'
+GOT+=" $(land) $(main_tip) $(grep -c 'unstaged edits land did not touch: g1.txt$' "$T/land.out")"
+git -C "$PROJ" checkout -q -- g1.txt
+check "a lane path with a glob in it is literal: an unstaged edit on a file it would match lands and is named" "0 0 $G 1" "$GOT"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

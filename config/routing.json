@@ -65,7 +65,7 @@
     "fixer": {
       "agent": "claude",
       "model": "opus",
-      "effort": "high",
+      "effort": "medium",
       "first": {"model": "builder", "effort": "builder"},
       "unboxed": true,
       "edits": true,

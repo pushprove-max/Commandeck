@@ -17,7 +17,9 @@
   what breaks under real load) and covering all three. Fix everything they find together, then review
   only the fixes.
 - Every reviewer gets the same full scope. Never split the areas between
-  reviewers; each prompt carries the complete finding list and checklist.
+  reviewers; each prompt but the closing pass's carries the complete finding
+  list and checklist. The closing pass is a fresh reviewer handed no earlier
+  findings, rebuttals or fix history.
   No reviewer runs a test at round close; each finding's test goes to the
   fixer. Read a reviewer's findings with `read-verdict.sh`, never a raw pane
   read.
@@ -25,7 +27,9 @@
   without them is not reported. A P0, P1 or P2 finding also carries a failing
   test, which the fixer runs red before the fix and ships green. When the test
   would cost more than the finding, the failing input or command stands alone
-  and says why.
+  and says why. A test that passes for the fixer does not end the finding: the
+  fixer rules on it in the evidence file. A reviewer stays read-only; its fix
+  diff is checked by another reviewer, never by its author.
 - A reviewer reads the diff and the brief first, drafts its findings, and only
   then reads the author's evidence, which would anchor the review if read first.
 - A review finding blocks the merge only when normal use would hit the bug,
@@ -68,7 +72,8 @@
   merge turn, and reconciles orphaned worktrees at every plan start; briefs run
   ahead of builds. Main verifies every dispatch: status shows only scope, the
   diff stat matches each claimed change, the worktree and main heads are as
-  expected, and a pass claim carries runner totals. Every worker is an Orca pane
+  expected, and a pass claim carries runner totals. A zero diff reported done
+  is a failure. Every worker is an Orca pane
   the owner can open; Orca's task list is the dispatch ledger.
 - When a `gh` read fails mid-task, print `BLOCKED: GitHub read failed:
   <command>: <first error line>` on a line of its own and stop. Never go on
@@ -87,6 +92,9 @@
 
 - A test verifies intent and fails on a regression. Write it red first: see it
   fail for the reason you expect, then make it pass.
+- Never edit, weaken, skip or delete an existing test to make it pass. A test
+  that looks wrong is reported, not changed; tests are deleted only in a pruning
+  job the owner ordered.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product

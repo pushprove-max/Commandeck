@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.55.0-111111?style=flat-square" alt="Version 0.55.0">
+  <img src="https://img.shields.io/badge/version-0.56.0-111111?style=flat-square" alt="Version 0.56.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -224,7 +224,7 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `fixerFirstModel` | `project`, `builder`, `opus`, `sonnet`, `fable` | The first fix round's model (project: the Builder's launched model) |
 | `fixerFirstEffort` | `project`, `builder`, `low`, `medium`, `high`, `xhigh`, `max` | The first fix round's effort (project: the Builder's launched effort) |
 | `fixerModel` | `project`, `opus`, `sonnet`, `fable` | Later fix rounds' model (project: Opus) |
-| `fixerEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Later fix rounds' effort (project: high) |
+| `fixerEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Later fix rounds' effort (project: medium) |
 
 **Reviewer**
 

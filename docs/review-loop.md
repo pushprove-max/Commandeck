@@ -100,8 +100,8 @@ to main as a question. A finding main lists under
 "Cleared findings" in its rulings file is handed to the next reviewer as out
 of scope; it never turns a NO-GO into a merge.
 
-The fix passes after a review run as the fixer role, every one on Opus high
-by default. The `fixer*` keys in `/plugin` config change both, and
+The fix passes after a review run as the fixer role: the first on the Builder's
+launch, every later one on Opus medium by default. The `fixer*` keys in `/plugin` config change both, and
 `fixerEnabled=false` keeps every fix pass on the Builder's launch.
 
 A launch with `--risky` opens the Builder at once. Its brief gets a
