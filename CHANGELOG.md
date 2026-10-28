@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.55.0 -- 2026-10-28
+
+### Units view
+
+- The standing Fast lane and Research lane no longer show up as builds in progress.
+- The cost for today now matches the dashboard's Cost today for the project. The line under it splits that total into merged units, units in flight, main, the standing panes and lanes, and the rest. When the day's cost is not available, the view shows the units' own total, marked "units only".
+
+### Tests
+
+- A retry on the same code can rerun only the test files that did not pass. A file that passed on exactly the same code is shown as passed without running again. Runs on the second machine are never skipped this way.
+- A test run handed to the second machine keeps going when the connection drops. The failure message gives the run's id, so its result can be collected once it ends.
+- A passing run on the second machine counts for the code it actually tested, not for whatever the checkout holds when the result comes back.
+
+### Lanes
+
+- The Fast lane and the Research lane may start helper agents on Sonnet or Haiku when the call names that model.
+
 ## 0.54.0 -- 2026-10-27
 
 ### Setup

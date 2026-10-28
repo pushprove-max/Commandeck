@@ -843,6 +843,6 @@ A cut built after B1 changes its `Refs #N` to `Closes #N`. A cut left partial fo
   made while --skip-passed checks ..." become one test of every ordering (What can go wrong). C5: the footer's newline
   check counts the last byte, so a final NUL no longer glues the footer (pass 2 known gap).
 - 2026-10-28 r5: C10's 0.55.0 bump with no CHANGELOG section turned `scripts/__tests__/update.test.sh` red (it linked
-  the real CHANGELOG). Main's decision d-20261028-plugin-update-test (Max, option b): the test writes its own fixture
+  the real CHANGELOG). Main's decision d-20261028-plugin-update-test (the owner, option b): the test writes its own fixture
   CHANGELOG with a section for the manifest's version; the refusal case stays; the real CHANGELOG is unchanged.
   Data design Limits: an ignored file created in a kept directory breaks the fence (fail closed).
