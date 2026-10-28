@@ -444,7 +444,7 @@ def under(folder, roots):
 
 def folder_key(folder, roots):
     """The day split's key for a request's recorded folder (#421), by path strings alone, so a removed worktree or
-    closing copy keeps its name. `roots` is a project's [main checkout, worktree folder, closing-copy folder]: under a
+    closing copy keeps its name. `roots` is a project's [main checkout, worktree folder, closing copies' folder]: under a
     closing copy or a worktree the key is the first segment after it (a plan worktree's `-plan` taken off, so a unit's
     worktree, plan worktree and closing copy are one key); under the main checkout `:main`; anything else `:other`."""
     path, ws, cc = (list(roots) + ["", "", ""])[:3]

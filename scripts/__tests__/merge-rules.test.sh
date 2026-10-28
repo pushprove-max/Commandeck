@@ -67,8 +67,8 @@ check "reworded 26b6b2b9: in by default, out under keep mine of c8e23316, in aga
   "$(GR 26b6b2b9) $(GR 26b6b2b9 --drop c8e23316) $(GR 26b6b2b9 --drop c8e23316 --keep 26b6b2b9)"
 # 0.48.0 global-rules.md rewordings: the review threshold (issue 366), the reviewers' scope, the ponytail add-on removed
 # (issue 365), units and duplicate agents, planning by size. 0.51.0: a plan's `file ~line`, the sibling dry run, the
-# flexibility finding's severity.
-for pair in 26b6b2b9:13e9906d cb6056f9:9243900d 41d1d566:e38a2639 e7926841:e6c9ac28 3b129248:516a9bd8 2424eeef:56860db4 eff13cd5:64f32653 faea5cd0:71b6b9ca a935667e:2fe4fdf9; do
+# flexibility finding's severity. 0.56.0: the closing pass, the fixer's passing test, a zero diff reported done.
+for pair in 26b6b2b9:13e9906d 0daaf070:cb6056f9 41d1d566:e38a2639 0d7babbc:e7926841 b1915c88:ecd4b33d 3b129248:516a9bd8 2424eeef:56860db4 eff13cd5:64f32653 faea5cd0:71b6b9ca a935667e:2fe4fdf9; do
   new=${pair%:*} old=${pair#*:}
   check "reworded global $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(GR "$new") $(GR "$new" --drop "$old") $(GR "$new" --drop "$old" --keep "$new")"
