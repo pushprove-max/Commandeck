@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.59.1 -- 2026-10-28
+
+### Tests
+
+- The plugin's own test run no longer picks up two sample files that one test uses as input, so the run passes again.
+
 ## 0.58.0 -- 2026-10-28
 
 ### Tests
