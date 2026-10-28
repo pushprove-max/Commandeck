@@ -42,6 +42,8 @@ E=/dev/null p=
 for a; do [ "\$p" != -E ] || E=\$a; p=\$a; done
 [ ! -e "$T/down" ] || { echo "ssh: connect to host pc port 22: Connection refused" >> "\$E"; exit 255; }
 echo 'Authenticated to pc ([192.0.2.1]:22) using "publickey".' >> "\$E"
+# \$T/nopipe: the PC's shell starts with SIGPIPE ignored, so a cut session's writes fail instead of killing it.
+[ ! -e "$T/nopipe" ] || trap '' PIPE
 # \$T/drop holds "<code> <lost>": the session opened, then ended with <code>, losing <lost>: exit (the exit line),
 # lines (every control line of the run), all (the connection drops before the command runs).
 if [ -e "$T/drop" ]; then
@@ -144,6 +146,13 @@ for t in where:cut red:cut where:hup; do
   got+="$RC $FRC $(grep -c '^offload: exit' <<<"$F") $F2RC $(grep -c 'no run' <<<"$F2") "
 done
 check "a run whose session dropped is fetched by id with its exit status" "1 0 1 2 1 1 1 1 2 1 1 0 1 2 1 " "$got"
+# The same cut on a PC shell that ignores SIGPIPE (a GitHub runner's steps inherit it so): the shell outlives the cut
+# and its footer writes fail, and the run must stay for the fetch, whatever this machine's own SIGPIPE.
+echo "255 cut" > "$T/drop"; touch "$T/nopipe"
+OUT=$(run "$T/wt" scripts/__tests__/where.test.sh); RC=$?
+ID=$(sed -n 's/^offload: run id //p' <<<"$OUT" | head -1); rm -f "$T/drop" "$T/nopipe"
+F=$(fetch "$ID"); FRC=$?
+check "a dropped session whose PC shell ignores SIGPIPE keeps the run: the fetch returns its status" "1 0 1" "$RC $FRC $(grep -c '^offload: exit' <<<"$F")"
 
 # Issue 423: a fetch validates with a nonce of its own, made after the command's output was written, and deletes the
 # run only by a second call once that result arrived whole. po <command>... -- pr_offload from the Mac's worktree.

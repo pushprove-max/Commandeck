@@ -195,9 +195,9 @@ wait \$P 2>/dev/null
 rc=\$(cat "\$S/rc" 2>/dev/null)
 [ -e "\$S/started" ] || { echo "REFUSED: the memory cage on $peer, or its start marker, failed (exit \$rc) before the command started; nothing ran"; exit 2; }
 [ -n "\$rc" ] || { echo "offload: run \${S##*/run.} ended without a status"; exit 1; }
-echo "offload-exit: $nonce \$rc"
-echo "offload: exit \$rc"
-echo "offload-done: $nonce"
+# A footer that could not be written (the session cut, under a SIGPIPE ignored from the start, as a GitHub runner's
+# steps have it) never reached the host: the run stays for --fetch.
+echo "offload-exit: $nonce \$rc" && echo "offload: exit \$rc" && echo "offload-done: $nonce" || exit 1
 rm -rf "\$S"; git worktree prune; S=
 EOF
   orc=${PIPESTATUS[0]}
