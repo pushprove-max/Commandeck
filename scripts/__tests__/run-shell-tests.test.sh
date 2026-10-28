@@ -199,5 +199,90 @@ check "... --own-lane: the table lists the lane file and its start, and no line 
   "1 1 0 0" "$(grep -c "^file$TAB$LANEREL\$" "$SEEN-lane") $(grep -c "^start$TAB$LANEREL$TAB" "$SEEN-lane") $(grep -c 'ord.test.sh' "$SEEN-lane") $(ls "$LD"/*.tsv 2>/dev/null | wc -l | tr -d ' ')"
 rm -f "$R/$OREL" "$R/$LANEREL"
 
+# Issue 422: --skip-passed reruns only what did not pass at this exact tree, read from a ledger of local results,
+# <git dir>/commandeck-test-runs.tsv. Three files: b is red while $BRED exists (outside the tree), a reads a selector.
+S=$TMP/skip; mkdir -p "$S/scripts/__tests__"
+printf '#!/usr/bin/env bash\necho "a${A_TEST_CASE+:$A_TEST_CASE}" >> "$RAN"\n' > "$S/scripts/__tests__/a.test.sh"
+printf '#!/usr/bin/env bash\necho b >> "$RAN"\n[ ! -e "$BRED" ]\n' > "$S/scripts/__tests__/b.test.sh"
+printf '#!/usr/bin/env bash\necho c >> "$RAN"\n' > "$S/scripts/__tests__/c.test.sh"
+git -C "$S" init -q && git -C "$S" add -A && git -C "$S" -c user.name=t -c user.email=t@t commit -qm base
+export BRED=$TMP/bred; LEDGER=$(git -C "$S" rev-parse --absolute-git-dir)/commandeck-test-runs.tsv
+skip() { : > "$RAN"; OUT=$(cd "$S" && env -u A_TEST_CASE "$@" timeout 30 bash "$RUNNER" "${ARGS[@]}" 2>&1); RC=$?; GOT=$(sort "$RAN" | paste -sd" " -); }
+REUSED='^-- ok   a\.test\.sh +0s \(passed at this tree in an earlier run\)$'
+touch "$BRED"; ARGS=(); skip
+grep -v $'\tscripts/__tests__/c.test.sh\t' "$LEDGER" > "$LEDGER.t"; mv "$LEDGER.t" "$LEDGER"; rm -f "$BRED"
+ARGS=(--skip-passed); skip
+check "--skip-passed reruns the failed and the missing file and skips the green one" "0 b c 1 1" \
+  "$RC $GOT $(grep -cE "$REUSED" <<<"$OUT") $(grep -c '^3 passed, 0 failed' <<<"$OUT")"
+printf '2026-10-27T00:00:00Z\tscripts/__tests__/a.te\n' >> "$LEDGER"; skip
+check "a cut or glued ledger line brings back no older pass" "a b c" "$GOT"
+skip; GONE=$GOT; echo x > "$S/new-untracked"; skip; rm -f "$S/new-untracked"
+check "--skip-passed skips nothing after any tree change" "| a b c" "$GONE| $GOT"
+ARGS=(); skip
+check "without --skip-passed every file runs" "a b c" "$GOT"
+rm -f "$LEDGER"; ARGS=(scripts/__tests__/a.test.sh); skip A_TEST_CASE=x; ROWS=$(cat "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')
+ARGS=(--skip-passed scripts/__tests__/a.test.sh); skip; WHOLE=$GOT
+skip A_TEST_CASE=x
+check "a selected-case run neither records nor reuses a pass" "0 a a:x 1 1" \
+  "$ROWS $WHOLE $GOT $(grep -c 'a test-case selector is set (A_TEST_CASE); --skip-passed reuses and records nothing' <<<"$OUT") $(wc -l < "$LEDGER" | tr -d ' ')"
+
+# A pass is recorded or reused only for a tree no edit touched after the run's snapshot: an edit kept, reverted, or made and
+# removed (a file created and deleted) must all rerun the file. Every fixture repo is fresh, `value` is bad in it, and the
+# file t passes only on good. Sync files sit outside the tree; every wait is bounded. A token is "<first rc>><retry rc>
+# <files the retry ran> <reuse lines>": 0>1 t 0 is a first run that passed and a retry that ran t and failed it.
+export READY=$TMP/ready RELEASE=$TMP/release EXAMINED=$TMP/examined FINISH=$TMP/finish
+await() { local _; for _ in $(seq 200); do [ -e "$1" ] && return 0; sleep 0.05; done; return 1; }
+mk() { rm -rf "$1"; mkdir -p "$1/scripts/__tests__"; printf 'bad\n' > "$1/value"; printf '#!/usr/bin/env bash\n%s\n' "$2" > "$1/scripts/__tests__/t.test.sh"
+  git -C "$1" init -q && git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm base; }
+bg() { : > "$RAN"; rm -f "$READY" "$RELEASE" "$EXAMINED" "$FINISH"
+  (cd "$1" && timeout 30 bash "$RUNNER" --skip-passed > /dev/null 2>&1) & BGPID=$!; await "$READY"; }
+fin() { wait "$BGPID"; RC1=$?; }
+tok() { echo "$RC1>$RC $GOT $(grep -c 'passed at this tree' <<<"$OUT")"; }
+rows() { cat "$1" 2>/dev/null | wc -l | tr -d ' '; }
+WAITS='touch "$READY"; n=0; until [ -e "$RELEASE" ] || [ $((n++)) -ge 400 ]; do sleep 0.05; done'
+FINW='touch "$EXAMINED"; n=0; until [ -e "$FINISH" ] || [ $((n++)) -ge 400 ]; do sleep 0.05; done'
+ARGS=(--skip-passed)
+# 1, kept: good while t waits, bad again once the run is over.
+T1=$TMP/o1; mk "$T1" "$WAITS"'; echo t >> "$RAN"; [ "$(cat "$(dirname "$0")/../../value")" = good ]'
+bg "$T1"; printf 'good\n' > "$T1/value"; touch "$RELEASE"; fin
+printf 'bad\n' > "$T1/value"; S=$T1 skip; TOK1=$(tok)
+# 2, reverted: t reads good, says so (EXAMINED), and waits; bad is back before it exits 0.
+T2=$TMP/o2; mk "$T2" "$WAITS"'; echo t >> "$RAN"; v=$(cat "$(dirname "$0")/../../value"); '"$FINW"'; [ "$v" = good ]'
+bg "$T2"; printf 'good\n' > "$T2/value"; touch "$RELEASE"; await "$EXAMINED"; printf 'bad\n' > "$T2/value"; touch "$FINISH"; fin
+S=$T2 skip; TOK2=$(tok)
+# 3, created and removed: t passes only while `extra` exists; it is gone before t exits.
+T3=$TMP/o3; mk "$T3" "$WAITS"'; echo t >> "$RAN"; [ -e "$(dirname "$0")/../../extra" ]; r=$?; '"$FINW"'; exit $r'
+bg "$T3"; touch "$T3/extra" "$RELEASE"; await "$EXAMINED"; rm -f "$T3/extra"; touch "$FINISH"; fin
+S=$T3 skip; TOK3=$(tok)
+# 4, the reuse side: the stub awk (the skip loop reads the ledger with it) edits the tree once, between the snapshot and the
+# recheck: first a file created and kept, then a file created and removed there. Neither reuses p or adds a row.
+P=$TMP/pass; mkdir -p "$P/scripts/__tests__" "$TMP/awkbin"
+printf '#!/usr/bin/env bash\necho p >> "$RAN"\n' > "$P/scripts/__tests__/p.test.sh"
+git -C "$P" init -q && git -C "$P" add -A && git -C "$P" -c user.name=t -c user.email=t@t commit -qm base
+printf '#!/usr/bin/env bash\ncase ${*: -1} in *commandeck-test-runs.tsv) touch "$INJECT"; [ -z "${INJECT_RM-}" ] || rm -f "$INJECT" ;; esac\nexec %q "$@"\n' "$(command -v awk)" > "$TMP/awkbin/awk"
+chmod +x "$TMP/awkbin/awk"
+PLEDGER=$(git -C "$P" rev-parse --absolute-git-dir)/commandeck-test-runs.tsv
+S=$P skip; PROWS=$(rows "$PLEDGER")
+S=$P skip INJECT="$P/injected" PATH="$TMP/awkbin:$PATH"; TOK4=$RC" $GOT $(grep -c 'passed at this tree' <<<"$OUT") $(($(rows "$PLEDGER") - PROWS))"
+rm -f "$P/injected"
+S=$P skip INJECT="$P/injected" INJECT_RM=1 PATH="$TMP/awkbin:$PATH"; TOK4B=$RC" $GOT $(grep -c 'passed at this tree' <<<"$OUT") $(($(rows "$PLEDGER") - PROWS))"
+# 5, the hash race: a git stub makes the run's first `add -A` on an index copy, then writes good into value, once.
+T5=$TMP/o5; mk "$T5" 'echo t >> "$RAN"; [ "$(cat "$(dirname "$0")/../../value")" = good ]'
+mkdir -p "$TMP/gitbin"; RG=$(command -v git)
+printf '#!/usr/bin/env bash\nif [ "${1-}" = add ] && [ "${2-}" = -A ] && [ -n "${GIT_INDEX_FILE-}" ] && [ ! -e "$GMARK" ]; then\n  %q "$@"; rc=$?; : > "$GMARK"; printf "good\\n" > "$GVAL"; exit $rc\nfi\nexec %q "$@"\n' "$RG" "$RG" > "$TMP/gitbin/git"
+chmod +x "$TMP/gitbin/git"
+S=$T5 skip GMARK="$TMP/gmark" GVAL="$T5/value" PATH="$TMP/gitbin:$PATH"; RC1=$RC
+printf 'bad\n' > "$T5/value"; S=$T5 skip; TOK5=$(tok)
+# The retry path for each piece of state, with a passing file q: (a) the ledger deleted, (b) every stamp deleted while q waits.
+Q=$TMP/q; mk "$Q" "$WAITS"'; echo t >> "$RAN"'
+QLEDGER=$(git -C "$Q" rev-parse --absolute-git-dir)/commandeck-test-runs.tsv; QGD=$(dirname "$QLEDGER")
+touch "$RELEASE"; S=$Q skip; QROWS=$(rows "$QLEDGER")
+rm -f "$QLEDGER"; S=$Q skip; TOKA="$QROWS $GOT"
+rm -f "$QLEDGER"; bg "$Q"; rm -f "$QGD"/commandeck-test-stamp.*; touch "$RELEASE"; fin
+BROWS=$(rows "$QLEDGER"); S=$Q skip; TOKB="$BROWS $GOT"
+check "an edit after the run's snapshot, kept or reverted, is never recorded or reused: every ordering reruns the file" \
+  "0>1 t 0 | 0>1 t 0 | 0>1 t 0 | 0 p 0 0 | 0 p 0 0 | 0>1 t 0 | 1 t | 0 t" \
+  "$TOK1 | $TOK2 | $TOK3 | $TOK4 | $TOK4B | $TOK5 | $TOKA | $TOKB"
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

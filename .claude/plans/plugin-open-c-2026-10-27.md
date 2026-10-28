@@ -29,7 +29,9 @@ Sources of every port, from the host's local main (`$HOST` below is the host che
   epoch apart (`START`) for the run's meta. Nothing of it is ported: the plugin's peer run directory is
   `mktemp -d run.XXXXXX` (random, `scripts/peer-offload.sh` in the draft), never a timestamp, so two runs cannot
   share one, and the plugin's run has no epoch meta. The ported hunks (keepalive `:276`, `cc_stamp`/`cc_alive`
-  `:216-224`, the fetch) read the same at `ee5efa7e` and at host main.
+  `:216-224`, the fetch) read the same at `ee5efa7e` and at host main. Host `f3a0d49e` (chain-run.sh picks run
+  directories, not the shell ledger beside them) is not ported either: the plugin keeps the exact `mktemp` directory
+  in `$S`.
 - Fast-lane unit: `86b6bc0f` (build) and `484fa3ca` (ledger). `git -C "$HOST" diff 86b6bc0f main --` on its
   `worktree-setup.sh` and `agent-model-guard.test.sh` is empty (2026-10-27).
 - #423 starts from the uncommitted draft diff in the plugin worktree `tooling-pc-chain-2026-10-27` (base `f626ece`,
@@ -512,11 +514,35 @@ No CHANGELOG entry and no README release text: release notes wait until every or
 ## Data design
 
 - `<git dir>/commandeck-test-runs.tsv` (new, C4): rows `<ISO time>\t<file>\t<ok|FAIL>\t<tree>`.
+  - Fence (r3 redesign of the data-design class; it replaces the r1 rehash): a row or a reuse is trusted only while
+    no path of the tree has changed since before the tree was hashed. At the run's start, before the offload split:
+    (1) the run makes its own stamp, `mktemp <git dir>/commandeck-test-stamp.XXXXXX`; (2) it waits one tick of the
+    filesystem clock (until a probe file touched after the stamp reads newer than it, at most 3 s); (3) it hashes
+    `TREE` and keeps that temp index's path list: every file in it, every directory holding one, and the root. The
+    fence holds while `find <kept paths> -prune -newercc <stamp>` prints nothing and exits 0. A write, create, delete,
+    rename or revert of any kept path, or of an entry in a kept directory, sets that path's status-change time (ctime)
+    to now, and no tool sets it back (`touch -t`, `cp -p` and `git checkout` set mtime only). So a fence that holds
+    proves the checkout was exactly `TREE` from before the hash until the check, whatever was edited and restored in
+    between. The tree is never hashed again. A failed stamp, tick wait, hash or path list makes `TREE` `-`; a missing
+    stamp, a vanished path or a failed `find` breaks the fence. Both fail closed: nothing is recorded or reused.
   - Writer: `run_one`, one `printf` per row after each local file, never in a partial-scope run (a `*_TEST_CASE`
-    variable set). Appends under 4 KB are atomic, so parallel files cannot interleave.
-  - Reader: `--skip-passed` only, after the offload split and never in a partial-scope run.
-  - Reset: none. It goes with a linked worktree's git dir (L4).
-  - Retry: the retry is the feature. A lost or cut row only makes a file run again.
+    variable set), and only when the fence holds after the file ended; otherwise one `run-shell-tests:` line says the
+    result is not recorded. Appends under 4 KB are atomic, so parallel files cannot interleave.
+  - Reader: `--skip-passed` only, after the offload split and never in a partial-scope run. It reuses a row only
+    when it is `ok` at `TREE` and the fence holds after the ledger was read; otherwise the run reuses nothing and
+    records nothing (`TREE` becomes `-`).
+  - Reset: the ledger, none; it goes with a linked worktree's git dir (L4). The stamp and the path list are the run's
+    own, deleted when it exits (trap); no run reads another run's stamp.
+  - Retry: one path, whatever the state came from: a file with no `ok` row at `TREE` under a holding fence runs. A
+    deleted ledger, a deleted or cut row, a stamp deleted mid-run or a broken fence only makes the file run again.
+  - Orderings the fence covers (r1 and r2 findings): an edit while a file runs, kept; an edit while a file runs,
+    reverted before it ends; a file created and removed while a file runs; an edit between the hash and the reuse
+    check; an edit while the tree is being hashed (the stamp comes first).
+  - Limits: the fence sees the tree's paths and its directories. A file created and removed inside an existing
+    directory that holds no file of the tree (only ignored files) is not seen, nor a path changed by someone setting
+    the system clock back. A worktree on a filesystem with coarser ctime than its git dir's is not supported. An
+    ignored file created in a kept directory (Python's `__pycache__/` the first time a test imports from the tree)
+    also breaks the fence for the rest of that run: fail closed, so the files ending after it rerun next time.
 - The peer's `~/.cache/commandeck-offload/run.<id>/` (changed, C5): `started`, `out`, `rc`, `pid`, `w/`.
   - Writer: the detached wrapper on the peer.
   - Readers: the live relay and `--fetch`.
@@ -677,11 +703,22 @@ Moved out of the table by its five-row cap, tests unchanged among the acceptance
 - an untracked file after a pass (C4, "--skip-passed skips nothing after any tree change")
 - an edit in main while land runs (C7, "an edit made in main while land runs is refused, never landed")
 - a look-alike lane folder (C1, "the helper allowance is the two lanes only")
+- an edit after the run's snapshot, in every ordering found (r1 and r2 findings; C4, the r3 fence, one test "an edit
+  after the run's snapshot, kept or reverted, is never recorded or reused: every ordering reruns the file"): an edit
+  while a test runs, kept and reverted before the retry (r1); an edit while a test runs, reverted before it ends (r2,
+  P1 and P2); a file created and removed while a test runs; an edit while --skip-passed reads the ledger, kept or made
+  and removed there (r1); an edit while the tree is hashed. The same test removes the ledger, and every stamp while
+  the file runs, between two runs, and the file still reruns.
+- command output with no final newline, fetched or live (r1 finding; C5, "a fetched run whose output has no final
+  newline returns its status and is collected once", "a live run whose output has no final newline returns its
+  status"); output whose last byte is NUL, which `$( )` drops (pass 2 known gap; the same two tests)
 
 ## Claims to falsify
 
 - With no `--skip-passed`, `run-shell-tests.sh` runs exactly the files it ran before this unit.
 - `--skip-passed` never skips a file whose last row is not `ok` at the exact current tree.
+- A ledger row `ok` at T is written only when no path of T changed (ctime) from before T was hashed until the file
+  ended, an edit made and reverted in between included.
 - A file run on the peer is never skipped by `--skip-passed`.
 - The summary line of a `--skip-passed` run counts every file in the inventory.
 - `peer-offload.test.sh` "a Mac linked worktree with chain host pc: ... exit passed back" passes with no test edit.
@@ -790,4 +827,22 @@ A cut built after B1 changes its `Refs #N` to `Closes #N`. A cut left partial fo
   as a finished file".
 - 2026-10-27 F9: `Catches:` lines at B1, C7 and C9.
 - 2026-10-27 F10: Sources: host main's `617423b5` assessed; nothing ported (random `mktemp` run folders).
+  F11: host `f3a0d49e` (run directories, not the shell ledger) assessed; nothing ported (the exact `mktemp` folder).
 - 2026-10-27: size 24 files, 873 lines -> 25 files, 1030 lines (C3 ~235, C4 ~150, C5 ~175, C9 ~300).
+- 2026-10-27 build: B1 empty, so C7 and C9 are not built (#426, #427, #428 stay partial).
+- 2026-10-27 build: C3's fixture has `u` holding four folders' spend, not five (the fifth row is yesterday's). It also has one
+  row in another project's folder, without which the Break "group every row" stays green. The `units only` mark is the line under the
+  header, and the status line keeps `today $X`: `hooks/units-panes.test.tsx:56` and `hooks/units.test.tsx:17` pin both.
+- 2026-10-27 build: the trap Break stayed green on the `cut` drop. A cut session dies on SIGPIPE, and SIGPIPE skips the EXIT trap. So
+  "a run whose session dropped is fetched by id with its exit status" gained a `hup` drop (hung up after the start).
+- 2026-10-28 r3 (data-design class, second return): Data design C4 ledger: one ctime fence per run (a stamp made
+  before the hash, one clock tick, the tree's kept paths) replaces the r1 rehash at the reuse check and after each
+  file. It covers an edit made and reverted inside one file's run, which the r1 Data design accepted and pass 2
+  found (P1). Claims to falsify: the row claim. Code follows the design pass.
+- 2026-10-28 r4 (after the design GO): the fence's code; the r1 tests "an edit made while a test runs ..." and "an edit
+  made while --skip-passed checks ..." become one test of every ordering (What can go wrong). C5: the footer's newline
+  check counts the last byte, so a final NUL no longer glues the footer (pass 2 known gap).
+- 2026-10-28 r5: C10's 0.55.0 bump with no CHANGELOG section turned `scripts/__tests__/update.test.sh` red (it linked
+  the real CHANGELOG). Main's decision d-20261028-plugin-update-test (Max, option b): the test writes its own fixture
+  CHANGELOG with a section for the manifest's version; the refusal case stays; the real CHANGELOG is unchanged.
+  Data design Limits: an ignored file created in a kept directory breaks the fence (fail closed).

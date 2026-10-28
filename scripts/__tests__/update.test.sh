@@ -9,7 +9,12 @@ PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
 export HOME=$T/home
 PL=$T/plugin PROJ=$T/proj
-mkdir -p "$PL/scripts" "$HOME" && ln -s "$REAL/.claude-plugin" "$REAL/CHANGELOG.md" "$PL/"
+mkdir -p "$PL/scripts" "$HOME" && ln -s "$REAL/.claude-plugin" "$PL/"
+# The notes are a fixture with a section for the manifest's version: these cases test setup under the update, not whether
+# this version's release notes are written yet (main's decision d-20261028-plugin-update-test).
+V=$(jq -r .version "$REAL/.claude-plugin/plugin.json")
+NOTES=$(printf '# Changelog\n\n## %s -- 2026-10-02\n\n### Setup\n\n- Fine.\n' "$V")
+printf '%s\n' "$NOTES" > "$PL/CHANGELOG.md"
 for f in "$REAL"/scripts/*; do case ${f##*/} in setup.sh|doctor.sh) ;; *) ln -s "$f" "$PL/scripts/"; esac; done
 cat > "$PL/scripts/setup.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -80,7 +85,6 @@ create: lock free" "$(cat "$HOME/log")"
 check "and says so, then done" '1:1' "$(grep -c "^Relay: opened Kit's pane (term_relay)\.$" <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT")"
 # The plugin updates from the marketplace's main branch, not from releases: notes the style guard refuses are shown
 # with the refusal and the update goes on, while a version with no section at all still stops it before any write.
-V=$(jq -r .version "$REAL/.claude-plugin/plugin.json")
 rm "$PL/CHANGELOG.md"; printf '# Changelog\n\n## %s -- 2026-10-02\n\n### Joining a room\n\n#### Odd\n\n- Fine.\n' "$V" > "$PL/CHANGELOG.md"
 : > "$HOME/log"; OUT=$(upd)
 check "a version whose notes the guard refuses still updates, and the refusal is shown" "1:1:1" \
@@ -89,7 +93,7 @@ printf '# Changelog\n\n## 0.0.1 -- 2026-10-01\n\n### Start\n\n- Hello.\n' > "$PL
 BEFORE=$(cksum < "$HOME/.commandeck/install/$SLUG.json"); : > "$HOME/log"; OUT=$(upd); RC=$?
 check "a version with no CHANGELOG section still stops the update, as it does today" "1:1:0:0:same" \
   "$RC:$(grep -c "^release-notes: .*has no section for version $V" <<<"$OUT"):$(grep -c '^doctor: ok$' <<<"$OUT"):$(grep -c '^update: done$' <<<"$OUT"):$([ "$BEFORE" = "$(cksum < "$HOME/.commandeck/install/$SLUG.json")" ] && echo same || echo changed)"
-rm "$PL/CHANGELOG.md"; ln -s "$REAL/CHANGELOG.md" "$PL/"
+printf '%s\n' "$NOTES" > "$PL/CHANGELOG.md"
 echo 'echo "doctor: broken"; exit 1' > "$PL/scripts/doctor.sh"
 : > "$HOME/log"; OUT=$(upd)
 check "an update that goes back opens no pane" 0 "$(grep -c create "$HOME/log")"

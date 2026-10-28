@@ -116,6 +116,16 @@ FAILOUT=$(jq -cn --argjson i "$GP_OPUS" '{tool_name:"Agent", tool_input:$i}' | C
 check "an unreadable routing file changes nothing and is reported" "1:1:rc=0" \
   "$(head -n1 <<<"$FAILOUT" | jq -e '.systemMessage | contains("could not run")' >/dev/null && echo 1 || echo 0):$(head -n1 <<<"$FAILOUT" | jq -e '.hookSpecificOutput.updatedInput == null' >/dev/null && echo 1 || echo 0):$(tail -n1 <<<"$FAILOUT")"
 
+# Issue 424: a Fast-lane or Research-lane pane sets no seat variable, so each helper it names a Sonnet or Haiku for
+# runs as named, and nothing is denied (its settings no longer deny Agent; worktree-setup.test.sh pins that half).
+lane_ok=0
+for t in general-purpose Explore; do for m in sonnet haiku; do
+  o=$(jq -cn --arg t "$t" --arg m "$m" '{tool_name:"Agent", tool_input:{subagent_type:$t, model:$m, description:"x", prompt:"y"}}' \
+    | env -u COMMANDECK_BUILDER -u COMMANDECK_SEAT bash "$HOOK" 2>/dev/null) || o="hook exited $?"
+  { [ -z "$o" ] || jq -e '.hookSpecificOutput.permissionDecision != "deny" and (.hookSpecificOutput.updatedInput // null) == null' <<<"$o" >/dev/null 2>&1; } && lane_ok=$((lane_ok+1))
+done; done
+check "a lane's named Sonnet or Haiku helper runs as named" 4 "$lane_ok"
+
 # The nudge: an untyped helper would run silently on Opus; it is told to name a type, and still runs.
 note() { jq -cn --argjson i "$1" '{tool_name:"Agent", tool_input:$i}' | bash "$HOOK" 2>/dev/null | jq -sr '.[0].hookSpecificOutput.additionalContext // "none"' | grep -c 'Name a subagent type: Explore (runs as Haiku)'; }
 check "an untyped call gets the type nudge, and is allowed as Opus" "1:1" "$(note '{"description":"x","prompt":"y"}'):$(rewritten Agent '{"description":"x","prompt":"y"}' opus)"

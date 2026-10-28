@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { closesOf, newestAttempt, paneLines, parseMergeLog, parseSnapshot, parseTestLive, seatFromGit, seenOf, todayUsd, toasts } from './units-sources'
+import { closesOf, newestAttempt, paneLines, parseMergeLog, parseSnapshot, parseTestLive, seatFromGit, seenOf, summaryLine, todaySplit, todayUsd, toasts } from './units-sources'
 import type { Seen } from './units-sources'
 
 // The parsers read whole files and hold no state: whatever a log looks like at a poll, the counts come from that text
@@ -13,6 +13,12 @@ test('a half-written last line is dropped', () => {
   expect(m.done).toBe(1)
   expect(m.failed).toBe(0)
   expect(parseMergeLog('STEP 3 rec').step).toBe(null)
+})
+
+// Issue 422: run-shell-tests.sh --skip-passed prints a reused result in its own line grammar, with a 0s field.
+test('a result reused at the same tree counts as a finished file', () => {
+  const m = parseMergeLog(`${STEP2}-- ok   a.test.sh 0s (passed at this tree in an earlier run)\n`)
+  expect([m.done, m.failed]).toEqual([1, 0])
 })
 
 test('a total and first failure survive 17,000 bytes of other output', () => {
@@ -83,6 +89,15 @@ test('a snapshot parses its units and red marks; junk gives a note', () => {
   expect(parseSnapshot('window.DASH = {nope', 0, 'p').note).toBe('units: snapshot unreadable')
 })
 
+// Issue 420: dashboard.sh gives a standing folder the stage of its lowercased name; the lanes are not units.
+test('the standing lanes are never units: BUILDING 1, neither lane listed', () => {
+  const snap = parseSnapshot(dash({ inFlight: [{ unit: 'u', stage: 'building' }, { unit: 'Fast-lane', stage: 'fast-lane' }, { unit: 'Research-lane', stage: 'research-lane' }] }), NOW, 'p')
+  expect(snap.rows.map(r => r.unit)).toEqual(['u'])
+  const lines = paneLines({ now: NOW, snap, merges: [], tests: [], notes: { merges: [], tests: [] } })
+  expect(lines.some(l => /^BUILDING +1$/.test(l))).toBe(true)
+  expect(lines.some(l => /lane/i.test(l))).toBe(false)
+})
+
 test("a plugin snapshot's project units, merge times and costs parse", () => {
   const text = 'window.DASH={"updatedAt":"2026-10-25T20:00:00Z","home":"p","projects":{"p":{"path":"/repo","units":{"inFlight":[{"unit":"u","stage":"building"}],"mergedSincePush":[],"finishedBuilds":[{"unit":"v","how":"merged","at":"2026-10-25T19:00:00Z","sha":"abc","cost":null}]}}}};'
   const s = parseSnapshot(text, Date.UTC(2026, 9, 25, 20, 1), 'p')
@@ -118,6 +133,47 @@ test("a push keeps today's merged builds and their spend", () => {
     return `${todayUsd(s)} ${paneLines(s).some(l => /^MERGED TODAY +1/.test(l))}`
   })
   expect(seen).toEqual(['12 true', '12 true'])
+})
+
+// Issue 421: the total is the dashboard's Cost today for the project, split by the folder each request ran in. A
+// merged unit's lifetime cost (99 here) is not today's spend.
+const dayOf = (today: object | null) => {
+  const done = { unit: 'merged-unit', how: 'merged', at: '2026-10-25T14:00:00Z', cost: { total: { usd: 99 } } }
+  const snap = parseSnapshot(dash({ inFlight: [{ unit: 'live-unit', stage: 'building', builder: { cost: { stages: [{ usd: 40 }] } } }], finishedBuilds: [done] }, today ? { limit: { today: { p: today } } } : {}), NOW, 'p')
+  return { now: NOW, snap, merges: [], tests: [], notes: { merges: [], tests: [] } }
+}
+const byFolder = { 'merged-unit': 10, 'live-unit': 5, ':main': 8, 'Fast-lane': 4, ':other': 3 }
+// The pane's money format; built here so no spend figure is written out in this public file (ci/leak-test.sh).
+const d = (n: number) => '$' + n.toFixed(2)
+
+test("today's total equals the dashboard's and splits by folder", () => {
+  const s = dayOf({ spentUsd: 30, complete: true, byFolder })
+  expect(todayUsd(s)).toBe(30)
+  const parts = todaySplit(s)
+  expect(parts.map(([, n]) => n)).toEqual([10, 5, 8, 4, 3])
+  expect(parts.reduce((n, [, x]) => n + x, 0)).toBe(30)
+  const lines = paneLines(s, 100)
+  expect(lines[0]).toMatch(/^UNITS +today \$30\.00$/)
+  expect(lines[1]).toBe(`  merged ${d(10)} · in flight ${d(5)} · main ${d(8)} · lanes ${d(4)} · other ${d(3)}`)
+  // A part the folders do not name is still in the total: the rest is not attributed.
+  expect(todaySplit(dayOf({ spentUsd: 30, complete: true, byFolder: { 'live-unit': 5 } }))).toEqual([['in flight', 5], ['other', 25]])
+})
+
+test('a partial day reads at least', () => {
+  const s = dayOf({ spentUsd: 30, complete: false, byFolder })
+  expect(paneLines(s, 100)[0]).toMatch(/^UNITS +today at least \$30\.00$/)
+  expect(summaryLine(s)).toBe(`1 building · today at least ${d(30)}`)
+})
+
+test('with no dashboard day the total is the units\' own sum, marked units only', () => {
+  // The old sum: the in-flight unit's 40 plus the merged unit's lifetime 99.
+  const s = dayOf(null)
+  expect(todayUsd(s)).toBe(139)
+  expect(todaySplit(s)).toEqual([])
+  const [head, mark] = paneLines(s, 100)
+  expect(head).toMatch(/^UNITS +today /)
+  expect(head.endsWith(` ${d(139)}`)).toBe(true)
+  expect(mark).toBe('  units only')
 })
 
 // r2 finding: dashboard.sh writes a unit's cost to builder.cost once a Builder runs, and to plan.cost before that.

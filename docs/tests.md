@@ -15,6 +15,22 @@ own-lane are skipped by the ordinary run and have a separate mode:
 bash scripts/run-shell-tests.sh --own-lane
 ```
 
+A retry on the same tree can rerun only what did not pass:
+
+```bash
+bash scripts/run-shell-tests.sh --skip-passed
+```
+
+It skips a file whose last result in this checkout was a pass at the same tree
+only (HEAD plus every uncommitted and untracked file), and prints that file's
+result as passed. A result is recorded only if no file of the tree changed
+while that file ran, even an edit undone before it ended. Files run on the PC are never skipped. A run with a
+test-case selector set (any `*_TEST_CASE` variable) records and reuses nothing.
+
+A run handed to the PC keeps going there when its connection drops. The
+failure message names its id; collect the result once with
+`bash scripts/peer-offload.sh --fetch <id>`.
+
 For a focused check, compare to `main` from a branch:
 
 ```bash

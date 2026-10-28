@@ -172,9 +172,13 @@ PLAN_WT=false
 # which would wake main every lane turn; and, for the Research lane, high effort.
 SEAT=$(basename "$(cd "$WT" && git rev-parse --show-toplevel)") LANE=false
 ! pp_standing_wt "$SEAT" || LANE=true
+# Issue 424: the two lanes may start Sonnet and Haiku helpers, so Agent comes off their deny list. Spelled here, not
+# read from pp_standing_wt, which also holds the relay.
+AGENTS=false
+case $SEAT in Fast-lane|Research-lane) AGENTS=true ;; esac
 TTL=$(PP_MAIN=$PROJECT pp_option workerPromptCacheTtl)
 [ "$LANE" = false ] || TTL=1h
-jq --argjson plan "$PLAN_WT" --argjson lane "$LANE" --arg seat "$SEAT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent-model-guard.sh\"" --arg ttl "$TTL" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
+jq --argjson plan "$PLAN_WT" --argjson agents "$AGENTS" --argjson lane "$LANE" --arg seat "$SEAT" --arg mg "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/agent-model-guard.sh\"" --arg ttl "$TTL" --arg w "$WINDOW" --arg notify "\"$HOOKS/lib/run-hook.sh\" \"$HOOKS/claude-worker-notify.sh\"" --arg ex "$EXCLUDE" --arg h "$HOOKS" --argjson deny "$DENY" --argjson allow "$ALLOW" --argjson poff "$PLUGINS_OFF" --argjson mdeny "$MCP_DENY" '
   # A hook this script registered from another plugin path, or by its own path with no launcher (before an update).
   def stale: (.command // "") | test("/hooks/(claude-worker-notify|builder-event-log|builder-search-guard|agent-model-guard)[.]sh\"$") and (startswith("\"" + $h + "/lib/run-hook.sh\" ") | not);
   .env = ((.env // {}) + {CLAUDE_CODE_AUTO_COMPACT_WINDOW: $w})
@@ -183,7 +187,7 @@ jq --argjson plan "$PLAN_WT" --argjson lane "$LANE" --arg seat "$SEAT" --arg mg 
   | .enabledPlugins = ((.enabledPlugins // {}) + {"memoir@memoir": false} + $poff | del(.["typescript-lsp@claude-plugins-official"]))
   | .disableClaudeAiConnectors = true
   | .deniedMcpServers = ((.deniedMcpServers // []) + $mdeny | unique)
-  | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique | if $plan then . - ["Agent"] else . end), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
+  | .permissions = ((.permissions // {}) + {deny: ((.permissions.deny // []) - ["Workflow"] + $deny | unique | if $plan or $agents then . - ["Agent"] else . end), allow: ((.permissions.allow // []) + $allow | unique), defaultMode: "auto"})
   | .claudeMdExcludes = ((.claudeMdExcludes // []) + [$ex] | unique)
   | (if $lane then . else .hooks = ((.hooks // {}) | .Stop = (((.Stop // []) + [{hooks: [{type: "command", command: $notify}]}]) | unique)) end)
   | (if $seat == "Research-lane" then .effortLevel = "high" else . end)

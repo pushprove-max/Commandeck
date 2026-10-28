@@ -442,6 +442,21 @@ def under(folder, roots):
     return isinstance(folder, str) and any(folder == r or folder.startswith(r + "/") for r in roots)
 
 
+def folder_key(folder, roots):
+    """The day split's key for a request's recorded folder (#421), by path strings alone, so a removed worktree or
+    closing copy keeps its name. `roots` is a project's [main checkout, worktree folder, closing-copy folder]: under a
+    closing copy or a worktree the key is the first segment after it (a plan worktree's `-plan` taken off, so a unit's
+    worktree, plan worktree and closing copy are one key); under the main checkout `:main`; anything else `:other`."""
+    path, ws, cc = (list(roots) + ["", "", ""])[:3]
+    for root, plan in ((cc, False), (ws, True)):
+        r = root.rstrip("/") if isinstance(root, str) else ""
+        if r and isinstance(folder, str) and folder.startswith(r + "/"):
+            unit = folder[len(r) + 1:].split("/")[0]
+            if unit:
+                return unit[:-len("-plan")] if plan and unit.endswith("-plan") else unit
+    return ":main" if under(folder, [path]) else ":other"
+
+
 def gone(path):
     """Whether a folder is not there. One whose parent cannot be searched is there: what it holds is unknown."""
     try:
@@ -1254,12 +1269,22 @@ def build(status, usage_path, now, cache_dir, projects, sessions=None, day_proje
     # A session is one project's: where one checkout sits inside another, the innermost root that holds it wins.
     roots = sorted(((r, name) for name, rs in (day_projects or {}).items() for r in rs if isinstance(r, str)), key=lambda t: -len(t[0].rstrip("/")))
     owner = lambda folder: next((name for r, name in roots if under(folder, [r])), None)
-    own = lambda rows, name: None if rows is None else [r for r, folder, _ in rows if owner(folder) == name]
+    own_where = lambda rows, name: None if rows is None else [(r, folder) for r, folder, _ in rows if owner(folder) == name]
+    own = lambda rows, name: None if rows is None else [r for r, _ in own_where(rows, name)]
     out["today"] = {}
     for name in day_projects or {}:
         t = api_week(None, own(day, name), now, own(codex_day, name), bool(lost), midnight)
         out["today"][name] = {k: t[k] for k in ("windowStart", "spentUsd", "claudeUsd", "codexUsd", "estimatedUsd", "tierUsd", "requests",
                                                 "unpricedRequests", "unpricedModels", "complete")}
+        # Issue 421: the same rows split by where they were spent, each group priced by the same sum.
+        claude, codex_rows = own_where(day, name), own_where(codex_day, name)
+        groups = {}
+        for i, rows in enumerate((claude, codex_rows)):
+            for r, folder in rows or []:
+                groups.setdefault(folder_key(folder, day_projects[name]), ([], []))[i].append(r)
+        out["today"][name]["byFolder"] = {
+            k: api_week(None, None if claude is None else c, now, None if codex_rows is None else x, bool(lost), midnight)["spentUsd"] or 0
+            for k, (c, x) in groups.items()}
     json.dump(out, sys.stdout)
     return 0
 

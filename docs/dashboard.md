@@ -183,6 +183,13 @@ band above the prompt, a side pane named `Units` and the pinned status line. It
 also toasts a verdict that changed and a unit that merged. `/units` prints the
 same table in the chat. The mod only reads. It writes no file.
 
+The header's `today` total is the dashboard's Cost today for the project, since
+local midnight (`at least` when part of it is not measured). The line under it
+splits that total five ways: merged units, units in flight, main, the standing
+panes and lanes, and the rest not attributed. A pane run in the main checkout
+counts under main. A snapshot without the day's cost shows the units' own sum,
+marked `units only`.
+
 It runs in a project that setup has configured (the main checkout has
 `.claude/commandeck.json`) and nowhere else, so other projects on the profile
 are not changed. It loads with the rest of the plugin: there is nothing to add
@@ -199,7 +206,8 @@ changes one for the current session. The doctor shows the three values.
 ### What it reads
 
 - The dashboard snapshot, `~/.commandeck/dashboard/data.js`: this project's
-  units, the verdicts, the cost and the units merged since the last push. The
+  units, the verdicts, the cost, the project's Cost today split by folder
+  (`limit.today`) and the units merged since the last push. The
   dashboard job writes it every 60 seconds. If it is missing, run
   `bash "$PLUGIN/scripts/dashboard.sh" --install`.
 - A merge: `merge-unit-local.state` in main's git folder (written while a merge

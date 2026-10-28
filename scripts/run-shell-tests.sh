@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-shell-tests.sh [--own-lane] [--list | --changed [<base>] [--callers] | <file>...] -- run every shell
+# run-shell-tests.sh [--own-lane] [--skip-passed] [--list | --changed [<base>] [--callers] | <file>...] -- run every shell
 # self-test under hooks/__tests__ and scripts/__tests__ (or only the named files), one per line in
 # sorted order, and exit non-zero if any failed. Each file's result is also
 # printed the moment it finishes, as a `-- ` line ahead of the sorted report.
@@ -29,6 +29,12 @@
 # the merge check: the whole suite took 12 minutes a merge (ruling 2026-10-17).
 # A test named after no script it tests carries `# covers: <path>...` in the
 # same first five lines, and --changed runs it when any of those paths changed.
+#
+# `--skip-passed` (issue 422) does not run a local file whose last result in <git dir>/commandeck-test-runs.tsv is ok
+# at exactly this tree (HEAD plus every uncommitted and untracked file); it prints that file's result line with 0s and
+# counts it as passed. A pass is recorded or reused only if no file of the tree changed since the run hashed it, an
+# edit made and undone included. Files run on the PC are never skipped. A run with any *_TEST_CASE selector set records and
+# reuses nothing.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
@@ -66,8 +72,68 @@ for v in $(compgen -e COMMANDECK_); do
 done
 TMPDIR=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
 
-ONLY_OWN_LANE=0
-[ "${1:-}" = --own-lane ] && { ONLY_OWN_LANE=1; shift; }
+ONLY_OWN_LANE=0 SKIP_PASSED=0
+while :; do
+  case ${1:-} in
+    --own-lane) ONLY_OWN_LANE=1; shift ;;
+    --skip-passed) SKIP_PASSED=1; shift ;;
+    *) break ;;
+  esac
+done
+# A partial-scope run, one with a test-case selector set (even to empty), neither records nor reuses a pass: a pass of
+# one case says nothing about the whole file (Decision 12). --changed, --own-lane and named files all choose whole files.
+PARTIAL=
+for v in $(compgen -e); do case $v in *_TEST_CASE) PARTIAL=$v; break ;; esac; done
+# TREE: the git tree of the working copy, untracked files included, hashed in a copy of the index; `-` when it cannot be.
+# It is trusted only under the fence (Data design, "Fence"): this run's stamp is made, and one tick of the filesystem
+# clock waited, before the hash, so any later change to a path of the tree has a newer ctime than the stamp. ctime moves
+# on every write, create, delete, rename or revert, and no tool sets it back, so a fence that holds means the checkout
+# is still exactly TREE, an edit made and undone in between included. The tree is never hashed again.
+GD=$(git rev-parse --absolute-git-dir 2>/dev/null) || GD=
+STAMP=$([ -n "$GD" ] && mktemp "$GD/commandeck-test-stamp.XXXXXX" 2>/dev/null) || STAMP=
+trap '[ -z "$STAMP" ] || rm -f "$STAMP" "$STAMP".*' EXIT
+tick() {
+  local n
+  for ((n = 0; n < 300; n++)); do
+    touch "$STAMP.tick" && [ -n "$(find "$STAMP.tick" -newercc "$STAMP" 2>/dev/null)" ] && return 0
+    sleep 0.01
+  done
+  return 1
+}
+# keep_paths < <files> -- the fence's path list, NUL-separated: every file, every directory holding one, and the root.
+keep_paths() {
+  local f d
+  local -A dirs=([.]=1)
+  while IFS= read -r -d '' f; do
+    printf './%s\0' "$f"
+    d=$f
+    while [[ $d == */* ]]; do d=${d%/*}; [ -z "${dirs[$d]:-}" ] || break; dirs[$d]=1; done
+  done
+  for d in "${!dirs[@]}"; do printf './%s\0' "$d"; done
+}
+# fence -- 0 while no kept path has a newer ctime than the stamp; a missing stamp, a vanished path or a failed find
+# breaks it.
+fence() {
+  local out
+  [ -e "$STAMP" ] && out=$(xargs -0 sh -c 'exec find "$@" -prune -newercc "$0" -print -quit' "$STAMP" < "$STAMP.paths") && [ -z "$out" ]
+}
+TREE=-
+if [ -n "$STAMP" ] && tick; then
+  IDX=$STAMP.index
+  if cp -p "$(git rev-parse --path-format=absolute --git-path index)" "$IDX" && GIT_INDEX_FILE=$IDX git add -A >/dev/null 2>&1 \
+    && T=$(GIT_INDEX_FILE=$IDX git write-tree 2>/dev/null) && GIT_INDEX_FILE=$IDX git ls-files -z > "$STAMP.files" \
+    && keep_paths < "$STAMP.files" > "$STAMP.paths"; then TREE=$T; fi
+fi
+LEDGER=$(git rev-parse --absolute-git-dir 2>/dev/null)/commandeck-test-runs.tsv || LEDGER=
+# last_pass <rel> -- `<result>\t<tree>` of the ledger's last row for the file. A line that is not a whole row (not 4
+# fields, or a first field that is not an ISO time: cut off mid-append, or glued to the next) clears every earlier
+# pass, since the cut can fall inside a file name and name no file.
+last_pass() {
+  awk -F'\t' -v f="$1" '
+    NF != 4 || $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ { r = ""; next }
+    $2 == f { r = $3 "\t" $4 }
+    END { print r }' "$LEDGER" 2>/dev/null
+}
 
 if [ "${1:-}" = --changed ]; then
   shift; CALLERS=0 BASE=HEAD
@@ -132,12 +198,41 @@ if [ "${#RESTF[@]}" -gt 0 ]; then
   esac
 fi
 
+# --skip-passed reads TESTS as the hand-off left it, so a file the PC took is never skipped: the PC returns one exit
+# code, no per-file result, so its files have no ledger row (Decision 4). Only a file this run would launch is skipped.
+SAMEPASS=0 SAME=()
+if [ "$SKIP_PASSED" = 1 ] && [ -n "$PARTIAL" ]; then
+  echo "run-shell-tests: a test-case selector is set ($PARTIAL); --skip-passed reuses and records nothing"
+elif [ "$SKIP_PASSED" = 1 ] && [ "$TREE" != - ] && [ -n "$LEDGER" ]; then
+  for i in "${!TESTS[@]}"; do
+    t=${TESTS[$i]}
+    sed -n '1,5p' "$t" | grep -q '^# parked:' && continue
+    if sed -n '1,5p' "$t" | grep -q '^# own-lane:'; then [ "$ONLY_OWN_LANE" = 1 ] || continue
+    else [ "$ONLY_OWN_LANE" = 0 ] || continue; fi
+    phys=$(cd "$(dirname "$t")" && pwd -P)/$(basename "$t")
+    IFS=$'\t' read -r res tree < <(last_pass "${phys#"$ROOTP"/}")
+    [ "$res" = ok ] && [ "${tree:-}" = "$TREE" ] || continue
+    SAME+=("$i")
+  done
+  # Any change to the tree since the stamp, undone or not, makes every candidate stale: reuse none, and record nothing.
+  if [ "${#SAME[@]}" -gt 0 ] && ! fence; then
+    TREE=-; echo "run-shell-tests: the tree changed while checking earlier passes; nothing is reused or recorded"
+  else
+    for i in ${SAME[@]+"${SAME[@]}"}; do
+      # The runner's own result line, 0 seconds: every reader of `-- ok` lines counts it as a finished file.
+      printf -- '-- ok   %-58s %ss (passed at this tree in an earlier run)\n' "$(basename "${TESTS[$i]}")" 0
+      SAMEPASS=$((SAMEPASS + 1)); unset "TESTS[$i]"
+    done
+    TESTS=(${TESTS[@]+"${TESTS[@]}"})
+  fi
+fi
+
 RES=$(mktemp -d) || exit 2
 # The live record of this run, for the units mod (issue 349): `run <start> <jobs>`, `file <rel>` for every selected
 # file, then `start <rel> <time>` and `end <rel> <ok|FAIL|skip> <secs>` as each file launches and ends. One
 # tab-joined printf per line, so parallel files cannot interleave inside one. Gone when the run exits.
-GD=$(git rev-parse --absolute-git-dir 2>/dev/null) && mkdir -p "$GD/commandeck-test-live" 2>/dev/null && LIVE=$GD/commandeck-test-live/$$.tsv || LIVE=
-trap 'rm -rf "$RES"; [ -z "$LIVE" ] || rm -f "$LIVE"' EXIT
+[ -n "$GD" ] && mkdir -p "$GD/commandeck-test-live" 2>/dev/null && LIVE=$GD/commandeck-test-live/$$.tsv || LIVE=
+trap 'rm -rf "$RES"; [ -z "$LIVE" ] || rm -f "$LIVE"; [ -z "$STAMP" ] || rm -f "$STAMP" "$STAMP".*' EXIT
 live() { [ -z "$LIVE" ] || { local IFS=$'\t'; printf '%s\n' "$*" >> "$LIVE"; } 2>/dev/null || true; }
 # A real hook run by a test must not count as a real fire.
 export COMMANDECK_HOOK_FIRE_LOG="$RES/hook-fire-log.jsonl"
@@ -169,6 +264,13 @@ run_one() {
   echo "$rc $secs" > "$RES/$1.rc"
   line=$(status_line "$1")
   live end "${REL[$1]}" "${line%% *}" "$secs"
+  # The ledger --skip-passed reads: one row per local file, one printf each (an append under 4 KB is atomic).
+  # A row at a tree the test did not run on would let --skip-passed reuse a result of another tree; `-` is no tree.
+  # The fence holding after the file ended proves it read exactly TREE.
+  if [ -z "$PARTIAL" ] && [ -n "$LEDGER" ] && [ "$TREE" != - ]; then
+    if fence; then printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REL[$1]}" "${line%% *}" "$TREE" >> "$LEDGER" 2>/dev/null
+    else printf 'run-shell-tests: the tree changed while %s ran; its result is not recorded\n' "${REL[$1]}"; fi
+  fi
   # One printf per line: parallel files then cannot interleave inside a line.
   printf -- '-- %s\n' "$line"
 }
@@ -215,7 +317,7 @@ done
 wait
 
 # Report pass, in sorted order whatever order the tests finished in.
-PASS=0 FAIL=0 SKIP=0 FAILED=()
+PASS=$SAMEPASS FAIL=0 SKIP=0 FAILED=()
 for i in "${!TESTS[@]}"; do
   t=${TESTS[$i]}
   [ -z "${EXCL[i]:-}" ] || continue

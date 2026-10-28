@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.54.0-111111?style=flat-square" alt="Version 0.54.0">
+  <img src="https://img.shields.io/badge/version-0.55.0-111111?style=flat-square" alt="Version 0.55.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -330,7 +330,11 @@ The plugin's own tests are shell tests:
 ```bash
 bash scripts/run-shell-tests.sh            # the whole suite
 bash scripts/run-shell-tests.sh --changed  # the merge check: tests the change touches
+bash scripts/run-shell-tests.sh --skip-passed  # a retry: skips files that passed at this same tree
 ```
+
+Files run on the PC are never skipped, and a run with a test-case selector set
+records and reuses nothing.
 
 **Test hand-off to a second machine.** In a Mac linked worktree, the shell
 tests can run on another machine. Write `pc` in
@@ -345,7 +349,9 @@ their result is the run's.
 - When the peer cannot be reached, the tests run on the Mac once.
 - When the peer refuses the tree, the run fails with exit 2 and runs nothing.
 - When the connection drops after the tests started, the run fails and the
-  tests do not run again on the Mac.
+  tests do not run again on the Mac. The run keeps going on the peer; collect
+  its result once with `bash scripts/peer-offload.sh --fetch <id>`, the id the
+  failure message names.
 
 More: [docs/tests.md](docs/tests.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

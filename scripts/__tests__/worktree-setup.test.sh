@@ -248,6 +248,14 @@ notify() { jq '[.hooks.Stop[]?.hooks[]?.command | select(test("claude-worker-not
 check "a lane registers no main-waking Stop hook; an ordinary worker does" '0:0:1' "$(notify Fast-lane):$(notify Research-lane):$(notify lanep)"
 check "the Research lane runs at high effort; the Fast lane and a worker set none" '"high":null:null' \
   "$(jq -c '.effortLevel // null' "$T/wt/Research-lane/.claude/settings.local.json"):$(jq -c '.effortLevel // null' "$T/wt/Fast-lane/.claude/settings.local.json"):$(jq -c '.effortLevel // null' "$T/wt/lanep/.claude/settings.local.json")"
+# Issue 424: the two lanes may start Sonnet and Haiku helpers, so their settings drop the Agent deny; by exact name,
+# so a look-alike folder or a new standing seat keeps it.
+agents() { jq '[.permissions.deny[]? | select(. == "Agent")] | length' "$T/wt/$1/.claude/settings.local.json"; }
+check "a lane may spawn helpers: its settings do not deny Agent; an ordinary worker's do" '0:0:1' "$(agents Fast-lane):$(agents Research-lane):$(agents lanep)"
+for w in Fast-lane2 Research; do git -C "$P" worktree add -q "$T/wt/$w"; run "$T/wt/$w" >/dev/null 2>&1; done
+check "the helper allowance is the two lanes only" '1:1:1' "$(agents Fast-lane2):$(agents Research):$(agents lanep)"
+echo '{"permissions":{"deny":["Agent"]}}' > "$T/wt/Fast-lane/.claude/settings.local.json"; run "$T/wt/Fast-lane" >/dev/null 2>&1
+check "a rerun takes an old Agent deny off a lane" 0 "$(agents Fast-lane)"
 # The drift check: every site that names the standing folders names the same three as pp_standing_wt. A shell site
 # must call the function; a jq site spells the set in an alternation, which must equal the function's.
 SET=$(bash -c '. "$0/hooks/lib/project.sh"; for n in Chief-of-Staff Fast-lane Research-lane Builder-probe main Fast-lane2 Research Chief; do pp_standing_wt "$n" && echo "$n"; done | sort | paste -sd, -' "$REAL")
@@ -260,6 +268,9 @@ for s in scripts/ruling-log-archive.sh scripts/cos-check.sh; do
   got=$(grep -oE '\(Chief-of-Staff(\|[A-Za-z-]+)+\)' "$REAL/$s" | tr -d '()' | tr '|' '\n' | sort | paste -sd, -)
   [ "$got" = "$SET" ] || DRIFT="$DRIFT $s($got)"
 done
+# Issue 420: the units view filters the folders by the stage dashboard.sh writes, the folder name lowercased.
+got=$(sed -n "s/^export const NOT_UNITS = new Set(\[\(.*\)\])$/\1/p" "$REAL/hooks/units-sources.ts" | tr -d "' " | tr ',' '\n' | sort | paste -sd, -)
+[ "$got" = "$(tr '[:upper:]' '[:lower:]' <<<"$SET")" ] || DRIFT="$DRIFT hooks/units-sources.ts($got)"
 check "every standing-worktree list names the same three folders" "" "$DRIFT"
 
 echo "$PASS passed, $FAIL failed"

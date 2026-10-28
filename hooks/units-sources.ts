@@ -97,10 +97,15 @@ export type SeatState = 'done' | 'running' | null
 export type Snap = {
   note: string | null; staleMin: number | null; rows: Row[]; merged: string[]; mergedAt: { unit: string; at: number }[]; chain: null
   finishedUsd: Record<string, number>
+  // The dashboard's Cost today for this project (`limit.today[<project>]`), split by folder; null when it has none.
+  day: Day | null
 }
+// `merged` holds the units of finishedBuilds and mergedSincePush, the folders the split counts as merged.
+export type Day = { total: number; byFolder: Record<string, number>; complete: boolean; merged: string[] }
 
-const NOT_UNITS = new Set(['chief-of-staff', 'research', 'walkthroughs'])
-export const emptySnap = (note: string | null): Snap => ({ note, staleMin: null, rows: [], merged: [], mergedAt: [], chain: null, finishedUsd: {} })
+// pp_standing_wt's folders, lowercased as dashboard.sh writes their stage: standing panes, never units.
+export const NOT_UNITS = new Set(['chief-of-staff', 'fast-lane', 'research-lane'])
+export const emptySnap = (note: string | null): Snap => ({ note, staleMin: null, rows: [], merged: [], mergedAt: [], chain: null, finishedUsd: {}, day: null })
 const STAGE_COST: Record<string, keyof Costs> = { planning: 'plan', building: 'build', review: 'review', fixing: 'fix' }
 const costsOf = (stages: any[]): Costs => {
   const c: Costs = { plan: 0, build: 0, review: 0, fix: 0, total: 0 }
@@ -149,6 +154,13 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
   // Every merge this checkout made is in finishedBuilds; mergedSincePush drops one once it is pushed, so a push would
   // take today's merges, and their spend, off the pane.
   const merged = (u.finishedBuilds ?? []).map((m: any) => ({ unit: String(m.unit), at: Date.parse(m.at ?? '') }))
+  const d = j.limit?.today?.[project]
+  const day: Day | null = d && Number.isFinite(d.spentUsd) ? {
+    total: Number(d.spentUsd),
+    byFolder: Object.fromEntries(Object.entries(d.byFolder && typeof d.byFolder === 'object' ? d.byFolder : {}).filter(([, n]) => Number.isFinite(n)) as [string, number][]),
+    complete: d.complete === true,
+    merged: [...merged.map((m: { unit: string }) => m.unit), ...(u.mergedSincePush ?? []).map((m: any) => String(m?.unit))],
+  } : null
   return {
     note: null,
     staleMin: Number.isFinite(min) && min > 5 ? min : null,
@@ -157,6 +169,7 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
     mergedAt: merged.filter((m: { at: number }) => Number.isFinite(m.at)),
     chain: null,
     finishedUsd: Object.fromEntries((u.finishedBuilds ?? []).filter((f: any) => Number.isFinite(f?.cost?.total?.usd)).map((f: any) => [String(f.unit), Number(f.cost.total.usd)])),
+    day,
   }
 }
 
@@ -246,8 +259,31 @@ const testModel = (v: TestView, w: number): Line =>
 
 const mergedToday = (s: State) => s.snap.mergedAt.filter(m => new Date(m.at).toDateString() === new Date(s.now).toDateString()).sort((a, b) => b.at - a.at)
 
-// Today's spend the board can see: units merged today plus every unit still in flight.
-export const todayUsd = (s: State) => mergedToday(s).reduce((n, m) => n + (s.snap.finishedUsd[m.unit] ?? 0), 0) + s.snap.rows.reduce((n, r) => n + r.costs.total, 0)
+// Issue 421: today's spend is the dashboard's Cost today for the project. A snapshot without it falls back to what
+// the board can see, units merged today plus every unit still in flight, which the header marks `units only`.
+export const todayUsd = (s: State) => s.snap.day ? s.snap.day.total
+  : mergedToday(s).reduce((n, m) => n + (s.snap.finishedUsd[m.unit] ?? 0), 0) + s.snap.rows.reduce((n, r) => n + r.costs.total, 0)
+const todayText = (s: State) => `today ${s.snap.day && !s.snap.day.complete ? 'at least ' : ''}${usd(todayUsd(s))}`
+
+// The day split by where it was spent: merged units, units in flight, main, the standing panes and lanes, and the
+// rest not attributed (`:other`, and any folder none of these names), so the parts always sum to the total.
+export const todaySplit = (s: State): [string, number][] => {
+  const d = s.snap.day
+  if (!d) return []
+  const merged = new Set(d.merged)
+  const live = new Set(s.snap.rows.flatMap(r => [r.unit, `${r.unit}-plan`]))
+  const kinds = [
+    ['merged', (k: string) => merged.has(k)], ['in flight', (k: string) => live.has(k)], ['main', (k: string) => k === ':main'],
+    ['lanes', (k: string) => NOT_UNITS.has(k.toLowerCase())],
+  ] as const
+  const sums = kinds.map(([name]): [string, number] => [name, 0])
+  let named = 0
+  for (const [k, n] of Object.entries(d.byFolder)) {
+    const i = kinds.findIndex(([, is]) => is(k))
+    if (i >= 0) { sums[i][1] += n; named += n }
+  }
+  return [...sums, ['other', d.total - named] as [string, number]].filter(([, n]) => Math.abs(n) >= 0.005)
+}
 
 // The pane and /units: a header, then sections drawn only when they hold something.
 export const paneModel = (s: State, w: number): Line[] => {
@@ -255,7 +291,10 @@ export const paneModel = (s: State, w: number): Line[] => {
   const merging = new Set(s.merges.filter(v => v.status === 'running').map(v => v.unit))
   const head = (title: string, right: Seg | null) => { if (out.length) out.push([]); out.push(spread([{ t: title, c: C.head, b: true }], right, w)) }
   const total = todayUsd(s)
-  out.push(spread([{ t: 'UNITS', c: C.head, b: true }], total > 0 ? { t: `today ${usd(total)}`, b: true } : null, w))
+  out.push(spread([{ t: 'UNITS', c: C.head, b: true }], total > 0 ? { t: todayText(s), b: true } : null, w))
+  const split = todaySplit(s)
+  if (split.length) out.push([{ t: `  ${split.map(([k, n]) => `${k} ${usd(n)}`).join(' · ')}`, d: true }])
+  else if (total > 0 && !s.snap.day) out.push([{ t: '  units only', d: true }])
   if (s.snap.rows.length) { head(`BUILDING  ${s.snap.rows.length}`, null); for (const r of s.snap.rows) out.push(...unitModel(r, s, w, merging.has(r.unit))) }
   if (s.merges.length) { head(`MERGING  ${s.merges.length}`, null); out.push(...s.merges.map(v => mergeModel(v, w))) }
   if (s.tests.length) { head('TESTS', null); out.push(...s.tests.map(v => testModel(v, w))) }
@@ -309,7 +348,7 @@ export const summaryLine = (s: State): string | undefined => {
     s.merges.length ? `${s.merges.length} merging` : '',
     s.tests.length ? `${s.tests.length} testing` : '',
     s.snap.note ? 'dashboard unreadable' : '',
-    total > 0 ? `today ${usd(total)}` : '',
+    total > 0 ? todayText(s) : '',
   ]
   return parts.filter(Boolean).join(' · ') || undefined
 }

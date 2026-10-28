@@ -122,6 +122,13 @@ test('no live units: no band row, no pane, no status line', quiet, async ($, on)
   expect(w.opened).toEqual([])
 })
 
+// Issue 420: the two standing lanes beside the relay are no live units either.
+test('only lanes and the relay: no live units', quiet, async ($, on) => {
+  world(on, 'main', { [DATA]: snap([unit('Chief-of-Staff', { stage: 'chief-of-staff' }, null), unit('Fast-lane', { stage: 'fast-lane' }, null), unit('Research-lane', { stage: 'research-lane' }, null)]) })
+  await start($, 'main')
+  expect(await units($)).toBe('No live units.')
+})
+
 // r1 finding: the pane opened from config alone and stayed open once the last unit finished.
 test('the pane opens when a unit goes live and closes when the last one finishes', async ($, on) => {
   const w = world(on, 'main', { [DATA]: snap([]) })
