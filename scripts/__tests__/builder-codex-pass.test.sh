@@ -316,5 +316,12 @@ check "a pass over the new-test cap refuses with the count (issue 433)" "2 1 1 0
   "$(upass nt 1 adversarial) $(grep -c 'the change adds 2 new tests, over the new-test cap of 1 (reviewLoop.newTestCap)' "$TMP/err") $(grep -c 'first new; second new' "$TMP/err") $(ls "$CODEX_HOME"/seen-thr-nt-1-* 2>/dev/null | wc -l | tr -d ' ')"
 jq 'del(.reviewLoop.newTestCap)' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
 
+# Issue 443: a plan that says `Break: none` has no break; read as one, it asked for a run nobody can record.
+printf 'Plan: .claude/plans/g.md\n' > "$GW/.claude/briefs/g.md"; : > "$GW/.claude/briefs/g-evidence.md"
+printf '# Plan\n\nBreak: none\nBreak: None -- nothing to break\n' > "$GW/.claude/plans/g.md"; NONE=$(gate)
+printf '# Plan\n\nBreak: none\nBreak: t/z.test.sh -- the zed check -- z.sh the rule\n' > "$GW/.claude/plans/g.md"; REAL1=$(gate)
+check "pass 1 takes a Break: none line as no break (issue 443)" "rc=0 rc=2 1" \
+  "$NONE $(tail -1 <<<"$REAL1") $(grep -c 't/z.test.sh -- the zed check' <<<"$REAL1")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

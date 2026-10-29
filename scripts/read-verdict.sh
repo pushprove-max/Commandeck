@@ -375,9 +375,14 @@ for e in rest[argc:]:
         break
     sys.stdout.buffer.write(e + b"\0")' "$1" "$([ -n "${READ_VERDICT_PROCARGS:-}" ] || sysctl -n kern.argmax)"
 }
+# Every claude process: the native install runs its binary from versions/<version>, so the kernel's process name (all
+# pgrep -x reads) is the version for a pane Orca started, and only argv[0] says claude (issue 445).
+claude_pids() {
+  { pgrep -x claude; ps -A -o pid=,args= | awk '{ a = $2; sub(/.*\//, "", a) } a == "claude" { print $1 }'; } 2>/dev/null | sort -un
+}
 pane_sessions() { # handle
   local p penv
-  for p in $(pgrep -x claude 2>/dev/null); do
+  for p in $(claude_pids); do
     penv=$(pid_env "$p" | tr '\0' '\n')
     grep -qxF "ORCA_TERMINAL_HANDLE=$1" <<<"$penv" || continue
     claude_ancestor "$p" && continue

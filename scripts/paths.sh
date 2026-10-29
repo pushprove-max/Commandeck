@@ -10,7 +10,7 @@
 # machine. A second formula anywhere forks scratch state.
 # Overrides: COMMANDECK_MAIN and COMMANDECK_WORKSPACES, read by project-main.sh
 # alone under the rule written there (inside a linked worktree git decides);
-# COMMANDECK_SCRATCH and COMMANDECK_CM (the code-graph CLI), as given. The PP_* names are outputs only, exported so a child
+# COMMANDECK_SCRATCH, as given. The PP_* names are outputs only, exported so a child
 # script or an embedded Python ledger reads the same values.
 #
 # The slug transform (every non-alphanumeric byte to '-') is Claude Code's own
@@ -83,15 +83,6 @@ PP_BUILDER_RULES_OFF="orchestration agents planning adversarial-reviews worktree
 # Issue 397: the standing helper line a plan-author prompt and a fix-round hand-off carry; the Builder brief template holds it word for word.
 PP_HELPER_LINE="Use helper subagents wherever the work allows: general-purpose (runs on the configured Sonnet model) for independent build cuts, research and test writing, Explore (runs on the configured Haiku model) for search and proof; this pane keeps only cut ordering, cross-cut contracts and final integration. For a search, a trace or a second opinion you may also ask Codex, read-only: bash <plugin scripts>/codex-ask.sh '<question>' (it cannot edit; writing stays with Sonnet helpers)."
 
-# The code-graph project for the primary checkout, chosen by root path from
-# list_projects. Each machine indexes the checkout under its own home, so the
-# name differs per machine; none is guessed, and an unindexed checkout is an
-# error naming what is indexed, never the other machine's project. The last
-# name this machine resolved is kept in $PP_SCRATCH/graph-project and answers
-# only when no list came back at all; a list without the checkout
-# still errors and deletes it.
-PP_CM=${COMMANDECK_CM:-$HOME/.local/bin/codebase-memory-mcp}
-PP_CM_TIMEOUT=${COMMANDECK_CM_TIMEOUT:-30}
 # A part brief's `Review base:` sha is rewritten by any rebase, and
 # review-round.sh refuses a base that is not an ancestor of HEAD. Count before
 # the rebase, restore after: the base keeps its distance below the tip.
@@ -104,38 +95,6 @@ pp_review_base_count() {  # <worktree> <brief file>; prints nothing without a ba
 pp_review_base_restore() {  # <worktree> <brief file> <count from pp_review_base_count>
   [ -n "${3:-}" ] || return 0
   sed -i.bak "s/^Review base: .*/Review base: \`$(git -C "$1" rev-parse --short=8 "HEAD~$3")\`/" "$2" && rm -f "$2.bak"
-}
-
-# Bounded, three attempts 3 s then 6 s apart: a CBM daemon that cannot start
-# under load hung every dispatch that asked it here with no end (2026-09-28),
-# and under load it also answered empty twice running.
-pp_graph_project() {
-  local list i name rc cache=$PP_SCRATCH/graph-project
-  for i in 1 2 3; do
-    list=$(timeout "$PP_CM_TIMEOUT" "$PP_CM" cli --json list_projects '{}' 2>/dev/null) && [ -n "$list" ] && break
-    [ "$i" = 3 ] || sleep $((i * 3))
-  done
-  name=$(printf '%s' "$list" | PP_MAIN=$PP_MAIN PP_CM=$PP_CM python3 -c '
-import json, os, sys
-try:
-    projects = json.loads(json.load(sys.stdin)["content"][0]["text"])["projects"]
-except Exception as e:
-    print("paths.sh: no project list from %s list_projects (%s)" % (os.environ["PP_CM"], e), file=sys.stderr)
-    sys.exit(2)
-main = os.environ["PP_MAIN"]
-names = [p["name"] for p in projects if os.path.realpath(p.get("root_path", "")) == os.path.realpath(main)]
-if not names:
-    sys.exit("paths.sh: no code-graph project for %s; indexed: %s" % (
-        main, ", ".join("%s (%s)" % (p["name"], p.get("root_path")) for p in projects) or "none"))
-print(names[0])') && rc=0 || rc=$?
-  case $rc in
-    0) mkdir -p "$PP_SCRATCH" && printf '%s\n' "$name" > "$cache.$$" && mv "$cache.$$" "$cache" || true
-       printf '%s\n' "$name" ;;
-    2) [ -s "$cache" ] || return 1
-       echo "paths.sh: using the cached code-graph project from $cache" >&2
-       cat "$cache" ;;
-    *) rm -f "$cache"; return 1 ;;
-  esac
 }
 
 # pp_session_log <worktree> -- the worktree's newest Claude session record, or nothing.
@@ -170,11 +129,13 @@ pp_session_bg_open() {
 # request start, so a reply's end would let a slow reply ping a lapsed cache. No such row in the window is at null, and
 # WARM never pings on it. ttl: the newest reply that wrote cache says which one applied (1h tokens 3600, 5m tokens 300).
 # ended: the newest assistant or user row is an end_turn reply, so the parent is at its prompt. No usage row, or no
-# cache write in the window, is null, and null means no ping.
+# cache write in the window, is null, and null means no ping. An optional second argument names the session log to
+# read instead of the newest one (issue 445: a fix round reads the log of the session live in the Builder's own pane,
+# never another session's newer transcript).
 pp_session_cache() {
   local f
-  f=$(pp_session_log "$1")
-  [ -n "$f" ] || { echo null; return; }
+  f=${2:-$(pp_session_log "$1")}
+  [ -n "$f" ] && [ -f "$f" ] || { echo null; return; }
   tail -n 400 "$f" | jq -cRn '
     def ep: sub("\\.[0-9]+"; "") | fromdateiso8601;
     def rk: .message.id // .uuid // .timestamp;
@@ -1505,5 +1466,19 @@ pp_link_node_modules() {
     # Nothing to share in a repo that has none; a link to nothing breaks tools that follow it.
     [ -d "$1/$d/node_modules" ] && [ -d "$2/$d" ] || continue
     [ -e "$2/$d/node_modules" ] || ln -sfn "$1/$d/node_modules" "$2/$d/node_modules"
+  done
+}
+
+# pp_fix_stated <batch> [<file>...] -- 0 when every issue the batch names (brief-issues.sh: its numbered list, text
+# items with no number skipped) or a `Closes:` line of the batch or the files names has a Fix case
+# (plan-check.sh --issue-cases), so its bundle gets one plan and one judge round with no revise session (issue 444). An
+# issue that cannot be read is not fix-stated, and no issue at all is not either. Caller: builder-launch.sh.
+pp_fix_stated() {
+  local nums n cases
+  nums=$({ bash "$PP_SCRIPTS/brief-issues.sh" "$1" | jq -r '.[] | numbers'; cat -- "$@" | grep '^Closes:' | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un || true)
+  [ -n "$nums" ] || return 1
+  for n in $nums; do
+    cases=$(bash "$PP_SCRIPTS/plan-check.sh" --issue-cases "$n" 2>/dev/null) || return 1
+    grep -q '^Fix ' <<<"$cases" || return 1
   done
 }

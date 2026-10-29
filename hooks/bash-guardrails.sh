@@ -614,7 +614,7 @@ for i in "${!SRCH_TEXT[@]}"; do
   # The rule never said how to ask the whole-repo question, which is sometimes
   # the real one: 19 of 51 blocks were followed by another block of this same
   # rule. Both sanctioned answers are named here.
-  echo "Whole repo: codebase-memory search_code answers it without a filesystem walk. To search the tree anyway, name its top-level directories: $TOOL ... <dir> <dir>" >&2
+  echo "Whole repo: to search the tree, name its top-level directories: $TOOL ... <dir> <dir>" >&2
   echo "Try: $TRY" >&2
   exit 2
 done

@@ -262,7 +262,7 @@ Each group's tests are green before the next starts. Commit per group.
   template's own words at `templates/_builder-brief-template.md:174`; the test asserts the whole state-swap
   instruction, the evidence recording included.
 - **298** port 413dab38's `search-log.sh` and `search-log-report.py`, with the plugin's matchers and two fixes.
-  Registration in `hooks/hooks.json` PostToolUse: a new entry `Grep|mcp__serena__.*|mcp__codebase-memory__.*`,
+  Registration in `hooks/hooks.json` PostToolUse: a new entry `Grep|mcp__serena__.*|<the code-graph server tools>`,
   and `search-log.sh` added to the existing `Read` (:68) and `Bash` (:71) entries (`Read` is the follow-up the
   flag reads; the host hook depends on it). The follow-up test runs each call through the commands `hooks.json`
   registers for that tool name (jq over the PostToolUse matchers), not the hook directly. Rate fix: a follow-up

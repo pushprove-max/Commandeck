@@ -233,7 +233,6 @@ check "no setup question is titled by a rule id" "" "$(grep -E 'Ask "(<id>|[0-9a
 check "every add-on has a command and a cost: none is a placeholder" 0 \
   "$(grep -v '^#' "$REAL/config/addons.tsv" | awk -F'\t' '$2 == "" || $3 == "" || /no public source/' | wc -l | tr -d ' ')"
 check "no add-on command names a version" 0 "$(grep -v '^#' "$REAL/config/addons.tsv" | cut -f2 | grep -cE '@[0-9]|==|--version[ =]?[0-9]')"
-check "the add-on list names no ponytail and no templates/ponytail folder is shipped" 0:absent "$(grep -ci ponytail "$REAL/config/addons.tsv" || true):$([ -e "$REAL/templates/ponytail" ] && echo present || echo absent)"
 
 # Issue 291: under an account profile Claude Code keeps these in CLAUDE_CONFIG_DIR, and a read of ~/.claude found
 # nothing there. The plugin's own folders (checkpoints, rulings, hook-fire-log) stay under ~/.claude. proof-run.sh
@@ -259,5 +258,7 @@ check "every .claude/metrics ledger in IL_STATE is deleted by uninstall --delete
 check "every .claude/metrics ledger a script names is in IL_STATE" "" \
   "$(cd "$REAL" && for f in $(grep -ho '\.claude/metrics/[a-z-]*\.jsonl' scripts/*.sh | sort -u); do
      grep -qF "$f" scripts/install-lib.sh || echo "$f"; done)"
+check "no tracked file outside the changelog names the retired code-graph server, and no hook matches its tools (issue 446)" "" \
+  "$(cd "$REAL" && git grep -il -e 'codebase[-]memory' -- ':!CHANGELOG.md'; jq -r '.. | .matcher? // empty' hooks/hooks.json | grep -iE 'codebase[-_]memory|mcp__codebase')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

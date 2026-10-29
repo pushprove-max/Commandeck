@@ -804,7 +804,7 @@ rv_unanswered() {
 # of them hit kern.maxprocperuid and crashed the Mac. A broker is leaked when it
 # is over an hour old, no live claude or codex-companion works in its --cwd, and
 # no codex-companion is in its tree (a review in flight). Its tree is killed
-# children first; a --cbm-daemon-internal process and its subtree never are.
+# children first.
 # Leaves PROCS and PROC_TOP (this user's process count and top command
 # families) for proc_warn.
 reap_brokers() {
@@ -839,14 +839,13 @@ reap_brokers() {
         m = split(kids[p], ks, " ")
         for (j = 1; j <= m; j++) {
           ch = ks[j]
-          if (cmd[ch] ~ /--cbm-daemon-internal/) continue
           if (cmd[ch] ~ /codex-companion/) busy = 1
           walk(ch); order = order " " ch; n++
         }
       }
       END {
         for (p in cmd) {
-          if (cmd[p] !~ /app-server-broker\.mjs serve/ || cmd[p] ~ /--cbm-daemon-internal/ || age[p] <= 3600) continue
+          if (cmd[p] !~ /app-server-broker\.mjs serve/ || age[p] <= 3600) continue
           if (!match(cmd[p], /--cwd[= ][^[:space:]]+/)) continue
           cwd = substr(cmd[p], RSTART + 6, RLENGTH - 6)
           # A path may hold a space, and ps does not quote: ask of each live
@@ -952,6 +951,7 @@ report_wake() {
   local n f line verdict kind next key item ck was
   newest_round "$1" "$2"
   while read -r n f; do
+    SN_TEXT=
     line=$(round_line "$f") || continue
     verdict=${line%% (*}; kind=${line#*(}; kind=${kind%)}
     key=$(report_key "$2" "$f") || continue; item=$ST/item-$key
@@ -976,6 +976,12 @@ report_wake() {
         [ -z "$SN_TEXT" ] || next=$SN_TEXT ;;
       *) next="see the report" ;;
     esac
+    # A Builder the unit driver launched converges with no main turn (issue 443), so its routine reports (a GO the Builder
+    # or the auto-merge carries on from, a NO-GO whose fix round runs, an older round) are settled unsent. A stop (SN_TEXT),
+    # an unrecorded kind and every hand-launched Builder's reports post as before.
+    if [ -e "$SCRATCH/drive-$2.launched" ] && [ -z "$SN_TEXT" ]; then
+      case $ck in superseded|final:GO|review:GO|design:GO|*:NO-GO|adversarial:GO) mark_handled "$key"; continue ;; esac
+    fi
     # A round that finished while the check ran makes this answer about an older round: hold it, and the next tick
     # stamps it superseded.
     was=$NR_N; newest_round "$1" "$2"; [ "$NR_N" = "$was" ] || continue
@@ -1272,6 +1278,9 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   if [ "$kind" = finished ]; then
     # A seat.sh wait on this pane reports the finish itself.
     pp_waited_on "$h" "$NOW" "${RV_OUT:-}" "watch:$item" && { echo handled > "$ST/item-$item"; return 0; }
+    # A seat of a unit a live unit driver owns is the driver's to report (it sends its own stop); once the driver is gone,
+    # the finish posts as before (issue 443).
+    hs_unit_driven "$u" && return 0
     local why=
     report_notes "$4" "$u" "$w"
     # A Builder's DONE in a unit worktree (one that holds its own brief) goes through the merge gate every tick

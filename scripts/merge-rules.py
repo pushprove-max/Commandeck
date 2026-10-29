@@ -174,6 +174,8 @@ MADE_FROM = {
     "0daaf070": ("cb6056f9",), "b1915c88": ("ecd4b33d",), "0d7babbc": ("e7926841",),
     # 0.57.0 main-session.md: the restart waits for a helper agent however long, and a failed restart is not retried
     "d2e4dc5b": ("3e156378",),
+    # 0.60.0 main-session.md: the helper-agent rule no longer names the retired code-graph server (issue 446)
+    "80518d00": ("b2577b20",),
 }
 
 

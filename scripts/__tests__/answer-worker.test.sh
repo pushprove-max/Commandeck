@@ -224,5 +224,23 @@ check "no id given and no seat record names the pane: says the lookup was skippe
 mv "$LOOKREC.gone" "$LOOKREC"
 # --interrupt (issue 351 ask 4) has its own file: answer-worker-interrupt.test.sh.
 
+# Issue 447: a Claude pane whose running tool call is not a wait never reads its inbox, so an order left there sat unread
+# while the Builder built what the order cancelled. Claude Code hands it typed text at its next tool result. The log is
+# rebuilt for these two (the one above ends in a done marker) and put back after.
+cp "$LOG" "$T/log.bak"
+BUSY_USE='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_work","name":"Bash","input":{"command":"npm test"}}]}}'
+PARK_USE='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_park","name":"Bash","input":{"command":"orca-ide orchestration check --wait"}}]}}'
+rows() { { echo '{"type":"user","message":{"role":"user","content":"build it"},"timestamp":"2026-10-15T10:00:00Z","sessionId":"s1"}'; echo "$1"; } > "$LOG"; : > "$T/typed"; : > "$T/inbox"; : > "$T/replies"; }
+echo working > "$T/state"
+rows "$BUSY_USE"
+OUT=$(answer term_b "Ruling 8: drop the last item"); RC=$?
+check "a Claude pane mid-work gets the answer typed at once, no inbox, confirmed in its log (issue 447)" "0 1 0 1" \
+  "$RC $(wc -l < "$T/typed" | tr -d ' ') $(wc -l < "$T/inbox" | tr -d ' ') $(grep -c 'delivered to term_b (typed into the pane mid-work' <<<"$OUT")"
+rows "$PARK_USE"
+OUT=$(answer term_b "Ruling 9: keep the last item"); RC=$?
+check "a pane parked in check --wait still gets the inbox message (issue 447)" "1 0 1" \
+  "$RC $(wc -l < "$T/typed" | tr -d ' ') $(grep -c 'Ruling 9' "$T/inbox")"
+cp "$T/log.bak" "$LOG"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -120,7 +120,7 @@ if [ -n "$PROFILE" ]; then
     ok "dashboard names: this machine's own$(jq -r '.dashboard.hosts // "" | if . == "" then "" else " and " + . end' "$IL_MACHINE" 2>/dev/null); a 403 under another name: bash $(printf '%q' "$HERE")/setup.sh --hosts <name>[,<name>]"
   fi
   # The add-on servers the hooks can use. Reported only: the owner installs them (setup prints the commands).
-  for s in serena codebase-memory; do
+  for s in serena; do
     if jq -e --arg s "$s" --arg p "$PP_MAIN" '.mcpServers[$s] // .projects[$p].mcpServers[$s]' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" >/dev/null 2>&1 \
       || jq -e --arg s "$s" '.mcpServers[$s]' "$PP_MAIN/.mcp.json" >/dev/null 2>&1; then ok "add-on server $s: present"
     else ok "add-on server $s: not installed (optional; setup.sh --addons $s installs it)"; fi

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # read-tracker.sh's MCP-unused tripwire. A worker that searches source by shell 25 times and never asks serena
-# or codebase-memory is told to record it as a main-only deferred item; main is sent nothing (message cuts).
+# is told to record it as a main-only deferred item; main is sent nothing (message cuts).
 set -u
 SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse hook on Read, Grep, Bash and the serena / codebase-memory tools: one local row per search or read, so
+# PostToolUse hook on Read, Grep, Bash and the serena tools: one local row per search or read, so
 # "do the code servers beat rg" is answered by counts, not by guessing (issue 298). Read it with
 # scripts/search-log-report.py.
 #

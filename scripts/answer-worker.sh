@@ -10,7 +10,9 @@
 # --wait`) or has ended its turn. An inbox message ends the wait at once, but a
 # pane that has ended its turn never reads its inbox; typed text reaches that
 # pane, but only queues behind a wait. So the pane's state picks the way: an
-# inbox message to a pane that is mid-turn, typed text to one that is not.
+# inbox message to a pane that is mid-turn, typed text to one that is not. A Claude
+# pane mid-turn but working (its running tool call is not a wait) never reads its inbox
+# either, and Claude Code hands it typed text at its next tool result, so it gets typed text.
 # The inbox message is a reply to the question's id when <question-id> holds one
 # (orchestration reply --id): a worker blocked in `orchestration ask` returns only
 # on a reply to its own question, never on a new message. With no id it is a send.
@@ -145,6 +147,57 @@ idle() {
   pane_is_busy "$H" || rc=$?
   [ "$rc" = 1 ]
 }
+# pending_state parked|working -- read from the pane's session log ($LOG, set by log_state). parked (0): the only tool
+# call still running is the last one, a Bash call that is one simple `orca(-ide) orchestration ask` or `check --wait`
+# command, so the pane reads its inbox. working (0): a tool call is running and it is not that wait. The decision is on
+# the command's shell-split words, never a match on its text: an operator token (`;` `&` `|` `(` `)` `<` `>`, an
+# unquoted newline) or a substitution anywhere reads as not a wait. A log that cannot be read is neither (exit 1).
+pending_state() {
+  [ -n "${LOG:-}" ] || return 1
+  python3 -I - "$LOG" "$1" <<'PY' 2>/dev/null
+import json, re, shlex, sys
+OPS = set(';&|()<>\n')
+def simple_wait(cmd):
+    if not isinstance(cmd, str) or re.search(r'\$\(|`|<\(|>\(', cmd):
+        return False
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=';&|()<>\n')
+    lex.whitespace, lex.commenters, lex.whitespace_split = ' \t\r', '', True
+    try:
+        words = list(lex)
+    except ValueError:
+        return False
+    # A quoted word made only of operator characters reads as an operator too: that is not a wait, the safe direction.
+    if any(w and set(w) <= OPS for w in words):
+        return False
+    while words and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*=.*', words[0], re.S):
+        words.pop(0)
+    if len(words) < 3 or re.sub(r'.*/', '', words[0]) not in ('orca', 'orca-ide') or words[1] != 'orchestration':
+        return False
+    return words[2] == 'ask' or (words[2] == 'check' and '--wait' in words[3:])
+uses, done = [], set()
+try:
+    for line in open(sys.argv[1], encoding='utf-8'):
+        if not line.strip():
+            continue
+        content = (json.loads(line).get('message') or {}).get('content')
+        for c in content if isinstance(content, list) else []:
+            if c.get('type') == 'tool_use':
+                uses.append(c)
+            elif c.get('type') == 'tool_result':
+                done.add(c.get('tool_use_id'))
+except (OSError, ValueError, AttributeError):
+    sys.exit(1)
+pending = [u for u in uses if u.get('id') not in done]
+parked = (len(pending) == 1 and pending[0] is uses[-1] and pending[0].get('name') == 'Bash'
+          and simple_wait((pending[0].get('input') or {}).get('command')))
+sys.exit(0 if (pending and not parked if sys.argv[2] == 'working' else parked) else 1)
+PY
+}
+# working -- 0 when the pane is mid-work. Such a pane never looks at its inbox, so an order left there sat unread
+# while the Builder built what the order cancelled. Claude Code shows text typed during a turn to the agent at its
+# next tool result, so a working Claude pane gets the answer typed in at once. A pane with no tool call running
+# (streaming text) keeps the inbox route; confirm() types the answer once its turn ends.
+working() { pending_state working; }
 # wake <result> -- the wake log's line for this answer (the owner's view of what main sent a worker).
 wake() { pp_wake_log answer-worker "$H" "answer ${TAG}" "$@"; }
 log_state
@@ -162,6 +215,11 @@ elif [ -n "$INTERRUPT" ]; then
   wake sent
 elif idle; then
   WAY="typed into the pane"
+  orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
+    || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
+  wake sent
+elif [ "$KIND" = claude ] && working; then
+  WAY="typed into the pane mid-work, read at its next tool result"
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
     || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
   wake sent
@@ -185,9 +243,10 @@ while :; do
   log_state
   [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
-  # inbox: the answer is typed in then, once, and waited for afresh.
+  # inbox: the answer is typed in then, once, and waited for afresh. So is a pane that left its wait and went
+  # back to work: it will not read the inbox either (see working).
   if [[ $WAY == "sent to the pane's inbox"* ]]; then
-    if idle; then
+    if idle || { [ "$KIND" = claude ] && working; }; then
       WAY="typed into the pane once its turn ended with the inbox message unread"
       orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
         || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; return 1; }

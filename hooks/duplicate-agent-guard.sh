@@ -9,6 +9,9 @@
 #   - `orca-ide terminal send ... --enter` of a new job, or
 #     `orchestration dispatch --inject` / `worker-start --terminal`, into a
 #     pane whose agent is mid-turn
+#   - `orchestration send --to <Builder pane>` into a Builder, at its prompt or
+#     mid-turn, and from main `--to dispatch:<id>`: an inbox it is not parked
+#     on is never read; answer-worker.sh wakes it or types into it
 # In the main checkout every typed route to a new agent pane is refused
 # outright, live agent or not (owner ruling 2026-10-11):
 # `terminal create|split --command <agent>`, `worker-start --agent` and
@@ -31,14 +34,14 @@ OPTS='([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]-][^[:space:]]*)?)*'
 # quoted span stays as its word (strip-quoted.sh, the mark form): removed, the
 # subcommand was gone and the launch passed. Quoted prose is one placeholder.
 Q=$'\x01'
-grep -qE "(terminal${OPTS}[[:space:]]+(create|send|split)|worktree${OPTS}[[:space:]]+create|orchestration${OPTS}[[:space:]]+(dispatch|worker-start))" \
+grep -qE "(terminal${OPTS}[[:space:]]+(create|send|split)|worktree${OPTS}[[:space:]]+create|orchestration${OPTS}[[:space:]]+(dispatch|worker-start|send))" \
   <<<"$(strip_quoted "$CMD" "$Q" | sed -E "s/${Q}([;&|()[:space:]]|\$)/QUOTED\1/g; s/${Q}//g")" || exit 0
 . "${BASH_SOURCE[0]%/*}/../scripts/codex-helpers.sh"
 block() { printf 'BLOCKED: %s\n' "$1" >&2; exit 2; }
 SCRIPTED="the scripted launchers (seat.sh launch, builder-launch.sh) hand back a live pane instead of opening another"
 
 # One line per checked invocation: "create<TAB><worktree>" for an agent launch,
-# "job<TAB><handle>" for a new job sent or injected into a pane. The scanner
+# "job<TAB><handle>" for a new job sent or injected into a pane, "inbox<TAB><handle>" for an inbox send. The scanner
 # splits the command into words and simple commands as bash does, so quoted
 # prompt text, comments and heredoc bodies never read as a command or a flag.
 # ponytail: expansions are not run; an orca-ide call built through a variable
@@ -176,6 +179,8 @@ for words in cmds:
         print('job\t' + (flag(words, 'terminal') or ''))
     elif sub == 'orchestration dispatch' and '--inject' in words:
         print('job\t' + (flag(words, 'to') or ''))
+    elif sub == 'orchestration send':
+        print('inbox\t' + (flag(words, 'to') or ''))
     elif sub == 'orchestration worker-start':
         # --terminal hands a job to an existing pane; --agent opens a new one,
         # a second agent unless the worktree is new too.
@@ -209,6 +214,19 @@ while IFS=$'\t' read -r kind val; do
         | select(.connected != false and .orphaned != true and .agentIdentity != null)
         | "\(.handle) (\(.agentIdentity), \(.title))"] | join(", ")' <<<"$out")
       [ -z "$live" ] || block "a second agent in $WT, which already has a live agent pane: $live. Read or reuse that pane; $SCRIPTED." ;;
+    inbox)
+      # A Builder at its prompt reads its inbox only inside a turn that runs `orchestration check`, and a mid-turn
+      # Builder that is working, not parked in a wait, never reads it either. Every hand send to a Builder, and from
+      # main to any dispatch, goes through answer-worker.sh, which reads the pane's state and picks the way. Only a
+      # handle a Builder seat record names is checked; the newest record wins.
+      H=${val#terminal:}
+      case $H in dispatch:*) [ -z "$MAIN" ] || block "a hand inbox send to $H: a working Builder never reads its dispatch inbox. Send it with scripts/answer-worker.sh <unit> \"<text>\" [<question id>], which picks the way the pane reads it" ;; esac
+      case $H in ''|*'$'*|dispatch:*) continue ;; esac
+      rec=$(ls -t "$PP_SCRATCH"/seat-*.txt 2>/dev/null | while IFS= read -r f; do grep -qx "handle=$H" "$f" && { echo "$f"; break; }; done)
+      case ${rec##*/} in seat-*-builder.txt) ;; *) continue ;; esac
+      rc=0; pane_is_busy "$H" || rc=$?
+      [ "$rc" != 0 ] || block "$H is mid-turn and reads its inbox only while parked in a wait; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which types into a working pane"
+      block "$H is at its prompt and never reads its inbox; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which wakes it" ;;
     job)
       H=$val
       [ -n "$H" ] || continue

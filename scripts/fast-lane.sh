@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# fast-lane.sh review|land -- the Fast lane's landing step: main merges the exact commit a reviewer reviewed.
+# fast-lane.sh review|land -- the Fast lane's landing step: main merges the exact commit a reviewer reviewed, by a
+# fast-forward, or a merge commit when main moved after the review and no path changed on both sides.
 #     review  run in the lane: one read-only reviewer session (the codex-reviewer route, Codex or Claude) reads the
 #             lane's tip, git diff main...<sha>, and ends its reply with a VERDICT line. Records the sha, the
 #             reviewer and its session in $PP_SCRATCH/fast-lane.review. Refuses (exit 2) with a tracked change.
 #     land    run by main in the main checkout, on main: takes the verdict, commit and folder from the reviewer's
-#             own session record, never from a line the lane typed, and runs git merge --ff-only <sha>. Refuses
-#             (exit 2), main untouched, with no record, a session of another commit, folder or prompt, more than
-#             one turn, a reply not ending VERDICT: GO or listing a P0, P1 or P2 finding above it, a lane tip that moved
-#             since the review, or a staged change in main's checkout. Prints landed only when main's index is the
-#             reviewed tree, every file the lane changes is its text on disk and every path it deletes is absent; an
-#             unstaged edit on any other path is allowed and named. A refusal after the merge leaves main at the
-#             reviewed commit and keeps the record; a retry checks the same lane paths, and the record goes only when
+#             own session record, never from a line the lane typed, and merges <sha>: git merge --ff-only, or a
+#             merge commit when main moved since the review. Refuses (exit 2), main untouched, with no record, a
+#             session of another commit, folder or prompt, more than one turn, a reply not ending VERDICT: GO or
+#             listing a P0, P1 or P2 finding above it, a lane tip that moved since the review, a staged change in
+#             main's checkout, a path main and the lane both changed, or a merge git cannot finish (aborted). Prints
+#             landed only when main's index is the landed tree, every file the lane changes is its text on disk and
+#             every path it deletes is absent; an unstaged edit on any other path is allowed and named. A refusal
+#             after the merge leaves the reviewed commit in main and keeps the record; a retry merges nothing,
+#             checks the same lane paths, and the record goes only when
 #             land prints landed.
 # The reviewer's record is the one builder-codex-pass.sh --verify reads for merge-unit-local.sh; a lane has no unit
 # brief or round files, which that merge needs. Ceiling: a same-user process could forge the reviewer's own files.
@@ -171,24 +174,42 @@ PY
   # Issue 428: a staged change would ride along with the merge, so it is refused before main moves. An unstaged edit
   # on a path the lane changes makes git merge refuse; one on any other path is allowed, and named below.
   git -C "$PP_MAIN" diff --cached --quiet HEAD || die "main's checkout has a staged change: commit or unstage it, then land"
-  # The record's base= is main's HEAD before the merge, written before main moves: a refusal below leaves main at $sha
-  # and keeps the record, and a retry checks the paths that merge changed, not the empty range $sha..$sha. A base
-  # that is not an ancestor of $sha (none, or hand-edited) checks every tracked path. review rewrites the record without it.
-  local old; old=$(git -C "$PP_MAIN" rev-parse HEAD)
-  if [ "$old" != "$sha" ]; then
-    { grep -v '^base=' "$REC"; echo "base=$old"; } > "$REC.tmp" && mv "$REC.tmp" "$REC" \
-      || die "could not record main's HEAD in $REC; main is untouched"
-  else
-    old=$(sed -n 's/^base=//p' "$REC" | head -1)
+  # The record's base= is the merge base of main and $sha, written before main moves: a refusal below leaves $sha in
+  # main and keeps the record, and a retry, finding $sha already in main, merges nothing and checks the paths the lane
+  # changed since that base, not the empty range $sha..$sha. A base that is not an ancestor of $sha (none, or
+  # hand-edited) checks every tracked path. review rewrites the record without it.
+  # Issue 442: main moving on after the review must not force a rebase, a new commit and a second review of the same
+  # work, so the reviewed commit itself is merged: a fast-forward, or a merge commit when main moved. Only when no
+  # path changed on both sides: then every lane file on main is the reviewed text, and an auto-merged file nobody
+  # reviewed never lands. -z and --no-renames list a rename as its old and new path, so a lane rename of a file main
+  # edited is an overlap. A merge git cannot finish is aborted, so main is never left half merged.
+  local old want=$sha both p
+  if git -C "$PP_MAIN" merge-base --is-ancestor "$sha" HEAD; then
+    want=HEAD old=$(sed -n 's/^base=//p' "$REC" | head -1)
     [[ $old =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && git -C "$PP_MAIN" merge-base --is-ancestor "$old" "$sha" \
       || old=$(git -C "$PP_MAIN" hash-object -t tree /dev/null)
+  else
+    old=$(git -C "$PP_MAIN" merge-base HEAD "$sha") || die "main and $sha share no history; main is untouched"
+    both=$(git -C "$PP_MAIN" diff -z --no-renames --name-only "$old" "$sha" | while IFS= read -r -d '' p; do
+      git -C "$PP_MAIN" --literal-pathspecs diff --quiet --no-renames "$old" HEAD -- "$p" || echo "$p"
+    done | paste -sd' ' -)
+    [ -z "$both" ] || die "main changed paths the lane also changed ($both); main is untouched: rebase the lane, then review the new tip"
+    { grep -v '^base=' "$REC"; echo "base=$old"; } > "$REC.tmp" && mv "$REC.tmp" "$REC" \
+      || die "could not record the merge base in $REC; main is untouched"
+    if git -C "$PP_MAIN" merge-base --is-ancestor HEAD "$sha"; then
+      git -C "$PP_MAIN" merge --ff-only "$sha" || die "git merge --ff-only $sha failed; main is untouched"
+    else
+      git -C "$PP_MAIN" merge --no-ff --no-edit -q -m "Merge Fast-lane at ${sha:0:8}" "$sha" \
+        || { git -C "$PP_MAIN" merge --abort 2>/dev/null; die "git merge $sha failed and was aborted; main is untouched"; }
+      want=HEAD
+    fi
   fi
-  git -C "$PP_MAIN" merge --ff-only "$sha" || die "git merge --ff-only $sha failed; main is untouched"
-  # landed only when main's index is the reviewed tree, every file the lane changes is its text on disk, and every path
-  # it deletes is absent (a recreated one is untracked, so diff misses it). -z and --no-renames list each old and new
-  # path unquoted; --literal-pathspecs makes a name like g*.txt a path, not a glob.
-  local off p
-  off=$({ git -C "$PP_MAIN" diff --cached --name-only "$sha"
+  # landed only when main's index is the landed tree ($want: the reviewed commit, or the merge commit holding it), every
+  # file the lane changes is its text on disk, and every path it deletes is absent (a recreated one is untracked, so
+  # diff misses it). -z and --no-renames list each old and new path unquoted; --literal-pathspecs makes a name like
+  # g*.txt a path, not a glob.
+  local off
+  off=$({ git -C "$PP_MAIN" diff --cached --name-only "$want"
     git -C "$PP_MAIN" diff -z --no-renames --name-only "$old" "$sha" | while IFS= read -r -d '' p; do
       if git -C "$PP_MAIN" cat-file -e "$sha:$p" 2>/dev/null; then
         git -C "$PP_MAIN" --literal-pathspecs diff --quiet -- "$p" || echo "$p"

@@ -105,9 +105,7 @@ offers to rebase it. It refuses a dirty relay or a conflicting rebase. Start
 new Claude and Codex sessions after updating; open sessions retain startup
 state.
 
-Codebase-memory updates are deferred when its client process is detected.
-Follow the printed close-sessions instructions and retry. An unknown config
-schema is refused; the update skill recommends uninstalling with the old
+An unknown config schema is refused; the update skill recommends uninstalling with the old
 plugin and setting up again. There is no automatic schema migration.
 
 To return to an earlier release, install that release with Claude Code's

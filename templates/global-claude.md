@@ -80,13 +80,12 @@ were skipped. Default to showing uncertainty, not hiding it.
 
 ## Code exploration
 
-Use a live symbol navigator for symbols and a code graph for structure, one
-tool per question. Corroborate an empty result with a text search before you
-conclude "not found". Fall back on purpose, not silently.
+Use a live symbol navigator for symbols, one tool per question. Corroborate an
+empty result with a text search before you conclude "not found". Fall back on
+purpose, not silently.
 
-If you have a symbol-navigation server (such as serena) and a code-graph
-server (such as codebase-memory), use them this way; without them, skip this
-table:
+If you have a symbol-navigation server (such as serena), use it this way;
+without it, skip this table:
 
 | Need | Tool |
 |---|---|
@@ -94,7 +93,6 @@ table:
 | Before opening a file | the navigator's symbol overview |
 | Before changing or deleting a function | the navigator's find-references |
 | Strings, comments, config, columns | a text search (rg) |
-| Blast radius, dependency paths, architecture | the code graph |
 
 ## Root-cause discipline
 

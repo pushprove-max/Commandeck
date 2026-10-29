@@ -56,7 +56,8 @@ RBASE='' RISKY=0 DRY=0 SMALL=0 PICK=0 BMODEL='' REASON='' RAISE=0 EFFORT='' WHY=
 needval() { [ $# -ge 2 ] && [[ $2 != --* ]] || { printf '%s needs a value\n%s\n' "$1" "$USAGE" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case $1 in
-    -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;;
+    # Under pipefail, head closing early can end sed with SIGPIPE (exit 141): the help still exits 0.
+    -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3 || true; exit 0 ;;
     --risky) RISKY=1 ;;
     --dry-run) DRY=1 ;;
     --small) SMALL=1 ;;
@@ -79,7 +80,7 @@ UNIT=${POS[0]:?$USAGE}
 BATCH=${POS[1]-}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
-[ "$FROM" = 0 ] || BATCH=${BATCH:-$PP_WORKSPACES/$UNIT/.claude/briefs/$UNIT-batch.md}
+[ "$FROM" = 0 ] || BATCH=${BATCH:-${COMMANDECK_BATCH:-$PP_WORKSPACES/$UNIT/.claude/briefs/$UNIT-batch.md}}
 : "${BATCH:?$USAGE}"
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
@@ -116,7 +117,7 @@ plan_ok() {
 # every top-level item under its Decisions or Accepted failure modes names the test that checks it (or says none, why).
 # A Skip batch has no plan: its own list is the only one. The checks are plan-check.sh's (issue 384), which every judge
 # launch of the plan runs too; a --from-plan plan's mockups resolve in its planning worktree, any other's on main.
-SMALL_PLAN=150 SMALLNOGO=0 PLINES=
+SMALL_PLAN=150 SMALLNOGO=0 PLINES= JROLE=plan-judge-sol
 plan_checks() { # <the plan's text, or nothing for a Skip batch>
   local pcout root=$PP_MAIN
   [ "$FROM" = 0 ] || root=$WT
@@ -124,9 +125,14 @@ plan_checks() { # <the plan's text, or nothing for a Skip batch>
   [ -n "${1:-}" ] || return 0
   PLINES=$(awk '$1 == "size" { print $3; exit }' <<<"$pcout")
   if [ "$SMALLNOGO" = 1 ]; then
-    [ "$PLINES" -lt "$SMALL_PLAN" ] \
-      || { echo "REFUSED: --from-plan: plan-judge-sol returned NO-GO on $PLAN and no revision was collected after it; main's rulings stand in for the revision only on a plan under $SMALL_PLAN planned lines (this one says $PLINES)" >&2; exit 2; }
-    echo "plan: plan-judge-sol returned NO-GO; main's rulings stand in for the revision ($PLINES planned lines, under $SMALL_PLAN)" >&2
+    # Issue 444: a bundle whose every issue states its fix has no revise session at any size.
+    if [ "$PLINES" -lt "$SMALL_PLAN" ]; then
+      echo "plan: $JROLE returned NO-GO; main's rulings stand in for the revision ($PLINES planned lines, under $SMALL_PLAN)" >&2
+    elif pp_fix_stated "$BATCH" <(printf '%s\n' "$1"); then
+      echo "plan: $JROLE returned NO-GO; main's rulings stand in for the revision (every issue states its fix)" >&2
+    else
+      echo "REFUSED: --from-plan: $JROLE returned NO-GO on $PLAN and no revision was collected after it; main's rulings stand in for the revision only on a plan under $SMALL_PLAN planned lines (this one says $PLINES) or one whose every issue has a Fix case" >&2; exit 2
+    fi
   fi
 }
 SKIPPED=
@@ -183,7 +189,20 @@ if [ "$FROM" = 1 ]; then
     # rulings file after the judge ran, and the Builder writes them into the plan. The plan must still be the bytes the
     # judge read; whether it is small is read from its size line (plan_checks).
     RUL=$PP_MAIN/.claude/briefs/$UNIT-main-rulings.md
-    if [ -z "$WANT" ] && [ "$J" = "$PP_SCRATCH/seat-$UNIT-plan-judge-sol.txt" ] && [ -s "$RUL" ] && [ "$RUL" -nt "$J" ]; then
+    # Issue 444: the selected judge's, as plan-tier.sh selects it: Sol, or Fable while Sol is off in /plugin config (a
+    # value the key does not take, 2, stops the launch naming it).
+    STANDIN=
+    if [ -z "$WANT" ] && [ -s "$RUL" ] && [ "$RUL" -nt "$J" ]; then
+      case $J in
+        "$PP_SCRATCH/seat-$UNIT-plan-judge-sol.txt") STANDIN=1 ;;
+        "$PP_SCRATCH/seat-$UNIT-plan-judge-fable.txt")
+          rc=0; OFF=$(pp_role_enabled plan-judge-sol 2>&1) || rc=$?
+          [ "$rc" != 2 ] || nope "${OFF#REFUSED: }"
+          [ "$rc" != 1 ] || STANDIN=1 ;;
+      esac
+    fi
+    if [ -n "$STANDIN" ]; then
+      JROLE=$(rv "$J" role); JROLE=${JROLE:-plan-judge-sol}
       OTHER=
       for r in "$PP_SCRATCH/seat-$UNIT-plan-judge-"*.txt; do
         if [ "$r" != "$J" ] && [ "$(rv "$r" plan)" = "$WP" ]; then OTHER=1; fi
@@ -255,6 +274,10 @@ open_builder() {
     printf '%s unit=%s note=routing-override %s\n' "$(date +%F)" "$UNIT" "$SKIPPED" >> "${COMMANDECK_ROUTING_LOG:-$PP_MAIN/.claude/routing-log}" \
       || { echo "could not write the routing log; the Builder was not launched" >&2; exit 1; }
   fi
+  # Issue 443: main-watch settles a driver-launched Builder's routine round reports unsent; any other launch of the unit
+  # clears the mark, so a hand launch posts every report as before.
+  mkdir -p "$PP_SCRATCH"
+  if [ "${COMMANDECK_DRIVER:-0}" = 1 ]; then date +%s > "$PP_SCRATCH/drive-$UNIT.launched"; else rm -f "$PP_SCRATCH/drive-$UNIT.launched"; fi
   bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} || exit $?
   # The plan is on main and the Builder runs: a unit planned before 0.18.0, in <unit>-plan, has that worktree closed.
   # A refusal is printed and never fails the launch.
@@ -384,6 +407,14 @@ record_main_pane() { # <settings file>
 record_main_pane "$WT/.claude/settings.local.json" || { echo "could not record main's pane folder in $WT/.claude/settings.local.json; the Builder was not launched" >&2; exit 1; }
 mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
+# Issue 448: where the unit branch tracks the brief, the rewrite above left it modified, and the pass's rebase onto a
+# moved main refused until someone committed it by hand. It is committed here, alone, and only when its text changed,
+# so a relaunch with the same brief adds no commit. An untracked or ignored brief stays out of every commit.
+if git -C "$WT" ls-files --error-unmatch -- ".claude/briefs/$UNIT.md" >/dev/null 2>&1 \
+  && ! git -C "$WT" diff --quiet HEAD -- ".claude/briefs/$UNIT.md"; then
+  git -C "$WT" commit -q -m "chore($UNIT): install the Builder brief" -- ".claude/briefs/$UNIT.md" \
+    || { echo "could not commit the Builder brief .claude/briefs/$UNIT.md in $WT; the Builder was not launched" >&2; exit 1; }
+fi
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"
 [ -z "$SKIPPED" ] || printf '%s\n' "$SKIPPED" >> "$WT/.claude/briefs/$UNIT-evidence.md"
 # Main's own copy: the pass script reads the stated limits from it, never from the Builder's.

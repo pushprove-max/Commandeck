@@ -1265,11 +1265,12 @@ elif [ -n "$PREV" ]; then
 fi
 # Issue 362: pass 1 needs a recorded break run for every `Break: <test file> -- <check label> -- <site>` line of the plan
 # (outside fenced blocks): the test was run red with the condition removed. A plan with none, or no plan, owes nothing.
+# A `Break: none` line is the plan saying it has no break, not a break (issue 443).
 break_gate() {
   local PF BREAKS RUNS NOBREAK= line bt bl
   PF=$(plan_file); [ -n "$PF" ] || return 0
   [ -z "$(round_files "$WT" "$UNIT")" ] || return 0
-  BREAKS=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^Break: / { sub(/^Break: /, ""); print }' "$PF")
+  BREAKS=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } tolower($0) ~ /^break:[[:space:]]*none([[:space:]]|[[:punct:]]|$)/ { next } /^Break: / { sub(/^Break: /, ""); print }' "$PF")
   RUNS=$(evidence_section "Break runs")
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -1882,7 +1883,7 @@ else
 fi
 TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
 where() { # <what the brief is opened for> -- the lines both hand-offs open with
-  printf 'You are the Builder of %s, in a fresh session of the same pane: the session that ran pass %s was cleared, so this file and the files it names are all you have.\n\n' "$UNIT" "$N"
+  printf 'You are the Builder of %s. This fix round after pass %s runs in the session that ran the pass while its context is under the Builder clear line, else in a cleared session of the same pane; work from this file and the files it names.\n\n' "$UNIT" "$N"
   printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$PANE" "${TASK:-not in $SEAT; ask main}" "$PANE"
   printf -- '- The brief still binds you, but do not read it at start: %s: %s\n' "$1" "$WT/.claude/briefs/$UNIT.md"
 }
@@ -1978,7 +1979,7 @@ WRITING=
 mkdir -p "$PP_SCRATCH"
 bash "$HERE/builder-fresh-round.sh" "$PANE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &
 if [ -n "$IN_PANE" ]; then
-  echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, a fresh session takes the fix round from ${HAND##*/}; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, main is told, and the fix round stays here."
+  echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, the fix round from ${HAND##*/} is typed into this session, or into a cleared one when this session is at or past the Builder clear line; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, main is told, and the fix round stays here."
 else
   echo "FIX ROUND $N: this session is not the Builder's pane, so the Builder's pane ($PANE) takes the fix round from ${HAND##*/} once it is idle; fix nothing here. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why and main is told."
 fi

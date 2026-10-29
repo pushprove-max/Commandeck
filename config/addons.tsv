@@ -1,7 +1,6 @@
 # name<TAB>install command<TAB>what it costs. Setup runs every command on each run (setup.sh --addons narrows the list), so
 # each installs the add-on or updates it to its latest; none names a version.
 serena	claude mcp remove serena -s local >/dev/null 2>&1; claude mcp add serena -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project "$(pwd)"	one language-server process per project; setup.sh --addons serena also turns on the hooks that use it (the read-tracker nudge and the pane-budget gate)
-codebase-memory	see https://github.com/DeusData/codebase-memory-mcp for its installer; once it is installed setup updates it	one background indexer; its tool list rides in every session
 agent-browser	npm install -g agent-browser@latest && agent-browser install	a browser download of a few hundred MB
 ui-themes	claude plugin marketplace add yugal1107/ui-themes; claude plugin marketplace update ui-themes && { claude plugin update ui-themes@ui-themes || claude plugin install ui-themes@ui-themes; }	loaded only when a session asks for it
 mattpocock-skills	see https://github.com/mattpocock/skills	one line per skill in every session's skill list

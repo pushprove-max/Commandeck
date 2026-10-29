@@ -65,5 +65,20 @@ check "estimated at ~200 it stays Panel" "Panel" "$(tier "${PANEL[@]}" 'Estimate
 check "estimated at exactly ~150 it stays Panel" "Panel" "$(tier "${PANEL[@]}" 'Estimated size: ~150 changed lines')"
 check "with no estimate it stays Panel" "Panel" "$(tier "${PANEL[@]}")"
 check "an estimate outside The batch is not read" "Panel" "$(tier '## Notes' 'Estimated size: ~120 changed lines' "${PANEL[@]}")"
+# Issue 444: Panel by risk, not by a stored record: new infrastructure picks Panel, a bundle that only stores a record
+# (a table, a field) keeps one planner and one judge.
+check "a new-infrastructure batch gets the panel and a stored-record bundle stays Plan + judge (issue 444)" \
+  "Panel Panel Panel Plan + judge" \
+  "$(tier '## The batch' '1. add a new queue for the export jobs') $(tier '## The batch' '1. write the stack with terraform') $(tier '## The batch' '1. a new database for notes') $(tier '## The batch' '1. store a notes record in the notes table')"
+# A new queue's risk does not shrink with its line count: a panel-always trigger keeps the panel under the 150-line
+# estimate that gives a small security batch one judge, even when another panel trigger matched first. A tier word
+# outside panel, panel-always and none is still refused.
+S120='Estimated size: ~120 changed lines'
+mkdir -p "$T/p/.claude"; printf 'panel-sometimes\tqueue\tbad\n' > "$T/p/.claude/plan-triggers.tsv"
+bad=$(run '## The batch' '1. add a new queue' >/dev/null; echo $?)
+rm -f "$T/p/.claude/plan-triggers.tsv"
+check "a small new-infrastructure batch keeps the panel, a small security batch still gets one judge, a bad tier word refuses (issue 444)" \
+  "Panel Panel Plan + judge 2" \
+  "$(tier '## The batch' '1. add a new queue for export jobs' "$S120") $(tier '## The batch' '1. tighten the login check for the new queue' "$S120") $(tier "${PANEL[@]}" "$S120") $bad"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

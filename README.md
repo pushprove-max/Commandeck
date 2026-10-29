@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.59.1-111111?style=flat-square" alt="Version 0.59.1">
+  <img src="https://img.shields.io/badge/version-0.60.0-111111?style=flat-square" alt="Version 0.60.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -156,7 +156,10 @@ line or option. `/commandeck:revoke undo` takes a choice back.
 1. You tell main what you want in plain words. Main writes a batch brief
    with you. Only your yes that names the unit is a build order.
 2. Main picks a plan tier from the brief: no plan, a plan and one judge, or a
-   panel of two judges. A plan is never a build order.
+   panel of two judges. A plan is never a build order. `scripts/unit-drive.sh
+   start` can carry the unit from there: it runs only the plan seats the tier
+   names, one judge round, and the launch, and stops once, naming the next
+   command, when a stage needs main.
 3. Main launches a Builder in its own worktree. The Builder works, commits and
    runs the review loop.
 4. When the last pass is GO, the unit merges into local `main` as one squash
@@ -179,7 +182,9 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   on record, `review` runs as the closing pass, and a P2 or P3 left there is
   filed as an issue before the merge. A P0 or P1 is never capped: one still
   open two passes past the cap stops the build and waits for the owner.
-- **Fix rounds.** After a NO-GO the fixer takes the branch in a fresh session.
+- **Fix rounds.** After a NO-GO the fix round goes to the Builder's own
+  session while its context is under the Builder clear line and it already
+  runs the round's model and effort; otherwise to a fresh session.
   Before the next pass, the evidence file must list every other call site of
   the flaw (`## Sites checked`) and each read, write or check the fix added,
   checked against the plan (`## New code checked`).

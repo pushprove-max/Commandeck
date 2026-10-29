@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.60.0 -- 2026-10-28
+
+### Builds
+
+- A build can now go from plan to a running Builder on its own, with the planning effort matched to the size and risk of the work.
+
 ## 0.59.1 -- 2026-10-28
 
 ### Tests

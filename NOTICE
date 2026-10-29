@@ -30,8 +30,6 @@ Setup prints an install command for each of these and installs none of them
   serena, by Oraios AI
     https://github.com/oraios/serena
     See the licensing overview in its repository.
-  codebase-memory-mcp, by DeusData               MIT
-    https://github.com/DeusData/codebase-memory-mcp
   agent-browser, by Vercel Labs                  Apache-2.0
     https://github.com/vercel-labs/agent-browser
   ui-themes, by yugal1107                        NO LICENCE STATED

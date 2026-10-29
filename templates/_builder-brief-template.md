@@ -291,9 +291,9 @@ is a red you trim or split, never a raised limit.
 Ask main and wait only when the class fix would change something the brief names as a stated limit.
 
 A pass that ends NO-GO writes `.claude/briefs/{unit}-fix-r<N>.md` and prints `FIX ROUND <N>: end your turn
-now`: end your turn without fixing anything. The script clears your pane and points a fresh session at that
-file, so keep the evidence file current before every pass, including what is left and what your report to
-main must say.
+now`: end your turn without fixing anything. The script points this session at that file while its context is
+under the Builder clear line, or clears your pane first and points a fresh session at it, so keep the evidence
+file current before every pass, including what is left and what your report to main must say.
 
 <!-- advisor -->
 Write one line per advisor consult in the evidence file: what the advisor said

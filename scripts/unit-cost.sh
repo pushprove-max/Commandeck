@@ -2,8 +2,8 @@
 # unit-cost.sh <unit> [since 'YYYY-MM-DD HH:MM'] -- what a unit's worker panes
 # cost, from their own transcripts. One line per session and a total:
 # turns, tool calls, cache-read Mtok (the bill), output ktok, suite/tsc runs,
-# reruns of an unchanged tree, hook-blocked calls, shell reads, serena and
-# codebase-memory calls beside shell searches. A session with no MCP call and
+# reruns of an unchanged tree, hook-blocked calls, shell reads, serena and other MCP
+# calls beside shell searches. A session with no serena call and
 # 10+ shell searches is marked MCP UNUSED.
 # cold/coldK (issue 203): replies that came more than the session's own cache
 # TTL (300 s, or 3600 s once it wrote 1-hour cache) after the previous reply and
@@ -62,15 +62,15 @@ def rk: .message.id // .uuid | tostring;
   hook_blocks: ($res | map(select(.is_error==true and ((.content|txt)|test("BLOCKED")))) | length),
   shell_reads: ($uses | map(select(.name=="Bash" and ((.input.command // "")|test("^\\s*(cat|sed -n|head|tail) ")))) | length),
   serena: ($uses | map(select(.name|startswith("mcp__serena__"))) | length),
-  cbm: ($uses | map(select(.name|test("^mcp__codebase[-_]memory__"))) | length),
+  mcp: ($uses | map(select((.name|startswith("mcp__")) and (.name|startswith("mcp__serena__")|not))) | length),
   cold: ($cold|length),
   cold_k: (($cold|add // 0) / 1000 | floor),
   # The same shell-search shape read-tracker.sh counts for its live tripwire.
   shell_searches: ($uses | map(select(.name=="Bash" and ((.input.command // "")|test("(^|[;&|(])\\s*(rg|grep|cat|sed\\s+-n)\\s")))) | length)
 }
-| .mcp_flag = (if .serena + .cbm == 0 and .shell_searches >= 10 then "MCP UNUSED" else "" end)'
+| .mcp_flag = (if .serena == 0 and .shell_searches >= 10 then "MCP UNUSED" else "" end)'
 if [ -n "$files" ]; then
-printf '%-10s %6s %6s %9s %8s %7s %6s %7s %6s %6s %6s %5s %6s %5s %6s\n' session turns tools cacheMtok out_k ctx_avgk suites repeat blocks shreads serena cbm shsrch cold coldK
+printf '%-10s %6s %6s %9s %8s %7s %6s %7s %6s %6s %6s %5s %6s %5s %6s\n' session turns tools cacheMtok out_k ctx_avgk suites repeat blocks shreads serena mcp shsrch cold coldK
 # Claude Code 2.1.300's api-request rows, a third or more of a long log, are no turn: dropped before jq parses them.
 API='^{"type":"api-request'
 # One helper's searches, call count and final answer's line count, from its own transcript.
@@ -94,16 +94,17 @@ HSUM='sort_by(.t) | reduce .[] as $h ({seen: [], n: 0, o20: 0, o15: 0, rep: 0};
     | .n += 1 | .o20 += (if $h.calls > 20 then 1 else 0 end) | .o15 += (if $h.lines > 15 then 1 else 0 end))
 | [.n, .o20, .o15, .rep] | @tsv'
 COLD=0 COLDK=0 HN=0 H20=0 H15=0 HR=0
-for f in $files; do
-  row=$(grep -v "$API" "$f" | jq -s -r --arg s "$(basename "$f" .jsonl | cut -c1-8)" "$JQ | [\$s, .turns, .tools, .cache_read_M, .output_k, .ctx_avg_k, .suite_runs, .same_cmd_repeats, .hook_blocks, .shell_reads, .serena, .cbm, .shell_searches, .cold, .cold_k, .mcp_flag] | @tsv")
+# One path per line: a config dir with a space in it (an account profile under Application Support) split each path.
+while IFS= read -r f; do
+  row=$(grep -v "$API" "$f" | jq -s -r --arg s "$(basename "$f" .jsonl | cut -c1-8)" "$JQ | [\$s, .turns, .tools, .cache_read_M, .output_k, .ctx_avg_k, .suite_runs, .same_cmd_repeats, .hook_blocks, .shell_reads, .serena, .mcp, .shell_searches, .cold, .cold_k, .mcp_flag] | @tsv")
   awk -F'\t' '{printf "%-10s %6s %6s %9s %8s %7s %6s %7s %6s %6s %6s %5s %6s %5s %6s %s\n",$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16}' <<<"$row"
   COLD=$((COLD + $(cut -f14 <<<"$row"))) COLDK=$((COLDK + $(cut -f15 <<<"$row")))
   compgen -G "${f%.jsonl}/subagents/agent-*.jsonl" >/dev/null || continue
   IFS=$'\t' read -r hn h20 h15 hr < <(for h in "${f%.jsonl}"/subagents/agent-*.jsonl; do grep -v "$API" "$h" | jq -s -c "$HJQ"; done | jq -s -r "$HSUM")
   printf '           helpers %s over20 %s over15 %s repeats %s\n' "$hn" "$h20" "$h15" "$hr"
   HN=$((HN + hn)) H20=$((H20 + h20)) H15=$((H15 + h15)) HR=$((HR + hr))
-done
-grep -hv "$API" $files | jq -s -r --argjson c "$COLD" --argjson ck "$COLDK" --argjson hn "$HN" --argjson h20 "$H20" --argjson h15 "$H15" --argjson hr "$HR" "$JQ | \"TOTAL      \(.turns) turns, \(.tools) tool calls, \(.cache_read_M)M cache-read tokens, \(.output_k)k output, \(.suite_runs) suite/tsc runs (\(.same_cmd_repeats) repeats), \(.hook_blocks) hook blocks, \(.shell_reads) shell reads, \(\$c) cold rewrites (\(\$ck)k tokens), \(\$hn) helpers (\(\$h20) over 20 calls, \(\$h15) answers over 15 lines, \(\$hr) repeated searches)\""
+done <<<"$files"
+while IFS= read -r f; do grep -hv "$API" "$f"; done <<<"$files" | jq -s -r --argjson c "$COLD" --argjson ck "$COLDK" --argjson hn "$HN" --argjson h20 "$H20" --argjson h15 "$H15" --argjson hr "$HR" "$JQ | \"TOTAL      \(.turns) turns, \(.tools) tool calls, \(.cache_read_M)M cache-read tokens, \(.output_k)k output, \(.suite_runs) suite/tsc runs (\(.same_cmd_repeats) repeats), \(.hook_blocks) hook blocks, \(.shell_reads) shell reads, \(\$c) cold rewrites (\(\$ck)k tokens), \(\$hn) helpers (\(\$h20) over 20 calls, \(\$h15) answers over 15 lines, \(\$hr) repeated searches)\""
 fi
 # Codex panes keep no per-turn transcript we parse; their index carries a
 # per-session token total (updated_at is epoch seconds).

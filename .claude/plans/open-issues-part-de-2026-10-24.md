@@ -91,7 +91,7 @@ naming the plugin issue or the host issue, no plugin-only names inside the logic
 - E3 host issue 3147: BUILT (no host commit). Rung 2: the gate that blocks is `hooks/pane-budget-gate.sh`
   :86-123. Its server check already waits 10 s (:97-99). Change: a missing server lets the call through with one
   note per session, and a host-wide stamp lets later sessions skip the wait. The hint `bash-guardrails.sh` ~583
-  does not gate on codebase-memory: it only advises it on an unbounded search, so it is unchanged.
+  does not gate on the code-graph server: it only advises it on an unbounded search, so it is unchanged.
   `read-tracker.sh` ~92 changes as noted in section 2. Root cause of the host's MCP timeouts: host-only, not in
   this unit.
 - E3 host issue 3038: BUILT (the host batch is unmerged). Rung 2: copy the host's `KERN_PROCARGS2` reader

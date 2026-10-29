@@ -1,13 +1,15 @@
 # The triggers that pick the plan tier with no question to the owner (scripts/plan-tier.sh). To change them, copy this file to
 # the project's .claude/plan-triggers.tsv and edit that copy: a project's own file replaces this one whole.
-# One trigger a line, three tab-separated columns: the tier (panel or none), a lowercase extended regex matched
-# against the lowercased batch brief, and the name Auto prints. A panel trigger on any line picks Panel. No plan only
+# One trigger a line, three tab-separated columns: the tier (panel, panel-always or none), a lowercase extended regex
+# matched against the lowercased batch brief, and the name Auto prints. A panel trigger on any line picks Panel; a batch
+# estimated under 150 changed lines then gets one judge, unless a panel-always trigger matched too. No plan only
 # when every item line of "## The issues" matches a none trigger. Anything else is Plan + judge.
 panel	secur|auth(n|z|entic|oriz)|login|password|permission|credential|secret|vulnerab	security
 panel	tenan(t|cy)|isolation	tenant isolation
 panel	billing|payment|money|pricing|invoice|refund|subscription	money or billing
 panel	verification|verifier	verification pipeline
 panel	delet(e|ion)|purge|migrat(e|ion)|drop (table|column)	data deletion or migration
+panel-always	infrastructure|terraform|cloudformation|new (service|queue|database|bucket|server)	new infrastructure
 none	typo|spelling|wording	typo
 none	docs|readme|documentation|changelog	docs
 none	bump|version number|one-number|constant	one-number change

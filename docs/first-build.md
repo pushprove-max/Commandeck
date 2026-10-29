@@ -6,7 +6,10 @@ After setup, the Claude session in the project's main checkout is the
 orchestrator. You tell it what you want in plain words. It writes a batch
 brief with you (the items and how each will be judged done), picks
 a plan tier from the trigger file (no plan, one planner, a plan and a judge, or a panel
-of two plans, two judges and one merge; a risky trigger on a batch that estimates under 150 changed lines gets one judge) and tells you the tier, trigger, models and effort in one line;
+of one plan and two judges; a risky trigger on a batch that estimates under 150 changed lines gets one judge,
+but a batch that adds new infrastructure gets the panel at any size) and tells you the tier, trigger, models and effort in one line.
+The plan check reads each listed issue's text: every case an issue names needs a row under the plan's `## Issue cases`,
+with its file in Steps and its test in Acceptance test;
 change the trigger file or `/plugin` settings, or say so in chat, and once you say go launches a Builder (a batch that
 names no committed plan is refused unless launched with
 the explicit skip shown below; the Builder can take over the unit's

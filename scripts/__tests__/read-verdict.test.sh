@@ -145,5 +145,14 @@ jq -cn '{type: "response_item", payload: {type: "message", role: "user", content
   {type: "response_item", payload: {type: "message", role: "assistant", phase: "final", content: [{type: "output_text", text: "Sample:\n~~~\nVERDICT: NO-GO\n~~~"}]}}' > "$T/tilde-rollout.jsonl"
 check "a Codex log's tilde-fenced sample verdict is not the answer" "VERDICT: GO" \
   "$(eval "$(sed -n '/^codex_report() {$/,/^}$/p' "$REAL/scripts/read-verdict.sh")"; ORDINAL=0 codex_report "$T/tilde-rollout.jsonl" | tail -1)"
+# Issue 445: Orca starts a pane's claude from the native install's versions/<version> binary with argv[0] claude, so the
+# kernel's process name is the version and pgrep -x claude never lists it; the pane's session is still found by argv[0].
+mkdir -p "$T/vbox/versions"; cp "$(command -v sleep)" "$T/vbox/versions/9.9.9"
+( (export ORCA_TERMINAL_HANDLE=term_v$$; exec -a claude "$T/vbox/versions/9.9.9" 30) </dev/null >/dev/null 2>&1 & echo $! > "$T/vpid" ); VP=$(cat "$T/vpid")
+echo '{"sessionId":"s-versioned"}' > "$T/home/.claude/sessions/$VP.json"; sleep 0.3
+check "a Claude run from a versioned binary path is still found as the pane's session (issue 445)" "s-versioned" \
+  "$(env -u CLAUDE_CONFIG_DIR HOME="$T/home" bash "$REAL/scripts/read-verdict.sh" --session term_v$$ 2>/dev/null)"
+kill "$VP" 2>/dev/null
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

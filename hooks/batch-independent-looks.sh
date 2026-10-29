@@ -86,7 +86,7 @@ count_calls() {
 }
 if [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ]; then CALLS=$(count_calls); fi
 
-# Read-only: Read/Grep/Glob, serena and codebase-memory lookups, and a Bash
+# Read-only: Read/Grep/Glob, serena lookups, and a Bash
 # call whose every segment is a look (rg/grep, ls, git log/show/diff/status,
 # board/status scripts, and the read filters they pipe into). Segments are read
 # after strip_quoted, so a `|`, `;` or `>` inside quotes is pattern text.
@@ -99,8 +99,6 @@ read_only() {
   case "$TOOL" in
     Read|Grep|Glob|LS) return 0 ;;
     mcp__serena__find_*|mcp__serena__get_symbols_overview|mcp__serena__get_diagnostics_for_file) return 0 ;;
-    mcp__codebase-memory__index_repository|mcp__codebase-memory__delete_project|mcp__codebase-memory__ingest_traces|mcp__codebase-memory__manage_adr) return 1 ;;
-    mcp__codebase-memory__*) return 0 ;;
     Bash) ;;
     *) return 1 ;;
   esac

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PostToolUse hook: nudge a worker that searches source with the shell and
-# never asks serena or codebase-memory.
+# never asks serena.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
 # Strict tier: off unless the project turned it on (lib/project.sh).
@@ -12,14 +12,13 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
 IS_ERROR=$(echo "$INPUT" | jq -r 'if (.tool_response|type) == "object" then (.tool_response.is_error // (.tool_response.error|if . then true else false end) // false) else false end' 2>/dev/null)
 [ "$(echo "$INPUT" | jq -r '.hook_event_name // empty')" = PostToolUseFailure ] && IS_ERROR=true
 
-# A worker that searches with the shell and never asks serena or
-# codebase-memory is working blind (cut 1, 2026-09-18: 245 rg, 0 MCP calls).
+# A worker that searches with the shell and never asks serena is working blind (cut 1, 2026-09-18: 245 rg, 0 MCP calls).
 # Any MCP call, even an errored one, shows the tools are in use. Past this many
 # shell searches with none, the worker is nudged, once. Main is not sent a
 # message: the worker records it in its evidence file.
 MCP_UNUSED_AFTER=25
 MCP_KEY=$(echo "$INPUT" | jq -r '.session_id // empty'); MCP_KEY=${MCP_KEY:-${CLAUDE_SESSION_ID:-${PPID}}}
-case "$TOOL_NAME" in mcp__serena__*|mcp__codebase-memory__*) : > "/tmp/claude-mcp-used-$MCP_KEY" ;; esac
+case "$TOOL_NAME" in mcp__serena__*) : > "/tmp/claude-mcp-used-$MCP_KEY" ;; esac
 [ "${TOOL_NAME#mcp__}" != "$TOOL_NAME" ] && exit 0
 # Only a search naming a source root the symbols gate covers, or a .ts/.tsx/.py
 # file, counts: a builder editing .claude/hooks has nothing for serena to answer,
@@ -80,7 +79,7 @@ PY
   DIR=${CLAUDE_PROJECT_DIR:-$PWD}
   GD=$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-dir 2>/dev/null) || return 0
   [ "$GD" = "$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$DIR" rev-parse --git-common-dir 2>/dev/null)" ] && return 0
-  echo "MCP UNUSED: $MCP_UNUSED_AFTER shell searches and not one serena or codebase-memory call. Use serena find_symbol / find_referencing_symbols and codebase-memory search_graph / trace_path for code; if they are missing from this session, stop and say so. Record it under \`## Main-only (deferred)\` in the evidence file and go on." >&2
+  echo "MCP UNUSED: $MCP_UNUSED_AFTER shell searches and not one serena call. Use serena find_symbol / find_referencing_symbols for code; if they are missing from this session, stop and say so. Record it under \`## Main-only (deferred)\` in the evidence file and go on." >&2
   return 2
 }
 

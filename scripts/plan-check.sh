@@ -12,9 +12,30 @@
 # checkout) for stdin.
 # Pass: prints "size <files> <lines>" when a plan was read, exit 0. Fault: the first REFUSED: line on stderr, exit 2.
 # Writes nothing.
+# plan-check.sh --issue-cases <n> -- the cases issue n's own text names, one per line `<Fix|Done|Body> <k> <first 80
+# chars>` (issue 444): a top-level list item outside a fence under a `## Fix...` or `## Done means` heading, a section
+# with no such item being one case, and the whole body the one Body section when the issue has neither (md_items.py,
+# the Markdown reader). A failed or slow gh read, or a list shape the reader does not know, is
+# `REFUSED: issue #<n> cases: check not run`, exit 2: it never reads as an issue with fewer cases.
 set -uo pipefail
 USAGE="usage: plan-check.sh [--batch-only] <plan file | - | ''> <batch or ''> [<label>]"
 case "${1:-}" in --help|-h) echo "$USAGE"; exit 0 ;; esac
+issue_cases() { # <n>
+  local body out err
+  [[ $1 =~ ^[0-9]+$ ]] || { echo "REFUSED: issue cases: '$1' is not an issue number" >&2; return 2; }
+  command -v python3 >/dev/null || { echo "REFUSED: issue #$1 cases: check not run -- python3 is missing" >&2; return 2; }
+  body=$(timeout 20 gh issue view "$1" --json body -q .body 2>/dev/null) \
+    || { echo "REFUSED: issue #$1 cases: check not run -- gh issue view failed or timed out" >&2; return 2; }
+  err=$(mktemp) || { echo "REFUSED: issue #$1 cases: check not run -- no temp file" >&2; return 2; }
+  out=$(PC_BODY=$body python3 -I "$(dirname "${BASH_SOURCE[0]}")/md_items.py" cases 2>"$err") \
+    || { echo "REFUSED: issue #$1 cases: check not run -- $(head -1 "$err" | grep . || echo 'the reader failed')" >&2; rm -f "$err"; return 2; }
+  rm -f "$err"
+  printf '%s\n' "$out"
+}
+if [ "${1:-}" = --issue-cases ]; then
+  [ $# -eq 2 ] || { echo "usage: plan-check.sh --issue-cases <issue number>" >&2; exit 2; }
+  issue_cases "$2"; exit
+fi
 ONLY=0
 [ "${1-}" != --batch-only ] || { ONLY=1; shift; }
 [ $# -ge 2 ] && [ $# -le 3 ] || { echo "$USAGE" >&2; exit 2; }
@@ -70,7 +91,84 @@ refuse_placeholders() { # <label> <text>
 # A Skip batch has no plan: its own list is the only one.
 { [ -n "$BATCH" ] && has_section 'what can go wrong' <<<"$BT"; } || { [ -n "$SRC" ] && has_section 'what can go wrong' <<<"$PT"; } \
   || refuse "neither ${BATCH:-the batch (none found)} nor ${PLAN:-its plan (none: a Skip batch)} has a What can go wrong section with cases under it (a '## What can go wrong' heading): limits (empty, tiny, huge, cut off mid-way), timing (two actions or replies in either order, retries, timeouts) and odd data (special characters, missing fields, duplicates, old shapes), one named test per case"
-[ -n "$SRC" ] || exit 0
+# Issue 444: every case an issue the unit closes states in its own text has one `## Issue cases` row
+# `- #<n> <Fix|Done|Body> <k> -- <path> -- <test name>`, whose path is a `## Steps` path (a `{a,b}` group counts as each
+# path it expands to) and whose test name is in `## Acceptance test`. The issues are the batch's (brief-issues.sh: its
+# numbered list, text items with no number skipped) and any `Closes:` line of the plan or batch. A planless (Skip)
+# batch, or a plan in the format before 0.55.0 (`issue_check legacy`: no Steps to check against), carries its own rows,
+# checked for a path and a test name only.
+issue_check() {
+  local label text planless nums n c cases='' out
+  if [ -n "$SRC" ]; then label=$PLAN text=$PT planless=0; else label=$BATCH text=$BT planless=1; fi
+  [ "${1-}" != legacy ] || planless=1
+  nums=$({ [ -z "$BATCH" ] || bash "$(dirname "${BASH_SOURCE[0]}")/brief-issues.sh" "$BATCH" | jq -r '.[] | numbers'
+    grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un || true)
+  [ -n "$nums" ] || return 0
+  for n in $nums; do
+    c=$(issue_cases "$n") || exit 2
+    cases+=$(sed "s/^/$n /" <<<"$c")$'\n'
+  done
+  out=$(PC_CASES=$cases PC_TEXT=$text python3 -I - "$label" "$planless" <<'PY'
+import os, re, sys
+label, planless = sys.argv[1], sys.argv[2] == '1'
+rows, steps, accept, sec, fence = {}, set(), [], '', False
+
+def expand(path):
+    """scripts/{a,b}.sh is scripts/a.sh and scripts/b.sh; a group with no comma is literal."""
+    m = re.search(r'\{([^{}]*,[^{}]*)\}', path)
+    if not m:
+        return [path]
+    return [p for alt in m.group(1).split(',') for p in expand(path[:m.start()] + alt + path[m.end():])]
+
+for line in os.environ['PC_TEXT'].split('\n'):
+    if line.startswith('```'):
+        fence = not fence
+        continue
+    if fence:
+        continue
+    h = re.match(r'(#+)[ \t]+(.*)', line)
+    if h:
+        if len(h.group(1)) <= 2:
+            sec = h.group(2).strip().lower()
+        continue
+    if sec == 'issue cases':
+        m = re.match(r'[-*] #(\d+) (Fix|Done|Body) (\d+) -- (.*?) -- (.*?)\s*$', line)
+        if m:
+            rows.setdefault((m.group(1), m.group(2), m.group(3)), []).append((m.group(4).strip('` '), m.group(5)))
+    elif sec == 'steps':
+        m = re.match(r'- (?:new|modify|delete) (\S+)', line)
+        if m:
+            steps.update(expand(m.group(1).strip('`')))
+    elif sec.startswith('acceptance test'):
+        accept.append(line)
+accept = '\n'.join(accept)
+missing, bad = [], []
+for case in os.environ['PC_CASES'].split('\n'):
+    if not case:
+        continue
+    n, kind, k, text = (case.split(' ', 3) + [''])[:4]
+    key = '#%s %s %s' % (n, kind, k)
+    if (n, kind, k) not in rows:
+        missing.append('  - %s: %s' % (key, text))
+        continue
+    for path, test in rows[(n, kind, k)]:
+        if not path or not test:
+            bad.append('  - %s: the row needs `-- <path> -- <test name>`' % key)
+        elif not planless and path not in steps:
+            bad.append('  - %s: path %s is not a ## Steps path' % (key, path))
+        elif not planless and test not in accept:
+            bad.append('  - %s: test "%s" is not in ## Acceptance test' % (key, test))
+if missing:
+    print('REFUSED: %s drops issue cases (each needs a `- #<n> <Fix|Done|Body> <k> -- <path> -- <test name>` row under ## Issue cases):' % label)
+    print('\n'.join(missing))
+if bad:
+    print('REFUSED: %s has issue case rows that do not hold:' % label)
+    print('\n'.join(bad))
+sys.exit(2 if missing or bad else 0)
+PY
+) || { [ -n "$out" ] || out="REFUSED: $label issue cases: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
+}
+[ -n "$SRC" ] || { issue_check; exit 0; }
 # Lines inside a fenced block (fence.sh's rule: backticks or tildes, indented or not) are never the plan's own.
 facts=$(awk "$PP_AWK_FENCE"'function flush() { if (item != "" && !has) print "untested " substr(item, 1, 60); item = ""; has = 0 }
   fence($0) || flen { next } {
@@ -98,6 +196,7 @@ done < <(grep '^mockup ' <<<"$facts")
 # still passes, with a warning; a plan with any of the three is checked in full.
 if ! awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^Goal:/ || /^##[ \t]+(Steps|Facts)[ \t]*$/ { f = 1 } END { exit !f }' <<<"$PT"; then
   echo "WARNING: $PLAN is in the plan format before 0.55.0, so its Facts and budget were not checked: rewrite it with one Goal: line, a ## Steps section and a ## Facts section" >&2
+  issue_check legacy
   echo "size $SIZE"; exit 0
 fi
 # Issues 426 and 427 run last, so every earlier refusal keeps its priority. A check that cannot run refuses with
@@ -183,7 +282,7 @@ CAPS = [('Why', 1200), ('Prior art', 1600), ('Data design', 5500), ('What can go
         ('Cuts', 10700), ('Not in this unit', 700), ('Accepted failure modes', 1100), ('Stated limits', 600),
         ('Acceptance test', 3200), ('Verification', 1600), ('Routing', 700), ('How this will be reviewed', 1100),
         ('Claims to falsify', 1600), ('Plan change log', 5300), ('Author self-check', 800), ('Facts', 4000),
-        ('Steps', 2000)]
+        ('Steps', 2000), ('Issue cases', 4000)]
 OTHER = 2000
 # Lines the plan-author spec in seat.sh requires word for word: an empty What can go wrong, and the opening of
 # `## Stated limits`. plan-check-budget.test.sh proves each entry is in seat.sh; add none that is not.
@@ -259,4 +358,5 @@ for b in bad:
 sys.exit(2 if bad else 0)
 PY
 ) || { [ -n "$out" ] || out="REFUSED: $PLAN budget: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
+issue_check
 echo "size $SIZE"

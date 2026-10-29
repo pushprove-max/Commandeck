@@ -13,7 +13,6 @@ add-on succeeded.
 | Add-on | What it adds | Local cost or setup behavior |
 |---|---|---|
 | serena | Symbol lookup | Language-server processes; selecting it enables its hook setting unless explicitly disabled. |
-| codebase-memory | Repository graph | Background indexer and MCP tools; manual first install, then guarded updates and a tool-list check. |
 | agent-browser | Browser automation | Global npm package and a browser download. |
 | ui-themes | Theme skills | Installed by a plugin command; loaded when requested. |
 | Engineering-skills add-on | Engineering skills | No one-line installer in this registry; skill descriptions add session context. |

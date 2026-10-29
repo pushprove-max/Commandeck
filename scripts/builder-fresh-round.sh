@@ -3,7 +3,9 @@
 # session of the same pane: wait until the pane is idle and stays idle, type /clear, wait for the new session,
 # then type the pointer to the hand-off file. Same pane, handle, Orca task and dispatch; new transcript. With a
 # seat record, the new session's id is appended as its last session= line, which main-watch.sh reads, so main
-# watches the new log and not the cleared one.
+# watches the new log and not the cleared one. A fix round (<unit>-fix-r<N>.md) skips the /clear, and types no
+# /model or /effort, when the pane's one live session is under the Builder clear line on this round's model and
+# effort (issue 445); the reason for a fresh round is logged.
 # builder-codex-pass.sh runs it after a NO-GO pass, and builder-add-work.sh when main adds work, each as a plain
 # background child. It waits while the pane is busy (saying so, and for how long), until the pane is gone, Orca fails
 # 5 tries in a row, or MAXW seconds (COMMANDECK_FRESH_ROUND_MAX_SECONDS, 1800) pass, when main is told; one hand-off
@@ -18,6 +20,8 @@ HAND=${2:?usage: builder-fresh-round.sh <handle> <hand-off file> [<seat record>]
 REC=${3:-}
 ARGS=("$@")
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/project.sh"
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SETTLE=${COMMANDECK_FRESH_ROUND_SETTLE_SECONDS:-20}
 MAXW=${COMMANDECK_FRESH_ROUND_MAX_SECONDS:-1800}   # the longest this waits on a busy pane before telling main
 # idle <ms> -- the pane is idle within <ms>. Orca's answer is kept in W: a busy pane is a wait that timed out.
@@ -99,10 +103,6 @@ while :; do
   fi
   sleep "$SETTLE"
 done
-STAMP=$(mktemp) || fail "cannot make a temp file; nothing typed"
-trap 'rm -f "$STAMP"' EXIT
-send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing typed"
-idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
 # Issue 313, the fixer: /clear keeps the model and effort the pane opened with. Only a fix hand-off
 # (<unit>-fix-r<N>.md) switches anything, and its round is the N in the name (issue 355): 1 is the first fix round, a
 # later N a later one, so a re-run of an older hand-off keeps its own round and a sparse or pruned set of fix-r files
@@ -121,31 +121,76 @@ elif [[ ${HAND##*/} =~ ^(.+)-handoff\.md$ ]]; then
   done
   [ "$LAST" = 0 ] || [ "$(tail -n 1 "$LASTF")" != "VERDICT: NO-GO" ] || ROUND=$LAST
 fi
-if [ -n "$ROUND" ] && [ -n "$REC" ] && [ -f "$REC" ]; then
-  # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take stops the hand-off.
+# pair -- this round's model and effort (WM, WE, RULE) and the pane's now (CM, CE). A /plugin config key the fixer role
+# does not take is left in PAIRERR, not told: the warm decision below reads it before /clear, and the hand-off stops with it
+# after /clear.
+PAIRERR=
+pair() {
+  # pick <var> <field> <routing path> -- the key's value, else routing's; a value the key does not take is PAIRERR.
   SRC=routing
   pick() { local v rc=0; v=$(pp_role_option fixer "$2" 2>&1) || rc=$?
-    case $rc in 0) SRC=config ;; 1) v=$(jq -r "$3 // empty" "$(pp_routing)") ;; *) tell "${v#REFUSED: }; nothing switched, the hand-off pointer was not typed; the round of $HAND stays in the old session." ;; esac
+    case $rc in 0) SRC=config ;; 1) v=$(jq -r "$3 // empty" "$(pp_routing)") ;; *) PAIRERR=${v#REFUSED: }; return 1 ;; esac
     printf -v "$1" '%s' "$v"; }
-  rc=0; EN=$(pp_role_option fixer enabled 2>&1) || rc=$?
-  [ "$rc" != 2 ] || tell "${EN#REFUSED: }; nothing switched, the hand-off pointer was not typed; the round of $HAND stays in the old session."
+  local rc=0; EN=$(pp_role_option fixer enabled 2>&1) || rc=$?
+  [ "$rc" != 2 ] || { PAIRERR=${EN#REFUSED: }; return 1; }
   # The pane's model and effort now: the last switch the record names, else the launch's own command.
   CM=$(sed -n 's/^model=//p' "$REC" | tail -1); [ -n "$CM" ] || CM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   CE=$(sed -n 's/^effort=//p' "$REC" | tail -1); [ -n "$CE" ] || CE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   if [ "$EN" = false ]; then RULE=off WM=builder WE=builder
-  elif [ "$ROUND" -le 1 ]; then pick WM firstModel .roles.fixer.first.model; pick WE firstEffort .roles.fixer.first.effort; RULE=first:$SRC
-  else pick WM model .roles.fixer.model; pick WE effort .roles.fixer.effort; RULE=later:$SRC; fi
+  elif [ "$ROUND" -le 1 ]; then pick WM firstModel .roles.fixer.first.model && pick WE firstEffort .roles.fixer.first.effort || return 1; RULE=first:$SRC
+  else pick WM model .roles.fixer.model && pick WE effort .roles.fixer.effort || return 1; RULE=later:$SRC; fi
   # builder: the Builder's launched model or effort, which the pane keeps.
   [ "$WM" != builder ] || WM=$(sed -n 's/^cmd=.*--model[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
   [ "$WE" != builder ] || WE=$(sed -n 's/^cmd=.*--effort[ =]\([^ ]*\).*/\1/p' "$REC" | tail -1)
-  if [ -n "$WM" ] && [[ $CM != *"$WM"* ]]; then
-    send "/model $WM" || fail "typed /clear but typing /model $WM into $H failed (${SENT:-no answer})"
-    idle 120000 || fail "typed /model $WM but $H was not idle within 120s; the hand-off pointer was not typed"
-  fi
-  # /effort takes in place in an idle Claude pane (checked on a live pane for issue 313), as seat.sh effort sends it.
-  if [ -n "$WE" ] && [ "$CE" != "$WE" ]; then
-    send "/effort $WE" || fail "typed /clear but typing /effort $WE into $H failed (${SENT:-no answer})"
-    idle 120000 || fail "typed /effort $WE but $H was not idle within 120s; the hand-off pointer was not typed"
+}
+HASPAIR=0
+if [ -n "$ROUND" ] && [ -n "$REC" ] && [ -f "$REC" ]; then HASPAIR=1; pair || true; fi
+# Issue 445: a fix round (<unit>-fix-r<N>.md) goes to the session live in this pane, its warm cache kept, only when all
+# hold: the pane names one live session; that session's own log (never a newer transcript of another session) gives a
+# context strictly under the Builder clear line (equal is fresh); and the round's model and effort are the pane's now, so
+# no /model or /effort (either re-sends the whole context uncached) is needed. Otherwise the round is fresh (/clear),
+# the reason logged. A context reset (<unit>-handoff.md) is always fresh. Only the config dir this run reads is searched:
+# a session under another one has an unreadable log, so its round is fresh.
+WARM=0 WHY="not a fix-r hand-off"
+case ${HAND##*/} in
+  *-fix-r[0-9]*.md)
+    SIDS=$(bash "$HERE/read-verdict.sh" --session "$H" 2>/dev/null | grep . || true)
+    if [ "$(grep -c . <<<"$SIDS")" != 1 ]; then WHY="pane $H names $(grep -c . <<<"$SIDS") live sessions, not one"
+    else
+      LOG=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "${HAND%/.claude/briefs/*}")/$SIDS.jsonl
+      CTX=$(pp_session_cache "${HAND%/.claude/briefs/*}" "$LOG" | jq -r '.ctx // empty' 2>/dev/null || true)
+      if ! [[ $CTX =~ ^[0-9]+$ ]]; then WHY="no context reading in session $SIDS's log"
+      elif ! WIN=$(pp_builder_clear_line "$PP_MAIN" 2>&1); then WHY=$WIN
+      elif ! [[ $WIN =~ ^[0-9]+$ ]]; then WHY="builder.clearLine is $WIN"
+      elif [ "$CTX" -ge "$WIN" ]; then WHY="ctx $CTX is not under the clear line $WIN"
+      elif [ "$HASPAIR" = 0 ]; then WHY="no seat record to read the pane's model and effort from"
+      elif [ -n "$PAIRERR" ]; then WHY="the round's model or effort is refused: $PAIRERR"
+      elif { [ -n "$WM" ] && [[ $CM != *"$WM"* ]]; } || { [ -n "$WE" ] && [ "$CE" != "$WE" ]; }; then
+        WHY="the round runs ${WM:-the launch model} ${WE:-the launch effort} but the live session runs ${CM:-an unrecorded model} ${CE:-an unrecorded effort}"
+      else WARM=1
+      fi
+    fi ;;
+esac
+if [ "$WARM" = 1 ]; then echo "builder-fresh-round: warm: ctx $CTX < clear line $WIN" >&2; else echo "builder-fresh-round: fresh: $WHY" >&2; fi
+STAMP=$(mktemp) || fail "cannot make a temp file; nothing typed"
+trap 'rm -f "$STAMP"' EXIT
+if [ "$WARM" = 0 ]; then
+  send /clear || fail "typing /clear into $H failed (${SENT:-no answer}); nothing typed"
+  idle 120000 || fail "typed /clear but the new session of $H was not idle within 120s; the hand-off pointer was not typed"
+fi
+if [ "$HASPAIR" = 1 ]; then
+  [ -z "$PAIRERR" ] || tell "$PAIRERR; nothing switched, the hand-off pointer was not typed; the round of $HAND stays in the old session."
+  # Only into a cleared session: a warm one already runs this pair.
+  if [ "$WARM" = 0 ]; then
+    if [ -n "$WM" ] && [[ $CM != *"$WM"* ]]; then
+      send "/model $WM" || fail "typed /clear but typing /model $WM into $H failed (${SENT:-no answer})"
+      idle 120000 || fail "typed /model $WM but $H was not idle within 120s; the hand-off pointer was not typed"
+    fi
+    # /effort takes in place in an idle Claude pane (checked on a live pane for issue 313), as seat.sh effort sends it.
+    if [ -n "$WE" ] && [ "$CE" != "$WE" ]; then
+      send "/effort $WE" || fail "typed /clear but typing /effort $WE into $H failed (${SENT:-no answer})"
+      idle 120000 || fail "typed /effort $WE but $H was not idle within 120s; the hand-off pointer was not typed"
+    fi
   fi
   { [ -z "$WM" ] || echo "model=$WM"; [ -z "$WE" ] || echo "effort=$WE"; } >> "$REC"
   echo "fixer=$RULE model=${WM:-launch} effort=${WE:-launch} round=$ROUND" >> "$REC"
@@ -157,7 +202,7 @@ U=$(sed -n 's/^unit=//p' "$REC" 2>/dev/null | tail -1)
 [ -z "$U" ] || timeout 8 orca-ide terminal set-pane-title --terminal "$H" --title "$(pane_title builder "$U")" >/dev/null 2>&1 || true
 send "Your task spec is the file $HAND. Read all of it now and do what it says." \
   || fail "typed /clear but typing the hand-off pointer into $H failed (${SENT:-no answer})"
-echo "builder-fresh-round: $H cleared and handed $HAND"
+if [ "$WARM" = 1 ]; then echo "builder-fresh-round: $H handed $HAND in its live session"; else echo "builder-fresh-round: $H cleared and handed $HAND"; fi
 [ -n "$REC" ] && [ -f "$REC" ] || exit 0
 # The pane that ran this pass is the live Builder. A relaunch leaves its record on the dead handle, and the first-line
 # readers (main-watch, board, pp_watched_seats) would keep watching and protecting that one (host issue 3011): rewrite
@@ -168,7 +213,9 @@ if [ -n "$CUR" ] && [ "$CUR" != "$H" ]; then
   awk -v h="$H" -v o="$CUR" '!d && /^handle=/ { print "handle=" h; d = 1; next } { print } END { print "prior_pane=" o }' "$REC" > "$REC.tmp" && mv "$REC.tmp" "$REC" \
     && echo "builder-fresh-round: $REC now names pane $H"
 fi
-# The new session is the log written since /clear that carries the pointer, other than the one the record names.
+# The new session is the log written since /clear that carries the pointer, other than the one the record names. A warm
+# round kept its session, so the record already names it.
+[ "$WARM" = 0 ] || exit 0
 OLD=$(sed -n 's/^session=//p' "$REC" | tail -1)
 PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pp_slug "${HAND%/.claude/briefs/*}")
 NEW=

@@ -71,9 +71,20 @@ PATTERN='\b('"$RUNNERS"')\.(only|skip)\b|\b(xit|xdescribe|fit|fdescribe)\(|\b(it
 # `// skip-ok: <reason>` is the approved-skip marker -- an assertion
 # counter honours exactly this form, so a skip
 # annotated the sanctioned way must not be refused by its sibling guard. The
-# marker is per LINE: annotating one skip does not license the next. A quote or backtick after it means the marker
-# sits in a string (`const s = "// skip-ok: x"; it.skip(`), so it licenses nothing.
-OFFENDERS=$(echo "$CONTENT" | grep -E "$PATTERN" | grep -vE "//[[:space:]]*skip-ok:[^\"'\`]*\$")
+# marker is per LINE: annotating one skip does not license the next. A marker counts only when no quote is open
+# before it: a left-to-right scan of the line tracks one open ' " or backtick (a backslash inside a quote skips the
+# next character), so `const s = "// skip-ok: x"; it.skip(` licenses nothing, while the reason after the marker is
+# free text and may hold an apostrophe (issue 441). A line passes when any of its markers counts.
+OFFENDERS=$(echo "$CONTENT" | grep -E "$PATTERN" | awk -v sq="'" '{
+  n = length($0); q = ""
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1)
+    if (q != "") { if (c == "\\") i++; else if (c == q) q = ""; continue }
+    if (c == "\"" || c == sq || c == "`") { q = c; continue }
+    if (c == "/" && substr($0, i) ~ /^\/\/[[:space:]]*skip-ok:/) next
+  }
+  print
+}')
 if [ -n "$OFFENDERS" ]; then
   MATCH=$(printf '%s\n' "$OFFENDERS" | grep -oE "$PATTERN" | head -1)
   echo "BLOCKED: '$MATCH' in $FILE_PATH skips or focuses tests -- that masks failures and disables coverage." >&2

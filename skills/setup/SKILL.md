@@ -222,7 +222,7 @@ Ask them in this order, up to four questions per call.
     - Add one, or typed as the picker's own text answer, as `<word>=<name>[,<name>...]`: `builder-launch.sh --keep <word>` brings those skills and plugins back for one unit. `--keep-word <word>=<names>`, once per word.
 12. Add-ons, one multi-select question (`multiSelect: true`):
     Ask "Add-ons": All (recommended) | serena | agent-browser | None
-    - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. codebase-memory is updated once installed (setup prints its installer's page until then), only while no session is open. Sends no `--addons`.
+    - All: every add-on in `config/addons.tsv`, installed or updated to its latest on each setup run, no version pinned. Sends no `--addons`.
     - serena: code navigation by symbol; one language-server process per project. Choosing it also turns on the two hooks that read it (`--serena`): the read-tracker nudge and the pane-budget gate.
     - agent-browser: a browser for agents; a download of a few hundred MB.
     - None: install nothing; setup prints each command to run later.

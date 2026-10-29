@@ -36,8 +36,8 @@ registered() { jq -r --arg t "$1" '.hooks.PostToolUse[] | select(.matcher as $m 
 rows() { [ -f "$LOG" ] && jq -s 'length' "$LOG" || echo 0; }
 last() { jq -r ".[-1].$1" <(jq -s . "$LOG"); }
 
-check "hooks.json runs search-log.sh once for each of Read, Grep, Bash, serena and codebase-memory" "1 1 1 1 1" \
-  "$(for t in Read Grep Bash mcp__serena__find_symbol mcp__codebase-memory__search_graph; do registered "$t" | wc -l | tr -d ' '; done | paste -sd' ' -)"
+check "hooks.json runs search-log.sh once for each of Read, Grep, Bash and serena" "1 1 1 1" \
+  "$(for t in Read Grep Bash mcp__serena__find_symbol; do registered "$t" | wc -l | tr -d ' '; done | paste -sd' ' -)"
 check "and not for Edit or Write" "0 0" "$(registered Edit | wc -l | tr -d ' ') $(registered Write | wc -l | tr -d ' ')"
 
 fire "$S-a" Read "{\"file_path\":\"$PROJ/src/r.ts\"}" '{"file":{"content":"x"}}'
@@ -49,8 +49,8 @@ check "Bash rg foo src/: tool bash-grep, symbol-shaped, path src/, hit src/a.ts"
   "$(last tool) $(last symbol_shaped) $(last 'paths[0]') $(last 'hits[0]')"
 fire "$S-a" mcp__serena__find_symbol '{"name_path_pattern":"foo"}' '[]'
 check "serena find_symbol name_path_pattern foo with []: empty and symbol-shaped" "true true" "$(last empty) $(last symbol_shaped)"
-fire "$S-a" mcp__codebase-memory__search_graph '{"query":"foo"}' '[{"type":"text","text":"src/b.ts"}]'
-check "codebase-memory search_graph: one row, size is the text length" "mcp__codebase-memory__search_graph 8" "$(last tool) $(last size)"
+fire "$S-a" mcp__serena__search_for_pattern '{"query":"foo"}' '[{"type":"text","text":"src/b.ts"}]'
+check "serena search_for_pattern: one row, size is the text length" "mcp__serena__search_for_pattern 8" "$(last tool) $(last size)"
 check "five calls so far, five rows" 5 "$(rows)"
 fire "$S-a" Bash '{"command":"ls"}' '{"stdout":"x"}'
 fire "$S-a" mcp__serena__find_symbol '{"name_path_pattern":"foo"}' '{"is_error":true}'

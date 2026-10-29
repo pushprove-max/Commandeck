@@ -60,5 +60,16 @@ done
 check "main: a plain shell pane is allowed"           0 "$(run_main 'orca-ide terminal create --worktree path:/ws/unit-x --command "tail -f ship.log"')"
 check "main: builder-launch.sh is the scripted path" 0 "$(run_main 'bash scripts/builder-launch.sh unit-x .claude/briefs/unit-x.md')"
 
+# Issue 447: an order sent by hand to a Builder's inbox, or to a dispatch inbox, is read only by a pane parked in a wait,
+# so it sat unread while the Builder built what the order cancelled. answer-worker.sh reads the pane and picks the way.
+mkdir -p "$BOX/scratch"
+printf 'handle=term_w\ntask=t1\nrole=builder\nunit=unit-x\n' > "$BOX/scratch/seat-unit-x-builder.txt"
+SEND='orca-ide orchestration send --type status --subject "answer" --body "go with ruling 4"'
+pane '"claude"' working
+check "a hand inbox send to a Builder is blocked and names answer-worker.sh (issue 447)" "2 1" \
+  "$(run "$SEND --to term_w") $(grep -c 'term_w is mid-turn and reads its inbox only while parked in a wait; send it with scripts/answer-worker.sh' "$BOX/err")"
+check "main's hand send to a dispatch inbox is blocked; a worker's is not checked (issue 447)" "2 0" \
+  "$(run_main "$SEND --to dispatch:ctx_1") $(run "$SEND --to dispatch:ctx_1")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

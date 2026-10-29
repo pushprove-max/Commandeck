@@ -152,7 +152,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   edits, runs, tests or judges is `general-purpose` (Sonnet). On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
   helper brief says: python3/rg into /tmp/commandeck, report what is unanswered
-  at 40 turns. A lookup serena, codebase-memory or one `rg` answers stays in
+  at 40 turns. A lookup serena or one `rg` answers stays in
   main; a pure count names Haiku.
 - Large reads (host issue 3165): a read over 10 KB goes to a background `Explore` helper with one precise question and
   the file path, and the answer comes back as a few lines with file:line. Example prompt: "In <log path>, which test

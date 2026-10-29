@@ -99,7 +99,7 @@ check "a value option given a flag is refused and launches nothing" "2:1:0:0:non
 
 # Issue 392: a plan names each mockup on a Mockup: line, and the batch (the Builder's brief) carries it.
 # mockplan <unit> <plan's extra lines> [batch's extra line] -- the unit's plan committed on main, its batch naming it.
-mockplan() { printf 'plan\n%s\n%s\n' "$PSZ" "$2" > "$P/.claude/plans/$1.md"; git -C "$P" add -A .claude/plans && git -C "$P" commit -qm "plan $1"
+mockplan() { printf 'plan\n%s\n%s%s\n' "${PSZ%%$'\n'*}" "$2" "$ICASES" > "$P/.claude/plans/$1.md"; git -C "$P" add -A .claude/plans && git -C "$P" commit -qm "plan $1"
   batchfor "$1"; sed -i.bak "s#\.claude/plans/toy\.md#.claude/plans/$1.md#" "$T/batch.md"; rm -f "$T/batch.md.bak"
   [ -z "${3-}" ] || printf '\n%s\n' "$3" >> "$T/batch.md"; }
 mkdir -p "$P/docs"; echo png > "$P/docs/m1.png"
@@ -128,7 +128,7 @@ mockplan u35 'The export page shows a Coming soon banner today (#12).'; args u35
 check "a fenced or issue-citing placeholder line passes" "0:1:0:1" "$FENCED:$RC:$(grep -cx 'launch builder u35' "$T/seats")"
 # plan-check alone, as seat.sh runs it before a judge, on u31's line in a plan that passes every other check: the
 # refusal exits the script, not a pipeline subshell that lets it go on to print its size line and exit 0.
-printf 'plan\n%s\nThe export page shows a Coming soon banner today.\n\n## What can go wrong\n\n- a case: its test\n' "$PSZ" > "$T/pc-plan.md"
+printf 'plan\n%s\nThe export page shows a Coming soon banner today.\n\n## What can go wrong\n\n- a case: its test\n' "${PSZ%%$'\n'*}" > "$T/pc-plan.md"
 bash "$REAL/scripts/plan-check.sh" "$T/pc-plan.md" '' >"$T/pc.out" 2>"$T/pc.err"; RC=$?
 check "plan-check alone exits 2 on a placeholder context line" "2:1:1:0" \
   "$RC:$(grep -c . "$T/pc.err"):$(grep -c '^REFUSED: .*pc-plan.md line 3 describes placeholder UI' "$T/pc.err"):$(grep -c '^size ' "$T/pc.out")"

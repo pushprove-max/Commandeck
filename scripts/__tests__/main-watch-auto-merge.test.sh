@@ -45,4 +45,42 @@ grep -q 'nogo@\|dirty@' "$F/mq-calls" && fail "a refused unit was merged: $(cat 
 [ "$(mails)" -le 11 ] || fail "12 items, 2 of them routine, made $(mails) wakes"
 for u in nogo dirty failed; do gone $u; done
 
+# Issue 443: the unit driver's last step is the Builder launch, and from there the unit converges with no main turn. The
+# launch mark (drive-<unit>.launched, written by builder-launch.sh under the driver) tells main-watch to settle the
+# Builder's routine round reports unsent; the hand-launched unit below, with the same reports, still posts each one.
+rounds() { # <unit> <pass> <verdict> <n> -- one finished round file
+  printf 'Pass: %s\nVERDICT: %s\n' "$2" "$3" > "$T/ws/$1/.claude/briefs/$1-r$4-reports.md"
+}
+sent() { grep -c . "$T/sends" || true; }
+N=$((N + 1000))
+unit hand; rounds hand review NO-GO 1; rounds hand final GO 2; tick $N; tick $((N + 60))
+[ "$(posts 'main-watch: hand pass 1: NO-GO (review)')" = 1 ] || fail "a hand-launched Builder lost its per-pass post: $(cat "$T/sends")"
+N=$((N + 1000)); unit drv; date +%s > "$S/drive-drv.launched"; rounds drv review NO-GO 1; tick $N
+rounds drv final GO 2; tick $((N + 60)); S1=$(sent); said_done drv; tick $((N + 120)); jobwait drv; tick $((N + 180))
+L="a driven unit's Builder that ends on a closing GO is merged with no message to main (issue 443)"
+[ "$(posts 'main-watch: drv pass')" = 0 ] || fail "$L: a routine round report was posted: $(grep 'drv pass' "$T/sends")"
+[ "$(posts 'main-watch: drv merged into local main')" = 1 ] || fail "$L: the landing was not posted once: $(cat "$T/sends")"
+[ "$(sent)" = "$((S1 + 1))" ] || fail "$L: main got more than the landing after the closing GO: $(tail -n +$((S1 + 1)) "$T/sends")"
+gone drv; gone hand
+echo "ok   $L"
+
+N=$((N + 1000)); unit drv2; date +%s > "$S/drive-drv2.launched"; echo "first-pass GO" > "$F/rule-drv2"; rounds drv2 adversarial GO 1
+tick $N; said_done drv2; tick $((N + 60)); jobwait drv2; tick $((N + 120))
+L="a driven first-pass GO with no stop posts nothing and merges (issue 443)"
+[ "$(posts 'main-watch: drv2 pass 1')" = 0 ] || fail "$L: the first-pass GO was posted: $(grep 'drv2 pass' "$T/sends")"
+grep -q '^drv2@' "$F/mq-calls" || fail "$L: the unit was not merged: $(cat "$F/mq-calls")"
+gone drv2
+echo "ok   $L"
+
+# A live driver owns its unit's seats: a finished seat posts nothing until the driver is gone, then posts as before.
+printf '#!/usr/bin/env bash\ncase "$*" in *list-units*) cat "%s/units" 2>/dev/null ;; esac\nexit 0\n' "$F" > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
+N=$((N + 1000)); unit dlv; echo "the last pass ended NO-GO" > "$F/refuse-dlv"; said_done dlv
+echo 'drive-dlv-1790000100.service loaded active running x' > "$F/units"; tick $N; tick $((N + 60))
+L="main-watch posts no seat finish for a unit a live driver owns (issue 443)"
+[ "$(posts 'seat builder on dlv finished')" = 0 ] || fail "$L: posted while the driver was listed: $(cat "$T/sends")"
+rm -f "$F/units"; tick $((N + 120))
+[ "$(posts 'seat builder on dlv finished')" = 1 ] || fail "$L: the finish was lost once the driver ended: $(cat "$T/sends")"
+gone dlv
+echo "ok   $L"
+
 echo "PASS main-watch-auto-merge.test.sh"

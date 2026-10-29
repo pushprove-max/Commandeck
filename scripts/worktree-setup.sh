@@ -87,7 +87,7 @@ PROJECT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/
 # worker mechanics below -- its Stop notify hook would wake main every relay turn.
 # Same seat test as agent-startup-context.sh: the worktree's directory name.
 if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Staff ]; then
-  COS_MCP_DENY='[{"serverName":"serena"},{"serverName":"codebase-memory"},{"serverName":"context7"},{"serverName":"aws-knowledge"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"},{"serverName":"claude-in-chrome"},{"serverName":"alphaxiv"}]'
+  COS_MCP_DENY='[{"serverName":"serena"},{"serverName":"context7"},{"serverName":"aws-knowledge"},{"serverName":"aws-cloudwatch-dev"},{"serverName":"aws-cloudwatch-prod"},{"serverName":"claude-in-chrome"},{"serverName":"alphaxiv"}]'
   COS_PLUGINS_OFF='{"skill-creator@claude-plugins-official":false,"canvas@claude-canvas":false,"mattpocock-skills@claude-plugins-official":false,"stripe@claude-plugins-official":false,"memoir@memoir":false}'
   # The orca commands the relay pane needs to reach main (owner ruling 2026-10-09); nothing broader.
   COS_ALLOW='["Bash(orca-ide terminal list:*)","Bash(orca-ide terminal send:*)","Bash(orca-ide terminal read:*)","Bash(orca-ide terminal wait:*)","Bash(orca-ide orchestration send:*)","Bash(orca-ide orchestration check:*)","Bash(orca-ide orchestration reply:*)","Bash(orca-ide orchestration inbox:*)"]'
@@ -146,7 +146,7 @@ EXCLUDE="$(cd "$WT" && pwd)/.claude/rules/orchestration.md"
 #    MCP servers, Pendo among them), the claude.ai connectors (Claude Docs),
 #    Chrome and both CloudWatch servers. Measured 2026-09-23 with `claude -p`:
 #    startup 35,280 -> 29,392 input tokens, 185 -> 72 tools. serena,
-#    codebase-memory, context7 and AWS Knowledge stay. OPT BACK for a seat
+#    context7 and AWS Knowledge stay. OPT BACK for a seat
 #    that needs one (a browser walkthrough): edit this worktree's
 #    settings.local.json, e.g.
 #    jq 'del(.disableClaudeAiConnectors) | .deniedMcpServers |= map(select(.serverName != "claude-in-chrome"))'
@@ -259,8 +259,8 @@ if [ "$BUILDER" = 1 ]; then
     | .hooks.PostToolUseFailure = ((.hooks.PostToolUseFailure // []) + reg(null) | unique)
     | .hooks.PostToolBatch = ((.hooks.PostToolBatch // []) + reg(null) | unique)
     | .hooks.PermissionDenied = ((.hooks.PermissionDenied // []) + reg(null) | unique)
-    | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Grep|Glob|Bash|Edit|Write|MultiEdit|Agent|Task|mcp__serena__search_for_pattern|mcp__codebase-memory__search_code|mcp__codebase-memory__search_graph", hooks: [{type: "command", command: $gcmd}]}] | unique)
-    | ([{matcher: "Grep|Glob|Bash|mcp__serena__search_for_pattern|mcp__codebase-memory__search_code|mcp__codebase-memory__search_graph", hooks: [{type: "command", command: $gcmd}]}]) as $counted
+    | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Grep|Glob|Bash|Edit|Write|MultiEdit|Agent|Task|mcp__serena__search_for_pattern", hooks: [{type: "command", command: $gcmd}]}] | unique)
+    | ([{matcher: "Grep|Glob|Bash|mcp__serena__search_for_pattern", hooks: [{type: "command", command: $gcmd}]}]) as $counted
     | .hooks.PostToolUse = (.hooks.PostToolUse + $counted | unique)
     | .hooks.PostToolUseFailure = (.hooks.PostToolUseFailure + $counted | unique)
     | .hooks.SubagentStart = ((.hooks.SubagentStart // []) + reg(null) | unique)

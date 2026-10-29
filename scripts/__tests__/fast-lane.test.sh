@@ -233,5 +233,44 @@ GOT+=" $(land) $(main_tip) $(grep -c 'unstaged edits land did not touch: g1.txt$
 git -C "$PROJ" checkout -q -- g1.txt
 check "a lane path with a glob in it is literal: an unstaged edit on a file it would match lands and is named" "0 0 $G 1" "$GOT"
 
+# Issue 442: main moving on after the review must not force a rebase and a second review of the same work, so the
+# reviewed commit itself is merged; but only when no file changed on both sides, so no auto-merged text that nobody
+# reviewed can land. A refusal leaves main untouched and the lane is put back on main for the next case.
+main_commit() { echo "$1" > "$PROJ/$1"; git -C "$PROJ" add -- "$1"; git -C "$PROJ" commit -q -m "$1"; git -C "$PROJ" rev-parse HEAD; }
+lane_sync() { git -C "$FAST" reset -q --hard main; }
+parents() { git -C "$PROJ" rev-list --parents -1 main | wc -w | tr -d ' '; }
+dirty() { git -C "$PROJ" status --porcelain | wc -l | tr -d ' '; }
+reset_main; lane_sync
+E=$(lane_commit e); review 'VERDICT: GO'
+M=$(main_commit m.txt)
+GOT="$(land) $(git -C "$PROJ" merge-base --is-ancestor "$E" main && echo has-e) $(git -C "$PROJ" merge-base --is-ancestor "$M" main && echo has-m) $(parents) $([ -e "$REC" ] && echo kept || echo gone)"
+check "a reviewed commit lands when main moved after the review (issue 442)" "0 has-e has-m 3 gone" "$GOT"
+
+lane_sync; seq 1 10 > "$FAST/f.txt"; git -C "$FAST" add f.txt; git -C "$FAST" commit -q -m f; review 'VERDICT: GO'; land >/dev/null
+sed -i.bak '10s/.*/lane/' "$FAST/f.txt"; rm -f "$FAST/f.txt.bak"; git -C "$FAST" commit -q -am f-lane; review 'VERDICT: GO'
+sed -i.bak '1s/.*/main/' "$PROJ/f.txt"; rm -f "$PROJ/f.txt.bak"; git -C "$PROJ" commit -q -am f-main; M=$(main_tip)
+check "a same-file edit git would merge cleanly still refuses, main untouched (issue 442)" "2 $M 0 1" \
+  "$(land) $(main_tip) $(dirty) $(grep -c 'f.txt' "$T/land.out")"
+
+lane_sync; lane_commit rn >/dev/null; review 'VERDICT: GO'; land >/dev/null
+lane_sync; git -C "$FAST" mv rn.txt rn2.txt; git -C "$FAST" commit -q -m mv; review 'VERDICT: GO'
+echo edited > "$PROJ/rn.txt"; git -C "$PROJ" commit -q -am rn-main; M=$(main_tip)
+check "a lane rename that main edited on the old path refuses (issue 442)" "2 $M 0" "$(land) $(main_tip) $(dirty)"
+
+# The first land merges and then refuses on a lane path a post-merge hook dirtied. Its retry finds the reviewed commit
+# already in main: it merges nothing, still checks the lane paths from the recorded base, and lands once they are clean.
+lane_sync; lane_commit rt >/dev/null; review 'VERDICT: GO'; main_commit mt.txt >/dev/null
+hook 'echo hook > rt.txt'
+GOT="$(land)"; MC=$(main_tip); rm -f "$HOOK"
+GOT+=" $(land) $(grep -c 'at: rt.txt$' "$T/land.out") $([ "$(main_tip)" = "$MC" ] && echo same)"
+git -C "$PROJ" checkout -q -- rt.txt
+GOT+=" $(land) $([ "$(main_tip)" = "$MC" ] && echo same) $(parents) $([ -e "$REC" ] && echo kept || echo gone)"
+check "a retry after a landed merge commit merges nothing and checks the lane paths again (issue 442)" "2 2 1 same 0 same 3 gone" "$GOT"
+
+lane_sync; mkdir -p "$FAST/x"; echo y > "$FAST/x/y"; git -C "$FAST" add x; git -C "$FAST" commit -q -m x-dir; review 'VERDICT: GO'
+M=$(main_commit x)
+check "a merge git cannot finish is aborted and main is untouched (issue 442)" "2 $M 0 no" \
+  "$(land) $(main_tip) $(dirty) $([ -e "$PROJ/.git/MERGE_HEAD" ] && echo yes || echo no)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

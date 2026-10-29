@@ -104,7 +104,7 @@ check "and the decisions that carry a Test: line, on it or on a line below it, a
 planned_as h2 "$(printf 'plan of h2\n\n## Accepted failure modes\n\n- a lost wake: main reads the board next.\n' )"
 fp h2
 check "a plan with no size line is refused, nothing on main" "2:1:none" "$RC:$(grep -c 'REFUSED: .* has no size line' "$T/out"):$(onmain h2)"
-planned_as h3 "$(printf 'plan of h3\n* Planned size: ~2 files, ~40 lines (tests ~20)\n\n## Decisions\n\n1. One thing. Test: none, a doc line.\n')"
+planned_as h3 "$(printf 'plan of h3\n* Planned size: ~2 files, ~40 lines (tests ~20)%s\n\n## Decisions\n\n1. One thing. Test: none, a doc line.\n' "$ICASES")"
 fp h3
 check "a size line with a * bullet, ~ and a note, and a decision whose Test: says none, is taken" "0:plan of h3" "$RC:$(onmain h3)"
 planned_as h4 "$(printf 'plan of h4\n%s\n' "$PSZ")"
@@ -118,7 +118,7 @@ check "the plan's own What can go wrong section stands in for the batch's" "0:pl
 # Issue 362: a plan under 150 planned lines that one judge sent back launches when main's rulings, written after the
 # judge ran, stand in for the revision; without them, or at 150 lines, or beside a second judge's record, it is refused.
 small() { # <unit> <changed lines> -- a plan sol judged NO-GO, 1 hour ago, with no revision
-  fpunit "$1"; printf 'plan of %s\n- Planned size: 4 files, %s changed lines\n' "$1" "$2" > "$WS/$1/.claude/plans/$1.md"
+  fpunit "$1"; printf 'plan of %s\n- Planned size: 4 files, %s changed lines%s\n' "$1" "$2" "$ICASES" > "$WS/$1/.claude/plans/$1.md"
   judged "$1" NO-GO 200 sol; touch -d '1 hour ago' "$SCR/seat-$1-plan-judge-sol.txt"; }
 rulings() { mkdir -p "$P/.claude/briefs"; printf '1. accept the finding about the lock.\n' > "$P/.claude/briefs/$1-main-rulings.md"; }
 small n1 80; fp n1
@@ -137,6 +137,38 @@ check "a Panel's second judge on the same plan: main's rulings do not stand in" 
 printf '\nan edit after the judge\n' >> "$WS/n5/.claude/plans/n5.md"; rm -f "$SCR/seat-n5-plan-judge-fable.txt"; fp n5
 check "a small NO-GO plan edited after the judge read it is refused, nothing on main" "2:none" "$RC:$(onmain n5)"
 rm -f "$HOME/.claude/settings.json"
+
+# Issue 444: a bundle whose every issue states its fix (a Fix case in the issue's own text) has no revise session at any
+# size, so a plan over the line that one judge sent back launches on main's newer rulings. The shared fixture: a unit
+# whose plan says 150 changed lines, the judge's NO-GO an hour old, main's rulings newer, and issue 1 (the batch's one)
+# with the body kind given, which plan-check --issue-cases reads from the gh stub.
+mkdir -p "$T/gh"
+printf '#!/usr/bin/env bash\ncat "%s/gh/$3" 2>/dev/null || printf "## Fix\\n\\n- do it\\n"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+fixstated() { # <unit> <Fix|Done means> <judge: sol|fable>
+  fpunit "$1"; printf 'plan of %s\n- Planned size: 4 files, 150 changed lines\n\n## Issue cases\n\n- #1 %s 1 -- src/x.ts -- t-one\n' "$1" "${2%% *}" > "$WS/$1/.claude/plans/$1.md"
+  printf '## %s\n\n- the one case\n' "$2" > "$T/gh/1"
+  judged "$1" NO-GO 200 "$3"; touch -d '1 hour ago' "$SCR/seat-$1-plan-judge-$3.txt"; rulings "$1"; }
+fixstated fs1 Fix sol; fp fs1
+out="$RC:$(onmain fs1):$(grep -cx 'launch builder fs1' "$T/seats"):$(grep -c 'launch plan-author' "$T/seats"):$(grep -c "^plan: plan-judge-sol returned NO-GO; main's rulings stand in for the revision (every issue states its fix)" "$T/out")"
+fixstated fs2 'Done means' sol; fp fs2
+out+=" $RC:$(onmain fs2):$(grep -c 'or one whose every issue has a Fix case' "$T/out")"
+check "a fix-stated plan over 150 lines launches on a NO-GO with main's rulings and no revise (issue 444)" \
+  "0:plan of fs1:1:0:1 2:none:1" "$out"
+
+# The selected judge's NO-GO is the one main's rulings answer: Fable's, only while Sol is off in /plugin config (plan-tier.sh
+# then runs Fable alone). With Sol on, a Fable NO-GO needs its revision; a value the Sol key does not take stops the launch.
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": false}}}}' > "$HOME/.claude/settings.json"
+fixstated ff1 Fix fable; fp ff1
+out="soloff=$RC:$(onmain ff1):$(grep -c "^plan: plan-judge-fable returned NO-GO; main's rulings stand in" "$T/out")"
+rm -f "$HOME/.claude/settings.json"
+fixstated ff2 Fix fable; fp ff2
+out+=" unset=$RC:$(onmain ff2)"
+echo '{"pluginConfigs": {"commandeck@commandeck": {"options": {"planJudgeSolEnabled": "maybe"}}}}' > "$HOME/.claude/settings.json"
+fixstated ff3 Fix fable; fp ff3
+out+=" maybe=$RC:$(onmain ff3):$(grep -c '^REFUSED: /plugin config planJudgeSolEnabled = maybe' "$T/out")"
+rm -f "$HOME/.claude/settings.json"
+check "a sole Fable NO-GO launches on main's newer rulings only while Sol is off (issue 444)" \
+  "soloff=0:plan of ff1:1 unset=2:none maybe=2:none:1" "$out"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

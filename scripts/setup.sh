@@ -671,8 +671,7 @@ NOTES+=("main lean: start main with claude --settings $PP_MAIN/$IL_MAIN_LEAN_FIL
 if [ -n "$PLAN" ]; then
   for a in $ADDONS; do
     c=$(addon_cmd "$a")
-    if [ "$a" = codebase-memory ] && command -v codebase-memory-mcp >/dev/null; then echo "plan: would update the add-on codebase-memory if no session is open, then check that a new session reaches it"
-    else case $c in see\ *) echo "plan: would list the add-on $a: $c" ;; *) echo "plan: would install the add-on $a, or update it to its latest, in $PP_MAIN: $c" ;; esac; fi
+    case $c in see\ *) echo "plan: would list the add-on $a: $c" ;; *) echo "plan: would install the add-on $a, or update it to its latest, in $PP_MAIN: $c" ;; esac
   done
   [ -z "$NAME" ] || [ -d "$PP_WORKSPACES/Chief-of-Staff" ] || echo "plan: would create $NAME's worktree $PP_WORKSPACES/Chief-of-Staff and open its pane"
   for L in Fast-lane Research-lane; do [ -d "$PP_WORKSPACES/$L" ] || echo "plan: would create the $L worktree $PP_WORKSPACES/$L (no pane is opened)"; done
@@ -773,27 +772,9 @@ else
   done <<<"$WROTE"
   echo
 fi
-# codebase-memory runs one daemon for every session, and it refuses a client of another version: it is updated only
-# while no session holds a client (the daemon is stopped first, and the next client starts it on the new version).
-# Whatever happened, a new client must then get its tool list, or new sessions would start without it.
-cbm_update() {
-  local was now K=--cbm-daemon-internal
-  was=$(codebase-memory-mcp --version 2>/dev/null) || was='version unknown'
-  if pgrep -f 'codebase-memory-mcp$' >/dev/null; then
-    NEED+=("add-on codebase-memory: not updated ($was): open sessions use its daemon, which refuses a client of another version. Close every Claude and Codex session, then run: pkill -f -- $K; codebase-memory-mcp update -y; then run setup again")
-  elif { pkill -f -- "$K"; codebase-memory-mcp update -y >/dev/null 2>&1; }; then
-    now=$(codebase-memory-mcp --version 2>/dev/null) || now='version unknown'
-    echo "add-on codebase-memory: updated ($was to $now); restart any Claude or Codex session that was open before"
-  else NEED+=("add-on codebase-memory: the update FAILED; to try again with every session closed: pkill -f -- $K; codebase-memory-mcp update -y"); fi
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"commandeck-setup","version":"0"}}}' \
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-    | timeout 30 codebase-memory-mcp 2>/dev/null | jq -eR 'fromjson? | select(.id == 2) | .result.tools | length > 0' >/dev/null \
-    || NEED+=("add-on codebase-memory: a new session cannot reach it (FAILED: its server gave no tool list). Close every session, run pkill -f -- $K, start one session and check that its codebase-memory tools load")
-}
 INSTALLED=' '
 for a in $ADDONS; do
   c=$(addon_cmd "$a")
-  if [ "$a" = codebase-memory ] && command -v codebase-memory-mcp >/dev/null; then cbm_update; INSTALLED+="$a "; continue; fi
   case $c in
     # One with no one-line installer is the owner's to install: under Needs you only when asked for by name.
     see\ *) [ -z "$ADDONS_SET" ] || NEED+=("add-on $a: it has no one-line installer; $c") ;;

@@ -124,6 +124,22 @@ RETRY="$(jq -cn --arg fp "$D/retry.test.ts" --arg s "$(printf 'const c = it;\nc.
 R1=$(run "$RETRY"); rm -f "$D/retry.test.ts"; R2=$(run "$RETRY")
 check "an aliased Edit refused with its file on disk is refused again once the file is gone (issue 439)" "2 2" "$R1 $R2"
 
+# Issue 441: the marker's reason is free text, so "doesn't" refused an approved skip; a quote open BEFORE the marker
+# still puts the marker in a string, which licenses nothing. <expected>|<line>; <bt> is a backtick.
+MARK_BAD=""
+while IFS='|' read -r want content; do
+  got=$(run "$(write "$D/m.test.ts" "${content//<bt>/\`}")")
+  [ "$got" = "$want" ] || MARK_BAD="$MARK_BAD [$content: $got]"
+done <<'EOF'
+0|it.skip(1); // skip-ok: doesn't support Windows
+0|it.skip("don't"); // skip-ok: x
+2|const s = "// skip-ok: it's"; it.skip(1);
+2|const s = '// skip-ok: x'; it.skip(1);
+2|const s = <bt>// skip-ok: x<bt>; it.skip(1);
+0|const s = "// skip-ok: x"; it.skip(1); // skip-ok: y
+EOF
+check "a skip-ok reason holding an apostrophe or quote passes, and a marker inside a string still blocks (issue 441)" "" "$MARK_BAD"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

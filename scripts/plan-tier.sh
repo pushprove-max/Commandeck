@@ -15,25 +15,29 @@ BATCH=${1:?usage: plan-tier.sh <batch-brief>}
 TRIG=$PP_MAIN/.claude/plan-triggers.tsv
 [ -f "$TRIG" ] || TRIG=$HERE/../config/plan-triggers.tsv
 # An edited file with a typo would quietly pick another tier, so it is refused.
-BAD=$(awk -F'\t' '!/^#/ && NF && (NF != 3 || $1 !~ /^(panel|none)$/) { print FNR; exit }' "$TRIG")
-[ -z "$BAD" ] || { echo "REFUSED: $TRIG line $BAD is not '<panel or none><tab><regex><tab><name>'" >&2; exit 2; }
+BAD=$(awk -F'\t' '!/^#/ && NF && (NF != 3 || $1 !~ /^(panel|panel-always|none)$/) { print FNR; exit }' "$TRIG")
+[ -z "$BAD" ] || { echo "REFUSED: $TRIG line $BAD is not '<panel, panel-always or none><tab><regex><tab><name>'" >&2; exit 2; }
 PICK=$(awk -F'\t' '
-  function pick(s,  i) { if (panel == "") for (i = 1; i <= n; i++) if (tier[i] == "panel" && s ~ re[i]) { panel = name[i]; break } }
+  function pick(s,  i) { for (i = 1; i <= n; i++) if (tier[i] ~ /^panel/ && s ~ re[i]) { if (panel == "") panel = name[i]; if (tier[i] == "panel-always" && keep == "") keep = name[i] } }
   FNR == NR { if ($0 !~ /^#/ && NF) { n++; tier[n] = $1; re[n] = $2; name[n] = $3 }; next }
   /^#+ / { h = index($0, " ") - 1; if (on && h <= lv) on = 0; if (!on && $0 ~ /^#+ The (issues|batch)/) { on = 1; lv = h } else if (on) pick(tolower($0)); next }
   !on { next }
   { s = tolower($0); pick(s) }
   /^[0-9]+\. / { items++; for (i = 1; i <= n; i++) if (tier[i] == "none" && s ~ re[i]) { quiet++; none = name[i]; break } }
   END {
-    if (panel != "") print "Panel\t" panel
+    if (panel != "") print "Panel\t" panel "\t" keep
     else if (items && quiet == items) print "No plan\t" none
     else if (quiet) print "Plan + judge\t" none " matched only some items, so one tier up"
     else print "Plan + judge\teverything else" }' "$TRIG" "$BATCH")
-TIER=${PICK%%$'\t'*} WHY=${PICK#*$'\t'}
+IFS=$'\t' read -r TIER WHY KEEP <<<"$PICK"
 # Issue 362: a risky trigger on a small unit gets one judge, not two. The batch's "The batch" section may carry
 # "Estimated size: ~<n> changed lines"; with none, or one at 150 or more, the Panel stands (one tier up when unsure).
+# A panel-always trigger (new infrastructure) keeps the Panel at any size: its risk does not shrink with its lines.
 EST=$(awk '/^#+ / { on = ($0 ~ /^#+ The batch/); next } on && match($0, /^Estimated size: ~[0-9]+ changed lines/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit }' "$BATCH")
-if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ "$((10#$EST))" -lt 150 ]; then TIER='Plan + judge' WHY="$WHY, a small unit (~$((10#$EST)) changed lines, under 150): one judge"; fi
+if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ "$((10#$EST))" -lt 150 ]; then
+  if [ -n "$KEEP" ]; then WHY="$WHY; $KEEP keeps the panel under 150 changed lines"
+  else TIER='Plan + judge' WHY="$WHY, a small unit (~$((10#$EST)) changed lines, under 150): one judge"; fi
+fi
 # on <role> -- the seat is on in /plugin config (issue 312); a value its Enabled key does not take stops here.
 on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
 case $TIER in

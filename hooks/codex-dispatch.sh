@@ -334,8 +334,7 @@ case "$EVENT" in
 esac
 
 case "$TOOL" in
-  # MCP calls pass through too: read-tracker.sh counts serena and
-  # codebase-memory use for the symbol-first hooks.
+  # MCP calls pass through too: read-tracker.sh counts serena use for the symbol-first hooks.
   Bash|mcp__*)
     run_matcher "$EVENT" "$TOOL" "$INPUT" || exit 2
     ;;

@@ -46,7 +46,6 @@ search() {
   Grep|Glob|mcp__serena__search_for_pattern)
     P=${2%/}
     case "$P" in ''|.) WHOLE=1 ;; *) [ -n "$ROOT" ] && [ "$P" = "$ROOT" ] && WHOLE=1 ;; esac ;;
-  mcp__codebase-memory__search_code|mcp__codebase-memory__search_graph) ;;
   Bash)
     P=${CMD//[\'\"\\]/}
     case "$P" in *rg*|*grep*|*find*) ;; *) return 1 ;; esac

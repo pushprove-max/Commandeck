@@ -47,6 +47,12 @@ fix round is reviewed with the rest. The Builder's evidence-file lines
 `Different fix r<N>: <why>` and `Other cases checked r<N>: <which>` go into the
 prompt of pass N.
 
+A fix round goes to the Builder's own session, its cache kept, when the pane
+has one live session, that session's context is under the Builder clear line
+(`builder.clearLine`), and the round's model and effort are the ones it runs
+now. Otherwise the pane is cleared and a fresh session takes the round. The
+hand-off log names the reason for a fresh round.
+
 Each pass is checked against its saved prompt and its own reviewer session,
 and earlier passes are checked too. Prompts are kept under the reviewer
 home's `builder-pass-prompts/`. An update to the external Codex plugin's

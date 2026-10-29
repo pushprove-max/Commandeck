@@ -74,7 +74,7 @@
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/script-over-reads.sh\""},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/search-log.sh\""}
       ]},
-      {"matcher": "Grep|mcp__serena__.*|mcp__codebase-memory__.*", "hooks": [
+      {"matcher": "Grep|mcp__serena__.*", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/search-log.sh\""}
       ]},
       {"matcher": "Bash", "hooks": [
@@ -85,7 +85,7 @@
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/suite-rerun-guard.sh\" --record-complete"},
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/search-log.sh\""}
       ]},
-      {"matcher": "mcp__serena__.*|mcp__codebase-memory__.*", "hooks": [
+      {"matcher": "mcp__serena__.*", "hooks": [
         {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/read-tracker.sh\""}
       ]},
       {"matcher": ".*", "hooks": [

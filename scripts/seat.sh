@@ -311,15 +311,15 @@ launch)
   # task or record exists. Its batch is the planning worktree's, else main's briefs folder's, else none.
   if [[ $ROLE == plan-judge-* ]] && grep -qxF "Plan: .claude/plans/$UNIT.md" "$SPEC" && [ -f "$WT/.claude/plans/$UNIT.md" ]; then
     PCB=
-    for b in "$WT/.claude/briefs/$UNIT-batch.md" "$PP_MAIN/.claude/briefs/$UNIT-batch.md"; do [ ! -e "$b" ] || { PCB=$b; break; }; done
+    for b in ${COMMANDECK_BATCH:+"$COMMANDECK_BATCH"} "$WT/.claude/briefs/$UNIT-batch.md" "$PP_MAIN/.claude/briefs/$UNIT-batch.md"; do [ ! -e "$b" ] || { PCB=$b; break; }; done
     bash "$PP_SCRIPTS/plan-check.sh" "$WT/.claude/plans/$UNIT.md" "$PCB" >/dev/null || exit 2
   fi
   # A Claude pane in a worktree takes the MAIN repo's ~/.claude.json project
-  # entry. serena or codebase-memory disabled there left a worker with no
+  # entry. serena disabled there left a worker with no
   # symbol tools and nothing said so (2026-09-18).
   if [ "$(seat_agent)" = claude ]; then
     MAIN_REPO=$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)")
-    OFF=$(jq -r --arg p "$MAIN_REPO" '.projects[$p].disabledMcpServers // [] | .[] | select(. == "serena" or . == "codebase-memory")' \
+    OFF=$(jq -r --arg p "$MAIN_REPO" '.projects[$p].disabledMcpServers // [] | .[] | select(. == "serena")' \
       "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null | tr '\n' ' ' || true)
     [ -z "$OFF" ] || {
       echo "BLOCKED: ${OFF% } disabled in ${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json projects[\"$MAIN_REPO\"].disabledMcpServers; a Claude seat would run without it." >&2
@@ -431,7 +431,7 @@ launch)
   # Issue 362: builder-launch.sh refuses a plan without these, so the plan author is told before it writes.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, a \`## Claims to falsify\` list (one checkable claim per line), and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
   # Issues 426 and 427: plan-check.sh refuses a plan over its budget or with a fact that does not resolve.
-  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The plan has one \`Goal:\` line (at most 200 characters), a \`## Steps\` section of one-line steps (\`- new|modify|delete <path>[ ~<line>] -- <what>\`), and a \`## Facts\` section, one bullet per fact you state about the code: \`- <claim> -- <path>:<n>[-<m>] (observed: YYYY-MM-DD)\`, citing a file in this checkout you opened (never a plan) and the day you read it. Prose goes only under \`## Why\`; everywhere else write list items, table rows or one-line \`Key: value\` lines, and keep each section under its size cap."
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The plan has one \`Goal:\` line (at most 200 characters), a \`## Steps\` section of one-line steps (\`- new|modify|delete <path>[ ~<line>] -- <what>\`), and a \`## Facts\` section, one bullet per fact you state about the code: \`- <claim> -- <path>:<n>[-<m>] (observed: YYYY-MM-DD)\`, citing a file in this checkout you opened (never a plan) and the day you read it. Prose goes only under \`## Why\`; everywhere else write list items, table rows or one-line \`Key: value\` lines, and keep each section under its size cap. An \`## Issue cases\` section (cap 4,000 bytes) has one row \`- #<n> <Fix|Done|Body> <k> -- <path> -- <test name>\` per case \`plan-check.sh --issue-cases <n>\` prints for each issue the unit closes (the batch's issues and any \`Closes:\` line), its path a \`## Steps\` path (a \`{a,b}\` group counts as each path) and its test named in \`## Acceptance test\`."
   # Issue 384: the judge launch runs plan-check.sh and refuses what it refuses, so the author runs it first.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Before PLAN-DONE run \`plan-check.sh .claude/plans/<unit>.md <batch>\` and fix every REFUSED: line; name each mockup on its own \`Mockup: <path or URL>\` line and make sure the batch carries it."
   # Issue 359: the table's shape, the settled claims and the contracts a cut produces and consumes.
@@ -441,7 +441,7 @@ launch)
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines, the budget and that each Facts citation resolves."
   # Host rule drift: the plan judge's reading.
-  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Read the plan as a Builder who cannot ask: list every place a wrong guess would change the code. Try to falsify each claim under Claims to falsify and each Facts line (read the cited lines). Name the established industry practice for the problem: a departure the plan does not justify is a finding. On a revised plan, recheck only what its Plan change log names."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Read the plan as a Builder who cannot ask: list every place a wrong guess would change the code. Try to falsify each claim under Claims to falsify and each Facts line (read the cited lines). Name the established industry practice for the problem: a departure the plan does not justify is a finding. On a revised plan, recheck only what its Plan change log names; a revised plan is not judged again."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan or batch line that describes existing placeholder UI (a disabled control, 'coming soon' copy) as context is a finding: an open problem until the plan removes it or names it on a \`Placeholder:\` line."
   # Issue 413: a judge prints its inputs in one call from the frozen copy; with no copy it is never pointed at the live plan.
   [[ $ROLE != plan-judge-* || -z ${SNAP:-} ]] || SPEC_TEXT+=" Print your inputs in one call with \`bash $PP_SCRIPTS/peek.sh --unit $UNIT --plan $SNAP\`: it reads the read-only copy your spec's Plan: line names, never the live plan."
