@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.61.1 -- 2026-10-29
+
+### Docs
+
+- The README is brought up to date with what the plugin does today, and now opens with two diagrams: who does what, and how a build earns its GO in the review loop.
+- The README now covers the units view and its settings, the plan format, the test rules, the lockfile setup question and the standing worktrees you can keep.
+
 ## 0.61.0 -- 2026-10-29
 
 ### Reviews

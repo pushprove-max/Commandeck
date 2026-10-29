@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.61.0-111111?style=flat-square" alt="Version 0.61.0">
+  <img src="https://img.shields.io/badge/version-0.61.1-111111?style=flat-square" alt="Version 0.61.1">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -36,6 +36,115 @@ It splits the work into roles:
 You choose the work, answer decisions and push the finished commits. The
 merge is local; Commandeck never pushes.
 
+## How it works
+
+### Who does what
+
+```mermaid
+flowchart LR
+  you(["👤 You<br/>choose work · answer decisions · push"]):::you
+  cos["🛰️ Chief of Staff<br/>relay pane (optional)"]:::relay
+  main["🧭 Main<br/>orchestrator<br/>plans · launches · merges<br/>never writes the build's code"]:::main
+  dash[["📊 Dashboard<br/>builders by stage · waits on you<br/>PRs · issues · limits"]]:::dash
+
+  subgraph plan["📝 Plan stage (tier picked from the brief)"]
+    direction TB
+    tier{"Plan tier?"}:::gate
+    author["Plan author"]:::seat
+    judge["Plan judge(s)<br/>one or a panel of two"]:::seat
+    tier -- "no plan" --> skip(("→ build")):::seat
+    tier -- "plan + judge(s)" --> author --> judge
+  end
+
+  subgraph wt["🌿 Unit worktree (one per build)"]
+    direction TB
+    builder["🔨 Builder<br/>works · commits<br/>may use Sonnet/Haiku helpers<br/>and read-only Codex"]:::build
+    loop["🔁 Review loop<br/>(see the next diagram)"]:::review
+    builder --> loop
+  end
+
+  merge["🔀 Squash merge into local main<br/>merge check on squashed tree<br/>closes the brief's issues"]:::merge
+  push(["⬆️ Push — only you"]):::you
+
+  you <--> cos
+  cos <--> main
+  you -. "yes that names the unit<br/>= build order" .-> main
+  main --> tier
+  judge -- GO --> builder
+  skip --> builder
+  loop -- "closing GO on exact commit" --> merge
+  main --> merge
+  merge --> push
+  main -.-> dash
+  dash -.-> you
+
+  subgraph lanes["Standing lanes beside the relay"]
+    fast["⚡ Fast lane<br/>small work, reviewed<br/>before main lands it"]:::lane
+    research["🔬 Research lane<br/>answers questions<br/>never builds"]:::lane
+  end
+  main --- lanes
+
+  classDef you fill:#1f6feb,stroke:#58a6ff,color:#fff,stroke-width:2px
+  classDef relay fill:#6e40c9,stroke:#a371f7,color:#fff
+  classDef main fill:#0b3d2e,stroke:#3fb950,color:#fff,stroke-width:2px
+  classDef dash fill:#21262d,stroke:#8b949e,color:#e6edf3
+  classDef gate fill:#3d2e00,stroke:#d29922,color:#fff
+  classDef seat fill:#272e3a,stroke:#79c0ff,color:#e6edf3
+  classDef build fill:#5a1e02,stroke:#f0883e,color:#fff,stroke-width:2px
+  classDef review fill:#4c1d2e,stroke:#f778ba,color:#fff
+  classDef merge fill:#0b3d2e,stroke:#56d364,color:#fff
+  classDef lane fill:#1c2128,stroke:#6e7681,color:#c9d1d9
+```
+
+### The review loop
+
+```mermaid
+flowchart TD
+  start(["Builder commits"]):::build
+  first{"First pass<br/>under 200 lines → 1 reviewer<br/>else or --risky → 3 reviewers"}:::gate
+  verdict{"Findings?<br/>P0–P3 + class tag"}:::gate
+  known["Known gap<br/>(odd setup / deliberate bypass)<br/>does not block"]:::muted
+  p3["P3 alone<br/>never holds the loop"]:::muted
+  fix["🔧 Fix round<br/>Builder's own session if under its clear line<br/>else a fresh session in the same pane"]:::build
+  evidence["Evidence file must list<br/>## Sites checked (every call site, incl. class-search hits)<br/>## New code checked (against the plan)"]:::seat
+  classq{"Same class<br/>came back?"}:::gate
+  redesign["🧩 Class stop → redesign<br/>data design + failure table<br/>reviewed alone to GO, then code"]:::review
+  cap{"Pass cap reached?<br/>(reviewPassCap, default 5)"}:::gate
+  narrowed["Narrowed pass<br/>reads only changes since last pass<br/>clean → NARROWED GO"]:::seat
+  closing["🏁 Closing pass<br/>rebases on local main · reads whole branch<br/>typecheck · full suite once when on<br/>handed no old findings"]:::merge
+  filed["Main files leftover findings as issues<br/>the merge names each one"]:::muted
+  owner["⛔ P0/P1 still open two passes past cap<br/>REVIEW STOP · waits for owner"]:::stop
+  go(["✅ GO on exact commit → merge"]):::merge
+
+  start --> first --> verdict
+  verdict -- "none blocking" --> closing
+  verdict -- "known gap" --> known --> closing
+  verdict -- "only P3" --> p3 --> closing
+  verdict -- "P0 / P1 / P2" --> classq
+  classq -- "no" --> fix --> evidence --> cap
+  classq -- "yes" --> redesign --> fix
+  cap -- "no" --> narrowed --> verdict
+  cap -- "yes" --> closing
+  closing -- "GO" --> go
+  closing -- "GO with P3 left, or<br/>NO-GO at cap with P2, no P0/P1" --> filed --> go
+  closing -- "other NO-GO" --> classq
+  closing -- "P0/P1 two passes past cap" --> owner
+
+  classDef build fill:#5a1e02,stroke:#f0883e,color:#fff,stroke-width:2px
+  classDef gate fill:#3d2e00,stroke:#d29922,color:#fff
+  classDef seat fill:#272e3a,stroke:#79c0ff,color:#e6edf3
+  classDef review fill:#4c1d2e,stroke:#f778ba,color:#fff
+  classDef merge fill:#0b3d2e,stroke:#56d364,color:#fff,stroke-width:2px
+  classDef muted fill:#1c2128,stroke:#6e7681,color:#c9d1d9
+  classDef stop fill:#490202,stroke:#f85149,color:#fff,stroke-width:2px
+```
+
+A first pass that ends GO with nothing committed after it merges without a
+closing pass, and a project with the closing pass off merges the narrowed pass
+that ends GO.
+
+## Screenshots
+
 ![Commandeck dashboard](docs/images/dashboard.png)
 
 The dashboard shows every Builder by stage, what waits on you, pull requests,
@@ -44,6 +153,11 @@ issues, and your Claude and Codex limits. (Sample project, invented figures.)
 ![Orca with Commandeck](docs/images/orca.png)
 
 Orca with the Chief of Staff pinned, main orchestrating and one worktree per Builder.
+
+Inside Claude Code, the units view shows the live units, merges and test runs
+as a band above the prompt, a `Units` side pane and a status line, with
+today's cost split by merged units, units in flight, main and the standing
+panes. More: [docs/dashboard.md](docs/dashboard.md).
 
 ## What you need
 
@@ -112,15 +226,16 @@ answer first on a rerun) and is asked only when it applies.
 | Builder clear line | 180K, 150K, 250K or off: past it the Builder goes on in a fresh session |
 | Issue sizing | 40K, 30K, 60K or off: a large independent issue is proposed as its own unit |
 | Hook trust | Codex reviewer only: whether to trust every hook in the Codex home before each Codex launch |
-| Relay, Relay voice | No relay, or a Chief of Staff pane with a name and a one-line voice |
+| Relay, Relay voice | No relay, or a Chief of Staff pane with a name and a one-line voice. The Fast-lane and Research-lane worktrees are always made |
 | Dashboard | On for this machine only, off, or on under another name (it then listens on the network, behind a login) |
 | Merge check, Full suite | The command that must pass before a merge, or none; and whether the closing review pass runs it once on the build's tip |
 | Typecheck, Screen code | The typecheck that must be green before a closing review pass, or none; and the folders of screen code, whose changes merge only with screenshot evidence |
+| Lockfile reads | Deny (the default) or allow built-in reads of the project's tracked lockfiles; shell search such as `rg` still works |
 | Strict hooks | Off (safety hooks only) or on (also search before reading, and one test run per change) |
 | Auto mode | Add two lines about the plugin's scripts to the auto-mode classifier's list, leave it, or take setup's lines out |
 | Worker cuts, Keep words | Extra skills and plugins to turn off in worker panes, and words that bring a set back for one unit |
 | Add-ons | All, serena, agent-browser or none |
-| Review | Defaults, keep saved, or tune: review rounds, closing pass, small-build line and review flags |
+| Review loop | Defaults, keep saved, or tune: the blocking severity, the pass cap, a fresh closing reviewer, the closing pass, the small-build line and when a finished build is flagged for a written review |
 
 After Apply, setup prints what it did, what needs you and what is optional,
 and offers a small demo build. Every question in detail:
@@ -139,6 +254,7 @@ and offers a small demo build. Every question in detail:
 | `/commandeck:revoke` | Take out one of setup's settings in an Orca profile, or keep your own value |
 | `/test-audit <folder>... [basic\|full\|prune] [N agents]` | A report of tests that are redundant, slow or missing; it changes no test. `prune` proposes only removals and merges, each naming the test that still covers it |
 | `/autodecide on\|off\|status` | Let the relay pane decide for you while you are away |
+| `/units` | Print the live units, merges and test runs; `/units band\|pane\|status on\|off` turns a view on or off for the session |
 
 Setup adds `/test-audit` as a project workflow. `/autodecide` is in the seats
 `autoDecideSeats` names; it shows a band and a status-line count while it is
@@ -159,12 +275,20 @@ line or option. `/commandeck:revoke undo` takes a choice back.
    panel of two judges. A plan is never a build order. `scripts/unit-drive.sh
    start` can carry the unit from there: it runs only the plan seats the tier
    names, one judge round, and the launch, and stops once, naming the next
-   command, when a stage needs main.
+   command, when a stage needs main. A plan has one goal line, one line per
+   step and a list of facts, each naming the file lines it rests on and the
+   day they were read; a fact whose lines do not exist is refused before any
+   judge reads the plan. A unit over the size limits is split unless main
+   writes down why it stays whole.
 3. Main launches a Builder in its own worktree. The Builder works, commits and
-   runs the review loop.
+   runs the review loop. It builds only what the plan asks for, never a
+   disabled or "coming soon" stand-in, and follows the shipped test rules
+   whenever it writes, changes or deletes a test.
 4. When the last pass is GO, the unit merges into local `main` as one squash
    commit. The merge check runs on the squashed tree, and the merge closes the
-   issues the brief lists under `Closes:`.
+   issues the brief lists under `Closes:`. A change to screen code merges
+   only with screenshot evidence or a stated reason that nothing visible
+   changed.
 5. You push when you choose.
 
 Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
@@ -179,9 +303,13 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   use would hit it. One that needs an odd setup or a deliberate bypass is a
   known gap and does not block. A P3 alone never holds the loop.
 - **Threshold and cap.** A P0, P1 or P2 runs a fix round. From the fifth pass
-  on record, `review` runs as the closing pass, and a P2 or P3 left there is
-  filed as an issue before the merge. A P0 or P1 is never capped: one still
+  on record, `review` runs as the closing pass, and main files a P2 or P3 left
+  there as an issue before the merge. A P0 or P1 is never capped: one still
   open two passes past the cap stops the build and waits for the owner.
+- **Placeholder UI and tests.** A disabled control or "coming soon" copy that
+  no plan or ruling asked for is a P1. Every reviewer judges each new, changed
+  or deleted test by the shipped test rules: a test is never weakened, skipped
+  or deleted to make it pass.
 - **Fix rounds.** After a NO-GO the fix round goes to the Builder's own
   session while its context is under the Builder clear line and it already
   runs the round's model and effort; otherwise to a fresh session.
@@ -270,6 +398,12 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `workerPromptCacheTtl` | `5m` (default), `1h`, `leave` | Builders' and other worker panes' prompt cache, subagents too |
 | `relayPromptCacheTtl` | `1h` (default), `5m`, `leave` | The relay pane's prompt cache |
 
+**Units view**
+
+| Option | Values | What it sets |
+|---|---|---|
+| `unitsBand`, `unitsPane`, `unitsStatus` | `auto` (default), `on`, `off` | The band above the prompt, the side pane and the status line. `auto` is on in main and the Chief of Staff, off in worker and reviewer panes |
+
 **Dashboard**
 
 | Option | Values | What it sets |
@@ -280,6 +414,8 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 Codex fast tier needs `service_tier = "fast"` in Codex's `config.toml`.
 Project answers that are not options (the merge check, strict hooks, the
 relay and others) live in `.claude/commandeck.json`; change them with setup.
+`keepWorktrees` there lists the standing worktrees whose panes are never
+closed; without it, the ones the plugin creates are kept.
 
 ## Update
 
@@ -319,12 +455,17 @@ Uninstall takes out only what setup added. Details:
 - Red proofs: `scripts/red-proof.sh` and the `Mutation-verified:` line
   (0.28.0).
 - The P2 tail: findings left open at a merge, and `file-open-findings.sh`
-  (0.29.0). Every blocking finding is fixed in the unit.
+  (0.29.0). Today only a closing pass at the cap can leave a P2 or P3 open,
+  and main files each one as an issue before the merge.
 - Setup's `--builder-model`, `--builder-effort`, `--codex-model`,
   `--plan-models`, `--plan-fast` and `--codex-fast` flags, and the plugin's
   own agent files (0.26.0). Use `--option <key>=<value>` or `/plugin` config.
 - The ponytail add-on, its `--ponytail` and `--no-ponytail` flags and its
   `ponytail` option (0.48.0). Nothing replaces them.
+- The single prompt-cache answer, `--cache-ttl` (0.48.0). Use
+  `mainPromptCacheTtl`, `workerPromptCacheTtl` and `relayPromptCacheTtl`.
+- The `planJudgeAstra*` options (0.48.0). The Panel's second judge is the
+  Fable judge, set with the `planJudgeFable*` options.
 
 What each version changed: [CHANGELOG.md](CHANGELOG.md).
 
@@ -338,7 +479,7 @@ bash scripts/run-shell-tests.sh --changed  # the merge check: tests the change t
 bash scripts/run-shell-tests.sh --skip-passed  # a retry: skips files that passed at this same tree
 ```
 
-Files run on the PC are never skipped, and a run with a test-case selector set
+Files run on the peer machine are never skipped, and a run with a test-case selector set
 records and reuses nothing.
 
 **Test hand-off to a second machine.** In a Mac linked worktree, the shell
