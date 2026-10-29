@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.61.2 -- 2026-10-29
+
+### Docs
+
+- A README wording fix in the list of removed options.
+
 ## 0.61.1 -- 2026-10-29
 
 ### Docs

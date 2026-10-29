@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.61.1-111111?style=flat-square" alt="Version 0.61.1">
+  <img src="https://img.shields.io/badge/version-0.61.2-111111?style=flat-square" alt="Version 0.61.2">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -464,7 +464,7 @@ Uninstall takes out only what setup added. Details:
   `ponytail` option (0.48.0). Nothing replaces them.
 - The single prompt-cache answer, `--cache-ttl` (0.48.0). Use
   `mainPromptCacheTtl`, `workerPromptCacheTtl` and `relayPromptCacheTtl`.
-- The `planJudgeAstra*` options (0.48.0). The Panel's second judge is the
+- The old second-judge options (0.48.0). The Panel's second judge is the
   Fable judge, set with the `planJudgeFable*` options.
 
 What each version changed: [CHANGELOG.md](CHANGELOG.md).
