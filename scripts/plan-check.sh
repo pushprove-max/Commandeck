@@ -358,5 +358,39 @@ for b in bad:
 sys.exit(2 if bad else 0)
 PY
 ) || { [ -n "$out" ] || out="REFUSED: $PLAN budget: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
+# Issue 456: a line under `## Done` is `- #<n> Done: <user action> -- <what the user sees>`; one with no ` -- `, a side under
+# three words or a side (action or outcome) that is a one- or two-word parenthesized label (`(API)`) names a component. Issue 458: outside
+# a fence, a line under `## Stated limits` that says follow-up, or any line starting `Follow-up:`, holds a filed issue
+# (`#N` or `owner/repo#N`); the section's opening line (SENTINELS[1] of the budget block) is exempt word for word.
+out=$(PC_PLANTEXT=$PT python3 -I - "$PLAN" <<'PY'
+import os, re, sys
+label = sys.argv[1]
+OPENING = '(every reviewer is handed these; a finding beyond one is out of scope: a follow-up issue, never a blocker)'
+lines = os.environ['PC_PLANTEXT'].split('\n')
+fenced = set(map(int, os.environ['PC_FENCED'].split()))
+done_bad, later, sec = [], [], ''
+for n, line in enumerate(lines, 1):
+    if n in fenced:
+        continue
+    if re.match(r'##[ \t]', line):
+        sec = line[2:].strip().lower()
+        continue
+    if sec == 'done' and re.match(r'[ \t]*[-*+][ \t]', line):
+        act, _, side = line.partition(' -- ')
+        act = re.sub(r'^[ \t]*[-*+][ \t]+(#\d+[ \t]+)?(Done:)?', '', act)
+        if any(len(s.split()) < 3 or re.fullmatch(r'\(\s*\S+(\s+\S+)?\s*\)', s.strip()) for s in (act, side)):
+            done_bad.append('REFUSED: %s line %d Done line names a component, not what a user sees: %s' % (label, n, line))
+    if line.strip() == OPENING or re.search(r'#\d+', line):
+        continue
+    if line.startswith('Follow-up:') or (sec.startswith('stated limits') and re.search(r'follow[- ]?up', line, re.I)):
+        later.append('  - line %d: %s' % (n, line))
+if done_bad:
+    print('\n'.join(done_bad))
+if later:
+    print('REFUSED: %s names later work with no filed issue (#N or owner/repo#N):' % label)
+    print('\n'.join(later))
+sys.exit(2 if done_bad or later else 0)
+PY
+) || { [ -n "$out" ] || out="REFUSED: $PLAN Done and follow-up lines: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
 issue_check
 echo "size $SIZE"

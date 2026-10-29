@@ -171,6 +171,9 @@ def simple_wait(cmd):
         return False
     while words and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*=.*', words[0], re.S):
         words.pop(0)
+    run = words[1:] if words and words[0] in ('bash', 'sh') else words
+    if len(run) > 1 and re.sub(r'.*/', '', run[0]) == 'ask-main.sh':
+        return True
     if len(words) < 3 or re.sub(r'.*/', '', words[0]) not in ('orca', 'orca-ide') or words[1] != 'orchestration':
         return False
     return words[2] == 'ask' or (words[2] == 'check' and '--wait' in words[3:])
@@ -201,6 +204,19 @@ working() { pending_state working; }
 # wake <result> -- the wake log's line for this answer (the owner's view of what main sent a worker).
 wake() { pp_wake_log answer-worker "$H" "answer ${TAG}" "$@"; }
 log_state
+# Still no id (issue 454), and the pane is parked in a wait: a pane in an ask-main.sh call holds a token <id>.asking
+# naming it for the whole call (claim_wait's liveness test, read only), also between two inbox waits, when <id>.wait is
+# gone. Its name is the question's id, the thread ask-main.sh returns on. A pane not parked keeps today's route (issue
+# 351's case).
+if [ -z "$QID" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ] && [ -z "$INTERRUPT" ] && pending_state parked; then
+  for t in "$PP_SCRATCH"/ask-main/*.asking; do
+    [ -f "$t" ] && grep -qxF "pane=$H" "$t" 2>/dev/null || continue
+    p=$(sed -n 's/^pid=//p' "$t")
+    [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o command= 2>/dev/null | grep -q 'ask-main\.sh' || continue
+    QID=${t##*/}; QID=${QID%.asking}; Q=$QID
+    echo "answer-worker: replying in $QID, the question $H is waiting on in ask-main.sh" >&2; break
+  done
+fi
 # The background follower (issue 340) is this script run again: the answer is already sent, the way it went is handed
 # over, and only the wait for the tag in the log, its retry and the closing of the ledger entry are left.
 FOLLOW=${ANSWER_WORKER_FOLLOW:-}

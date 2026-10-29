@@ -369,5 +369,20 @@ OUT=$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/cos-tell.sh" --note "bare text 
 check "bare text after the type is refused with the usage line and no Orca call" "2:1:$BEFORE" \
   "$RC:$(grep -c '^usage: cos-tell.sh --note <subject> <body>$' <<<"$OUT"):$(wc -l < "$T/store.jsonl" | tr -d ' ')"
 
+# Issue 461: a Builder's quiet alert and any stage alert woke the relay for nothing the owner can act on, and an alert
+# printed once printed again at the next poll unless the pane added a seen line.
+rm -f "$T"/home/.commandeck/chief-of-staff/*.alerts-seen "$T"/home/.commandeck/chief-of-staff/*.alerts-told
+alert builder-demo/u1-quiet-1793000100; Q=$(alertwatch)
+alert stage-demo/u1-1793000100; S=$(alertwatch)
+alert builder-demo/u1-stuck-1793000100; B=$(alertwatch)
+alert stale-gh-1793000100; G=$(alertwatch)
+check "quiet and stage alerts do not wake the relay; others do (issue 461)" "0:0:1:1" \
+  "$(grep -c . <<<"$Q"):$(grep -c . <<<"$S"):$(grep -c 'u1-stuck' <<<"$B"):$(grep -c 'stale-gh' <<<"$G")"
+rm -f "$T"/home/.commandeck/chief-of-staff/*.alerts-seen "$T"/home/.commandeck/chief-of-staff/*.alerts-told
+alert limit-claude-1793000200; A1=$(alertwatch); A2=$(alertwatch)
+alert limit-claude-1793000800; A3=$(alertwatch)
+check "an alert wakes the relay once, under any stamp (issue 461)" "1:0:0" \
+  "$(grep -c 'limit-claude-1793000200' <<<"$A1"):$(grep -c . <<<"$A2"):$(grep -c . <<<"$A3")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

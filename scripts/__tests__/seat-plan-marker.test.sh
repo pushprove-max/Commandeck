@@ -222,5 +222,12 @@ for f in assume-unchanged skip-worktree; do
     "$?:$(grep -c 'closed seat=plan-author unit=pr PLAN-DONE' "$T/out")"
   git -C "$RWT" update-index --no-$f .claude/plans/pr.md
 done
+# Issue 456: a plan's Done line was a component name; the plan author is told to write what a user does and sees, with a good
+# and a bad example, so plan-check's refusal of the bad shape is rarely met.
+check "the plan-author prompt asks for a user-observable Done line per issue, with a good and a bad example (issue 456)" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'one `- #<n> Done: <user action> -- <what the user sees>` line per issue.*Good: `- #39 Done: a user retries an import from the dashboard after a lost response -- no duplicate import appears`.*Bad: `- #39 Done: retry key handling (API)`')"
+# Issue 457: a stated limit that said no client sends a fix's header passed the judge; the fix had no real caller.
+check "the judge's prompt makes a stated limit that leaves a fix with no real caller a NO-GO (issue 457)" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pu-plan-judge-sol.txt.prompt 2>/dev/null | grep -c 'A stated limit that leaves a planned fix with no real caller in production (no client sends it, a gate blocks it, nothing routes to it) makes your verdict NO-GO unless the owner approved that limit by name')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

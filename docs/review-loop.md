@@ -53,6 +53,14 @@ has one live session, that session's context is under the Builder clear line
 now. Otherwise the pane is cleared and a fresh session takes the round. The
 hand-off log names the reason for a fresh round.
 
+When a finding shows a gate's reader mishandling an input shape, the first fix
+is an allowlist: the reader accepts only the shapes it fully understands and
+refuses every other one with an error naming the line.
+
+A pass refuses the checks it can run before any commit or rebase in one
+message: a single refusal prints as `REFUSED: <text>`, two or more as
+`REFUSED: <k> checks failed:` with a `- <text>` line each.
+
 Each pass is checked against its saved prompt and its own reviewer session,
 and earlier passes are checked too. Prompts are kept under the reviewer
 home's `builder-pass-prompts/`. An update to the external Codex plugin's

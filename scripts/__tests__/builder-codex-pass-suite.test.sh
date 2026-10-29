@@ -60,6 +60,15 @@ check "the pass prompt asks for a Class search line under each blocking finding"
 $(grep -c 'the <file>:<line> of that finding among them; the author must answer for each hit' "$B/$U-r14-prompt-1.md") \
 $(grep -c 'A known gap carries no Class search line' "$B/$U-r14-prompt-1.md")"
 
+# A final refused for its missing sites section, then for its new-code check, then for its missing test command cost a fix
+# round each: all three are named in one refusal. Pass 14 ended NO-GO and no evidence section is written for it.
+cfg '.fullSuiteBeforeFinal = true'; cfg 'del(.testCommand)'; printf 'echo fifteen\n' > "$W/a.sh"; HEAD15=$(git -C "$W" rev-parse HEAD)
+(cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-15 bash "$PASS_SH" "$U" 15 final >"$TMP/out" 2>"$TMP/err"); RC=$?
+check "a final after a NO-GO with no evidence and no test command lists all three refusals at once (issue 451)" "2 1 3 1 1 1 $HEAD15" \
+  "$RC $(grep -cx 'REFUSED: 3 checks failed:' "$TMP/err") $(grep -c '^- ' "$TMP/err") $(grep -c "^- pass 14 ended NO-GO, and .* has no usable '## Sites checked (pass 14)' section" "$TMP/err") \
+$(grep -c "^- pass 14 ended NO-GO, and .* has no usable '## New code checked (pass 14)' section" "$TMP/err") $(grep -c '^- fullSuiteBeforeFinal is on' "$TMP/err") $(git -C "$W" rev-parse HEAD)"
+cfg 'del(.fullSuiteBeforeFinal)'; cfg ".testCommand = \"bash $TMP/suite-red.sh\""
+
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

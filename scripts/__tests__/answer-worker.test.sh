@@ -242,5 +242,39 @@ check "a pane parked in check --wait still gets the inbox message (issue 447)" "
   "$RC $(wc -l < "$T/typed" | tr -d ' ') $(grep -c 'Ruling 9' "$T/inbox")"
 cp "$T/log.bak" "$LOG"
 
+# Issue 454: a Builder in ask-main.sh's wait is a pane that reads its inbox, and its question is the one whose call token
+# (<id>.asking, pid= and pane=, beside the wait token <id>.wait) names it. With no id given and no seat record, the token
+# supplies the id, so the answer is a reply in that thread (the only way ask-main.sh returns) and closes that question
+# only. The tokens are read, never moved.
+rm -f "$T"/scratch/seat-*.txt; mkdir -p "$T/scratch/ask-main"
+bash -c 'sleep 30; :' ask-main.sh & WAITPID=$!
+printf 'pid=%s\npane=term_b\n' "$WAITPID" > "$T/scratch/ask-main/msg_new.wait"; cp "$T/scratch/ask-main/msg_new.wait" "$T/scratch/ask-main/msg_new.asking"
+ASK_USE='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ask","name":"Bash","input":{"command":"bash scripts/ask-main.sh q body"}}]}}'
+MIX_USE='{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_mix","name":"Bash","input":{"command":"ask-main.sh q b; npm test"}}]}}'
+echo working > "$T/state"; touch "$T/reads"
+rows "$ASK_USE"
+OUT=$(answer term_b "Ruling 10: wait in ask-main"); RC=$?
+check "a pane waiting in ask-main.sh gets its answer as a reply in its question's thread, nothing typed (issue 454)" "0 1 0 0 1" \
+  "$RC $(grep -c '^msg_new .*Ruling 10' "$T/replies") $(wc -l < "$T/typed" | tr -d ' ') $(wc -l < "$T/inbox" | tr -d ' ') $(grep -c "^pane=term_b$" "$T/scratch/ask-main/msg_new.wait" 2>/dev/null)"
+# F1: the same call inside a compound command reads as work, so the answer is typed at its next tool result, as before.
+rows "$MIX_USE"
+OUT=$(answer term_b "Ruling 11: compound call"); RC=$?
+check "a compound ask-main.sh call reads as work: the answer is typed, not left in the inbox (issue 454)" "0 1 0" \
+  "$RC $(wc -l < "$T/typed" | tr -d ' ') $(wc -l < "$T/inbox" | tr -d ' ')"
+rows "$ASK_USE"
+for q in new q4; do (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" \
+  bash "$REAL/scripts/decision.sh" add "u1-msg_$q" "question $q" none 'u1 asks' --waits-on main >/dev/null); done
+OUT=$(answer term_b "Ruling 12: the waiting one"); RC=$?
+check "an answer with no id and no seat record replies in the waiting question's thread and closes only that question (issue 454)" "0 1 u1-msg_q4 1" \
+  "$RC $(grep -c '^msg_new .*Ruling 12' "$T/replies") $(open) $(grep -c 'replying in msg_new' <<<"$OUT")"
+# Between two inbox waits (a batch without the answer is being printed) ask-main.sh holds no <id>.wait, only the
+# call-long <id>.asking: an answer sent in that gap still replies in the question's thread, the only way the call returns.
+mv "$T/scratch/ask-main/msg_new.wait" "$T/scratch/ask-main/msg_new.asking"
+OUT=$(answer term_b "Ruling 13: between two waits"); RC=$?
+check "an answer sent while ask-main.sh is between two inbox waits replies in its question's thread" "0 1 0" \
+  "$RC $(grep -c '^msg_new .*Ruling 13' "$T/replies") $(wc -l < "$T/typed" | tr -d ' ')"
+kill "$WAITPID" 2>/dev/null; wait "$WAITPID" 2>/dev/null
+cp "$T/log.bak" "$LOG"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

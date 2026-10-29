@@ -254,5 +254,8 @@ printf -- '- [Live](live.md): a\n- [Old](old.md): b\n' > "$MP/MEMORY.md"; printf
 check "under CLAUDE_CONFIG_DIR the index in that profile's projects folder is the one rewritten" "0:1" \
   "$(grep -c '(old.md)' "$MP/MEMORY.md"):$(grep -c '(old.md)' "$MD/MEMORY.md")"
 
+# Issue 461: no watcher reported a unit idling after its closing GO; the relay is told to run one.
+check "the relay is told to run the idle-unit watcher (issue 461)" 1 "$(grep -c 'scripts/cos-watch-units.sh' <<<"$REL")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

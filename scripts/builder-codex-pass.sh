@@ -74,6 +74,16 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
 die() { echo "REFUSED: $*" >&2; exit 2; }
+# A pass refused for one evidence check, fixed and refused for the next, cost a fix round each. The checks a pass can
+# run before any commit or rebase collect here, and refusals_flush refuses once with all of them.
+REFUSALS=()
+refuse() { REFUSALS+=("$*"); }
+refusals_flush() {
+  [ "${#REFUSALS[@]}" -gt 0 ] || return 0
+  [ "${#REFUSALS[@]}" -gt 1 ] || die "${REFUSALS[0]}"
+  { echo "REFUSED: ${#REFUSALS[@]} checks failed:"; printf -- '- %s\n' "${REFUSALS[@]}"; } >&2
+  exit 2
+}
 CODEX_DIR=${CODEX_HOME:-$HOME/.codex}
 CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 # Which reviewer this run is: codexReviewerAgent (COMMANDECK_PASS is the self-test's switch). --verify reads it
@@ -144,7 +154,7 @@ FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the chang
 # Asked in every pass and by every reviewer, after its focus. The test rules go in whole: the Claude reviewer runs
 # --restricted, so it cannot open a file outside the review worktree, and a Codex sandbox may not either.
 TEST_RULES=$(<"$HERE/../templates/test-rules.md") && [ -n "$TEST_RULES" ] || die "the plugin has no test rules file $HERE/../templates/test-rules.md; every reviewer is asked to judge tests by it"
-LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path.
+LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path. Gate readers: a fix to a reader that guards a gate must be an allowlist that accepts only the shapes it fully understands and refuses every other one with an error naming the line; a fix that adds support for one more input shape instead is a class-miss finding.
 
 $TEST_RULES"
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -1085,8 +1095,8 @@ PLANONLY=0
 { [ -z "$CHANGED" ] || grep -qvE '^"?\.claude/(plans|briefs|metrics)/' <<<"$CHANGED"; } || PLANONLY=1
 CAP_WHY=$(cap_gate_reason "$GATE_ROWS" "$PLANONLY")
 case $CAP_WHY in
-  code) die "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the latest pass was a closing pass that ended NO-GO with only a finding the cap merges, so the review loop has stopped. File the open findings and run merge-unit-local.sh $UNIT --filed '<class>=#<n>'. No pass starts, nothing was committed" ;;
-  plan) die "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the change to review is plan-only, so there is no code for a pass to read. Write the code first, or file the open findings and run merge-unit-local.sh $UNIT --filed '<class>=#<n>'. No pass starts, nothing was committed" ;;
+  code) refuse "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the latest pass was a closing pass that ended NO-GO with only a finding the cap merges, so the review loop has stopped. File the open findings and run merge-unit-local.sh $UNIT --filed '<class>=#<n>'. No pass starts, nothing was committed" ;;
+  plan) refuse "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the change to review is plan-only, so there is no code for a pass to read. Write the code first, or file the open findings and run merge-unit-local.sh $UNIT --filed '<class>=#<n>'. No pass starts, nothing was committed" ;;
 esac
 # Main adds scope in a fix round by changing the brief or its rulings. A narrowed
 # pass would read only the fix and leave the new part unread until the closing
@@ -1147,7 +1157,7 @@ evidence_section() {
 new_code_checked() {
   NEWCODE=$(evidence_section "New code checked \\\\(pass $1\\\\)")
   grep -qE '^- ([^ :]+:[0-9]+ (meets .+|no plan rule, .+)|none, .+)' <<<"$NEWCODE" \
-    || die "$2, and ${EV#"$WT/"} has no usable '## New code checked (pass $1)' section. Under that heading check every read, write or check you added or changed since that pass against the plan's Data design, What can go wrong and the failure table, one line each: '- <path>:<line> meets <the plan line it follows>', or '- <path>:<line> no plan rule, <why it is safe>'; when you added none, '- none, <why>'. Then run the pass again."
+    || refuse "$2, and ${EV#"$WT/"} has no usable '## New code checked (pass $1)' section. Under that heading check every read, write or check you added or changed since that pass against the plan's Data design, What can go wrong and the failure table, one line each: '- <path>:<line> meets <the plan line it follows>', or '- <path>:<line> no plan rule, <why it is safe>'; when you added none, '- none, <why>'. Then run the pass again."
 }
 # fix_groups <round file> -- the pass's findings in groups that share no file, as "- Group <i> (<files>):" then one
 # "  - <finding>" line each, groups in the order their first finding appears. A finding is grouped under every file it cites,
@@ -1244,12 +1254,12 @@ if [ -n "$PREV" ] && [ "$(grep -v '^[[:space:]]*$' "$PREV" | tail -n 1)" = "VERD
   FIXED_RE='fixed(, .+)?'
   ! grep -qF 'fixed, <how>' "$WT/.claude/briefs/$UNIT-fix-r$SM.md" 2>/dev/null || FIXED_RE='fixed, .+'
   { grep -qE '^Search: .+' <<<"$SITES" && grep -qE "^- [^ :]+:[0-9]+ ($FIXED_RE|not affected, .+)" <<<"$SITES"; } \
-    || die "pass $SM ended NO-GO, and ${EV#"$WT/"} has no usable '## Sites checked (pass $SM)' section. Under that heading write the search for the same pattern at the other call sites: a 'Search: <command>' line for each search you ran, then a '- <path>:<line> fixed, <how>' or '- <path>:<line> not affected, <why>' line for each site it found. Then run the pass again."
+    || refuse "pass $SM ended NO-GO, and ${EV#"$WT/"} has no usable '## Sites checked (pass $SM)' section. Under that heading write the search for the same pattern at the other call sites: a 'Search: <command>' line for each search you ran, then a '- <path>:<line> fixed, <how>' or '- <path>:<line> not affected, <why>' line for each site it found. Then run the pass again."
   # Every hit of the reviewers' own class searches (class_sites) is owed as listed, fixed (and how) or not affected.
   CS=$WT/.claude/briefs/$UNIT-r$SM-class-sites.txt
   if [ -s "$CS" ]; then
     MISSING=$(grep -vxFf <(sed -nE "s/^- ([^ ]+:[0-9]+) ($FIXED_RE|not affected, .+)\$/\\1/p" <<<"$SITES") "$CS" || true)
-    [ -z "$MISSING" ] || die "pass $SM ended NO-GO, and '## Sites checked (pass $SM)' leaves out $(wc -l <<<"$MISSING" | tr -d ' ') hit(s) of the reviewers' class searches (.claude/briefs/$UNIT-r$SM-class-sites.txt): $(head -10 <<<"$MISSING" | paste -sd' ' -). Add each as listed, '- <path>:<line> fixed, <how>' or '- <path>:<line> not affected, <why>'. Then run the pass again."
+    [ -z "$MISSING" ] || refuse "pass $SM ended NO-GO, and '## Sites checked (pass $SM)' leaves out $(wc -l <<<"$MISSING" | tr -d ' ') hit(s) of the reviewers' class searches (.claude/briefs/$UNIT-r$SM-class-sites.txt): $(head -10 <<<"$MISSING" | paste -sd' ' -). Add each as listed, '- <path>:<line> fixed, <how>' or '- <path>:<line> not affected, <why>'. Then run the pass again."
   fi
   # Host change (owner order 2026-10-25): passes kept finding a defect in the last fix's new code that broke a rule its
   # own plan already stated. The fixer checks its new code against the plan.
@@ -1277,7 +1287,7 @@ break_gate() {
     bt=${line%% -- *}; bl=${line#* -- }; bl=${bl% -- *}
     grep -F -- "- $bt -- $bl -- red: " <<<"$RUNS" | grep -qE 'red: .*[^[:space:]]' || NOBREAK+="  $bt -- $bl"$'\n'
   done <<<"$BREAKS"
-  [ -z "$NOBREAK" ] || die "pass 1 of $UNIT needs a break run for each Break line of the plan, and ${EV#"$WT/"} has none under '## Break runs' for:
+  [ -z "$NOBREAK" ] || refuse "pass 1 of $UNIT needs a break run for each Break line of the plan, and ${EV#"$WT/"} has none under '## Break runs' for:
 ${NOBREAK}Run each test red with the condition removed, and under that heading write '- <test file> -- <check label> -- red: <the command that ran it with the condition removed>'. Then run the pass again."
 }
 # Issue 341: a unit whose Data design (the brief's first such section, the batch's; the template's own comes after) is not "none" has saves to recover,
@@ -1296,7 +1306,7 @@ table_gate() {
       for (i = 1; i <= k; i++) if (c[i] ~ /^[[:space:]]*$/) ok = 0
       if (ok) found = 1 }
     END { exit !found }' \
-    || die "the Data design of $UNIT's brief is not 'none', and ${EV#"$WT/"} has no '## Failure table' with a row under its header. Under that heading write one row per save: '| Save | Steps | Left behind if it stops after each step | The one recovery |', then a row of four cells for each save. Then run the pass again."
+    || refuse "the Data design of $UNIT's brief is not 'none', and ${EV#"$WT/"} has no '## Failure table' with a row under its header. Under that heading write one row per save: '| Save | Steps | Left behind if it stops after each step | The one recovery |', then a row of four cells for each save. Then run the pass again."
 }
 [ "$KIND" != adversarial ] || { break_gate; table_gate; }
 # Issue 433: a change adding more tests than the cap reached review with no count named. Counted over the unit's own
@@ -1304,7 +1314,7 @@ table_gate() {
 if [ "$NEW_TEST_CAP" != off ]; then
   NEWT=$(cd "$WT" && bash "$HERE/new-test-count.sh" main) || die "cannot count the new tests of $UNIT (new-test-count.sh)"
   [ "$(head -1 <<<"$NEWT")" -le "$NEW_TEST_CAP" ] \
-    || die "the change adds $(head -1 <<<"$NEWT") new tests, over the new-test cap of $NEW_TEST_CAP (reviewLoop.newTestCap). Each new test names the bug it catches; cut the extras, or list them under ## Extra tests in the evidence file and cut them below the cap. The first ten: $(sed -n '2,11p' <<<"$NEWT" | paste -sd'|' - | sed 's/|/; /g')"
+    || refuse "the change adds $(head -1 <<<"$NEWT") new tests, over the new-test cap of $NEW_TEST_CAP (reviewLoop.newTestCap). Each new test names the bug it catches; cut the extras, or list them under ## Extra tests in the evidence file and cut them below the cap. The first ten: $(sed -n '2,11p' <<<"$NEWT" | paste -sd'|' - | sed 's/|/; /g')"
 fi
 # Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
 # so the Builder learns of a refusal before a launch costs a retry.
@@ -1323,18 +1333,36 @@ stage_and_check() {
 SUITE_ON=$(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal)
 if [ "$KIND" = final ] && [ "$SUITE_ON" = true ]; then
   TEST_CMD=$(jq -r '.testCommand // empty' "$MAIN_OF_WT/.claude/commandeck.json" 2>/dev/null || true)
-  [ -n "$TEST_CMD" ] || die "fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)) and main's .claude/commandeck.json has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off, or in /config"
+  [ -n "$TEST_CMD" ] || refuse "fullSuiteBeforeFinal is on (from $(PP_MAIN=$MAIN_OF_WT pp_option fullSuiteBeforeFinal source)) and main's .claude/commandeck.json has no testCommand, so the closing pass has no suite to run. Set testCommand, or turn the setting off: setup.sh --full-suite off, or in /config"
   # The merge check's own command, run whole: --changed (and the base it may take) is taken off. Its cksum, of the
   # command as configured, ends the Suite line: the merge reuses the run only for the check it would run itself.
   CMD_SUM=$(cksum <<<"$TEST_CMD" | cut -d' ' -f1)
   TEST_CMD=$(sed -E 's/[[:space:]]--changed([[:space:]]+[^-&|;[:space:]][^&|;[:space:]]*)?//g' <<<"$TEST_CMD")
 fi
-if [ "$CHECK" = 1 ]; then
-  cp "$(git -C "$WT" rev-parse --absolute-git-dir)/index" "$LOCK/index" || die "cannot copy the index of $WT"
+# precheck -- every refusal a pass can know without the reviewer, run on a copy of the index before anything is staged,
+# committed or rebased, then one refusal naming all of them.
+precheck() {
+  local gd dirty
+  gd=$(git -C "$WT" rev-parse --absolute-git-dir) || die "$WT is not a git worktree"
+  # -p keeps the index's mtime: git's racy-entry check needs it to see a same-size edit made in the second of the
+  # last staging.
+  cp -p "$gd/index" "$LOCK/index" || die "cannot copy the index of $WT"
   GIT_INDEX_FILE=$LOCK/index stage_and_check
+  if [ "$KIND" = final ]; then
+    [ ! -d "$gd/rebase-merge" ] && [ ! -d "$gd/rebase-apply" ] \
+      || refuse "a rebase is in progress in $WT, so the closing pass cannot rebase onto main. Finish or abort it (main resolves a conflict), then rerun the pass."
+    dirty=$(GIT_INDEX_FILE=$LOCK/index git -C "$WT" diff --name-only) || die "cannot list the changed tracked files in $WT"
+    [ -z "$dirty" ] \
+      || refuse "tracked files the pass does not commit are changed in $WT ($(head -10 <<<"$dirty" | paste -sd' ' -)), so the rebase onto main would stop on them. Restore them, then rerun the pass."
+  fi
+  refusals_flush
+}
+if [ "$CHECK" = 1 ]; then
+  precheck
   echo "check ok: a launch of $UNIT $N $KIND passes the launch checks. Not run: the Codex sign-in check. Nothing was staged or committed."
   exit 0
 fi
+precheck
 # A revoked sign-in made the pass end with no output while `codex login status`
 # still said signed in, so a one-word request is the check. It runs outside the
 # worktree, where the repo's own Codex Stop hooks cannot slow it past 30 s; under
@@ -1365,6 +1393,7 @@ Run codex login, then run the pass again. No commit, no reviewer, no round file.
 fi
 
 stage_and_check
+refusals_flush
 # rebase_and_test -- before a closing (final) pass (issue 344, host issue 3171): the unit is rebased onto current local
 # main, so the pass reads what will merge, and when main moved the shell tests that cover the unit's changed files and
 # the files main changed since the old base run, so a clash with main fails here and not at the merge. Selection is
@@ -1930,6 +1959,7 @@ WRITING=$HAND
   printf -- '- A finding marked `(not in the plan list)` is fixed AND added, with its test, to the What can go wrong section of the plan (%s) in the same commit.\n' "$(plan_rel | grep . || echo ".claude/plans/$UNIT.md")"
   printf -- '- A finding'"'"'s severity is the reviewer'"'"'s: never lower one in a round file or the evidence (the loop'"'"'s stop reads the reviewer'"'"'s record, not the round file). Send a dispute to main as a question.\n'
   printf -- '- A fix that changes when a state is trusted (narrows or widens it) reruns the existing cases with the state swapped in before the next pass, and the evidence file records the result.\n'
+  printf -- '- When a finding shows a gate'"'"'s reader mishandling an input shape, the first fix is an allowlist: the reader accepts only the shapes it fully understands and refuses every other one with an error naming the line; supporting the one new shape is not an accepted fix for a gate reader.\n'
   printf -- '- A closing (final) pass first rebases this unit onto current local main and, when main moved, runs the shell tests that cover what you or main changed. A conflict or a red test stops it before the reviewer: fix a red test, send a conflict to main as a question.\n\n'
   printf '## Findings so far\n\nEvery finding of this build'"'"'s passes so far, this pass'"'"'s included, by class. A class with several findings, or one that returns, is one flaw seen again and again: fix it as a class.\n\n%s\n' "${FSF:-None with a level or a class tag.}"
   printf 'A fix that touches a save updates that save'"'"'s row in the evidence file'"'"'s failure table (its steps, what is left after each, the one recovery) in the same commit; the next reviewer checks the code against the table.\n'

@@ -28,6 +28,7 @@ it found and exits, which wakes the pane:
 | `cos-watch-decisions.sh` | a decision in the ledger is open and you have not been asked yet (every 20 s) |
 | `cos-watch-alerts.sh` | the dashboard raises an alert for this project or the machine (every 60 s) |
 | `cos-watch-limit.sh` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |
+| `cos-watch-units.sh` | a unit's worktree has a commit under a day old, its newest review round is not a GO at or after that commit, and nothing in it or its merge log changed for 12 minutes (once per commit; every 60 s). The Stop hook does not hold this one |
 | `cos-check.sh` | 50 minutes pass: it names a watcher that is down, prints held FYI notes, counts messages the inbox watcher missed, and says how long you have been quiet |
 
 A Stop hook keeps the pane from ending a turn unless all four watchers and `cos-check.sh` are alive.

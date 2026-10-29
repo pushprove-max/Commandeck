@@ -33,3 +33,15 @@ worked.
 | Worktree settings have no effect | Read the doctor's shadow warnings and main's settings.local.json. Start a fresh session after fixing precedence. |
 | Handoff leaves the old pane open | Read `~/.claude/checkpoints/clear-hook.log` and the next prompt's HANDOFF NOT DONE line. Fix checkpoint freshness/carry-over or Orca takeover before retrying. |
 | Update fails after rewriting files | Read its rollback message. Recorded files are restored, but jobs may need old setup rerun and add-ons may already have updated. |
+
+## Orca 1.4.241-1.4.243 retest
+
+Stub tests cannot show real Orca behaviour. Checked on Orca 1.4.243 by `orca --version` and `orca orchestration check --help` (2026-10-29). Every workaround is kept.
+
+| Item | Result | Reason |
+|---|---|---|
+| 1. The turn-start proof in `seat.sh` | Kept | The proof is still the only sign that a seat took its prompt; no Orca release in this range adds a replacement. |
+| 2. The drain in `orca-wait.sh` | Kept | The 1.4.243 help for `orchestration check` still says a bound Run replays the same delivery until `--ack`, so the drain is still needed. |
+| 3. The cost of the hooks guard | Kept | The guard still runs before every tool call; no Orca change removes that cost, so the guard stays as it is. |
+| 4. Main restart opens a new pane | Kept, with a fix | The restart opens a new pane on purpose, so the replay of the launch line stays. The restart fix is the argv read: when the launch line has quotes or braces, the restart reads the parent's real argv and keeps its permission mode (see `docs/auto-permission-mode.md`). |
+| 5. Heartbeats dropped unread | Kept | Orca has no off switch for heartbeats, so they are still dropped unread. |

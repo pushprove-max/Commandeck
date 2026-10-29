@@ -19,7 +19,7 @@ case "\$1 \$2" in
   "orchestration send") echo "\$*" >> "$T/sends.log"; echo '{"ok":true,"result":{"message":{"id":"msg_q1"}}}' ;;
   # --all: every message for the handle, read or not, with no batch and no ack (the full view); $T/extra.jsonl holds
   # messages only that view still shows (an answer whose batch was acknowledged without being printed).
-  "orchestration check") echo "\$*" >> "$T/checks.log"
+  "orchestration check") echo "\$*" >> "$T/checks.log"; cat "$T/scratch/ask-main/"*.asking >> "$T/asking.log" 2>/dev/null
     case " \$* " in *" --all "*) { jq -c '.messages[]' "$T/batches.jsonl" 2>/dev/null; cat "$T/extra.jsonl" 2>/dev/null; } | jq -sc '{ok: true, result: {messages: ., count: length, acknowledged: null}}'; exit 0 ;; esac
     ack=; while [ \$# -gt 0 ]; do [ "\$1" != --ack ] || ack=\$2; shift; done
     if [ -n "\$ack" ]; then
@@ -44,7 +44,7 @@ E=(env -u CLAUDE_PROJECT_DIR COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws
 mkdir -p "$T/scratch/handles"; echo term_main > "$T/scratch/handles/main"
 ask() { (cd "$T/p" && "${E[@]}" bash "$REAL/scripts/ask-main.sh" "$@" 2>&1); }
 at() { local t=$1; shift; (cd "$T/p" && "${E[@]}" COMMANDECK_ASK_MAIN_NOW="$t" bash "$REAL/scripts/ask-main.sh" "$@" 2>&1); }
-reset() { rm -rf "$T/batches.jsonl" "$T/extra.jsonl" "$T/checks.log" "$T/sends.log" "$T/fail-ack" "$T/screen" "$T/scratch/ask-main"; }
+reset() { rm -rf "$T/batches.jsonl" "$T/extra.jsonl" "$T/asking.log" "$T/checks.log" "$T/sends.log" "$T/fail-ack" "$T/screen" "$T/scratch/ask-main"; }
 
 reset
 OUT=$(ask "which db" "sqlite or postgres?")
@@ -135,6 +135,13 @@ jq -cn '{id: "mx", thread_id: "msg_q1", type: "status", subject: "Re: q", body: 
 OUT=$(at 1541 --resume msg_q1); RC=$?
 check "an answer found in the full view after the deadline is returned, and main is told nothing" "0:1:0" \
   "$RC:$(grep -c '^a late answer$' <<<"$OUT"):$(grep -c 'unanswered' "$T/sends.log")"
+
+# A call keeps <id>.asking (pid= and pane=) from its first inbox wait until it returns, gaps between waits included:
+# answer-worker.sh finds the question's thread there (issue 454). Two waits: an unrelated batch, then the answer.
+reset; batch d1 - "other" "unrelated"; batch d2 msg_q1 "Re: q" "the answer"
+OUT=$(ask "q" "b"); RC=$?
+check "a waiting call names its pane in <id>.asking at each inbox read and leaves none once it returns" "0:2:1:" \
+  "$RC:$(grep -c -- --wait "$T/checks.log"):$(( $(grep -cx 'pane=term_me' "$T/asking.log") == $(wc -l < "$T/checks.log") )):$(ls "$T/scratch/ask-main" | paste -sd' ' -)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

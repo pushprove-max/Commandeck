@@ -2,8 +2,8 @@
 # cos-watch-alerts.sh -- waits until the dashboard lists an active alert, the
 # machine's or this project's, that the Chief of Staff has not seen yet, prints
 # it and exits, which wakes the pane (run it in the background).
-# Seen ids live in <state>/<project>.alerts-seen; the pane appends an id once
-# the owner has been told. <state>/<project>.alerts-told holds "<fingerprint>
+# Seen ids live in <state>/<project>.alerts-seen; this watcher appends each id it prints (and the pane may add one).
+# A stage alert, and a Builder's quiet alert (id builder-...-quiet-<time>), are never printed. <state>/<project>.alerts-told holds "<fingerprint>
 # <epoch>" for each time this watcher printed one.
 # --seed: every alert id open now goes into the seen file, told now, and the script exits: run once at a switch from
 # another watcher, so the alerts the owner already knows of raise nothing (issue 292).
@@ -64,7 +64,11 @@ def is_new(i):
     # A state from before the told record: the newest stamp seen stands for the last tell.
     last = told.get(k, newest.get(k))
     return last is None or now - last >= 86400
-new = [a for a in alerts if is_new(a['id'])]
+# A stage alert (its id names no stage) and a Builder's quiet alert are the dashboard's to show, never a wake (issue 461).
+def wakes(i):
+    k = split(i)[0]
+    return not (k.startswith('stage-') or (k.startswith('builder-') and k.endswith('-quiet')))
+new = [a for a in alerts if wakes(a['id']) and is_new(a['id'])]
 if not new:
     sys.exit(1)
 try:
@@ -72,6 +76,12 @@ try:
         f.write(''.join(f"{split(a['id'])[0]} {now}\n" for a in new))
 except OSError:
     pass  # the owner is told all the same; the newest seen stamp stands in for this tell
+# Printed is seen: the next poll, under this stamp or a later one, is quiet until 24 h pass since the told record (issue 461).
+try:
+    with open(seen_path, 'a') as f:
+        f.write(''.join(a['id'] + '\n' for a in new))
+except OSError:
+    pass  # the owner is told all the same; the told record keeps the next poll quiet for 24 h
 for a in new:
     row = json.dumps(a)  # issue 290: cut at 1,500 characters, with a pointer
     print(row if len(row) <= 1500 else row[:1500] + ' ...[cut; full row: the dashboard data.js alerts]')

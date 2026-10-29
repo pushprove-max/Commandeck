@@ -245,7 +245,7 @@ check "--auto on a unit with an owner question opened during its check is refuse
 rm -f "$REPO/.claude/commandeck.json"
 # Issue 255: the brief's Post-merge lines run once the merge stands, only the ones on the list. The plugin is a copy,
 # so its dashboard.sh and main-watch.sh are stubs; the stub dashboard has a login and answers --login-check.
-PLUG_COPY=$TMP/plugin; mkdir -p "$PLUG_COPY"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$REAL/.claude-plugin" "$PLUG_COPY/"
+PLUG_COPY=$TMP/plugin; mkdir -p "$PLUG_COPY"; cp -R "$REAL/scripts" "$REAL/hooks" "$REAL/config" "$REAL/templates" "$REAL/.claude-plugin" "$PLUG_COPY/"
 printf '#!/usr/bin/env bash\necho "dashboard.sh $*" >> "%s/post-calls"\n[ "$1" != --login-check ] || [ -e "%s/password-set" ] || { echo "the dashboard login is on and no password is set" >&2; exit 1; }\n' "$TMP" "$TMP" > "$PLUG_COPY/scripts/dashboard.sh"
 printf '#!/usr/bin/env bash\necho "main-watch.sh $*" >> "%s/post-calls"\n' "$TMP" > "$PLUG_COPY/scripts/main-watch.sh"
 MERGE=$PLUG_COPY/scripts/merge-unit-local.sh
@@ -265,8 +265,8 @@ check "one line says what each step did" 1 "$(grep -c '^step 4 post-merge: dashb
 # Issue 310: the script takes its repository from the checkout it lives in, not from where it is run. Here the project's
 # main checkout holds the plugin (tracked, on main); the merge is run from another repository's root, then by a relative
 # path from the checkout's parent folder. An installed copy (no git behind it) keeps the cwd, as every case above.
-cp -R "$PLUG_COPY/scripts" "$PLUG_COPY/hooks" "$PLUG_COPY/config" "$PLUG_COPY/.claude-plugin" "$REPO/"
-git -C "$REPO" add -A scripts hooks config .claude-plugin; git -C "$REPO" commit -qm "main: the plugin"
+cp -R "$PLUG_COPY/scripts" "$PLUG_COPY/hooks" "$PLUG_COPY/config" "$PLUG_COPY/templates" "$PLUG_COPY/.claude-plugin" "$REPO/"
+git -C "$REPO" add -A scripts hooks config templates .claude-plugin; git -C "$REPO" commit -qm "main: the plugin"
 git init -q -b main "$TMP/other"; git -C "$TMP/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m other
 mk s1; go s1; echo s1 > "$TMP/unit"
 check "run from another repository's root, the checkout's own script merges its unit" "0 1" \

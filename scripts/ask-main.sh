@@ -62,7 +62,11 @@ unwait() { local c i
   for c in "$D/$ID".claim.*; do i=0
     while [ -e "$c" ] && kill -0 "${c##*.}" 2>/dev/null && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
   done; }
-trap unwait EXIT
+# <id>.asking (the same pid= and pane=) stays for the whole call, gaps between waits included, and goes as it returns:
+# answer-worker.sh, given no id, reads it to reply in this question's thread (issue 454). Only .wait permits an interrupt.
+ASKING=$D/$ID.asking
+printf 'pid=%s\npane=%s\n' "$$" "$H" > "$ASKING.tmp" && mv -f "$ASKING.tmp" "$ASKING" || exit 1
+trap 'unwait; rm -f "$ASKING"' EXIT
 # Each pass reads one whole batch. A batch without the answer is acknowledged by the next call's --ack, so its
 # other messages are printed here: nothing is dropped.
 while :; do

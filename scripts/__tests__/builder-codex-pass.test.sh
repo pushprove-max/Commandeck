@@ -225,11 +225,12 @@ check "the review prompt carries the failing-test default, the cold-read order a
   'This prompt, the brief and the dispatch spec outrank the startup file' 'runtime_unavailable' "draft your findings, and only then open the author's evidence" \
   'only to confirm or refute one finding, and say which' 'never a generated file'; do grep -cF -- "$s" "$P8"; done | paste -sd' ' -)"
 
-# Issue 362: the Break gate before pass 1, run on a hand-written plan and evidence file (the gate's own function).
-GATEFNS=$(sed -n '/^round_files()/,/^}/p;/^plan_rel()/p;/^plan_file()/p;/^evidence_section()/,/^}/p;/^break_gate()/,/^}/p' "$PASS_SH")
+# Issue 362: the Break gate before pass 1, run on a hand-written plan and evidence file (the gate's own function). The
+# gates collect their refusal (refuse, issue 451) and the pass refuses once at refusals_flush, so the harness flushes too.
+GATEFNS=$(sed -n '/^REFUSALS=()$/p;/^refuse() { REFUSALS/p;/^refusals_flush()/,/^}/p;/^round_files()/,/^}/p;/^plan_rel()/p;/^plan_file()/p;/^evidence_section()/,/^}/p;/^break_gate()/,/^}/p' "$PASS_SH")
 GW=$TMP/gate; mkdir -p "$GW/.claude/briefs" "$GW/.claude/plans"
 printf 'Plan: .claude/plans/g.md\n' > "$GW/.claude/briefs/g.md"
-gate() { (. "$REAL/scripts/fence.sh"; die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$GATEFNS"; break_gate) 2>&1; echo "rc=$?"; }
+gate() { (. "$REAL/scripts/fence.sh"; die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$GATEFNS"; break_gate; refusals_flush) 2>&1; echo "rc=$?"; }
 printf '# Plan\n\nBreak: t/a.test.sh -- the first check -- a.sh the gate\nBreak: t/b.test.sh -- the second check -- b.sh the rule\n\n```\nBreak: t/fenced.test.sh -- not a line -- x\n```\n~~~\nBreak: t/fenced-tilde.test.sh -- not a line -- x\n~~~\n  ```\nBreak: t/fenced-indented.test.sh -- not a line -- x\n  ```\n' > "$GW/.claude/plans/g.md"
 printf '## Break runs\n\n- t/a.test.sh -- the first check -- red: sed -i s/x/y/ a.sh; bash t/a.test.sh\n' > "$GW/.claude/briefs/g-evidence.md"
 OUT=$(gate)
@@ -247,8 +248,8 @@ rm -f "$GW/.claude/briefs/g-r1-reports.md" "$GW/.claude/briefs/g.md"
 check "a unit whose brief names no plan owes nothing" "rc=0" "$(gate)"
 
 # Issue 341: the failure table gate before pass 1, on a hand-written brief and evidence file.
-TGATEFNS=$(sed -n '/^round_files()/,/^}/p;/^evidence_section()/,/^}/p;/^table_gate()/,/^}/p' "$PASS_SH")
-tgate() { (. "$REAL/scripts/fence.sh"; die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$TGATEFNS"; table_gate) 2>&1; echo "rc=$?"; }
+TGATEFNS=$(sed -n '/^REFUSALS=()$/p;/^refuse() { REFUSALS/p;/^refusals_flush()/,/^}/p;/^round_files()/,/^}/p;/^evidence_section()/,/^}/p;/^table_gate()/,/^}/p' "$PASS_SH")
+tgate() { (. "$REAL/scripts/fence.sh"; die() { echo "REFUSED: $*" >&2; exit 2; }; WT=$GW UNIT=g EV=$GW/.claude/briefs/g-evidence.md; eval "$TGATEFNS"; table_gate; refusals_flush) 2>&1; echo "rc=$?"; }
 # The batch comes first in a Builder brief, the template's own Data design section after it.
 brief() { printf '## The issues\n\n## Data design\n\n%s\n\n## The batch\n\nx\n\n## Data design\n\nThe batch'"'"'s Data design section above binds.\n' "$1" > "$GW/.claude/briefs/g.md"; }
 HEAD4='## Failure table\n\n| Save | Steps | Left behind if it stops after each step | The one recovery |\n|---|---|---|---|\n'

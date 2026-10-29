@@ -7,7 +7,7 @@ set -uo pipefail
 . "$(dirname "$0")/fixtures/builder-codex-pass-setup.sh"
 rawpass() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO STUB_THREAD=thr-$1 STUB_REPLY="$3" bash "$PASS_SH" "$U" "$1" "$2" >"$TMP/out" 2>"$TMP/err"); echo $?; }
 printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n' "$U" > "$SC/seat-$U-builder.txt"
-printf 'echo base\n' > "$W/a.sh"
+printf 'echo first\n' > "$W/a.sh"
 pass 1 adversarial
 printf 'echo built\n' > "$W/a.sh"; printf 'built\n' > "$W/b.sh"; printf 'other\n' > "$W/c.sh"
 fpass "$W" 2 review $'- [P1] (class: stale-read) stale read -- a.sh:1 -- why -- cmd\nClass search: rg -n built a.sh b.sh c.sh\nVERDICT: NO-GO' >/dev/null

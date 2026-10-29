@@ -213,10 +213,54 @@ if [ "$fresh" = 1 ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && command -v orca-ide
   # ps returns the arguments as one flat line, their quoting lost, and the
   # helper types the line into a shell: only plain flag text is replayed. A
   # command that cannot be rebuilt restarts as bare `claude`, permission checks on.
-  # shortcut: braces and quotes (a --settings JSON value) fall back to plain claude, widen when a main runs with such a flag.
+  # Such a command restarts as `claude` plus the permission options of the parent's real argv (issue 453).
   [[ $cmd =~ ^[]A-Za-z0-9\ _./:=,@%+[-]+$ ]] || {
-    echo "$(date +%FT%T) stop-hook: the parent command could not be replayed safely; restarting as plain claude" >> "$HOME/.claude/checkpoints/clear-hook.log"
-    cmd=claude
+    # argv: NUL-separated entries, from COMMANDECK_PARENT_ARGV (a test file), /proc, or KERN_PROCARGS2 on macOS (the argc
+    # entries, where read-verdict.sh pid_env reads the environment after them).
+    parent_argv() {
+      if [ -n "${COMMANDECK_PARENT_ARGV:-}" ]; then cat "$COMMANDECK_PARENT_ARGV" 2>/dev/null; return 0; fi
+      if [ -r "/proc/$PPID/cmdline" ]; then cat "/proc/$PPID/cmdline" 2>/dev/null; return 0; fi
+      [ "$(uname -s)" = Darwin ] || return 0
+      python3 -I -c '
+import ctypes, sys
+pid = int(sys.argv[1])
+buf = ctypes.create_string_buffer(int(sys.argv[2]))
+size = ctypes.c_size_t(len(buf))
+if ctypes.CDLL(None).sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)):
+    sys.exit(0)
+raw = buf.raw[:size.value]
+argc = int.from_bytes(raw[:4], "little")
+rest = raw[4:].split(b"\0")[1:]
+while rest and not rest[0]:
+    rest.pop(0)
+for e in rest[:argc]:
+    sys.stdout.buffer.write(e + b"\0")' "$PPID" "$(sysctl -n kern.argmax)" 2>/dev/null
+    }
+    av=()
+    while IFS= read -r -d '' e; do av+=("$e"); done < <(parent_argv)
+    # Walk the entries after argv[0] up to `--`. An entry is an option only when it is the whole entry and the entry
+    # before it is argv[0], does not start with `-`, or is a permission option already taken: a flag inside a value, or
+    # the value of another option, is data. Two --permission-mode options keep neither.
+    skipperm="" modes=() prev_ok=1 i=1
+    while [ "$i" -lt "${#av[@]}" ] && [ "${av[i]}" != -- ]; do
+      e=${av[i]} ok=0 mode=""
+      if [ "$prev_ok" = 1 ]; then
+        case $e in
+          --dangerously-skip-permissions) skipperm=" $e"; ok=1 ;;
+          --permission-mode) mode=${av[i+1]:-} ;;
+          --permission-mode=*) mode=${e#*=} ;;
+        esac
+        case $mode in
+          acceptEdits|auto|bypassPermissions|manual|dontAsk|plan)
+            modes+=("$mode"); ok=1; [ "$e" = --permission-mode ] && i=$((i + 1)) ;;
+        esac
+      fi
+      if [ "$ok" = 1 ] || [ "${av[i]:0:1}" != - ]; then prev_ok=1; else prev_ok=0; fi
+      i=$((i + 1))
+    done
+    cmd="claude$skipperm"
+    [ "${#modes[@]}" -ne 1 ] || cmd+=" --permission-mode ${modes[0]}"
+    echo "$(date +%FT%T) stop-hook: the parent command could not be replayed safely; restarting as: $cmd" >> "$HOME/.claude/checkpoints/clear-hook.log"
   }
   log="$HOME/.claude/checkpoints/clear-hook.log"
   # macOS has no setsid; perl's POSIX::setsid detaches the same way there.

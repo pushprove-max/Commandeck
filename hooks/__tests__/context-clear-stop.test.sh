@@ -58,7 +58,7 @@ stop_hook() { # one stop of the same pane, the checkpoint files left as they are
     | env -i PATH="$BOX/bin" HOME="$BOX/home" CALLS="$BOX/calls" ORCA_TERMINAL_HANDLE=old-pane \
         COMMANDECK_RESTART_SETTLE_S=0 COMMANDECK_RESTART_TUI_FALLBACK_S=0 \
         COMMANDECK_SCRATCH="$BOX" COMMANDECK_DRIVERS=none.service \
-        ${1:+COMMANDECK_RESTART_HELPER="$1"} ${2:+COMMANDECK_PARENT_ARGS="$2"} bash "$HOOK" >/dev/null 2>&1)
+        ${1:+COMMANDECK_RESTART_HELPER="$1"} ${2:+COMMANDECK_PARENT_ARGS="$2"} ${3:+COMMANDECK_PARENT_ARGV="${3}"} bash "$HOOK" >/dev/null 2>&1)
 }
 # Up to 30 s, returning as soon as the condition holds: a loaded chain host took
 # longer than the old 5 s to start the detached helper, and a timeout is its own
@@ -398,6 +398,24 @@ check "an agent stopped with TaskStop no longer holds it" launched "$(agents "$L
 check "the stop text quoted in a shell's output ends nothing" held "$(agents "$LAUNCH" "$QUOTED")"
 check "a session whose restart helper gave up is not restarted again" held "$(GAVE_UP=1 agents)"
 check "and main is told the owner restarts it by hand" 1 "$(grep -c 'the automatic restart failed .*the owner restarts main by hand' "$BOX/agents.err")"
+
+# Issue 453: a launch line the flat ps text cannot replay (braces, quotes) restarts as `claude` plus the permission
+# options found in the parent's real argv, one entry each. A permission word that is data (inside a value, or the
+# value of another option) grants nothing. COMMANDECK_PARENT_ARGV is a file of NUL-separated entries.
+rm -f "$BOX/gh-fail" "$CPD/sid.handoff"
+restart_cmd() { # <flat ps line> <argv entries...> -> the command the new pane is created with, minus the resume token
+  local flat=$1; shift
+  printf '%s\0' "$@" > "$BOX/argv"
+  run_hook "" "$flat" "$BOX/argv"
+  wait_for "$helper_done"
+  grep -m1 '^terminal create' "$BOX/calls" | sed -E 's/.*--command COMMANDECK_RESUME_TOKEN=[^ ]+ //; s/ --json.*//'
+}
+J1='{"a":1}'
+J2='{"env":{"NOTE":" --dangerously-skip-permissions "}}'
+check "a launch line with a JSON value restarts with its permission mode kept (issue 453)" "claude --permission-mode acceptEdits" \
+  "$(restart_cmd "claude --settings $J1 --permission-mode acceptEdits" claude --settings "$J1" --permission-mode acceptEdits)"
+check "a permission flag inside an option's value grants nothing on restart (issue 453)" "claude --permission-mode acceptEdits:claude" \
+  "$(restart_cmd "claude --settings $J2 --permission-mode acceptEdits" claude --settings "$J2" --permission-mode acceptEdits):$(restart_cmd "claude --append-system-prompt --dangerously-skip-permissions {" claude --append-system-prompt --dangerously-skip-permissions)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

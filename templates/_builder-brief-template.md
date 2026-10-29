@@ -275,6 +275,9 @@ narrowed pass is handed that list as known, so it is not raised again; the closi
 what it finds again at the stop.
 When a reviewer finds a way round a guard, list the other ways round the same guard
 and fix them all BEFORE asking for the next pass; one test covers the bug class, not one per way round.
+When a finding shows a gate's reader mishandling an input shape, the first fix is an allowlist: the reader accepts only
+the shapes it fully understands and refuses every other one with an error naming the line; supporting the one new shape
+is not an accepted fix for a gate reader.
 A fix that changes when a state is trusted (narrows or widens it) reruns the existing
 cases with the state swapped in before the next pass, and the evidence file records the result.
 When a finding class returns a SECOND time, fix the design, not the named case: work out what the variants

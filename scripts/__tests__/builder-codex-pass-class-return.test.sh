@@ -107,5 +107,21 @@ age 12; printf 'echo twelve\n' > "$W/a.sh"; fpass "$W" 12 review "$PGJOIN" >/dev
 check "a finding citing two files joins their groups: a.sh and b.sh are one group of three findings, c.sh another" "2 - Group 1 (a.sh, b.sh) 3" \
   "$(grep -c '^- Group [0-9]' "$B/$U-fix-r12.md") $(grep '^- Group 1 ' "$B/$U-fix-r12.md" | sed 's/:$//') $(groups 12 | awk '/^- Group 1 / { f = 1; next } /^- Group / { f = 0 } f' | grep -c '^  - ')"
 
+# A fix that supports only the one new input shape of a gate's reader leaves the other shapes to the next pass, so the
+# rule is handed to the Builder in the fix round and to every reviewer: an allowlist that refuses what it does not understand.
+RULE='refuses every other one with an error naming the line'
+check "a fix hand-off and a reviewer prompt both carry the gate-reader allowlist rule (issue 450)" "1 1" \
+  "$(hand 12 | grep -c "an allowlist.*$RULE") $(grep -c "an allowlist.*$RULE" "$B/$U-r3-prompt-1.md")"
+
+# A pass refused for the sites section, then for the new-code check, cost a fix round each: the checks a pass can run
+# before any commit are refused together, once.
+age 13; printf 'echo thirteen\n' > "$W/a.sh"; HEAD13=$(git -C "$W" rev-parse HEAD)
+RC13=$(rawpass 13 review 'VERDICT: GO')
+check "two failed checks are refused in one, before any commit (issue 451)" "2 1 1 2 1 1 no $HEAD13" \
+  "$RC13 $(grep -c '^REFUSED:' "$TMP/err") $(grep -cx 'REFUSED: 2 checks failed:' "$TMP/err") $(grep -c '^- ' "$TMP/err") \
+$(grep -c "^- pass 12 ended NO-GO, and .* has no usable '## Sites checked (pass 12)' section" "$TMP/err") \
+$(grep -c "^- pass 12 ended NO-GO, and .* has no usable '## New code checked (pass 12)' section" "$TMP/err") \
+$([ -e "$B/$U-r13-reports.md" ] && echo yes || echo no) $(git -C "$W" rev-parse HEAD)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

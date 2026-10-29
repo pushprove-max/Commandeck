@@ -89,5 +89,29 @@ check "prose under ## Why passes" "0 0" "$(pc REFUSED "${ok[@]}" '## Why' 'This 
 check "a section over its cap is refused, naming its size and cap" "2 1" \
   "$(pc 'section ## Verification is' "${ok[@]}" '## Verification' "$(for i in $(seq 80); do printf -- '- check %s: a long enough line of text\n' "$i"; done)")"
 check "prose quoted in a tilde fence is not prose" "0 0" "$(pc REFUSED "${ok[@]}" '## Cuts' '~~~' 'Quoted prose.' '~~~')"
+# Issue 456: a Done line is what a user does and sees: `- #<n> Done: <user action> -- <what the user sees>`. A line with no
+# ` -- `, a side under three words or a one- or two-word parenthesized label (`(API)`) names a component and is refused,
+# naming the line. The plan above has its Done line at line 10.
+DONE='- #39 Done: a user retries an import from the dashboard after a lost response -- no duplicate import appears'
+dn() { pc 'line 10 Done line names a component, not what a user sees: '"$1" "${ok[@]}" '## Done' "$1"; }
+check "a plan whose issue Done line names only a component is refused (issue 456)" \
+  "2 1 2 1 2 1 2 1 0 0 0 0" \
+  "$(dn '- #39 Done: retry key handling (API)') $(dn '- #39 Done: retry key handling -- (API)') $(dn '- #39 Done: retry key handling -- (the API)') $(dn '- #39 Done: a user retries an import -- no duplicates') $(pc REFUSED "${ok[@]}" '## Done' "$DONE") $(pc REFUSED "${ok[@]}")"
+# The action side is held to the same rule: a component label before ` -- ` is not something a user does.
+check "a plan whose issue Done line names a component as the user action is refused (issue 456)" \
+  "2 1 2 1 2 1" \
+  "$(dn '- #39 Done: (API) -- no duplicate import appears') $(dn '- #39 Done: API -- a user sees results') $(dn '- #39 Done: (the API) -- no duplicate import appears')"
+# Issue 458: later work needs a filed issue. Under ## Stated limits a line saying follow-up (any case, also follow up and
+# followup), or a line starting `Follow-up:`, is refused unless it holds #N or owner/repo#N; the section's opening line is
+# exempt word for word; the word under ## Why or in the change log is not read. One refusal lists every such line.
+fu() { pc "$1" "${ok[@]}" '## Stated limits' "$PRE" "${@:2}"; }
+HEAD458='REFUSED: the plan names later work with no filed issue (#N or owner/repo#N):'
+GOT="$(fu "$HEAD458" '- the import UI key is a follow-up') $(fu '  - line 11: - the import UI key is a follow-up' '- the import UI key is a follow-up')"
+GOT+=" $(fu '  - line 11: Follow-up: the CORS header' 'Follow-up: the CORS header') $(fu '  - line 11: - a Follow Up is planned' '- a Follow Up is planned')"
+GOT+=" $(fu '  - line 11: - the work is a FOLLOWUP' '- the work is a FOLLOWUP') $(fu '  - line 12: - two followup' '- one follow-up' '- two followup') $(fu REFUSED '- one follow-up' '- two followup')"
+GOT+=" $(fu REFUSED '- the import UI key is a follow-up (#12)') $(fu REFUSED 'Follow-up: the CORS header other/repo#3') $(fu REFUSED)"
+GOT+=" $(pc REFUSED "${ok[@]}" '## Why' 'A follow-up is planned.' '## Plan change log' '- 2026-10-01: a follow-up is noted') $(fu REFUSED '```' '- a follow-up in a fence' '```')"
+check "a stated limit naming later work with no issue number is refused, naming the line, and passes with one (issue 458)" \
+  "2 1 2 1 2 1 2 1 2 1 2 1 2 1 0 0 0 0 0 0 0 0 0 0" "$GOT"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

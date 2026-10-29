@@ -93,7 +93,7 @@ if [ "$(basename "$(cd "$WT" && git rev-parse --show-toplevel)")" = Chief-of-Sta
   COS_ALLOW='["Bash(orca-ide terminal list:*)","Bash(orca-ide terminal send:*)","Bash(orca-ide terminal read:*)","Bash(orca-ide terminal wait:*)","Bash(orca-ide orchestration send:*)","Bash(orca-ide orchestration check:*)","Bash(orca-ide orchestration reply:*)","Bash(orca-ide orchestration inbox:*)"]'
   # Its own watcher scripts and the decision script, each by the full path the
   # startup text names (owner ruling 2026-10-12); no other script.
-  COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
+  COS_ALLOW=$(jq -c --arg s "$PP_SCRIPTS_Q" '. + (["cos-watch-alerts", "cos-watch-decisions", "cos-watch-inbox", "cos-watch-limit", "cos-watch-units", "decision"] | map("Bash(bash \($s)/\(.).sh:*)"))' <<<"$COS_ALLOW")
   # The off an earlier run wrote for the third-party ponytail plugin goes (issue 365). The typescript-lsp plugin is gone, and so is the key for it.
   # The setup answer for the relay's prompt cache: 5m or 1h is written into env by path, so its other env entries stay.
   jq --arg rttl "$(PP_MAIN=$PROJECT pp_option relayPromptCacheTtl)" --argjson poff "$PLUGINS_OFF" --argjson cpoff "$COS_PLUGINS_OFF" --argjson mdeny "$COS_MCP_DENY" --argjson callow "$COS_ALLOW" "$DISOWN"'

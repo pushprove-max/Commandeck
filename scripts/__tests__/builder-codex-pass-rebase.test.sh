@@ -102,5 +102,15 @@ printf 'echo unit-side\n' > "$W/a.sh"; git -C "$W" add a.sh; git -C "$W" -c user
 head=$(git -C "$W" rev-parse HEAD)
 check "a conflict stops the pass, names the file, aborts the rebase and leaves the branch as it was" "2 1 1 0 $head" \
   "$(fin 12 "$NOGO2") $(grep -c 'REBASE CONFLICT' "$TMP/err") $(grep -c 'a.sh' "$TMP/err") $(ls -d "$(git -C "$W" rev-parse --git-path rebase-merge)" 2>/dev/null | wc -l | tr -d ' ') $(git -C "$W" rev-parse HEAD)"
+
+# A final on a stopped rebase, with a tracked brief changed, failed only after the commit; both are refused at once, before
+# any commit or rebase. The unit's rebase is stopped at a `break` line, then its tracked brief is edited.
+echo v1 > "$W/.claude/briefs/tracked-note.md"; git -C "$W" add -f .claude/briefs/tracked-note.md
+git -C "$W" -c user.name=t -c user.email=t@t commit -qm 'a tracked brief'
+GIT_SEQUENCE_EDITOR='echo break >>' git -C "$W" -c user.name=t -c user.email=t@t rebase -q -i HEAD~1 >/dev/null 2>&1
+echo v2 > "$W/.claude/briefs/tracked-note.md"; head=$(git -C "$W" rev-parse HEAD)
+check "a final with a rebase in progress and a changed tracked file is refused once, before it commits (issue 451)" "2 1 1 1 1 no 0 $head" \
+  "$(fin 12 "$NOGO2") $(grep -c '^REFUSED:' "$TMP/err") $(grep -cx 'REFUSED: 2 checks failed:' "$TMP/err") $(grep -c '^- a rebase is in progress' "$TMP/err") \
+$(grep -c '^- tracked files .*tracked-note.md' "$TMP/err") $(round 12) $(grep -c 'rebased\|REBASE CONFLICT' "$TMP/out" "$TMP/err" | awk -F: '{ s += $2 } END { print s }') $(git -C "$W" rev-parse HEAD)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
