@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.61.0 -- 2026-10-29
+
+### Reviews
+
+- When a review finding needs a gate to check its input, the fix now refuses any input it does not recognise instead of guessing, so the same kind of finding stops coming back round after round.
+- A review pass now checks that the build's notes are complete before it saves the work, so a pass never runs on a half-written record.
+
+### Builds
+
+- An answer to a Builder that is waiting on a question now reaches it straight away instead of queueing behind the wait.
+- The slowest builder self-test runs faster.
+
 ## 0.60.0 -- 2026-10-28
 
 ### Builds
