@@ -34,6 +34,8 @@ import tarfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import extras  # noqa: E402
+from extras import own_usage  # noqa: E402
 from timing import LOOK_TOOLS, codex_commands, rows_of, session_ledger, ts  # noqa: E402
 
 TEST_RE = r'self-test|sweep|\btests?\b|time the|timings?\b|preflight|red run'
@@ -96,11 +98,6 @@ def usd(model, u):
     row = PRICES.request_row({'requestId': 'x', 'timestamp': '2026-01-01T00:00:00Z', 'type': 'assistant',
                               'message': {'model': model, 'usage': u}})
     return PRICES.price(row) if row else None
-
-
-def own_usage(u):
-    """One call's usage without the advisor's share: that is priced once, in the advisor's own bucket."""
-    return u | {'iterations': [i for i in u.get('iterations') or [] if i.get('type') != 'advisor_message']}
 
 
 def cache_counts(u):
@@ -385,7 +382,7 @@ def read_codex(path, worktree):
     verdict = re.findall(r'VERDICT:\s*(NO-GO|GO)', p['message'])
     p['verdict'] = verdict[-1] if verdict else ('stopped' if not p['complete'] else 'none')
     # A finding as the merge reads one (builder-codex-pass.sh FINDING): a '- ' or '* ' bullet, or none.
-    p['findings'] = len(re.findall(r'^\s*(?:[-*]\s*)?\[P[0-3]\]', p['message'], re.M))
+    p['findings'] = len(re.findall(extras.FINDING_HEAD, p['message'], re.M))
     return p
 
 
@@ -481,6 +478,19 @@ def loop_limits(home):
                                              for x, k in zip(got, ('maxReviewMinutes', 'maxTestPercent', 'maxUsd'))):
         raise SystemExit(f'{home}/.claude/commandeck.json: a reviewLoop threshold is not a number of 0 or more ({rl}); answer it again with /commandeck:setup')
     return got
+
+
+def evidence_of(worktree, unit, archive=None):
+    """The unit's evidence file, from the worktree or, once merged, the archive; '' when neither has it."""
+    path = f'{worktree}/.claude/briefs/{unit}-evidence.md'
+    if os.path.exists(path):
+        return open(path, errors='replace').read()
+    if archive and os.path.exists(archive):
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                if member.isfile() and member.name.endswith(f'{unit}-evidence.md'):
+                    return tar.extractfile(member).read().decode(errors='replace')
+    return ''
 
 
 def main_archive(worktree, unit, given=None):
@@ -673,7 +683,7 @@ def main():
             passes.append({'file': sess['name'], 'files': [], 'sid': sess['name'], 'start': sess['first'], 'end': sess['last'], 'complete': True,
                            'usage': {}, 'calls': 0, 'model': next((m for _, _, m in sess['usage'].values() if m), None), 'effort': None,
                            'message': sess['final'], 'rows': [], 'threads': 1, 'verdict': verdict[-1] if verdict else 'none',
-                           'findings': len(re.findall(r'^\s*(?:[-*]\s*)?\[P[0-3]\]', sess['final'], re.M))})
+                           'findings': len(re.findall(extras.FINDING_HEAD, sess['final'], re.M))})
     passes.sort(key=lambda p: p['start'])
     for p in passes:
         # command_s and longest are worked out once the cut windows are known.
@@ -1012,6 +1022,15 @@ def main():
         'passes': [{k: p[k] for k in ('n', 'kind', 'start', 'end', 'complete', 'model', 'effort', 'verdict', 'findings', 'usage', 'calls', 'threads',
                                       'commands', 'command_s', 'longest', 'cut_s', 'unexplained_s', 'message')} for p in passes],
     }
+    for p, row in zip(passes, result['passes']):
+        # A response with no price leaves the pass unpriced: a partial sum would read as the pass's cost.
+        costs = [PRICES.price(r) if r else None for r in p.get('rows') or []] if PRICES else []
+        row['usd'] = round(sum(costs), 4) if costs and None not in costs else None
+    result['context_sources'] = extras.context_breakdown(files, usd)
+    result['cache_expiry'] = extras.cache_expiry(sessions, usd)
+    result['main_share'] = extras.main_share(unit, t0, t1, home, os.path.join(os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude'), 'projects', ''), usd)
+    result['finding_value'] = extras.finding_value(result['passes'], evidence_of(wt, unit, main_archive(wt, unit, a.main)))
+    result['after_merge'] = extras.after_merge_safe(unit, home)
     json.dump(result, open(f'{out}/result.json', 'w'), indent=1)
     with open(f'{out}/notes.txt', 'w') as fh:
         for sess in sessions:

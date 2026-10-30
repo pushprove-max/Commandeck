@@ -222,5 +222,29 @@ rm -rf "$T/sc"; OUT=$(mdrain)
 check "a status note, main's own and a driver FYI included, prints under held notes after the wake's own lines; a heartbeat prints nowhere" \
   "a Builder asks|held notes (did not wake you):|main's own note|merge still running|drive u9: FYI round started|0" \
   "$(grep -oE '^(term_[a-z]+ \| [^|]+ \||held notes.*)' <<<"$OUT" | sed -E 's/^term_[a-z]+ \| //; s/ \|$//' | paste -sd'|' -)|$(grep -c 'alive' <<<"$OUT")"
+# Issue 498: the state line printed every distinct VERDICT line of the round file, a reviewer's quoted ones included, so a
+# round that ended NO-GO could read "VERDICT: GO VERDICT: NO-GO". It shows the one verdict that stands (read-verdict.sh
+# --round-verdict): the last outside a fence, or a last line of NO-GO. A false NO-GO costs a round, a false GO skips one.
+rwake() {  # rwake <round file text> -- the unit's r5 round file holds the text; prints the wake
+  printf '%s\n' "$1" > "$U/.claude/briefs/u212-r5-reports.md"
+  git -C "$U" add -A && git -C "$U" -c user.name=t -c user.email=t@t commit -qm "r5 $RANDOM"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$PL/scripts/builder-codex-pass.sh"
+  msg w1 term_u status "pass done (u212)" "r5 is in" | jq -sc '{ok: true, result: {deliveryId: "d3", messages: .}}' > "$T/batch.json"
+  rm -rf "$T/sc"
+  (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+    COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$PL/scripts/orca-wait.sh" 2>&1)
+}
+# Catches: the state line listing a quoted GO beside the final NO-GO.
+OUT=$(rwake $'Pass: review\nVERDICT: GO\n~~~text\n[P2] x\nVERDICT: NO-GO')
+check "state_line_shows_final_nogo: a quoted GO above a final NO-GO shows NO-GO alone" "1 0" \
+  "$(grep -c 'last Codex round r5 (review) VERDICT: NO-GO$' <<<"$OUT") $(grep -c 'VERDICT: GO' <<<"$OUT")"
+# Catches: a GO inside a reviewer's unfinished fence counting as the round's verdict (accepted failure F5: NO-GO, one more round).
+OUT=$(rwake $'Pass: review\nVERDICT: NO-GO\n~~~text\nVERDICT: GO')
+check "state_line_skips_unfinished_fence: a GO inside an unclosed fence shows the NO-GO above it" "1 0" \
+  "$(grep -c 'last Codex round r5 (review) VERDICT: NO-GO$' <<<"$OUT") $(grep -c 'VERDICT: GO' <<<"$OUT")"
+# Catches: the Pass: label or a plain pass's own GO line dropped from the state line.
+OUT=$(rwake $'Pass: review\n[P3] a note\nVERDICT: GO')
+check "state_line_keeps_pass_line: a plain GO round still shows its pass and GO" 1 \
+  "$(grep -c 'last Codex round r5 (review) VERDICT: GO$' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

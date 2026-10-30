@@ -145,5 +145,15 @@ check "with no worktree id, Orca's list entry for this pane's handle names the p
   "$(away ORCA_WORKTREE_ID= ORCA_TERMINAL_HANDLE=term_m bash "$REAL/scripts/orca-wait.sh" --close task_3 2>&1):$(grep -c 'task-update --id task_3 --status completed' "$T/orca.log" 2>/dev/null)"
 check "with no pane either, it still says there is no project, and names where it looked" 1 \
   "$(away ORCA_WORKTREE_ID= bash "$REAL/scripts/orca-wait.sh" --close task_2 2>&1 | grep -c "no project here: .*tried: $T/elsewhere)")"
+# #483: a fetch that hung with no time limit held a merge for 12 minutes. A timed-out fetch refuses like a failed one.
+# The stub ssh sleeps 300 s: with no limit on the fetch, the outer 20 s timeout ends the run (rc=124) and no refusal is printed.
+HG=$T/hang; git init -q -b main "$HG" && git -C "$HG" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
+git -C "$HG" remote add origin ssh://hang.invalid/x.git
+printf '#!/bin/sh\nexec sleep 300\n' > "$T/hang-ssh"; chmod +x "$T/hang-ssh"
+hung=$( cd "$HG" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES COMMANDECK_MAIN="$HG" GIT_SSH_COMMAND="$T/hang-ssh" COMMANDECK_SYNC_FETCH_S=1 \
+  timeout 20 bash -c '. "$0" && pp_sync_main "$@"' "$REAL/scripts/paths.sh" "$HG" 2>&1; echo "rc=$?" )
+check "hung_fetch_takes_no_fetch_path (a timed-out fetch refuses with the could-not-fetch line)" "1 rc=1" \
+  "$(grep -c 'could not fetch main from origin' <<<"$hung") $(tail -1 <<<"$hung")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

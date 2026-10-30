@@ -30,5 +30,10 @@ has "size and counts are screening proxies, not evidence" "Length, assertion cou
 has "a deletion needs an intent review; a coverage floor is not enough" "A deletion needs a review that the test's intent is kept; a passing coverage floor alone is not enough."
 has "no test without an assertion, no unapproved skip" "No test without an assertion, and no skip that was not approved."
 has "the reviewer names a change that would fail each test" "The reviewer names one code change that would make each new or changed test fail; a test with no such change is a finding."
+# #487: a refusal at the test cap sends a Builder to main; without this rule it merged tests to get under the cap.
+LIMIT="On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name."
+has "test_limit_rule_sends_to_main: the rules file sends a cap refusal to main" "$LIMIT"
+check "test_limit_rule_sends_to_main: the Builder brief says the same" yes \
+  "$(tr '\n' ' ' < "$R/templates/_builder-brief-template.md" | sed -E 's/ +/ /g' | grep -qF -- "$LIMIT" && echo yes || echo no)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -1006,12 +1006,14 @@ pp_worktree_new() {
 # pp_sync_main <checkout> [--check] -- fetch origin's main and fast-forward local
 # main to it, before a Builder branches or a merge rebases: a release marked
 # published on origin and not fetched here gets its files rebuilt as a draft.
-# No origin is nothing to fetch. A fetch that fails, or a local main that has
-# diverged, refuses with the reason. --check moves nothing (a dry run).
+# No origin is nothing to fetch. A fetch that fails or runs past
+# COMMANDECK_SYNC_FETCH_S seconds (default 60; a hung one held a merge 12
+# minutes, #483), or a local main that has diverged, refuses with the reason.
+# --check moves nothing (a dry run).
 pp_sync_main() {
   local c=$1 got
   git -C "$c" remote get-url origin >/dev/null 2>&1 || return 0
-  git -C "$c" fetch -q origin main 2>/dev/null && got=$(git -C "$c" rev-parse -q --verify 'FETCH_HEAD^{commit}') \
+  timeout -k 5 "${COMMANDECK_SYNC_FETCH_S:-60}" git -C "$c" fetch -q origin main 2>/dev/null && got=$(git -C "$c" rev-parse -q --verify 'FETCH_HEAD^{commit}') \
     || { echo "could not fetch main from origin; fetch it by hand (git fetch origin main), then run this again" >&2; return 1; }
   git -C "$c" merge-base --is-ancestor "$got" refs/heads/main && return 0
   git -C "$c" merge-base --is-ancestor refs/heads/main "$got" \
@@ -1329,6 +1331,26 @@ pp_gh_read() {
   echo "$reason: $err. Fix: $fix"
   return 1
 }
+# pp_review_workflow <brief file> -- the unit's review workflow: `default` or `per-issue #a #b`, from the one `Review workflow:`
+# line main writes in the batch, so in main's <unit>-builder-brief.md; no line, or no file, is default. An allowlist: a
+# near-miss read as default would silently drop reviews, so any line that starts `review workflow`, in any case or spacing,
+# must have the exact shape, and a second such line refuses. Exit 2 and one stderr line naming the line. The gates pass
+# main's brief by its fixed path, never a worktree's copy: a Builder must not turn them off.
+pp_review_workflow() {
+  local lines rc=0 body
+  [ -e "$1" ] || { echo default; return 0; }
+  lines=$(grep -iE '^[[:space:]#>*-]*review[[:space:]_-]*workflow' "$1") || rc=$?
+  [ "$rc" -le 1 ] || { echo "REFUSED: cannot read $1 for its Review workflow line" >&2; return 2; }
+  [ -n "$lines" ] || { echo default; return 0; }
+  [ "$(wc -l <<<"$lines" | tr -d ' ')" = 1 ] \
+    || { echo "REFUSED: $1 has more than one Review workflow line: $(paste -sd'|' - <<<"$lines")" >&2; return 2; }
+  [[ $lines =~ ^Review\ workflow:\ (default|per-issue(\ #[1-9][0-9]*)+)$ ]] \
+    || { echo "REFUSED: $1 has a bad Review workflow line: '$lines'. Write 'Review workflow: default' or 'Review workflow: per-issue #<n> #<n>'" >&2; return 2; }
+  body=${lines#Review workflow: }
+  [ "$(tr ' ' '\n' <<<"$body" | sort | uniq -d | wc -l | tr -d ' ')" = 0 ] \
+    || { echo "REFUSED: $1 has a bad Review workflow line: '$lines' names an issue twice" >&2; return 2; }
+  echo "$body"
+}
 # pp_unit_briefs <briefs dir> <unit> -- the unit's own files there, one a line:
 # its brief, evidence, main's rulings, round files and later-cut briefs. Never
 # "$unit"*.md: unit "pre" would then own the briefs of "prefab" and "pre-other".
@@ -1337,7 +1359,7 @@ pp_unit_briefs() {
   for f in "$1/$2".md "$1/$2"-*.md; do
     [ -e "$f" ] || continue
     b=${f##*/}; b=${b#"$2"}
-    [[ $b =~ ^(\.md|-evidence\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
+    [[ $b =~ ^(\.md|-evidence\.md|-main-rulings\.md|-review-cap\.md|-r[0-9a-z]+-reports\.md|-issue-[0-9]+-round-[0-9]+\.md|-cut[0-9][^/]*\.md)$ ]] && printf '%s\n' "$f"
   done
   return 0
 }

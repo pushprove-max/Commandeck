@@ -24,6 +24,8 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
    item, then run the pass script the brief names. The script commits, runs
    the review and writes `.claude/briefs/<unit>-r<N>-reports.md`. Fix what it
    finds and run the next pass. Change nothing after the GO pass.
+   A brief with a per-issue review section has you run `builder-codex-pass.sh --issue <n> <unit>` for each issue
+   first, one issue at a time; the whole-branch passes start after every issue is done.
 3. Builder: print the marker the brief names as the last line, and stop.
 4. Main: `bash scripts/merge-unit-local.sh <unit>`; Details,
    `templates/rules-details.md`, Merging a unit.

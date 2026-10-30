@@ -51,7 +51,8 @@ bash "$PLUGIN/scripts/merge-unit-local.sh" add-csv-export
 ```
 
 From the orchestrator's session the merge detaches: it prints `running detached as pid N; watch <log>` and keeps
-running after the shell call ends. Wait on that log (its last line is `DONE unit=…` or `FAILED …`) or on the message the
+running after the shell call ends. Wait on that log (its last line is `DONE unit=…` or `FAILED …`; `MERGE-TIME step=… seconds=…` lines
+above it give each step's time, and `MERGE-TIME total` comes before `DONE`) or on the message the
 merge sends when it ends; never run it again. While it holds main it keeps its state in `.git/merge-unit-local.state`,
 and `git stash`, `checkout`, `reset`, `clean` and edits in main are refused, naming the merge. A second request for the
 same unit at the same commit, running or waiting, is a no-op (exit 4).

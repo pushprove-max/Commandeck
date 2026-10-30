@@ -462,6 +462,13 @@
     }
     put(byId('tests-body'), body);
   }
+  // Issue 486: a Builder on the per-issue review workflow says so, and which issue's round ran last. The default workflow adds no line.
+  function workflowText(u) {
+    const b = isBuilder(u) ? u.builder : null;
+    if (!b || typeof b.workflow !== 'string' || !b.workflow.startsWith('per-issue')) return '';
+    const r = b.issueRound && num(b.issueRound.issue) !== null && num(b.issueRound.round) !== null ? `, last review: issue #${b.issueRound.issue} round ${b.issueRound.round}` : '';
+    return `Per-issue review of ${b.workflow.slice('per-issue'.length).trim() || 'its issues'}${r}`;
+  }
   // A stage segment narrower than this share of the clock cannot hold its time and cost under it.
   const STAGE_MIN_PCT = 12;
   function unitCard(u, now, asks = []) {
@@ -479,6 +486,8 @@
       h('span', 'state', quiet && num(u.ageSec) !== null ? `Quiet for ${ago(u.ageSec)}` : u.worktree === false ? 'Parked' : STAGE_LABEL[u.stage] || SEATS.get(u.stage) || 'Stage not known yet'),
       seatSpan);
     li.append(head);
+    const wfText = workflowText(u);
+    if (wfText) li.append(h('p', 'uworkflow', wfText));
     // A unit's planning worktree shows its time from the first plan seat's launch, its cost and its cost by stage.
     const cost = isBuilder(u) ? u.builder.cost : u.plan ? u.plan.cost : undefined;
     if (isBuilder(u) || u.plan) {

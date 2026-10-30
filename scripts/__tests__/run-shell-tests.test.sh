@@ -73,7 +73,9 @@ git -C "$R" checkout -q -- .
 # Issue 230: in main's own foreground (a Claude session in the main checkout) a run returns at once with its log,
 # runs detached, and its result reaches main as a question; the tests it runs are not main's foreground.
 : > "$RAN"; printf '#!/usr/bin/env bash\necho "fg=$COMMANDECK_FOREGROUND" >> "$RAN"\n' > "$R/scripts/__tests__/touched.test.sh"
-OUT=$(cd "$R" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 COMMANDECK_SCRATCH="$TMP/scratch" bash "$RUNNER" scripts/__tests__/touched.test.sh </dev/null 2>&1); RC=$?
+# A stub with no panes: under a live Orca the detached result went to the real main pane, so the fixture's queue stayed empty.
+mkdir -p "$TMP/nopane"; printf '#!/usr/bin/env bash\necho "{\\"result\\":[]}"\n' > "$TMP/nopane/orca-ide"; chmod +x "$TMP/nopane/orca-ide"
+OUT=$(cd "$R" && env -u COMMANDECK_FOREGROUND CLAUDECODE=1 COMMANDECK_SCRATCH="$TMP/scratch" PATH="$TMP/nopane:$PATH" bash "$RUNNER" scripts/__tests__/touched.test.sh </dev/null 2>&1); RC=$?
 PID=$(sed -n 's/.*running detached as pid \([0-9]*\);.*/\1/p' <<<"$OUT")
 check "in main's foreground the run returns 0 at once, naming its log" "0 1" "$RC $(grep -c "watch $TMP/scratch/shell-tests.log" <<<"$OUT")"
 [ -z "$PID" ] || tail --pid="$PID" -f /dev/null
@@ -295,6 +297,31 @@ check "a shell test file over the line cap fails with the cap named (issue 436)"
   "$([ "$RC" -ne 0 ] && echo 1 || echo 0) $(grep -c 'FAIL over.test.sh over the 500-line cap for one shell test file' <<<"$OUT") $(grep -c over "$RAN")"
 : > "$RAN"; OUT=$(cd "$C" && timeout 30 bash "$RUNNER" scripts/__tests__/at.test.sh 2>&1); RC=$?
 check "a shell test file at the cap runs (issue 436)" "0 at" "$RC $(cat "$RAN")"
+
+# #489: with slow files last a bare run ends on them alone, so the seconds saved from earlier runs start the slowest first.
+# One fixture builder: four tests that log their name, one job so the log is the start order.
+mkord() { rm -rf "$1"; mkdir -p "$1/scripts/__tests__"; git -C "$1" init -q
+  for n in a b c d; do printf '#!/usr/bin/env bash\necho %s >> "$RUNLOG"\n' "$n" > "$1/scripts/__tests__/$n-l.test.sh"; done; }
+BOXL=$TMP/ord; mkord "$BOXL"; LIST=$BOXL/secs.tsv; RUNLOG=$BOXL/ran; export RUNLOG
+rl() { : > "$RUNLOG"; (cd "$BOXL" && env -u COMMANDECK_RUNNING_TEST COMMANDECK_SHELL_TEST_JOBS=1 COMMANDECK_SHELL_TEST_SECONDS=$LIST timeout 30 bash "$RUNNER" "$@" > "$BOXL/out" 2>"$BOXL/err"); }
+printf '5\tb-l.test.sh\n90\td-l.test.sh\n' > "$LIST"
+rl
+# Catches: files started in sorted order whatever the saved seconds, so a run still ended on its slowest file.
+check "longest_first_starts_slowest: known files start longest first, a file with no row after them" "d b a c" "$(paste -sd' ' - < "$RUNLOG")"
+# Catches: the report following the start order instead of sorted order.
+check "report_stays_sorted: the report keeps sorted order whatever order the files ran" "a-l b-l c-l d-l" \
+  "$(sed -n 's/^ok   \([a-d]-l\)\.test\.sh.*/\1/p' "$BOXL/out" | paste -sd' ' -)"
+printf '12\tb-l\n7\tc/l.test.sh\n3\td-l.test.sh\tx\nxx\ta-l.test.sh\n40\tc-l.test.sh\n' > "$LIST"
+rl; RCL=$?
+# Catches: a half row, a row with a slash, an extra field or a non-number being used (or aborting the run) instead of skipped.
+check "corrupt_seconds_row_ignored: bad rows are skipped, the one good row orders the run and the run passes" "c a b d 0" \
+  "$(paste -sd' ' - < "$RUNLOG") $RCL"
+FAKEHOME=$BOXL/home; mkdir -p "$FAKEHOME/.commandeck"; printf '90\td-l.test.sh\n5\tb-l.test.sh\n' > "$FAKEHOME/.commandeck/shell-test-seconds.tsv"
+BEFORE=$(cksum < "$FAKEHOME/.commandeck/shell-test-seconds.tsv")
+: > "$RUNLOG"; (cd "$BOXL" && env -u COMMANDECK_SHELL_TEST_SECONDS HOME=$FAKEHOME COMMANDECK_RUNNING_TEST=outer.test.sh COMMANDECK_SHELL_TEST_JOBS=1 timeout 30 bash "$RUNNER" > "$BOXL/out" 2>&1)
+# Catches: a run inside a test reading or writing the host's list (the clear-out unsets the guard before it is read).
+check "nested_run_leaves_list_alone (a run inside a test neither orders by the host's list nor changes it)" "a b c d | $BEFORE" \
+  "$(paste -sd' ' - < "$RUNLOG") | $(cksum < "$FAKEHOME/.commandeck/shell-test-seconds.tsv")"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

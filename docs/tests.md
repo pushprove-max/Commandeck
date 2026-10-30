@@ -50,6 +50,9 @@ many tests):
 bash scripts/run-shell-tests.sh --changed main --callers
 ```
 
+`scripts/shell-tests-for.sh --hops <n>` stops that walk after n rounds. The builder pass's rebase check passes 2.
+With no flag the walk goes on until nothing new turns up.
+
 To know whether a test file needs a new run, ask what it reads. It prints
 `unchanged <file>` when neither the file, nor a script it names, nor a file those
 source has changed since the commit, and `changed <file>` otherwise (or when it
@@ -90,6 +93,11 @@ can be set with `COMMANDECK_SHELL_TEST_JOBS` and
 and 120 seconds, except a test's own timeout marker. One `*.test.sh` file holds
 at most 500 lines (`COMMANDECK_SHELL_TEST_MAX_LINES`): the runner fails a longer
 file before it runs and names the cap. Split such a file by section.
+
+A bare run starts the slowest files first, from the seconds the last bare runs saved in
+`$HOME/.commandeck/shell-test-seconds.tsv` (`COMMANDECK_SHELL_TEST_SECONDS` sets another path). A file with no saved
+row starts after the known ones. The report stays in sorted order. A run inside a test uses no list unless that variable
+names one.
 
 Contributions should branch from `main`, keep one change per pull request,
 and add a test that fails without a behavior fix. Open an issue first for a

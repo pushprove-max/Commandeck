@@ -28,6 +28,9 @@ one plan judge, not two; with no line, or 150 or more, the plan tier stays Panel
   whose files are all docs or config may name none: say why, and the command
   that proves it.
 
+- Optional: to have each issue reviewed alone before the whole-branch passes, add one line to this batch,
+  `Review workflow: per-issue #<a> #<b>`, naming every issue the plan closes. Leave it out for the usual review.
+
 ## Launch
 
 Required: builder-launch.sh refuses a batch without it, and a plan seat's

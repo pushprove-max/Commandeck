@@ -9,6 +9,9 @@ and every review prompt point here.
   failure.
 - List every deleted or merged test with the test that replaces it, in the
   evidence file or the change's description.
+- On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name.
+- No existing test loses a line without main's `Test edit: <path> ruling:<id>`
+  line in the unit's rulings. Adding a new case is free.
 
 ## What a test must encode
 

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pre-push -- run the shell tests on the commit being pushed to refs/heads/main, and refuse the push if they fail
+# (issue 497). Wire it once per checkout: git config core.hooksPath .githooks
+# stdin is githooks(5)'s `<local ref> <local sha> <remote ref> <remote sha>`, one line per ref. Other refs and deletes
+# (an all-zero local sha) pass. Shell tests only: CI runs the rest.
+WT=
+cleanup() { [ -z "$WT" ] || { git worktree remove --force "$WT/w" 2>/dev/null; rm -rf "$WT"; WT=; }; }
+trap cleanup EXIT
+while read -r _ lsha rref _; do
+  [ "$rref" = refs/heads/main ] || continue
+  case $lsha in *[!0]*) ;; *) continue ;; esac
+  WT=$(mktemp -d) || { echo "pre-push: no scratch folder; push to main refused" >&2; exit 1; }
+  # Before the variables clear: the worktree is added to the repository that is pushing.
+  git worktree add -q --detach "$WT/w" "$lsha" || { echo "pre-push: no worktree for $lsha; push to main refused" >&2; exit 1; }
+  # githooks(5): Git's variables (GIT_DIR and the rest) point at the pushing repository; clear them to work in another.
+  ( unset $(git rev-parse --local-env-vars); cd "$WT/w" && bash scripts/run-shell-tests.sh ) < /dev/null >&2
+  rc=$?
+  cleanup
+  [ "$rc" -eq 0 ] || { echo "pre-push: the shell tests failed (exit $rc) on $lsha; push to main refused" >&2; exit 1; }
+done
+exit 0

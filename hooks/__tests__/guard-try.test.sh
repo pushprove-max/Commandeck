@@ -5,7 +5,8 @@ set -uo pipefail
 HOOKS=$(cd "$(dirname "$0")/.." && pwd)
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected [$2], got [$3])"; fi }
-TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P); trap 'rm -rf "$TMP"; rm -f /tmp/claude-builder-search-streak-gt-*' EXIT
+SG=run$$ # this run's session-name prefix: two runs at once share /tmp streak files (#484)
+TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P); trap 'rm -rf "$TMP"; rm -f /tmp/claude-builder-search-streak-$SG-*' EXIT
 git init -q -b main "$TMP/p" && git -C "$TMP/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 git -C "$TMP/p" worktree add -q -b wk "$TMP/wk"
 mkdir -p "$TMP/p/lib" && echo hit > "$TMP/p/f.txt"
@@ -18,15 +19,15 @@ WHOLE=$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"it'"'"'s"}}')
 # One label per bug: a sub is one assertion under it, and `check "<label>" "" "$MISS"` fails with every miss named.
 MISS=
 sub() { [ "$2" = "$3" ] || MISS+="$1: expected [$2], got [$3]; "; }
-sub "a whole-repo search is refused" 2 "$(sg gt-1 "$WHOLE")"
+sub "a whole-repo search is refused" 2 "$(sg $SG-1 "$WHOLE")"
 T=$(try_of < "$TMP/err")
 sub "the whole-repo Try names the pattern and a folder of the checkout" "rg -n -e 'it'\\''s' lib" "$T"
-sub "the whole-repo Try passes the guard" 0 "$(sg gt-2 "$(bash_ "$T")")"
-for i in 1 2 3; do sg gt-3 "$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"a", path:"lib"}}')" >/dev/null; CLAUDE_PROJECT_DIR=$TMP/p bash "$HOOKS/builder-search-guard.sh" <<<"$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"a", path:"lib"}, hook_event_name:"PostToolUse", session_id:"gt-3"}')" >/dev/null 2>&1; done
-sub "the 4th search of a streak on a file is refused" 2 "$(sg gt-3 "$(jq -cn --arg p "$TMP/p/f.txt" '{tool_name:"Grep", tool_input:{pattern:"hit", path:$p}}')")"
+sub "the whole-repo Try passes the guard" 0 "$(sg $SG-2 "$(bash_ "$T")")"
+for i in 1 2 3; do sg $SG-3 "$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"a", path:"lib"}}')" >/dev/null; CLAUDE_PROJECT_DIR=$TMP/p bash "$HOOKS/builder-search-guard.sh" <<<"$(jq -cn --arg s "$SG-3" '{tool_name:"Grep", tool_input:{pattern:"a", path:"lib"}, hook_event_name:"PostToolUse", session_id:$s}')" >/dev/null 2>&1; done
+sub "the 4th search of a streak on a file is refused" 2 "$(sg $SG-3 "$(jq -cn --arg p "$TMP/p/f.txt" '{tool_name:"Grep", tool_input:{pattern:"hit", path:$p}}')")"
 T=$(try_of < "$TMP/err")
 sub "the streak Try is a plain grep of that file" "grep -n -e 'hit' '$TMP/p/f.txt'" "$T"
-sub "the streak Try passes the guard" 0 "$(sg gt-3 "$(bash_ "$T")")"
+sub "the streak Try passes the guard" 0 "$(sg $SG-3 "$(bash_ "$T")")"
 check "a refused search names a search that runs (issue 471)" "" "$MISS"; MISS=
 
 # git-safety: a force push is printed as the lease push, from the words typed; a delete has no allowed form.

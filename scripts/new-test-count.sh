@@ -11,6 +11,26 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 BASE=${1:?usage: new-test-count.sh <base>}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/../hooks/lib/test-path.sh" || { echo "new-test-count: cannot load hooks/lib/test-path.sh" >&2; exit 2; }
+if [ "$BASE" = --edited ]; then
+  # --edited <base> [<head>] (issue 496): `<path><TAB><lost lines><TAB><lost check lines>` per test file that exists at <base>
+  # and loses a non-blank line by <head> (default: the index). An added line is no edit, so a new case stays free. A rename
+  # counts as a delete: every old line is lost. A git failure exits 2.
+  EB=${2:?usage: new-test-count.sh --edited <base> [<head>]} EH=${3-} SPAN=()
+  [ -n "$EH" ] && SPAN=("$EB" "$EH") || SPAN=(--cached "$EB")
+  NAMES=$(git --literal-pathspecs diff --no-renames --name-only -z "${SPAN[@]}" | tr '\0' '\n') \
+    || { echo "new-test-count: git diff failed for $EB" >&2; exit 2; }
+  while IFS= read -r f; do
+    [ -n "$f" ] && is_test_path "$f" && git cat-file -e "$EB:$f" 2>/dev/null || continue
+    # --text: a `-diff` attribute would print "Binary files differ", with no hunk to read a lost line from.
+    D=$(git --literal-pathspecs diff --text --no-color --no-renames --no-ext-diff --no-textconv -U0 "${SPAN[@]}" -- "$f") \
+      || { echo "new-test-count: git diff failed for $f" >&2; exit 2; }
+    # Header lines (`--- a/x`) come before the first hunk, so they are never read as a lost line.
+    awk -v p="$f" 'BEGIN { OFS = "\t" } /^@@/ { on = 1; next } on && /^-/ && substr($0, 2) ~ /[^ \t]/ { n++
+      if (substr($0, 2) ~ /(^|[^A-Za-z0-9_])(expect|assert)([^A-Za-z0-9_]|$)|^[ \t]*check[ \t]/) c++ }
+      END { if (n) print p, n, c + 0 }' <<<"$D"
+  done <<<"$NAMES"
+  exit 0
+fi
 FROM=$(git merge-base "$BASE" HEAD) || { echo "new-test-count: cannot find where HEAD left $BASE" >&2; exit 2; }
 # The change as the pass will commit it, uncommitted and untracked files included: staged into a copy of the index.
 IDX=$(mktemp) || exit 2; trap 'rm -f "$IDX"' EXIT

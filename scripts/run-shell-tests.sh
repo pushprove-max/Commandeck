@@ -23,6 +23,11 @@
 # only those, which is how the chain gives them a lane of their own. The
 # coverage guard reads the same marker, so the two never both run one test.
 #
+# Files start longest first (#489), from the seconds saved at $HOME/.commandeck/shell-test-seconds.tsv
+# (COMMANDECK_SHELL_TEST_SECONDS overrides; one copy per host, `<seconds>\t<file basename>`), so a run does not end on
+# its slow files alone. A file with no row starts after the known ones. Only a bare run saves it. A run inside a test
+# uses no list unless the variable names one.
+#
 # `--changed [<base>] [--callers]` runs only the tests `git diff --name-only <base>` (default
 # HEAD) touches: a test it adds or edits, and the same-name test of a script or
 # hook it adds or edits (scripts/seat.sh -> scripts/__tests__/seat.test.sh). It is
@@ -68,6 +73,8 @@ OFF_ENV=("COMMANDECK_HOOK_FIRE_LOG=${COMMANDECK_HOOK_FIRE_LOG:-}" "COMMANDECK_OF
 # Every other COMMANDECK_ variable the session or main-watch set too (main's pane folder, scratch, seat): the merge
 # check runs in main's environment, and a test must see what CI gives it. Kept: CI's two and this runner's own.
 unset CLAUDE_PROJECT_DIR CLAUDE_CONFIG_DIR
+# Read before the loop below clears COMMANDECK_RUNNING_TEST: a run inside a test keeps the saved seconds out of it.
+NESTED=${COMMANDECK_RUNNING_TEST:+1}
 for v in $(compgen -e COMMANDECK_); do
   case $v in COMMANDECK_FOREGROUND|COMMANDECK_SHELL_TEST_*|COMMANDECK_TEST_NODE_MODULES|COMMANDECK_BREW_PREFIX) ;; *) unset "$v" ;; esac
 done
@@ -136,6 +143,7 @@ last_pass() {
     END { print r }' "$LEDGER" 2>/dev/null
 }
 
+SCOPE=
 if [ "${1:-}" = --changed ]; then
   shift; CALLERS=0 BASE=HEAD
   for a in "$@"; do case $a in --callers) CALLERS=1 ;; *) BASE=$a ;; esac; done
@@ -167,6 +175,7 @@ elif [ $# -gt 0 ] && [ "$1" != --list ]; then
   # Named files are relative to where the caller stood, not to $ROOT.
   mapfile -t TESTS < <(for f in "$@"; do case $f in (/*) echo "$f" ;; (*) echo "$CALLER_PWD/$f" ;; esac; done | sort)
 else
+  SCOPE=whole
   mapfile -t TESTS < <(ls hooks/__tests__/*.test.sh scripts/__tests__/*.test.sh 2>/dev/null | sort)
 fi
 [ "${#TESTS[@]}" -gt 0 ] || { echo "run-shell-tests: found no test files" >&2; exit 2; }
@@ -310,6 +319,48 @@ for i in "${!TESTS[@]}"; do
   cap=$(sed -n '1,5p' "$t" | sed -n 's/^# timeout: *\([0-9][0-9]*\).*/\1/p' | head -1)
   CAP[i]=${cap:-$TIMEOUT}; RUN+=("$i")
 done
+SECS_FILE=${COMMANDECK_SHELL_TEST_SECONDS:-}
+[ -n "$SECS_FILE" ] || [ -n "$NESTED" ] || SECS_FILE=$HOME/.commandeck/shell-test-seconds.tsv
+declare -A SAVED=()
+# read_seconds -- fill SAVED from the list; a row of any other shape is skipped. Status 1: the list is there and unreadable.
+read_seconds() {
+  local line tab=$'\t' re
+  SAVED=()
+  [ -n "$SECS_FILE" ] && [ -e "$SECS_FILE" ] || return 0
+  [ -f "$SECS_FILE" ] && [ -r "$SECS_FILE" ] || return 1
+  re="^([0-9]+)$tab([^$tab/]+)\$"
+  while IFS= read -r line; do
+    [[ $line =~ $re ]] && SAVED[${BASH_REMATCH[2]}]=${BASH_REMATCH[1]}
+  done < "$SECS_FILE"
+  return 0
+}
+# save_seconds -- this run's seconds over the list as it stands now, through a temp file and a rename so a reader never
+# sees half of it. Only a whole-scope run saves. Two saves together lose one run's rows; the next run relearns them.
+# A failure prints one line and never changes the exit.
+save_seconds() {
+  local i b tmp why=
+  local -A LIVE=()
+  [ -n "$SECS_FILE" ] && [ "$SCOPE" = whole ] && [ "$ONLY_OWN_LANE" = 0 ] && [ "$OFFLOADED" = 0 ] && [ -z "$PARTIAL" ] || return 0
+  read_seconds || SAVED=()
+  for i in ${RUN[@]+"${RUN[@]}"}; do
+    [ -f "$RES/$i.rc" ] || continue
+    read -r _ SAVED["$(basename "${TESTS[$i]}")"] < "$RES/$i.rc"
+  done
+  for i in "${!TESTS[@]}"; do LIVE[$(basename "${TESTS[$i]}")]=1; done
+  if [ -d "$SECS_FILE" ]; then why="$SECS_FILE is a directory"
+  elif ! mkdir -p "$(dirname "$SECS_FILE")" 2>/dev/null; then why="cannot create $(dirname "$SECS_FILE")"
+  elif ! tmp=$(mktemp "$SECS_FILE.XXXXXX" 2>/dev/null); then why="cannot write in $(dirname "$SECS_FILE")"
+  else
+    for b in "${!SAVED[@]}"; do [ -z "${LIVE[$b]:-}" ] || printf '%s\t%s\n' "${SAVED[$b]}" "$b"; done > "$tmp" \
+      && mv -f "$tmp" "$SECS_FILE" || { why="cannot replace $SECS_FILE"; rm -f "$tmp"; }
+  fi
+  [ -z "$why" ] || echo "run-shell-tests: could not save durations: $why" >&2
+  return 0
+}
+if ! read_seconds; then echo "run-shell-tests: cannot read $SECS_FILE; starting files in sorted order" >&2; fi
+if [ "${#SAVED[@]}" -gt 0 ] && [ "${#RUN[@]}" -gt 0 ]; then
+  mapfile -t RUN < <(for i in "${RUN[@]}"; do b=$(basename "${TESTS[$i]}"); printf '%s\t%s\n' "${SAVED[$b]:--1}" "$i"; done | sort -s -t$'\t' -k1,1nr | cut -f2)
+fi
 live run "$(date +%s)" "$JOBS"
 for i in ${SEL[@]+"${SEL[@]}"}; do live file "${REL[i]}"; done
 for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${SKIPWHY[i]:-}" ] || live end "${REL[i]}" skip 0; done
@@ -345,6 +396,7 @@ for i in "${!TESTS[@]}"; do
        [ -e "$RES/$i.companion" ] || { grep '^FAIL ' "$RES/$i.out" | head -20; tail -12 "$RES/$i.out"; } | sed 's/^/       /' ;;
   esac
 done
+save_seconds
 
 echo
 # Anti-vacuity: an own-lane run that matched nothing means the marker was

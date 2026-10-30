@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.62.1-111111?style=flat-square" alt="Version 0.62.1">
+  <img src="https://img.shields.io/badge/version-0.63.0-111111?style=flat-square" alt="Version 0.63.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -115,7 +115,9 @@ flowchart TD
   filed["Main files leftover findings as issues<br/>the merge names each one"]:::muted
   owner["⛔ P0/P1 still open two passes past cap<br/>REVIEW STOP · waits for owner"]:::stop
   go(["✅ GO on exact commit → merge"]):::merge
+  perissue["Optional per-issue workflow<br/>each issue reviewed alone first<br/>(main's brief line)"]:::muted
 
+  start -.-> perissue -.-> first
   start --> first --> verdict
   verdict -- "none blocking" --> closing
   verdict -- "known gap" --> known --> closing
@@ -307,6 +309,10 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   on record, `review` runs as the closing pass, and main files a P2 or P3 left
   there as an issue before the merge. A P0 or P1 is never capped: one still
   open two passes past the cap stops the build and waits for the owner.
+- **Per-issue workflow (optional).** Main can ask for each issue to be reviewed
+  alone before the whole-branch passes (`builder-codex-pass.sh --issue <n> <unit>`).
+  An issue that runs out of regular reviews with no GO waits for main's answer;
+  the final cycle and the merge wait for every issue. See [Review passes](docs/review-loop.md).
 - **Placeholder UI and tests.** A disabled control or "coming soon" copy that
   no plan or ruling asked for is a P1. Every reviewer judges each new, changed
   or deleted test by the shipped test rules: a test is never weakened, skipped

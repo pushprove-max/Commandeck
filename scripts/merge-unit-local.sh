@@ -64,7 +64,7 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ] && [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] && ! pri
 fi
 if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
   # -o: a child the merge leaves running (a test command's) must not keep the lock after the merge ends (issue 301).
-  exec env MERGE_UNIT_LOCAL_LOCK=1 MERGE_UNIT_LOCAL_QUEUE="$QFILE" flock -o \
+  exec env MERGE_UNIT_LOCAL_LOCK=1 MERGE_UNIT_LOCAL_QUEUE="$QFILE" MERGE_T0="$(date +%s)" flock -o \
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$SELF" "$@"
 fi
 UNIT=$1; shift
@@ -83,7 +83,26 @@ done
 # Issue 349: each attempt that took the lock opens its output with this line, so a log many attempts were appended to
 # (merge-queue.sh) can be split into attempts; the units mod reads the newest attempt only.
 [ "$DRY_RUN" = 1 ] || echo "ATTEMPT unit=$UNIT pid=$$ started=$(date +%s)"
-fail() { echo "FAILED $1: $2" >&2; exit 1; }
+# #490: one `MERGE-TIME step=<name> start=<epoch> end=<epoch> seconds=<n>` line per step on stdout, so a slow merge's time
+# has a name. Steps meet end to end, so they add up to the `MERGE-TIME total` line, printed only before DONE. MERGE_T0 is
+# set before the lock (the wait is the first step); empty means no times (a run that did not take the lock, a dry run).
+# merge_time <step> closes the open step and opens <step>. merge_time_close [total] closes the open step and ends the
+# times, so a later close is a no-op: fail() and release() call it, the last line of the log stays DONE or FAILED.
+MT_STEP=lock MT_START=${MERGE_T0:-}
+merge_time() {
+  [ -n "${MERGE_T0:-}" ] && [ "$DRY_RUN" = 0 ] || return 0
+  local now; now=$(date +%s)
+  echo "MERGE-TIME step=$MT_STEP start=$MT_START end=$now seconds=$((now - MT_START))"
+  MT_STEP=$1 MT_START=$now
+}
+merge_time_close() {
+  [ -n "${MERGE_T0:-}" ] && [ "$DRY_RUN" = 0 ] || return 0
+  merge_time closed
+  [ "${1:-}" != total ] || echo "MERGE-TIME total seconds=$((MT_START - MERGE_T0))"
+  MERGE_T0=
+}
+# UNDO_ON_FAIL runs before the FAILED line, so the undo's own line cannot end the log.
+fail() { merge_time_close; ${UNDO_ON_FAIL:-:} || true; echo "FAILED $1: $2" >&2; exit 1; }
 ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a git checkout"
 [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
   || fail "step 1 preconditions" "run from the main checkout, not a linked worktree"
@@ -97,10 +116,12 @@ COMMANDECK_MAIN=$ROOT . "$HERE/paths.sh"
 STATE=$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.state
 state() { # <stage>
   [ "$DRY_RUN" = 0 ] || return 0
+  merge_time "$1"
   printf 'unit=%s\nsha=%s\ntip=%s\npid=%s\nstarted=%s\nstage=%s\nmain=%s\nlog=%s\n' "$UNIT" "$PRE_TIP" "${TIP:-$PRE_TIP}" "$$" "$STARTED" "$1" "$ROOT" "$PP_SCRATCH/merge-$UNIT.log" \
     > "$STATE.$$" && mv -f "$STATE.$$" "$STATE"
 }
 release() {
+  merge_time_close
   rm -f "${MERGE_UNIT_LOCAL_QUEUE:-}" "$STATE.$$"
   [ "$(sed -n 's/^pid=//p' "$STATE" 2>/dev/null)" != "$$" ] || rm -f "$STATE"
 }
@@ -195,6 +216,7 @@ if [ "$CLEANUP" = 1 ]; then
   ARCHIVE=$HOME/.commandeck/briefs/$PP_PROJECT/$UNIT.tar KEPT=0 MAIN_FILES=()
   mkdir -p "$(dirname "$ARCHIVE")" || fail "--cleanup" "could not create the archive directory"
   cleanup_step
+  merge_time_close total
   echo "DONE unit=$UNIT cleanup=$([ -z "$CLEANUP_HELD" ] && echo removed || echo "HELD: $CLEANUP_HELD")"
   [ -z "$CLEANUP_HELD" ] || exit 5
   exit 0
@@ -221,8 +243,10 @@ done < <(git -C "$WT" ls-files --others --exclude-standard)
 git diff --no-relative --cached --quiet \
   || fail "step 1 preconditions" "main has staged changes, which step 4 would sweep into the unit's squash commit: $(git diff --no-relative --cached --name-only | paste -sd, -)"
 # Before the rebase: a release origin marked published must not be rebuilt as a draft here.
+merge_time sync
 if [ "$DRY_RUN" = 1 ]; then pp_sync_main "$ROOT" --check; else pp_sync_main "$ROOT"; fi \
   || fail "step 1 preconditions" "main is not up to date with origin's main (above)"
+merge_time preconditions
 # --no-renames: a rename is a deletion of the old path too, and the undo in
 # step 4 restores both.
 MERGE_TOUCHES=$(git diff --no-relative --name-only --no-renames "$(git merge-base main "$BRANCH")" "$BRANCH")
@@ -385,6 +409,7 @@ state rebase
 echo "STEP 2 rebase: git -C $WT rebase main"
 if [ "$DRY_RUN" = 0 ]; then
   git -C "$WT" rebase main || {
+    merge_time_close
     echo "FAILED step 2 rebase: conflict left for the Builder" >&2
     echo "Fix the conflict in the unit's worktree, then run the merge again." >&2
     exit 1
@@ -587,6 +612,7 @@ if [ "$DRY_RUN" = 0 ]; then
   mapfile -t SQUASH_PATHS < <(git -C "$ROOT" diff --name-only --no-renames HEAD "$BRANCH")
   state merge
   trap 'undo_squash; release' EXIT
+  UNDO_ON_FAIL=undo_squash
   git merge --squash "$BRANCH" >/dev/null || fail "step 4 merge" "squash merge conflicted; resolve in the unit worktree by rebasing onto main"
   TREE=$(git write-tree)
   # The project's check runs once, on the merged tree, before the commit exists:
@@ -688,6 +714,7 @@ if [ "$DRY_RUN" = 0 ]; then
     git reset -q --soft HEAD~1
     fail "step 4 merge" "the commit holds other files than the squash ($HOOKED), so the commit was not the tree that was reviewed and checked (a commit hook, or main's index changed during the run); it was taken back. If a hook did it, make that change in $WT and run another pass; if someone touched main's index, merge again"
   fi
+  UNDO_ON_FAIL=
   trap merged_end EXIT
   state post-merge
   MERGE_SHA=$(git rev-parse HEAD)
@@ -771,6 +798,8 @@ fi
 [ "$DRY_RUN" = 1 ] || pp_unit_event "$UNIT" merge || true
 
 [ "$DRY_RUN" = 0 ] || echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
+# A close GitHub refused ends the run with code 3 (merged_end), and an exit 3 prints no total.
+if [ -n "$NOT_CLOSED" ]; then merge_time_close; else merge_time_close total; fi
 echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${CLEANUP_HELD:+; cleanup HELD: $CLEANUP_HELD}"
 # The unit's seats are done with: main-watch's item tasks about them are handled by this merge.
 [ "$DRY_RUN" = 1 ] || pp_close_items $(sed -n 's/^handle=//p' "$PP_SCRATCH"/seat-"$UNIT"-*.txt 2>/dev/null || true)

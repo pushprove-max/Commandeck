@@ -38,10 +38,11 @@ worked.
 
 Stub tests cannot show real Orca behaviour. Checked on Orca 1.4.243 by `orca --version` and `orca orchestration check --help` (2026-10-29). Every workaround is kept.
 
-| Item | Result | Reason |
-|---|---|---|
-| 1. The turn-start proof in `seat.sh` | Kept | The proof is still the only sign that a seat took its prompt; no Orca release in this range adds a replacement. |
-| 2. The drain in `orca-wait.sh` | Kept | The 1.4.243 help for `orchestration check` still says a bound Run replays the same delivery until `--ack`, so the drain is still needed. |
-| 3. The cost of the hooks guard | Kept | The guard still runs before every tool call; no Orca change removes that cost, so the guard stays as it is. |
-| 4. Main restart opens a new pane | Kept, with a fix | The restart opens a new pane on purpose, so the replay of the launch line stays. The restart fix is the argv read: when the launch line has quotes or braces, the restart reads the parent's real argv and keeps its permission mode (see `docs/auto-permission-mode.md`). |
-| 5. Heartbeats dropped unread | Kept | Orca has no off switch for heartbeats, so they are still dropped unread. |
+| Item | Orca version | Result | Reason | Live run left |
+|---|---|---|---|---|
+| 1. "Submitted" is no longer reported when the worker did not start (the turn-start proof in `seat.sh`) | 1.4.243 | Kept | The plugin trusts the `turn_started` row, not Orca's label, so the proof does not depend on the false report. | None |
+| 2. Mail is acknowledged and drained in batches (the drain in `orca-wait.sh`) | 1.4.242 | Kept | The 1.4.243 help for `orchestration check` still says a bound Run replays the same delivery until `--ack`, so the drain is still needed. No test shows batches cover it. | Yes: a real Run with two unread messages |
+| 3. A new `orchestration check --wait` can start while an old one waits | 1.4.241 | No workaround exists | Nothing in the plugin guards against a second wait, so there is nothing to remove. | None |
+| 4. A restored pane resumes its agent from the saved session (main restart) | 1.4.242, 1.4.243 | Kept, with a fix | The restart opens a new pane on purpose, so the replay of the launch line stays. The restart reads the parent's real argv when the launch line has quotes or braces, and keeps its permission mode (see `docs/auto-permission-mode.md`). | Yes: a restored main pane must start in its configured permission mode (Done 2) |
+| 5. Settled workers stop polling; the heartbeat interval can be set or turned off | 1.4.243 | Kept | Heartbeats are still dropped unread. The old note that Orca has no off switch is stale since 1.4.243, but no test shows the setting covers the drop. | Yes: a real worker with the interval turned off |
+| 6. The cost of the hooks guard (not in the issue) | 1.4.243 | Kept | The guard still runs before every tool call; no Orca change removes that cost, so the guard stays as it is. | None |

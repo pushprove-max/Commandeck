@@ -631,6 +631,17 @@ test("a raised Builder's unit card says main raised its effort, with the reason 
   assert.equal(chip.title, 'effort raised by main: touches billing');
 });
 
+// Catches a per-issue Builder showing no sign of its workflow, or a default one gaining a line.
+test("card_names_workflow: a per-issue Builder's card names its issues and last round; a default one adds no line", () => {
+  const w = fresh();
+  show(w, { units: { inFlight: [
+    builder({ unit: 'batch-w', builder: { ...builder().builder, workflow: 'per-issue #12 #7', issueRound: { issue: 12, round: 3 } } }),
+    builder({ unit: 'batch-d', builder: { ...builder().builder, workflow: 'default', issueRound: null } })] } });
+  const line = (u) => w.document.querySelector(`#units li.unit[data-unit="${u}"] .uworkflow`);
+  assert.equal(text(line('batch-w')), 'Per-issue review of #12 #7, last review: issue #12 round 3');
+  assert.equal(line('batch-d'), null);
+});
+
 // issue 211: on a phone every panel was one long column. A bottom tab bar picks what shows; More reaches the rest.
 // jsdom lays nothing out, so where the page's look is the point the phone rules are read from app.css.
 const CSS = fs.readFileSync(path.join(ROOT, 'dashboard', 'app.css'), 'utf8');

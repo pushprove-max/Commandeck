@@ -139,17 +139,32 @@ sort the tables, check the rows, and only then write a lesson.
 - Every time: is there a library, a shared helper or a cached step that would significantly
   speed up builds like this one? Answer it in a lesson, yes with what, or no.
 
+## The computed sections beyond timing
+
+`extras.py` adds these to every page, with no words needed from you:
+- **What filled the context**: estimated tokens by source, the largest items, content that entered
+  twice, and caches a pause let expire. Thinking is what a request wrote beyond its text and tool
+  calls, because the log keeps only its signature. The page prints the margin against the measured
+  peak; it does not cover helpers. Its leads join "Where it could shrink".
+- **Main's share**: main's and the Chief of Staff's requests during the build, as a floor (naming
+  the unit) and a ceiling (the whole window).
+- **What each review found**: findings per pass, repeats (a file or a `(class: <tag>)` an earlier
+  pass cited), findings the evidence likely rejected, and list price per fresh finding.
+- **After the merge**: later fixes and reverts in the build's files. Run `collect.py` again days
+  later to fill it; the page made at merge shows none yet.
+
 ## Rules for the words
 
 - Plain English, the point first. Explain a term or use a normal word.
 - Tag anything you did not check as unverified or likely. Never guess a cause the logs do not show.
-- Always include what the report does not measure: main's own tokens, what the plan really
-  bills, hook time per tool call, quality after merge.
+- Always include what the report does not measure: what the plan really bills, hook time per
+  tool call, bugs reopened after merge. Main's share is a floor and a ceiling, never one figure.
 - Dollars are list-price equivalents, priced call by call with the repo's one price table
   (`scripts/dashboard_limit.py`, the dashboard's own). Say "list price" every time.
   A model with no price there (a Codex name with no known tier) is unpriced: never guess a rate,
   and name what the total leaves out. A new Codex version of a known tier takes the tier's
-  price; say that part is priced by tier, not by exact version.
+  price; say that part is priced by tier, not by exact version. A response whose speed tier
+  nothing recorded is an estimate.
 - Name each model by its name (Opus 5.5, Fable 5.1, Haiku 5.5), never only by its role.
 - Helper output tokens are under-recorded in the logs; say so if you quote them.
 - A lesson that proposes a change is your view. Say so, and do not present it as a ruling.

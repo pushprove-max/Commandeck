@@ -75,6 +75,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
 . "$HERE/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 die() { echo "REFUSED: $*" >&2; exit 2; }
+# Set only inside issue_rows (ISSUE_SET) and by --issue (ISSUE): from a pane's environment they would hide the whole final record from every gate.
+unset ISSUE ISSUE_SET
 # stamp <step> -- a clock line of its own (issue 474), so a slow pass names its slow step while it runs and when it dies in one.
 stamp() { printf '%s %s pass %s: %s\n' "$(date +%H:%M:%S)" "$UNIT" "$N" "$1"; }
 # A pass refused for one evidence check, fixed and refused for the next, cost a fix round each. The checks a pass can
@@ -187,6 +189,11 @@ HEAD_FIX='Review input: a narrowed pass, not the closing review. Only the change
 HEAD_FINAL='Review input: the closing pass, the whole branch diff against main (git diff main...HEAD).'
 # Host change (owner order 2026-10-25): a final whose commit changes no code is read for its design alone; its GO merges nothing.
 HEAD_DESIGN='Review input: a design-only pass, not the closing review. The last commit changes only the plan, the briefs or the metrics, so judge the design and expect the code to follow. The whole branch diff against main (git diff main...HEAD) is below.'
+# Issue 486: a per-issue review. Not in the heads pass_threads lists by default, so it counts toward no cap and merges
+# nothing. No apostrophe: the merge parses NAME='...'. `issue #0` and `main...HEAD` are filled in by the pass.
+HEAD_ISSUE_ADV='Review input: a per-issue adversarial review of issue #0 alone, not the closing review (git diff main...HEAD).'
+HEAD_ISSUE_REV='Review input: a per-issue regular review of issue #0 alone, not the closing review (git diff main...HEAD).'
+HEAD_ISSUE_DESIGN='Review input: a per-issue design-only review of issue #0 alone, not the closing review (git diff main...HEAD). The commit of this review changes only the plan: the code for this redesign is deliberately not written yet. Judge the design: does the plan close each finding below and its whole class against the code it will touch, and does it add a defect of its own? Code that does not yet do what the plan says is not a finding.'
 # The same mistake came back pass after pass, one finding at a time.
 # The block runs from this line to EARLIER_END and is the one place the merge
 # looks for what the closing reviewer was handed: no diff line can spell
@@ -234,7 +241,7 @@ DIFF_HARD=${COMMANDECK_PASS_DIFF_HARD:-900000}
 # The prompt is checked against this script's own text only: the merge
 # reads no plugin file, so a plugin update after a pass does not undo the pass.
 session_proof() {
-  BLK=$BLK python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$FINDING" "$HERE" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
+  BLK=$BLK HEAD_ISSUE_ADV=$HEAD_ISSUE_ADV HEAD_ISSUE_REV=$HEAD_ISSUE_REV HEAD_ISSUE_DESIGN=$HEAD_ISSUE_DESIGN python3 - "$BY" "$1" "$2" "$3" "${4:-0}" "$RHOME" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN" "$OPEN"$'\n'"$FORMAT"$'\n'"$CLOSE" "$UPDATED" "$FINDING" "$HERE" "$LABEL" "$GUIDANCE" "$MANY" "$LENS" <<'PY'
 import glob, json, os, re, subprocess, sys, time
 by, tid, wt, sha, wait, home, head_full, head_fix, head_final, head_design, block, updated, finding, here, *fixed = sys.argv[1:]
 sys.path.insert(0, here)
@@ -357,12 +364,16 @@ if not any(ours(t) for t in user):
     die(f"{name} {tid} was not started with the pass script's prompt. {updated}")
 # The first such line: the script writes it ahead of the findings and the diff.
 # Issue 430: a whole-branch line names main...HEAD, or <sha>...HEAD for a unit with a review base.
-form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD")
+form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD").replace(re.escape("issue #0"), r"issue #[1-9][0-9]*")
 heads = {head_full: "full", head_fix: "fix", head_final: "final", head_design: "design"}
+# Issue 486: the per-issue heads, read here so a record of one is told apart; pass_threads lists them only when asked.
+heads.update({os.environ[e]: k for e, k in (("HEAD_ISSUE_ADV", "issue-adv"), ("HEAD_ISSUE_REV", "issue-rev"), ("HEAD_ISSUE_DESIGN", "issue-design"))})
 kind = re.search(rf"^({'|'.join(map(form, heads))}) Reviewer ([1-9]) of ([1-9]), round ([1-9][0-9]*)\.$", sent, re.M)
 if not kind:
     die(f"the prompt of {name} {tid} has no review-input line of the pass script")
 read_as = next(v for h, v in heads.items() if re.fullmatch(form(h), kind.group(1)))
+if read_as.startswith("issue-"):
+    read_as += ":" + re.search(r"issue #([1-9][0-9]*)", kind.group(1)).group(1)
 base = re.search(r"git diff ([0-9a-f]{40})\.\.\.HEAD", kind.group(1))
 lines = (reply or "").strip().splitlines()
 # Issue 316: a reviewer that lost GitHub ends its reply on that line, in place of a verdict. A fixed slot, never a
@@ -553,14 +564,18 @@ one_reviewer_allowed() {
 # written, still happened. Any other session in the worktree is not a pass.
 # shortcut: only session files of the last 14 days are read, longer than a unit lives; widen it if one ever outlasts that.
 pass_threads() {
-  python3 - "$BY" "$1" "$RHOME" "$HERE" "$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN" <<'PY'
+  # With ISSUE_SET the list is the three per-issue heads alone, and a third word names the issue; otherwise as it always was.
+  local heads=("$HEAD_FULL" "$HEAD_FIX" "$HEAD_FINAL" "$HEAD_DESIGN")
+  [ -z "${ISSUE_SET:-}" ] || heads=("$HEAD_ISSUE_ADV" "$HEAD_ISSUE_REV" "$HEAD_ISSUE_DESIGN")
+  python3 - "$BY" "$1" "$RHOME" "$HERE" "${heads[@]}" <<'PY'
 import glob, json, os, re, sys, time
 by, wt, home, here, *heads = sys.argv[1:]
 sys.path.insert(0, here)
 from unit_folders import belongs
-# Issue 430: a whole-branch line names main...HEAD, or <sha>...HEAD for a unit with a review base.
-form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD")
+# Issue 430: a whole-branch line names main...HEAD, or <sha>...HEAD for a unit with a review base; a per-issue line its issue.
+form = lambda h: re.escape(h).replace(re.escape("main...HEAD"), r"(?:main|[0-9a-f]{40})\.\.\.HEAD").replace(re.escape("issue #0"), r"issue #[1-9][0-9]*")
 head = re.compile(rf"^(?:{'|'.join(map(form, heads))}) Reviewer [1-9] of [1-9], round ([1-9][0-9]*)\.$", re.M)
+issue_of = lambda m: [m.group(0).split(" alone", 1)[0].rsplit("#", 1)[1]] if os.environ.get("ISSUE_SET") else []
 def claude(path):
     # The first row with a cwd places the session; its first prompt says whether it was a pass.
     here = False
@@ -580,7 +595,7 @@ def claude(path):
             b.get("text") or "" for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
         if here and row.get("type") == "user" and text.strip():
             if m := head.search(text):
-                print(os.path.basename(path)[:-6], m.group(1))
+                print(os.path.basename(path)[:-6], m.group(1), *issue_of(m))
             return
 pattern = ("projects", "*", "*.jsonl") if by == "claude" else ("sessions", "**", "rollout-*.jsonl")
 for path in sorted(glob.glob(os.path.join(home, *pattern), recursive=True)):
@@ -605,7 +620,7 @@ for path in sorted(glob.glob(os.path.join(home, *pattern), recursive=True)):
             tid = str(p.get("id"))
         elif row.get("type") == "response_item" and p.get("role") == "user":
             if m := next(filter(None, (head.search(c.get("text") or "") for c in p.get("content") or [] if isinstance(c, dict))), None):
-                print(tid, m.group(1))
+                print(tid, m.group(1), *issue_of(m))
                 break
         elif row.get("type") == "event_msg" and p.get("type") in ("task_complete", "turn_aborted"):
             break
@@ -621,7 +636,7 @@ stop_strays() {
   alive() { local s; s=$(ps -o stat= -p "$1" 2>/dev/null) && [ -n "$s" ] && [[ $s != Z* ]]; }
   found=$(ps -axo pid=,command= | awk -v wt="$1" -v cp="$cp" -v ids="$2" -v unit="$UNIT" '
     BEGIN { n = split(ids, id, " ") }
-    { line = $0 " "; hit = (index(line, "/pp-pass.") && (index(line, " --cwd " wt " ") || index(line, " --cwd " cp " "))) || index(line, " --prompt-file " wt "/.claude/briefs/" unit "-r")
+    { line = $0 " "; hit = (index(line, "/pp-pass.") && (index(line, " --cwd " wt " ") || index(line, " --cwd " cp " "))) || index(line, " --prompt-file " wt "/.claude/briefs/" unit "-r") || index(line, " --prompt-file " wt "/.claude/briefs/" unit "-issue-")
       for (i = 1; i <= n; i++) hit = hit || index(line, " --session-id " id[i] " ")
       if (hit) print $1 }')
   while [ -n "$found" ]; do pids+=" $found"; found=$(for p in $found; do pgrep -P "$p" || true; done); done
@@ -653,11 +668,11 @@ stop_strays() {
 # holds the pass lock, so no pass of the worktree runs, and a reviewer still alive
 # is a dead launcher's. It is stopped first, and the launch refuses if it will not stop.
 earlier_passes() {
-  local tids tid round rc proof line
+  local tids tid round rc proof line issue
   tids=$(pass_threads "$1") || die "the reviewer's session files under $RHOME cannot be listed, so the passes of $1 are not known"
   [ "${CUT:-}" != mark ] || stop_strays "$1" "$(cut -d' ' -f1 <<<"$tids" | paste -sd' ' -)" \
     || die "a reviewer of an earlier pass of $1 is still running and could not be stopped, so its pass is not recorded as abandoned and no pass starts beside it. Stop it by hand (ps shows it with --cwd $1), then run this pass again"
-  while read -r tid round; do
+  while read -r tid round issue; do
     [ -n "$tid" ] || continue
     [ "${CUT:-}" != refuse ] || [ "$round" -le "$ROUND" ] \
       || die "round $round of this worktree launched a reviewer ($NAME $tid) and has no round file, so round $ROUND proves nothing: only the last round that launched a reviewer can prove a merge, whatever became of that reviewer. Run round $round again in full"
@@ -673,7 +688,7 @@ earlier_passes() {
       # A round with no answer is still on record, as a cut row (#376); session_proof printed when it began.
       [ -n "$proof" ] && [ "$proof" != - ] \
         || die "the record of an earlier pass of this worktree ($NAME $tid) does not say when it began, so its place among the passes is not known. $UPDATED"
-      echo "@ $tid cut 0 0 $round $proof $proof - - cut"
+      echo "@ $tid cut${issue:+:$issue} 0 0 $round $proof $proof - - cut"
       continue
     fi
     line=$(sed -n 2p <<<"$proof")
@@ -698,6 +713,132 @@ open_findings() {
     | awk 'NF && !seen[$0]++ { c = "no-file"; if (match($0, "[-A-Za-z0-9_./]+\\.[A-Za-z0-9]+:[0-9]+")) { c = substr($0, RSTART, RLENGTH); sub(/:[0-9]+$/, "", c) } print "Open finding: " c " " $0 }'
 }
 
+# ruling_id_ok <id> -- the id has the ruling id shape, a row in the ruling log (the log orca-wait.sh reads), no void row and no
+# unconfirmed suspect row, and is in main's rulings for this unit. A ledger row has no unit field: that file ties an id to the unit.
+ruling_id_ok() {
+  local log=${COMMANDECK_RULING_LOG:-}
+  [[ $1 =~ ^r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}$ ]] || return 1
+  [ -n "$log" ] || log=$(. "$HERE/../hooks/lib/project.sh" && pp_project "$MAIN_OF_WT" && echo "$HOME/.claude/rulings/$PP_PROJECT.jsonl")
+  jq -Rne --arg id "$1" '[inputs | fromjson? | select(.id == $id)] | length > 0 and (any(.[]; .void or (.pick == "suspect" and (.confirmed | not))) | not)' "$log" >/dev/null 2>&1 \
+    && grep -qF -- "$1" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null
+}
+# test_edit_refusals <base> <head, empty for the index> -- issue 496: one line per test file that exists at <base> and loses a
+# line with no approval. An approval is a `Test edit: <path> ruling:<id>` line in main's rulings for this unit with an id
+# ruling_id_ok passes; a worktree copy never counts, and any other shape approves nothing. A listing failure is one line
+# too, so a git failure never reads as no edits.
+test_edit_refusals() {
+  local rows path lost checks l ok note= f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
+  rows=$(cd "$WT" && bash "$HERE/new-test-count.sh" --edited "$1" ${2:+"$2"} 2>&1) \
+    || { echo "cannot list the existing tests this branch edits: $rows"; return 0; }
+  [ -n "$rows" ] || return 0
+  [ -r "$f" ] || note=" ($f cannot be read, so nothing is approved)"
+  while IFS=$'\t' read -r path lost checks; do
+    ok=
+    while IFS= read -r l; do
+      [ "$l" = "Test edit: $path ruling:${l##*ruling:}" ] || continue
+      if ruling_id_ok "${l##*ruling:}"; then ok=1; break; fi
+    done < <(grep '^Test edit: ' "$f" 2>/dev/null)
+    [ -n "$ok" ] || echo "$path is an existing test and loses $lost line(s), $checks of them check lines, with no Test edit: line in main's rulings for $UNIT$note. No existing test changes without the owner's yes by name; when main adds the line, run builder-codex-pass.sh --ack-rulings $UNIT and the pass again. Try: bash $HERE/ask-main.sh \"Test edit: $path\" \"<the test, the change, whether a check gets looser>\""
+  done <<<"$rows"
+}
+
+# The per-issue workflow (issue 486). Everything an issue's state rests on is read from the reviewer's records and main's own
+# files, never from a round file or the worktree's rulings copy, which are the Builder's to edit.
+same_pass() { if [ "$KIND" = issue ]; then echo "--issue $ISSUE $UNIT"; else echo "$UNIT $N $KIND"; fi; }
+issue_main() { [ -n "${MAIN_OF_WT:-}" ] || { MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git}; } || die "$WT is not a git worktree"; }
+issue_workflow() { issue_main; pp_review_workflow "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md"; }
+issue_rows() { ISSUE_SET=1 earlier_passes "$1"; }
+issue_regular_cap() {
+  pp_review_limit perIssueRegular | grep -E '^[1-9][0-9]*$' \
+    || die "cannot read a whole number of 1 or more for review-limits.perIssueRegular from $(pp_routing)"
+}
+# issue_answers -- "<issue> <round> <continue|redesign>" per answer in main's rulings. An allowlist: a line that starts
+# `per-issue` and a number must have the exact shape, and two different answers to one stop refuse.
+issue_answers() {
+  local f l out=; issue_main; f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
+  [ -e "$f" ] || return 0
+  while IFS= read -r l; do
+    [[ $l =~ ^Per-issue\ #([1-9][0-9]*)\ round\ ([1-9][0-9]*):\ (continue|redesign)$ ]] \
+      || die "$f has a bad per-issue answer line: '$l'. Write 'Per-issue #<n> round <R>: continue' or '... redesign'"
+    out+="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"$'\n'
+  done < <(grep -iE '^[[:space:]#>*-]*per[[:space:]_-]*issue[[:space:]]*#?[[:space:]]*[0-9]' "$f" || true)
+  out=$(sort -u <<<"$out" | grep . || true)
+  [ -z "$(awk '{ print $1, $2 }' <<<"$out" | sort | uniq -d | grep . || true)" ] \
+    || die "$f answers one per-issue stop both ways: $(paste -sd'|' - <<<"$out")"
+  [ -z "$out" ] || echo "$out"
+}
+# issue_step <issue> <rows> <answers> <cap> -- what the issue needs next: adversarial, review, done, "design <files>" or
+# "ask <round>". A session with no verdict neither counts nor clears. Only a GO regular review after an adversarial ends an
+# issue, so a P0 or P1 is never capped. A pure walk over the reviewer's records: the launch and the merge agree.
+# Main is asked when <cap> regular reviews in a row end with no GO (`continue` gives a new set of regular reviews, `redesign`
+# restarts with a fresh adversarial), and when a class comes back after its design was approved.
+# CLASS STOP: a blocking finding in a file an earlier round of this issue also cited holds the issue until a design-only
+# review of it ends GO. Until then no other round counts, so a patched regular GO does not end the issue, and `continue`
+# does not lift it. The reviewers get no earlier findings here, so no `[same class]` tag can appear.
+issue_step() {
+  ANSWERS=$3 awk -v n="$1" -v cap="$4" '
+    BEGIN { m = split(ENVIRON["ANSWERS"], a, "\n"); for (i = 1; i <= m; i++) { split(a[i], w, " "); ans[w[1] SUBSEP w[2]] = w[3] } }
+    $1 == "@" { split($3, k, ":"); cur = ""; if (k[2] != n || k[1] == "cut" || $11 == "none") next
+      cur = $6; kind[cur] = k[1]; said[cur] = $11; if (cur + 0 > top) top = cur + 0; next }
+    cur != "" && /^[[:space:]]*([-*][[:space:]]*)?\[P[0-2]\]/ { s = $0
+      while (match(s, /[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+:[0-9]+/)) { c = substr(s, RSTART, RLENGTH); sub(/:[0-9]+$/, "", c); cites[cur] = cites[cur] " " c; s = substr(s, RSTART + RLENGTH) } }
+    END {
+      fresh = 1
+      for (r = 1; r <= top; r++) {
+        if (!(r in kind)) continue
+        if (pending != "") {
+          if (kind[r] == "issue-design" && said[r] == "GO") { c = split(pending, p, " "); for (i = 1; i <= c; i++) cleared[p[i]] = 1; pending = "" }
+          continue
+        }
+        if (kind[r] == "issue-design") continue
+        if (kind[r] == "issue-adv") { if (!fresh) continue; fresh = 0; regs = 0 }
+        else { if (fresh) continue; if (said[r] == "GO") { print "done"; exit } regs++ }
+        back = 0; c = split(cites[r], p, " "); split("", once)
+        for (i = 1; i <= c; i++) { if (p[i] in once) continue; once[p[i]] = 1
+          if (p[i] in cleared) back = 1; else if (p[i] in seen) pending = pending " " p[i] }
+        for (f in once) seen[f] = 1
+        spent = kind[r] == "issue-rev" && regs >= cap
+        if (spent) regs = 0
+        if (!spent && !back) continue
+        if (!((n SUBSEP r) in ans)) { print "ask", r; exit }
+        if (ans[n SUBSEP r] == "redesign") { fresh = 1; pending = ""; split("", seen); split("", cleared) }
+      }
+      if (pending != "") { sub(/^ /, "", pending); print "design", pending }
+      else print (fresh ? "adversarial" : "review")
+    }' <<<"$2"
+}
+# issue_findings <issue> -- the blocking findings of the issue's rounds, for a design-only review to answer.
+issue_findings() {
+  awk -v n="$1" '$1 == "@" { split($3, k, ":"); on = k[2] == n; next } on && /^[[:space:]]*([-*][[:space:]]*)?\[P[0-2]\]/ && !seen[$0]++' <<<"$ISSUE_ROWS"
+}
+# issue_started <issue> <rows> -- the issue has a session on record, cut off or not.
+issue_started() { awk -v n="$1" '$1 == "@" { split($3, k, ":"); if (k[2] == n) f = 1 } END { exit !f }' <<<"$2"; }
+# issue_stop_text <issue> <round> -- what main needs to answer a stop, and the line it writes.
+issue_stop_text() {
+  issue_main
+  printf '%s: issue #%s stopped at round %s (%s): its regular reviews ran out with no GO, or a class came back after its design was approved. Decide whether to continue or redesign the fix. Add one line to %s, then tell the Builder: "Per-issue #%s round %s: continue" keeps the design and gives another set of regular reviews; "Per-issue #%s round %s: redesign" has the fix rewritten and restarts with a fresh adversarial review.' \
+    "$UNIT" "$1" "$2" "$UNIT-issue-$1-round-$2.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" "$1" "$2" "$1" "$2"
+}
+# issue_gate <worktree> -- a per-issue unit reaches neither the final cycle nor the merge with an issue unfinished. A default
+# unit reads no session here. The launch runs the worktree's copy of this and the merge runs main's.
+issue_gate() {
+  local wf rows answers cap n step
+  wf=$(issue_workflow) || exit 2
+  [ "$wf" != default ] || return 0
+  rows=$(issue_rows "$1") || exit 2
+  answers=$(issue_answers) || exit 2
+  cap=$(issue_regular_cap) || exit 2
+  for n in ${wf#per-issue }; do
+    n=${n#\#}
+    step=$(issue_step "$n" "$rows" "$answers" "$cap")
+    case $step in
+      done) ;;
+      ask\ *) die "$UNIT is on the per-issue review workflow and issue #$n waits for main's answer to round ${step#ask }; the final cycle and the merge wait for every issue" ;;
+      *) die "$UNIT is on the per-issue review workflow and issue #$n is not done: it needs a ${step%% *} review. Run: builder-codex-pass.sh --issue $n $UNIT; the final cycle and the merge wait for every issue" ;;
+    esac
+  done
+}
+
 if [ "${1:-}" = --verify ]; then
   WT=${2:?worktree} UNIT=${3:?unit} TIP=${4:?tip}
   # A pass still running may yet find a blocker, and its session reads as "found nothing yet" until it ends.
@@ -716,6 +857,12 @@ if [ "${1:-}" = --verify ]; then
   WANT=$(git -C "$WT" rev-parse --verify -q "$TIP^{commit}") || die "no commit $TIP in $WT"
   SEEN="" OF="" WHAT="" RULE="" STEPS=""
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
+  # Issue 486: an issue left unfinished keeps the unit from the merge.
+  issue_gate "$WT"
+  # Issue 496: the launch's gate again, from main's script, so a tip no launch saw cannot merge an unapproved test edit.
+  FORK=$(git -C "$WT" merge-base main "$WANT") || die "main and $WANT share no merge base in $WT"
+  EDITS=$(test_edit_refusals "$FORK" "$WANT")
+  [ -z "$EDITS" ] || die "$EDITS"
   # The range field a whole-branch pass of this unit records (session_proof): "whole" from main, "base:<sha>" from a review base.
   BASE_RANGE=$(review_base "$WT") || exit 2
   [ "$BASE_RANGE" = main ] && BASE_RANGE=whole || BASE_RANGE=base:$BASE_RANGE
@@ -826,6 +973,11 @@ if [ "${1:-}" = --verify ]; then
   [ -z "$OPEN_LINES" ] || printf '%s\n' "$OPEN_LINES"
   # Issue 465: a class stop nobody counted cannot be measured; the merge carries this line into the squash message.
   MARKS=$(sed -nE 's/^- Class (redesign|ask-main): //p' "$WT/.claude/briefs/$UNIT"-fix-r*.md 2>/dev/null || true)
+  # A per-issue class stop writes no hand-off: its mark is the design-only session on the record issue_step reads.
+  if [ "$(issue_workflow)" != default ]; then
+    MARKS+=$'\n'$(issue_rows "$WT" | awk '$1 == "@" { split($3, k, ":"); if (k[1] == "issue-design") print "issue-" k[2] }')
+    MARKS=$(grep . <<<"$MARKS" || true)
+  fi
   [ -z "$MARKS" ] || echo "Class stops: $(wc -l <<<"$MARKS" | tr -d ' ') ($(sort -u <<<"$MARKS" | paste -sd' ' -))"
   if [ "$RULE" = "no closing pass" ]; then
     # The owner chose no closing pass at setup: the last first pass anchors the chain, and
@@ -968,13 +1120,18 @@ if [ "${1:-}" = --preflight ]; then review_gh_check "$PP_MAIN"; printf '%s\t%s\n
 # --ack-rulings <unit> runs no pass: the round and kind below are only stand-ins for it.
 CHECK=0; [ "${1:-}" != --check ] || { CHECK=1; shift; }
 ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
-UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|final}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
+# --issue picks its own round and step below: the 1 and `issue` are only stand-ins.
+if [ "${1:-}" = --issue ]; then
+  ISSUE=${2:-}; [[ $ISSUE =~ ^[1-9][0-9]*$ ]] || die "--issue needs an issue number, not '$ISSUE'"
+  set -- "${3:-}" 1 issue
+fi
+UNIT=${1:?usage: builder-codex-pass.sh [--check] <unit> <N> adversarial|review|final, or [--check] --issue <n> <unit>}; N=${2:?round number}; KIND=${3:?adversarial, review or final}
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad unit name: $UNIT"
 [[ $N =~ ^[1-9][0-9]*$ ]] || die "bad round number: $N"
 # The owner's answer (2026-10-25): a pass with no rg refuses at once, so no reviewer's class search is skipped unseen.
 [ "$ACK" = 1 ] || command -v rg >/dev/null || die "no rg (ripgrep) on PATH: after a NO-GO the pass runs each reviewer's Class search line with it. Install ripgrep (brew install ripgrep, or sudo apt-get install -y ripgrep), then run the pass again"
 # Each reviewer leads with its own angle and carries the whole checklist: the rule gives every reviewer the same full scope.
-case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]} $PLACEHOLDER_UI"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
+case $KIND in adversarial) FOCI=(); for a in "${ANGLES[@]}"; do FOCI+=("$DATA_DESIGN $a Lead with that angle, and cover all three as fully: ${ANGLES[*]} $PLACEHOLDER_UI"); done ;; review|final) FOCI=("$FOCUS_REVIEW") ;; issue) [ -n "${ISSUE:-}" ] || die "pass must be adversarial, review or final, not $KIND" ;; *) die "pass must be adversarial, review or final, not $KIND" ;; esac
 WT=$PP_WORKSPACES/$UNIT
 [ "$(jq -r '.env.COMMANDECK_BUILDER // empty' "$WT/.claude/settings.local.json" 2>/dev/null)" = 1 ] || die "$WT is not a Builder worktree"
 [ "$ACK" = 1 ] || review_gh_check "$WT"  # an acknowledgement reads no GitHub
@@ -1008,7 +1165,7 @@ Read the file and do what it says, then acknowledge it and run the pass again: b
 fi
 [ "$ACK" = 0 ] || { echo "no rulings file for $UNIT: nothing to acknowledge"; exit 0; }
 OUT=$WT/.claude/briefs/$UNIT-r$N-reports.md
-[ -e "$OUT" ] && die "${OUT##*/} exists; a round is never rewritten, use the next number"
+[ "$KIND" = issue ] || [ ! -e "$OUT" ] || die "${OUT##*/} exists; a round is never rewritten, use the next number"
 # Main's one way to stop or steer a Builder that waits on a pass: the
 # pane guard reads the pass as the Builder's own turn, so no message gets in.
 STOP=$WT/.claude/briefs/$UNIT-stop
@@ -1050,7 +1207,47 @@ PASS_T0=$SECONDS
 PREV=$(round_files "$WT" "$UNIT" | awk -v n="$N" '$1 < n' | sort -n | tail -1 | cut -d' ' -f2-)
 PASSES=$(CUT=mark earlier_passes "$WT") || exit 2
 EARLIER=$(awk '$1 == "@" && $3 == "cut" { next } $1 == "@" { print "Earlier pass " $2 " ended " $8; next } !seen[$0]++' <<<"$PASSES")
-[ "$KIND" = adversarial ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-codex-pass.sh $UNIT $N adversarial"
+# issue_setup -- the checks that need no tree, then this review's step (ISSUE_STEP), round (N), round file (OUT), range start
+# (ISSUE_BASE) and reviewers. An issue's range starts where the review before it ended, so ranges never overlap; every
+# round of the issue reads the whole range, so a repair is read with the fix it repairs.
+ISSUE_STEP= ISSUE_BASE= ISSUE_ROWS= ISSUE_CLASS=
+issue_setup() {
+  local wf answers cap n step
+  wf=$(issue_workflow) || exit 2
+  [ "$wf" != default ] || die "$UNIT is on the default review workflow, so --issue has nothing to do: main's builder brief has no 'Review workflow: per-issue' line. Run the usual passes: builder-codex-pass.sh $UNIT <N> adversarial"
+  [[ " ${wf#per-issue } " == *" #$ISSUE "* ]] || die "issue #$ISSUE is not on $UNIT's review workflow line ($wf)"
+  [ -z "$(grep '^@' <<<"$PASSES" || true)" ] \
+    || die "$UNIT already has a final-cycle pass on record, and that cycle's rebase rewrites the commits a per-issue range rests on, so --issue is closed. Two ways out: main sets 'Review workflow: default' in the batch and the usual passes go on, or main launches the rest as a new unit"
+  ISSUE_ROWS=$(issue_rows "$WT") || exit 2
+  answers=$(issue_answers) || exit 2
+  cap=$(issue_regular_cap) || exit 2
+  for n in ${wf#per-issue }; do
+    n=${n#\#}
+    [ "$n" != "$ISSUE" ] && issue_started "$n" "$ISSUE_ROWS" || continue
+    [ "$(issue_step "$n" "$ISSUE_ROWS" "$answers" "$cap")" = done ] \
+      || die "issue #$n is still open, and one issue runs at a time so each range holds one fix. Finish it first: builder-codex-pass.sh --issue $n $UNIT"
+  done
+  step=$(issue_step "$ISSUE" "$ISSUE_ROWS" "$answers" "$cap")
+  case $step in
+    done) die "issue #$ISSUE is done: a GO regular review ended it. Start the next listed issue, or the Prove step and the usual passes" ;;
+    ask\ *) die "$(issue_stop_text "$ISSUE" "${step#ask }") No per-issue pass of this issue starts until that line is in main's rulings, and the Builder has acknowledged it: builder-codex-pass.sh --ack-rulings $UNIT" ;;
+  esac
+  ISSUE_STEP=${step%% *} ISSUE_CLASS=${step#design }
+  N=$(awk -v n="$ISSUE" '$1 == "@" { split($3, k, ":"); if (k[2] == n && $6 + 0 > t) t = $6 + 0 } END { print t + 1 }' <<<"$ISSUE_ROWS")
+  OUT=$WT/.claude/briefs/$UNIT-issue-$ISSUE-round-$N.md
+  [ ! -e "$OUT" ] || die "${OUT##*/} exists; a round is never rewritten, and the reviewer's record has no round $N of issue #$ISSUE to go with it"
+  # The first session with a range names it: a redesign or a repair keeps the issue's start.
+  ISSUE_BASE=$(awk -v n="$ISSUE" '$1 == "@" { split($3, k, ":"); if (k[2] == n && k[1] != "cut" && (!t || $6 + 0 < t)) { t = $6 + 0; b = $10 } } END { sub(/^base:/, "", b); print b }' <<<"$ISSUE_ROWS")
+  if [ -z "$ISSUE_BASE" ]; then
+    ISSUE_BASE=$(awk '$1 == "@" && $3 !~ /^cut/ { print $8, $9 }' <<<"$ISSUE_ROWS" | sort | tail -1 | cut -d' ' -f2)
+    [ -n "$ISSUE_BASE" ] || ISSUE_BASE=$(review_base "$WT") || exit 2
+    [ "$ISSUE_BASE" != main ] || ISSUE_BASE=$(git -C "$WT" merge-base main HEAD) || die "cannot find where $UNIT left main in $WT"
+  fi
+  [[ $ISSUE_BASE =~ ^[0-9a-f]{40}$ ]] || die "the reviewer's record gives no start commit for issue #$ISSUE ($ISSUE_BASE)"
+  if [ "$ISSUE_STEP" = adversarial ]; then FOCI=("$DATA_DESIGN All three angles, in this one review. ${ANGLES[*]} $PLACEHOLDER_UI"); else FOCI=("$FOCUS_REVIEW"); fi
+}
+if [ "$KIND" = issue ]; then issue_setup; else issue_gate "$WT"; fi
+[ "$KIND" = adversarial ] || [ "$KIND" = issue ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-codex-pass.sh $UNIT $N adversarial"
 # Issue 366 (O4): no pass of any kind launches, and nothing is committed, while the latest pass on record holds a P0 or
 # P1 two passes past the cap and the owner has not answered its decision in main's ledger. Each stop has its own id,
 # so an answer to one does not cover the next. A ledger that cannot be read refuses: no answer is never read as one.
@@ -1333,7 +1530,7 @@ if [ "$NEW_TEST_CAP" != off ]; then
   NT_CAP=$NEW_TEST_CAP NT_SRC="reviewLoop.newTestCap"
   [ -z "$NT_LINE" ] || { NT_CAP=$((10#${NT_LINE% *})) NT_SRC="the New tests: line in .claude/plans/$UNIT.md"; }
   [ "$(head -1 <<<"$NEWT")" -le "$NT_CAP" ] \
-    || refuse "the change adds $(head -1 <<<"$NEWT") new tests, over the new-test cap of $NT_CAP ($NT_SRC). Each new test names the bug it catches; cut the extras, or list them under ## Extra tests in the evidence file and cut them below the cap. The first ten: $(sed -n '2,11p' <<<"$NEWT" | paste -sd'|' - | sed 's/|/; /g')
+    || refuse "the change adds $(head -1 <<<"$NEWT") new tests, over the new-test cap of $NT_CAP ($NT_SRC). Each new test names the bug it catches; cut the extras, or list them under ## Extra tests in the evidence file and cut them below the cap. Do not merge or edit existing tests to get under it; ask main. The first ten: $(sed -n '2,11p' <<<"$NEWT" | paste -sd'|' - | sed 's/|/; /g')
 Try: cd $WT && bash $HERE/new-test-count.sh main"
 fi
 # Stages what the pass will commit. --check runs it in a copy of the index, after the launch's own checks above,
@@ -1347,21 +1544,17 @@ stage_and_check() {
   # Only when one is tracked: git fails a pathspec that matches no tracked file.
   TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
   [ -z "$TEMPLATES" ] || git -C "$WT" add -u -- '.claude/briefs/_*'
+  # Issue 496: an edit to an existing test reaches no review without the owner's recorded yes.
+  local edit
+  while IFS= read -r edit; do
+    [ -z "$edit" ] || refuse "$edit"
+  done <<<"$(test_edit_refusals "$(git -C "$WT" merge-base main HEAD)" "")"
   limits_check
 }
 # limits_added <file> <baseline file> <heading> -- the lines under <heading> in <file> beyond each line's count in the
 # baseline, a missing baseline being empty.
 limits_added() {
   awk 'FILENAME == ARGV[1] { n[$0]++; next } n[$0] > 0 { n[$0]--; next } { print }' <(section_lines "$2" "$3") <(section_lines "$1" "$3")
-}
-# ruling_id_ok <id> -- the id has the ruling id shape, a row in the ruling log (the log orca-wait.sh reads), no void row and no
-# unconfirmed suspect row, and is in main's rulings for this unit. A ledger row has no unit field: that file ties an id to the unit.
-ruling_id_ok() {
-  local log=${COMMANDECK_RULING_LOG:-}
-  [[ $1 =~ ^r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}$ ]] || return 1
-  [ -n "$log" ] || log=$(. "$HERE/../hooks/lib/project.sh" && pp_project "$MAIN_OF_WT" && echo "$HOME/.claude/rulings/$PP_PROJECT.jsonl")
-  jq -Rne --arg id "$1" '[inputs | fromjson? | select(.id == $id)] | length > 0 and (any(.[]; .void or (.pick == "suspect" and (.confirmed | not))) | not)' "$log" >/dev/null 2>&1 \
-    && grep -qF -- "$1" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null
 }
 # limits_refuse <repo path> <baseline name> -- one refusal per line on stdin that carries no ruling id every id of which passes ruling_id_ok.
 limits_refuse() {
@@ -1410,6 +1603,20 @@ precheck() {
   # last staging.
   cp -p "$gd/index" "$LOCK/index" || die "cannot copy the index of $WT"
   GIT_INDEX_FILE=$LOCK/index stage_and_check
+  if [ "$KIND" = issue ]; then
+    local tree last said files
+    tree=$(GIT_INDEX_FILE=$LOCK/index git -C "$WT" write-tree) || die "cannot write the tree of the staged copy in $WT"
+    ! git -C "$WT" diff --quiet --no-ext-diff "$ISSUE_BASE" "$tree" -- . ':(exclude).claude/briefs' \
+      || refuse "issue #$ISSUE's range from ${ISSUE_BASE:0:12} has no change outside .claude/briefs, so a review would read nothing. Write the fix first."
+    read -r last said <<<"$(awk -v n="$ISSUE" '$1 == "@" { split($3, k, ":"); if (k[2] == n && k[1] != "cut" && $11 != "none" && $6 + 0 > t) { t = $6 + 0; l = $9 " " $11 } } END { print l }' <<<"$ISSUE_ROWS")"
+    [ -z "${last:-}" ] || [ "$said" = GO ] || [ "$(git -C "$WT" rev-parse "$last^{tree}" 2>/dev/null)" != "$tree" ] \
+      || refuse "the last review of issue #$ISSUE ended NO-GO and nothing has changed since, so another review would spend a round on the same code. Fix the findings, then run this again."
+    if [ "$ISSUE_STEP" = design ]; then
+      files=$(git -C "$WT" diff --name-only "$last" "$tree") || die "cannot list what changed since $last in $WT"
+      { ! grep -qvE '^\.claude/(plans|briefs|metrics)/' <<<"$files" && grep -q '^\.claude/plans/' <<<"$files"; } \
+        || refuse "CLASS STOP: issue #$ISSUE has findings in $ISSUE_CLASS in more than one round, so its redesign is reviewed alone before any code. Put the design in the plan and change nothing else since ${last:0:12}, then run this again; write the code after that review ends GO."
+    fi
+  fi
   if [ "$KIND" = final ]; then
     [ ! -d "$gd/rebase-merge" ] && [ ! -d "$gd/rebase-apply" ] \
       || refuse "a rebase is in progress in $WT, so the closing pass cannot rebase onto main. Finish or abort it (main resolves a conflict), then rerun the pass.
@@ -1499,7 +1706,7 @@ rebase_and_test() {
   echo "$old" > "$pend"
   files=$({ git -C "$WT" diff --name-only "$new...HEAD"; git -C "$WT" diff --name-only "$old" "$new"; } | sort -u)
   stamp "test selection start"
-  tests=$(cd "$WT" && bash "$HERE/shell-tests-for.sh" <<<"$files") || die "shell-tests-for.sh failed in $WT"
+  tests=$(cd "$WT" && bash "$HERE/shell-tests-for.sh" --hops 2 <<<"$files") || die "shell-tests-for.sh failed in $WT"
   stamp "test selection end"
   [ -n "$tests" ] || { rm -f "$pend"; echo "no shell test covers the files $UNIT or main changed since the old base"; return 0; }
   mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the rebase test log"
@@ -1578,7 +1785,9 @@ seed_typecheck_cache() {
 # The one authorized Builder commit: the override lifts only the linked-checkout
 # and agent-ancestry guards; the protected-file and commit-msg checks still run.
 PRE=$(git -C "$WT" rev-parse HEAD)
-git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "feat($UNIT): Builder pass r$N"
+SUBJECT="feat($UNIT): Builder pass r$N"
+[ "$KIND" != issue ] || SUBJECT="feat($UNIT): Builder issue #$ISSUE round $N"
+git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "$SUBJECT"
 # Host change (owner order 2026-10-25): a final whose own commit changes no code is a design-only pass; with no commit
 # of its own it is a closing pass. SHA is set here first: under set -u an unset SHA ends the pass, and one inherited from
 # the caller would judge another commit.
@@ -1636,7 +1845,13 @@ if [ -n "$FROM" ]; then
 fi
 # The review input is the diff itself, each changed file whole with its
 # changes marked (one diff gives both), so the reviewer fetches neither.
-if [ "$KIND" = review ]; then
+if [ "$KIND" = issue ]; then
+  RANGE=$ISSUE_BASE...HEAD
+  case $ISSUE_STEP in adversarial) HEAD_LINE=$HEAD_ISSUE_ADV ;; design) HEAD_LINE=$HEAD_ISSUE_DESIGN ;; *) HEAD_LINE=$HEAD_ISSUE_REV ;; esac
+  HEAD_LINE=${HEAD_LINE//issue #0/issue #$ISSUE} HEAD_LINE=${HEAD_LINE//main...HEAD/$RANGE}
+  NOTE="This review covers issue #$ISSUE alone: the range is everything committed for it so far, the first fix and any repairs together. The unit's other issues are reviewed on their own, so the absence of their work is not a finding."
+  [ "$ISSUE_STEP" != design ] || NOTE+=$'\n'"The class under redesign is $ISSUE_CLASS. The findings it answers:"$'\n'$(issue_findings "$ISSUE")
+elif [ "$KIND" = review ]; then
   [ -n "$FROM" ] || die "${PREV##*/} names no reviewed commit: it was not written by the pass script"
   [ "$FROM" != "$SHA" ] || die "nothing changed since ${PREV##*/} reviewed $SHA: a narrowed pass has nothing to read. A whole-branch pass that ended GO there merges as it is; otherwise the closing pass is: builder-codex-pass.sh $UNIT $N final"
   RANGE=$FROM..HEAD HEAD_LINE=$HEAD_FIX
@@ -1756,7 +1971,7 @@ if [ -n "$FRESH" ]; then
   COPY=$CLOSING_COPY
   [ ! -d "$WT/node_modules" ] || ln -s "$WT/node_modules" "$COPY/node_modules" || die "cannot link node_modules into the closing copy"
   copy_artifacts() { # a copy of a branch that tracks no briefs has no briefs folder: nothing to remove
-    [ ! -d "$COPY/.claude/briefs" ] || find "$COPY/.claude/briefs" -maxdepth 1 \( -name "$UNIT-r[0-9]*-*" -o -name "$UNIT-fix-r*.md" -o -name "$UNIT-handoff*.md" -o -name "$UNIT-after-r*.md" -o -name "$UNIT-evidence.md" \)
+    [ ! -d "$COPY/.claude/briefs" ] || find "$COPY/.claude/briefs" -maxdepth 1 \( -name "$UNIT-r[0-9]*-*" -o -name "$UNIT-fix-r*.md" -o -name "$UNIT-handoff*.md" -o -name "$UNIT-after-r*.md" -o -name "$UNIT-evidence.md" -o -name "$UNIT-issue-*" \)
   }
   copy_artifacts | while IFS= read -r f; do rm -f -- "$f"; done
   [ -z "$(copy_artifacts)" ] || die "the closing copy $COPY still holds the unit's review files after they were removed; no reviewer ran"
@@ -1779,6 +1994,7 @@ Try: bash $SERENA_SH start $RCWD"
 fi
 # Each of the pass's readers gets a session of its own, all at once; the prompt goes by file, since it carries the diff.
 RUN=$WT/.claude/briefs/$UNIT-r$N
+[ "$KIND" != issue ] || RUN=${OUT%.md}
 PIDS=() SIDS=()
 for i in "${!FOCI[@]}"; do
   BASE=$(plugin_prompt "${FOCI[i]}")
@@ -1921,11 +2137,11 @@ for i in "${!FOCI[@]}"; do
   mkdir -p "$RHOME/builder-pass-prompts" && cp "$RUN-prompt-$((i + 1)).md" "$RHOME/builder-pass-prompts/$TID" \
     || die "cannot record the prompt of $NAME $TID under $RHOME/builder-pass-prompts"
 done
-[ ! -e "$SOCKS/no-session" ] || die "no Codex session appeared within ${SESSION_WAIT}s of the launch for reviewer(s) $(tr -s ' ' < "$SOCKS/no-session" | sed 's/ $//'), so this was not a pass and no round file is written. Run the same pass again: builder-codex-pass.sh $UNIT $N $KIND"
+[ ! -e "$SOCKS/no-session" ] || die "no Codex session appeared within ${SESSION_WAIT}s of the launch for reviewer(s) $(tr -s ' ' < "$SOCKS/no-session" | sed 's/ $//'), so this was not a pass and no round file is written. Run the same pass again: builder-codex-pass.sh $(same_pass)"
 [ -z "$FAILED" ] || die "the $BY $KIND pass failed for reviewer(s)$FAILED; raw output in $RUN-$BY-<k>.json"
 # A companion that answers without JSON gave no thread and no verdict: the pass
 # ended here with no word and no round file, and read as one still running.
-[ -z "$NOJSON" ] || die "reviewer$NOJSON answered without JSON, so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json. Run the same pass again: builder-codex-pass.sh $UNIT $N $KIND"
+[ -z "$NOJSON" ] || die "reviewer$NOJSON answered without JSON, so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json. Run the same pass again: builder-codex-pass.sh $(same_pass)"
 # A Claude reviewer's shell is not sandboxed as Codex's is, so the tree is
 # checked as well, files it added included.
 # shortcut: a change to a file that was already untracked is not seen; sandbox the session when Claude Code can.
@@ -1955,8 +2171,39 @@ HEAD_NAME=Sol; [ "$BY" = codex ] || HEAD_NAME="Claude reviewer"
 # Issue 271: the pass began with its first reviewer and ended with its last; "-" is a time a record did not give ("-" sorts first).
 TIMING="$(printf '%s\n' "${T_BEGAN[@]}" | sort | sed -n 1p) $(printf '%s\n' "${T_ENDED[@]}" | sort | sed -n '$p')"
 [[ " ${T_ENDED[*]} " != *" - "* ]] || TIMING="${TIMING% *} -"
+PASS_WORD=${DESIGN:-$KIND}
+[ -z "$ISSUE_STEP" ] || PASS_WORD=issue-$ISSUE_STEP
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
-  printf 'Pass: %s\nTiming: %s\nPre-review: rebase %s, tests %s, suite %s\n%s%s\n%s\n\n%s\n' "${DESIGN:-$KIND}" "$TIMING" "$T_REBASE" "$T_TESTS" "$T_SUITE" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+  printf 'Pass: %s\nTiming: %s\nPre-review: rebase %s, tests %s, suite %s\n%s%s\n%s\n\n%s\n' "$PASS_WORD" "$TIMING" "$T_REBASE" "$T_TESTS" "$T_SUITE" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+# issue_tail -- a per-issue review ends here. No final-cycle counter or fix hand-off applies, and a NO-GO stays in this session;
+# the class stop does apply, through issue_step. A stop wakes main from the pass itself, so no Builder can forget it, and the
+# hold stands whether or not the wake got through: every rerun refuses until main's answer is there.
+issue_tail() {
+  local wf rows answers cap step n left= text
+  wf=$(issue_workflow) || exit 2
+  rows=$(issue_rows "$WT") || exit 2
+  answers=$(issue_answers) || exit 2
+  cap=$(issue_regular_cap) || exit 2
+  step=$(issue_step "$ISSUE" "$rows" "$answers" "$cap")
+  case $step in
+    done)
+      for n in ${wf#per-issue }; do
+        [ "$(issue_step "${n#\#}" "$rows" "$answers" "$cap")" = done ] || left+=${left:+ }$n
+      done
+      echo "PER-ISSUE DONE: issue #$ISSUE ended GO. Next: $(if [ -n "$left" ]; then echo "the next of $left, then builder-codex-pass.sh --issue <n> $UNIT"; else echo "every issue is done, so run the Prove step and the usual passes, starting with builder-codex-pass.sh $UNIT 1 adversarial"; fi)" ;;
+    ask\ *)
+      text=$(issue_stop_text "$ISSUE" "${step#ask }")
+      echo "PER-ISSUE STOP: $text No per-issue pass of this issue starts until then; end your turn."
+      bash "$HERE/to-main.sh" question "$UNIT: PER-ISSUE STOP issue #$ISSUE" "$text" >/dev/null 2>&1 \
+        || echo "(main could not be told. Send it: bash $HERE/to-main.sh question '$UNIT: PER-ISSUE STOP issue #$ISSUE' '${text//\'/\'\\\'\'}')" ;;
+    design\ *) echo "CLASS STOP: issue #$ISSUE has findings in ${step#design } in more than one round. Do not fix it finding by finding: put the design for the whole class in the plan, change nothing else, and run builder-codex-pass.sh --issue $ISSUE $UNIT, which reviews the design alone. Write the code after that review ends GO; it needs no word to main." ;;
+    *) echo "PER-ISSUE NEXT: issue #$ISSUE needs a $step review. Fix what this one found, then: builder-codex-pass.sh --issue $ISSUE $UNIT" ;;
+  esac
+}
+if [ "$KIND" = issue ]; then
+  echo "${OUT##*/}: $VERDICT (issue #$ISSUE $ISSUE_STEP review on $SHA, $NAME(s) ${TIDS[*]})"
+  issue_tail; exit 0
+fi
 echo "$SCOPE" > "$SCOPE_REC"
 echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
 # Issue 366: whether the loop goes on, read from the reviewers' records and the count, never from N or a round file. A

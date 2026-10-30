@@ -94,7 +94,8 @@
     "diffLines": 1000,
     "maxIssues": 5,
     "oneJudgeLines": 500,
-    "note": "Per Codex review. calls: model calls one review session may make. diffLines and maxIssues: a plan's planned changed lines and distinct Closes issues; plan-check.sh refuses a plan over either unless it carries a Split override line. oneJudgeLines: plan-tier.sh gives a Panel unit estimated at or under this many changed lines one judge. A routing file of your own that lacks diffLines, maxIssues or oneJudgeLines takes the value here."
+    "perIssueRegular": 3,
+    "note": "Per Codex review. calls: model calls one review session may make. diffLines and maxIssues: a plan's planned changed lines and distinct Closes issues; plan-check.sh refuses a plan over either unless it carries a Split override line. oneJudgeLines: plan-tier.sh gives a Panel unit estimated at or under this many changed lines one judge. perIssueRegular: the regular reviews one issue gets on the per-issue workflow before main is asked to continue or redesign. A routing file of your own that lacks diffLines, maxIssues or oneJudgeLines takes the value here."
   },
   "seat-liveness": {
     "backgroundMaxMinutes": 20,

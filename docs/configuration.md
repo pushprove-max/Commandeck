@@ -102,13 +102,18 @@ names the count; `off` or `setup.sh --new-test-cap <n>|off`), and report flags a
 with over 10 minutes, and 30 US dollars. Those report flags do not block a merge.
 From the pass cap on the record, `review` runs as the closing pass
 ([Review passes](review-loop.md)). `maxRounds` is no longer read.
+The per-issue review workflow reads one more limit, `review-limits.perIssueRegular` in
+`config/routing.json`: the regular reviews of one issue in a row with no GO before main is
+asked (3 by default; a whole number of 1 or more).
 `generatedFiles` lets merge accept a tail of commits changing only the listed
 generated paths after the reviewed commit; do not list handwritten source.
 
 Set `COMMANDECK_ROUTING` in the launching environment to use your own routing
 file instead of editing the installed copy. Project Builder and review answers
 still apply. Other useful overrides are `COMMANDECK_MAIN`,
-`COMMANDECK_WORKSPACES`, `COMMANDECK_SCRATCH` and `CODEX_HOME`. Git decides the
+`COMMANDECK_WORKSPACES`, `COMMANDECK_SCRATCH` and `CODEX_HOME`.
+`COMMANDECK_SYNC_FETCH_S` (default 60) sets how many seconds the fetch of
+origin's main may run before a merge or a Builder launch refuses. Git decides the
 primary checkout from inside a linked worktree. The dashboard/report collector
 also reads `COMMANDECK_CODEX_REVIEW_HOME`, default `~/.codex-review`, for review
 spend; it does not itself change where reviewer processes run.

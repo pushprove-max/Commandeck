@@ -14,6 +14,8 @@ bash ci/version-check.sh
 bash scripts/run-shell-tests.sh
 ```
 
+To run the shell tests before each push to `main`, wire the pre-push hook once in your checkout: `git config core.hooksPath .githooks`. A red run refuses the push and names the commit.
+
 Every change to the plugin raises the version in `.claude-plugin/plugin.json` and the README's badge, with a `CHANGELOG.md` entry: the third part for a fix, the second for new behaviour.
 `ci/version-check.sh` fails when a plugin file changed against the main branch and the version did not; a change to the docs or to `ci/` alone does not count.
 
@@ -28,7 +30,8 @@ CI's Ubuntu ships jq 1.7, which refuses some programs jq 1.8 accepts: before you
 with jq 1.7 first on `PATH` (on a Mac, `J=$(mktemp -d); ln -s /usr/bin/jq "$J/jq"; PATH="$J:$PATH" bash scripts/run-shell-tests.sh`).
 
 The local merge check runs only the shell tests a change touches: `bash scripts/run-shell-tests.sh --changed main`
-from your branch. CI and anyone who wants the whole suite run `bash scripts/run-shell-tests.sh`.
+from your branch. CI and anyone who wants the whole suite run `bash scripts/run-shell-tests.sh`, which starts the
+slowest files first from the seconds it saved on earlier bare runs.
 
 ## Pull requests
 

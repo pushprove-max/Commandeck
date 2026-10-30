@@ -17,6 +17,7 @@
 #        [worktree-path] [agent] [unit] [model] [verdict-ordinal] [launched-epoch]
 #        scripts/read-verdict.sh --repeat-class <round file>   (see below)
 #        scripts/read-verdict.sh --seat <unit> <role>   (the report seat.sh collect kept)
+#        scripts/read-verdict.sh --round-verdict <round file>   (the verdict that stands, outside any fence)
 # The extra arguments bind a round to the reviewer session review-round.sh
 # launched. They are optional for interactive use and old handles files.
 #
@@ -548,6 +549,18 @@ verdict_word() {  # <text> <its verdict line, from find_verdict>
   printf '%s\n' "$1" | sed -n "${2}p" \
     | sed -E 's/^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*//; s/[[:space:]].*$//; s/"$//; s/\*+$//'
 }
+
+# --round-verdict <round file>: the verdict that stands for a Codex round file, as `VERDICT: <word>`; nothing when none
+# stands (issue 498). A verdict inside a fence, closed or not, never counts. The pass writes its own line last, so a
+# last line of `VERDICT: NO-GO` wins even under a reviewer's unclosed fence: a false NO-GO costs a round, a false GO skips one.
+if [ "$HANDLE" = --round-verdict ]; then
+  . "$(dirname "${BASH_SOURCE[0]}")/fence.sh" || exit 1
+  RTEXT=$(cat -- "${2:?usage: $0 --round-verdict <round file>}" 2>/dev/null) || exit 0
+  if [ "$(printf '%s\n' "$RTEXT" | grep -v '^[[:space:]]*$' | tail -1)" = "VERDICT: NO-GO" ]; then echo "VERDICT: NO-GO"; exit 0; fi
+  RLINE=$(find_verdict "$RTEXT")
+  [ -z "$RLINE" ] || echo "VERDICT: $(verdict_word "$RTEXT" "$RLINE")"
+  exit 0
+fi
 
 # SESSION LOGS ARE AUTHORITATIVE. The terminal screen contains the injected
 # spec, file contents and prior reports, all of which can contain a bare verdict

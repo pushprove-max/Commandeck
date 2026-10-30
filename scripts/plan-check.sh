@@ -366,6 +366,16 @@ PC_ASK=$(awk -v fenced="$PC_FENCED" 'BEGIN { n = split(fenced, a, " "); for (i =
   /^#+[ \t]/ { q = (tolower($0) ~ /^#+[ \t]+questions? for the owner/); if (q && seen++) { print NR; exit } next }
   !q && /^[ \t]*>[ \t]*Owner:/ { print NR; exit }' <<<"$PT")
 [ -z "$PC_ASK" ] || refuse "$PLAN asks the owner outside its one ## Question for the owner section (line $PC_ASK)"
+# Issue 486: a Closes issue left off a per-issue line would reach the merge with no review of its own.
+if [ -n "$BATCH" ]; then
+  PC_WF=$(pp_review_workflow "$BATCH") || exit 2
+  if [ "$PC_WF" != default ]; then
+    for n in $(grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | sort -u || true); do
+      [[ " ${PC_WF#per-issue } " == *" $n "* ]] \
+        || refuse "the Closes: line names $n and $BATCH's Review workflow line does not ($PC_WF): list every closed issue there"
+    done
+  fi
+fi
 # Issue 480: a plan over the review-limits caps (changed lines, distinct Closes issues, as issue_check lists them) is split
 # unless a `Split override: <reason>` line stands outside a fence; a bare key is none. An unreadable key refuses.
 PC_LCAP=$(pp_review_limit diffLines) || refuse "cannot read review-limits.diffLines from $(pp_routing)"

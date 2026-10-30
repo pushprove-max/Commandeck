@@ -461,6 +461,12 @@ check "an unreadable wait-test-run.sh max is refused, not counted as 270; an abs
 check "a bgrun wait inside a worker loop is refused as a loop" 2:1 \
   "$(OUT=$(run_wt "$(bg 'for i in 1 2; do bash scripts/bgrun.sh wait /tmp/a.log; done' false)"); echo "$(tail -1 <<<"$OUT" | sed 's/rc=//'):$(grep -c 'inside a loop' <<<"$OUT")")"
 
+# #488: the hook decides by command word. An id that ends in -sleep is data, not a wait, and must not be refused.
+check "id_ending_sleep_passes: a worker command with an id ending -sleep, alone or after a pipe, runs" "rc=0 rc=0" \
+  "$(rc_wt 'bash scripts/x.sh --id job-sleep') $(rc_wt 'echo run-sleep | cat')"
+check "real_sleep_loop_refused: a worker loop that waits on a real wait command is still refused" "rc=2" \
+  "$(rc_wt 'for i in 1 2 3; do bash scripts/bgrun.sh wait /tmp/a.log; done')"
+
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.
 echo "$PASS passed, $FAIL failed"

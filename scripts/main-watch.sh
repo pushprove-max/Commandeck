@@ -325,6 +325,17 @@ inbox_wake() {
   done
 }
 
+# builder_done <handle> <unit> <launched> <tag> -- this Builder's DONE line is in its answer or is its latest message's
+# marker (the two reads seat() makes before it holds on a helper): it is finished, and a keep-alive "." would bury the
+# line (#499). Leaves RV_OUT alone.
+builder_done() {
+  local out
+  out=$(timeout 20 bash "$HERE/read-verdict.sh" "$1" 5 "" "" "" "" "" "$3" 2>/dev/null) || true
+  grep -qxF -- "${2^^}-DONE" <<<"$out" && return 0
+  timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$WS/$2" --agent claude --launched "$3" --spec "$4" \
+    --marker "${2^^}-DONE" 2>/dev/null | grep -qx 'marker=1'
+}
+
 # builder_watch -- each working Builder seat's event log through
 # dashboard_builders.jq. The first sighting of a signal episode ({kind, since})
 # types one line into that pane and records the episode under $ST, so it never
@@ -365,6 +376,8 @@ builder_watch() {
         grep -qxF -- "$since $anchor" "$hist.warm" 2>/dev/null && continue
         n=$(grep -cxE -- "[0-9]+ $anchor" "$hist.warm" 2>/dev/null)
         [ "${n:-0}" -lt "$(jq -r .maxPings <<<"$sig")" ] || continue
+        # Its "." reply would become the latest answer, the one the finish is read from.
+        ! builder_done "$h" "$u" "$la" "$(sed -n 's/^tag=//p' "$r" | head -1)" || continue
         echo "$since $anchor" >> "$hist.warm"
         orca-ide terminal send --terminal "$h" --text "Signal WARM: keep-alive while you wait. Reply with one . and end your turn." --enter >/dev/null 2>&1 \
           && pp_wake_log main-watch "$h" "nudge WARM $u" sent \

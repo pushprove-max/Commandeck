@@ -30,5 +30,11 @@ jq '.reviewLoop.newTestCap = "off"' "$REPO/.claude/commandeck.json" > "$TMP/cfg"
 newunit of 31 'New tests: of 30'
 check "off wins over a New tests line (issue 462)" "0:0" "$(upass of):$(grep -c 'over the new-test cap' "$TMP/err")"
 
+# #487: a cap refusal that offered merging tests got Builders to merge tests; it sends them to main.
+jq '.reviewLoop.newTestCap = 40' "$REPO/.claude/commandeck.json" > "$TMP/cfg" && mv "$TMP/cfg" "$REPO/.claude/commandeck.json"
+newunit rf 31 'New tests: rf 30'
+check "refusals_offer_no_test_edit: the cap refusal says to ask main and offers no merge" "2:1:0" \
+  "$(upass rf):$(grep -c 'Do not merge or edit existing tests to get under it; ask main\. The first ten:' "$TMP/err"):$(grep -ci 'merge tests\|or merge' "$TMP/err")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

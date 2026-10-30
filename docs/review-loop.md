@@ -96,6 +96,18 @@ it comes later, unless the plan or main's rulings name it on a
 line that describes placeholder UI is refused at launch unless it sits in a
 fenced block, is a `Placeholder:` line, or cites the issue that tracks it.
 
+A batch can ask for a per-issue review workflow. Main puts one line,
+`Review workflow: per-issue #<a> #<b>`, in the batch (the default is the review
+described here), and every `Closes` issue must be on it. Before the whole-branch
+passes, each issue is reviewed alone with `builder-codex-pass.sh --issue <n> <unit>`:
+an adversarial review, then regular reviews of that issue's change only. One regular
+GO after the adversarial review ends the issue. After `review-limits.perIssueRegular`
+regular reviews in a row with no GO (3 by default), or when a finding class comes back
+after its design was approved, the pass wakes main and the issue waits for the line
+`Per-issue #<n> round <R>: continue` or `redesign` in main's rulings. The final
+cycle and the merge wait for every issue. Per-issue sessions are not rounds of the
+branch: they count toward no cap and are never a merge's proof.
+
 A P0, P1 or P2 holds the loop (the blocking severity, P2 by default; set
 `reviewBlockSeverity` to P1 so only a P0 or P1 holds, or to P3 so every
 finding does; the setting is part of every prompt, so change it between builds, not during one): the Builder fixes it and the next `review`

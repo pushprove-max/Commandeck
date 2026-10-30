@@ -12,7 +12,13 @@ id must be logged and listed in this file, or the next pass refuses it. A review
 main rules out goes under "Cleared findings" as its own first two parts,
 "<title> -- <file>:<line>": the next reviewer is handed it as a limit, not to
 list again. Clearing never merges a NO-GO: the merge still needs a closing
-pass that ends GO, or a cap stop. -->
+pass that ends GO, or a cap stop. An edit to an existing test file is approved
+by one line in this file, `Test edit: <path> ruling:<id>`, with a logged id;
+the pass and the merge refuse the edit without it, and the Builder runs
+--ack-rulings again after you add it.
+A per-issue review that stops for you is answered by one line, `Per-issue #<n> round <R>: continue` (another set of
+regular reviews) or `Per-issue #<n> round <R>: redesign` (rewrite the fix, restart with an adversarial review);
+the Builder runs --ack-rulings again after you add it. -->
 
 1. <#issue, or "Item N" of the brief>: <the ruling, in one or two sentences>
    - Source: <a ruling id, or "main's call" with the reason>

@@ -103,6 +103,7 @@ and a fix that touches a save updates that save's row in the same commit.
   short timeout (a few seconds), so it fails fast instead of running to the
   command's time limit. Before you write, change or delete a test, read
   ~/.commandeck/plugin/templates/test-rules.md.
+- On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name.
 - The evidence file opens with an `Issue | Status` table, one `| #<n> | not built |`
   row per issue of the batch, each set to `built` in the same edit that adds the
   section of the cut that finishes it. The dashboard counts an issue built from a
@@ -117,6 +118,10 @@ and a fix that touches a save updates that save's row in the same commit.
   it under `## Extra tests` in the evidence file. A pass refuses a change that
   adds more new tests than the cap (`reviewLoop.newTestCap`, 40 by default),
   or than the number on the plan's `New tests: <unit> <n>` line when it has one.
+- Ask main before you edit an existing test. A test file that exists at the fork
+  point and loses a line stops the pass and the merge until main's
+  `<unit>-main-rulings.md` holds `Test edit: <path> ruling:<id>` for it. Adding
+  a new case is free. After main adds the line, run `--ack-rulings` again.
 - Arrange test data with one shared builder per domain object (a fixture
   function in shell tests), one or two lines per test. When a test needs a new
   field, extend the builder; never hand-build the object in the test:
@@ -217,6 +222,11 @@ real entry point, with an input from the batch's done criteria (a script run on 
 JSON, a page opened locally). Fix what it turns up, then run it again. Under `## Proof` in the evidence file write one
 `Ran:` line (the command or action) and one `Saw:` line (what came back) per thing proved, and a `Fixed:` line per
 fix. Nothing is reverted; never production data or a deploy. Then step 1.
+
+If a `## Per-issue review workflow` section sits above `## The batch`, review each listed issue alone first:
+`bash {scripts}/{pass-script} --issue <n> {unit}`, after the fix for that issue only. Each pass prints what to run
+next. When main's answer is needed it says so and you end your turn. The usual passes below start only when every
+listed issue is done.
 
 1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
    the first pass and one pass: three reviewers at once, or one when the build

@@ -328,8 +328,9 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     ahead=$(git -C "$wt" rev-list --count main..HEAD 2>/dev/null); ahead=${ahead:-?}
     dirty=$(git -C "$wt" status --porcelain 2>/dev/null | awk 'END { print NR }')
     round=$(ls "$wt/.claude/briefs/$unit"-r*-reports.md 2>/dev/null | awk -F'-r|-reports' '{ print $(NF-1) "\t" $0 }' | sort -n | tail -1 | cut -f2-)
-    verdict=""
-    [ -z "$round" ] || verdict="r$(basename "$round" | sed 's/.*-r\([0-9]*\)-reports\.md$/\1/') ($(sed -n 's/^Pass: *//p' "$round" | tail -1)) $(grep '^VERDICT:' "$round" | sort -u | paste -sd' ' -)"
+    verdict="" rverdict=""
+    [ -z "$round" ] || rverdict=$(bash "$PP_SCRIPTS/read-verdict.sh" --round-verdict "$round" 2>/dev/null)
+    [ -z "$round" ] || verdict="r$(basename "$round" | sed 's/.*-r\([0-9]*\)-reports\.md$/\1/') ($(sed -n 's/^Pass: *//p' "$round" | tail -1)) $rverdict"
     echo "  unit $unit: $ahead commit$([ "$ahead" = 1 ] || echo s) ahead of main, $dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, last Codex round ${verdict:-none on file}"
     # The next step for the three kinds of wake a unit sends, and no stage machine:
     # a question waits on an answer; anything else merges or does not.
@@ -353,7 +354,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       elif [ "$dirty" != 0 ]; then why="$dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, which no Codex pass read"
       # The pass writes its own verdict line last. After a NO-GO the next step is a fix round: a finding normal use
       # would hit blocks the merge. This line only advises; the merge checks.
-      elif [ -n "$round" ] && [ "$(grep '^VERDICT:' "$round" | tail -1)" = "VERDICT: NO-GO" ]; then nogo=1
+      elif [ "$rverdict" = "VERDICT: NO-GO" ]; then nogo=1
       elif [ ! -f "$PP_SCRIPTS/builder-codex-pass.sh" ] && [ ! -f "$SCRATCH/main-watch/gate-$unit" ]; then
         why="the merge check (builder-codex-pass.sh --verify) is not in this checkout"
       elif ! verified "$unit" "$wt"; then why=${VOUT:-the merge check refused it and gave no reason}

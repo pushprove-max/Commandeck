@@ -221,7 +221,7 @@ seat_actual() {
 # and main's rulings file for the unit: an issue is its number, an item with no issue number its own text.
 # Built ones are the items its evidence file heads a section with, findings the newest round report's finding lines.
 builder_progress() {
-  local d=$1/.claude/briefs u=${2##*/} is=null bu=null pa=null fi_=null f t tb
+  local d=$1/.claude/briefs u=${2##*/} is=null bu=null pa=null fi_=null f t tb wf ir
   [ ! -f "$d/$u.md" ] || is=$(bash "$HERE/brief-issues.sh" "$d/$u.md" "$PP_MAIN/.claude/briefs/$u-main-rulings.md")
   # The file's title names the unit's issue before anything is built: only a section heading counts.
   # A heading "Item N" with no issue number stands for the items on numbered line N of the brief
@@ -253,8 +253,14 @@ builder_progress() {
   [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
   # Raised: the effort main raised the Builder to and why, from the line builder-launch.sh writes in its brief.
   t=$(grep -m1 -E '^effort override: builder [a-z]+ -> [a-z]+: ' "$d/$u.md" 2>/dev/null || true)
-  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson pa "$pa" --argjson fi "$fi_" --arg ra "$t" \
-    '{issues: $is, built: $bu, partial: $pa, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null)}'
+  # Issue 486: the review workflow main chose in its own brief ("default" or "per-issue #a #b", null when the line cannot be
+  # read), and the newest per-issue round file ({issue, round}, null before one is written).
+  wf=$(pp_review_workflow "$PP_MAIN/.claude/briefs/$u-builder-brief.md" 2>/dev/null) || wf=
+  ir=$(ls -t "$d/$u"-issue-*-round-*.md 2>/dev/null | sed -nE "s#^.*/$u-issue-([0-9]+)-round-([0-9]+)\.md\$#\1 \2#p" | head -1)
+  jq -cn --argjson is "$is" --argjson bu "$bu" --argjson pa "$pa" --argjson fi "$fi_" --arg ra "$t" --arg wf "$wf" --arg ir "$ir" \
+    '{issues: $is, built: $bu, partial: $pa, findings: $fi, raised: ($ra | capture("^effort override: builder [a-z]+ -> (?<effort>[a-z]+): (?<reason>.+)$") // null),
+      workflow: ($wf | if . == "" then null else . end),
+      issueRound: ($ir | split(" ") | if length == 2 then {issue: (.[0] | tonumber), round: (.[1] | tonumber)} else null end)}'
 }
 # terminal_list -- Orca's terminal list, read once per collect into $DASH_TERMS for every project's units() and
 # chief_of_staff() (issue 299); fails, for all of them, when the read or its shape does (the failure is kept too, so a

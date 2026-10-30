@@ -503,6 +503,23 @@ if lost:
 refused = [c for c in TOOLS if c['refused']]
 if refused:
     ideas.append(f'**Tool calls a guard refused.** {len(refused)}; each cost the request that asked ({sec(med(r["s"] for r in REQ))} at the median) and usually a second one to retry.')
+CTX, EXPIRY, SHARE, VALUE, AFTER = (R.get(k) or {} for k in ('context_sources', 'cache_expiry', 'main_share', 'finding_value', 'after_merge'))  # absent in a result saved earlier
+
+
+def unpriced_note(part):
+    """A dollar figure that leaves requests out says so: a silent zero reads as a known cost."""
+    return f', leaving out {part["unpriced"]} with no list price on file' if part.get('unpriced') else ''
+
+
+# These join the ideas before the review below, so a lead left unmarked is named too.
+if CTX.get('top'):
+    biggest = CTX['sources'][0]
+    ideas.append(f'**What the context carried.** {biggest["source"]} cost the most to carry: {100 * biggest["carry_share"]:.0f}% of all context re-read, about ${biggest["usd"]:,.2f} at list price. The largest single item was '
+                 f'"{CTX["top"][0]["name"]}" ({n(CTX["top"][0]["tokens"])} tokens over {CTX["top"][0]["requests"]} requests, about ${CTX["top"][0]["usd"]:,.2f}). Estimates; the tables below list the rest.')
+if CTX.get('repeats'):
+    ideas.append(f'**The same content entered twice.** {len(CTX["repeats"])} items came in more than once; the copies after the first cost about ${sum(x["usd"] for x in CTX["repeats"]):,.2f} at list price to carry.')
+if EXPIRY.get('count'):
+    ideas.append(f'**Caches that expired in a pause.** {EXPIRY["count"]} requests re-wrote {n(EXPIRY["tokens"])} tokens after a pause longer than the cache lasts, about ${EXPIRY["usd"]:,.2f} at list price over reading them{unpriced_note(EXPIRY)}. Only a shorter pause or a smaller context cuts it.')
 # A written review marks each item: covered by an open issue, cited, or not, with a one-line proposed
 # fix. An item it leaves out is named, so an unreviewed lead shows on the page.
 review = []
@@ -533,6 +550,38 @@ SORT_JS = ('<script>document.querySelectorAll("table.sort").forEach(t=>{[...t.ro
            'th.onclick=()=>{const d=th.d=-(th.d||-1),v=r=>{const x=r.cells[c].dataset.v??r.cells[c].textContent,n=parseFloat(x);return isNaN(n)||!/^-?[\\d.]+$/.test(x)?x.toLowerCase():n};'
            '[...t.rows].slice(1).sort((a,b)=>{const x=v(a),y=v(b);return(x>y?1:x<y?-1:0)*d}).forEach(r=>t.tBodies[0].appendChild(r))}})})</script>')
 
+ctx_html = ''
+if CTX:
+    gap = CTX['peak'] - CTX['estimated_at_peak']
+    ctx_html = (f'<h2>What filled the context</h2><div class="box"><p>At its fullest the context was {n(CTX["peak"])} tokens as the API measured it. The sizes below are estimates from the logged text and add up to {n(CTX["estimated_at_peak"])}: '
+                f'{100 * CTX["margin"]:.0f}% {"short of" if gap > 0 else "over"} the measured size. Dollars split the ${CTX["input_usd"]:,.2f} list price of input tokens{unpriced_note(CTX)} by how much context each source kept in play; helpers are not included.</p></div>'
+                + table(['Source', '>Tokens at the peak', '>Share of the peak', '>Share of context re-read', '>List price'],
+                        ['<tr>' + td(txt(x['source']), cls='l') + td(x['at_peak'], n(x['at_peak'])) + td(x['peak_share'], f'{100 * x["peak_share"]:.0f}%')
+                         + td(x['carry_share'], f'{100 * x["carry_share"]:.0f}%') + td(x['usd'], f'${x["usd"]:,.2f}') + '</tr>' for x in CTX['sources']])
+                + '<h4>The largest items</h4>' + table(['Item', 'Source', '>Tokens', '>Requests carried', '>List price'],
+                        ['<tr>' + td(txt(x['name']), cls='l') + td(txt(x['source']), cls='l') + td(x['tokens'], n(x['tokens'])) + td(x['requests']) + td(x['usd'], f'${x["usd"]:,.2f}') + '</tr>' for x in CTX['top']])
+                + ('<h4>Content that entered more than once</h4>' + table(['Item', 'Source', '>Times', '>Tokens each', '>List price of the extra copies'],
+                        ['<tr>' + td(txt(x['name']), cls='l') + td(txt(x['source']), cls='l') + td(x['times']) + td(x['tokens'], n(x['tokens'])) + td(x['usd'], f'${x["usd"]:,.2f}') + '</tr>' for x in CTX['repeats']]) if CTX['repeats'] else ''))
+if EXPIRY.get('count'):
+    ctx_html += ('<h4>Caches that expired in a pause</h4>' + table(['Request', '>Pause', '>Tokens re-written', '>Extra list price'],
+                 ['<tr>' + td(x['t'], local(x['t'], '%-I:%M:%S %p'), cls='l') + td(x['gap_s'], dur(x['gap_s'])) + td(x['tokens'], n(x['tokens'])) + td(x['usd'] or 0, f'${x["usd"]:,.2f}' if x['usd'] is not None else 'no list price') + '</tr>' for x in EXPIRY['events']]))
+share_html = ''
+if SHARE:
+    share_html = ('<h2>Main\'s share of this build</h2><div class="box"><p>Usage of the seats that ran this build, while it ran. "Names it" counts requests that mention the unit or were woken by a message that does: a floor. "All of the window" is every request in that time, other work included: a ceiling. Their helpers are not included.</p></div>'
+                  + table(['Seat', '>Requests naming it', '>List price naming it', '>All requests', '>List price, all of the window', '>Requests with no list price'],
+                          ['<tr>' + td(txt(k), cls='l') + td(v['named_requests']) + td(v['named_usd'], f'${v["named_usd"]:,.2f}') + td(v['requests']) + td(v['window_usd'], f'${v["window_usd"]:,.2f}') + td(v.get('unpriced', 0)) + '</tr>' for k, v in SHARE.items()], sortable=False))
+value_html = ''
+if VALUE.get('by_pass'):
+    value_html = (f'<h2>What each review found</h2><div class="box"><p>{len(VALUE["findings"])} findings: {VALUE["repeats"]} repeat a file or a class an earlier pass cited, and {VALUE["rejected"]} sit in a file the evidence says was refused or accepted (likely, read from the evidence text, not a ruling). "Fresh" is the rest.</p></div>'
+                  + table(['Pass', 'Kind', '>Findings', '>Fresh', '>List price', '>List price per fresh finding'],
+                          ['<tr>' + td(x['pass']) + td(txt(x['kind']), cls='l') + td(x['findings']) + td(x['fresh']) + td(x.get('usd') or 0, f'${x["usd"]:,.2f}' if x.get('usd') is not None else 'no list price')
+                           + td(x['usd_per_fresh'] or 0, f'${x["usd_per_fresh"]:,.2f}' if x['usd_per_fresh'] is not None else '&ndash;') + '</tr>' for x in VALUE['by_pass']]))
+after_html = ''
+if AFTER.get('merged'):
+    after_html = (f'<h2>After the merge</h2><div class="box"><p>{AFTER["later_commits"]} later commits touched the {AFTER["files"]} files this build changed; {AFTER["fix_count"]} of them are fixes or reverts. A later fix in the same file is a lead, not proof this build caused it. Bugs reopened are not checked. Re-run collect.py to refresh; a page made at merge shows none.</p></div>'
+                  + (ul(f'{x["sha"]}: {x["subject"]}' for x in AFTER['fixes']) if AFTER['fixes'] else ''))
+if AFTER.get('timed_out'):
+    after_html = '<h2>After the merge</h2><div class="box"><p>Not read: git did not answer in time. Re-run collect.py.</p></div>'
 title = txt(N.get('title') or 'Build review: ' + R['unit'])
 page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title><style>
@@ -578,6 +627,10 @@ ul{{margin:6px 0 0 18px;padding:0}} li{{margin:3px 0}} code{{background:#eef2f7;
 {lessons}
 {off_html}
 {on_html}
+{ctx_html}
+{share_html}
+{value_html}
+{after_html}
 <h2>Other facts from the logs</h2><div class="box">{ul(facts)}</div>
 <h2>What this report does not measure</h2><div class="box">{ul(N.get('not_measured', []))}</div>
 <h2>How the numbers were made</h2><div class="box">{ul(method)}</div>

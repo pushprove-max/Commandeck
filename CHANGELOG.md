@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.63.0 -- 2026-10-30
+
+### Reviews
+
+- A unit can now be reviewed one fix at a time. Main sets the workflow in the batch, each issue's fix gets its own reviews, and the usual passes follow.
+- An edit that thins an existing test is now refused at each pass and at the merge until main approves that test file.
+- The new-test cap refusal now says to ask main, and never to merge or edit existing tests to get under the cap.
+- A pass's check after main moves now runs the tests within two steps of the change, not the whole chain.
+
+### Merges
+
+- A stalled fetch of origin now ends at 60 seconds and the merge refuses, so a dead link no longer holds the merge lock. `COMMANDECK_SYNC_FETCH_S` sets the limit.
+- A merge log now prints each step's seconds and the total, and FAILED stays the last line of a failed merge.
+
+### Tests
+
+- The shell test runner now starts the slowest files first, from a list of each file's last time.
+- The guard tests can now run twice at once without false failures.
+
+### Status and wakes
+
+- A wake now shows a pass's final verdict, not a sorted list of every verdict the round file quotes.
+- A Builder that has printed its finish line no longer gets a keep-alive that buries it.
+
+### Worktree review
+
+- The review page now shows what filled the context, which caches expired, main's share, what each finding was worth and the fixes that came after the merge.
+- A Codex-only build now gets main's share, and a file with a non-ASCII name now shows its later fixes.
+
 ## 0.62.1 -- 2026-10-30
 
 ### Fixes

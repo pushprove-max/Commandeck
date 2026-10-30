@@ -43,7 +43,9 @@ map(select(type == "object" and (.event | type) == "string")) as $r
 | (reduce $ended[] as $e ({}; if $e.use != null then .[$e.use | tostring] = true else . end)) as $endedSet
 | (reduce $se[] as $e ({}; if $e.agent_id != null then .[$e.agent_id | tostring] = true else . end)) as $stopSet
 | ($r | map(select(.event == "tool-end"))) as $ends
-| ($r | map(select(.event == "codex-start"))) as $cs
+# A per-issue pass (pass "issue", issue 486) is no round of the whole branch: round, passes, steps and the review rows of
+# stageHistory skip it, while stage, waiting and the review time still show it.
+| ($r | map(select(.event == "codex-start" and .pass != "issue"))) as $cs
 | ($r | map(select(.event == "codex-end"))) as $ce
 | ($r | map(select(.event == "subagent-start"))) as $ss
 | ($r | map(select(.event == "subagent-request"))) as $sr
@@ -75,7 +77,7 @@ map(select(type == "object" and (.event | type) == "string")) as $r
         | ($se | map(select(.agent_id != null and .agent_id == $s.agent_id)) | last) as $p
         | {kind: "subagent", agentId: $s.agent_id, type: $s.type, modelAsked: (if $q == null then null else $q.model // "" end), model: ($p.model // null),
            tokens: ($p.tokens // null), start: $s.ts, stop: ($p.ts // null), reason: ($p.reason // null)}]
-      + [$cx[] | .c as $c | .e as $e
+      + [$cx[] | select(.c.pass != "issue") | .c as $c | .e as $e
         | {kind: "codex", pass: $c.pass, round: $c.round, start: $c.ts, end: ($e.ts // null), rc: ($e.rc // null)}]
       | sort_by(.start) | reverse),
     signals: (
@@ -116,7 +118,7 @@ map(select(type == "object" and (.event | type) == "string")) as $r
     # each pass a review, the time after a pass to the next one a fix. The open stage has no end (to: null).
     stageHistory: (([$r[].ts | ep | select(. != null)] | min) as $t0
       | if $t0 == null then [] else
-        ([$cx[] | {a: (.c.ts | ep), b: (.e.ts // null | if . == null then null else ep end), r: (.c.round // null)} | select(.a != null)] | sort_by(.a)) as $p
+        ([$cx[] | select(.c.pass != "issue") | {a: (.c.ts | ep), b: (.e.ts // null | if . == null then null else ep end), r: (.c.round // null)} | select(.a != null)] | sort_by(.a)) as $p
         | [{stage: "building", from: $t0, to: ($p[0].a // null)}]
           + [range(0; $p | length) as $i | $p[$i] as $x | ($p[$i + 1].a // null) as $nx
              # round: the pass's own, so the stage list names it and its round file's verdict.

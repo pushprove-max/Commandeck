@@ -313,6 +313,9 @@ T=${T//'{design}'/"$DESIGN"}
 # Above the batch, where the dashboard reads no issue numbers: a reason that names one stays out of the issue list.
 [ -z "$OVERRIDE" ] || T=${T/$'\n## The batch'/$'\n'"$OVERRIDE"$'\n\n## The batch'}
 [ -z "$SKIPPED" ] || T=${T/$'\n## The batch'/$'\n'"$SKIPPED"$'\n\n## The batch'}
+# Issue 486: the batch's one `Review workflow:` line. A default unit gets no added text, so its brief reads as it always did.
+WORKFLOW=$(pp_review_workflow "$BATCH") || exit 2
+[ "$WORKFLOW" = default ] || T=${T/$'\n## The batch'/$'\n## Per-issue review workflow\n\nMain chose this unit'"'"'s reviews issue by issue. Work the issues on this line one at a time: '"$WORKFLOW"'. When one issue'"'"'s fix is ready, run `bash '"$PP_SCRIPTS_Q"'/builder-codex-pass.sh --issue <n> '"$UNIT"'` (add `--check` first to run its checks). It commits that fix and picks the review: one adversarial, then up to the configured number of regular reviews, all reading that issue'"'"'s commits alone. Put one issue'"'"'s work in each run: the script cannot tell two fixes apart. After a NO-GO, fix the findings and run the same command; it is one session, with no fix hand-off and no Sites checked. Repeat until it prints `PER-ISSUE DONE`, then start the next issue. On `PER-ISSUE STOP` end your turn: main answers continue or redesign, and you acknowledge the rulings file and do what the answer says. For `redesign`, write the new design into the plan, then rewrite the fix. Only after every issue is done run the usual passes below; they refuse before that.\n\n## The batch'}
 # The review loop the owner chose at setup; with every default taken the brief reads as it always did.
 SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && PASSCAP=$(pp_review_loop passCap 5 '^[1-9][0-9]*$') \
   && BLOCKAT=$(pp_review_loop blockAt P2 '^P[123]$') && FRESHC=$(pp_review_loop freshClosing yes '^(yes|no)$') \
@@ -421,6 +424,9 @@ fi
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
   && printf '%s\n' "$ISSUES" > "$PP_MAIN/.claude/briefs/$UNIT-issues.json" \
   || { echo "could not keep main's copy of the brief and its work items for $UNIT" >&2; exit 1; }
+# The pass and the merge read the line from this copy: it must read as the batch's line did, or no gate sees it.
+[ "$(pp_review_workflow "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md")" = "$WORKFLOW" ] \
+  || { echo "REFUSED: main's copy of the brief for $UNIT does not read as the batch's Review workflow line ($WORKFLOW); the Builder was not launched" >&2; exit 2; }
 # Issue 430: written whole (temp file, then mv); a retry of the launch writes the same value again.
 [ -z "$RBASE" ] || { printf '%s\n' "$RBASE" > "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" \
   && mv -f "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" "$PP_MAIN/.claude/briefs/$UNIT-review-base.md"; } \
