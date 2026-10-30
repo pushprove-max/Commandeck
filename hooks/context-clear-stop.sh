@@ -13,6 +13,7 @@
 input=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
 # Every run leaves one line, so a stop that clears nothing can be explained.
+mkdir -p "$HOME/.claude/checkpoints" 2>/dev/null
 echo "$(date +%FT%T) stop-hook: pid=$$ ppid=$PPID cwd=$PWD handle=${ORCA_TERMINAL_HANDLE:-unset} $(printf '%s' "$input" | jq -c '{session_id,stop_hook_active,transcript_path}' 2>/dev/null)" >> "$HOME/.claude/checkpoints/clear-hook.log"
 [ "${COMMANDECK_REVIEWER:-}" = "1" ] && exit 0
 if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then exit 0; fi

@@ -112,6 +112,7 @@ case $MODE in
       elif [ -n "$LEFT" ]; then STUCK="still listed after the close: $(tr '\n' ' ' <<<"$LEFT" | sed 's/ $//')"; fi
     fi
     [ -z "$STUCK" ] || { echo "KEPT $WT: $STUCK" >&2; exit 1; }
+    bash "${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh}" stop "$WT" || true
     orca-ide worktree remove --worktree "path:$WT" --force >/dev/null \
       || { echo "KEPT $WT: could not remove it; its tasks are already failed, rerun to remove it" >&2; exit 1; }
     echo "dropped $UNIT: $REASON" ;;

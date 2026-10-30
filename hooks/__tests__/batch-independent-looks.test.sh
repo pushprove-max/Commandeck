@@ -67,5 +67,22 @@ check "a second streak of 3 in the same session prints nothing" nudge/quiet \
 check "a new session's first streak still nudges" nudge/quiet/nudge \
   "$(as_main bash -c "$(declare -f turn streak3 fresh); HOOK=$HOOK; export BATCH_SIBLING_MS BATCH_STREAK_THRESHOLD; fresh; a=\$(streak3); b=\$(streak3); fresh; echo \"\$a/\$b/\$(streak3)\"")"
 
+# Issue 473: the nudge names the looks of the streak and, for two or more reads inside the checkout, the one command
+# that does them. A read outside the checkout is named but never sent to peek.sh.
+PD=$(cd "$(dirname "$HOOK")/../scripts" && pwd)
+read_turn() { # <file path> -- one Read call of a new turn: the hook's output
+  sleep 0.3
+  jq -cn --arg s "$S" --arg p "$1" '{session_id: $s, tool_name: "Read", tool_input: {file_path: $p}}' \
+    | CLAUDE_PROJECT_DIR="$MP" bash "$HOOK" 2>/dev/null
+}
+reads3() { fresh; read_turn "$MP/a/one.ts" >/dev/null; read_turn "$MP/b/two.ts" >/dev/null; read_turn "$1"; }
+OUT=$(reads3 /elsewhere/out.ts)
+# Catches a nudge that never offers peek.sh for the reads inside the checkout, or one that lists a path outside it.
+check "two reads get a peek line (issue 473)" "1 0 1" \
+  "$(grep -c "Try: bash $PD/peek.sh a/one.ts b/two.ts" <<<"$OUT") $(grep -c 'Try: bash [^\\]*out.ts' <<<"$OUT") $(grep -c 'Send these together: Read a/one.ts; Read b/two.ts; Read out.ts' <<<"$OUT")"
+# Catches a state file from before the labels (one line, no labels) breaking the next nudge.
+old_state() { fresh; printf '%s 2 0\n' "$(date +%s%3N)" > "/tmp/claude-batch-$S"; sleep 0.3; turn ls; }
+check "an old state file still nudges (issue 473)" nudge "$(old_state)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

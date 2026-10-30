@@ -10,11 +10,19 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The real codex is the next one on PATH; with this folder left in, exec finds this script again.
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$HERE" | paste -sd: -)
 OFF=()
+# PP_PASS_SERENA_URL is set by builder-codex-pass.sh for its reviewers only: the one server it leaves on.
 while IFS= read -r name; do
-  [ -z "$name" ] || OFF+=(-c "mcp_servers.$name.enabled=false")
+  [ -z "$name" ] || [ "$name:${PP_PASS_SERENA_URL:+on}" = serena:on ] || OFF+=(-c "mcp_servers.$name.enabled=false")
 done < <(python3 -c '
 import sys, tomllib
 print("\n".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "${CODEX_HOME:-$HOME/.codex}/config.toml")
+if [ -n "${PP_PASS_SERENA_URL:-}" ]; then
+  # The server runs outside Codex's sandbox and has edit tools too: this list is what keeps a read-only reviewer read-only.
+  # Checked before the eval: an eval of an empty or failed $(...) still succeeds.
+  WORDS=$("${COMMANDECK_SERENA_SHARED:-$HERE/../serena-shared.sh}" seat-args codex "$PP_PASS_SERENA_URL") && [ -n "$WORDS" ] && eval "SERENA_WORDS=($WORDS)" \
+    || { echo "codex-no-helpers: no Serena start-up words for $PP_PASS_SERENA_URL" >&2; exit 1; }
+  OFF+=("${SERENA_WORDS[@]}" -c mcp_servers.serena.enabled=true -c 'mcp_servers.serena.enabled_tools=["find_symbol","find_referencing_symbols","find_declaration","find_implementations","get_symbols_overview","get_diagnostics_for_file"]')
+fi
 # The pass names the tier when the project did not choose fast mode (COMMANDECK_CODEX_TIER=default).
 [ -z "${COMMANDECK_CODEX_TIER:-}" ] || OFF+=(-c "service_tier=$COMMANDECK_CODEX_TIER")
 exec codex "$@" "${OFF[@]}"

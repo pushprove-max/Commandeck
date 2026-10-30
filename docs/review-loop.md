@@ -61,6 +61,18 @@ A pass refuses the checks it can run before any commit or rebase in one
 message: a single refusal prints as `REFUSED: <text>`, two or more as
 `REFUSED: <k> checks failed:` with a `- <text>` line each.
 
+A pass prints a clock line, `HH:MM:SS <unit> pass <N>: <step> start` and
+`... end`, around each slow step: the launch checks, the rebase, test
+selection, each test call (its test files' seconds follow), and the typecheck.
+A slow pass names its slow step while it runs, and a pass that dies names the
+step it died in.
+
+A fix brief ends a class stop with one mark line: `- Class redesign: <class>`
+when a class returns the second time, and `- Class ask-main: <class>` beside it
+the third time. `--verify` counts them as `Class stops: <n> (<classes>)`, and
+the merge adds that line to the squash message. A build with no class stop
+prints nothing.
+
 Each pass is checked against its saved prompt and its own reviewer session,
 and earlier passes are checked too. Prompts are kept under the reviewer
 home's `builder-pass-prompts/`. An update to the external Codex plugin's
@@ -103,7 +115,14 @@ stops at the first of these:
   stop). A NO-GO that names no P2 is no cap stop. After a cap stop no later
   pass launches, and past the cap none launches on a change that is only the
   plan, brief or metrics folders, while no P0 or P1 is open: the launch is
-  refused before it commits anything.
+  refused before it commits anything. That refusal says what the merge gate
+  says: the merge takes only a closing pass on the tip, so write the code,
+  then run one `final` pass.
+- A pass refuses a stated limit added to the brief's `## Stated limits`, or
+  to the plan's `Stated limits` or `Accepted failure modes`, after the plan
+  judge's GO, unless the line ends with `ruling:<id>`: a logged, standing
+  ruling id that main's rulings for the unit also carry. Lines already there
+  and removed lines pass.
 - A P0 or P1 is still open two passes past the cap. The pass prints
   `REVIEW STOP` with a decision id, no fix round runs, and the next launch
   refuses until the owner answers that decision: the question the pass

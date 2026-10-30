@@ -115,7 +115,8 @@ and a fix that touches a save updates that save's row in the same commit.
   next line.
 - Each new test names the bug it catches. A test past that is an extra: list
   it under `## Extra tests` in the evidence file. A pass refuses a change that
-  adds more new tests than the cap (`reviewLoop.newTestCap`, 40 by default).
+  adds more new tests than the cap (`reviewLoop.newTestCap`, 40 by default),
+  or than the number on the plan's `New tests: <unit> <n>` line when it has one.
 - Arrange test data with one shared builder per domain object (a fixture
   function in shell tests), one or two lines per test. When a test needs a new
   field, extend the builder; never hand-build the object in the test:
@@ -221,8 +222,9 @@ fix. Nothing is reverted; never production data or a deploy. Then step 1.
    the first pass and one pass: three reviewers at once, or one when the build
    is under {small-build} changed lines and main did not launch it with `--risky` (the
    pass prints which); fix everything it finds together. Before it, each `Break:` line of the plan
-   (`<test file> -- <check label> -- <site>`) needs a recorded break run: run that test red with the
-   condition removed, then write `- <test file> -- <check label> -- red: <the command that ran it>` under
+   (`<test file> -- <check label> -- <site>`) needs a recorded break run: remove the condition, run
+   `bash {scripts}/break-run.sh <plan> <k>` for the k-th `Break:` line (it needs that check itself to fail, not another),
+   then write the row it prints, `- <test file> -- <check label> -- red: <the command that ran it>`, under
    `## Break runs` in the evidence file. The pass refuses until every `Break:` line has one.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
@@ -292,6 +294,7 @@ A fix adds a test only if it guards a real regression. Write no test that only
 shows a file, function or setting exists. A shell test file over its time budget
 is a red you trim or split, never a raised limit.
 Ask main and wait only when the class fix would change something the brief names as a stated limit.
+Add no stated limit to the brief or the plan yourself: a pass refuses a limit added after the plan judge's GO unless its line ends with `ruling:<id>` and main's rulings carry that id.
 
 A pass that ends NO-GO writes `.claude/briefs/{unit}-fix-r<N>.md` and prints `FIX ROUND <N>: end your turn
 now`: end your turn without fixing anything. The script points this session at that file while its context is

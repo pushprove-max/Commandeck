@@ -6,7 +6,8 @@ It reads ATX and setext headings and list items (`-`, `+`, `*`, 1-9 digits then 
 item's content column, and keeps no fence state: a fence line is never a block, so no heading is ever swallowed.
 Fail closed: a shape it does not model where it could hide or reset a case is a refusal (exit 2) naming the line,
 never a lost case. Inside a list item only plain text, blank lines and nested sub-bullets are taken; in a Fix or
-Done means section only items, sub-bullets, plain text, blank lines and the level 1-2 heading that ends it.
+Done means section only items, sub-bullets, plain text, blank lines, a thematic break with a blank line above it (it
+ends a list, not the section, and hides no item) and the level 1-2 heading that ends it.
 """
 import os
 import re
@@ -157,13 +158,15 @@ def cases(body):
         for b in body_blocks:
             if b[0] == 'tab':
                 return None, 'line %d: a tab in the indentation, which this reader does not measure: %s' % (b[1], b[2].strip()[:60])
+            if b[0] == 'shape' and b[3] == 'thematic break' and not lines[b[1] - 2].strip():
+                continue
             if b[0] == 'shape' and kind != 'Body':
                 return None, 'line %d: a %s %s: %s' % (b[1], b[3], IN_SECTION, b[2].strip()[:60])
             if b[0] == 'odd':
                 return None, 'line %d under %s looks like a list item this reader does not know: %s' % (b[1], kind, b[2].strip()[:60])
         items = [b[2] for b in body_blocks if b[0] == 'item' and b[3]]
         if not items:
-            items = [b[2] for b in body_blocks if b[0] in ('text', 'shape')][:1]
+            items = [b[2] for b in body_blocks if b[0] == 'text' or (b[0] == 'shape' and b[3] != 'thematic break')][:1]
         if not items:
             return None, '%s has no case' % kind
         for item in items:

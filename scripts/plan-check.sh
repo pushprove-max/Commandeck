@@ -72,6 +72,7 @@ fi
 # unless it sits in a fenced block, is a Placeholder: line, or cites the issue that tracks it (#<n>).
 . "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/screen-code.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/fence.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/paths.sh"
 refuse_placeholders() { # <label> <text>
   local n cands fenced
   cands=$({ grep -inE "$PLACEHOLDER_COPY" <<<"$2" | cut -d: -f1; always_disabled_lines <<<"$2"; } | sort -nu)
@@ -358,6 +359,102 @@ for b in bad:
 sys.exit(2 if bad else 0)
 PY
 ) || { [ -n "$out" ] || out="REFUSED: $PLAN budget: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
+# Issue 476: every question for the owner sits in the one `## Question for the owner` section, which main sends as one ask.
+# A second such heading, or a `> Owner:` line outside the section, is refused; fenced lines are skipped.
+PC_ASK=$(awk -v fenced="$PC_FENCED" 'BEGIN { n = split(fenced, a, " "); for (i = 1; i <= n; i++) f[a[i]] = 1 }
+  NR in f { next }
+  /^#+[ \t]/ { q = (tolower($0) ~ /^#+[ \t]+questions? for the owner/); if (q && seen++) { print NR; exit } next }
+  !q && /^[ \t]*>[ \t]*Owner:/ { print NR; exit }' <<<"$PT")
+[ -z "$PC_ASK" ] || refuse "$PLAN asks the owner outside its one ## Question for the owner section (line $PC_ASK)"
+# Issue 480: a plan over the review-limits caps (changed lines, distinct Closes issues, as issue_check lists them) is split
+# unless a `Split override: <reason>` line stands outside a fence; a bare key is none. An unreadable key refuses.
+PC_LCAP=$(pp_review_limit diffLines) || refuse "cannot read review-limits.diffLines from $(pp_routing)"
+PC_ICAP=$(pp_review_limit maxIssues) || refuse "cannot read review-limits.maxIssues from $(pp_routing)"
+PC_LINES=${SIZE#* }
+PC_ISSUES=$({ [ -z "$BATCH" ] || bash "$(dirname "${BASH_SOURCE[0]}")/brief-issues.sh" "$BATCH" | jq -r '.[] | numbers'
+  grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un | wc -l | tr -d ' ' || true)
+if [ "$PC_LINES" -gt "$PC_LCAP" ] || [ "$PC_ISSUES" -gt "$PC_ICAP" ]; then
+  awk -v fenced="$PC_FENCED" 'BEGIN { n = split(fenced, a, " "); for (i = 1; i <= n; i++) f[a[i]] = 1 }
+    !(NR in f) && /^Split override:[ \t]*[^ \t]/ { ok = 1 } END { exit !ok }' <<<"$PT" \
+    || refuse "$PLAN is over a cap ($PC_LINES changed lines, cap $PC_LCAP; $PC_ISSUES Closes issues, cap $PC_ICAP): split the unit, or carry a line 'Split override: <reason>' (a bare 'Split override:' is no override)"
+fi
+# Issue 462: a plan that names test cases carries the `New tests:` line the pass's cap reads, so its Builder never stops to
+# ask for the cap. The line is read by pp_new_tests_line, the cap's own reader, for the unit (PLAN_CHECK_UNIT, default the
+# plan's file name; a bare line counts only in the unit's own plan). The count is the `; `-separated cases in the
+# parenthesis of every `- test file path:` row under `## Acceptance test`, or, in a plan with no such case, the
+# `; `-separated cases of its `Red-first:` lines; fenced lines are skipped and `Break:` lines are never counted. N may
+# differ from the count only with a ` -- <reason>` after it.
+PC_NT=$(PC_PLANTEXT=$PT python3 -I - <<'PY'
+import os, re
+def split(s): # the `; `-separated parts of s, never split inside backticks
+    parts, cur, tick = [], '', False
+    for i, ch in enumerate(s):
+        tick = tick != (ch == '`')
+        if not tick and s.startswith('; ', i):
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    return [p for p in parts + [cur] if p.strip()]
+def scan(text): # (closed, cases) of the parenthesis after the row's backticked paths, parens counted outside backticks
+    body = re.sub(r'^(\s*`[^`]*`\s*,?(\s*and\b)?)+', '', text)
+    depth, start, tick = 0, -1, False
+    for i, ch in enumerate(body):
+        if ch == '`':
+            tick = not tick
+        elif not tick and ch == '(':
+            start, depth = start if start >= 0 else i, depth + 1
+        elif not tick and ch == ')' and depth:
+            depth -= 1
+            if depth == 0:
+                return True, len(split(body[start + 1:i]))
+    return False, len(split(body[start + 1:])) if start >= 0 else 0
+fenced = set(map(int, os.environ['PC_FENCED'].split()))
+sec, rows, red, row = '', 0, 0, None
+for n, line in enumerate(os.environ['PC_PLANTEXT'].split('\n'), 1):
+    if n in fenced:
+        continue
+    if row is not None:
+        if re.match(r'\s*([-*] |#+(?:[ \t]|$)|New tests:|Red-first:)', line):
+            rows, row = rows + scan(row)[1], None
+        else:
+            row += ' ' + line.strip()
+            closed, k = scan(row)
+            if closed:
+                rows, row = rows + k, None
+            continue
+    m = re.match(r'\s*(?:[-*]\s+)?Red-first:\s*(.*)$', line)
+    if m and m.group(1).strip().lower() not in ('', 'none'):
+        red += len(split(m.group(1)))
+    h = re.match(r'(#+)[ \t]+(.*)', line)
+    if h:
+        if len(h.group(1)) <= 2:
+            sec = h.group(2).strip().lower()
+        continue
+    if sec.startswith('acceptance test'):
+        m = re.match(r'\s*[-*] test file path:(.*)$', line)
+        if m:
+            closed, k = scan(m.group(1))
+            if closed:
+                rows += k
+            else:
+                row = m.group(1)
+if row is not None:
+    rows += scan(row)[1]
+print(rows or red)
+PY
+) || { echo "REFUSED: $PLAN New tests: check not run -- python3 failed" >&2; exit 2; }
+if [ "$PC_NT" -gt 0 ]; then
+  PC_OWN=${PLAN##*/}; PC_OWN=${PC_OWN%.md}; PC_UNIT=${PLAN_CHECK_UNIT:-$PC_OWN}
+  PC_TMP=$(mktemp) || refuse "$PLAN New tests: check not run -- no temp file"
+  printf '%s\n' "$PT" > "$PC_TMP"
+  PC_LINE=$(pp_new_tests_line "$PC_TMP" "$PC_UNIT" "$([ "$PC_UNIT" = "$PC_OWN" ] && echo 1)")
+  rm -f "$PC_TMP"
+  [ -n "$PC_LINE" ] || refuse "$PLAN names $PC_NT new test cases but has no \`New tests: $PC_UNIT $PC_NT\` line (counted by \`; \`; when one case holds several tests, write the real count after \` -- <reason>\`)"
+  if [ "$((10#${PC_LINE% *}))" -ne "$PC_NT" ] && [ "${PC_LINE#* }" != 1 ]; then
+    refuse "$PLAN says New tests: ${PC_LINE% *} but names $PC_NT cases; make them agree, or give the difference after \` -- <reason>\`"
+  fi
+fi
 # Issue 456: a line under `## Done` is `- #<n> Done: <user action> -- <what the user sees>`; one with no ` -- `, a side under
 # three words or a side (action or outcome) that is a one- or two-word parenthesized label (`(API)`) names a component. Issue 458: outside
 # a fence, a line under `## Stated limits` that says follow-up, or any line starting `Follow-up:`, holds a filed issue

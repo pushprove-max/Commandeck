@@ -83,14 +83,29 @@ blk $((NOW - 200)) 2 >> "$HL/demo.$(date -u +%F).jsonl"
 hrow m2 $((NOW - 20)) >> "$(seatf "$MAIN")/m1.jsonl"
 printf '%s\n' '{"type":"user","toolUseResult":{"backgroundTaskId":"b1"}}' \
   '{"type":"assistant","message":{"id":"m9","usage":{"cache_read_input_tokens":160000,"input_tokens":20,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":5}}}}' >> "$BS"
-# The blocks' hourly mean is over the hours since the day file's start by the wall clock: a sample time.
-DNOW=$((W + 60)) dash; warm=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds)' "$T/out/run/project.json" 2>&1)
+# The blocks' hourly mean is over the hours since the day file's start by the wall clock: a sample time. The stream marks are each run's own.
+DNOW=$((W + 60)) dash; warm=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds, .units.seen, .units.inFlight[].seen, .units.inFlight[].sampledAt)' "$T/out/run/project.json" 2>&1)
 rm -rf "$T/out/cache"; mv "$T/cache-1" "$T/out/cache"
 rm -f "$T/out/cache"/{limit-requests,codex-requests,codex-requests-review}.json "$T/out/cache/demo"/{guard-blocks,session-summary}.json
-DNOW=$((W + 60)) dash; cold=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds)' "$T/out/run/project.json" 2>&1)
+DNOW=$((W + 60)) dash; cold=$(jq -S 'first(.[]) | del(.guardBlocks.perHour, .partSeconds, .units.seen, .units.inFlight[].seen, .units.inFlight[].sampledAt)' "$T/out/run/project.json" 2>&1)
 check "issue 299: the warm collect read what grew: two blocks, main's new request, the Builder's new context" '[2,200000,160025]' \
   "$(jq -c '[.guardBlocks.blocks, .seats.main.today.tokens, (.units.inFlight[] | select(.unit == "u-verdicts") | .builder.context)]' <<<"$warm")"
 check "issue 299: a warm collect shows what one with no reading state shows" "$cold" "$warm"
+
+# Issue 460: a name added only to PP_STANDING_SEATS showed as a unit, stage and all, on the board, while the guards
+# already treated it as a seat. The copy of the tree has the name added to the list; nothing else changed.
+TREE=$T/tree
+mkdir -p "$TREE"; cp -R "$SOURCE/scripts" "$SOURCE/hooks" "$SOURCE/dashboard" "$TREE/"
+sed 's/^PP_STANDING_SEATS=(\(.*\))$/PP_STANDING_SEATS=(\1 New-seat)/' "$SOURCE/hooks/lib/project.sh" > "$TREE/hooks/lib/project.sh"
+mkdir -p "$WS/New-seat" && touch "$WS/New-seat/.git"
+SOURCE=$TREE dash
+check "a listed name shows as a seat (issue 460)" '["seat"]' \
+  "$(jq -c 'first(.[]) | [.units.inFlight[]? | select(.unit == "New-seat") | .stage]' "$T/out/run/project.json" 2>&1)"
+
+# Issue 466: the unit list carries its cycle's mark itself: an empty list has no row to carry it, and the page lays the
+# first live row over this one.
+check "the snapshot carries its own mark (issue 466)" true \
+  "$(jq -c 'first(.[]) | .units.seen | (.gen | type) == "number" and (.seq | type) == "number"' "$T/out/run/project.json" 2>&1)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

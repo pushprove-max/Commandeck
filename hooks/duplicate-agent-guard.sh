@@ -12,6 +12,8 @@
 #   - `orchestration send --to <Builder pane>` into a Builder, at its prompt or
 #     mid-turn, and from main `--to dispatch:<id>`: an inbox it is not parked
 #     on is never read; answer-worker.sh wakes it or types into it
+#   - `orchestration send --to <any other seat's pane>` at its prompt or unreadable: no new task starts;
+#     seat.sh revise <role> <unit> "<text>" does (a working seat may be parked in a wait, and passes)
 # In the main checkout every typed route to a new agent pane is refused
 # outright, live agent or not (owner ruling 2026-10-11):
 # `terminal create|split --command <agent>`, `worker-start --agent` and
@@ -218,13 +220,20 @@ while IFS=$'\t' read -r kind val; do
       # A Builder at its prompt reads its inbox only inside a turn that runs `orchestration check`, and a mid-turn
       # Builder that is working, not parked in a wait, never reads it either. Every hand send to a Builder, and from
       # main to any dispatch, goes through answer-worker.sh, which reads the pane's state and picks the way. Only a
-      # handle a Builder seat record names is checked; the newest record wins.
+      # handle a seat record names is checked; the newest record wins. Another seat (a plan author, a judge) at its
+      # prompt reads no inbox either, and a hand send is no new task (issue 485): it is revised with seat.sh revise.
       H=${val#terminal:}
       case $H in dispatch:*) [ -z "$MAIN" ] || block "a hand inbox send to $H: a working Builder never reads its dispatch inbox. Send it with scripts/answer-worker.sh <unit> \"<text>\" [<question id>], which picks the way the pane reads it" ;; esac
       case $H in ''|*'$'*|dispatch:*) continue ;; esac
       rec=$(ls -t "$PP_SCRATCH"/seat-*.txt 2>/dev/null | while IFS= read -r f; do grep -qx "handle=$H" "$f" && { echo "$f"; break; }; done)
-      case ${rec##*/} in seat-*-builder.txt) ;; *) continue ;; esac
+      [ -n "$rec" ] || continue
       rc=0; pane_is_busy "$H" || rc=$?
+      case ${rec##*/} in seat-*-builder.txt) ;; *)
+        # A working seat passes: it may be parked in a wait. At its prompt, or unreadable, a hand send is never read.
+        [ "$rc" != 0 ] || continue
+        role=$(sed -n 's/^role=//p' "$rec" | tail -1); unit=$(sed -n 's/^unit=//p' "$rec" | tail -1)
+        block "$H is at its prompt or its state cannot be read, and a hand send to it starts no task; revise it with scripts/seat.sh revise ${role:-<role>} ${unit:-<unit>} \"<text>\"" ;;
+      esac
       [ "$rc" != 0 ] || block "$H is mid-turn and reads its inbox only while parked in a wait; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which types into a working pane"
       block "$H is at its prompt and never reads its inbox; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which wakes it" ;;
     job)

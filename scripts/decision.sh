@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
-#           | reopen <id> | list | holds <unit> | push-ask
+#           | reopen <id> | list | holds <unit> | push-ask | rulings <term>...
+# rulings <term>... (issue 477): the owner's earlier picker answers from the ruling log, for a plan author to read before it
+# writes a question. Void and decoy rows are left out; a term is plain text matched in any case on the question or the
+# answer; newest first, one line each, `<id> <et>: <question> -> <answer>`. Exit 0 with nothing printed when no row matches.
 # The decisions ledger, .claude/metrics/decisions.jsonl in the primary checkout:
 # append-only, one complete snapshot per line, the latest line per id wins.
 # The dashboard's Needs Owner card shows the unanswered ones with their default;
@@ -29,7 +32,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask | rulings <term>..."; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -281,5 +284,20 @@ case "${1:-}" in
       | [.[] | select((.id + " " + .question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])"))]
       | (.[] | select(.answeredAt == null) | "Open question to the owner \(.id): \(.question)"),
         (.[] | select(.answeredAt != null) | "The owner answered \(.id) (\(.question)): \(.answer)")' <<<"$cur" ;;
+  rulings)
+    [ $# -ge 2 ] || usage
+    shift
+    for t in "$@"; do [ -n "$t" ] || usage; done
+    [ -r "$RULINGS" ] || die "cannot read the ruling log $RULINGS"
+    . "$(dirname "$0")/../hooks/lib/ask-decoy.sh" || exit 1
+    # The terms go in as JSON, not --args: jq would take a term starting with - as an option.
+    terms=$(printf '%s\n' "$@" | jq -Rsc 'ascii_downcase | split("\n")[:-1]') || die "could not read the terms"
+    jq -nRr --arg d "$ASK_DECOY" --argjson terms "$terms" '
+      [inputs | try fromjson catch empty | objects
+       | select(.source == "ask" and .void != true and .answer != $d)
+       | (("\(.question)\n\(.answer)") | ascii_downcase) as $text
+       | select(any($terms[]; . as $t | $text | contains($t)))]
+      | sort_by(.utc) | reverse | .[]
+      | "\(.id) \(.et): \(.question) -> \(.answer)" | gsub("[\r\n]"; " ")' "$RULINGS" || die "cannot read the ruling log $RULINGS" ;;
   *) usage ;;
 esac

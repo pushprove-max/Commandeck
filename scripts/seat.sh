@@ -6,7 +6,13 @@
 #     $SCRATCH/seat-<unit>-<role>.txt. It returns once the pane, its task and that
 #     record exist (phase=launching); the rest runs in the background, logged to
 #     the record's .log, and ends phase=dispatched or phase=failed.
-# seat.sh status <role> <unit> -- the record's phase, handle and task, whether its pane is live, gone or unknown, and its log's last line.
+# seat.sh status <role> <unit> -- the record's phase, handle and task, whether its pane is live, gone or unknown, Orca's agent state for it
+#     (agent=working|idle|done|none|unknown), and its log's last line.
+# seat.sh revise <role> <unit> <text> -- a revision for a seat that finished: the old task is settled, a new task holding <text> is
+#     started on the same pane (dispatch-task.sh, the path launch uses), and the record's one task= line is replaced by it; revised=<new
+#     task id> goes with it, and main-watch.sh wakes main for the revised turn only once a prompt in the seat's session holds that id.
+#     Exit 2 for a Builder (answer-worker.sh), no record, a pane that is not live or not idle; 1 when the old task will not settle (the
+#     record is untouched). A dispatch Orca refuses types the text with " Task id <new>." and prints NO-WAKE.
 # seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
 #     -- read the pane's verdict and findings (read-verdict.sh), write them to
 #     --report when the pane could not (a read-only Codex sandbox cannot), or with
@@ -44,6 +50,7 @@ usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 rerun
        seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed; its pane: live, gone or unknown)
        seat.sh run     <role> <unit> <spec-file> [--marker <text>] [launch options]   (launch, wait, collect; one line back; not for a Builder)
        seat.sh effort  <role> <unit> <handle> <level>
+       seat.sh revise  <role> <unit> <text>   (a revision for an idle seat's pane: a new task on the same pane; never a Builder)
 Open one routing.json seat in the unit's worktree, collect its verdict, or wait for its marker.
 effort sends /effort <level> to the pane only while it is an idle Claude pane, and
 never below routing's effort-stages.reviewer-floor to a read-only role.
@@ -56,7 +63,7 @@ never below routing's effort-stages.reviewer-floor to a read-only role.
 example: scripts/seat.sh collect certifier my-unit --report /tmp/commandeck/my-unit-r1.md
 EOF
 }
-case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status|run) ;; *) usage >&2; exit 2 ;; esac
+case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status|run|revise) ;; *) usage >&2; exit 2 ;; esac
 [ $# -ge 3 ] || { usage >&2; exit 2; }
 CMDNAME=$1; shift
 ROLE=$1; UNIT=$2; shift 2
@@ -66,6 +73,7 @@ ROOT=$(git rev-parse --show-toplevel)
 SEAT_REPO=${COMMANDECK_SEAT_REPO:-}
 [[ -z $SEAT_REPO || $SEAT_REPO =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "COMMANDECK_SEAT_REPO must be a repo name: $SEAT_REPO" >&2; exit 2; }
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
+. "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 WS=$PP_WORKSPACES
 [ -z "$SEAT_REPO" ] || [ -n "$PP_WORKSPACES_GIVEN" ] || WS=$HOME/orca/workspaces/$SEAT_REPO
 SCRATCH=$PP_SCRATCH
@@ -134,7 +142,18 @@ pane_state() {
     '((.result // []) | if type == "array" then . else (.terminals // []) end) | if any(.[]; .handle == $h) then "live" else "gone" end' 2>/dev/null \
     || echo unknown
 }
-seat_status() { printf 'phase=%s handle=%s task=%s pane=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(pane_state)" "$(grep . "$REC.log" 2>/dev/null | tail -1)"; }
+# pane_agent -- Orca's agent state for the record's pane, as main-watch.sh reads it: working, idle, done, none; unknown when
+# either list cannot be read (issue 485: the launch line's state= word is the screen at launch, long stale by the time main asks).
+pane_agent() {
+  local h r ps ts; h=$(rec handle); [ -n "$h" ] || { echo unknown; return; }
+  ps=$(timeout --kill-after=2 8 orca-ide worktree ps --json 2>/dev/null) && ts=$(timeout --kill-after=2 8 orca-ide terminal list --json 2>/dev/null) || { echo unknown; return; }
+  r=$(jq -rn --argjson ps "$ps" --argjson ts "$ts" --arg h "$h" '
+    (first(($ts.result | if type == "array" then . else (.terminals // []) end)[] | select(.handle == $h) | "\(.tabId):\(.leafId)") // "") as $k
+    | first($ps.result.worktrees[]?.agents[]? | select(.paneKey == $k) | .state) // "none"' 2>/dev/null) || r=
+  echo "${r:-unknown}"
+}
+seat_status() { printf 'phase=%s handle=%s task=%s pane=%s agent=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(pane_state)" "$(pane_agent)" \
+  "$(grep . "$REC.log" 2>/dev/null | tail -1 | sed 's/ state=.* record=/ record=/')"; }
 # settled -- wait out a launch's background part; fails when it ended phase=failed.
 settled() { local p; p=$(rec pid); while [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do sleep 1; done; [ "$(rec phase)" != failed ]; }
 # A record with no session= (a Codex seat, or a Claude pid lookup that failed) takes the log the reader found, so
@@ -208,6 +227,30 @@ run)
 status)
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
   seat_status
+  ;;
+revise)
+  # Issue 485: Orca's reopen needs a settled dispatch, and a hand send to an idle seat is no new task. A revision is a new
+  # task on the same pane, started as launch starts one (worker-start); the old task is settled first.
+  TEXT=${1:?revise: the revision text}
+  [ "$ROLE" != builder ] || { echo "REFUSED: a Builder is revised through answer-worker.sh, not seat.sh revise" >&2; exit 2; }
+  [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
+  H=$(rec handle); OLD=$(rec task)
+  [ "$(pane_state)" = live ] || { echo "REFUSED: pane ${H:-?} of $ROLE $UNIT is not live; nothing was sent" >&2; exit 2; }
+  . "$PP_SCRIPTS/codex-helpers.sh"
+  rc=0; pane_is_busy "$H" || rc=$?
+  [ "$rc" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read; nothing was sent" >&2; exit 2; }
+  # A refusal or an open question stops here, the record intact.
+  pp_task_close "$OLD" completed || exit 1
+  NEW=$("$PP_SCRIPTS/orca-task-create.sh" --spec "$TEXT When you have done this, send worker_done and end on the line your brief names.") \
+    || { echo "task-create failed for the revision of $ROLE $UNIT; nothing was sent" >&2; exit 1; }
+  if ! "$PP_SCRIPTS/dispatch-task.sh" "$NEW" "terminal:$H" --keep-task; then
+    echo "NO-WAKE: task $NEW was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
+    orca-ide terminal send --terminal "$H" --text "$TEXT Task id $NEW." --enter --wait-submit 10 --json >/dev/null 2>&1 \
+      || { echo "send failed to $H" >&2; exit 1; }
+  fi
+  # One task= line, replaced: seat.sh, board.sh and the awk readers take one.
+  awk -v t="$NEW" '/^task=/ { if (!d) print "task=" t; d = 1; next } /^revised=/ { next } { print } END { print "revised=" t }' "$REC" > "$REC.new" && mv "$REC.new" "$REC"
+  echo "seat=$ROLE unit=$UNIT handle=$H task=$NEW revised=$NEW record=$REC"
   ;;
 effort)
   # The one /effort send. Sent mid-turn, /effort is queued as the
@@ -378,7 +421,25 @@ launch)
   # Issue 315: trust the Codex home's hooks again right before the pane starts, so a hook a tool update changed
   # since the last launch does not open the pane on the review menu.
   [ "$LAUNCH_AGENT" != codex ] || pp_codex_retrust "$CMD"
-  H=$(open_pane "path:$WT" "$(pane_title "$ROLE" "$UNIT")" "$CMD") || REUSED=$?
+  # One Serena per worktree, not one per seat: the pane's start-up line points the seat's `serena` at the worktree's
+  # server. The record's cmd= and the reuse check keep the line without these words: a restarted server has a new port.
+  # Exit 3 is no Serena on this machine: the seat runs as it does without the flag.
+  OPEN_CMD=$CMD
+  if pp_serena && case "$(seat_agent)" in claude|codex) true ;; *) false ;; esac; then
+    SERENA_SH=${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh} SERENA_RC=0
+    SERENA_URL=$(bash "$SERENA_SH" start "$WT") && SERENA_ARGS=$(bash "$SERENA_SH" seat-args "$(seat_agent)" "$SERENA_URL") || SERENA_RC=$?
+    if [ "$SERENA_RC" = 0 ]; then OPEN_CMD+=" $SERENA_ARGS"
+    elif [ "$SERENA_RC" != 3 ]; then
+      # A Builder without its worktree's Serena ran on rg and sed; the gate only noticed at its first lookup, a turn later.
+      case $ROLE in builder|builder-fix)
+        echo "REFUSED: $ROLE $UNIT: no shared Serena for $WT (serena-shared.sh start or seat-args failed; server log: serena-shared-*.log in the scratch dir)." >&2
+        echo "Try: bash $SERENA_SH start $WT" >&2
+        exit 2 ;;
+      esac
+      echo "seat $ROLE $UNIT: no shared Serena for $WT; this seat starts its own" >&2
+    fi
+  fi
+  H=$(open_pane "path:$WT" "$(pane_title "$ROLE" "$UNIT")" "$OPEN_CMD") || REUSED=$?
   # The pane is listed and recorded now; the launch's background part must not hold the next launch's count.
   [ -z "${ADMIT_FD:-}" ] || exec {ADMIT_FD}>&-
   [ -n "$H" ] || { echo "terminal create returned no handle" >&2; exit 1; }
@@ -429,9 +490,11 @@ launch)
   # Host issue 2999: a heavy fixture added to a test file with time-bound checks slows them past their bound.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan that adds a heavy fixture to a test file with time-bound checks names them on a \`Timed checks:\` line and orders the heavy case after them."
   # Issue 362: builder-launch.sh refuses a plan without these, so the plan author is told before it writes.
-  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, a \`## Claims to falsify\` list (one checkable claim per line), and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case."
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" A plan carries a \`- Planned size: <n> files, <n> changed lines\` line, a \`Test:\` line under each item of its \`## Decisions\` and \`## Accepted failure modes\` (or \`Test: none, <why>\`), a \`Break:\` line (\`Break: <test file> -- <check label> -- <site>\`) for each new security check or conditional write, a \`## Claims to falsify\` list (one checkable claim per line), and a \`## What can go wrong\` section: limits, timing and odd data, one named test per case. Each test you name goes in one \`- test file path: <path> (<case>; <case>)\` row under \`## Acceptance test\`, its cases separated by \`; \`. A plan that names test cases carries a \`New tests: <unit> <n>\` line, n the number of cases; when one case holds several tests, write the real count and \` -- <reason>\` after it. plan-check refuses a plan with no such line or a wrong one."
   # Issues 426 and 427: plan-check.sh refuses a plan over its budget or with a fact that does not resolve.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The plan has one \`Goal:\` line (at most 200 characters), a \`## Steps\` section of one-line steps (\`- new|modify|delete <path>[ ~<line>] -- <what>\`), and a \`## Facts\` section, one bullet per fact you state about the code: \`- <claim> -- <path>:<n>[-<m>] (observed: YYYY-MM-DD)\`, citing a file in this checkout you opened (never a plan) and the day you read it. Prose goes only under \`## Why\`; everywhere else write list items, table rows or one-line \`Key: value\` lines, and keep each section under its size cap. An \`## Issue cases\` section (cap 4,000 bytes) has one row \`- #<n> <Fix|Done|Body> <k> -- <path> -- <test name>\` per case \`plan-check.sh --issue-cases <n>\` prints for each issue the unit closes (the batch's issues and any \`Closes:\` line), its path a \`## Steps\` path (a \`{a,b}\` group counts as each path) and its test named in \`## Acceptance test\`."
+  # Issue 477: the owner's earlier picks are read before a question is written.
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Before you write a question to the owner, run \`decision.sh rulings <term>...\` (a few words of the question): it lists the owner's earlier picks that match, and a pick that settles it is the answer."
   # Issue 384: the judge launch runs plan-check.sh and refuses what it refuses, so the author runs it first.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Before PLAN-DONE run \`plan-check.sh .claude/plans/<unit>.md <batch>\` and fix every REFUSED: line; name each mockup on its own \`Mockup: <path or URL>\` line and make sure the batch carries it."
   # Issue 359: the table's shape, the settled claims and the contracts a cut produces and consumes.
@@ -440,6 +503,11 @@ launch)
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" The plan opens with an \`Owner's words:\` line copied word for word from the order (the batch's \`Order:\` line), and every requirement it plans traces to those words or to an addition the owner approved by name."
   # Issue 456: plan-check.sh refuses a Done line that names a component; the author is told the shape first.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Under \`## Done\` write one \`- #<n> Done: <user action> -- <what the user sees>\` line per issue the unit closes: what a user does and what the user sees, never a component. Good: \`- #39 Done: a user retries an import from the dashboard after a lost response -- no duplicate import appears\`. Bad: \`- #39 Done: retry key handling (API)\`. Where the issue names only a component, write the user path with every hop, or name the missing hop as a stated limit."
+  # Issues 476, 480: one owner section, and the size caps plan-check.sh enforces.
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Put every question for the owner in the one \`## Question for the owner\` section, never in a \`> Owner:\` line elsewhere or a second section: main sends the section as one ask. A plan of more than 1000 changed lines or more than 5 Closes issues needs a \`Split override: <reason>\` line (a bare \`Split override:\` is no override), or the unit is split."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A new question for the owner is a finding that starts \`Question for the owner:\`; do not add it to the plan. Main asks it with \`decision.sh add plan-<unit> ... --reask\`."
+  # Issue 481: stored data meets two versions of the code during a release.
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines, the budget and that each Facts citation resolves."
   # Host rule drift: the plan judge's reading.
@@ -473,6 +541,7 @@ launch)
   PLANREF=$(git -C "$WT" rev-parse -q --verify "HEAD:.claude/plans/$UNIT.md" 2>/dev/null || true)
   printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\nplanref=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" "$PLANREF" > "$REC"
   echo "phase=launching" >> "$REC"
+  pp_unit_event "$UNIT" seat-launch
   [ -z "$PLAN_REC" ] || echo "$PLAN_REC" >> "$REC"
   seat_codex_home
   # The silent-pane relaunch below starts this seat again from its record.
@@ -729,6 +798,7 @@ collect)
   pp_close_items "$H"
   pp_pane_close "$H" "verdict collected" || true
   echo "verdict=$V" >> "$REC"
+  pp_unit_event "$UNIT" seat-verdict
   echo "collected=$(date +%s)" >> "$REC"
   [[ $ROLE != plan-author* ]] || plan_lines >> "$REC"
   echo "closed seat=$ROLE unit=$UNIT $V"

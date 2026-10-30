@@ -91,8 +91,10 @@
   "review": {},
   "review-limits": {
     "calls": 60,
-    "diffLines": 3000,
-    "note": "Per Codex review. calls: model calls one review session may make. diffLines: added plus deleted lines in main...HEAD, generated files excluded; a bigger unit is split before review."
+    "diffLines": 1000,
+    "maxIssues": 5,
+    "oneJudgeLines": 500,
+    "note": "Per Codex review. calls: model calls one review session may make. diffLines and maxIssues: a plan's planned changed lines and distinct Closes issues; plan-check.sh refuses a plan over either unless it carries a Split override line. oneJudgeLines: plan-tier.sh gives a Panel unit estimated at or under this many changed lines one judge. A routing file of your own that lacks diffLines, maxIssues or oneJudgeLines takes the value here."
   },
   "seat-liveness": {
     "backgroundMaxMinutes": 20,

@@ -615,9 +615,10 @@ def requests(projects, cache_path, since, now, folders=False):
     whole = not unread and all(isinstance(e, FileNotFoundError) for e in unlisted)
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 7, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
-                   "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen},
-                   "cycle": CYCLE, "complete": whole, "covered": since, "root": projects}, f)
+        # json.dumps, not json.dump: same text through the C encoder. This file reaches 50 MB.
+        f.write(json.dumps({"version": 7, "offsets": live, "requests": seen, "cwd": {k: where.get(k) for k in seen},
+                            "alias": {i: k for i, k in alias.items() if k in seen}, "file": {k: file.get(k) for k in seen},
+                            "cycle": CYCLE, "complete": whole, "covered": since, "root": projects}))
     os.replace(tmp, cache_path)
     if firsts:
         remember_started(os.path.dirname(cache_path), firsts)
@@ -809,7 +810,7 @@ def test_runs(projects, cache_path, now, roots, builders=()):
         runs = [r for r in runs if r[0] >= since]
         tmp = f"{cache_path}.{os.getpid()}"
         with open(tmp, "w") as f:
-            json.dump({"version": version, "offsets": live, "files": {p: files[p] for p in live}, "runs": runs, "spans": {p: spans[p] for p in live}}, f)
+            f.write(json.dumps({"version": version, "offsets": live, "files": {p: files[p] for p in live}, "runs": runs, "spans": {p: spans[p] for p in live}}))
         os.replace(tmp, cache_path)
     if unread:
         print(f"dashboard_limit: {len(unread)} transcript path(s) could not be read, so test runs are unknown: {unread[0]}", file=sys.stderr)
@@ -1130,8 +1131,8 @@ def codex_requests(sessions_dir, cache_path, since, now, missed=None, folders=Fa
     seen = {k: v for k, v in seen.items() if v[0] >= now - 2 * WEEK}
     tmp = f"{cache_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": 5, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen},
-                   "cycle": CYCLE, "complete": len(missed) == n, "covered": since, "root": sessions_dir}, f)
+        f.write(json.dumps({"version": 5, "files": live, "requests": seen, "cwd": {k: where.get(k) for k in seen}, "file": {k: file.get(k) for k in seen},
+                            "cycle": CYCLE, "complete": len(missed) == n, "covered": since, "root": sessions_dir}))
     os.replace(tmp, cache_path)
     return [(v, where.get(k), file.get(k)) if folders else v for k, v in seen.items() if since <= v[0] <= now]
 

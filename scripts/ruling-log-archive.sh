@@ -14,6 +14,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/paths.sh"
 . "$HERE/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
+# The panes ruling-log.sh logs: the standing seats, from the one list.
+PANES=$(IFS='|'; echo "${PP_STANDING_SEATS[*]}")
 LOG=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 ARCH=${LOG%.jsonl}.archive-2026-10-24.jsonl
 # The whole log, copied beside it before the rewrite truncates it and removed once the rewrite is done: a run killed
@@ -25,11 +27,11 @@ die() { echo "ruling-log-archive: $*; nothing moved" >&2; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ruling-archive.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
 
 split() { # <in> <tag>: writes $TMP/<tag>.keep and $TMP/<tag>.arch, prints the line count of <in>
-  jq -rR -L "$HERE/../hooks/lib" --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" 'include "ruling-typed";
+  jq -rR -L "$HERE/../hooks/lib" --arg main "$PP_MAIN" --arg mainp "$PP_MAIN_P" --arg panes "$PANES" 'include "ruling-typed";
     (try fromjson catch null) as $r
     | if ($r | type) != "object" or $r.source != "prompt" then "k"
       elif $r.void == true then "a"
-      elif ($r.cwd // "" | . == $main or . == $mainp or startswith($main + "/") or startswith($mainp + "/") or test("/(Chief-of-Staff|Fast-lane|Research-lane)(/|$)")) | not then "a"
+      elif ($r.cwd // "" | . == $main or . == $mainp or startswith($main + "/") or startswith($mainp + "/") or test("/(" + $panes + ")(/|$)")) | not then "a"
       elif ($r.answer // "" | machine_prompt) then "a"
       else "k" end' "$1" > "$TMP/$2.dec" || die "could not read $1"
   python3 -I -c '

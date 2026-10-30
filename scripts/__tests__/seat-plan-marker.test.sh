@@ -229,5 +229,14 @@ check "the plan-author prompt asks for a user-observable Done line per issue, wi
 # Issue 457: a stated limit that said no client sends a fix's header passed the judge; the fix had no real caller.
 check "the judge's prompt makes a stated limit that leaves a fix with no real caller a NO-GO (issue 457)" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pu-plan-judge-sol.txt.prompt 2>/dev/null | grep -c 'A stated limit that leaves a planned fix with no real caller in production (no client sends it, a gate blocks it, nothing routes to it) makes your verdict NO-GO unless the owner approved that limit by name')"
+# Issue 462: a plan author who names test cases without the `New tests:` line gets refused by plan-check; the prompt names the row and the line.
+check "the author prompt names the new rules (issue 462)" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'one `- test file path: <path> (<case>; <case>)` row under `## Acceptance test`.*`New tests: <unit> <n>` line, n the number of cases.*` -- <reason>`')"
+# Issues 476, 480: the author puts every owner question in the one section and carries the size caps; issue 481: a plan
+# judge checks that a change to stored data works while the release before it still runs.
+check "the author prompt names the one owner section and the caps (issues 476, 480)" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'every question for the owner in the one `## Question for the owner` section.*more than 1000 changed lines or more than 5 Closes issues needs a `Split override: <reason>` line')"
+check "the judge checks mixed-version safety (issue 481)" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pu-plan-judge-sol.txt.prompt 2>/dev/null | grep -c 'A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

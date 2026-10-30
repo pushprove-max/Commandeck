@@ -132,9 +132,14 @@ have() {
 # Seconds a process has run: ps's [[dd-]hh:]mm:ss.
 age_s() { ps -o etime= -p "$1" 2>/dev/null | awk -F'[-:]' 'NF == 4 { print $1*86400 + $2*3600 + $3*60 + $4 } NF == 3 { print $1*3600 + $2*60 + $3 } NF == 2 { print $1*60 + $2 }'; }
 HEALTH=${COMMANDECK_MCP_HEALTH_DIR:-$HOME/.commandeck/mcp-health}
+SERENA_SH=${COMMANDECK_SERENA_SHARED:-$(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)/serena-shared.sh} SHARED_RC=-
+# Serena is up when its server runs under the session, or is the worktree's shared one.
 missing() {
   MISSING=""
-  have 'serena.*start-mcp-server' || MISSING="serena"
+  have 'serena.*start-mcp-server' || {
+    bash "$SERENA_SH" status "$CLAUDE_PROJECT_DIR" >/dev/null 2>&1; SHARED_RC=$?
+    [ "$SHARED_RC" -eq 0 ] || MISSING="serena"
+  }
   [ -n "$MISSING" ]
 }
 if [ -n "$SID" ] && [ ! -e "$MCP_CHECKED" ]; then
@@ -158,7 +163,9 @@ if [ -n "$SID" ] && [ ! -e "$MCP_CHECKED" ]; then
   if [ -n "$MISSING" ]; then
     # read-tracker.sh reads this flag: a session with no server is not nudged to use it.
     : > "/tmp/claude-mcp-down-$SID"
-    NOTE="$MISSING is not running in this session (no server process under claude pid $CLAUDE_PID); reads go through without it. Record '$MISSING missing' as one line under \`## Main-only (deferred)\` in the evidence file and go on; main reads it at review."
+    NOTE="$MISSING is not running in this session (no server process under claude pid $CLAUDE_PID); reads go through without it. Record '$MISSING missing' as one line under \`## Main-only (deferred)\` in the evidence file and go on; main reads it at review.
+saw: claude pid ${CLAUDE_PID:-none}, shared status $SHARED_RC
+Try: bash $SERENA_SH start $CLAUDE_PROJECT_DIR"
     echo "$NOTE" >&2
     jq -n --arg m "$NOTE" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
   fi
@@ -175,6 +182,7 @@ HANDOFF="$CLAUDE_PROJECT_DIR/.claude/briefs/${UNIT}-handoff.md"
 if [ ! -f "$HANDOFF" ]; then
   echo "pane budget exceeded ($PB_SUMMARY); write $HANDOFF with headings: decisions, unresolved findings, current commit, test evidence" >&2
   echo "options: simplify the unit; reset the pane from the handoff file; reassign to a fresh pane; escalate to main" >&2
+  echo "Try: bash $(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)/builder-fresh-round.sh <handle of this pane> $HANDOFF <seat record of $UNIT>" >&2
   exit 2
 fi
 # Every missing heading in one refusal, with the skeleton to paste.

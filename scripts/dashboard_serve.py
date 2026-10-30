@@ -673,6 +673,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if self.foreign():
             self.send_error(403, "the dashboard answers its own page only")
+        elif urlsplit(self.path).path == '/events':
+            self.events()
         elif urlsplit(self.path).path.startswith('/p/'):
             self.project_page(urlsplit(self.path).path[3:])
         else:
@@ -683,14 +685,58 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def project_page(self, rest):
         """GET /p/<name>/: the page with that project open. Only a name data.js lists is sent on, matched on the raw
         path (an encoded slash or dot never reaches the file handler, which would serve the root page for /p/../)."""
-        name = rest[:-1] if rest.endswith('/') else None
+        stream = rest.endswith('/events')
+        name = rest[:-len('/events')] if stream else rest[:-1] if rest.endswith('/') else None
         dash = snapshot(self.directory)
+        if stream:
+            if name and PROJECT.match(name) and isinstance(dash, dict) and isinstance(dash.get('projects'), dict) and name in dash['projects']:
+                return self.events(None if name == dash.get('home') else name)
+            self.send_response(302)
+            self.send_header('Location', '/')
+            self.send_header('Content-Length', '0')
+            return self.end_headers()
         if not (name and PROJECT.match(name) and isinstance(dash, dict) and isinstance(dash.get('projects'), dict) and name in dash['projects']):
             return self.send_error(404, "no such project on this dashboard")
         self.send_response(302)
         self.send_header('Location', '../../index.html?project=' + quote(name))
         self.send_header('Content-Length', '0')
         self.end_headers()
+
+    def events(self, project=None):
+        """GET /events and /p/<name>/events: the live file of that project, live.json for the home project and
+        live/<project>.json for another (the fast lane's unit rows), as a server-sent event, once
+        on connect and again whenever it changes, with a comment every 15 s to keep the connection open. The login is
+        rechecked at each tick, so a revoked device's open stream ends within one (issue 466)."""
+        path = os.path.join(self.directory, 'live', project + '.json') if project else os.path.join(self.directory, 'live.json')
+        tick = float(os.environ.get('COMMANDECK_DASHBOARD_STREAM_TICK') or 0.5)
+        beat = float(os.environ.get('COMMANDECK_DASHBOARD_KEEPALIVE') or 15)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+        self.close_connection = True
+        sent, last = None, time.monotonic()
+        try:
+            while True:
+                if self.login_on and not self.authed():
+                    return
+                try:
+                    with open(path, 'rb') as f:
+                        raw = f.read()
+                    live = json.loads(raw)
+                except (OSError, ValueError):
+                    raw, live = None, None
+                if isinstance(live, dict) and raw != sent:
+                    sent = raw
+                    self.wfile.write(b'data: ' + json.dumps(live, separators=(',', ':')).encode() + b'\n\n')
+                    last = time.monotonic()
+                elif time.monotonic() - last >= beat:
+                    self.wfile.write(b': keep-alive\n\n')
+                    last = time.monotonic()
+                self.wfile.flush()
+                time.sleep(tick)
+        except OSError:
+            return
 
     def own_page(self):
         """A loopback client, under a loopback Host name, from this page's own Origin, with a JSON body. With the login

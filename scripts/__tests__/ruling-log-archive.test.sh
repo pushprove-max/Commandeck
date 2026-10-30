@@ -109,5 +109,15 @@ run >/dev/null 2>&1; rc=$?
 check "restored from the copy, a run completes and removes it" "0 r-p-main gone" \
   "$rc $(ids "$COMMANDECK_RULING_LOG" | awk '{print $3}') $([ -e "$BAK" ] && echo kept || echo gone)"
 
+# Issue 460: the archive spelled its own seat names, so a name added only to PP_STANDING_SEATS lost its prompts here while
+# ruling-log.sh still logged them. The copy of the tree has the name added to the list; nothing else changed.
+TREE=$BOX/tree
+mkdir -p "$TREE"; cp -R "$SOURCE/scripts" "$SOURCE/hooks" "$TREE/"
+sed 's/^PP_STANDING_SEATS=(\(.*\))$/PP_STANDING_SEATS=(\1 New-seat)/' "$SOURCE/hooks/lib/project.sh" > "$TREE/hooks/lib/project.sh"
+rm -f "$ARCH"
+row r-new prompt /u/workspaces/proj/New-seat "a typed ruling" > "$COMMANDECK_RULING_LOG"
+(cd "$MAIN" && bash "$TREE/scripts/ruling-log-archive.sh") >/dev/null 2>&1
+check "a listed name keeps its prompts (issue 460)" "r-new" "$(ids "$COMMANDECK_RULING_LOG")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

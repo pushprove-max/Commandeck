@@ -125,7 +125,7 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
   if (!Array.isArray(u?.inFlight)) return emptySnap('units: snapshot unreadable')
   const at = Date.parse(j.updatedAt)
   const min = Math.round((now - at) / 60000)
-  const rows: Row[] = u.inFlight.filter((x: any) => x && !NOT_UNITS.has(x.stage)).map((x: any) => {
+  const rows: Row[] = u.inFlight.filter((x: any) => x && !NOT_UNITS.has(x.stage) && x.stage !== 'seat').map((x: any) => {
     const b = x.builder
     const f = b?.findings?.sol ?? b?.findings
     const started = Date.parse(b?.startedAt ?? '')

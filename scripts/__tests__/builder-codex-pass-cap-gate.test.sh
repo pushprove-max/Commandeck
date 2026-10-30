@@ -80,5 +80,17 @@ check "a closing GO rerun of a round with an abandoned cut row is still a closin
   "$(capg "$GO12"$'\n'"$CUT3"$'\n'"$GO3" 1 | grep . || echo none) $(capg "$GO12"$'\n'"$GO3"$'\n'"$CUT3" 1 | grep . || echo none)"
 check "a round that is only its cut row holds the gate open" "none" "$(capg "$GO12"$'\n'"$CUT3" 1 | grep . || echo none)"
 
+# Issue 467: the plan-only refusal sent a Builder to merge-unit-local.sh --filed, which the merge gate refuses for a NO-GO that
+# is no cap stop; only a closing pass on the tip merges. cr's pass 1 ended NO-GO, so the refusal must name final and no
+# --filed, and --verify (the merge's check) must refuse the same unit.
+CR=$'- [P2] (class: lost-reply) CR-P2 -- cr.txt:1 -- drops a reply -- cat cr.txt\nVERDICT: NO-GO'
+mk cr; loop '{"passCap":"1"}' tpass cr 1 adversarial "$CR" >/dev/null
+mkdir -p "$WS/cr/.claude/plans"; echo 'Data design: one fence' > "$WS/cr/.claude/plans/cr.md"
+loop '{"passCap":"1"}' tpass cr 2 review >/dev/null
+VR=$(cd "$WS/cr" && HOME=$PH TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_ROUTING=$TMP/routing.json \
+  COMMANDECK_REVIEW_LOOP='{"passCap":"1"}' bash "$PASS_SH" --verify "$WS/cr" cr HEAD >/dev/null 2>&1; echo $?)
+check "a plan-only refusal names final (issue 467): a design NO-GO, no --filed, --verify refuses too" "1 0 1" \
+  "$(grep -c 'run builder-codex-pass.sh cr 2 final' "$TMP/perr") $(grep -c -e '--filed' "$TMP/perr") $([ "$VR" != 0 ] && echo 1 || echo 0)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

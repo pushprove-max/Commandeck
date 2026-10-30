@@ -56,6 +56,26 @@ warning; this repository's CI runs it.
 | `duplicate-subject`, `stale-model`, `open-conflict` | The same rule under two headings, a pinned model id, an "OPEN conflict" marker. |
 | `memory-over-limit`, `dead-index`, `orphan-memory`, `superseded-memory` | The memory folder's `MEMORY.md` is too long, links a missing file, or leaves a memory unindexed or superseded. |
 
+## break-run
+
+`bash scripts/break-run.sh <plan> <k>` runs the test of the plan's k-th `Break:` line after the Builder removed the
+condition, and prints the row for the evidence file's `## Break runs`: `- <test file> -- <check label> -- red: <command>`.
+It counts only a non-zero exit with a failure record of the named check (`FAIL <label>`, or `✖ <label> (` for node);
+another check failing is no break run. Exit 0 for a break run, 1 for none, 2 for a bad line, plan or file.
+
+## decision rulings
+
+`bash scripts/decision.sh rulings <term>...` lists the owner's earlier picker answers whose question or answer holds a
+term (any case), newest first, one `<id> <et>: <question> -> <answer>` line each. Voided picks and the picker decoy are
+left out. A plan author runs it before it writes a question to the owner. No match prints nothing and exits 0.
+
+## seat revise
+
+`bash scripts/seat.sh revise <role> <unit> "<text>"` sends a follow-up to a seat that reported done: it settles the old
+task and gives the same pane a new one, so the next finish wakes main. It refuses a Builder (use `answer-worker.sh`), a
+seat with no record, and a pane that is gone or busy. The finish comes as main-watch's wake, not from `seat.sh wait`,
+which still counts the first prompt's marker. `seat.sh status` shows the pane's live state as `agent=<state>`.
+
 ## peek
 
 `bash scripts/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>` prints several reads in one call, each under

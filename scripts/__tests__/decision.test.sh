@@ -73,5 +73,19 @@ jq -cn --arg c "$T/p/sub" '{source: "ask", question: "Ship the sub release?", ut
 DL add decoys-1999-01-01 'Ship the sub release?' yes main >/dev/null 2>&1
 check "and one logged from a folder inside main is found too" 0 "$?"
 
+# Issue 477: `rulings <term>...` lists the owner's earlier picks for a plan author to read before it asks. Only a real
+# pick counts: a voided row, the picker decoy, and a typed prompt (source not "ask") are left out; newest first.
+DECOY=$(bash -c '. "$1/hooks/lib/ask-decoy.sh"; printf %s "$ASK_DECOY"' _ "$REAL")
+{ jq -cn '{source: "ask", id: "old-1999-01-01", et: "01-01 09:00", utc: "1999-01-01T09:00:00Z", question: "Which Cache layer?", answer: "redis"}'
+  jq -cn '{source: "ask", id: "new-1999-01-03", et: "01-03 09:00", utc: "1999-01-03T09:00:00Z", question: "Keep the cache?", answer: "yes"}'
+  jq -cn '{source: "ask", id: "void-1999-01-02", et: "01-02 09:00", utc: "1999-01-02T09:00:00Z", question: "Drop the cache?", answer: "no", void: true}'
+  jq -cn --arg d "$DECOY" '{source: "ask", id: "decoy-1999-01-02", et: "01-02 10:00", utc: "1999-01-02T10:00:00Z", question: "Flush the cache?", answer: $d}'
+  jq -cn '{source: "prompt", id: "typed-1999-01-02", et: "01-02 11:00", utc: "1999-01-02T11:00:00Z", question: "cache", answer: "typed words"}'
+  jq -cn '{source: "ask", id: "other-1999-01-04", et: "01-04 09:00", utc: "1999-01-04T09:00:00Z", question: "Which port?", answer: "80"}'; } > "$T/rulings.jsonl"
+DR=$(D rulings cache 2>&1); RC=$?
+check "the digest lists real picks only (issue 477)" "0|new-1999-01-03 01-03 09:00: Keep the cache? -> yes
+old-1999-01-01 01-01 09:00: Which Cache layer? -> redis" "$RC|$DR"
+check "a term matching no row prints nothing and exits 0; no term is a usage error (issue 477)" "0|| 1" "$(D rulings zebra >/dev/null 2>&1; echo $?)|$(D rulings zebra 2>&1)| $(D rulings >/dev/null 2>&1; echo $?)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

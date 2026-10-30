@@ -80,5 +80,25 @@ rm -f "$T/p/.claude/plan-triggers.tsv"
 check "a small new-infrastructure batch keeps the panel, a small security batch still gets one judge, a bad tier word refuses (issue 444)" \
   "Panel Panel Plan + judge 2" \
   "$(tier '## The batch' '1. add a new queue for export jobs' "$S120") $(tier '## The batch' '1. tighten the login check for the new queue' "$S120") $(tier "${PANEL[@]}" "$S120") $bad"
+# Issue 479: a Panel batch estimated at oneJudgeLines (500) or fewer changed lines gets one judge, the same one a
+# Plan + judge tier picks, and the tier word stays Panel; a panel-always trigger or no estimate keeps both judges.
+nseat() { seats "$@" | awk -F, '{ print NF }'; }
+check "~500 gets one judge, ~501 two (issue 479)" "Panel 2 Panel 3 Panel 3" \
+  "$(tier "${PANEL[@]}" 'Estimated size: ~500 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~500 changed lines') $(tier "${PANEL[@]}" 'Estimated size: ~501 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~501 changed lines') $(tier '## The batch' '1. add a new queue' 'Estimated size: ~400 changed lines') $(nseat '## The batch' '1. add a new queue' 'Estimated size: ~400 changed lines')"
+opts '{"planJudgeSolEnabled": false}'
+check "a small Panel with Sol off keeps Fable (issue 479)" "plan-author claude opus,plan-judge-fable claude fable 0" \
+  "$(seats "${PANEL[@]}" 'Estimated size: ~400 changed lines') $(run "${PANEL[@]}" 'Estimated size: ~400 changed lines' | grep -c 'One planner')"
+opts '{}'
+# A routing file deployed before oneJudgeLines lacks the key, and setup adds only roles: the shipped limit stands in, so
+# the owner's plan still launches. A value the owner did set and that is no count stops the launch instead of guessing.
+jq '."review-limits" |= del(.oneJudgeLines, .maxIssues)' "$REAL/config/routing.json" > "$T/old.json"
+export COMMANDECK_ROUTING="$T/old.json"
+check "an old routing file still launches a small Panel (issue 479)" "Panel 2 Panel 3" \
+  "$(tier "${PANEL[@]}" 'Estimated size: ~400 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~400 changed lines') $(tier "${PANEL[@]}" 'Estimated size: ~501 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~501 changed lines')"
+jq '."review-limits".oneJudgeLines = "many"' "$REAL/config/routing.json" > "$T/bad.json"
+export COMMANDECK_ROUTING="$T/bad.json"
+run "${PANEL[@]}" 'Estimated size: ~400 changed lines' >/dev/null; r=$?
+check "a oneJudgeLines that is no count refuses (issue 479)" "2" "$r"
+unset COMMANDECK_ROUTING
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

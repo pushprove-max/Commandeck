@@ -307,5 +307,18 @@ touch "$TMP/claude-red"; mk pr; hx pr; go pr; HP=$(git -C "$REPO" rev-parse HEAD
 check "a red claude plugin test refuses the merge and leaves main where it was" "1 1 $HP 0" \
   "$(merge pr) $(grep -c '^FAILED step 4 plugin' "$TMP/out") $(git -C "$REPO" rev-parse HEAD) $(git -C "$REPO" diff --cached --name-only | wc -l | tr -d ' ')"
 rm -f "$TMP/claude-red"
+
+# Issue 465: a class stop nobody counted cannot be measured. The fix briefs of the build mark each redesign and each
+# question to main; --verify counts them and the squash message keeps the count, so a build's stops show in main's log.
+mk cs "feat(cs): the unit"; go cs
+printf -- '- Class redesign: cs-class\n- Class ask-main: cs-class\n' > "$COMMANDECK_WORKSPACES/cs/.claude/briefs/cs-fix-r2.md"
+check "class stops reach the squash (issue 465)" "0 Class stops: 2 (cs-class)" \
+  "$(merge cs) $(git -C "$REPO" log -1 --format=%b | grep . | paste -sd' ' -)"
+mk cn "feat(cn): the unit"; go cn
+check "a build with no class stop carries no Class stops line" "0 0" "$(merge cn) $(git -C "$REPO" log -1 --format=%B | grep -c 'Class stops')"
+# Issue 470: the merged unit's shared Serena stops before its worktree is removed, so none outlives the unit.
+printf '#!/bin/sh\necho "$*" >> "%s/serena-calls"\n' "$TMP" > "$TMP/serena-stub"; chmod +x "$TMP/serena-stub"
+mk sr; hx sr; go sr; COMMANDECK_SERENA_SHARED="$TMP/serena-stub" merge sr > /dev/null
+check "a merge stops the server (issue 470)" "stop $COMMANDECK_WORKSPACES/sr" "$(grep -x "stop $COMMANDECK_WORKSPACES/sr" "$TMP/serena-calls" 2>/dev/null | head -1)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

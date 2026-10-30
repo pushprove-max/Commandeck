@@ -46,6 +46,22 @@ case "${COMMANDECK_SEAT-}" in plan-*) ;; *) [ "${COMMANDECK_BUILDER-}" = 1 ] \
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 STATE="/tmp/claude-batch-${SID:-$PPID}"
 
+# The label of this call for the advice (tool and target, 60 characters, one line). A Bash label drops a leading
+# `cd <dir> &&` (\x22 and \x27 are the two quotes, kept out of the program so macOS bash 3.2 parses it). A Read label
+# is the path relative to the checkout, a path outside it keeps its basename; a Read inside the checkout also sends
+# its relative path as the second field, for the peek line.
+{ IFS= read -r -d '' LABEL; IFS= read -r -d '' PEEK; } < <(printf '%s' "$INPUT" | jq -j --arg root "${CLAUDE_PROJECT_DIR:-}" '(.tool_input // {}) as $i
+  | ($i.file_path // "" | tostring) as $fp
+  | (if $root != "" and ($fp | startswith($root + "/")) then $fp[($root | length) + 1:] else "" end) as $rel
+  | ([(if $rel != "" then $rel else ($fp | split("/") | last) end), $i.pattern,
+      ($i.command // "" | sub("^\\s*cd\\s+(\\x22[^\\x22]*\\x22|\\x27[^\\x27]*\\x27|\\S+)\\s*&&\\s*"; "")),
+      $i.name_path_pattern, $i.name_path, $i.relative_path]
+     | map(select(. != null and . != "")) | .[0] // "") as $t
+  | ["\(.tool_name // "") \($t | tostring | gsub("\\s+"; " "))"[0:60],
+     (if .tool_name == "Read" then $rel else "" end)]
+  | map(tostring + "\u0000") | add' 2>/dev/null)
+[ -z "$PEEK" ] || LABEL+=$'\t'$PEEK
+
 # Both overridable so the self-test does not have to sleep through real gaps.
 SIBLING_MS=${BATCH_SIBLING_MS:-1500}
 THRESHOLD=${BATCH_STREAK_THRESHOLD:-3}
@@ -54,9 +70,10 @@ THRESHOLD=${BATCH_STREAK_THRESHOLD:-3}
 NOW=$(date +%s%3N 2>/dev/null) || exit 0
 case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
 
-PREV=0; STREAK=0; NAGGED=0
-[ -f "$STATE" ] && read -r PREV STREAK NAGGED < "$STATE" 2>/dev/null
-case "${PREV:-x}${STREAK:-x}${NAGGED:-0}" in *[!0-9]*) PREV=0; STREAK=0; NAGGED=0 ;; esac
+PREV=0; STREAK=0; NAGGED=0; LABELS=''
+# Line 1 is `NOW STREAK NAGGED`; the labels of the streak follow. A file from before the labels has line 1 only.
+[ -f "$STATE" ] && { read -r PREV STREAK NAGGED; LABELS=$(cat); } < "$STATE" 2>/dev/null
+case "${PREV:-x}${STREAK:-x}${NAGGED:-0}" in *[!0-9]*) PREV=0; STREAK=0; NAGGED=0; LABELS='' ;; esac
 
 # THE TRUE COUNT, WHENEVER THE TRANSCRIPT IS THERE. Every tool call of
 # one turn belongs to one assistant message, so that message's `tool_use` blocks
@@ -133,10 +150,12 @@ if [ "$CALLS" -ge 2 ] \
   STREAK=0
 elif read_only; then
   STREAK=$((STREAK + 1))
+  LABELS+=${LABELS:+$'\n'}$LABEL
 else
   STREAK=0
 fi
-printf '%s %s %s\n' "$NOW" "$STREAK" "${NAGGED:-0}" > "$STATE" 2>/dev/null || exit 0
+[ "$STREAK" -gt 0 ] || LABELS=''
+{ printf '%s %s %s\n' "$NOW" "$STREAK" "${NAGGED:-0}"; [ -z "$LABELS" ] || printf '%s\n' "$LABELS"; } > "$STATE" 2>/dev/null || exit 0
 
 [ "$STREAK" -ge "$THRESHOLD" ] || exit 0
 # Said once per session (issue 327): the advice stays in the context for every later turn, so a later streak is
@@ -160,8 +179,19 @@ fi
 # Reset, and mark the session told: it hears this once.
 printf '%s 0 1\n' "$NOW" > "$STATE" 2>/dev/null || true
 PEEK_DIR=$(cd "${BASH_SOURCE[0]%/*}/../scripts" 2>/dev/null && pwd) || PEEK_DIR=scripts
+# Two or more Reads inside the checkout in the streak: the nudge ends with the one command that does them.
+PEEK_PATHS=$(printf '%s\n' "$LABELS" | awk -F'\t' 'NF > 1 { printf "%s ", $2 }')
+PEEK_PATHS=${PEEK_PATHS% }
+LABELS=$(printf '%s\n' "$LABELS" | cut -f1)
+if [ "$(printf '%s\n' "$PEEK_PATHS" | wc -w | tr -d ' ')" -ge 2 ]; then
+  PEEK_LINE="Try: bash $PEEK_DIR/peek.sh $PEEK_PATHS"
+else
+  PEEK_LINE="Several file reads in one call: bash $PEEK_DIR/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>"
+fi
 ADVICE=$(cat <<EOF
-BATCHING: that is $THRESHOLD turns in a row carrying one read-only look each.
+BATCHING: Send these together: ${LABELS//$'\n'/; }
+
+That is $THRESHOLD turns in a row carrying one read-only look each.
 Each turn replays the whole context, so $THRESHOLD single-call turns cost about
 $THRESHOLD times what one turn with $THRESHOLD calls costs, for the same information.
 
@@ -174,7 +204,7 @@ Keep sequential: dependencies, waits, approvals, interdependent edits, anything
 irreversible, and adaptive investigation where each result picks the next
 question. If this streak was all of those, it was the right shape -- carry on.
 
-Several file reads in one call: bash $PEEK_DIR/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>
+$PEEK_LINE
 
 Said once per session.
 EOF

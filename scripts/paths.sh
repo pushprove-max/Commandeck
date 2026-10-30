@@ -262,6 +262,16 @@ PY
   read -r PP_SESSION_AT PP_SESSION_BG PP_SESSION_CACHE <<<"$out"
 }
 
+# pp_unit_event <unit> <event> -- the one writer of the unit event stream the dashboard's live follower reads
+# (issue 466): one short line, appended. A trigger, never a store; it never fails its caller, and a failed append says
+# so in one stderr line, so a dead stream is seen.
+pp_unit_event() {
+  { mkdir -p "$PP_SCRATCH" && printf '{"at":"%s","unit":"%s","event":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
+      >> "$PP_SCRATCH/unit-events.jsonl"; } 2>/dev/null \
+    || echo "pp_unit_event: could not append $2 for $1 to $PP_SCRATCH/unit-events.jsonl" >&2
+  return 0
+}
+
 # pp_waited_on <handle> [now] [turn text] -- a `seat.sh wait` watches this pane:
 # it is still waiting (its pid, line 1 of $PP_SCRATCH/waiting-<handle>), or under
 # 5 minutes ago it saw the marker this turn's text prints on a line of its own
@@ -666,6 +676,14 @@ PROMPT_BLOCKED='Do you want to (proceed|make this edit|create|allow)|Would you l
 # checked against a safe character set and quoted for the pane's shell; no
 # configuration text is ever evaluated.
 pp_routing() { printf '%s\n' "${COMMANDECK_ROUTING:-$PP_SCRIPTS/../config/routing.json}"; }
+# pp_review_limit <key> -- review-limits.<key> of the routing file, a whole number of 0 or more. A key the file lacks takes
+# the shipped value: a file deployed before the key was added keeps working, and setup adds only roles. Any other value,
+# or an unreadable file, prints nothing and fails.
+pp_review_limit() {
+  jq -er --arg k "$1" --slurpfile d "$PP_SCRIPTS/../config/routing.json" '
+    (."review-limits" // {}) as $l | (if $l | has($k) then $l[$k] else $d[0]."review-limits"[$k] end)
+    | select(type == "number" and . >= 0 and . == floor)' "$(pp_routing)" 2>/dev/null
+}
 PP_ROUTE_JQ='
 def fail($m): error("routing: " + $m);
 def efforts: ["low", "medium", "high", "xhigh", "max"];
@@ -1033,6 +1051,16 @@ pp_review_loop() {
   [ -n "$v" ] || { echo "$2"; return 0; }
   [[ $v =~ $3 ]] || { echo "$PP_MAIN/.claude/commandeck.json has reviewLoop.$1 = \"$v\", which is not a value it takes; answer it again with /commandeck:setup" >&2; return 1; }
   echo "$v"
+}
+# pp_new_tests_line <plan file> <unit> <own: 1 or ''> -- the one reader of a plan's `New tests:` line (issue 462), shared
+# by plan-check.sh and the pass's cap. Prints `<n> <reason>` for the first line that is `New tests: <unit> <digits>`, or,
+# own only (the file is the unit's own plan), a bare `New tests: <digits>`; reason is 1 when the rest of that line starts
+# with `--`. Prints nothing when none does.
+pp_new_tests_line() {
+  awk -v u="$2" -v own="$3" '
+    function why(k,  s, i) { s = ""; for (i = k; i <= NF; i++) s = s (i > k ? " " : "") $i; return s ~ /^--/ }
+    $1 == "New" && $2 == "tests:" && $3 == u && $4 ~ /^[0-9]+$/ { print $4, why(5); exit }
+    own && $1 == "New" && $2 == "tests:" && $3 ~ /^[0-9]+$/ { print $3, why(4); exit }' "$1"
 }
 # pp_keep_worktrees -- the standing worktrees (issue 431) the sweep never closes a pane in and the checkpoint does not
 # list: keepWorktrees in this project's config, a JSON array of names, printed one per line. Only an explicit empty

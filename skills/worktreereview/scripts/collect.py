@@ -15,7 +15,9 @@ and notes.txt (the agent's own progress notes, for choosing splits) to --out.
 
 Time spent waiting on the owner is not build time (the owner, 2026-10-14): each --exclude window (ISO UTC)
 and the part of each idle gap over two minutes with nothing running that sits inside an open decision for
-this unit (decisions.jsonl) comes out of the clock, shares and flags; cost stays.
+this unit (decisions.jsonl) comes out of the clock, shares and flags; cost stays. An idle gap waiting on main
+or on nothing with no decision recorded is cut whole, with its cause as the reason, unless the turn before it
+printed the unit's DONE marker: that wait is the merge's.
 """
 import argparse
 import collections
@@ -143,7 +145,7 @@ def refusal(blocked):
 def read_session(path):
     """One Claude session log -> its calls, tool calls, wake-ups, questions to main and failed pass launches."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
-         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'down': [], 'first': None, 'last': None, 'final': ''}
+         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'dones': [], 'down': [], 'first': None, 'last': None, 'final': ''}
     tasks, asked = {}, {}  # background task id -> its call; a job tool's call -> the job's call it asks about
     for e in rows_of(path):
         when = e.get('timestamp')
@@ -159,6 +161,9 @@ def read_session(path):
                 if b.get('type') == 'text' and b.get('text', '').strip():
                     s['final'] = b['text']
                     s['notes'].append((ts(when), b['text'].strip().replace('\n', ' ')[:220]))
+                    # The Builder's last line, e.g. <UNIT>-DONE; the note above is cut short of it.
+                    if done := re.search(r'(?:^|\n)\s*([A-Z0-9][A-Z0-9-]*-DONE)\s*$', b['text']):
+                        s['dones'].append((ts(when), done.group(1)))
                 elif b.get('type') == 'tool_use':
                     i = b.get('input') or {}
                     s['tools'][b['id']] = {'t': ts(when), 'name': b.get('name'), 'bg': bool(i.get('run_in_background')),
@@ -237,8 +242,9 @@ def call_kind(t, test_re):
     return 'files' if t['name'] in FILE_TOOLS else 'tools'
 
 
-def idle_gap(sess, end, nxt, t1, kind, runs):
-    """One idle wait -> its clock label and its row: the jobs still running in it and what the pane waited on.
+def idle_gap(sess, end, nxt, t1, kind, runs, marker):
+    """One idle wait -> its clock label and its row: the jobs still running in it, what the pane waited on, and
+    whether the turn before it printed the unit's DONE marker.
 
     With none of its own jobs running, a pass launch in the turn before it that could not reach the reviewer
     is a review tool down, and a Codex run inside it is a review run outside this session."""
@@ -249,8 +255,9 @@ def idle_gap(sess, end, nxt, t1, kind, runs):
                    'job' if pending else 'down' if any(turn < d <= end for d in sess['down'])
                    else 'elsewhere' if any(p['start'] < nxt and p['end'] > end for p in runs)
                    else 'main' if any(turn < a <= end for a in sess['asks']) else 'nothing')
+    done = any(turn < w <= end and m == marker for w, m in sess['dones'])
     return ('idle_tests' if 'tests' in kinds else 'idle_job' if pending else f'idle_{waiting}' if waiting in ('down', 'elsewhere') else 'idle',
-            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting})
+            {'start': end, 'end': nxt, 'pending': [t['desc'][:90] for t in pending], 'waiting': waiting, 'done': done})
 
 
 def holds_for(path, unit):
@@ -797,16 +804,21 @@ def main():
         for end in sess['turn_ends']:
             nxt = min((u for u in sess['users'] if u > end), default=None)
             if nxt and nxt - end > 5:
-                waited, gap = idle_gap(sess, end, nxt, t1, kind_of, runs)
+                waited, gap = idle_gap(sess, end, nxt, t1, kind_of, runs, unit.upper() + '-DONE')
                 paint(end, nxt, waited, only=('gap',))
                 idle_gaps.append(gap)
-                # Waiting on the owner, with nothing of the build's own running: only the part inside an open
-                # decision window, never idle after DONE by itself. A background job of ANY session, or a
-                # Codex run, still going keeps the gap build time; idle_gap's `pending` sees only this session's.
+                # Waiting on the owner, with nothing of the build's own running: the part inside an open decision
+                # window; a wait with no decision recorded is cut whole with its cause, never idle after DONE by
+                # itself. A background job of ANY session, or a Codex run, still going keeps the gap build time;
+                # idle_gap's `pending` sees only this session's.
                 busy = any(t['bg'] and t['t'] < nxt and other['woken'].get(k, t1) > end for other in sessions for k, t in other['tools'].items())
                 if nxt - end > WAIT_ON_OWNER and not busy and not any(p['start'] < nxt and p['end'] > end for p in runs):
-                    cuts += [{'start': max(q, end), 'end': min(r or nxt, nxt), 'reason': f'decision {i}'}
-                             for q, r, i in asked if max(q, end) < min(r or nxt, nxt)]
+                    cut_rows = [{'start': max(q, end), 'end': min(r or nxt, nxt), 'reason': f'decision {i}'}
+                                for q, r, i in asked if max(q, end) < min(r or nxt, nxt)]
+                    # Merge, elsewhere and down stay on the clock as their own labels.
+                    if not cut_rows and not gap['done'] and gap['waiting'] in ('main', 'nothing'):
+                        cut_rows = [{'start': end, 'end': nxt, 'reason': f"waiting on {gap['waiting']}, no decision recorded"}]
+                    cuts += cut_rows
     # A hold never cuts a second a Codex run or a background job of any session covers: a wait label says nothing of
     # other sessions' jobs or outlives its own, so each window is cut around every busy span first. A job with no
     # recorded end runs to the review's end, as idle_gap reads it.

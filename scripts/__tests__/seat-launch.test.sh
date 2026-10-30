@@ -198,5 +198,14 @@ COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 ru
 check "a judge with no Plan: line is not checked" "0:1:1" "$RC:$(grep -c . "$T/creates"):$(VREC)"
 rm -f "$T/pane-up"
 
+# Issue 470: with the Serena flag on, a Builder whose worktree server fails is refused with the start command and no pane
+# opens; a server stub that starts is asked for its words, and the record's cmd= keeps the line without them.
+printf '#!/bin/sh\n[ "$1" != start ] || exit 1\n' > "$T/shared-fail"; chmod +x "$T/shared-fail"
+jq '.serena = true' "$CFG" > "$T/cfg.on" && cp "$T/cfg.on" "$CFG"; : > "$T/creates"
+OUT=$(COMMANDECK_SERENA_SHARED="$T/shared-fail" bl builder); RC=$?
+check "a Builder with no server is refused (issue 470)" "1:1:0" \
+  "$(grep -c 'REFUSED: builder seat-builder: no shared Serena' <<<"$OUT"):$(grep -c '^Try: bash .*shared-fail start ' <<<"$OUT"):$(grep -c . "$T/creates")"
+jq '.serena = false' "$CFG" > "$T/cfg.off" && cp "$T/cfg.off" "$CFG"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

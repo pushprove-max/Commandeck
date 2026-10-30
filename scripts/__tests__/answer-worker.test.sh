@@ -181,7 +181,7 @@ rm -f "$T/deaf"
 # tag is in the log (delivered) or the acknowledgement limit passes (NOT acknowledged, exit 1). In main's foreground the
 # follower sends main that last result as one question.
 echo working > "$T/state"; : > "$T/inbox"; : > "$T/typed"
-(sleep 3; jq -cn '{type: "user", message: {role: "user", content: "[late-tag] a late read"}, timestamp: "2026-10-15T10:06:00Z", sessionId: "s1"}' >> "$LOG") &
+(sleep 4; jq -cn '{type: "user", message: {role: "user", content: "[late-tag] a late read"}, timestamp: "2026-10-15T10:06:00Z", sessionId: "s1"}' >> "$LOG") &
 OUT=$(AACK=12 ANSWER_WORKER_TAG=late-tag answer term_b "a late read"); RC=$?; wait
 check "an answer read during the longer wait ends delivered (exit 0), after the queued line, and is not NOT acknowledged" "0:1:1:0" \
   "$RC:$(grep -c 'queued, not read yet' <<<"$OUT"):$(grep -c 'delivered to term_b' <<<"$OUT"):$(grep -c 'NOT acknowledged' <<<"$OUT")"
@@ -274,6 +274,80 @@ OUT=$(answer term_b "Ruling 13: between two waits"); RC=$?
 check "an answer sent while ask-main.sh is between two inbox waits replies in its question's thread" "0 1 0" \
   "$RC $(grep -c '^msg_new .*Ruling 13' "$T/replies") $(wc -l < "$T/typed" | tr -d ' ')"
 kill "$WAITPID" 2>/dev/null; wait "$WAITPID" 2>/dev/null
+cp "$T/log.bak" "$LOG"
+
+# Issue 463: main's foreground call returns before ask-main.sh writes its question's token, so a send can find none. The
+# stub's `orchestration send` writes the tokens as it returns, no sleep; only a look after the send can see them.
+rm -f "$T"/scratch/seat-*.txt "$T"/scratch/ask-main/* "$T"/scratch/answer-worker-answer-*.log; mkdir -p "$T/bin3"
+cat > "$T/bin3/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "orchestration send") "$T/bin/orca-ide" "\$@"
+    if [ -e "$T/gap" ]; then for k in wait asking; do printf 'pid=%s\npane=term_b\n' "\$(cat "$T/gap")" > "$T/scratch/ask-main/msg_gap.\$k"; done; fi ;;
+  "terminal send") a=("\$@"); while [ \$# -gt 0 ]; do case \$1 in --text) t=\$2 ;; esac; shift; done
+    if [ "\$t" = \$'\x1b' ]; then echo esc >> "$T/esc"
+      [ ! -e "$T/esc-works" ] || { kill "\$(cat "$T/escpid")"; echo idle > "$T/state"
+        printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ask","is_error":true,"content":"interrupted"}]},"timestamp":"2026-10-15T10:07:00Z","sessionId":"s1"}' \
+          '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"timestamp":"2026-10-15T10:07:01Z","sessionId":"s1"}' >> "$LOG"; }
+      echo '{"ok":true}'
+    else "$T/bin/orca-ide" "\${a[@]}"
+      # the fresh session reads the answer file: its text, tag included, reaches the pane's log
+      case "\$t" in *"Your task spec is the file"*) cat "$T"/ws/u1/.claude/briefs/u1-answer-*.md | jq -Rsc '{type: "user", message: {role: "user", content: .}, timestamp: "2026-10-15T10:09:00Z", sessionId: "s2"}' >> "$LOG" ;; esac
+    fi ;;
+  *) exec "$T/bin/orca-ide" "\$@" ;;
+esac
+EOF
+chmod +x "$T/bin3/orca-ide"
+answer3() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=${AACK:-3} PATH="$T/bin3:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
+fg3() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR -u COMMANDECK_FOREGROUND CLAUDECODE=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=${AACK:-3} PATH="$T/bin3:$PATH" timeout 8 bash "$REAL/scripts/answer-worker.sh" "$@" </dev/null 2>&1); }
+bash -c 'sleep 30; :' ask-main.sh & GAPPID=$!; echo "$GAPPID" > "$T/gap"
+echo working > "$T/state"; touch "$T/reads"; rows "$ASK_USE"
+OUT=$(answer3 term_b "Ruling 14: the gap"); RC=$?
+check "a start-gap answer threads (issue 463)" "0 1 1" \
+  "$RC $(grep -c '^msg_gap .*Ruling 14' "$T/replies") $(grep -c 'replying in msg_gap' <<<"$OUT")"
+# The same in main's foreground: the detached follower, not the call, is the one that looks again.
+rm -f "$T/scratch/ask-main/msg_gap".*; rows "$ASK_USE"
+OUT=$(fg3 term_b "Ruling 15: the follower"); RC=$?
+for _ in $(seq 80); do grep -q 'delivered to term_b' "$T"/scratch/answer-worker-answer-*.log 2>/dev/null && break; sleep 0.1; done
+check "the follower finds the token (issue 463)" "0 1 1" \
+  "$RC $(grep -c '^msg_gap .*Ruling 15' "$T/replies") $(cat "$T"/scratch/answer-worker-answer-*.log 2>/dev/null | grep -c 'replying in msg_gap')"
+rm -f "$T/gap" "$T/scratch/ask-main/msg_gap".*; kill "$GAPPID" 2>/dev/null; wait "$GAPPID" 2>/dev/null
+
+# Issue 478: past the cache's start + ttl a Builder's old session is stale and its answer is fresh-session work. Idle, it
+# is handed over; parked in ask-main.sh's wait, one Escape (A17: the pid ends, the tool call is_error, no model call)
+# ends the wait first, and the hand-off runs only once that is confirmed.
+printf 'handle=term_b\nrole=builder\nunit=u1\n' > "$T/scratch/seat-u1-builder.txt"
+COLD='{"type":"assistant","message":{"id":"m1","role":"assistant","usage":{"input_tokens":5,"cache_creation_input_tokens":900,"cache_creation":{"ephemeral_5m_input_tokens":900}},"content":[{"type":"text","text":"x"}]},"timestamp":"2026-10-15T10:00:30Z","sessionId":"s1"}'
+rows "$COLD"; echo idle > "$T/state"; rm -f "$T"/ws/u1/.claude/briefs/u1-answer-*.md
+OUT=$(answer3 term_b "Ruling 16: cold"); RC=$?; wait
+check "a cold answer goes fresh (issue 478)" "0 1 1" \
+  "$RC $(grep -c 'delivered to term_b (handed to a fresh session)' <<<"$OUT") $(cat "$T"/ws/u1/.claude/briefs/u1-answer-*.md | grep -c 'Ruling 16: cold')"
+# The same seat with a warm cache keeps its session: the expiry is what sends an answer fresh.
+rows "$COLD"; jq -c --arg t "$(date -u +%FT%TZ)" '.timestamp = $t' "$LOG" > "$LOG.warm"; mv "$LOG.warm" "$LOG"
+echo idle > "$T/state"; rm -f "$T"/ws/u1/.claude/briefs/u1-answer-*.md
+OUT=$(answer3 term_b "Ruling 16: warm"); wait
+check "a cold answer goes fresh (issue 478)" "0 0" \
+  "$(grep -c 'handed to a fresh session' <<<"$OUT") $(ls "$T"/ws/u1/.claude/briefs/u1-answer-*.md 2>/dev/null | wc -l | tr -d ' ')"
+bash -c 'sleep 30; :' ask-main.sh & PARKPID=$!; echo "$PARKPID" > "$T/escpid"
+for k in wait asking; do printf 'pid=%s\npane=term_b\n' "$PARKPID" > "$T/scratch/ask-main/msg_new.$k"; done
+rm -f "$T"/ws/u1/.claude/briefs/u1-answer-*.md "$T/esc"; : > "$T/replies"; touch "$T/esc-works"
+echo working > "$T/state"; rows "$COLD"; echo "$ASK_USE" >> "$LOG"
+OUT=$(answer3 term_b "Ruling 17: cold and parked"); RC=$?; wait
+PGONE=0; ! kill -0 "$PARKPID" 2>/dev/null || PGONE=1
+check "a parked cold answer goes fresh (issue 478)" "0 1 1 1 1 0" \
+  "$RC $(grep -c 'delivered to term_b (handed to a fresh session)' <<<"$OUT") $(wc -l < "$T/esc" | tr -d ' ') $(ls "$T"/ws/u1/.claude/briefs/u1-answer-*.md | wc -l | tr -d ' ') $(grep -c '^msg_new .*Ruling 17' "$T/replies") $PGONE"
+kill "$PARKPID" 2>/dev/null; wait "$PARKPID" 2>/dev/null
+# An Escape that does not end the wait (the pid lives): nothing is cleared or handed off, and the reply lands in the thread.
+bash -c 'sleep 30; :' ask-main.sh & PARKPID=$!; echo "$PARKPID" > "$T/escpid"
+for k in wait asking; do printf 'pid=%s\npane=term_b\n' "$PARKPID" > "$T/scratch/ask-main/msg_new.$k"; done
+rm -f "$T"/ws/u1/.claude/briefs/u1-answer-*.md "$T/esc" "$T/esc-works"; : > "$T/replies"
+echo working > "$T/state"; rows "$COLD"; echo "$ASK_USE" >> "$LOG"
+OUT=$(ANSWER_WORKER_ESCAPE_WAIT=2 answer3 term_b "Ruling 18: escape missed"); RC=$?
+check "a failed Escape keeps the reply (issue 478)" "0 1 0 1" \
+  "$RC $(wc -l < "$T/esc" | tr -d ' ') $(ls "$T"/ws/u1/.claude/briefs/u1-answer-*.md 2>/dev/null | wc -l | tr -d ' ') $(grep -c '^msg_new .*Ruling 18' "$T/replies")"
+kill "$PARKPID" 2>/dev/null; wait "$PARKPID" 2>/dev/null
 cp "$T/log.bak" "$LOG"
 
 echo "$PASS passed, $FAIL failed"

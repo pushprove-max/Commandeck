@@ -123,11 +123,43 @@ GITOPTS='([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]-][^[:space:]]*)?)*'
 # Both views, one per line: a quoted argument kept as its word (ARGV), and a quoted `git` or `push` bared (CMD).
 FORCE_CMD=$(printf '%s\n%s' "$ARGV" "$CMD" | sed -E 's/--force-with-lease(=[^[:space:]]*)?/--lease/g; s/--force-if-includes//g')
 
+# Try line: the refused push as a lease push, built from the words typed ($CMD). A plain word is the only kind
+# rebuilt; delete, mirror and :ref forms have no allowed form, so they get none.
+gs_plain() { case "$1" in *[\'\"\\\`\$\(\)\<\>\*\?\[\{]*) return 1 ;; esac; }
+gs_push_try() { # <one push call>: prints the lease form; fails when nothing was forced or a word cannot be rebuilt
+  local w x out="" f=0
+  gs_plain "$1" || return 1
+  set -f
+  for w in $1; do
+    case "$w" in
+      --force-with-lease*|--force-if-includes) ;;
+      --force) f=1; continue ;;
+      --de*|--m*|:*) set +f; return 1 ;;
+      --*) ;;
+      -*d*) set +f; return 1 ;;
+      -*f*) f=1; x=${w//f/}; [ "$x" = - ] && continue; w=$x ;;
+      +?*) f=1; w=${w#+} ;;
+    esac
+    out+="$w "
+    [ "$w" = push ] && out+="--force-with-lease "
+  done
+  set +f
+  [ "$f" = 1 ] && printf '%s\n' "${out% }"
+}
+gs_force_try() { # the first push call in the command that gs_push_try can rebuild
+  local c t
+  while IFS= read -r c; do
+    t=$(gs_push_try "$c") && { printf '%s\n' "$t"; return 0; }
+  done < <(printf '%s\n' "$CMD" | grep -oE "git${GITOPTS}[[:space:]]+push[^;&|]*")
+  return 1
+}
+
 # Block force push. A push's arguments stop at a command separator, so the
 # next command's own -f or --force is not read as the push's.
 PUSH_ARGS="git${GITOPTS}[[:space:]]+push([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+"
 if printf '%s' "$FORCE_CMD" | grep -qE "${PUSH_ARGS}(--force|-f([[:space:];&|)]|\$))"; then
   echo "Blocked: force push is not allowed. Use --force-with-lease if absolutely necessary." >&2
+  TRY=$(gs_force_try) && echo "Try: $TRY" >&2
   exit 2
 fi
 
@@ -137,6 +169,7 @@ fi
 # is not read as a refspec.
 if printf '%s' "$FORCE_CMD" | grep -qE "${PUSH_ARGS}(-[[:alnum:]]*[fd][[:alnum:]]*|[+:][^;&|[:space:]]+|--de(l(e(te?)?)?)?|--m(i(r(r(or?)?)?)?)?)([[:space:];&|)]|\$)"; then
   echo "Blocked: force push, remote branch deletion and --mirror are not allowed (-f in a flag cluster, a +refspec, a :ref refspec, --delete or -d). Use --force-with-lease if a rewrite is absolutely necessary." >&2
+  TRY=$(gs_force_try) && echo "Try: $TRY" >&2
   exit 2
 fi
 
@@ -328,6 +361,7 @@ while IFS= read -r CALL; do
   esac
   [ -n "$WHY" ] || continue
   echo "Blocked: $WHY" >&2
+  [ "$SUB" != gc ] || echo "Try: git gc" >&2
   exit 2
 done < <(printf '%s\n' "$ARGV" | grep -oE "$DISCARD")
 

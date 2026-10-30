@@ -71,5 +71,13 @@ check "a hand inbox send to a Builder is blocked and names answer-worker.sh (iss
 check "main's hand send to a dispatch inbox is blocked; a worker's is not checked (issue 447)" "2 0" \
   "$(run_main "$SEND --to dispatch:ctx_1") $(run "$SEND --to dispatch:ctx_1")"
 
+# Issue 485: a plan seat at its prompt reads no inbox, and a hand send starts no task; seat.sh revise does. A working seat
+# may be parked in a wait, so it passes.
+rm -f "$BOX/scratch/seat-unit-x-builder.txt"
+printf 'handle=term_w\ntask=t1\nrole=plan-author\nunit=unit-x\n' > "$BOX/scratch/seat-unit-x-plan-author.txt"
+pane '"claude"' done
+check "an idle seat send is refused (issue 485)" "2 1 0" \
+  "$(run "$SEND --to term_w") $(grep -c 'seat.sh revise plan-author unit-x' "$BOX/err") $(pane '"claude"' working; run "$SEND --to term_w")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -112,5 +112,17 @@ else
   echo "SKIP a real Codex refuses a write (no codex on PATH on this host)"
 fi
 
+# Issues 470, 482: a pass's reviewers keep the worktree's Serena, read tools only; a home that turns serena off does not win.
+# PP_PASS_SERENA_URL is the pass's one switch; the seat-args words come from a stub (no real Serena).
+printf '#!/bin/sh\necho "-c mcp_servers.serena.command=\\"stub\\" -c mcp_servers.serena.args=[\\"$3\\"]"\n' > "$T/shared-stub"; chmod +x "$T/shared-stub"
+printf '[mcp_servers.fake]\ncommand = "true"\n[mcp_servers.serena]\ncommand = "true"\nenabled = false\n' > "$CODEX_HOME/config.toml"
+fresh; ask ok PP_PASS_SERENA_URL=http://127.0.0.1:1/mcp COMMANDECK_SERENA_SHARED="$T/shared-stub" -- 'q'
+check "a pass gets read tools only (issue 470)" "6:1:1" \
+  "$(grep -o -E 'find_symbol|find_referencing_symbols|find_declaration|find_implementations|get_symbols_overview|get_diagnostics_for_file' "$LOG" | sort -u | wc -l | tr -d ' '):$(grep -c 'mcp_servers.serena.args=.*127.0.0.1:1/mcp' "$LOG"):$(grep -c 'mcp_servers.fake.enabled=false' "$LOG")"
+check "a home's serena off is overridden (issue 482)" "1:0" \
+  "$(grep -c 'mcp_servers.serena.enabled=true' "$LOG"):$(grep -c 'mcp_servers.serena.enabled=false' "$LOG")"
+fresh; ask ok -- 'q'
+check "with no pass env every server is off, as before" "1:0" "$(grep -c 'mcp_servers.serena.enabled=false' "$LOG"):$(grep -c 'enabled_tools' "$LOG")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -1,4 +1,5 @@
 {
   "testCommand": "bash ci/version-check.sh main && bash scripts/run-shell-tests.sh --changed",
-  "fullSuiteBeforeFinal": false
+  "fullSuiteBeforeFinal": false,
+  "serena": true
 }

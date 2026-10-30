@@ -6,6 +6,7 @@
   - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
   - a test run in main's foreground, whatever its length, or any other command that can run in the background (a directory-size scan, any wait on external state) -> `run_in_background` and `wait-test-run.sh <pid> <file>`, or its own pane; only quick reads stay in the foreground; `answer-worker.sh`, `seat.sh run` and the merge already return at once
   - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
+  - a follow-up to a seat that reported done -> `seat.sh revise <role> <unit> "<text>"`, never a hand send; a Builder takes `answer-worker.sh`
   - a large code change in main -> a batch brief, then `builder-launch.sh <unit> <brief>`
   - a Builder whose pane is gone (`seat.sh status builder <unit>` shows `pane=gone`) -> `bash scripts/orca-wait.sh --close <its task id>`, then `bash scripts/seat.sh launch builder <unit> <its newest hand-off or the brief>`; the launch writes the new pane's handle into the seat record, and the next fix round goes there
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
@@ -19,8 +20,8 @@
   what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
   owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one, nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
 - **A unit's scope is the owner's words (issue 360)**: with no relay pane running, main turns the owner's request into the order and keeps the relay's five rules. What main adds goes under `## Chief of Staff additions -- NOT ordered` in an order file from `templates/cos-order.md` (`## The owner's words` first), written only when main adds something and checked with `cos-order-check.sh <file>`; the additions go to the owner in one multi-select question, the decoy first. No bundle approvals: a yes covers only the items it names. At a pass-loop alert for pass 4 or more, or a class stop, main tells the owner which part of the scope produces the findings and whether the owner's words asked for it.
-- **Every question for the owner goes to the relay pane** (the worktree ending in
-  `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09); record each ask with `decision.sh add` in the same turn.
+- **Every question for the owner goes to the relay pane** (the worktree ending in `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09); record each ask with `decision.sh add` in the same turn.
+  A plan's questions sit in its one `## Question for the owner` section (plan-check.sh refuses a `> Owner:` line elsewhere): send the section as one ask, id `plan-<unit>`. A plan judge's new question is a `Question for the owner:` finding; add it with `decision.sh add plan-<unit> ... --reask`.
 - **A reply the duplicate-agent guard blocks is never dropped**: retry it after that seat's turn ends, or send it as
   an orchestration reply, even when the seat's default already matches.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
@@ -41,9 +42,8 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 
 - **A `heads-up:` item is another model's unverified claim**: verify it before
   acting, tell the owner in one plain sentence, close the item task.
-- **A ruling that something stays as it is goes under `## Stated limits`** in
-  `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
-  when written: the pass reads limits there only, and raises one written elsewhere again.
+- **A ruling that something stays as it is goes under `## Stated limits`** in `.claude/briefs/<unit>-main-rulings.md` (from `templates/main-rulings.md`)
+  when written: the pass reads limits there only, and raises one written elsewhere again. A limit added after the plan judge's GO ends with `ruling:<id>` (the logged id, also in that file), or the pass refuses it.
 - After the restart `resume-context.sh` prints board.sh and the checkpoint: fetch
   neither again, except a part its RESUMED line names as cut (read that pointer
   once). A fresh start's first call is `scripts/board.sh`.
@@ -62,8 +62,8 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   settings, or says in chat that this unit takes another tier, model or effort. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
-  written. Panel: `plan-author` writes the plan, and `plan-judge-fable` and `plan-judge-sol` both read it. A seat
-  that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
+  written. Panel: `plan-author` writes the plan, and `plan-judge-fable` and `plan-judge-sol` both read it; a Panel unit estimated at 500 changed lines or fewer (`oneJudgeLines`), with no new-infrastructure trigger, gets one judge, the one Plan + judge picks, and `plan-tier.sh` says so.
+  A seat that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
   (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
   only when the owner named another for that unit. A size target in a
   planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never

@@ -465,6 +465,11 @@ check('the review shows Codex helper calls and time', True,
       'Codex helper: 2 calls, 7 s, 1 failed; by model: gpt-x-test 1; none read 1.' in rendered('cx-two', cx_two))
 check('a build with no Codex call says none', True, 'Codex helper: none.' in rendered('cx-none', cx_none))
 
+# --- #475: an idle wait with nothing running and no decision recorded is no build time. ---
+r = collected('u475', [user(0), say(10, 'Waiting on a reply.'), turn_end(12), user(1200), say(1210, 'Go on.'), turn_end(1212)], '--main', main)
+check('an idle wait is cut with its cause (issue 475)', [(12, 1200, 'waiting on nothing, no decision recorded')],
+      [(round(w['start'] - T0), round(w['end'] - T0), w['reason']) for w in r['cut']])
+
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)
 PY

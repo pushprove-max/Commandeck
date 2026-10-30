@@ -197,8 +197,10 @@ check "a probe answering after 31 s passes: one try, no refusal" "0 1 0" \
 
 # Issue 359 (5c) and the rule drift items RD1 to RD3: one first pass of three reviewers over a unit whose plan carries claims
 # to falsify and decisions, and whose brief states a limit. After the slow case above, since it adds a pass.
-mkdir -p "$W/.claude/plans"
-printf '# Plan: p\n\n## What can go wrong\n\n| case | x |\n|---|---|\n| CASE-PROBE | y |\n\n## Claims to falsify\n\n1. CLAIM-PROBE the plan says so.\n\n## Decisions\n\n1. DECISION-PROBE a ruling.\n\n## Accepted failure modes\n\n1. ACCEPTED-PROBE not a claim.\n' > "$W/.claude/plans/$U.md"
+# The plan comes from main, as a real one does: the unit's limits are read against it there (issue 468).
+mkdir -p "$REPO/.claude/plans"
+printf '# Plan: p\n\n## What can go wrong\n\n| case | x |\n|---|---|\n| CASE-PROBE | y |\n\n## Claims to falsify\n\n1. CLAIM-PROBE the plan says so.\n\n## Decisions\n\n1. DECISION-PROBE a ruling.\n\n## Accepted failure modes\n\n1. ACCEPTED-PROBE not a claim.\n' > "$REPO/.claude/plans/$U.md"
+git -C "$REPO" add ".claude/plans/$U.md" && git -C "$REPO" commit -qm "plan" && git -C "$W" merge -q --no-edit main
 printf 'Plan: .claude/plans/%s.md\n' "$U" >> "$B/$U.md"
 printf '\n## Stated limits\n- LIMIT-PROBE: one measured bound\n' >> "$MAINBRIEF"
 printf 'echo seven\n' > "$W/a.sh"

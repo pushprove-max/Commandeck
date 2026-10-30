@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--register <repo>|--unregister <repo>|--import <folder>]
+# dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--units <unit>|--follow|--register <repo>|--unregister <repo>|--import <folder>]
 # -- one dashboard per machine. Collects everything we measure into one
 # snapshot, $HOME/.commandeck/dashboard/data.js (`window.DASH = {...};`), from
 # ledgers, event logs and CLI reads. The static view in dashboard/, copied
@@ -42,6 +42,8 @@ NAME=dashboard
 UNIT=commandeck-$NAME.service  # the Linux unit; another project's dashboard.service is not ours
 OUT=${COMMANDECK_DASHBOARD_DIR:-$HOME/.commandeck/dashboard}
 CACHE=$OUT/cache
+# The project's live rows (issue 466): the home project's here, a registered project's under live/, one writer each.
+LIVE=${DASH_LIVE:-$OUT/live.json}
 REG=$OUT/projects
 TTL=300  # slow reads: a 60 s collection would otherwise repeat them every cycle
 METRICS=$PP_MAIN/.claude/metrics
@@ -59,9 +61,9 @@ VIEW=(index.html app.css app.js)
 ws_listable() { [ -d "$PP_WORKSPACES" ] && [ -r "$PP_WORKSPACES" ] && [ -x "$PP_WORKSPACES" ]; }
 BIND=${COMMANDECK_DASHBOARD_BIND:-127.0.0.1}
 PORT=${COMMANDECK_DASHBOARD_PORT:-8791}
-RUN='' PUB='' SRV='' ALV=''
-# The heartbeat dies with the loop, or the page would read a dead collector as alive.
-trap 'pp_rm_rf "${RUN:-}" "${PUB:-}"; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null; [ -z "$ALV" ] || kill "$ALV" 2>/dev/null' EXIT
+RUN='' PUB='' SRV='' ALV='' FLW=''
+# The heartbeat and the live follower die with the loop, or the page would read a dead collector as alive.
+trap 'pp_rm_rf "${RUN:-}" "${PUB:-}"; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null; [ -z "$ALV" ] || kill "$ALV" 2>/dev/null; [ -z "$FLW" ] || kill "$FLW" 2>/dev/null' EXIT
 trap 'exit 143' TERM
 
 iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
@@ -320,6 +322,7 @@ units() {
   for wt in "$PP_WORKSPACES"/*/; do
     wt=${wt%/}; [ -e "$wt/.git" ] || continue
     u=${wt##*/}
+    [ -z "${UNITS_ONLY:-}" ] || [ "$u" = "$UNITS_ONLY" ] || continue
     # A merged unit leaves the in-flight list even while its worktree stays (finishedBuilds lists it). Seats are not units.
     pp_standing_wt "$u" || ! merged "$u" || continue
     # A plan seat's worktree, marked by seat.sh, is the unit's Planning stage until the Builder's launch adopts it and
@@ -332,7 +335,9 @@ units() {
       *) po= ;;
     esac
     # The relay's and the lanes' worktrees are seats, not units. Exact names only (pp_standing_wt); app.js SEATS names the same stages.
+    # A listed name beyond the three has no label of its own: stage `seat`.
     seat=; ! pp_standing_wt "$u" || seat=$(printf '%s' "$u" | tr 'A-Z' 'a-z')
+    case $seat in ''|chief-of-staff|fast-lane|research-lane) ;; *) seat=seat ;; esac
     ag=null
     [ -z "$ps" ] || ag=$(jq -c --arg p "$wt" '[.result.worktrees[]? | select(.path == $p) | (.agents // [])[] | "\(.agentType):\(.state)"] | join(" ")' <<<"$ps")
     branch=null dirty=null diff=null
@@ -426,8 +431,8 @@ units() {
       rs=$(launch_roster "$u" "$b") || rs=null
     fi
     jq -cn --arg u "$u" --argjson branch "$branch" --argjson dirty "$dirty" --argjson diff "$diff" --argjson ag "$ag" \
-      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" --argjson pj "${pj:-null}" --argjson rs "$rs" \
-      '{unit: $u, worktree: true, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj, plan: $pj, seats: $rs}' \
+      --argjson st "$st" --argjson age "$age" --argjson sr "$sr" --argjson rd "$rd" --argjson bj "$bj" --argjson pj "${pj:-null}" --argjson rs "$rs" --argjson seen "$SEEN" \
+      '{unit: $u, worktree: true, branch: $branch, dirty: $dirty, diffStat: $diff, agents: $ag, stage: $st, seatRole: $sr, ageSec: $age, round: $rd, builder: $bj, plan: $pj, seats: $rs, sampledAt: $seen.at, seen: $seen}' \
       | jq -c --argjson seat "$(seat_actual "$wt")" '. + {seat: $seat}'
   done > "$RUN/in-flight.jsonl"
   if [ -e "$RUN/builder-bad" ]; then nm builder-logs "a Builder event log could not be read"; else ok builder-logs; fi
@@ -437,19 +442,35 @@ units() {
   # unreadable unit list leaves the record as it was.
   local stages=$CACHE/unit-stages.json old known=true
   old=$(jq -ce 'objects' "$stages" 2>/dev/null) || old='{}'
-  jq -cs --slurpfile oa <(printf '%s' "$old") --argjson now "$NOW" '$oa[0] as $o | map(. as $u | $o[$u.unit] as $p
-      | (if ($p | type) == "object" and ($p.since | type) == "number" and $p.stage == $u.stage and $p.round == $u.round then $p
-         else {stage: $u.stage, round: $u.round, since: $now, exact: ($p != null)} end) as $r
+  # A stage's start is decided here alone, for both lanes (issue 466). The candidates are the stage record and the
+  # live row ($LIVE) of this run's stream generation that carry a mark; of those, the larger sequence wins, the
+  # record on a tie. Its start is kept on the same stage and round; else this run's time, exact when such an
+  # observation saw the stage change, as the record alone did before.
+  jq -cs --slurpfile oa <(printf '%s' "$old") --argjson now "$NOW" \
+    --slurpfile la <(jq -ce '.rows | objects' "$LIVE" 2>/dev/null || echo '{}') --argjson seen "$SEEN" \
+    '$oa[0] as $o | $la[0] as $l | map(. as $u | $o[$u.unit] as $p | ($l[$u.unit] // null) as $lv
+      | ([(if ($p | type) == "object" then {seen: $p.seen, stage: $p.stage, round: $p.round, since: $p.since, exact: ($p.exact == true), rec: 1} else empty end),
+          (if ($lv | type) == "object" and ($lv.row | type) == "object"
+           then {seen: $lv.seen, stage: $lv.row.stage, round: $lv.row.round, since: (try ($lv.row.stageSince | fromdateiso8601) catch null),
+                 exact: ($lv.row.stageExact == true), rec: 0} else empty end)]
+         | map(select((.seen | type) == "object" and .seen.gen == $seen.gen and (.seen.seq | type) == "number" and (.since | type) == "number"))
+         | sort_by([.seen.seq, .rec]) | last) as $c
+      | ((if $c != null and $c.stage == $u.stage and $c.round == $u.round then {stage: $u.stage, round: $u.round, since: $c.since, exact: $c.exact}
+         else {stage: $u.stage, round: $u.round, since: $now, exact: ($c != null)} end) + {seen: $seen}) as $r
       | $u + {stageSince: ($r.since | todate), stageExact: $r.exact, rec: $r})' "$RUN/in-flight.jsonl" > "$RUN/in-flight.json" || return 1
   # Without the workspace directory, or one that cannot be listed, the unit list is unknown, not empty.
-  if ws_listable; then
+  # The fast lane (--units) sees one unit: it reads the record, and only the full cycle writes it.
+  if ! ws_listable; then known=false
+  elif [ -z "${UNITS_ONLY:-}" ]; then
     jq -c 'map({(.unit): .rec}) | add // {}' "$RUN/in-flight.json" > "$RUN/unit-stages" && mv -f "$RUN/unit-stages" "$stages"
-  else known=false; fi
+  fi
   # Each Builder's cost by stage (#94), from its worktree's own sessions, its planning first. The last figures
   # read for each unit are kept, so a finished build shows them as they stood at its merge.
   # shortcut: kept by unit name, so a later build under the same name replaces an earlier one's; key by build if that matters.
   local costs kept=$CACHE/unit-cost.json had
-  if costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select((.builder.stageHistory | type == "array" and length > 0) or .plan != null)
+  # The fast lane (--units) reads no cost, so a slow read never holds a stage update; the full cycle owns it and its record.
+  if [ -n "${UNITS_ONLY:-}" ]; then costs=null
+  elif costs=$(jq -c --arg ws "$PP_WORKSPACES" '[.[] | select((.builder.stageHistory | type == "array" and length > 0) or .plan != null)
         | {unit, worktree: "\($ws)/\(.unit)", stages: (.builder.stageHistory | arrays // []), plan}]' "$RUN/in-flight.json" \
       | python3 "$HERE/dashboard_limit.py" units "$NOW" "$REQS" "$CLAUDE_DIR/projects" "${CODEX_HOME:-$HOME/.codex}/sessions" 2>"$RUN/err-unit-cost") \
       && jq -e 'objects' >/dev/null 2>&1 <<<"$costs"; then
@@ -471,8 +492,8 @@ units() {
   local pushed
   pushed=$(git -C "$PP_MAIN" rev-list '@{upstream}..HEAD' 2>/dev/null | jq -Rcn '[inputs]') && [ -n "$pushed" ] || pushed=null
   jq -c --argjson k "$known" --argjson cap "${cap:-null}" --slurpfile fina <(finished_builds) --slurpfile ca <(printf '%s' "$costs") \
-    --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" --argjson pushed "$pushed" --slurpfile pka <(parked_units "$open") \
-    '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {inFlight: (if $k then (map(del(.rec) | ($c[.unit]? // null) as $x
+    --slurpfile kepta <(jq -ce 'objects' "$kept" 2>/dev/null || echo '{}') --arg s7 "$(since7)" --argjson pushed "$pushed" --slurpfile pka <(parked_units "$open") --argjson seen "$SEEN" \
+    '$fina[0] as $fin | $ca[0] as $c | $kepta[0] as $kept | {seen: $seen, inFlight: (if $k then (map(del(.rec) | ($c[.unit]? // null) as $x
         # A planning stage in the cost is drawn first on the Builder clock, which then starts with it.
         | if .builder then .builder.cost = $x
             | if $x.stages[0].stage? == "planning" and (.builder.stageHistory | type == "array")
@@ -819,8 +840,9 @@ try:
         raise OSError("partial cycle: keep the last whole state")
     tmp = f"{state_path}.{os.getpid()}"
     with open(tmp, "w") as f:
-        json.dump({"version": VERSION, "files": done, "sessions": {k or "": v for k, v in sessions.items()},
-                   "blocks": [[r, k or "", a] for r, k, a in blocks], "blocked": sorted(blocked)}, f)
+        # json.dumps, not json.dump: same text through the C encoder. This file reaches 50 MB.
+        f.write(json.dumps({"version": VERSION, "files": done, "sessions": {k or "": v for k, v in sessions.items()},
+                            "blocks": [[r, k or "", a] for r, k, a in blocks], "blocked": sorted(blocked)}))
     os.replace(tmp, state_path)
 except OSError:
     pass  # no state: the next cycle reads cold
@@ -1119,6 +1141,8 @@ project() {
   trap - EXIT
   RUN=$1 NOW=${DASH_NOW:?} CACHE=$CACHE/$PP_PROJECT
   mkdir -p "$CACHE" "$RUN/src" "$RUN/parts" || return 1
+  # Before anything is read: every unit row and stage record carries this mark (issue 466).
+  SEEN=$(seen_mark) || return 1
   # A project collected alone (no render around it) is its own collect: its own stamp and terminal list.
   [ -n "${DASH_CYCLE:-}" ] || { export DASH_CYCLE=$NOW.$$ DASH_TERMS=$RUN/terminals.json; rm -f "$DASH_TERMS" "$DASH_TERMS.bad"; }
   # The units, the seats and the limit card read the transcripts once a collect (issue 299), through the top-level
@@ -1173,7 +1197,7 @@ projects() {
     i=$((i + 1))
     # The workspace and scratch overrides name one project's folders: a registered project derives its own.
     # Run in that project's own checkout: started from a linked worktree, COMMANDECK_MAIN would not be followed (project-main.sh).
-    (cd "$p" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$p" DASH_NOW="$NOW" bash "$HERE/$NAME.sh" --project "$RUN/proj-$i" >&2) \
+    (cd "$p" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$p" DASH_NOW="$NOW" DASH_LIVE="$OUT/live/${n//[^A-Za-z0-9_.-]/-}.json" bash "$HERE/$NAME.sh" --project "$RUN/proj-$i" >&2) \
       && cat "$RUN/proj-$i/project.json" >> "$RUN/projects.jsonl" || { echo "dashboard: collecting $p failed" >&2; return 1; }
   done < <(registered)
   [ -z "$bare" ] || note="registered with no GitHub origin, not listed: $bare"
@@ -1446,6 +1470,132 @@ cycle() {
   alive
 }
 
+tail_ck() { local n=$(( $2 > 256 ? 256 : $2 )); tail -c +$(( $2 - n + 1 )) "$1" 2>/dev/null | head -c "$n" | cksum | tr ' ' :; } # <file> <offset>: the 256 bytes ending there
+
+# seen_mark -- the stream mark (issue 466), printed as {gen, seq, at}: the one reader and writer of
+# $CACHE/unit-events.gen, under its lock. The generation goes on only while the stream has grown from the recorded
+# sequence with the 256 bytes before it unchanged (append-only keeps both); a truncated, removed or rewritten stream,
+# or a lost record, starts a new one, later than every earlier. A lock not taken in 10 s or a failed write fails the run.
+seen_mark() {
+  local ev=$PP_SCRATCH/unit-events.jsonl rec=$CACHE/unit-events.gen g='' q='' c='' size now fd
+  exec {fd}>>"$rec.lock" && flock -w 10 "$fd" || { echo "the stream mark's lock was not taken in 10 s" >&2; return 1; }
+  read -r g q c 2>/dev/null < "$rec" || true
+  size=$(stat -c %s "$ev" 2>/dev/null) || size=0
+  now=$(date +%s%3N)
+  if ! { [[ $g =~ ^[0-9]+$ && $q =~ ^[0-9]+$ ]] && [ "$size" -ge "$q" ] && [ "$(tail_ck "$ev" "$q")" = "$c" ]; }; then
+    if [[ $g =~ ^[0-9]+$ ]] && [ "$g" -ge "$now" ]; then g=$((g + 1)); else g=$now; fi
+  fi
+  printf '%s %s %s\n' "$g" "$size" "$(tail_ck "$ev" "$size")" > "$rec.$BASHPID" && mv -f "$rec.$BASHPID" "$rec" \
+    || { rm -f "$rec.$BASHPID"; echo "the stream mark could not be written to $rec" >&2; return 1; }
+  exec {fd}>&-
+  printf '{"gen":%s,"seq":%s,"at":"%s"}\n' "$g" "$size" "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+}
+
+# units_fast <unit> -- the fast lane (issue 466): the units group alone for one unit, set up as project() is, printing
+# {unit, sampledAt, seen, row}; row null when the unit is not listed (merged, gone). It waits for no limit read, reads no
+# cost, writes no data.js and no shared cache but cached()'s own, and fails loud when it cannot list Orca's worktrees.
+units_fast() {
+  local out ws
+  NOW=$(date +%s)
+  claude_dir
+  CACHE=$CACHE/$PP_PROJECT
+  mkdir -p "$CACHE" || return 1
+  SEEN=$(seen_mark) || return 1
+  RUN=$(mktemp -d "$OUT/.run.XXXXXX") || return 1
+  mkdir -p "$RUN/src" "$RUN/parts"
+  export DASH_CYCLE=$NOW.$$ DASH_TERMS=$RUN/terminals.json
+  cd "$PP_MAIN" || return 1
+  ws=$(cd "$PP_WORKSPACES" 2>/dev/null && env pwd -P) && PP_WORKSPACES=$ws
+  ws_listable || { echo "cannot list $PP_WORKSPACES" >&2; return 1; }
+  out=$(UNITS_ONLY=$1 units) || { echo "the units group failed" >&2; return 1; }
+  jq -e '.orca.status == "fresh"' "$RUN/src/orca.json" >/dev/null 2>&1 || { echo "orca-ide worktree ps failed" >&2; return 1; }
+  # A unit not listed (merged, gone) was seen absent at the same mark.
+  jq -c --arg u "$1" --argjson seen "$SEEN" '(first(.inFlight[]? | select(.unit == $u)) // null) as $r | {unit: $u, sampledAt: $seen.at, seen: $seen, row: $r}' <<<"$out" || return 1
+  pp_rm_rf "$RUN"; RUN=''
+}
+
+# live_merge <run output> -- fold one fast-lane result into $LIVE, by temp file and rename; the follower is
+# its one writer. A store, not a judge: it keeps the previous row only when it is of the same stream generation with a
+# larger sequence (an older run that finished later), and drops rows older than 24 h. The page decides what is shown.
+# A failed write keeps the last file.
+live_merge() {
+  local t=$LIVE.$BASHPID  # set here: a redirect's $BASHPID is the forked command's
+  jq -c --slurpfile na "$1" --arg cut "$(iso $(( $(date +%s) - 86400 )))" '$na[0] as $n | (.rows // {}) as $r | $r[$n.unit] as $p
+    | .rows = (if ($p | type) == "object" and ($p.seen | type) == "object" and $p.seen.gen == $n.seen.gen and ($p.seen.seq | type) == "number"
+           and $p.seen.seq > $n.seen.seq then $r
+       else $r + {($n.unit): {sampledAt: $n.sampledAt, seen: $n.seen, row: $n.row}} end)
+    | .rows |= with_entries(select(.value.sampledAt >= $cut))' <(jq -ce 'objects' "$LIVE" 2>/dev/null || echo '{}') \
+    > "$t" && mv -f "$t" "$LIVE" || { rm -f "$t"; return 1; }
+}
+
+# follow -- a project's live follower, run beside the cycle by --loop (issue 466). From the stream's end at its start, every 0.5 s it
+# reads the complete new lines of $PP_SCRATCH/unit-events.jsonl (pp_unit_event's), and starts one fast-lane run per
+# distinct safe unit name; an event for a unit whose run is still going runs it once more after. Each finished run is
+# merged at the tick that sees it, so one slow unit never holds another's update. It ends with its parent.
+# Nothing truncates or rotates the stream, but the size alone cannot show a file replaced or regrown to or past the
+# offset inside one tick, so the follower also keeps the inode and tail_ck at the offset; either changing reads from 0.
+follow() {
+  local LC_ALL=C ev=$PP_SCRATCH/unit-events.jsonl d=$OUT/.live/$PP_PROJECT parent=$PPID off size c rest k v u rc ino cur ck
+  local -A pid=() again=()
+  mkdir -p "$d" || return 1
+  read -r ino off < <(stat -c '%i %s' "$ev" 2>/dev/null) || { ino='' off=0; }
+  ck=$(tail_ck "$ev" "$off")
+  while kill -0 "$parent" 2>/dev/null; do
+    read -r cur size < <(stat -c '%i %s' "$ev" 2>/dev/null) || { cur='' size=0; }
+    if [ "$cur" != "$ino" ] || [ "$size" -lt "$off" ] || [ "$(tail_ck "$ev" "$off")" != "$ck" ]; then
+      ino=$cur off=0 ck=$(tail_ck "$ev" 0)
+    fi
+    if [ "$size" -gt "$off" ]; then
+      c='' rest=''
+      tail -c +$((off + 1)) "$ev" 2>/dev/null | head -c $((size - off)) > "$d/chunk"
+      IFS= read -r -d '' c < "$d/chunk" || true
+      # A line still being written waits for its newline.
+      rest=${c##*$'\n'}; k=$(( ${#c} - ${#rest} ))
+      if [ "$k" -gt 0 ]; then
+        off=$((off + k)) ck=$(tail_ck "$ev" "$off")
+        while IFS= read -r v; do
+          if [[ $v =~ ^\"[A-Za-z0-9][A-Za-z0-9._-]*\"$ ]]; then u=${v:1:${#v}-2}
+            if [ -n "${pid[$u]:-}" ]; then again[$u]=1
+            else "$BASH" "$HERE/$NAME.sh" --units "$u" > "$d/$u.out" 2> "$d/$u.err" & pid[$u]=$!; fi
+          else echo "$(date +%FT%T) dashboard: live event skipped: unit $v is not a safe unit name" >&2; fi
+        done < <(printf '%s' "${c:0:k}" | jq -rR 'select(length > 0) | (fromjson? | objects | .unit | strings | @json) // "null"' | awk '!s[$0]++')
+      fi
+    fi
+    for u in "${!pid[@]}"; do
+      kill -0 "${pid[$u]}" 2>/dev/null && continue
+      rc=0; wait "${pid[$u]}" || rc=$?
+      if [ "$rc" = 0 ] && jq -e '(.unit | type) == "string" and (.sampledAt | type) == "string" and (.seen.gen | type) == "number" and (.seen.seq | type) == "number" and has("row")' "$d/$u.out" >/dev/null 2>&1; then
+        live_merge "$d/$u.out" || echo "$(date +%FT%T) dashboard: live update of $u FAILED: live.json not written" >&2
+      else echo "$(date +%FT%T) dashboard: live update of $u FAILED: $(tail -n 1 "$d/$u.err" 2>/dev/null | cut -c1-200)" >&2; fi
+      unset "pid[$u]"
+      if [ -n "${again[$u]:-}" ]; then
+        unset "again[$u]"
+        "$BASH" "$HERE/$NAME.sh" --units "$u" > "$d/$u.out" 2> "$d/$u.err" & pid[$u]=$!
+      fi
+    done
+    sleep 0.5
+  done
+}
+
+# follow_projects -- --loop's other followers (issue 466): each registered project the cycle collects gets its own, set up
+# as its collect is, writing its own live file; a dead one starts again and an unregistered one stops. The home project's
+# is started by --loop itself.
+declare -A FOLLOW=()
+follow_projects() {
+  local p n; local -A want=()
+  while IFS= read -r p; do
+    n=${p##*/}; n=${n//[^A-Za-z0-9_.-]/-}
+    [ "$n" != "$PP_PROJECT" ] && [ -e "$p/.git" ] && github "$p" || continue
+    want[$n]=1
+    [ -n "${FOLLOW[$n]:-}" ] && kill -0 "${FOLLOW[$n]}" 2>/dev/null && continue
+    (cd "$p" && exec env -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$p" \
+      DASH_LIVE="$OUT/live/$n.json" "$BASH" "$HERE/$NAME.sh" --follow) & FOLLOW[$n]=$!
+  done < <(registered)
+  for n in "${!FOLLOW[@]}"; do
+    [ -n "${want[$n]:-}" ] || { kill "${FOLLOW[$n]}" 2>/dev/null; unset "FOLLOW[$n]"; }
+  done
+}
+
 uninstall() {
   if [ "$(hs_os)" = Darwin ]; then
     launchctl bootout "gui/$(id -u)/$HS_PREFIX$NAME" 2>/dev/null || true
@@ -1486,6 +1636,7 @@ case "${1:-}" in
           rm -f "$OUT/.cycle"
           # Every 15 s while this loop lives (COMMANDECK_DASHBOARD_ALIVE_S, for the self-test), and each refreshes the view files; a cycle's start and end also write it at once.
           { while kill -0 $$ 2>/dev/null; do alive; sleep "${COMMANDECK_DASHBOARD_ALIVE_S:-15}"; done; } & ALV=$!
+          "$BASH" "$HERE/$NAME.sh" --follow & FLW=$!
           last=null
           while :; do
             # Restarted here if it died; request lines would flood dashboard.log.
@@ -1494,12 +1645,18 @@ case "${1:-}" in
             [ -e "$OUT/layout.js" ] || echo 'window.DASH_LAYOUT = null;' > "$OUT/layout.js"
             [ -n "$SRV" ] && kill -0 "$SRV" 2>/dev/null \
               || { python3 "$HERE/dashboard_serve.py" "$PORT" "$BIND" "$OUT" >/dev/null 2>&1 & SRV=$!; }
+            follow_projects
             t0=$(date +%s); cycle "$t0" "$last"
             render || echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; pp_rm_rf "${RUN:-}" "${PUB:-}"
             last=$(( $(date +%s) - t0 )); cycle "$t0" "$last"
             [ "$last" -le 60 ] || echo "dashboard: cycle took $last s" >&2
             # COMMANDECK_DASHBOARD_CYCLE_S, for the self-test. A foreground sleep would hold off the TERM trap that stops the server.
             sleep "${COMMANDECK_DASHBOARD_CYCLE_S:-60}" & wait $!; done ;;
+  --units) [ -n "${2:-}" ] || { echo "usage: dashboard.sh --units <unit>" >&2; exit 2; }
+           mkdir -p "$OUT" || exit 1
+           units_fast "$2" || exit 1; exit 0 ;;
+  --follow) mkdir -p "$OUT" "${LIVE%/*}" || exit 1
+            follow; exit $? ;;
   "") render || { echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; exit 1; } ;;
-  *) echo "usage: dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--register <repo>|--unregister <repo>|--import <folder>]" >&2; exit 2 ;;
+  *) echo "usage: dashboard.sh [--install|--uninstall|--restart|--status|--job-file|--loop|--units <unit>|--follow|--register <repo>|--unregister <repo>|--import <folder>]" >&2; exit 2 ;;
 esac

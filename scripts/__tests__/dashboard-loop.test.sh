@@ -47,6 +47,17 @@ wait_for 10 grep -q 'could not refresh' "$T/loop.err"; check "a copy it cannot m
 check "and the old file stays" 1 "$([ -s "$T/out/app.js" ] && ! same app.js && echo 1)"
 chmod u+w "$T/out"
 
+# Issue 466: a registered project's stream is followed too, each project's rows in its own file. The loop registers it at
+# a cycle, so the event repeats until a lane has run. Its unit stays out of the home project's rows.
+B=$T/beta; git init -q -b main "$B" && git -C "$B" remote add origin https://github.com/acme/beta.git
+printf '#!/usr/bin/env bash\ncase "$*" in *"worktree ps"*) echo %s ;; *) exit 1 ;; esac\n' "'{\"result\":{\"worktrees\":[]}}'" > "$T/bin/orca-ide"; chmod +x "$T/bin/orca-ide"
+inb() { (cd "$B" && env -u COMMANDECK_SCRATCH -u COMMANDECK_WORKSPACES COMMANDECK_MAIN="$B" bash -c ". '$T/plugin/scripts/paths.sh'; $1"); }
+BW=$(inb 'echo "$PP_WORKSPACES"'); mkdir -p "$BW/bu1" && touch "$BW/bu1/.git"
+printf '%s\n' "$T/proj" "$B" > "$T/out/projects"
+beta_live() { inb 'pp_unit_event bu1 seat-launch'; sleep 0.5; jq -e '.rows.bu1.row.unit == "bu1"' "$T/out/live/beta.json" >/dev/null 2>&1; }
+wait_for 60 beta_live; check "a registered project goes live (issue 466)" "0 false" "$? $(jq -e '.rows.bu1' "$T/out/live.json" >/dev/null 2>&1 && echo true || echo false)"
+printf '%s\n' "$T/proj" > "$T/out/projects"
+
 # Issue 292: the job file left out COMMANDECK_SCRATCH, so a home project with its scratch moved lost its state at
 # the first restart. A stub launchctl, so no job is loaded.
 printf '#!/usr/bin/env bash\necho "${0##*/} $*" >> "%s/managed"\n[ "$1" != print ]\n' "$T" > "$T/bin/launchctl"; cp "$T/bin/launchctl" "$T/bin/systemctl"; chmod +x "$T/bin/launchctl" "$T/bin/systemctl"

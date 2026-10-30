@@ -151,5 +151,6 @@ if [ -n "$BAD" ]; then
 fi
 refuse " (written while panes closed)"
 [ "$ADOPT" = 0 ] || { rm -f "$(git -C "$WT" rev-parse --absolute-git-dir)/commandeck-plan-of" && echo "adopted $WT"; exit; }
+bash "${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh}" stop "$WT" || true
 orca-ide worktree remove --worktree "path:$WT" --force >/dev/null || { echo "kept: $WT: worktree remove failed" >&2; exit 1; }
 echo "closed ${WT##*/}"

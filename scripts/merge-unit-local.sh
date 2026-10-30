@@ -168,7 +168,8 @@ cleanup_step() {
     else hold "git status failed"; fi
   fi
   if [ -n "$CLEANUP_HELD" ]; then echo "STEP 5 cleanup HELD: $CLEANUP_HELD"
-  else orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"; fi
+  else bash "${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh}" stop "$WT" || true
+    orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"; fi
 }
 # main_holds <tip>: main already holds the unit, read from git alone: the tip is in main (a fast-forward, or no commit
 # of its own), or one commit of main since the fork point is the branch's whole diff (the squash, by patch id), or
@@ -463,6 +464,9 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
     'BEGIN { n = split(have, h, " "); for (i = 1; i <= n; i++) seen[h[i]] = 1 }
      !seen[$0]++ { out = out (out == "" ? "" : ", ") $0 } END { print out }' || true)
 [ -z "$REFS" ] || TITLE="$TITLE ($REFS)"
+# Issue 465: the Builder's proof counts the class stops of the build (a redesign or a question to main); the squash keeps them.
+CLASS_STOPS=$(grep -m1 '^Class stops: ' <<<"${BUILDER_PROOF:-}" || true)
+[ -z "$CLASS_STOPS" ] || TITLE=$(printf '%s\n\n%s' "$TITLE" "$CLASS_STOPS")
 # The unit's work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief:
 # the Builder edits its brief, and a quoted list or directive in it adds nothing.
 ISSUES=$PP_MAIN/.claude/briefs/$UNIT-issues.json
@@ -764,6 +768,7 @@ if [ "$DRY_RUN" = 0 ]; then
     || echo "no unit ledger row written for $UNIT (ignored)" >&2
   cleanup_step
 fi
+[ "$DRY_RUN" = 1 ] || pp_unit_event "$UNIT" merge || true
 
 [ "$DRY_RUN" = 0 ] || echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
 echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${CLEANUP_HELD:+; cleanup HELD: $CLEANUP_HELD}"

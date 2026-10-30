@@ -5,7 +5,15 @@
 The dashboard is one local page for all your projects, with a bar to switch
 between them. A background job waits 60 seconds between collections, with no
 model call; collection time adds to that interval. The page refreshes its
-data every 15 seconds. Each project's view shows alerts,
+data every 15 seconds. A unit's stage change reaches the page sooner: the page
+opens the shown project's `events` stream (a registered project has its own
+follower and live file), which sends the fast lane's rows within about
+a second of a change, and keeps it open with a comment every 15 seconds. A live
+row replaces the snapshot's row only when it is newer by the stream mark (the
+same generation and a larger sequence); it never wipes a known cost. The stream
+needs the same login as any other page, checked at every tick. A cost table
+says when its figures were read (`read <when>`) and, if that read failed, since
+when they are old (`stale since <when>`). Each project's view shows alerts,
 builds in progress, decisions waiting on you, `main` against its remote,
 every worktree by stage, a unit's planning as its Planning stage, seat by seat,
 counted in its build's cost, the 7-day limit, tokens per role over 7 days, recent

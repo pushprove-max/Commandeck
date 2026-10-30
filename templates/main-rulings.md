@@ -6,7 +6,9 @@ Builder acknowledges the whole file before its next pass
 acknowledgement. A numbered item that names an issue adds that issue to the
 unit's work list on the dashboard. A ruling that something stays as it is
 goes under "Stated limits", one line each: the pass reads limits from that
-heading only, and every line under it reaches the reviewer. A review finding
+heading only, and every line under it reaches the reviewer. A limit added to the
+brief or the plan after the plan judge's GO must end with ruling:<id>, and that
+id must be logged and listed in this file, or the next pass refuses it. A review finding
 main rules out goes under "Cleared findings" as its own first two parts,
 "<title> -- <file>:<line>": the next reviewer is handed it as a limit, not to
 list again. Clearing never merges a NO-GO: the merge still needs a closing

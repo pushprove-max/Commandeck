@@ -32,10 +32,13 @@ pp_cos_key() {
   done
 }
 # pp_standing_wt <folder>: 0 for the folder names of the seats the owner sits in, found by name as the relay is:
-# the Chief-of-Staff relay and the Fast-lane and Research-lane worktrees (issue 416). The one list; the two jq
-# sites (ruling-log-archive.sh, cos-check.sh) spell the same three, and worktree-setup.test.sh fails on a site that drifts.
+# the Chief-of-Staff relay and the Fast-lane and Research-lane worktrees (issue 416). PP_STANDING_SEATS is the one
+# list (issue 460): a name added to it reaches every caller, ruling-log-archive.sh's jq included. Only cos-check.sh's
+# jq spells the same three, and worktree-setup.test.sh fails on a site that drifts.
+PP_STANDING_SEATS=(Chief-of-Staff Fast-lane Research-lane)
 pp_standing_wt() {
-  case ${1-} in Chief-of-Staff|Fast-lane|Research-lane) return 0 ;; esac
+  local s
+  for s in "${PP_STANDING_SEATS[@]}"; do [ "${1-}" = "$s" ] && return 0; done
   return 1
 }
 # pp_flag <key>: 0 when the project's .claude/commandeck.json (setup writes it)

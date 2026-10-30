@@ -168,4 +168,12 @@ if [ -n "$ROOT" ] && mkdir -p "$ROOT/.claude"; then
     '{ts: $ts, event: "search-refused", tool: $t, reason: $r, use: (if $u == "" then null else $u end)}' >> "$ROOT/.claude/builder-events.jsonl"
 fi
 echo "$MSG" >&2
+# Try line: the refused search over a folder of the checkout (the first one, as bash-guardrails.sh names it), or a
+# plain grep of the file a streak search named. No pattern found (an -e pattern, a find) gets no line.
+if [ -n "$PAT" ]; then
+  if [ "$REASON" = whole-repo ]; then
+    TRYDIR=$(cd "${ROOT:-.}" 2>/dev/null && ls -d */ 2>/dev/null | head -1); TRYDIR=${TRYDIR%/}
+    echo "Try: rg -n -e '${PAT//\'/\'\\\'\'}' ${TRYDIR:-src}" >&2
+  elif [ -f "$PTH" ]; then echo "Try: grep -n -e '${PAT//\'/\'\\\'\'}' '${PTH//\'/\'\\\'\'}'" >&2; fi
+fi
 exit 2

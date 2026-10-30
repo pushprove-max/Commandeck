@@ -49,5 +49,8 @@ check "the next collect after a refusal sends" 5 "$(wakes)"
 sed -i '/^session=/d' "$REC"; rm -f "$LOGD/sid1.jsonl"; printf 'Done.\nVERDICT: GO\n' > "$T/screen"; col >"$T/out"; col >"$T/out"
 check "a seat with no session log sends on each collect: a duplicate, never silence" 7 "$(wakes)"
 
+# The launch and the verdict each append a line to the unit event stream the dashboard's live follower reads.
+check "a state change hits the stream (issue 466)" "seat-launch seat-verdict" "$(jq -r 'select(.unit == "seat-builder") | .event' "$SC/unit-events.jsonl" | sort -u | paste -sd' ' -)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -38,11 +38,18 @@ if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ "$((10#$EST))" -lt 150 ]; then
   if [ -n "$KEEP" ]; then WHY="$WHY; $KEEP keeps the panel under 150 changed lines"
   else TIER='Plan + judge' WHY="$WHY, a small unit (~$((10#$EST)) changed lines, under 150): one judge"; fi
 fi
+# Issue 479: a Panel unit estimated at config/routing.json's review-limits.oneJudgeLines or fewer changed lines gets the
+# one judge the tier above picks, and stays Panel (its trigger stands); a panel-always trigger, no estimate or a bigger one keeps both.
+ONEJ=
+if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ -z "$KEEP" ]; then
+  LIM=$(pp_review_limit oneJudgeLines) || { echo "cannot read review-limits.oneJudgeLines from $(pp_routing)" >&2; exit 2; }
+  if [ "$((10#$EST))" -le "$LIM" ]; then ONEJ=one WHY="$WHY; ~$((10#$EST)) changed lines, at most $LIM: one judge"; fi
+fi
 # on <role> -- the seat is on in /plugin config (issue 312); a value its Enabled key does not take stops here.
 on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
-case $TIER in
+case ${ONEJ:-$TIER} in
   'No plan') SEATS=() ;;
-  'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-fable) ;;
+  one|'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-fable) ;;
   *) SEATS=(plan-author plan-judge-fable plan-judge-sol) ;;
 esac
 # An author that is off is no plan; a judge that is off leaves the other to judge alone, and none leaves the plan unjudged.

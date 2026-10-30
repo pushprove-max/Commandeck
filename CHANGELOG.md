@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.62.0 -- 2026-10-30
+
+### Plans
+
+- A plan that names test cases must now state how many, and a wrong count is refused with the line to fix.
+- A plan that asks the owner anything outside its one question section is refused.
+- A plan over 1,000 changed lines or 5 issues is refused unless it says why it should not be split.
+- A small plan in the panel tier now gets one judge, and the launch says why.
+- Plan judges now check whether a new uniqueness rule is safe while old code is still running.
+- A plan author can list the owner's earlier answers on a topic before asking again.
+
+### Reviews
+
+- A review pass now prints the start and end time of each step, so a slow pass shows where the time went.
+- A stated limit added after the plan's GO is refused unless it cites one of main's rulings.
+- A plan-only change at the pass cap is now refused with the one way out: write the code, then run the final pass.
+- Refused commands now end with a ready command to try, where one can be built from what was refused.
+- Each merged unit's message now counts the review findings that came back and forced a redesign.
+- A new command runs a plan's named test and records that it failed for the right reason.
+- With Serena set up, builders and review passes now share one local Serena server per worktree. Reviewers get read-only lookups, even when your Codex home turns Serena off.
+
+### Builds
+
+- An answer sent in the moment after a Builder asks now reaches its wait.
+- An answer to a Builder whose session has gone cold now starts a fresh session.
+- A plan or review seat can now be revised after its done report, and its next finish wakes main.
+- The seat status now shows the pane's live state.
+- The batching nudge now names the looks to send together, with a ready command for reads.
+- A fresh install no longer prints an error at the end of a turn.
+
+### Dashboard
+
+- A unit's stage change now reaches the page within seconds, without a reload.
+- You can add your own names to the standing worktrees: they show as seats and their prompts are kept.
+- Unit reviews now cut idle waits with no decision recorded, and name the cause.
+- State files are written a little faster.
+
 ## 0.61.2 -- 2026-10-29
 
 ### Docs

@@ -123,5 +123,12 @@ $(grep -c "^- pass 12 ended NO-GO, and .* has no usable '## Sites checked (pass 
 $(grep -c "^- pass 12 ended NO-GO, and .* has no usable '## New code checked (pass 12)' section" "$TMP/err") \
 $([ -e "$B/$U-r13-reports.md" ] && echo yes || echo no) $(git -C "$W" rev-parse HEAD)"
 
+# Issue 465: each class stop leaves one mark in the fix brief, for --verify to count: none for a first return, a redesign
+# mark for the second, and the ask-main mark beside it for the third.
+check "a class stop marks the fix brief: none at the first return, redesign at the second, ask-main at the third (issue 465)" "0 1 0 1 1" \
+  "$(grep -c '^- Class ' "$B/$U-fix-r2.md") \
+$(grep -cx -- '- Class redesign: lost-reply' "$B/$U-fix-r3.md") $(grep -cx -- '- Class ask-main: lost-reply' "$B/$U-fix-r3.md") \
+$(grep -cx -- '- Class redesign: lost-reply' "$B/$U-fix-r4.md") $(grep -cx -- '- Class ask-main: lost-reply' "$B/$U-fix-r4.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

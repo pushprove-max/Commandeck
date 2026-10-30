@@ -32,11 +32,17 @@
 # pane whose ask-main.sh call is in that wait as the answer is sent takes it (the call's wait token is claimed for the send,
 # and the call does not return until it is sent); any other pane, one between slices included, is refused with nothing
 # sent and the plain command printed: an interrupt would cut the work it is doing.
-# Never automatic. With no <question-id>, the pane's own open question (its seat record, the way pp_task_close counts it)
-# is the thread the answer replies in, so a pane blocked in `orchestration ask` is not left to wait out its limit.
+# Never automatic, but for one case (issue 478): a Builder whose prompt cache has gone cold (past the cached turn's start + ttl)
+# is idle or parked in ask-main.sh's wait, so its old session is stale. A parked one gets one Escape (no Enter, no model call;
+# it ends only the wait), and once the wait is confirmed gone the answer goes to a fresh session of the pane
+# (builder-add-work.sh --answer). An Escape that is not confirmed leaves the answer on today's route.
+# With no <question-id>, the pane's own open question (its seat record, the way pp_task_close counts it)
+# is the thread the answer replies in, so a pane blocked in `orchestration ask` is not left to wait out its limit. The
+# question's wait token can appear after the answer is sent (issue 463), so the wait for the tag looks for it again first.
 #
 # ANSWER_WORKER_WAIT: seconds to wait for the text in the log (default 60).
 # ANSWER_WORKER_ACK_WAIT: seconds an inbox answer to a busy pane is checked from the send before it is NOT acknowledged (default 600).
+# ANSWER_WORKER_ESCAPE_WAIT: seconds the Escape to a cold, parked Builder is checked for (default 10).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -86,7 +92,7 @@ claim_wait() { local t c p; for t in "$PP_SCRATCH"/ask-main/*.wait; do
     rm -f "$c"
   done; return 1; }
 retry() { printf 'Send it without --interrupt: bash %s/answer-worker.sh %q %q' "$HERE" "${U:-$H}" "$TEXT"; [ -z "$Q" ] || printf ' %q' "$Q"; }
-[ -z "$INTERRUPT" ] || trap '[ -z "$CLAIM" ] || rm -f "$CLAIM"' EXIT
+trap '[ -z "$CLAIM" ] || rm -f "$CLAIM"' EXIT
 # No question id given: the pane's own open question is the thread to reply in (issue 351). pp_seat_open_ask counts the
 # questions pp_task_close counts, so the answer and the task close agree. Not in the background follower: the call that
 # started it has looked, and handed on the id it found.
@@ -208,20 +214,69 @@ log_state
 # naming it for the whole call (claim_wait's liveness test, read only), also between two inbox waits, when <id>.wait is
 # gone. Its name is the question's id, the thread ask-main.sh returns on. A pane not parked keeps today's route (issue
 # 351's case).
-if [ -z "$QID" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ] && [ -z "$INTERRUPT" ] && pending_state parked; then
+find_asking() {
+  local t p
   for t in "$PP_SCRATCH"/ask-main/*.asking; do
     [ -f "$t" ] && grep -qxF "pane=$H" "$t" 2>/dev/null || continue
     p=$(sed -n 's/^pid=//p' "$t")
     [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o command= 2>/dev/null | grep -q 'ask-main\.sh' || continue
     QID=${t##*/}; QID=${QID%.asking}; Q=$QID
-    echo "answer-worker: replying in $QID, the question $H is waiting on in ask-main.sh" >&2; break
+    echo "answer-worker: replying in $QID, the question $H is waiting on in ask-main.sh" >&2; return 0
   done
+  return 1
+}
+if [ -z "$QID" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ] && [ -z "$INTERRUPT" ] && pending_state parked; then
+  find_asking
 fi
+# fresh_unit -- the unit of the Builder record that names $H when the cache of its session has gone cold (issue 478):
+# past the cached turn's start + ttl its context is paid for in full again, so the answer is fresh-session work.
+# With no cache row (either null) it is not cold.
+fresh_unit() {
+  local rec exp
+  rec=$(grep -lx "handle=$H" "$PP_SCRATCH"/seat-*-builder.txt 2>/dev/null | head -1 || true)
+  [ -n "$rec" ] || return 1
+  exp=$(pp_session_cache "$WT" "${LOG:-}" | jq -r 'if .at != null and .ttl != null then .at + .ttl else empty end' 2>/dev/null)
+  [ -n "$exp" ] && [ "$(date +%s)" -gt "$exp" ] || return 1
+  rec=${rec##*/seat-}; echo "${rec%-builder.txt}"
+}
+# end_wait -- end the claimed ask-main.sh wait with one Escape (no Enter: Claude Code stops the tool call and its model
+# call never starts), and say whether the pane is now at rest. The claim goes at once: ask-main.sh's EXIT trap waits on
+# a held claim. At rest, all four: the claimed pid gone, no tool call pending (parked or working) on a fresh read, the
+# assistant rows unchanged, and the pane not busy. Anything else returns 1 and the answer takes today's route.
+assistant_rows() { jq -Rn '[inputs | fromjson? | objects | select(.type == "assistant")] | length' "$1" 2>/dev/null; }
+end_wait() {
+  local pid rows i rc
+  pid=$(sed -n 's/^pid=//p' "$CLAIM"); rows=$(assistant_rows "$LOG")
+  timeout 8 orca-ide terminal send --terminal "$H" --text $'\x1b' --json >/dev/null; rc=$?
+  rm -f "$CLAIM"; CLAIM=
+  [ "$rc" = 0 ] || return 1
+  for ((i = 0; i < ${ANSWER_WORKER_ESCAPE_WAIT:-10}; i++)); do
+    log_state
+    if ! kill -0 "$pid" 2>/dev/null && ! pending_state parked && ! pending_state working \
+       && [ "$(assistant_rows "$LOG")" = "$rows" ]; then
+      rc=0; pane_is_busy "$H" || rc=$?
+      [ "$rc" != 1 ] || return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
 # The background follower (issue 340) is this script run again: the answer is already sent, the way it went is handed
 # over, and only the wait for the tag in the log, its retry and the closing of the ledger entry are left.
 FOLLOW=${ANSWER_WORKER_FOLLOW:-}
+FRESH=
+# The cache and pane reads are slow, so a pane with no Builder record skips them, and a pane read busy here is not read
+# again in the chain below.
+BUSY=
+if [ -z "$FOLLOW" ] && [ -z "$INTERRUPT" ] && grep -lqx "handle=$H" "$PP_SCRATCH"/seat-*-builder.txt 2>/dev/null; then
+  if idle; then FRESH_UNIT=$(fresh_unit) && FRESH=1
+  else BUSY=1; if pending_state parked && FRESH_UNIT=$(fresh_unit) && claim_wait && end_wait; then FRESH=1 BUSY=; fi; fi
+fi
 if [ -n "$FOLLOW" ]; then
   WAY=$ANSWER_WORKER_WAY REPLIED=${ANSWER_WORKER_REPLIED:-}
+elif [ -n "$FRESH" ] && bash "$HERE/builder-add-work.sh" "$FRESH_UNIT" --answer "$MSG"; then
+  WAY="handed to a fresh session"
+  wake sent
 elif [ -n "$INTERRUPT" ]; then
   WAY="typed into the pane with an interrupt"
   claim_wait || { echo "answer-worker: --interrupt refused: $H is not waiting in ask-main.sh now (no question of its, or its wait has returned); nothing was sent. $(retry)" >&2; exit 1; }
@@ -229,7 +284,7 @@ elif [ -n "$INTERRUPT" ]; then
   rm -f "$CLAIM"; CLAIM=
   [ "$rc" = 0 ] || { wake refused "terminal send --interrupt failed"; echo "answer-worker: terminal send --interrupt to $H failed (exit $rc); the answer may have been typed before it ended, so check the pane first. $(retry)" >&2; exit 1; }
   wake sent
-elif idle; then
+elif [ -z "$BUSY" ] && idle; then
   WAY="typed into the pane"
   orca-ide terminal send --terminal "$H" --text "$MSG" --enter --json >/dev/null \
     || { wake refused "terminal send failed"; echo "answer-worker: terminal send to $H failed; the answer was not delivered" >&2; exit 1; }
@@ -252,11 +307,20 @@ else
   fi
   wake sent
 fi
+# A fresh session reads the answer file, and takes its time to settle: the wait for it is the acknowledgement limit.
+[[ $WAY != handed* ]] || WAIT=$ACK
 
 confirm() {
 local LEFT=$WAIT T0=$SECONDS QUEUED=
 while :; do
   log_state
+  # Issue 463: ask-main.sh writes its question's token after main's foreground call has gone, so a send that found none
+  # may still be the answer to a pane in that wait. Looked for again here, in the follower too, before the tag check.
+  if [ -z "$QID" ] && [ "$WAY" = "sent to the pane's inbox" ] && find_asking; then
+    if orca-ide orchestration reply --id "$QID" --body "$MSG" --json >/dev/null 2>&1; then
+      REPLIED=1; WAY="sent to the pane's inbox as a reply to $QID"
+    else echo "answer-worker: the late reply to $QID failed; the answer stays in the inbox" >&2; fi
+  fi
   [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
   # inbox: the answer is typed in then, once, and waited for afresh. So is a pane that left its wait and went

@@ -37,6 +37,15 @@ WORKER=0
 [ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ] || WORKER=1
 # One single-quoted word (the same function as hooks/bash-guardrails.sh).
 shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# Try line: the one-line command with every --timeout-ms above <ms> set to <ms>; nothing for a multi-line call.
+cap_try() { # <ms>
+  local n t=$CMD
+  case "$CMD" in *$'\n'*) return 0 ;; esac
+  for n in $(grep -oE -- '--timeout-ms(=|[[:space:]]+)[0-9]+' <<<"$CMD" | grep -oE '[0-9]+$' | sort -u); do
+    [ "$n" -gt "$1" ] && t=$(sed -E "s/(--timeout-ms(=|[[:space:]]+))$n([^0-9]|\$)/\1$1\3/g" <<<"$t")
+  done
+  [ "$t" = "$CMD" ] || printf 'Try: %s\n' "$t" >&2
+}
 
 # A HEREDOC BODY IS DATA BEING WRITTEN, NOT A COMMAND BEING RUN.
 # `cat >> report.md <<'EOF' ... bash scripts/orca-wait.sh ... EOF`
@@ -418,6 +427,9 @@ print("loop" if kind == 2 else "unread" if unread else "sleeploop:%d" % total if
   fi
   if [ "${WAITED:-0}" -gt "$LIMIT" ] 2>/dev/null; then
     printf "BLOCKED: this call can wait up to %s s in all, past the prompt cache's life, so the next reply rewrites it.\nOne wait per call, at most %s s: an ask takes \`--timeout-ms 240000\` and on a timeout reruns with \`--resume <message id>\`.\n" "$WAITED" "$LIMIT" >&2
+    # Only a lone ask is rebuilt: with another wait beside it, a shorter ask would not bring the total under the limit.
+    NMS=$(grep -oE -- '--timeout-ms(=|[[:space:]]+)[0-9]+' <<<"$CMD" | grep -oE '[0-9]+$')
+    [ "$(grep -c . <<<"$NMS")" = 1 ] && [ "$WAITED" = "$(( (NMS + 999) / 1000 ))" ] && cap_try "${LIMIT}000"
     exit 2
   fi
   exit 0

@@ -536,3 +536,32 @@ test('truncated_transcript_replaces_started_memo', (t) => {
   assert.equal(typeof warm, 'number');
   assert.equal(warm, JSON.parse(seatsRun(c, NOW + 120, coldDir(c)).out).main.rebuildUsd, 'warm equals a cold read');
 });
+
+// ---- the 50 MB state files: json.dump to a file takes the pure-Python encoder (issue 459) ---------------------------
+// A wall-clock assertion is banned, so a sitecustomize on PYTHONPATH makes json.dump raise on a state file (the four
+// carry a "version"; the small started-at memo beside them is not one of the four).
+// BASE_ENV carries the path: py() and bash() both build their env from it, so the guard reader's heredoc sees it too.
+test('state files skip the Python encoder (issue 459)', (t) => {
+  const site = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-site-'));
+  fs.writeFileSync(path.join(site, 'sitecustomize.py'), `import json, sys
+_dump = json.dump
+def _refuse(o, f, *a, **k):
+    if f is not sys.stdout and isinstance(o, dict) and "version" in o:
+        raise AssertionError("a state file went through json.dump")
+    return _dump(o, f, *a, **k)
+json.dump = _refuse
+`);
+  BASE_ENV.PYTHONPATH = site;
+  t.after(() => { delete BASE_ENV.PYTHONPATH; fs.rmSync(site, { recursive: true, force: true }); });
+  for (const [A, call] of [[claude, claudeReq], [codex, codexReq]]) {
+    const c = A.setup(t);
+    A.put(c, 'f1', A.line(1));
+    const cache = path.join(c.cache, 'state.json');
+    py(c, call(c, cache));
+    assert.ok(JSON.parse(fs.readFileSync(cache, 'utf8')).version, `${A.name}: the state is written, and reads back`);
+  }
+  const c = guard.setup(t);
+  guard.put(c, 'f1', guard.line(1));
+  assert.deepEqual(guard.ids(c), [1]);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(c.cache, 'guard-blocks.json'), 'utf8')).version, 'the guard state is written, and reads back');
+});

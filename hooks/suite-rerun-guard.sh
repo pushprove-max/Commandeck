@@ -324,6 +324,8 @@ if [ -f "$STATE" ]; then
   # started, and blocking on it strands the tree until the 30 minutes lapse.
   if [ "${STATUS:-}" = complete ] && [ "$LAST_TREE" = "$TREE" ] && [ "$AGE" -lt 30 ]; then
     echo "BLOCKED: '$KEY' already ran $AGE min ago in $CWD with NO edit since -- the result is what you saw. Save the output next time (... > \"\$SCRATCH/run.log\") and read the file. Checking a flake? Prefix the command with RERUN=1. Do not ask main: if you still need that check, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on." >&2
+    # A flake check on purpose: the same one-line command behind the override.
+    case "$CMD" in *$'\n'*) ;; *) echo "Try: RERUN=1 $CMD" >&2 ;; esac
     exit 2
   fi
 fi

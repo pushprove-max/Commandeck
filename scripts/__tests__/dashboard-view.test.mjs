@@ -45,7 +45,10 @@ function boot(store = {}, project = 'demo', clock = Date, at = '127.0.0.1', sche
   // w.refresh() runs the page's timers once, as the next refresh would: it asks for data.js again.
   const timers = [];
   w.refresh = () => timers.forEach((f) => f());
-  vm.runInNewContext(appSrc, { window: w, document: w.document, setInterval: (f) => timers.push(f), clearInterval: none, setTimeout, clearTimeout, Date: clock, console });
+  // jsdom has no EventSource: a stub records each address opened, and a test calls its onmessage({data}).
+  w.eventSources = [];
+  w.EventSource = function (url) { this.url = url; w.eventSources.push(this); };
+  vm.runInNewContext(appSrc, { window: w, document: w.document, EventSource: w.EventSource, setInterval: (f) => timers.push(f), clearInterval: none, setTimeout, clearTimeout, Date: clock, console });
   return w;
 }
 // Saves and their answers are real requests: wait until a page has sent nothing new for a while.
@@ -1313,4 +1316,54 @@ test('the Issues card shows counts by priority', () => {
   w.refresh();
   show(w, { units: { inFlight: [] }, github: { ...GH, byPriority: null } });
   assert.equal(text(w.document.getElementById('held-priority')), 'Priority counts not measured');
+});
+
+// Issue 466: the page lays live rows (the stream's {rows}) over each snapshot by the stream mark, not by wall-clock time.
+const mark = (seq, gen = 1) => ({ gen, seq, at: iso(NOW) });
+const liveRow = (unit, stage, seen, over = {}) => builder({ unit, stage, seen, sampledAt: iso(NOW), ...over });
+const push = (w, rows) => w.eventSources[0].onmessage({ data: JSON.stringify({ rows }) });
+const shown = (w, unit) => { const c = [...w.document.querySelectorAll('#units li.unit')].find((li) => text(li).includes(unit)); return c ? text(c.querySelector('.unit-head')) : null; };
+
+test('a live row wins (issue 466)', () => {
+  // Catches: a page that opens no stream, opens it more than once or off a relative address, or lets an older, other-generation
+  // or unmarked live row replace the snapshot's newer stage; and a null cost in a live row wiping the card's known cost.
+  const w = fresh(Fixed);
+  assert.equal(w.eventSources.length, 0, 'no stream before the first load');
+  const cost = { stages: [], total: tally(3.25) };
+  const snap = (stage, over) => show(w, { units: { inFlight: [builder({ unit: 'ord', stage, seen: mark(100), builder: { ...builder().builder, cost } , ...over })] } },
+    { 'unit-cost': { sampledAt: iso(NOW - 3600000), status: 'stale', staleSince: iso(NOW - 1800000) } });
+  snap('building');
+  assert.equal(w.eventSources.length, 1);
+  assert.equal(w.eventSources[0].url, 'p/demo/events', "once, relative, the shown project's");
+  const base = shown(w, 'ord');
+  const live = (seen, stage = 'review', cst = null) => push(w, { ord: { sampledAt: iso(NOW), seen, row: liveRow('ord', stage, seen, { builder: { ...builder().builder, cost: cst } }) } });
+  for (const seen of [mark(50), mark(100), mark(10000, 0), mark(5, 2), undefined]) { live(seen); assert.equal(shown(w, 'ord'), base, `ignored: ${JSON.stringify(seen)}`); }
+  live(mark(200));
+  assert.notEqual(shown(w, 'ord'), base, 'the same generation, a larger sequence wins');
+  assert.match(text(w.document.querySelector('#builds table.costs tr.total')), /\$3\.25/, 'a null live cost keeps the known cost');
+  const cap = text(w.document.querySelector('#builds table.costs caption'));
+  assert.match(cap, /^read /);
+  assert.match(cap, /stale since /);
+  w.refresh();
+  snap('building');
+  assert.notEqual(shown(w, 'ord'), base, 'a later data.js load re-applies the kept live row');
+  push(w, { ord: { sampledAt: iso(NOW), seen: mark(300), row: null } });
+  assert.equal(shown(w, 'ord'), null, 'a null row removes the merged unit');
+  assert.equal(w.eventSources.length, 1);
+});
+
+test('the first unit appears live (issue 466)', () => {
+  // Catches: an empty list with no row to carry the mark, so the first launch waits for a full cycle; and a live row older
+  // than the snapshot, or a snapshot with no mark at all, adding a card all the same.
+  const w = fresh(Fixed);
+  const first = (page, seq) => push(page, { first: { sampledAt: iso(NOW), seen: mark(seq), row: liveRow('first', 'building', mark(seq)) } });
+  show(w, { units: { inFlight: [], seen: mark(100) } }, {});
+  first(w, 50);
+  assert.equal(shown(w, 'first'), null, 'older than the snapshot');
+  first(w, 200);
+  assert.ok(shown(w, 'first'), 'newer than the empty snapshot');
+  const unmarked = fresh(Fixed);
+  show(unmarked, { units: { inFlight: [] } }, {});
+  first(unmarked, 200);
+  assert.equal(shown(unmarked, 'first'), null, 'no mark, no live row');
 });

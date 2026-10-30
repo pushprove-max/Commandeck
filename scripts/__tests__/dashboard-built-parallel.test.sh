@@ -15,7 +15,8 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$T/copy/scripts/subagent-usa
 # pdash <fire log>: one dashboard.sh project collect with the hook fire log named.
 pdash() { rm -rf "$T/out/run"; timeout 90 env -u COMMANDECK_SCRATCH -u CODEX_HOME COMMANDECK_HOOK_FIRE_LOG="$1" PATH="$BIN:$PATH" COMMANDECK_WORKSPACES="$WS" \
   COMMANDECK_DASHBOARD_DIR="$T/out" COMMANDECK_MAIN="$MAIN" DASH_NOW="$NOW" bash "$SOURCE/scripts/dashboard.sh" --project "$T/out/run" >"$T/out.log" 2>&1; }
-norm() { jq -cS 'first(.[]) | del(.partSeconds) | .sources |= map_values(.status)' "$T/out/run/project.json"; }
+# The stream marks are each run's own.
+norm() { jq -cS 'first(.[]) | del(.partSeconds, .units.seen, .units.inFlight[].seen, .units.inFlight[].sampledAt) | .sources |= map_values(.status)' "$T/out/run/project.json"; }
 secs() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", b - a }'; }
 
 # Order, not wall time (which moves with the load): the github groups run in the main chain and call gh; measures and

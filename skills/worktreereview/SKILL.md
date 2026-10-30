@@ -94,8 +94,9 @@ from every clock figure, share and flag, and leaves cost as it is: each `--exclu
 (ISO UTC, repeatable; review.py passes it through), and the part of each idle gap over two minutes with
 nothing of the build running that sits inside an open decision in the main checkout's
 `.claude/metrics/decisions.jsonl` that names the unit in its `source` or `answer` (the last row per
-decision and ask wins). Idle after the Builder's `<UNIT>-DONE` line is not cut by itself: with no owner
-decision open it stays on the clock, as does time waiting on the orchestrator. A gap with any session's background
+decision and ask wins). A gap waiting on main or on nothing with no decision recorded is cut whole, and its
+reason names the cause. Idle after the Builder's `<UNIT>-DONE` line is not cut by itself: with no owner
+decision open it stays on the clock, as does time waiting on a merge. A gap with any session's background
 job or a Codex run in it is kept, and a found window cuts only idle seconds. Overlapping windows cut
 each second once. Once the worktree is removed nothing proves which checkout it came from: pass `--main <main
 checkout>` (review.py passes it through), or no decision and no round archive is read. Still counted, and the page says so: a helper's request and tool subtotals, and

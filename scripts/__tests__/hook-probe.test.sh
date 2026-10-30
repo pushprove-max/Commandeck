@@ -29,5 +29,7 @@ check "a relative TMPDIR still gives the hook an absolute HOME" "HOME=/" \
 (cd "$T/wt" && HOME="$T/home" TMPDIR="$T/tmp" exec bash "$REAL/scripts/hook-probe.sh" "$T/hooks/slow.sh" true >/dev/null 2>&1) & PID=$!
 sleep 1; kill -TERM $PID; wait $PID 2>/dev/null; RC=$?
 check "TERM during a probe removes the scratch folder and exits 143" "143 0" "$RC $(find "$T/tmp" -mindepth 1 | wc -l | tr -d ' ')"
+# Issue 464: the probe's HOME has no .claude, and the stop hook's log append printed "No such file or directory".
+check "a clean home prints no error (issue 464)" "allow" "$(probe hooks/context-clear-stop.sh 'true')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

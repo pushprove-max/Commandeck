@@ -264,7 +264,8 @@ DRIFT=
 for s in hooks/pane-budget-gate.sh hooks/worker-ask-guard.sh hooks/ruling-log.sh scripts/install-lib.sh scripts/dashboard.sh scripts/worktree-setup.sh; do
   grep -q 'pp_standing_wt' "$REAL/$s" || DRIFT="$DRIFT $s(no call)"
 done
-for s in scripts/ruling-log-archive.sh scripts/cos-check.sh; do
+grep -q 'PP_STANDING_SEATS' "$REAL/scripts/ruling-log-archive.sh" || DRIFT="$DRIFT scripts/ruling-log-archive.sh(no list)"
+for s in scripts/cos-check.sh; do
   got=$(grep -oE '\(Chief-of-Staff(\|[A-Za-z-]+)+\)' "$REAL/$s" | tr -d '()' | tr '|' '\n' | sort | paste -sd, -)
   [ "$got" = "$SET" ] || DRIFT="$DRIFT $s($got)"
 done

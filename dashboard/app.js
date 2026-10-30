@@ -13,7 +13,7 @@
   const STUCK_SEC = 7200;
   const STAGES = ['planning', 'building','review', 'fixing', 'waiting-main'];
   // The long-lived worktree's stage, from dashboard.sh: a seat, never a unit in flight.
-  const SEATS = new Map([['chief-of-staff', 'Chief-of-Staff seat'], ['fast-lane', 'Fast lane'], ['research-lane', 'Research lane']]);
+  const SEATS = new Map([['chief-of-staff', 'Chief-of-Staff seat'], ['fast-lane', 'Fast lane'], ['research-lane', 'Research lane'], ['seat', 'Standing seat']]);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   let data = null;
   let inflight = null;
@@ -58,7 +58,9 @@
   const STAGE_LABEL = { planning: 'Planning', building: 'Building', review: 'In review', fixing: 'Fixing', 'waiting-main': 'Waiting on main' };
   // Which panels need a look this render: set by each renderer, read by the "Needs a look" switch.
   let looks = new Set();
-  const flag = (id, on) => { if (on) looks.add(id); };
+  // The unit-cost source of the snapshot being drawn: the cost tables say when it was read and since when it is stale.
+  let unitCost = null;
+  const flag =(id, on) => { if (on) looks.add(id); };
 
   function badge(text, tone) { return h('span', `badge ${tone || ''}`.trim(), text); }
 
@@ -770,6 +772,10 @@
       ...(cost.stages || []).map((x) => tr([STAGE_LABEL[x.stage] || x.stage, `${took(x.sec)}${x.to ? '' : ' so far'}`, x.calls, tin(x), x.output.toLocaleString('en-US'), costOf(x)])),
       tr(['Unit total', took(cost.total.sec), cost.total.calls, tin(cost.total), cost.total.output.toLocaleString('en-US'), costOf(cost.total)]));
     t.lastChild.classList.add('total');
+    const read = unitCost ? parseTime(unitCost.sampledAt) : NaN;
+    const stale = unitCost && unitCost.status === 'stale' ? parseTime(unitCost.staleSince) : null;
+    const said = [Number.isFinite(read) ? `read ${when(read)}` : null, stale === null ? null : Number.isFinite(stale) ? `stale since ${when(stale)}` : 'stale since unknown'].filter(Boolean);
+    if (said.length) t.append(h('caption', null, said.join(' · ')));
     const d = h('div', 'costs-wrap');
     d.append(h('h3', null, 'Cost by stage'), t,
       h('p', 'meta', "List-price equivalents of the Builder, its helpers and sub-agents and its review passes; main's own tokens are not counted."));
@@ -1726,10 +1732,52 @@
     }
   }
 
+  // Live rows (issue 466): the host pushes {rows: {<unit>: {sampledAt, seen, row}}} when a unit's stage changes. The last
+  // rows are laid over each snapshot's inFlight list only where they are newer by the stream mark: the same generation
+  // and a larger sequence than the snapshot's own mark. A unit's mark is its row's, or, for one the snapshot lacks, the
+  // cycle's (units.seen, so an empty list has one too); a snapshot with no mark is never overridden. A null row removes the card.
+  let liveRows = {};
+  const newer = (l, s) => !!l && !!s && typeof l === 'object' && Number.isFinite(l.gen) && l.gen === s.gen
+    && Number.isFinite(l.seq) && Number.isFinite(s.seq) && l.seq > s.seq;
+  function overlaid(d) {
+    const units = d.units;
+    if (!units || !Array.isArray(units.inFlight)) return d;
+    const list = units.inFlight.slice();
+    const cycle = units.seen || (list.find((u) => u && u.seen && typeof u.seen === 'object') || {}).seen;
+    for (const [name, live] of Object.entries(liveRows)) {
+      if (!live || typeof live !== 'object') continue;
+      const i = list.findIndex((u) => u && u.unit === name);
+      const old = i >= 0 ? list[i] : null;
+      if (!newer(live.seen, old ? old.seen : cycle)) continue;
+      if (live.row === null) { if (i >= 0) list.splice(i, 1); continue; }
+      if (!live.row || typeof live.row !== 'object') continue;
+      let next = live.row;
+      // The fast lane reads no cost (a null there is unread, not none): the snapshot's known figures stay.
+      if (old && old.builder && next.builder && typeof next.builder === 'object') next = { ...next, builder: { ...next.builder, cost: old.builder.cost } };
+      if (old && old.plan && next.plan && typeof next.plan === 'object') next = { ...next, plan: { ...next.plan, cost: old.plan.cost } };
+      if (i >= 0) list[i] = next; else list.push(next);
+    }
+    return { ...d, units: { ...units, inFlight: list } };
+  }
+  let events = null;
+  function openEvents() {
+    // A browser without EventSource keeps the 15 s data.js reload alone.
+    if (events || typeof EventSource !== 'function') return;
+    // Each project's rows are its own: the address names the project shown.
+    events = new EventSource(project === null ? 'events' : `p/${encodeURIComponent(project)}/events`);
+    events.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch (err) { return; }
+      if (!msg || typeof msg.rows !== 'object' || msg.rows === null) return;
+      liveRows = msg.rows;
+      if (data) render(data);
+    };
+  }
   function render(snapshot) {
     const now = Date.now();
     looks = new Set();
-    const d = view(snapshot);
+    const d = overlaid(view(snapshot));
+    unitCost = (d.sources && d.sources['unit-cost']) || null;
     const title = typeof d.name === 'string' && d.name ? d.name : project ? `${project} Dashboard` : '';
     if (title) { byId('title').textContent = title; document.title = title; }
     renderNeeds(d.needsOwner, now, d.githubP1, d.githubProposed);
@@ -1879,7 +1927,7 @@
       settle(s);
       const d = window.DASH;
       byId('refresh-note').hidden = true;
-      if (d && typeof d === 'object') { data = d; render(d); } else tick();
+      if (d && typeof d === 'object') { data = d; render(d); openEvents(); } else tick();
     };
     s.onerror = () => {
       settle(s);

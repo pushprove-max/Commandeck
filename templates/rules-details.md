@@ -49,7 +49,8 @@ moved out of `AGENT_STARTUP.md` and `global-rules.md` unchanged.
 - A brief whose cuts run past an hour names its halfway cut. At that cut the
   Builder writes a halfway note of about 200 tokens in the evidence file (what
   is built, what is left, what is decided) and goes on.
-- A unit over the size caps is split by default. Main keeps it whole only with a
+- A unit over the size caps (`review-limits` in `config/routing.json`: `diffLines` 1000 changed lines, `maxIssues` 5
+  Closes issues; plan-check.sh refuses a plan over either) is split by default. Main keeps it whole only with a
   `Split override: <reason>` line in the plan; a bare `Split override:` is no override.
 - Acceptance criteria that change behaviour name the test file and the exact
   cases. The failing test comes first.

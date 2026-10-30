@@ -7,6 +7,7 @@
 # also on a removed line was moved, not added. Checks made in a loop or through a helper count as one or none: the
 # count is a review gate on labels, not a proof of count.
 set -uo pipefail
+case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 BASE=${1:?usage: new-test-count.sh <base>}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/../hooks/lib/test-path.sh" || { echo "new-test-count: cannot load hooks/lib/test-path.sh" >&2; exit 2; }

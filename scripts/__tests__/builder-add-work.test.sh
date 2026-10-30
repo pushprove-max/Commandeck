@@ -77,5 +77,11 @@ wait; rm -f "$T/calls" "$W/.claude/briefs/$U-added-"*.md; mv "$W/.git" "$W/.git-
 check "a probe that git cannot read is refused" "1 1 0 0" "$(addx --unless 'done.txt:PROBE-DONE') $(grep -c "cannot read the branch in $W" "$T/err") $(sends) $(added)"
 mv "$W/.git-off" "$W/.git"
 wait
+# Issue 478: main's answer to a Builder whose cache went cold adds no scope, so it passes after the first review pass,
+# with no probe and no stop note; ordinary added work there is still refused.
+rm -f "$T/calls" "$W/.claude/briefs/$U-added-"*.md; : > "$W/.claude/briefs/$U-r1-reports.md"
+check "an answer after pass 1 goes fresh (issue 478)" "0 1 0 2" \
+  "$(addx --answer 'ANSWER-PROBE yes') $(grep -c 'ANSWER-PROBE yes' "$W/.claude/briefs/$U-answer-"*.md) $(sends) $(addx --unless 'new.txt:NOT-YET')"
+wait
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

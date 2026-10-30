@@ -63,8 +63,10 @@ $(prompt th 2 | grep -c 'A GO reply names no level, P0 to P3')"
 # 2. O1 and O2: a closing pass that lists an earlier P2 again holds the loop, and the closing reviewer is fresh: it is
 # handed the owner's decisions, the stated limits and the plan's accepted failure modes, and no earlier finding,
 # Main-only list, sites list or new-code list.
-mk oc; printf 'Plan: .claude/plans/oc.md\n' >> "$WS/oc/.claude/briefs/oc.md"; mkdir -p "$WS/oc/.claude/plans"
-printf '# oc\n\n## Accepted failure modes\n\n- ACCEPTED-PROBE: a stale nit is filed, not fixed\n' > "$WS/oc/.claude/plans/oc.md"
+# The plan comes from main, as a real one does: the unit's limits are read against it there (issue 468).
+mk oc; printf 'Plan: .claude/plans/oc.md\n' >> "$WS/oc/.claude/briefs/oc.md"; mkdir -p "$REPO/.claude/plans"
+printf '# oc\n\n## Accepted failure modes\n\n- ACCEPTED-PROBE: a stale nit is filed, not fixed\n' > "$REPO/.claude/plans/oc.md"
+git -C "$REPO" add .claude/plans/oc.md && git -C "$REPO" commit -qm "plan oc" && git -C "$WS/oc" merge -q --no-edit main
 go oc
 OLD=$'- [P2] (class: lost-reply) OLD-P2 -- oc.txt:1 -- drops a reply -- cat oc.txt'
 tpass oc 2 final "$OLD"$'\nVERDICT: NO-GO' >/dev/null

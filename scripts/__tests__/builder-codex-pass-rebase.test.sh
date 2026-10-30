@@ -112,5 +112,16 @@ echo v2 > "$W/.claude/briefs/tracked-note.md"; head=$(git -C "$W" rev-parse HEAD
 check "a final with a rebase in progress and a changed tracked file is refused once, before it commits (issue 451)" "2 1 1 1 1 no 0 $head" \
   "$(fin 12 "$NOGO2") $(grep -c '^REFUSED:' "$TMP/err") $(grep -cx 'REFUSED: 2 checks failed:' "$TMP/err") $(grep -c '^- a rebase is in progress' "$TMP/err") \
 $(grep -c '^- tracked files .*tracked-note.md' "$TMP/err") $(round 12) $(grep -c 'rebased\|REBASE CONFLICT' "$TMP/out" "$TMP/err" | awk -F: '{ s += $2 } END { print s }') $(git -C "$W" rev-parse HEAD)"
+
+# Issue 474: a slow pass named no slow step. Each step of a closing pass prints a clock line of its own, start and end, in
+# the order the pass runs them. The unit is put back on a base main can take (the conflict and the stopped rebase above
+# are undone), then main moves, and the tests that cover the unit's own files run, one of them an own-lane test.
+git -C "$W" rebase --abort; git -C "$W" checkout -q -- .; git -C "$W" reset -q --hard HEAD~2; G reset -q --hard HEAD~1
+echo again >> "$REPO/other.txt"; G commit -qam 'other moved'
+cfg '.reviewLoop.passCap = "40"'
+cfg '.typecheckCommand = "true"'; echo thirteen > "$W/n13.txt"
+R13=$(fin 13)
+check "a pass clocks each step (issue 474)" "0 precheck start,precheck end,rebase start,rebase end,test selection start,test selection end,tests start,tests end,own-lane tests start,own-lane tests end,typecheck start,typecheck end" \
+  "$R13 $(sed -n "s/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] $U pass 13: //p" "$TMP/out" | paste -sd, -)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

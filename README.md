@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.61.2-111111?style=flat-square" alt="Version 0.61.2">
+  <img src="https://img.shields.io/badge/version-0.62.0-111111?style=flat-square" alt="Version 0.62.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -148,7 +148,8 @@ that ends GO.
 ![Commandeck dashboard](docs/images/dashboard.png)
 
 The dashboard shows every Builder by stage, what waits on you, pull requests,
-issues, and your Claude and Codex limits. (Sample project, invented figures.)
+issues, and your Claude and Codex limits. A unit's stage change shows within
+about a second. (Sample project, invented figures.)
 
 ![Orca with Commandeck](docs/images/orca.png)
 

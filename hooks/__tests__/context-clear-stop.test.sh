@@ -417,5 +417,10 @@ check "a launch line with a JSON value restarts with its permission mode kept (i
 check "a permission flag inside an option's value grants nothing on restart (issue 453)" "claude --permission-mode acceptEdits:claude" \
   "$(restart_cmd "claude --settings $J2 --permission-mode acceptEdits" claude --settings "$J2" --permission-mode acceptEdits):$(restart_cmd "claude --append-system-prompt --dangerously-skip-permissions {" claude --append-system-prompt --dangerously-skip-permissions)"
 
+# Issue 464: a home with no .claude made the log append print "No such file or directory" on every stop.
+mkdir -p "$BOX/bare"
+check "a clean home prints no error (issue 464)" "" \
+  "$(echo '{}' | env -i PATH="$BOX/bin" HOME="$BOX/bare" bash "$HOOK" 2>&1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -239,4 +239,11 @@ check "other path refused: another --out, a flag before --out, a value with no f
   "$(snapgate "bash $ROOT/scripts/state-snapshot.sh --out /tmp/other.md --goal 'x'") $(snapgate "bash $ROOT/scripts/state-snapshot.sh --goal 'x' --out $CPF") $(snapgate "$SNAP 'x'") $(snapgate "$SNAP --goal")"
 rm -f "$H/.claude/checkpoints/msid.past-line"
 
+# Issue 470: the note keeps its words and adds what the gate saw and the command that starts the worktree's server.
+rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp-down-serena
+first_call "${S}z" "$BOX/lw" >/dev/null
+check "the gate prints the start command (issue 470)" "1:1:1" \
+  "$(grep -c 'serena is not running' "$ERR"):$(grep -c '^saw: claude pid [0-9]*, shared status 1' "$ERR"):$(grep -c '^Try: bash .*serena-shared.sh start ' "$ERR")"
+rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp-down-serena
+
 echo "$PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

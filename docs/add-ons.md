@@ -12,7 +12,7 @@ add-on succeeded.
 
 | Add-on | What it adds | Local cost or setup behavior |
 |---|---|---|
-| serena | Symbol lookup | Language-server processes; selecting it enables its hook setting unless explicitly disabled. |
+| serena | Symbol lookup | Language-server processes; selecting it enables its hook setting unless explicitly disabled. With it on, each worktree runs one shared Serena server on 127.0.0.1 (`scripts/serena-shared.sh`); seats and review passes use it, and closing the worktree stops it. |
 | agent-browser | Browser automation | Global npm package and a browser download. |
 | ui-themes | Theme skills | Installed by a plugin command; loaded when requested. |
 | Engineering-skills add-on | Engineering skills | No one-line installer in this registry; skill descriptions add session context. |

@@ -9,7 +9,11 @@
 # Finished:
 #   - a seat (seat-*.txt) whose pane Orca reads `done` after this service saw
 #     it `working`, or `done` with a verdict or marker present (fast work can
-#     finish between two ticks). A boot `done` with neither is not finished.
+#     finish between two ticks). A boot `done` with neither is not finished. Orca
+#     reads a seat at its prompt `idle`: that is `done` for a Builder, or for a
+#     seat this service saw working or whose finish is settled; a seat that never
+#     worked stays a wait post. A revised seat (seat.sh revise, `revised=<task>` in
+#     its record) is finished only once a prompt in its session holds that task id.
 # Stopped without reporting: a seat that finished with no marker or verdict
 #   after this service saw it `working`, or whose pane is gone (closed or
 #   crashed) after it was seen alive. Never read as success. A seat that sent
@@ -1131,7 +1135,14 @@ reported() {
   [ "$asked" -le "$since" ] || pp_worker_done_since "$1" "$asked" <<<"$INBOX"
 }
 
-seat() { # handle task unit role launched [session id] [seat tag] [worktree name]
+# revised_ran <worktree> <revised task id> <launched> -- the revised turn's prompt reached the seat's session: read-verdict.sh binds
+# --task on user text rows only, so its --state prints session= once the prompt holding the new task id landed (issue 485).
+# No time is compared: the old PLAN-DONE, a prompt in the same second or an unreadable session all answer no.
+revised_ran() {
+  timeout 20 bash "$HERE/read-verdict.sh" --state --worktree "$1" --task "$2" --launched "${3:-0}" 2>/dev/null | grep -q '^session=.'
+}
+
+seat() { # handle task unit role launched [session id] [seat tag] [worktree name] [revised task id]
   # A planner of a unit planned before 0.18.0 runs in <unit>-plan: the record names where the seat runs.
   local h=$1 task=$2 u=$3 w=$WS/${8:-$3} key="seat-$1-$2" state kind since at ep item
   # The closing line compared below is this seat's own read, never the last seat's.
@@ -1158,7 +1169,7 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   # A finish settled while Orca still read `working` (sw-, a stale snapshot) needs the pane to grow past it too.
   if [ -n "$kind" ] && case $state in
       working) [ ! -e "$ST/sw-$key" ] || pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}" ;;
-      done|none) pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}" ;;
+      done|idle|none) pane_grew "$h" "$key" f "$w" "$task" "$5" "${6:-}" ;;
       *) false ;; esac; then
     rm -f "$ST/kind-$key" "$ST/rv-$key" "$ST/fp-$key" "$ST/fl-$key" "$ST/held-$key" "$ST/sw-$key"; kind=; echo "$NOW" > "$ST/episode-$key"
   fi
@@ -1168,7 +1179,19 @@ seat() { # handle task unit role launched [session id] [seat tag] [worktree name
   ep=$(cat "$ST/episode-$key" 2>/dev/null)
   item=$key${ep:+-$ep}; [ -z "$ep" ] || task=
   # Issue 258: Orca reads a Builder at its prompt as idle as well as done; both are a stop.
-  local cs=$state; [ "$4:$state" != builder:idle ] || cs=done
+  # Issue 485: so is a seat that worked (this service saw `working`, or its settled finish stands): idle after a finish is no
+  # wait. A seat that never worked keeps the wait post.
+  local cs=$state
+  if [ "$state" = idle ] && { [ "$4" = builder ] || [ -e "$ST/working-$key" ] || [ -n "$kind" ]; }; then cs=done; fi
+  # A revised seat (seat.sh revise) that this service never saw work reads idle, done or none whether its turn ran or has not
+  # started: the old turn's marker is not its finish. Its prompt holding the new task id is the only proof it ran, and then
+  # the turn ran unseen, so it is as good as seen working. No proof is unstarted: the wait branch, never the old marker.
+  if [ -n "${9:-}" ] && [ ! -e "$ST/working-$key" ]; then
+    case $state in idle|done|none)
+      if revised_ran "$w" "$9" "${5:-0}"; then : > "$ST/working-$key"; [ "$state" != idle ] || cs=done
+      else cs=unstarted; fi ;;
+    esac
+  fi
   case $cs in
     working)
       # A hold ends when the Builder works again, settled or not: its next helper wait starts a fresh clock.
@@ -1645,12 +1668,12 @@ tick() {
   # record was most of a tick. Each key's first line counts, the last
   # for session=. The separator is not whitespace, so an empty field keeps its
   # place; not a pipe: a subshell would drop the items this tick batches.
-  while IFS=$'\x1f' read -r h t u role launched sid tag wt; do
-    seat "$h" "$t" "$u" "$role" "$launched" "$sid" "$tag" "$wt"
+  while IFS=$'\x1f' read -r h t u role launched sid tag wt revised; do
+    seat "$h" "$t" "$u" "$role" "$launched" "$sid" "$tag" "$wt" "$revised"
   done < <(awk -F= -v OFS=$'\x1f' '
-    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"], v["tag"], v["worktree"] }
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["session"], v["tag"], v["worktree"], v["revised"] }
     FNR == 1 { if (NR > 1) out(); split("", v) }
-    /^(handle|task|unit|role|launched|origin|tag|worktree)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
+    /^(handle|task|unit|role|launched|origin|tag|worktree|revised)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   merge_collect

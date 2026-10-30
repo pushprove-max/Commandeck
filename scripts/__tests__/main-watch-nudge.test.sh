@@ -125,4 +125,44 @@ state term_wt-p5 "done"; tick $((R + 1))
   COMMANDECK_WORKSPACES="$T/ws" bash scripts/seat.sh collect plan-author wt-p5 >"$T/collect" 2>&1) || fail "collect of the committed plan failed: $(cat "$T/collect")"
 [ "$(grep -c wt-p5 "$T/sends")" = 1 ] || fail "commit-only completion was not one notification across wait, watcher and collect"
 
+# Issue 485: Orca reads a plan seat at its prompt `idle`. A seat that worked and reported was held in the wait branch, and
+# posted "stalled in Orca state idle" two minutes after its finish; a revised seat (seat.sh revise) that finished between two
+# ticks was never read finished, or read the old turn's PLAN-DONE as the new one's. read-verdict.sh --task is the proof the
+# revised prompt landed: this stand-in prints session= for a task whose ran-<task> file exists.
+mv "$REPO/scripts/read-verdict.sh" "$REPO/scripts/read-verdict.orig"
+cat > "$REPO/scripts/read-verdict.sh" <<RV
+#!/usr/bin/env bash
+t=; a=("\$@"); for ((i = 0; i < \${#a[@]}; i++)); do [ "\${a[i]}" != --task ] || t=\${a[i+1]:-}; done
+[ -z "\$t" ] || { [ ! -e "$F/ran-\$t" ] || echo session=/log/\$t.jsonl; exit 0; }
+exec bash "$REPO/scripts/read-verdict.orig" "\$@"
+RV
+revise() { # <unit> <new task> -- seat.sh revise's record: its one task= line is the new task, revised= beside it
+  sed -i "s/^task=.*/task=$2/" "$S/seat-$1-plan-author.txt"; echo "revised=$2" >> "$S/seat-$1-plan-author.txt"; echo "$2 running" >> "$F/tasks"; }
+pwaits() { posts "$1 plan-author stalled in Orca state"; }
+# <label> <expected> <got> <unit> -- a failure record a Break line reads: FAIL <label> (...)
+c485() { [ "$2" = "$3" ] || { echo "FAIL $1 (expected [$2], got [$3]): $(grep "$4" "$T/sends")" >&2; exit 1; }; }
+pseat wt-m1 term_wt-m1 task_wt-m1 50000; state term_wt-m1 working; tick 50060; echo PLAN-DONE > "$F/verdict-term_wt-m1"
+state term_wt-m1 idle; tick 50120; tick 50190; tick 50260
+c485 "a marker after a done report posts once (issue 485)" 1:0 "$(pfinished wt-m1):$(pwaits wt-m1)" wt-m1
+pseat wt-m2 term_wt-m2 task_wt-m2 51000; state term_wt-m2 idle; tick 51000; tick 51060
+c485 "a never-worked seat stays a wait (issue 485)" 0 "$(pwaits wt-m2)" wt-m2
+tick 51200
+c485 "a never-worked seat stays a wait (issue 485)" 1:0 "$(pwaits wt-m2):$(pfinished wt-m2)" wt-m2
+# The revised turn started and ended between two ticks: the old PLAN-DONE is still the last line, Orca reads idle, and the
+# new task id is in a prompt of the session.
+pseat wt-m3 term_wt-m3 task_wt-m3 52000; state term_wt-m3 working; tick 52060; echo PLAN-DONE > "$F/verdict-term_wt-m3"; state term_wt-m3 idle; tick 52120
+revise wt-m3 task_wt-m3b; touch "$F/ran-task_wt-m3b"; tick 52300; tick 52360
+c485 "a fast revision wakes main (issue 485)" 2:0 "$(pfinished wt-m3):$(pwaits wt-m3)" wt-m3
+# The revision is typed in the same second as the last prompt and has not started: no prompt holds the new id, the old
+# PLAN-DONE must not stand in for it, and main hears the wait after two minutes.
+pseat wt-m4 term_wt-m4 task_wt-m4 53000; state term_wt-m4 working; tick 53060; echo PLAN-DONE > "$F/verdict-term_wt-m4"; state term_wt-m4 idle; tick 53120
+revise wt-m4 task_wt-m4b; tick 53130; tick 53190
+c485 "a same-second prompt waits (issue 485)" 1 "$(pfinished wt-m4)" wt-m4
+tick 53300
+c485 "a same-second prompt waits (issue 485)" 1 "$(pwaits wt-m4)" wt-m4
+# Orca reads done, not idle: the old marker must not pass as the unstarted revision's finish either.
+pseat wt-m5 term_wt-m5 task_wt-m5 54000; state term_wt-m5 working; tick 54060; echo PLAN-DONE > "$F/verdict-term_wt-m5"; state term_wt-m5 done; tick 54120
+revise wt-m5 task_wt-m5b; tick 54130; tick 54190; tick 54500
+c485 "a same-second prompt waits (issue 485)" 1 "$(pfinished wt-m5)" wt-m5
+
 echo "PASS main-watch-nudge.test.sh"

@@ -86,8 +86,10 @@ nums=(429 430 433 434 435 436 439 441 442 443 444 445 446 447 448)
 rows=$(for n in "${nums[@]}"; do printf -- '- #%s Body 1 -- src/x.ts -- t-one\n' "$n"; done)
 for n in "${nums[@]}"; do printf '## Fix\n\n- do it for %s\n' "$n" > "$T/gh/$n"; done
 fixrows=${rows//Body/Fix}
-: > "$T/gh-calls"; out="full=$(icp '' "$fixrows") reads=$(sort -u "$T/gh-calls" | grep -c .)"
-r=$(icp '' "$(grep -v '#448 ' <<<"$fixrows")"); out+=" dropped=$r:$(grep -c '#448 Fix 1: do it for 448' "$T/ic-err")"
+# Fifteen issues are over the issue cap (issue 480): the plan carries the override, as a real plan of this size must.
+SPLITOK='Split override: the fixture holds fifteen issues'
+: > "$T/gh-calls"; out="full=$(icp "$SPLITOK" "$fixrows") reads=$(sort -u "$T/gh-calls" | grep -c .)"
+r=$(icp "$SPLITOK" "$(grep -v '#448 ' <<<"$fixrows")"); out+=" dropped=$r:$(grep -c '#448 Fix 1: do it for 448' "$T/ic-err")"
 git init -q -b main "$T/p" && git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 fixed() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$T/scratch" \
   bash -c '. "$1/scripts/paths.sh" && pp_fix_stated "$2"' _ "$REAL" "$T/batch.md" >/dev/null 2>&1; echo $?); }
@@ -117,6 +119,16 @@ r=$(legacy "$rows"); out+=" full=$r:$(grep -c 'format before 0.55.0' "$T/ic-err"
 r=$(legacy "${rows//-- t-one/--}"); out+=" notest=$r"
 check "a plan in the format before 0.55.0 still runs the issue-text check: a dropped case refuses (issue 444)" \
   "norows=2:1 full=0:1 notest=2" "$out"
+
+# Issue 469: a rule line after a Fix list refused the whole issue as a thematic break. With a blank line above it, it ends
+# the list and is no case; tight under an item it still refuses, and a section holding only a rule has no case.
+printf '## Fix\n\n- first\n- second\n\n---\n\n## Done means\n\n- d one\n' > "$T/gh/469"
+printf '## Fix\n\n- first\n---\n' > "$T/gh/470"
+printf '## Fix\n\n---\n' > "$T/gh/471"
+r=0; pcr --issue-cases 469 > "$T/ic-out" 2>"$T/ic-err" || r=$?; out="$r $(tr '\n' '|' < "$T/ic-out")"
+r=0; pcr --issue-cases 470 > "$T/ic-out" 2>"$T/ic-err" || r=$?; out+=" $r:$(grep -c 'a thematic break' "$T/ic-err")"
+r=0; pcr --issue-cases 471 > "$T/ic-out" 2>"$T/ic-err" || r=$?; out+=" $r:$(grep -c 'Fix has no case' "$T/ic-err")"
+check "a spaced --- is no case (issue 469)" "0 Fix 1 first|Fix 2 second|Done 1 d one| 2:1 2:1" "$out"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

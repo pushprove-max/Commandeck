@@ -313,6 +313,48 @@ check "and a settle keeps what it holds" "['old']" "$(sed -n 2p <<<"$OUT")"
 check "picker marks that cannot be read are not replaced, and the outbox keeps the send" "['old'] ['mark']" "$(sed -n 3p <<<"$OUT")"
 check "a picker mark that cannot be saved keeps its delivered send in the outbox" "['old'] ['mark']" "$(sed -n 4p <<<"$OUT")"
 
+# Issue 466: /events streams the home project's live.json (the fast lane's unit rows), /p/<name>/events that project's file. Behind the login it is a redirect like any page: no
+# stream opens for a client with no session, whatever it asks for. One server with the login on, then one with it off.
+OUT=$(COMMANDECK_DASHBOARD_AUTH="$T/events-auth.json" COMMANDECK_DASHBOARD_STREAM_TICK=0.1 COMMANDECK_DASHBOARD_KEEPALIVE=1 python3 - "$ROOT/scripts" "$T" <<'PY'
+import functools, http.client, http.server, json, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+D = sys.argv[2]
+open(D + "/data.js", "w").write('window.DASH = {"home":"demo","projects":{"demo":{},"beta":{}}};')
+def serve(login):
+    d.Handler.login_on = login
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=D))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1]
+def get(port, path):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", path)
+    r = c.getresponse()
+    return c, r
+shut = serve(True)
+for path in ("/events", "/p/beta/events"):
+    c, r = get(shut, path)
+    print(r.status, r.getheader("Location"), r.read() == b"")
+open(D + "/live.json", "w").write('{"rows":{"u1":{"row":null}}}')
+import os
+os.mkdir(D + "/live"); open(D + "/live/beta.json", "w").write('{"rows":{"b1":{"row":null}}}')
+port = serve(False)
+for path, want, other in (("/events", b"u1", b"b1"), ("/p/demo/events", b"u1", b"b1"), ("/p/beta/events", b"b1", b"u1")):
+    c, r = get(port, path)
+    seen = b""
+    for _ in range(6):
+        seen += r.fp.readline()
+        if want in seen: break
+    print(r.status, r.getheader("Content-Type"), want in seen and other not in seen)
+    c.close()
+c, r = get(port, "/p/nope/events")
+print(r.status, r.getheader("Location"))
+PY
+)
+# No session is a redirect and no stream.
+check "events needs a login (issue 466)" "302 /login True|302 /login True" "$(sed -n 1p <<<"$OUT")|$(sed -n 2p <<<"$OUT")"
+check "a project gets its own stream (issue 466)" "200 text/event-stream True|200 text/event-stream True|200 text/event-stream True" "$(sed -n 3p <<<"$OUT")|$(sed -n 4p <<<"$OUT")|$(sed -n 5p <<<"$OUT")"
+check "events under a project the data does not list is the redirect home" "302 /" "$(sed -n 6p <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
