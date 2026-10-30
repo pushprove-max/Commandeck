@@ -119,7 +119,7 @@ check "with each piece of state removed in turn, --cleanup still closes the writ
 printf '{"result":{"terminals":[]}}\n0\n' > "$TMP/list-after"; : > "$TMP/closed"; : > "$TMP/orca-calls"
 RC=$(merge $u --cleanup)
 check "--cleanup once the writer closes: exit 0, the worktree removed, the briefs archived, nothing merged again" "0 gone 1 yes 1" \
-  "$RC $(gone $u && echo kept || echo gone) $(grep -cx term_writer "$TMP/closed") $(tar -tf "$HOME/.commandeck/briefs/proj/$u.tar" 2>/dev/null | grep -q . && echo yes) $(git -C "$REPO" log --format=%s | grep -c "$u")"
+  "$RC $(gone $u && echo kept || echo gone) $(grep -cx term_writer "$TMP/closed") $([ "$(tar -tf "$HOME/.commandeck/briefs/proj/$u.tar" 2>/dev/null | wc -l)" -gt 0 ] && echo yes) $(git -C "$REPO" log --format=%s | grep -c "$u")"
 rm -f "$TMP/list-after"
 # A unit main does not hold is never cleaned up: its panes are a live Builder's.
 n=$((n + 1)); u=l$n; mk $u; : > "$TMP/orca-calls"; : > "$TMP/closed"
