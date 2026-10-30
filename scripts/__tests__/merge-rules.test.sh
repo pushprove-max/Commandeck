@@ -55,7 +55,7 @@ check "an owner who kept their own AGENT_STARTUP planning step does not get the 
 # out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
 # Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
 ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
-for pair in d2e4dc5b:3e156378 bbe121f7:f45e894e 401e8893:71c7e94b 4083592b:b1471fa8 80518d00:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
+for pair in d2e4dc5b:3e156378 895a7e56:f45e894e 401e8893:71c7e94b 702b08c7:b1471fa8 80518d00:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
   new=${pair%:*} old=${pair#*:}
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"

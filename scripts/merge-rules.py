@@ -176,6 +176,9 @@ MADE_FROM = {
     "d2e4dc5b": ("3e156378",),
     # 0.60.0 main-session.md: the helper-agent rule no longer names the retired code-graph server (issue 446)
     "80518d00": ("b2577b20",),
+    # 0.62.0 main-session.md: a follow-up to a seat goes through seat.sh revise; a plan's one question section; a limit
+    # added after the plan judge's GO carries its ruling id; the one-judge rule for a small Panel unit
+    "702b08c7": ("4083592b",), "4f20e61c": ("5c61b810",), "2e9e3e76": ("8aa8b56d",), "895a7e56": ("bbe121f7",),
 }
 
 

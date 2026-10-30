@@ -25,8 +25,9 @@ S1=$(one1 "$REAL/templates/AGENT_STARTUP.md" 1) S2=$(one1 "$REAL/templates/AGENT
 # Another rule sessions load, by its id and its first line (merge-rules.py --units).
 U=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' -v m="$M1" 'length($2) < 100 && $2 ~ /^- / && $2 != m && $2 !~ /scripts\/|hooks\/|templates\/|200K/' | head -1)
 ID=${U%%$'\t'*} M2=${U#*$'\t'}
-# A rule 0.14.1 reworded (5c61b810, made from 0.7.1's 34ec1023: merge-rules.py MADE_FROM), by its first line.
-M3=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "5c61b810" { print $2 }')
+# A rule 0.14.1 reworded and 0.62.0 again (4f20e61c, made from 5c61b810, made from 0.7.1's 34ec1023: merge-rules.py
+# MADE_FROM), by its first line in full: --units cuts a line at 100 characters.
+M3=$(MS | grep -F -- "$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "4f20e61c" { print $2 }')")
 
 # Issue 228: Claude Code passes a hook print over 10,240 bytes as a 2 KB preview, and a project's long rule file
 # crossed that live. The print stays under it: a part that does not fit is one pointer line naming its file.
@@ -118,7 +119,7 @@ check "main offers a merge only for a unit the gate held or refused" 1 "$(grep -
 # Issue 235: long end-of-turn reports cost the owner a read every turn.
 check "main ends each turn with one status line" 1 "$(grep -c 'End each turn with one status line' "$T/ctx")"
 # Issue 230: main met the same guards turn after turn; its rules open with what to do instead, each with its command.
-check "main's rules open with the do-not list, six lines, each with a command" "1 6" \
+check "main's rules open with the do-not list, seven lines, each with a command" "1 7" \
   "$(grep -c 'Do not -> instead' "$T/ctx") $(awk '/Do not -> instead/ {p = 1; next} p && /^  - .* -> .*`/ {n++} p && !/^  - / {exit} END {print n + 0}' "$T/ctx")"
 
 # --- a path-scoped rule loads only for its paths, and a Builder never loads agents.md: neither stands in ---
@@ -186,9 +187,9 @@ STUBS=$(cat "$REAL/templates/AGENT_STARTUP.md" "$REAL/templates/global-rules.md"
 N=0 R=0; while IFS= read -r T1; do [ -n "$T1" ] || continue; N=$((N+1)); grep -qxF -- "## $T1" "$DET" && R=$((R+1)); done <<<"$STUBS"
 check "every Details stub names a section that exists in rules-details.md" "3 3" "$N $R"
 # The seven unpinned planning bullets and the two main-only steps moved verbatim: found under the section their stub names,
-# and in no always-on file.
+# and in no always-on file. 0.62.0 reworded the size-caps bullet in place (2434c9d1 to c17bc95e).
 SEC() { awk -v s="## $1" '$0 == s {p = 1; next} /^## / {p = 0} p' "$DET" 2>/dev/null; }
-GONE='3e7415fc 97c20446 6895053b 0e7bd99a 2434c9d1 99a98f43 f1c7b025'
+GONE='3e7415fc 97c20446 6895053b 0e7bd99a c17bc95e 99a98f43 f1c7b025'
 IN_SEC=$(python3 "$REAL/scripts/merge-rules.py" <(SEC 'Planning and evidence') --units | cut -f1 | sort | tr '\n' ' ')
 IN_RULES=$(python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/global-rules.md" --units | cut -f1 | grep -cE "^($(tr ' ' '|' <<<"$GONE"))$")
 check "every moved rule is findable from its stub: the seven ids sit under Planning and evidence and no longer in global-rules.md" "$(printf '%s\n' $GONE | sort | tr '\n' ' ')0" "$IN_SEC$IN_RULES"

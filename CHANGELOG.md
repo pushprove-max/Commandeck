@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.62.1 -- 2026-10-30
+
+### Fixes
+
+- Four main rules reworded in 0.62.0 lost your "keep mine" choice, so an update added the new wording beside your own. Your choice holds for them again.
+
 ## 0.62.0 -- 2026-10-30
 
 ### Plans
