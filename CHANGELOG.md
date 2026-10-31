@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.63.1 -- 2026-10-30
+
+### Tests
+
+- The merge cleanup check no longer fails on a good archive when its reader stops early.
+- The Mac check now runs on macOS 15, because macOS 14 runners are retiring.
+
 ## 0.63.0 -- 2026-10-30
 
 ### Reviews

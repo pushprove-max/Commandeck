@@ -57,7 +57,7 @@ jobs:
   # files start every hook and setup.sh under it, and run-hook.test.sh runs
   # `/bin/bash -n` over every shell file in the tree. Homebrew's Bash runs the tests.
   mac-bash-3:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # A Mac with no Homebrew, the case the restart under a newer Bash exists for: setup started
