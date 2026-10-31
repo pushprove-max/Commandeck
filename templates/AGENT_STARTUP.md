@@ -66,6 +66,7 @@ keeps its own `AGENT_STARTUP.md` at the repo root replaces this file.
   code or the live state before acting on it.
 - Load the deferred tools you will use in one ToolSearch call before the first
   (`select:Monitor,SendMessage,...`), not one per turn.
+- Read a saved tool output (a path under `tool-results/`) with the Read tool (`offset`, `limit`) or the Grep tool, never a shell command: that opens a permission prompt, and the guard refuses it.
 
 ## Compact instructions
 

@@ -56,6 +56,7 @@ refuse() { # <what>
   echo "BLOCKED: $1. The merge of $unit (reviewed ${sha:0:8}) is running detached as pid $PID, stage $stage, and holds main's checkout; its log: $log" >&2
   echo "It detaches on purpose and keeps running after the shell call that started it ended, so a half-merged tree is the merge at work, not leftovers. Wait for the end of its log or the message it sends main; do not stash, reset or check out under it, and do not run it again." >&2
   echo "If it is hung: \`kill $PID\`. Its lock is then stale and main is yours." >&2
+  HOOK_FIRE_REASON=merge-lock
   exit 2
 }
 # at <folder> <path> -- the folder <path> names from <folder>: ? when the words cannot tell, empty when it does not exist.
@@ -95,7 +96,7 @@ mains() {
     # From outside a repo the session's project (Claude Code's CLAUDE_PROJECT_DIR) is the one to check (r2); with
     # neither, no merge can be ruled out.
     '?') g=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "${CLAUDE_PROJECT_DIR:-/}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
-      || { echo "BLOCKED: ${WHAT:-git $SUB} with a folder this guard cannot read (a variable, a substitution, quoted prose, a glob, a hard link, a folder or file not made yet, or a word before git such as env -C), from outside any repository: it cannot tell whether a merge holds that folder. Name the folder as a plain path." >&2; exit 2; }
+      || { echo "BLOCKED: ${WHAT:-git $SUB} with a folder this guard cannot read (a variable, a substitution, quoted prose, a glob, a hard link, a folder or file not made yet, or a word before git such as env -C), from outside any repository: it cannot tell whether a merge holds that folder. Name the folder as a plain path." >&2; HOOK_FIRE_REASON=merge-lock; exit 2; }
       live "$g" && refuse "${WHAT:-git $SUB} with a folder this guard cannot read (a variable, a substitution, quoted prose, a glob, a hard link, a folder or file not made yet, or a word before git such as env -C) while a merge holds main; name the folder as a plain path" ;;
     *) held "$1" && refuse "${WHAT:-git $SUB} in main's checkout" ;;
   esac
@@ -236,7 +237,7 @@ if [ "$TOOL" = Bash ]; then
   [ -z "$HELD" ] || [[ $COMMAND != *[\$\`]* ]] || refuse "a \$ or a backtick in a command in main's checkout while a merge holds it (a string bash evaluates can run the command it holds); type the value"
   [[ $P == *git* ]] || [ -n "$HELD" ] || exit 0
   . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
-  type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Reinstall it with \`claude plugin install commandeck@commandeck\` and retry." >&2; exit 2; }
+  type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Reinstall it with \`claude plugin install commandeck@commandeck\` and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
   # A shell given a string runs that string: it is read, its quotes taken out, as the commands after a ;.
   SH='(^|[^[:alnum:]_.-])(eval|(ba|z|da|k)?sh([[:space:]]+-[a-z]+)*[[:space:]]+-[a-z]*c[a-z]*)([[:space:]]|$)'
   if [[ $P =~ $SH ]]; then CMD=$(sed -E "s/$SH/\\1;\\5/g" <<<"$P")

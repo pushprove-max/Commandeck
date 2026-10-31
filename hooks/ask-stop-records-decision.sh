@@ -28,6 +28,7 @@ if [ -f "$OWED" ] && { flock -w 10 9 && ! grep -qx held "$OWED" && IFS=$'\t' rea
   printf '%s\n' "HELD: the owner's message \"$SUBJ\", passed on by the Chief of Staff, has no reply sent back to the relay, so an answer left on this screen does not reach the owner." \
     "Send your reply, then end the turn again: bash ${BASH_SOURCE[0]%/*}/../scripts/cos-tell.sh --note '<subject>' '<your reply>'" \
     "If the answer comes later, end the turn again: the relay's watcher tells the owner this turn ended without one." >&2
+  HOOK_FIRE_REASON=cos-reply-owed
   exit 2
 fi
 
@@ -73,5 +74,6 @@ printf '%s\n' \
   "HELD: this turn ends by asking the owner something, but no decision was recorded, so the Needs Owner card will not show it." \
   "Record the ask, then end the turn again:" \
   "  bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh add <id> '<question>' '<your proposed default, or none>' main" \
-  "The owner's reply closes it only when it names <id> (ruling-log.sh); otherwise run decision.sh answer <id> '<their answer>'. If the line was not a question for the owner, end the turn again." >&2
+  "The owner's reply closes it only when it names <id> (ruling-log.sh); otherwise run bash ${BASH_SOURCE[0]%/*}/../scripts/decision.sh answer <id> '<their answer>'. If the line was not a question for the owner, end the turn again." >&2
+HOOK_FIRE_REASON=ask-no-decision
 exit 2

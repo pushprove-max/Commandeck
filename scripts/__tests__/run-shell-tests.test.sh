@@ -11,6 +11,7 @@ PASS=0 FAIL=0
 export COMMANDECK_FOREGROUND=1
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+export COMMANDECK_SHELL_TEST_SECONDS=$TMP/shell-test-seconds.tsv  # a whole run here must never save over the host's list
 
 # A project with two tests, one script with its same-name test, and a README.
 R=$TMP/repo; mkdir -p "$R/scripts/__tests__" "$R/hooks/__tests__"
@@ -322,6 +323,39 @@ BEFORE=$(cksum < "$FAKEHOME/.commandeck/shell-test-seconds.tsv")
 # Catches: a run inside a test reading or writing the host's list (the clear-out unsets the guard before it is read).
 check "nested_run_leaves_list_alone (a run inside a test neither orders by the host's list nor changes it)" "a b c d | $BEFORE" \
   "$(paste -sd' ' - < "$RUNLOG") | $(cksum < "$FAKEHOME/.commandeck/shell-test-seconds.tsv")"
+
+# #506: a busy machine ran the default half of the cores and failed on load alone. The default is cores / 2, one less when
+# uptime's first load figure is at or over the cores, at least 1; COMMANDECK_SHELL_TEST_JOBS still wins. getconf and uptime
+# are stubs first on PATH (the Homebrew directories go in ahead of /usr/bin only).
+JB=$TMP/jobs; mkdir -p "$JB/scripts/__tests__" "$JB/stub"; printf '#!/usr/bin/env bash\n:\n' > "$JB/scripts/__tests__/t.test.sh"
+git -C "$JB" init -q && git -C "$JB" add -A && git -C "$JB" -c user.name=t -c user.email=t@t commit -qm base
+printf '#!/bin/sh\necho "$CORES"\n' > "$JB/stub/getconf"
+printf '#!/bin/sh\nif [ "${LC_ALL-}" = C ]; then echo " 10:00  up 3 days,  2 users,  $UT"; else echo " up 3 days,  load averages: 99,00 99,00 99,00"; fi\n' > "$JB/stub/uptime"
+chmod +x "$JB/stub/getconf" "$JB/stub/uptime"
+# jobs_for <cores> <uptime's load text> [jobs variable]: the job count the runner printed.
+jobs_for() { env -u COMMANDECK_RUNNING_TEST -u COMMANDECK_SHELL_TEST_JOBS ${3:+COMMANDECK_SHELL_TEST_JOBS=$3} CORES=$1 UT="$2" PATH="$JB/stub:$PATH" \
+  bash -c 'cd "$1" && timeout 60 bash "$2" scripts/__tests__/t.test.sh 2>&1' _ "$JB" "$RUNNER" | sed -n 's/^run-shell-tests: \([0-9]*\) jobs$/\1/p'; }
+# Catches: the default staying cores / 2 whatever the load, or reading the load figure in the host's locale, or a count the owner's variable does not override.
+check "default jobs fall with the load (under the cores half, at or over one less, never below 1, unreadable cuts nothing, the variable wins)" \
+  "4 3 3 4 4 1 5" \
+  "$(jobs_for 8 'load averages: 2.50 3.00 3.10') $(jobs_for 8 'load averages: 8.00 3.00 3.10') $(jobs_for 8 'load average: 9.12, 8.00, 7.00') $(jobs_for 8 'load averages: 7.99 9 9') $(jobs_for 8 'no figures here') $(jobs_for 2 'load averages: 5.00 1 1') $(jobs_for 8 'load averages: 20.0 1 1' 5)"
+
+# #506: a python import in a test wrote __pycache__ into a kept folder, and the fence read it as an edit to the tree.
+PY=$TMP/py; mkdir -p "$PY/scripts/__tests__"
+printf '#!/usr/bin/env bash\ncd "$(dirname "$0")" && python3 -c "import helper"\n' > "$PY/scripts/__tests__/t.test.sh"; echo 'X = 1' > "$PY/scripts/__tests__/helper.py"
+git -C "$PY" init -q && git -C "$PY" add -A && git -C "$PY" -c user.name=t -c user.email=t@t commit -qm base
+OUT=$(cd "$PY" && env -u COMMANDECK_RUNNING_TEST -u PYTHONDONTWRITEBYTECODE timeout 60 bash "$RUNNER" scripts/__tests__/t.test.sh 2>&1); RC=$?
+# Catches: the runner not stopping bytecode writes, so the fence reports `tree changed` and the pass is never recorded.
+check "a python import leaves the fence whole (the run is green, says nothing of a changed tree, and records its pass)" "0 0 1" \
+  "$RC $(grep -c 'the tree changed while' <<<"$OUT") $(rows "$(git -C "$PY" rev-parse --absolute-git-dir)/commandeck-test-runs.tsv")"
+
+# #489 and #506: this file's own whole runs saved their seconds over the host's list (:239 of an earlier run left one row).
+# A bare run with the variable inherited from the top of this file writes that file and the HOME list stays absent.
+rm -f "$COMMANDECK_SHELL_TEST_SECONDS"; NH=$TMP/nohome; mkdir -p "$NH"
+(cd "$JB" && env -u COMMANDECK_RUNNING_TEST HOME=$NH PATH="$JB/stub:$PATH" CORES=2 UT='load averages: 0.10 0.10 0.10' timeout 60 bash "$RUNNER" > /dev/null 2>&1)
+# Catches: the top-of-file export going, so a whole run in this test saves into $HOME/.commandeck/shell-test-seconds.tsv.
+check "a test box never writes the real list (the run saved to the file this test named, and not under HOME)" "yes no" \
+  "$([ -s "$COMMANDECK_SHELL_TEST_SECONDS" ] && echo yes) $([ -e "$NH/.commandeck" ] && echo yes || echo no)"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

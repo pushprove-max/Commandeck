@@ -39,7 +39,7 @@ Q=$'\x01'
 grep -qE "(terminal${OPTS}[[:space:]]+(create|send|split)|worktree${OPTS}[[:space:]]+create|orchestration${OPTS}[[:space:]]+(dispatch|worker-start|send))" \
   <<<"$(strip_quoted "$CMD" "$Q" | sed -E "s/${Q}([;&|()[:space:]]|\$)/QUOTED\1/g; s/${Q}//g")" || exit 0
 . "${BASH_SOURCE[0]%/*}/../scripts/codex-helpers.sh"
-block() { printf 'BLOCKED: %s\n' "$1" >&2; exit 2; }
+block() { HOOK_FIRE_REASON=$1; shift; printf 'BLOCKED: %s\n' "$1" >&2; exit 2; }
 SCRIPTED="the scripted launchers (seat.sh launch, builder-launch.sh) hand back a live pane instead of opening another"
 
 # One line per checked invocation: "create<TAB><worktree>" for an agent launch,
@@ -193,7 +193,7 @@ for words in cmds:
             if not wt.startswith('new-'): print('create\t' + wt)
 PY
 }
-PLAN=$(plan) || block "an orca-ide command this hook cannot parse (unbalanced quotes?); an unchecked launch or send is not allowed. Split it into plain commands."
+PLAN=$(plan) || block unparsable-command "an orca-ide command this hook cannot parse (unbalanced quotes?); an unchecked launch or send is not allowed. Split it into plain commands."
 
 # Main is the session's checkout, not the cwd a `cd` left behind. Outside a
 # repository nothing is main and the live-agent check below still applies.
@@ -205,17 +205,17 @@ MAIN=""
 while IFS=$'\t' read -r kind val; do
   case $kind in
     hand)
-      [ -z "$MAIN" ] || block "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11). To move main itself to a fresh session, run /handoff: its Stop hook opens the new main pane." ;;
+      [ -z "$MAIN" ] || block hand-made-pane-main "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11). To move main itself to a fresh session, run /handoff: its Stop hook opens the new main pane." ;;
     create)
       WT=$val
       [ -n "$WT" ] || WT="path:$(git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" rev-parse --show-toplevel 2>/dev/null)"
-      case $WT in *'$'*) block "a hand-made agent pane in a worktree given as a variable ($WT): the live-agent check cannot read it. Spell the worktree out; $SCRIPTED." ;; esac
+      case $WT in *'$'*) block worktree-variable "a hand-made agent pane in a worktree given as a variable ($WT): the live-agent check cannot read it. Spell the worktree out; $SCRIPTED." ;; esac
       out=$(orca-ide terminal list --worktree "$WT" --json 2>/dev/null) && jq -e 'has("result")' <<<"$out" >/dev/null 2>&1 \
-        || block "a hand-made agent pane in $WT: Orca's pane list cannot be read, and an unknown state is not an absent agent. Retry once \`orca-ide terminal list --worktree <path> --json\` answers."
+        || block pane-list-unreadable "a hand-made agent pane in $WT: Orca's pane list cannot be read, and an unknown state is not an absent agent. Retry once \`orca-ide terminal list --worktree <path> --json\` answers."
       live=$(jq -r '[.result | if type == "array" then . else (.terminals // []) end | .[]
         | select(.connected != false and .orphaned != true and .agentIdentity != null)
         | "\(.handle) (\(.agentIdentity), \(.title))"] | join(", ")' <<<"$out")
-      [ -z "$live" ] || block "a second agent in $WT, which already has a live agent pane: $live. Read or reuse that pane; $SCRIPTED." ;;
+      [ -z "$live" ] || block second-agent "a second agent in $WT, which already has a live agent pane: $live. Read or reuse that pane; $SCRIPTED." ;;
     inbox)
       # A Builder at its prompt reads its inbox only inside a turn that runs `orchestration check`, and a mid-turn
       # Builder that is working, not parked in a wait, never reads it either. Every hand send to a Builder, and from
@@ -223,7 +223,7 @@ while IFS=$'\t' read -r kind val; do
       # handle a seat record names is checked; the newest record wins. Another seat (a plan author, a judge) at its
       # prompt reads no inbox either, and a hand send is no new task (issue 485): it is revised with seat.sh revise.
       H=${val#terminal:}
-      case $H in dispatch:*) [ -z "$MAIN" ] || block "a hand inbox send to $H: a working Builder never reads its dispatch inbox. Send it with scripts/answer-worker.sh <unit> \"<text>\" [<question id>], which picks the way the pane reads it" ;; esac
+      case $H in dispatch:*) [ -z "$MAIN" ] || block hand-inbox-send "a hand inbox send to $H: a working Builder never reads its dispatch inbox. Send it with scripts/answer-worker.sh <unit> \"<text>\" [<question id>], which picks the way the pane reads it" ;; esac
       case $H in ''|*'$'*|dispatch:*) continue ;; esac
       rec=$(ls -t "$PP_SCRATCH"/seat-*.txt 2>/dev/null | while IFS= read -r f; do grep -qx "handle=$H" "$f" && { echo "$f"; break; }; done)
       [ -n "$rec" ] || continue
@@ -232,18 +232,18 @@ while IFS=$'\t' read -r kind val; do
         # A working seat passes: it may be parked in a wait. At its prompt, or unreadable, a hand send is never read.
         [ "$rc" != 0 ] || continue
         role=$(sed -n 's/^role=//p' "$rec" | tail -1); unit=$(sed -n 's/^unit=//p' "$rec" | tail -1)
-        block "$H is at its prompt or its state cannot be read, and a hand send to it starts no task; revise it with scripts/seat.sh revise ${role:-<role>} ${unit:-<unit>} \"<text>\"" ;;
+        block send-to-unknown-pane "$H is at its prompt or its state cannot be read, and a hand send to it starts no task; revise it with scripts/seat.sh revise ${role:-<role>} ${unit:-<unit>} \"<text>\"" ;;
       esac
-      [ "$rc" != 0 ] || block "$H is mid-turn and reads its inbox only while parked in a wait; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which types into a working pane"
-      block "$H is at its prompt and never reads its inbox; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which wakes it" ;;
+      [ "$rc" != 0 ] || block send-to-busy-pane "$H is mid-turn and reads its inbox only while parked in a wait; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which types into a working pane"
+      block send-to-idle-pane "$H is at its prompt and never reads its inbox; send it with scripts/answer-worker.sh $H \"<text>\" [<question id>], which wakes it" ;;
     job)
       H=$val
       [ -n "$H" ] || continue
-      case $H in *'$'*) block "a job sent to a pane given as a variable ($H): the busy check cannot read it. Spell the handle out; \`orca-ide terminal list --json\` prints them." ;; esac
+      case $H in *'$'*) block handle-variable "a job sent to a pane given as a variable ($H): the busy check cannot read it. Spell the handle out; \`orca-ide terminal list --json\` prints them." ;; esac
       rc=0; pane_is_busy "$H" || rc=$?
       case $rc in
-        0) block "a new job into ${H#terminal:}, whose agent is mid-turn: it would queue behind that turn and run as a second job. Wait for the turn to end (\`orca-ide terminal wait --terminal <handle> --for tui-idle --timeout-ms 240000\`); dispatch-task.sh refuses a busy pane the same way." ;;
-        2) block "a job sent to ${H#terminal:}: Orca cannot report its agent state, and an unknown state is not an idle pane. Retry once \`orca-ide terminal list --json\` shows it." ;;
+        0) block job-to-busy-pane "a new job into ${H#terminal:}, whose agent is mid-turn: it would queue behind that turn and run as a second job. Wait for the turn to end (\`orca-ide terminal wait --terminal <handle> --for tui-idle --timeout-ms 240000\`); dispatch-task.sh refuses a busy pane the same way." ;;
+        2) block job-state-unknown "a job sent to ${H#terminal:}: Orca cannot report its agent state, and an unknown state is not an idle pane. Retry once \`orca-ide terminal list --json\` shows it." ;;
       esac ;;
   esac
 done <<<"$PLAN"

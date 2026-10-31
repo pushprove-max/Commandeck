@@ -179,5 +179,9 @@ check "a Stop with no session record skips nothing" 2 "$(st "")"
 cp "$P/hooks/rec.sh" "$P/hooks/suite-rerun-guard.sh"
 printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [%s]}]}}\n' "$(h "suite-rerun-guard.sh deny")" > "$P/hooks/hooks.json"
 check "a guard on the keep-list still refuses in a read-only run" 2 "$(ro "$SES/ro.jsonl")"
+# Catches: generated-read-guard.sh missing from READ_ONLY_KEEP, so a read-only reviewer's whole read of a generated file is no longer refused (issue 519).
+cp "$P/hooks/rec.sh" "$P/hooks/generated-read-guard.sh"
+printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [%s]}]}}\n' "$(h "generated-read-guard.sh deny")" > "$P/hooks/hooks.json"
+check "a read-only run keeps the generated guard" 2 "$(ro "$SES/ro.jsonl")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

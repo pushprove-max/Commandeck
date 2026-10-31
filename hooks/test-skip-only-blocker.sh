@@ -9,7 +9,7 @@ INPUT=$(cat)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 CONTENT=$(hook_new_text "$INPUT")
 [ -z "$CONTENT" ] && exit 0
 
@@ -29,7 +29,7 @@ case "$FILE_PATH" in
   */hooks/__tests__/*.sh|hooks/__tests__/*.sh) exit 0 ;;
 esac
 . "${BASH_SOURCE[0]%/*}/lib/test-path.sh" 2>/dev/null && declare -F is_test_path >/dev/null \
-  || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/test-path.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+  || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/test-path.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 is_test_path "$FILE_PATH" || exit 0
 
 # RUNNER ALIASES. `const itCompat = it; itCompat.only(...)` focused a suite past the literal names. A name bound by
@@ -89,6 +89,7 @@ if [ -n "$OFFENDERS" ]; then
   MATCH=$(printf '%s\n' "$OFFENDERS" | grep -oE "$PATTERN" | head -1)
   echo "BLOCKED: '$MATCH' in $FILE_PATH skips or focuses tests -- that masks failures and disables coverage." >&2
   echo "Remove it and make the test pass. An intentional skip carries // skip-ok: <reason> on the same line, and that is the owner's decision, not a default." >&2
+  HOOK_FIRE_REASON=test-skip-only
   exit 2
 fi
 

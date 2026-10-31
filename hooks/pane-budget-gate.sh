@@ -85,6 +85,7 @@ if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
     TaskCreate|TaskUpdate|TaskList|TaskGet|TaskStop|TodoWrite) exit 0 ;;
   esac
   echo "BLOCKED: main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out with --goal/--stage/--next/--open-item, checkpoint-context.py carry, decision.sh add to record an ask, TaskStop and the task-list tools also pass), then end the turn; the Stop hook restarts main." >&2
+  HOOK_FIRE_REASON=past-clear-line
   exit 2
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).
@@ -183,6 +184,7 @@ if [ ! -f "$HANDOFF" ]; then
   echo "pane budget exceeded ($PB_SUMMARY); write $HANDOFF with headings: decisions, unresolved findings, current commit, test evidence" >&2
   echo "options: simplify the unit; reset the pane from the handoff file; reassign to a fresh pane; escalate to main" >&2
   echo "Try: bash $(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)/builder-fresh-round.sh <handle of this pane> $HANDOFF <seat record of $UNIT>" >&2
+  HOOK_FIRE_REASON=handoff-missing
   exit 2
 fi
 # Every missing heading in one refusal, with the skeleton to paste.
@@ -193,5 +195,6 @@ done
 if [ ${#MISSING_HEADINGS[@]} -gt 0 ]; then
   echo "handoff $HANDOFF lacks headings: $(IFS=,; echo "${MISSING_HEADINGS[*]}" | sed 's/,/, /g'). Add them all in one edit; the full skeleton:" >&2
   printf '## %s\n' decisions 'unresolved findings' 'current commit' 'test evidence' >&2
+  HOOK_FIRE_REASON=handoff-headings
   exit 2
 fi

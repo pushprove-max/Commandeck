@@ -68,6 +68,7 @@ if [ "$fresh" = 1 ]; then
   if [ -n "$unfilled" ]; then
     echo "$(date +%FT%T) stop-hook: $cp still has unfilled fields ($unfilled); main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
     if [ "$active" != true ]; then
+      HOOK_FIRE_REASON=checkpoint-unfilled
       HOOK_FIRE_BLOCK=1
       snap="$(cd "$(dirname "$0")/../scripts" && pwd)/state-snapshot.sh"
       jq -n --arg r "CHECKPOINT NOT READY: ${cp/#$HOME/\~} has unfilled $unfilled. Fill them in one call: bash ${snap/#$HOME/\~} --out ${cp/#$HOME/\~} --goal '<one line>' --stage <unit>=<text> --next <unit>=<text>; then end the turn." '{decision:"block", reason:$r}'
@@ -98,6 +99,7 @@ if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
   n=$(grep -c '^- ' <<<"$miss")
   if [ "$rc" != 0 ] && [ "$active" != true ]; then
     echo "$(date +%FT%T) stop-hook: carry-over check failed for $cp against ${base:-<empty $anc>}: $n items" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    HOOK_FIRE_REASON=carry-over-missing
     HOOK_FIRE_BLOCK=1
     first=$(grep -m1 '^- ' <<<"$miss"); first=${first#- }
     head="CARRY-OVER: $n inherited open item$([ "$n" = 1 ] || echo s): "
@@ -276,6 +278,7 @@ for e in rest[:argc]:
 fi
 [ "$fresh" = 1 ] && { HOOK_FIRE_ADVISE=1; echo "context-clear: checkpoint fresh but no ORCA_TERMINAL_HANDLE; type /clear by hand" >&2; exit 0; }
 [ "$active" = "true" ] && exit 0
+HOOK_FIRE_REASON=no-checkpoint
 HOOK_FIRE_BLOCK=1
 # The template's headings ride in the reason: reading the 4.5 KB template
 # first cost 3.5 turns a block. Builtins only, read from the template itself.

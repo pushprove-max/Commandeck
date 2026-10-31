@@ -17,6 +17,8 @@
 #   HOOK_FIRE_BLOCK=1    a refusal that exits 0 (JSON {"decision":"block"})
 #   HOOK_FIRE_ASK=1      a permissionDecision "ask": the owner is asked first
 #   HOOK_FIRE_ADVISE=1   a warning or advice that lets the call through
+#   HOOK_FIRE_REASON=<slug>   set before any refusal: the rule refused, kept on a
+#                        block row only and only as [a-z0-9-]{1,40}
 # Block outranks ask, ask outranks advice, and ask counts only on exit 0.
 # hook-fire-log-coverage.guard.test.sh fails a hook that prints "ask" unmarked.
 # Plain assignments, so a hook whose helper did not load runs exactly as
@@ -81,7 +83,7 @@ hook_fire_log_arm() {
   local LC_ALL=C
   # tool_use_id is the payload's last key, so it is read from the tail.
   _HOOK_FIRE_INPUT=$1 _HOOK_FIRE_HEAD=${1:0:4096} _HOOK_FIRE_TAIL=${1:$(( ${#1} > 512 ? ${#1} - 512 : 0 ))} _HOOK_FIRE_EVENT=${2-} _HOOK_FIRE_HOOK=${BASH_SOURCE[1]##*/} _HOOK_FIRE_FILE=${BASH_SOURCE[1]} _HOOK_FIRE_PID=${BASHPID-} _HOOK_FIRE_T0=${EPOCHREALTIME-}
-  HOOK_FIRE_BLOCK='' HOOK_FIRE_ASK='' HOOK_FIRE_ADVISE='' HOOK_FIRE_WAIT_MS=''
+  HOOK_FIRE_BLOCK='' HOOK_FIRE_ASK='' HOOK_FIRE_ADVISE='' HOOK_FIRE_WAIT_MS='' HOOK_FIRE_REASON=''
   trap _hook_fire_log_exit EXIT
   return 0
 }
@@ -346,6 +348,7 @@ _hook_fire_log_write() { # decision
     wt=${wt//[^A-Za-z0-9._-]/}
     _hook_fire_log_summary
     extra+=",\"worktree\":\"${wt:0:64}\",\"summary\":\"$summary\""
+    [[ ${HOOK_FIRE_REASON-} =~ ^[a-z0-9-]{1,40}$ ]] && extra+=",\"reason\":\"$HOOK_FIRE_REASON\""
   fi
   [[ ${HOOK_FIRE_WAIT_MS-} =~ ^[0-9]{1,9}$ ]] && extra+=",\"wait_ms\":$((10#$HOOK_FIRE_WAIT_MS))"
   [ "${AGENT_KIND-}" = codex ] || [[ $use == exec-* ]] && agent=codex

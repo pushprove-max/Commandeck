@@ -60,7 +60,7 @@ if [ -z "$ASK" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "$(printf '%s' "$INP
     r=$(pp_seat_record "$ORCA_TERMINAL_HANDLE") && pp_plan_committed "$r" && pp_turn_quiet "$(pp_seat_turn "$r")" 'running|complete' \
       && ! pp_failed_text "$FULL" && pp_seat_clear "$r" && sed -n 's/^unit=//p' "$r" | tail -1 )
   [ -z "$PU" ] || { jq -nc --arg r "Your plan .claude/plans/$PU.md is committed since this seat started, but your turn ended without its marker. Print this line alone as your last line, with nothing after it: PLAN-DONE" \
-    '{decision: "block", reason: $r}'; HOOK_FIRE_BLOCK=1; exit 0; }
+    '{decision: "block", reason: $r}'; HOOK_FIRE_REASON=plan-done-marker; HOOK_FIRE_BLOCK=1; exit 0; }
 fi
 # No marker and no ask line, no send: a mid-work turn end has nothing for main, and
 # main-watch's and seat.sh wait's own timers catch a pane that stopped silently.

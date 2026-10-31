@@ -9,3 +9,5 @@ __pycache__/
 todo/main-todo.md
 .claude/workflows/test-audit.js
 *.commandeck-bak-*
+.claude/bugfix-lock
+.claude/stop-checks

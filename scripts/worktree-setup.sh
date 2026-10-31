@@ -59,7 +59,7 @@ fi
 # exclude file names them.
 EXCLUDE=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir)/info/exclude
 [ "$PRINT" = 1 ] || mkdir -p "${EXCLUDE%/*}"
-for p in .claude/settings.local.json .claude/builder-events.jsonl; do
+for p in .claude/settings.local.json .claude/builder-events.jsonl .claude/bugfix-lock; do
   [ "$PRINT" = 1 ] || grep -qxF "$p" "$EXCLUDE" 2>/dev/null || echo "$p" >> "$EXCLUDE"
 done
 # A Builder stays a Builder: seat.sh launch reruns this script without the flag.

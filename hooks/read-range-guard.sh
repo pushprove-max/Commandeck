@@ -15,4 +15,5 @@ grep -Iq . "$FILE" 2>/dev/null || exit 0
 N=$(wc -l < "$FILE" 2>/dev/null | tr -d ' ')
 [ "${N:-0}" -gt "$MAX" ] || exit 0
 echo "BLOCKED: $FILE has $N lines; a whole read of it rides every later turn. Find the line first with \`grep -n <pattern> $FILE\`, then Read a range: offset 1, limit 200, or offset <line> with the limit you need." >&2
+HOOK_FIRE_REASON=read-range
 exit 2

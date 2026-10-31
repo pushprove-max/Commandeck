@@ -31,5 +31,6 @@ if [ "$GITDIR" != "$COMMON" ] && [ "${TOP##*/}" = Chief-of-Staff ]; then :
 elif [ "$GITDIR" = "$COMMON" ] && ! bash "${BASH_SOURCE[0]%/*}/../scripts/cos-tell.sh" --handle >/dev/null 2>&1; then :
 else exit 0; fi
 R="Unfinished work in your reply ($HIT). If it is yours to do (file, relay, check, fix tooling), do it now and report it done. Keep the line only if it truly needs the owner or is outside your authority, and say why in the same sentence."
+HOOK_FIRE_REASON=unfinished-work
 HOOK_FIRE_BLOCK=1
 jq -cn --arg r "$R" '{decision:"block", reason:$r}'

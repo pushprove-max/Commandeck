@@ -11,7 +11,8 @@
 # UNIT_LEDGER_ROUNDS, UNIT_LEDGER_GO_ROUNDS, UNIT_LEDGER_NO_GO_ROUNDS, and
 # UNIT_LEDGER_MERGE_RULE. Seats are the unit's seat-events.jsonl rows; tokens
 # are the unit's Claude transcripts, from its first launch on (seat-event.sh --usage); Codex passes are not in them.
-# A metric with no source is null and named in gaps, never 0. findings and fixRounds always are: the plugin keeps
+# A metric with no source is null and named in gaps, never 0 (passes, each round's kind, verdict and P0..P3 counts, too:
+# review-pass-report.sh reads it). findings and fixRounds always are: the plugin keeps
 # no per-round finding counts, and its Builder fixes its own rounds, with no fixer seat to count.
 # The file is append-only: an --append with no merge sha or no verdict is refused, as that row could never be joined
 # to an outcome. An escape is a row of its own, and a unit with no merged row is tagged all the same (an escape can
@@ -85,7 +86,8 @@ ROW=$(jq -Rnc --arg unit "$UNIT" --arg sha "$SHA" --arg verdict "$VERDICT" --arg
      wallHours: (if $m and $f then (($m - $f) / 360 | round) / 10 else null end),
      rounds: ($rounds | n), goRounds: ($go | n), noGoRounds: ($nogo | n), fixRounds: null, verdict: ($verdict | s),
      mergeRule: ($rule | s),
-     passKinds: (($review | if . == "" then null else fromjson end) | .passKinds), reviewSeconds: (($review | if . == "" then null else fromjson end) | .reviewSeconds),
+     passKinds: (($review | if . == "" then null else fromjson end) | .passKinds),
+     passes: (($review | if . == "" then null else fromjson end) | .passes), reviewSeconds: (($review | if . == "" then null else fromjson end) | .reviewSeconds),
      findings: null, expensivePasses: null,
      seats: [$ev[] | {round, role, model, tokens: (if .tokens then (.tokens.input // 0) + (.tokens.output // 0) else null end)}
        + (if .tokensReason then {tokensReason} else {} end)],

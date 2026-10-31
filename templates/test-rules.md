@@ -10,8 +10,19 @@ and every review prompt point here.
 - List every deleted or merged test with the test that replaces it, in the
   evidence file or the change's description.
 - On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name.
-- No existing test loses a line without main's `Test edit: <path> ruling:<id>`
-  line in the unit's rulings. Adding a new case is free.
+- No existing test loses a line without main's `Test edit: <path> test:<label>
+  ruling:<id>` line in the unit's rulings, one per test that loses a line.
+  `<label>` is the test's name; `(file)` covers a line of a `.json`, `.txt`, `.md`,
+  `.yml` or `.yaml` file. Any other code line (a helper, a case's setup, a comment)
+  needs its own `Test edit: <path> line:<exact old text> ruling:<id>`. A line with
+  the path only approves nothing. Adding a new case is free.
+- A bug fix starts with a failing test. Run it and see it fail for the bug's reason. Then add its path to
+  `.claude/bugfix-lock`, one repo-relative path per line, no glob and no `..`. While the line is there the file
+  tools refuse any edit of that test: fix the code, not the test. The lock is run state and is never committed.
+  When the fix is verified, run the test as written and remove the line.
+- If the brief or a review finding names a change to a locked test, make only that change: delete the line, edit,
+  put the line back, and show the test before and after in the evidence file. Any wider change is a question for main.
+- The lock stops the file tools only, not a shell edit. A shell edit of a locked test breaks this rule the same way.
 
 ## What a test must encode
 

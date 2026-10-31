@@ -51,6 +51,7 @@ blocked() {
   [ -n "$RELAY" ] || return 0
   printf '%s\n' "BLOCKED: this question is already in front of the owner (state below); do not ask it again." \
     "Still open: do not re-ask; carry on with other work or end the turn, the answer arrives by itself. Answered: use that answer. Its state: \`bash scripts/decision.sh list\`." "$@" >&2
+  HOOK_FIRE_REASON=ask-already-open
   exit 2
 }
 dups=() seen=() restore='{}' added=() add_failed=
@@ -87,6 +88,7 @@ if [ -z "$add_failed" ] && [ ${#added[@]} -gt 0 ] && [ -n "$RELAY" ] && bash "${
   ids=$(IFS=,; echo "${added[*]}")
   printf '%s\n' "BLOCKED: do not open a picker while the Chief of Staff is live. This question is recorded in the decisions ledger as $ids: the Chief of Staff puts it to the owner and relay-order.sh sends the answer back." \
     "Carry on with other work or end the turn; the answer arrives by itself (scripts/relay-order.sh delivers it, no call needed)." >&2
+  HOOK_FIRE_REASON=ask-cos-live
   exit 2
 fi
 # A decoy or re-ask retry that came back reworded shows the ORIGINAL question:

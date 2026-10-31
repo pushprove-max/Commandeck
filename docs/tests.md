@@ -99,6 +99,16 @@ A bare run starts the slowest files first, from the seconds the last bare runs s
 row starts after the known ones. The report stays in sorted order. A run inside a test uses no list unless that variable
 names one.
 
+A drift guard fails when two copies of one fact disagree and names both. The worked example compares the
+`Retry limit:` line of two files:
+
+```bash
+printf 'Retry limit: 3\n' > a.md; printf 'Retry limit: 5\n' > b.md
+bash templates/drift-guard-example.sh a.md b.md
+```
+
+It prints `drift: a.md says '3', b.md says '5'` and exits 1; with equal lines it prints `ok: ...` and exits 0.
+
 Contributions should branch from `main`, keep one change per pull request,
 and add a test that fails without a behavior fix. Open an issue first for a
 larger change. Follow the repository's contributing instructions; do not add

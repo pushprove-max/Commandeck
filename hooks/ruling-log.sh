@@ -5,7 +5,7 @@
 # WHY: on 2026-09-18 a memory note dated a ruling 00:15 ET; the transcript
 # shows 02:05 ET. The time was invented and the note was then used as settled
 # law. This log is what a "owner ruling" line cites (ruling:r-<id>), and
-# ruling-cite-gate.sh blocks a memory or rule line whose id is not in it.
+# hooks/ruling-cite-gate.sh blocks a memory or rule line whose id is not in it.
 #
 # One JSONL row per answer, outside the repo so worktrees share one log.
 # AskUserQuestion prints one short line with the id(s); a prompt prints nothing.

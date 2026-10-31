@@ -13,8 +13,7 @@
 # none of these rules needs a repo-wide migration: 470 existing cast sites
 # stay untouched; only new writing pays the toll.
 #
-# Rule format (@@ delimiter -- patterns need alternation, see
-# companion-read-guard.sh for the `|` incident):
+# Rule format (@@ delimiter -- patterns need alternation, so `|` cannot delimit):
 #   pattern@@applies-path-regex@@exempt-path-regex@@annotation@@message
 # `applies` and `exempt` match the repo-relative path; the rule fires only
 # when the path matches `applies` and not `exempt`. The annotation is the
@@ -28,7 +27,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 . "${BASH_SOURCE[0]%/*}/lib/screen-code.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 
 # ONE PARSE. Every rule below reads some slice of the payload -- the path, the
 # text going in, the text coming out, or all three per edit -- and each slice
@@ -46,7 +45,7 @@ if [ "$(grep -c . <<<"$_paths")" -gt 1 ]; then
     _one=$(jq -c --arg p "$(printf '%s' "$_p64" | base64 -d 2>/dev/null)" '.tool_input |= (. as $t
       | (if ($t.file_path // "") == $p then . else del(.content, .new_string, .old_string) end)
       | .edits = [($t.edits // [])[] | select((.file_path // $t.file_path // "") == $p)] | .file_path = $p)' <<<"$INPUT") \
-      || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not split a batch over several files, so it cannot screen this write. Send one \`Edit\` call per file." >&2; exit 2; }
+      || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not split a batch over several files, so it cannot screen this write. Send one \`Edit\` call per file." >&2; HOOK_FIRE_REASON=batch-split-failed; exit 2; }
     printf '%s' "$_one" | bash "${BASH_SOURCE[0]}" || exit $?
   done <<<"$_paths"
   exit 0
@@ -87,6 +86,7 @@ if [[ "$REGION" == *$'\r'* ]]; then
   # five files, not blocking work on them.
   if ! { [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ] && grep -qU $'\r' "$FILE_PATH" 2>/dev/null; }; then
     echo "BLOCKED: Write to ${FILE_PATH:-unknown} contains CRLF line endings. Use LF only (Unix-style). Remove all \\r characters." >&2
+    HOOK_FIRE_REASON=crlf-write
     exit 2
   fi
 fi
@@ -137,6 +137,7 @@ if bad:
     sys.exit(2)') || {
   [ $? -ne 2 ] || {
     echo "BLOCKED: after this edit $PARSE. A hook that does not parse refuses every call it is registered for, its own repair included. Fix the text; \`bash -n <file>\` reads it the same way." >&2
+    HOOK_FIRE_REASON=hook-parse-error
     exit 2
   }
 }
@@ -188,6 +189,7 @@ while IFS= read -r _rec; do
   esac
   if printf '%s' "$_c64" | base64 -d 2>/dev/null | grep -qE "$_LOCALHOST_RE"; then
     echo "BLOCKED: HTTP fetch to a local address in $_pair_path. In containers, localhost doesn't resolve to the expected service. Use the service name or environment variable for the URL." >&2
+    HOOK_FIRE_REASON=localhost-fetch
     exit 2
   fi
 done <<< "$TRIPLES"
@@ -214,6 +216,7 @@ case "$FILE_PATH" in
           | utf8bytelength end' <<< "$INPUT" 2>/dev/null)
     if [ "${_mem_new:-0}" -gt "$_mem_cap" ] && [ "$_mem_new" -gt "$_mem_cur" ]; then
       echo "BLOCKED: this leaves $FILE_PATH at $_mem_new bytes, over the $_mem_cap-byte cap. Move entries for merged or closed work to ARCHIVE.md, or shorten hooks, then retry." >&2
+      HOOK_FIRE_REASON=memory-size-cap
       exit 2
     fi
   ;;
@@ -251,6 +254,7 @@ BLOCKED: $FILE_PATH adds a Claude contributor credit (Co-Authored-By /
 noreply@anthropic.com / Generated with Claude Code / Claude-Session).
 Credits are banned repo-wide.
 EOF
+      HOOK_FIRE_REASON=claude-credit
       exit 2
     fi
   ;;
@@ -271,10 +275,12 @@ case "$SCOPE_PATH" in
       MATCH=$(printf '%s' "$SCREENED" | grep -oiE '(TODO|FIXME|HACK|XXX|TEMP)\b[^"]*' | head -1)
       echo "BLOCKED: Deferred work marker in $FILE_PATH: '$MATCH'. Fix it now or remove the comment." >&2
       echo "An ownerless marker is what is banned. A TODO carrying an issue number -- TODO(#<issue>): ... -- is allowed." >&2
+      HOOK_FIRE_REASON=deferred-marker
       exit 2
     fi
     if printf '%s' "$ADDED" | grep -qiE '//\s*(implement later|temporary fix|placeholder|will be replaced|needs refactor|come back to this)'; then
       echo "BLOCKED: Vague placeholder comment in $FILE_PATH. Either implement it now or remove the comment." >&2
+      HOOK_FIRE_REASON=placeholder-comment
       exit 2
     fi
   ;;
@@ -297,6 +303,7 @@ if type screen_rel >/dev/null 2>&1 && _sr=$(screen_rel "$FILE_PATH") && [ -n "$_
     done <<<"$ADDED"
     if [ -n "$_copy" ]; then
       echo "BLOCKED: placeholder copy in $FILE_PATH: $_copy. Build only what the plan asks for; a mockup element the plan does not build is left out and sent to main as a question. Allowed only when the plan or main's rulings name the complete line: Placeholder: $_rel | <complete source line> | <why>" >&2
+      HOOK_FIRE_REASON=placeholder-copy
       exit 2
     fi
   fi
@@ -315,10 +322,12 @@ case "$FILE_PATH" in
           MATCH=$(printf '%s' "$ADDED" | grep -oE '@ts-(ignore|expect-error|nocheck)' | head -1)
           echo "BLOCKED: '$MATCH' in $FILE_PATH suppresses TypeScript instead of fixing it." >&2
           echo "Resolve the underlying type error; do not route around the type check." >&2
+          HOOK_FIRE_REASON=ts-suppress
           exit 2
         fi
         if printf '%s' "$ADDED" | grep -qE 'eslint-disable'; then
           echo "BLOCKED: 'eslint-disable' in $FILE_PATH. Fix the lint violation rather than disabling the rule." >&2
+          HOOK_FIRE_REASON=eslint-disable
           exit 2
         fi
       ;;
@@ -383,6 +392,7 @@ BLOCKED: $REL names a reviewer, a round or a severity in a code comment.
   Comments say what the code does, not who asked for it. Review history lives
   in the round files.
 EOF
+    HOOK_FIRE_REASON=history-comment
     exit 2
   done <<< "$_matches"
 fi
@@ -460,6 +470,7 @@ BLOCKED: $_erel introduces a pattern with a known defect history.
 
   If this use is deliberate, annotate it in the same edit: // $ANNOTATION: <reason>
 EOF
+    HOOK_FIRE_REASON=needs-annotation
     exit 2
   done <<< "$TRIPLES"
 done

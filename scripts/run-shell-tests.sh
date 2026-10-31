@@ -4,7 +4,7 @@
 # sorted order, and exit non-zero if any failed. Each file's result is also
 # printed the moment it finishes, as a `-- ` line ahead of the sorted report.
 # Tests run in parallel, COMMANDECK_SHELL_TEST_JOBS at a time (default: half the
-# CPUs, at least 1), so no two tests may share a fixed scratch path.
+# CPUs, one less under load, at least 1), so no two tests may share a fixed scratch path.
 #
 # Why this exists: 135 of these tests were wired to no gate at all. test:guards
 # selects TypeScript files only, and nothing in local-checks.sh or the CI
@@ -50,8 +50,18 @@ ROOT=$(git rev-parse --show-toplevel)
 HERE=$(cd "$(dirname "$0")" && pwd)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 MAX_LINES=${COMMANDECK_SHELL_TEST_MAX_LINES:-500}
-JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(( $(getconf _NPROCESSORS_ONLN) / 2 ))}
+# Default jobs (#506): half the CPUs, one less when the machine is already busy (uptime's first load figure at or over
+# the CPU count; one that cannot be read cuts nothing).
+default_jobs() {
+  local cores load
+  cores=$(getconf _NPROCESSORS_ONLN) || cores=2
+  load=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load averages*: *\([0-9][0-9]*\).*/\1/p')
+  if [ -n "$load" ] && [ "$load" -ge "$cores" ] 2>/dev/null; then echo $(( cores / 2 - 1 )); else echo $(( cores / 2 )); fi
+}
+JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(default_jobs)}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
+# A python import in a test would write __pycache__ into a kept folder, and the fence would call it an edit to the tree.
+export PYTHONDONTWRITEBYTECODE=1
 CALLER_PWD=$PWD
 # In main's own foreground a run restarts itself detached (issue 230). A subshell: paths.sh exports what the
 # tests must not inherit. No test this runs is main's foreground.
@@ -362,6 +372,7 @@ if [ "${#SAVED[@]}" -gt 0 ] && [ "${#RUN[@]}" -gt 0 ]; then
   mapfile -t RUN < <(for i in "${RUN[@]}"; do b=$(basename "${TESTS[$i]}"); printf '%s\t%s\n' "${SAVED[$b]:--1}" "$i"; done | sort -s -t$'\t' -k1,1nr | cut -f2)
 fi
 live run "$(date +%s)" "$JOBS"
+echo "run-shell-tests: $JOBS jobs"
 for i in ${SEL[@]+"${SEL[@]}"}; do live file "${REL[i]}"; done
 for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${SKIPWHY[i]:-}" ] || live end "${REL[i]}" skip 0; done
 for i in ${SEL[@]+"${SEL[@]}"}; do [ -z "${OVER[i]:-}" ] || live end "${REL[i]}" FAIL 0; done

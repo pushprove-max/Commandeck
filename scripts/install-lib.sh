@@ -52,7 +52,7 @@ IL_GLOBAL=$HOME/.claude/CLAUDE.md   # the owner's own instructions: the plugin a
 # git tracks, and uninstall takes out the lines setup's manifest recorded.
 IL_STATE=('*.commandeck-bak-*' .claude/settings.local.json .claude/main-session.settings.json .claude/builder-events.jsonl .claude/metrics/decisions.jsonl .claude/metrics/seat-events.jsonl
   .claude/metrics/unit-ledger.jsonl .claude/metrics/subagent-usage.jsonl .claude/metrics/subagent-usage.jsonl.lock
-  .claude/metrics/unit-holds.jsonl .claude/metrics/codex-helper.jsonl .claude/briefs/ .claude/routing-log todo/main-todo.md
+  .claude/metrics/unit-holds.jsonl .claude/metrics/codex-helper.jsonl .claude/briefs/ .claude/routing-log todo/main-todo.md .claude/bugfix-lock .claude/stop-checks
   .claude/workflows/test-audit.js)   # setup's copy holds this machine's paths (il_test_audit)
 
 il_sha() { sha256sum < "$1" | cut -d' ' -f1; }

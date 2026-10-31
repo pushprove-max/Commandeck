@@ -40,6 +40,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib/edit-payload.sh" 2>/dev/null
 hook_payload_loaded 2>/dev/null || {
   echo "BLOCKED: hooks/lib/edit-payload.sh did not load, so the file-size cap screened nothing. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2
+  HOOK_FIRE_REASON=helper-missing
   exit 2
 }
 
@@ -79,6 +80,7 @@ while IFS=$'\t' read -r P64 KIND N; do
       continue
     fi
     echo "BLOCKED: $VERB $FILE_PATH would leave a ${LINE_COUNT}-line file; the cap is ${CAP}. Split it, or move what you are adding to the file it belongs in." >&2
+    HOOK_FIRE_REASON=file-size-cap
     exit 2
   fi
 done <<< "$(hook_edit_size "$INPUT")"

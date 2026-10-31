@@ -120,8 +120,11 @@ and a fix that touches a save updates that save's row in the same commit.
   or than the number on the plan's `New tests: <unit> <n>` line when it has one.
 - Ask main before you edit an existing test. A test file that exists at the fork
   point and loses a line stops the pass and the merge until main's
-  `<unit>-main-rulings.md` holds `Test edit: <path> ruling:<id>` for it. Adding
-  a new case is free. After main adds the line, run `--ack-rulings` again.
+  `<unit>-main-rulings.md` holds `Test edit: <path> test:<label> ruling:<id>`
+  for each test that loses a line (`(file)` for a line of a data file), and
+  `Test edit: <path> line:<exact old text> ruling:<id>` for each other code line,
+  one per line; the refusal prints the lines to add. Adding a new case is free. After
+  main adds the lines, run `--ack-rulings` again.
 - Arrange test data with one shared builder per domain object (a fixture
   function in shell tests), one or two lines per test. When a test needs a new
   field, extend the builder; never hand-build the object in the test:

@@ -320,5 +320,17 @@ check "a build with no class stop carries no Class stops line" "0 0" "$(merge cn
 printf '#!/bin/sh\necho "$*" >> "%s/serena-calls"\n' "$TMP" > "$TMP/serena-stub"; chmod +x "$TMP/serena-stub"
 mk sr; hx sr; go sr; COMMANDECK_SERENA_SHARED="$TMP/serena-stub" merge sr > /dev/null
 check "a merge stops the server (issue 470)" "stop $COMMANDECK_WORKSPACES/sr" "$(grep -x "stop $COMMANDECK_WORKSPACES/sr" "$TMP/serena-calls" 2>/dev/null | head -1)"
+# Issue 514 (after every timed check above): the ledger row keeps each round's kind, verdict and finding counts, so the
+# report can say whether a later pass found anything. Counted with the pass script's finding line; tm's two rounds
+# above (one [P1] line, then a bare GO) are the fixture.
+# Catches: a REVIEW that drops `passes`, counts a round's lines wrongly, or loses the round number.
+# (The round file repeats the finding line, so the P1 count is read as "some", not 1.)
+check "the ledger keeps each pass" '[{"n":1,"kind":"adversarial","verdict":"NO-GO","p0":0,"p1":true,"p2":0,"p3":0},{"n":2,"kind":"final","verdict":"GO","p0":0,"p1":0,"p2":0,"p3":0}]' \
+  "$(jq -sc 'map(select(.unit == "tm")) | .[0].passes | map(.p1 |= if . > 0 then true else . end)' "$UL" 2>/dev/null)"
+# Catches: a round that cannot be read counted as 0 finds, which reads as a pass that found nothing.
+mk ur; go ur
+for f in "$COMMANDECK_WORKSPACES"/ur/.claude/briefs/ur-r[0-9]*-reports.md; do grep -v '^Pass: ' "$f" > "$f.new" && mv "$f.new" "$f"; done
+check "an unread round leaves passes null" "0 true true" \
+  "$(merge ur) $(jq -sr 'map(select(.unit == "ur")) | .[0] | has("passes") and .passes == null' "$UL" 2>/dev/null) $(jq -sr 'map(select(.unit == "ur")) | .[0].gaps | index("passes") != null' "$UL" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

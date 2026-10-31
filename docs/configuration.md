@@ -68,6 +68,9 @@ build review counts them.
 | Location | Owns |
 |---|---|
 | `.claude/commandeck.json` | Project answers, schema version 1. |
+| `.claude/stop-checks` | Optional, written by hand in the main checkout, never tracked: one command per line, `#` comments, `seconds: <n>` (default 30, cap 120) as one deadline for the whole run. `stop-checks.sh` runs them at a worktree's Stop. |
+| `.claude/bugfix-lock` | Run state, never committed: one repo-relative test path per line. `bugfix-test-lock.sh` refuses file-tool edits of those tests. |
+| `.claude/companions.tsv` | Optional, written by hand: `<edited path><TAB><contract path>[<TAB><why>]`, repo-relative; a trailing `/` on the first makes it a folder. `companion-read-guard.sh` reads it. |
 | `.claude/settings.json` | Shared project workflow and selected cache settings. |
 | `.claude/settings.local.json` | This machine's project permissions; each worktree also has its own settings. |
 | `.claude/settings.local.json` of the main checkout | Claude Code applies it over every worktree session's own settings, so setup puts no lean list there. |

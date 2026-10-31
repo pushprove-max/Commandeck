@@ -10,13 +10,13 @@ Build order: C1 to C15 in order; C3 before C14; C7 before C8; C15 last.
 - Planned size: 83 files, 2150 changed lines
 New tests: plugin-open-2026-10-31 76
 Version: 0.64.0 (a minor: new behaviour), unless `bash ci/version-check.sh` at merge time says another number is taken.
-Closes: #502 #503 #504 #506 #507 #509 #510 #511 #512 #514 #515 #516 #517 #518 #519 #520 #521
-Refs: #492 #500 #501 #508 #513
+Closes: #502 #503 #504 #507 #509 #510 #511 #512 #514 #515 #516 #517 #518 #519 #520 #521
+Refs: #492 #500 #501 #506 #508 #513
 Timed checks: run-shell-tests.test.sh :24-321; dashboard-built-parallel.test.sh :10-60; orca-wait.test.sh :33-235; merge-unit-local.test.sh :14, :200 (`rg 'sleep|timeout|wait_for|SECONDS|date \+%s'`, 2026-10-31). Every new case goes after them, at the end of its file; no heavy fixture is added. New file builder-codex-pass-retry.test.sh holds its one slow case, the session limit, last.
 
 ## Merge
 
-- Merge commit message: `Closes` each issue on the Closes: line, then `Refs #492`, `Refs #500`, `Refs #501`, `Refs #508`, `Refs #513`.
+- Merge commit message: `Closes` each issue on the Closes: line, then `Refs #492`, `Refs #500`, `Refs #501`, `Refs #506`, `Refs #508`, `Refs #513`.
 - An issue whose outcome below reads partial moves from Closes to Refs before the merge: #503 (A1), #506 (A2).
 - Main closes these four by hand, each with its comment; both judges confirmed them, 2026-10-31.
 - #492 comment: no shipped test carries the own-lane marker, so joining the batch gains 0 s and the issue's keep-if-faster rule keeps nothing. Retest: `rg -n '^# own-lane:' scripts hooks` hits one fixture line.
@@ -30,7 +30,7 @@ The order is every open plugin issue in one unit. Reading each issue against thi
 
 ## Prior art
 
-- Host c64bbb31e: #511 (host #3327 only). No later host commit touches that script or its test (`git log c64bbb31e..main`, 2026-10-31).
+- Host c64bbb31e: #511 (host issue 3327 only). No later host commit touches that script or its test (`git log c64bbb31e..main`, 2026-10-31).
 - Host main, read 2026-10-31: `generated-read-guard.sh` (#519), `bugfix-test-lock.sh` (#517), `ruling-cite-gate.sh` (#521), `tier1-stop.sh` (#518's replay and stop order), `companion-read-guard.sh` (#520's edit check).
 - Named for a host fix, none found: 578e154cd (a login bug) and 9f68c7976 (a stylesheet) only mention #507 and #510. Both host twins are open.
 - No host fix, host issue open: #502, #503, #504, #508, #509, #515. No host twin: #506, #512, #516.
@@ -45,13 +45,16 @@ The order is every open plugin issue in one unit. Reading each issue against thi
 - `<git dir>/commandeck-stop-checks` (C10, new): `<tree> <cksum of the checks file> <rc>` and the kept message beside it. One writer, the Stop hook. Written after each run. Same key replays; a new tree or a changed checks file runs. Outside the tree, so writing it changes no tree id.
 - `.claude/stop-checks` (C10, new): read from the main checkout. One command per line, `#` comments, `seconds: <n>` (default 30, cap 120), one deadline for the whole run. Written by hand, never by setup, so setup keeps no copy. Refused when its resolved target is tracked in the checkout that owns that target, so a link or a linked `.claude` folder cannot bring in a clone's file. Absent: the hook does nothing.
 - `.claude/bugfix-lock` (C9, new): one repo-relative path per line, `#` comments; absolute, `..` and glob lines ignored with a warning. Written and emptied by the Builder. Run state, never committed: in `IL_STATE`, `.gitignore` and worktree-setup.sh's shared exclude.
-- `.claude/companions.tsv` (C8, new): `<edited path><TAB><contract path>[<TAB><why>]`, repo-relative; a trailing `/` on the first is a folder. Written by hand; absent means nothing runs and nothing is recorded.
+- `.claude/companions.tsv` (C8, new): `<edited path><TAB><contract path>[<TAB><why>]`, repo-relative; a trailing `/` on the first is a folder. Written by hand; absent means nothing runs and nothing is recorded. A line with no contract warns on stderr naming its line and pairs nothing, as a bad lock line does.
 - `/tmp/claude-read-tracker-<session id>` (C8, new): one absolute path per line. One writer, read-record.sh, only when the pairs file exists. Reader: the guard. A session id must be a UUID. Never cleaned, as the other `/tmp/claude-*` files; a lost file costs one more read.
 - `reason` on a fire log row (C3, new): `[a-z0-9-]{1,40}`, block rows only, from `HOOK_FIRE_REASON`; any other shape is dropped. Readers: the summary's `reasons` object. Old rows have none. The dashboard reads rows by key and ignores it.
 - `passes` on a unit-ledger row (C12, new): `[{n, kind, verdict, p0, p1, p2, p3}]`, one per round file. On every new row; null and named in `gaps` when any round cannot be read, never 0, as unit-ledger.sh:14 rules. Reader: review-pass-report.sh. Rows from before have no key and read as null.
-- `Test edit: <path> test:<label> ruling:<id>` (C4, changed): one line per test. Lives in main's rulings; read by `test_edit_refusals`. `<label>` is the text up to the last ` ruling:`, spaces allowed; `(file)` covers lines that belong to no one test.
+- `Test edit: <path> test:<label> ruling:<id>` (C4, changed): one line per test. Two tests of one label are `<label> #1`, `<label> #2`. Lives in main's rulings; read by `test_edit_refusals`. `<label>` is the text up to the last ` ruling:`, spaces allowed; `(file)` covers a data file's line only; on a code line it approves nothing.
+- The label of a lost line (C4, changed at pass 4, class-miss): test-edit-labels.sh keeps no list. A lost non-blank line of a code file gets its test's label or is refused, helpers, imports and comments included; a line of a data file (`.json`, `.txt`, `.md`, `.yml`, `.yaml`) is `(file)`. A refused line prints `(line)<TAB><line number><TAB><exact text>` and the run exits 2 naming `<path>:<line>`, after every row; any failure of git or of the reader itself exits 3, so it never reads as no edits. `(line)` is a reserved label.
+- `Test edit: <path> line:<exact line text> ruling:<id>` (C4, new): one approval unlocks one refused line of that exact text and nothing else. N lost identical lines need N such lines; each is spent once per run. It never covers a labelled or `(file)` line, and `test:(file)` never covers a refused line. The text is the old line whole, spaces kept, up to the last ` ruling:`. The refusal prints this ready-to-paste line, one row per refused line. Stateless: every run reads only git and main's rulings, so a refused edit is retried by restoring the line or by main making the change, whatever ran before. The fixed list is under Protocols.
+- A read proof (C8, changed at pass 3, false-read-proof): `shell_reads.py` in `proof` mode prints a path only when the command text alone shows contract text reached the agent. An allowlist: a whole-file printer (`cat`, `nl`, `tac`, `less`, `more`, `bat`, `batcat`) on a non-empty file with no flag that can hide lines, or a head, tail or `sed -n` window that overlaps a non-empty file. A search, jq, diff, awk, cut, sort, uniq and any other tool prove nothing: an empty result cannot be told from the command. A word with a glob, `$` or `~`, a `cd` that is not one plain argument, `pushd`, `popd` and a spaced `2 >` prove nothing: the lexer drops quotes, so the path would be a guess. The non-proof rules above it stand. A lost proof costs one more read. The guard modes (`dump`, `read`, `saved`) do not change.
 - `docs/guard-review-2026-10-31.md` (C14, new): written once by the Builder from the summary; nothing reads it.
-- No migration: every new key and file is optional, and an old file reads as before.
+- No migration, with one exception: every new key and file is optional, and an old file reads as before. The exception is a path-only `Test edit: <path> ruling:<id>` line, which stops approving (issue 504). The refusal prints the ready-to-paste lines carrying the id from main's old line; nothing is approved automatically.
 
 ## Decisions already made
 
@@ -63,7 +66,7 @@ The order is every open plugin issue in one unit. Reading each issue against thi
   Test: "a quoted Pass line keeps the kind"
 - D4 #510: a plain assignment `HOOK_FIRE_REASON=<slug>` before each refusal, `exit 2` or `HOOK_FIRE_BLOCK=1`, the shape of `HOOK_FIRE_BLOCK`. A slug names the rule refused, as `search-first` or `past-clear-line`. Reading the hook's stderr would need a process or a temp file on every call, which the helper's rule bars, and a trap sees only the exit, not the words.
   Test: "a block row keeps its reason"; "a hook that refuses sets a reason"
-- D5 #504: approvals name tests. New scripts/test-edit-labels.sh maps each lost line: a `check` statement and its continuation lines to that label; a line inside an `it(` or `test(` block, which ends at its closing line of equal indent, to that label; anything else to `(file)`, helpers and case setup included, because such a line can change every test below it. `(file)` must be approved by name. The refusal prints the exact lines main must add. `--edited` stays for the counts. A path-only line approves nothing (the owner, 2026-10-31).
+- D5 #504: approvals name tests. New scripts/test-edit-labels.sh maps each lost line of a code file: a `check` statement and its continuation lines to that label; a line inside an `it(` or `test(` block, which ends at its closing line of equal indent, to that label; any other line, helpers, setup and comments included, stays refused, naming the line, and one approval naming that exact line unlocks that one line and nothing else (the owner). `(file)` stays only for `.json`, `.txt`, `.md`, `.yml` and `.yaml`, and `test:(file)` on a code line approves nothing (the owner, which deletes the list of lines that earned `(file)`). The refusal prints the exact lines main must add. `--edited` stays for the counts. A path-only line approves nothing (the owner, 2026-10-31).
   Test: "a test the line does not name is refused"
 - D6 #511: the host's retry, waits 60 and 180 s, in a `BY=codex` branch; a Claude reviewer keeps its plain wait. The ticker's kill moves after the retry loop.
   Test: "capacity_retry_reruns_only_failed_slot"; "other_failure_not_retried"
@@ -72,11 +75,11 @@ The order is every open plugin issue in one unit. Reading each issue against thi
 - D8 #506: default `cores / 2`, then one less when `uptime`'s first load figure is at or over the core count, floor 1; an unreadable load cuts nothing. 3 of 8 is the measured count that passed at load 29. `COMMANDECK_SHELL_TEST_JOBS` still wins. `PYTHONDONTWRITEBYTECODE=1` stops the fence's false alarm. No retry of a hung file: that is a timeout raise by another name.
   Test: "default jobs fall with the load"; "a python import leaves the fence whole"
 - D9 #519, #509: the host's rule and lexer, moved to hooks/lib/shell_reads.py, less the items under Prior art. `set` counts as generated as well as `true`: `git check-attr` prints `set` for a bare attribute (A4). `git check-attr` alone decides, so a nested attribute file counts. The word prefilter only picks whether to run the lexer, so a word in an echo refuses nothing. The guard joins the read-only keep-list: a reviewer reads, and that is what #519 bounds.
-  Test: "an echo label passes"; "a bare attribute is generated"; "a nested attribute file counts"; "a read-only run keeps the generated guard"
+  Test: "an echo label passes"; "an attribute in any form counts"; "a read-only run keeps the generated guard"
 - D10 #503: the guard refuses a shell command with a word under `*/tool-results/*` in a stage that is no echo or printf, and names the Read and Grep tools. A refusal stops before the prompt, needs no permission rule and changes no write rule. No allow rule: its match on a linked path is unproved, and an added directory grants writes.
   Test: "a shell read of saved output is refused"
 - D11 #520: new read-record.sh on PostToolUse `Read|Bash`, default tier: read-tracker.sh is strict-tier and records no paths. Shell reads come from shell_reads.py. `# codex: skip` on the guard.
-  Test: "a Read opens the edit"
+  Test: "a read opens the edit"
 - D12 #517: the host's hook, with its text rewritten for this repo; it does not parse Bash, a tripwire as the issue says.
   Test: "a listed test is refused"
 - D13 #518: a new file, not `typecheckCommand` or a new config key: reusing a key would start blocking turns in projects that never asked, and setup rebuilds that file. Main's checkout is skipped: the issue is about edits between review passes. All refusals are exit 2, each saying failed, deadline or could not run. Each line runs under `bash -c` in the worktree whose Stop fired, with the hook's environment; the file is read from main's checkout. `seconds:` is one deadline shared by every command: a Stop hook has no `onFailure`, so a run must end inside the entry's own timeout. A failed command leaves the rest to run; the deadline ends them.
@@ -105,6 +108,10 @@ The order is every open plugin issue in one unit. Reading each issue against thi
 - Fire log reason: Hook sets, helper checks shape, row carries, summary counts. A subshell's assignment is lost, as for `HOOK_FIRE_BLOCK`: set it in the hook's own shell.
 - New hook rules, one place: file mode 100755, `#!/usr/bin/env bash`, the fire-log arm line at top level before any decision, a backticked command in each `BLOCKED:` text; a PreToolUse entry that can refuse takes `onFailure: block` and timeout 30 or more; a Stop entry takes no `onFailure`.
 - Shell reads: `shell_reads.py <cmd> <cwd>` prints `dump<TAB><path>`, `read<TAB><path>` or `saved<TAB><path>`, one per line. Consumers: generated-read-guard.sh (`dump`, `saved`), read-record.sh (`dump`, `read`).
+- Label reader's rule:
+  - Label: a line of a `check "<label>"` in a `.sh` file that starts its line, with its backslash continuations; or an `it(` or `test(` in a JS or TS file that starts its line, has a string label and has a closing line of equal indent or fits on one line. A label with `$`, a backtick, a backslash or a tab, equal to `(file)` or `(line)`, or ending ` #<digits>` gives no label. A test whose lines hold a second `check`, `it(` or `test(`, on its first line, a continuation or nested in its block, gives no label, so one approval never covers two tests.
+  - Data file, `.json`, `.txt`, `.md`, `.yml`, `.yaml`: `(file)`.
+  - Every other lost line: refused. The reader tells no comment, helper, setup line or file kind apart.
 
 ## Steps
 
@@ -201,6 +208,27 @@ Break: scripts/__tests__/merge-unit-local.test.sh -- the ledger keeps each pass 
 | Two checks outlive one budget | `seconds: 120`, two `sleep 70` (in the test `seconds: 2`, two `sleep 1.5`) | the second is cut at the shared deadline, turn held, the text says the deadline fired | two commands share one deadline |
 | Checks file from a clone | `.claude/stop-checks` tracked in git | nothing runs, one line says why | a tracked checks file runs nothing |
 | Same failure, third start | two failed passes on one tree and reason | refused, names the reason and tells the Builder to ask main | a third same failure is refused |
+| A numeric sed address with automatic printing on | `sed 1,5p gen.json`, `sed '1,5p' gen.json` | refused: `sed` is a window only as `sed -n a,bp` or `sed Nq` | a sed with no range is refused |
+| A window that covers the file | `head -10000 gen.json`, `sed -n 1,99999p gen.json`, `tail -n 5000 gen.json` on 300 lines | refused, as a Read whose limit covers the file | a limit over the file is refused |
+| A tool or pattern that prints every line | `sort gen.json`, `cut -c1-80 gen.json`, `rg . gen.json`, `grep -v zzz gen.json` | refused | a cat is refused |
+| A shell read that may not have run or was not seen | `false && cat c`, `if false; then cat c; fi`, `cat c > /dev/null`, `cat c \| wc -l`, `x=$(cat c)`, `wc -l c` | no proof recorded, the edit stays refused; the generated guard still reads the branch | an errored Read counts for nothing |
+| A MultiEdit with a path on each edit | `edits: [{file_path: <listed path>}]` | companion guard and ruling gate screen every edited path, each with its own edits | an unread contract refuses the edit; a claim with no id is refused |
+| A shell read of a path the reader must guess | `cat 'src/*.ts'`, `cat '~/x'`, `cd; cat c`, `pushd lib; cat c`, `cat c 2 > out` | no proof recorded, the edit stays refused | an errored Read counts for nothing |
+| A cut Stop state line | `<tree> <cksum>` with no rc | the line is no key: the checks run again, never read as green | a changed checks file runs again |
+| A shell query that shows no contract line | `grep -n no-such-text c`, `sed -n 900,910p c` on a shorter file, `jq keys c`, `grep -v . c`, `head -n 0 c` | no proof recorded, the edit stays refused | an errored Read counts for nothing |
+| A lost test line in a shape the label reader does not know | `check 'x' 1 1`, `check"x" 1 1`, `fresh; check "x" 1 1`, `it.only("x", ...)` | test-edit-labels.sh exits 2 naming `<path>:<line>`, never `(file)` | an unknown test shape is refused by line |
+| A lost line inside a test the reader cannot name | body of `test.each(...)("x", ...)`, `it(name, ...)`, an `it("x", ...)` with no closing line, a `def test_` body, the second line of a check whose quote stays open | exit 2 naming the line, never `(file)` | an unknown test shape is refused by line |
+| A label that names no one test | `check "(file)" 1 1`, `check "x #1" 1 1`, `check "$v" 1 1` | exit 2 naming the line, so no label can pose as `(file)` or a numbered test | an unknown test shape is refused by line |
+| A lost code line that is no labelled test | `run_case "x"`, `registerCase("x");`, `const c = registerCase("x");`, a line in a helper body, `import "./shared-tests";`, `FAIL=$((FAIL+1))`, `# a comment`, a `# ` line in a here-document, any line of a `.py` test or of a `.test.sh` with no `check`, in a file that sources or not | exit 2 naming the line, one ready `line:` row each, never `(file)` | an unknown test shape is refused by line |
+| Two tests under one label | `check "a" 1 1; check "b" 2 2`, `it("a", f); it("b", g);`, `check "a" 1 1 \` then `check "b" 2 2`, `it("inner", ...)` inside `it("outer", ...)` | exit 2 naming the line, so no label covers both | an unknown test shape is refused by line |
+| A data file | a lost line of a `.json` fixture | `(file)`, and `test:(file)` approves it | a data line maps to (file) |
+| `test:(file)` on a code file | `test:(file)` with a logged id, a lost helper line | approves nothing, the refusal prints the `line:` row | a helper edit needs its line |
+| The reader fails | git fails, or its own diff reader fails | exit 3, the gate says `cannot tell`, never no edits | an unknown test shape is refused by line |
+| A refused edit retried | the same edit run twice, the index and the approval removed between the runs | refused both times; the exact-line approval or restoring the line ends the refusal, with no state to clear | a line approval unlocks one line |
+| One approval, two identical refused lines | both lost, one `line:` approval | the first unlocked, the second refused and printed; two approval lines pass | a line approval unlocks one line |
+| A line approval on any other line | `line:` of a labelled or `(file)` line, another path, a different text, a bad id; `test:(file)` on a refused line | approves nothing | a line approval unlocks one line |
+| Two tests of one label | `check "same"` twice | `same #1`, `same #2`, so one approval names one test | two tests of one name differ |
+| A path-only line from before issue 504 | `Test edit: <path> ruling:<id>` with a logged id | approves nothing; the refusal prints each line with that id | a path-only line gets ready lines |
 
 ## Accepted failure modes
 
@@ -236,14 +264,14 @@ Break: scripts/__tests__/merge-unit-local.test.sh -- the ledger keeps each pass 
 - test file path: decision.test.sh (decision.sh is tracked executable; the spec's decision.sh command runs)
 - test file path: orca-wait.test.sh (a quoted Pass line keeps the kind)
 - test file path: hook-fire-log-summary.test.sh (a block row keeps its reason; a bad reason is dropped; a hook that refuses sets a reason; the summary counts reasons; a hook behind run-hook.sh reads registered)
-- test file path: test-edit-labels.test.sh (a check line maps to its label; a helper line maps to (file); an it block maps to its label)
-- test file path: builder-codex-pass-test-edit.test.sh (a test the line does not name is refused; a named test passes; a helper edit needs (file))
+- test file path: test-edit-labels.test.sh (a check line maps to its label; a data line maps to (file); an unknown test shape is refused by line; two tests of one name differ)
+- test file path: builder-codex-pass-test-edit.test.sh (a test the line does not name is refused; a named test passes; a helper edit needs its line; a path-only line gets ready lines; a line approval unlocks one line)
 - test file path: builder-codex-pass-retry.test.sh (capacity_retry_reruns_only_failed_slot; capacity_retry_gives_up_after_last_try; other_failure_not_retried; mixed_failure_not_retried; the refusal names the stop reason; a third same failure is refused; a new tree runs again after a failure; main's reset lets it run; retry_with_no_session_stops_at_limit)
 - test file path: run-shell-tests.test.sh (default jobs fall with the load; a python import leaves the fence whole; a test box never writes the real list)
 - test file path: dashboard-built-parallel.test.sh (another runner leaves the collect alone)
-- test file path: generated-read-guard.test.sh (a whole Read is refused; a limit over the file is refused; a ranged Read passes; a cat is refused; a sed with no range is refused; head and rg pass; a bare attribute is generated; a nested attribute file counts; an unmarked file passes; an echo label passes; a shell read of saved output is refused; an echo naming saved output passes)
+- test file path: generated-read-guard.test.sh (a whole Read is refused; a limit over the file is refused; a cat is refused; a sed with no range is refused; a bounded read passes; an attribute in any form counts; an unmarked file passes; an echo label passes; a shell read of saved output is refused; an echo naming saved output passes)
 - test file path: codex-dispatch.test.sh (a read-only run keeps the generated guard)
-- test file path: companion-read-guard.test.sh (no pairs, no refusal; an unread contract refuses the edit; a Read opens the edit; a sed read opens the edit; an errored Read counts for nothing; another session's read counts for nothing)
+- test file path: companion-read-guard.test.sh (no pairs, no refusal; an unread contract refuses the edit; a read opens the edit; an errored Read counts for nothing; another session's read counts for nothing)
 - test file path: bugfix-test-lock.test.sh (a listed test is refused; a MultiEdit is refused; an unlisted file passes; a glob line matches nothing; the lock stays out of a commit)
 - test file path: stop-checks.test.sh (no checks file, nothing runs; a tracked checks file runs nothing; a link to a tracked file runs nothing; stop_hook_active runs nothing; a failure says failed; a deadline says the deadline fired; two commands share one deadline; a missing command says could not run; one tree runs once; a new tree runs again; a changed checks file runs again; main's checkout runs nothing)
 - test file path: ruling-cite-gate.test.sh (a claim with no id is refused; an unlogged id is refused; a logged id passes; a void id is refused; an old line passes; a profile memory path is screened)
@@ -317,6 +345,8 @@ Break: scripts/__tests__/merge-unit-local.test.sh -- the ledger keeps each pass 
 - One line per issue in the evidence file: `#N: built` or `#N: partial -- <what is left>`.
 - #492, #500, #501, #508: not built, proposed for closing.
 - #513: partial -- the owner's verdicts and the retire-when lines in the hook headers.
+- A1 (#503): passed headless, Closes #503.
+- A2 (#506): one full Mac run at 3 default jobs, load1 8 to 82, 12 reds, so #506: partial -- builder-codex-pass-closing, builder-codex-pass-threshold, dashboard-live, main-watch-nudge, merge-queue-glob, merge-queue-listing, merge-queue-train, merge-queue, merge-unit-local-cleanup, merge-unit-local, seat-launch, seat-plan-finish. Moved to Refs. Runs 2 and 3 were not started: any red decides, and each run takes 48 minutes.
 
 ## Verification
 
@@ -330,7 +360,7 @@ Break: scripts/__tests__/merge-unit-local.test.sh -- the ledger keeps each pass 
 
 - Builder: this pane's model. Helpers: Sonnet `general-purpose` for reading code, test triage and mechanical edits; Haiku `Explore` for search. Name the model on every call; the Builder brief carries this line.
 - Tests run on the PC; A1, A2 and C14 run on the Mac. Red runs only for the Break lines.
-- Main adds for each of the two approved edits a path-only `Test edit:` line, for the installed gate, and a `test:<label>` line, for this unit's. The labels: `every registered hook was run`; `(file)`, as :44 is no check line.
+- Main adds for each of the two approved edits a path-only `Test edit:` line, for the installed gate, and an approval for this unit's: `test:every registered hook was run` for setup-gate.test.sh:35; a `line:` approval of the old text for builder-codex-pass-test-edit.test.sh:44, a code line that is no check, so `test:(file)` no longer covers it. Main owns both lines.
 
 ## Question for the owner
 
@@ -382,3 +412,10 @@ Break: scripts/__tests__/merge-unit-local.test.sh -- the ledger keeps each pass 
 - 2026-10-31 Sol r2 P3 accepted: the lock joins `IL_STATE`, `.gitignore` and worktree-setup.sh:62; neither list held it (read today), and the host ignores it. Cost under five lines. New case: the lock stays out of a commit.
 - 2026-10-31 added beside the P3: `.claude/stop-checks` joins `IL_STATE` and `.gitignore`, one word each: a tracked one is refused, so nothing should stage it.
 - 2026-10-31 no finding was false. Fable's report file held no verdict, so its findings came from its session record.
+- 2026-10-31 Builder, main agreed: `no test pins the old words` was false. Rewording main-session.md changes hashed rule ids (merge-rules.test.sh, agent-startup-context.test.sh), and C5's added rule passed plugin.test.sh's 200-line cap. main-session.md stays as on main, its `decision.sh` words stay bare; main's reset of `builder-pass-failed` moves to rules-details.md and docs/review-loop.md. No existing test edited for this.
+- 2026-10-31 Builder, class-miss returned at pass 2: the label reader's `(file)` was a fall-through. It is now earned from a fixed list, anything else exits 2 naming the line (Data design, D5). Shell reads prove a contract only from a whole-file printer or an overlapping window (false-read-proof). Reviewed alone first. Recounted: the three checks the fix rounds added join the test lines, 76 again.
+- 2026-10-31 owner: a line the reader cannot place stays refused; one `line:` approval unlocks that one line. Pass 3's indirect-helper P1 closed by a fixed point over the file's functions, and strict reading of a file that sources or evals: 98 of 238 test files source, so a closure cannot be complete there. `an it block maps to its label` folds into `a check line maps to its label` (new test file, every assertion kept) for `a line approval unlocks one line`: cap stays 76.
+- 2026-10-31 Builder, r4 sweep: quoted globs, unfollowable `cd`s and `2 >` prove nothing (false-read-proof, not in the plan list); a cut Stop state line runs the checks again, as `${PR:-0}` read it green.
+- 2026-10-31 owner, class-miss at pass 4: delete the list. Each pass found one more place where the reader judged code it could not see through (a shell wrapper, a sourced file, a JS helper), so a code line now gets its test's label or is refused with a `line:` approval, and `(file)` stays only for data files. Removes the fixed point, the opener list and the strict rule for sourcing files. Corrects the pass 3 claim that main's held `test:(file)` for :44 stays valid. Renames: `a data line maps to (file)`, `a helper edit needs its line`. A sweep find: a line holding two tests gives no label.
+- 2026-10-31 Builder, pass 5: ran as a closing pass, not design-only, because the Builder committed the plan by hand; the pass reads a design only from a commit of its own. Its two P1s name unbuilt code.
+- 2026-10-31 Builder: A2 red, #506 moved from Closes to Refs. Claim `PYTHONDONTWRITEBYTECODE removes every false tree changed line` is false for a full run: 204 lines on the Mac run with it set. The cause is not found.

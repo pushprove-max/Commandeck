@@ -67,6 +67,15 @@ selection, each test call (its test files' seconds follow), and the typecheck.
 A slow pass names its slow step while it runs, and a pass that dies names the
 step it died in.
 
+A Codex reviewer that stops at Codex's capacity (`server_overloaded` in its session) is run again alone, after 60 s and
+then 180 s; a reviewer that stops for any other reason is not. A refusal for a failed reviewer names why Codex stopped,
+read from its session: the error's `codex_error_info`, else its message cut to 80 characters, else `aborted: <reason>`,
+else `no reason in the session`. The pass records each such failure in `builder-pass-failed` in the worktree's git dir
+(unit, round, kind, tree, reason, count). A third start on the same tree with the same reason is refused: the message
+names the reason and `ask-main.sh` and offers no way past. A changed tree or round is a new pass. Main removes the file
+to let the same tree run again: `rm "$(git -C <worktree> rev-parse --absolute-git-dir)/builder-pass-failed"`. The Builder
+can also change the tree or remove the file; the refusal is a stop to think, not a lock.
+
 A fix brief ends a class stop with one mark line: `- Class redesign: <class>`
 when a class returns the second time, and `- Class ask-main: <class>` beside it
 the third time. `--verify` counts them as `Class stops: <n> (<classes>)`, and

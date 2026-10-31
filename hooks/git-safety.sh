@@ -29,7 +29,7 @@ COMMAND=$(printf '%s' "$COMMAND" | sed -E "s#\\\\([a-z])#\\1#g; s#[\$]('[a-z][a-
 # bodies included: a per-line sed left a multi-line message whole.
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 # Without the helper CMD would be empty and every force push would pass.
-type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; exit 2; }
+type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 # A quoted WORD is still the word git gets: `git push '--force'` forces. Only
 # quoted text is not a command, so a one-word flag or refspec (it opens with
 # - + or :) and a quoted subcommand right after `git` are bared first.
@@ -42,7 +42,7 @@ BARE=$(printf '%s' "$COMMAND" | sed -E "s#'([-+:]$W)'#\\1#g; s#\"([-+:]$W)\"#\\1
 # it: each misread one hid the command after the note. bash-guardrails.sh says
 # the same for every command, and is off unless the project runs the strict tier.
 ODD=$(strip_odd_end "$COMMAND")
-[ -z "$ODD" ] || { echo "Blocked: a here-document's end word is not plain: $ODD -- use one plain word such as EOF (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
+[ -z "$ODD" ] || { echo "Blocked: a here-document's end word is not plain: $ODD -- use one plain word such as EOF (letters, digits, _ . -), bare or in one pair of quotes." >&2; HOOK_FIRE_REASON=odd-heredoc-end; exit 2; }
 CMD=$(strip_quoted "$BARE")
 # CONTRACT for a quoted git word and for backticks. A seat belt against an
 # honest mistake, not a wall; it fails closed.
@@ -160,6 +160,7 @@ PUSH_ARGS="git${GITOPTS}[[:space:]]+push([[:space:]]+[^;&|[:space:]]+)*[[:space:
 if printf '%s' "$FORCE_CMD" | grep -qE "${PUSH_ARGS}(--force|-f([[:space:];&|)]|\$))"; then
   echo "Blocked: force push is not allowed. Use --force-with-lease if absolutely necessary." >&2
   TRY=$(gs_force_try) && echo "Try: $TRY" >&2
+  HOOK_FIRE_REASON=force-push
   exit 2
 fi
 
@@ -170,6 +171,7 @@ fi
 if printf '%s' "$FORCE_CMD" | grep -qE "${PUSH_ARGS}(-[[:alnum:]]*[fd][[:alnum:]]*|[+:][^;&|[:space:]]+|--de(l(e(te?)?)?)?|--m(i(r(r(or?)?)?)?)?)([[:space:];&|)]|\$)"; then
   echo "Blocked: force push, remote branch deletion and --mirror are not allowed (-f in a flag cluster, a +refspec, a :ref refspec, --delete or -d). Use --force-with-lease if a rewrite is absolutely necessary." >&2
   TRY=$(gs_force_try) && echo "Try: $TRY" >&2
+  HOOK_FIRE_REASON=force-push
   exit 2
 fi
 
@@ -181,6 +183,7 @@ fi
 # Block git reset --hard on main, and each prefix git takes for it (`--h`, `--ha`, `--har`)
 if printf '%s\n%s' "$ARGV" "$CMD" | grep -qE "git${GITOPTS}[[:space:]]+reset([[:space:]]+[^;&|()[:space:]]+)*[[:space:]]+--h(a(r(d)?)?)?([[:space:];&|)]|\$)"; then
   echo "Blocked: git reset --hard is dangerous. Use git revert for safe rollbacks." >&2
+  HOOK_FIRE_REASON=reset-hard
   exit 2
 fi
 
@@ -362,6 +365,7 @@ while IFS= read -r CALL; do
   [ -n "$WHY" ] || continue
   echo "Blocked: $WHY" >&2
   [ "$SUB" != gc ] || echo "Try: git gc" >&2
+  HOOK_FIRE_REASON=git-unsafe-command
   exit 2
 done < <(printf '%s\n' "$ARGV" | grep -oE "$DISCARD")
 

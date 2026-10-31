@@ -14,6 +14,8 @@ MAIN=$T/demo BIN=$T/bin WS=$T/ws
 mkdir -p "$HOME" "$BIN"
 git init -q -b main "$MAIN" && git -C "$MAIN" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN/orca-ide"; cp "$BIN/orca-ide" "$BIN/gh"; chmod +x "$BIN"/*
+printf '#!/bin/sh\ncase "$*" in "-axww -o pid=,ppid=,etime=,command=") cat "$PS_OUT" ;; *) exec %s "$@" ;; esac\n' "$(command -v ps)" > "$BIN/ps"
+chmod +x "$BIN/ps"; export PS_OUT=$T/ps.out; : > "$PS_OUT"  # the Tests card's process list is empty: a runner elsewhere on the machine cannot change a collect
 # builder <unit>: a Builder's worktree holding the unit's evidence file from the fixtures.
 builder() {
   mkdir -p "$WS/$1/.claude/briefs" && touch "$WS/$1/.git"

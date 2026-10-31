@@ -62,5 +62,18 @@ HELD=$(grep -c . "$LEDGER" 2>/dev/null || true)
 wait
 check "while the test holds the ledger's lock the collect has appended no row, and after it lets go it has appended one" "0 1" "${HELD:-0} $(grep -c . "$LEDGER" 2>/dev/null)"
 
+# #506: the Tests card reads every process on the machine, so another runner there must not reach the collect. A runner
+# of the main checkout (a bash running a run-shell-tests.sh, in MAIN) is started here, parentless (a child of this test
+# would hide under it) and the fixture's empty ps list hides it.
+printf '#!/usr/bin/env bash\necho $$ > "%s/other.pid"\ntrap exit TERM\nwhile :; do sleep 1; done\n' "$T" > "$T/run-shell-tests.sh"
+( ( cd "$MAIN" && exec bash "$T/run-shell-tests.sh" x.test.sh ) & )
+for _ in $(seq 100); do [ -s "$T/other.pid" ] && break; sleep 0.05; done
+OTHER=$(cat "$T/other.pid")
+rm -rf "$T/out/cache"; pdash "$FIRE"
+kill "$OTHER" 2>/dev/null
+# Catches: the fixture reading the host's process list, so a runner going there changes a collect these cases compare.
+check "another runner leaves the collect alone (the collect's Tests card does not list a runner started beside it)" 0 \
+  "$(jq -r --argjson p "$OTHER" 'first(.[]) | [.tests.running[]? | select(.pid == $p)] | length' "$T/out/run/project.json" 2>&1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

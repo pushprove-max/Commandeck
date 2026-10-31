@@ -134,6 +134,7 @@ ASK="$ASK"'|(proceed|continue)\?'
 hit=$(printf '%s' "$last" | tr '\n' ' ' | grep -oiE "$ASK" | head -1)
 [ -n "$hit" ] || exit 0
 
+HOOK_FIRE_REASON=asks-owner
 HOOK_FIRE_BLOCK=1
 jq -n --arg h "$hit" '{
   decision: "block",

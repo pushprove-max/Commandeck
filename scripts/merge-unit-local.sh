@@ -782,9 +782,16 @@ if [ "$DRY_RUN" = 0 ]; then
   RULE=$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)
   # GO and NO-GO per pass kind (the round file's Pass: line), and the seconds in review (its Timing: line, the pass's
   # start and end). A round with no verdict, a kind this list does not know, or no Timing leaves that part null, never 0.
-  REVIEW=$(for f in ${REPORTS[@]+"${REPORTS[@]}"}; do echo "$(sed -n 's/^Pass: *//p' "$f" | head -1)|$(tail -n 1 "$f")|$(sed -n 's/^Timing: *//p' "$f" | head -1)"; done \
+  # passes (issue 514): one entry a round file, its number, kind, verdict and the P0..P3 finding lines in it, counted
+  # with the pass script's finding line shape. A round that cannot be read, or a count that is no number, leaves it null.
+  REVIEW=$(for f in ${REPORTS[@]+"${REPORTS[@]}"}; do
+      N=${f##*/}; N=${N%-reports.md}; N=${N##*-r}
+      echo "$(sed -n 's/^Pass: *//p' "$f" | head -1)|$(tail -n 1 "$f")|$(sed -n 's/^Timing: *//p' "$f" | head -1)|$N$(for d in 0 1 2 3; do printf '|%s' "$(grep -cE "^[[:space:]]*(- )?\[P$d\]" "$f" 2>/dev/null)"; done)"
+    done \
     | jq -Rnc 'def t: sub("\\.[0-9]+Z$"; "Z") | fromdate; [inputs | split("|")] as $r
-      | {passKinds: (if $r == [] or any($r[]; (.[0] | IN("adversarial", "review", "final") | not) or (.[1] | IN("VERDICT: GO", "VERDICT: NO-GO") | not)) then null
+      | {passes: (if $r == [] or any($r[]; (.[0] | IN("adversarial", "review", "final") | not) or (.[1] | IN("VERDICT: GO", "VERDICT: NO-GO") | not) or any(.[3:8][]; test("^[0-9]+$") | not)) then null
+           else [$r[] | {n: (.[3] | tonumber), kind: .[0], verdict: (.[1] | sub("^VERDICT: "; "")), p0: (.[4] | tonumber), p1: (.[5] | tonumber), p2: (.[6] | tonumber), p3: (.[7] | tonumber)}] end),
+         passKinds: (if $r == [] or any($r[]; (.[0] | IN("adversarial", "review", "final") | not) or (.[1] | IN("VERDICT: GO", "VERDICT: NO-GO") | not)) then null
            else reduce $r[] as $x ({}; .[$x[0]] |= ({go: 0, noGo: 0} + .) | .[$x[0]][if $x[1] == "VERDICT: GO" then "go" else "noGo" end] += 1) end),
          reviewSeconds: (if $r == [] or any($r[]; .[2] | test("^\\S+Z \\S+Z$") | not) then null
            else [$r[] | .[2] | split(" ") | (.[1] | t) - (.[0] | t)] | add end)}' 2>/dev/null || true)

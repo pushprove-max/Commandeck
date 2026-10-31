@@ -87,5 +87,14 @@ check "the digest lists real picks only (issue 477)" "0|new-1999-01-03 01-03 09:
 old-1999-01-01 01-01 09:00: Which Cache layer? -> redis" "$RC|$DR"
 check "a term matching no row prints nothing and exits 0; no term is a usage error (issue 477)" "0|| 1" "$(D rulings zebra >/dev/null 2>&1; echo $?)|$(D rulings zebra 2>&1)| $(D rulings >/dev/null 2>&1; echo $?)"
 
+# Issue 512. Catches: a user running scripts/decision.sh by its path gets a permission error (mode 100644).
+check "decision.sh is tracked executable" yes "$([ -x "$REAL/scripts/decision.sh" ] && echo yes || echo no)"
+# Issue 515. Catches: a spec or template word no seat can run: no seat has the scripts folder on its PATH.
+SPEC=$(grep -o 'bash $PP_SCRIPTS_Q/decision\.sh rulings' "$REAL/scripts/seat.sh" | head -1)
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_RULING_LOG="$T/rulings.jsonl" \
+  bash -c "${SPEC/\$PP_SCRIPTS_Q/$(printf '%q' "$REAL/scripts")} cache" 2>&1)
+check "the spec's decision.sh command runs" "$DR|0" \
+  "$OUT|$(cat "$REAL/scripts/seat.sh" "$REAL/hooks/ask-stop-records-decision.sh" | grep -v '^ *#' | grep -cE '(`|run )(decision|plan-check)\.sh ')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

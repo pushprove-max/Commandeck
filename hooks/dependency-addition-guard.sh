@@ -14,7 +14,7 @@
 # A package.json edit has no command string to carry that prefix, and in a
 # linked worktree node_modules is a symlink to the main checkout's copy, so the
 # install form is not always available. There the approval is an EXACT name in
-# the environment, the same shape flag-addition-guard uses:
+# the environment:
 #   COMMANDECK_DEP_APPROVED=<pkg>[,<pkg>]   (.claude/settings.local.json env)
 # No prefixes, no wildcards, so approving one package cannot approve its
 # neighbour, and an unapproved name in the same edit still blocks.
@@ -46,6 +46,7 @@ block() {
   echo "Rule 2: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "If the owner has approved this exact package, install it with the token as the COMMAND PREFIX: COMMANDECK_DEP_APPROVED=1 npm install <pkg> (one command per approval; package.json direct edits stay blocked -- the install writes it)." >&2
   echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
+  HOOK_FIRE_REASON=new-dependency
   exit 2
 }
 
@@ -473,11 +474,11 @@ if [ "$TOOL" = "Bash" ]; then
         UNREAD=popd
       fi
       grep -qE "$NPM_CI" <<<"$SEG" || continue
-      [ -z "$UNREAD" ] || { echo "BLOCKED: npm ci after a move to $UNREAD, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. $WAY_OUT" >&2; exit 2; }
+      [ -z "$UNREAD" ] || { echo "BLOCKED: npm ci after a move to $UNREAD, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. $WAY_OUT" >&2; HOOK_FIRE_REASON=npm-ci-unreadable; exit 2; }
       CI_DIRS=$(printf '%s\n' "${NPM_DIRS[@]}")
       if [[ $SEG =~ (--prefix|-C)[=[:space:]]+($WORD) ]]; then
         CI_DIRS=$(folders "${BASH_REMATCH[2]}") \
-          || { echo "BLOCKED: npm ci into ${BASH_REMATCH[2]}, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. Name the folder in full: \`npm --prefix <folder> ci\`." >&2; exit 2; }
+          || { echo "BLOCKED: npm ci into ${BASH_REMATCH[2]}, a folder this guard cannot read, so it cannot tell whether node_modules there is the shared copy. Name the folder in full: \`npm --prefix <folder> ci\`." >&2; HOOK_FIRE_REASON=npm-ci-unreadable; exit 2; }
       fi
       while IFS= read -r CI_DIR; do
         [ -L "$CI_DIR/node_modules" ] || continue
@@ -486,6 +487,7 @@ if [ "$TOOL" = "Bash" ]; then
         [ "$CI_DIR" = "$NPM_CWD" ] || [ "${#NPM_DIRS[@]}" = 1 ] \
           || echo "This line could run it in more than one folder ($(printf '%s, ' "${NPM_DIRS[@]}" | sed 's/, $//')), and the guard does not follow which move took effect." >&2
         echo "For an install meant for another folder: $WAY_OUT" >&2
+        HOOK_FIRE_REASON=npm-ci-shared-modules
         exit 2
       done <<<"$CI_DIRS"
     # A redirection's `&` (2>&1, &>) is not a separator.
@@ -566,6 +568,7 @@ block_manifest() {
   echo "Rule 2: check the stdlib, an already-installed package, or an existing helper in shared/ or src/utils/ before reaching for a new package." >&2
   echo "Once the owner has approved THIS package: COMMANDECK_DEP_APPROVED=$1 (exact, comma-separated for several) in .claude/settings.local.json env, or install it with COMMANDECK_DEP_APPROVED=1 npm install <pkg> as the command prefix." >&2
   echo "If you need this package, record it as a main-only deferred item (one line under ## Main-only (deferred) in the evidence file) and go on without it; do not ask main." >&2
+  HOOK_FIRE_REASON=new-dependency
   exit 2
 }
 
@@ -579,7 +582,7 @@ block_manifest() {
 # the `git checkout` that restores the helper. The Bash branch has already
 # returned by this point, so it never depends on the helper.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 CONTENT=$(hook_new_text "$INPUT")
 [ -z "$CONTENT" ] && exit 0
 APPROVED=",${COMMANDECK_DEP_APPROVED:-},"
@@ -588,6 +591,7 @@ APPROVED=",${COMMANDECK_DEP_APPROVED:-},"
 # that is in the file more than once is refused (readers exit 3), not guessed.
 ambiguous() {
   echo "BLOCKED: this edit's old text is in $FILE_PATH more than once, so where it lands cannot be told and it cannot be screened for a new dependency. Give the edit enough of its surrounding lines to match once." >&2
+  HOOK_FIRE_REASON=ambiguous-edit
   exit 2
 }
 
@@ -667,6 +671,7 @@ print("\n".join(sorted(found)))
 ' "$BASE" 2>/dev/null) || {
     [ $? != 3 ] || ambiguous
     echo "BLOCKED: could not read the dependencies $FILE_PATH would declare after this edit, so it cannot be screened for a new one." >&2
+    HOOK_FIRE_REASON=manifest-unreadable
     exit 2
   }
   while IFS= read -r NAME; do
@@ -766,10 +771,12 @@ fi
 if [ -n "$CANDIDATES" ]; then
   if [ "$TOOL" != Write ] && ! jq empty "$BASE" >/dev/null 2>&1; then
     echo "BLOCKED: $FILE_PATH is not valid JSON, so this edit cannot be screened for a new dependency; fix the file first (a Write of valid JSON is screened)." >&2
+    HOOK_FIRE_REASON=manifest-invalid-json
     exit 2
   fi
   if [ "$PY_RC" = 5 ]; then
     echo "BLOCKED: this edit leaves $FILE_PATH as invalid JSON; make the edit keep it valid." >&2
+    HOOK_FIRE_REASON=manifest-invalid-json
     exit 2
   fi
 fi

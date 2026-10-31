@@ -34,6 +34,7 @@ if [ "$GITDIR" = "$COMMON" ] || pp_standing_wt "${TOP##*/}"; then
     printf '%s\n' \
       "BLOCKED: every question's FIRST option must be the decoy, label exactly: \`$ASK_DECOY\`" \
       "An Orca alert typed into an open picker picks the first option; the decoy makes that pick void. Put it first (description: \"Stray keypress guard, never pick this\") and ask again." >&2
+    HOOK_FIRE_REASON=ask-decoy-first
     exit 2
   fi
   OPEN="$(dirname "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/x}")/ask-open"
@@ -53,4 +54,5 @@ printf '%s\n' \
   "  orca-ide orchestration ask --from ${ORCA_TERMINAL_HANDLE:-<your terminal handle>}${run:+ --to run:$run} --timeout-ms 240000 --question '<question>. Options: A) ... B) ... Recommend: ...'" \
   "It waits and prints main's answer; on a timeout, rerun with --resume <message id>." \
   "If a reasonable default exists, take it, write it in your evidence, and carry on instead of asking." >&2
+HOOK_FIRE_REASON=worker-ask
 exit 2

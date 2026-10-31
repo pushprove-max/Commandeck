@@ -330,7 +330,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
     round=$(ls "$wt/.claude/briefs/$unit"-r*-reports.md 2>/dev/null | awk -F'-r|-reports' '{ print $(NF-1) "\t" $0 }' | sort -n | tail -1 | cut -f2-)
     verdict="" rverdict=""
     [ -z "$round" ] || rverdict=$(bash "$PP_SCRIPTS/read-verdict.sh" --round-verdict "$round" 2>/dev/null)
-    [ -z "$round" ] || verdict="r$(basename "$round" | sed 's/.*-r\([0-9]*\)-reports\.md$/\1/') ($(sed -n 's/^Pass: *//p' "$round" | tail -1)) $rverdict"
+    [ -z "$round" ] || verdict="r$(basename "$round" | sed 's/.*-r\([0-9]*\)-reports\.md$/\1/') ($(sed -n 's/^Pass: *//p' "$round" | head -1)) $rverdict"
     echo "  unit $unit: $ahead commit$([ "$ahead" = 1 ] || echo s) ahead of main, $dirty file$([ "$dirty" = 1 ] || echo s) uncommitted, last Codex round ${verdict:-none on file}"
     # The next step for the three kinds of wake a unit sends, and no stage machine:
     # a question waits on an answer; anything else merges or does not.

@@ -65,6 +65,7 @@ for W in cos-watch-decisions:"open decisions for the owner" cos-watch-alerts:"da
 done
 [ ${#MISSING[@]} -gt 0 ] || exit 0
 
+HOOK_FIRE_REASON=watcher-not-running
 HOOK_FIRE_BLOCK=1
 jq -n --arg r "Arm each missing watcher in the background (run_in_background) before ending the turn. $(printf '%s. ' "${MISSING[@]}")" \
   '{decision:"block", reason:$r}'

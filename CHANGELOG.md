@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.64.0 -- 2026-10-31
+
+### Reviews
+
+- A pass that meets a Codex capacity error now runs that one reviewer again, after one and then three minutes, and ends with a verdict.
+- A failed pass now says why Codex stopped, and a third start on the same tree with the same failure is refused and sends the Builder to main.
+- Approving an edit to an existing test now names the test, not just its file, so an approval no longer covers every test in that file. The refusal prints the lines main must add.
+- A new report shows how often each later pass found a real problem, split by the kind of unit. The merge now keeps each pass's findings count for it.
+
+### Guards
+
+- A whole read of a generated file is now refused in every seat, reviewers included, and the message names a bounded read. A word in an echo no longer counts as a read.
+- A shell read of a saved tool output is now refused and points to the Read tool, so no permission prompt waits for a person.
+- A project can now list a contract file for a path. An edit there is refused until the session has read the contract.
+- A Builder can now lock a failing test, so the test cannot be edited to agree with its bug.
+- A project can now list its own checks to run when a worktree's turn ends. The turn is held and says failed, deadline or could not run. A checks file tracked in git is refused.
+- A memory or rule line that cites an owner ruling must now give a real id. An id that was never logged is refused.
+- The hook summary now counts refusals by reason and reads every registered hook correctly.
+
+### Tests
+
+- The shell test runner now starts fewer jobs on a busy machine, and prints how many it started.
+- A Python import no longer sets off the runner's changed-tree alarm.
+- Another test run on the same machine no longer disturbs the dashboard tests.
+- A new template shows how to guard two copies of one fact against drifting apart.
+
+### Status and wakes
+
+- A wake for a report that quotes a pass line now shows the real pass kind.
+
+### Plans
+
+- The decision script can now be run by its path.
+- Plan specs and main's template now write commands that run in any seat.
+
 ## 0.63.1 -- 2026-10-30
 
 ### Tests

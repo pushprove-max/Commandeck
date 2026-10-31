@@ -7,7 +7,7 @@
 # how many the session followed with the same call again and how many with a
 # different one; its run time after arming, which excludes process
 # startup and the input read, over the window's rows that carry one (null when none);
-# fires and blocks per agent. Noisiest and slowest guards:
+# fires and blocks per agent; reasons {slug: n}, the rules its block rows name. Noisiest and slowest guards:
 #   bash scripts/hook-fire-log-summary.sh 7 | jq '.hooks | sort_by(-.blocks)[:10]'
 #   bash scripts/hook-fire-log-summary.sh 7 | jq '.hooks | sort_by(-.ms_body_total)[:10]'
 #
@@ -45,7 +45,7 @@ try:
     registry = json.load(open(settings)).get("hooks") or {}
 except (OSError, ValueError) as error:
     sys.exit(f"hook-fire-log-summary: cannot read {settings}: {error}")
-registered = {os.path.basename(words[0].strip('"'))
+registered = {os.path.basename(words[1 if len(words) > 1 and os.path.basename(words[0].strip('"')) == "run-hook.sh" else 0].strip('"'))
               for groups in registry.values() for group in groups or []
               for hook in group.get("hooks") or []
               for words in [(hook.get("command") or "").split()] if words}
@@ -77,7 +77,8 @@ else:
         except OSError:
             pass
 
-counts, sessions, blocked, ms, agents = {}, {}, [], {}, {}
+counts, sessions, blocked, ms, agents, reasons = {}, {}, [], {}, {}, {}
+slug = re.compile(r"[a-z0-9-]{1,40}")
 for path in paths:
     try:
         lines = open(path, encoding="utf-8", errors="replace").readlines()
@@ -102,6 +103,9 @@ for path in paths:
             c[0] += 1
             c[1] += decision == "block"
             c[2] += decision == "advise"
+            if decision == "block" and isinstance(row.get("reason"), str) and slug.fullmatch(row["reason"]):
+                r = reasons.setdefault(hook, {})
+                r[row["reason"]] = r.get(row["reason"], 0) + 1
             if type(row.get("ms_body")) is int:
                 ms.setdefault(hook, []).append(row["ms_body"])
             if row.get("agent") in ("claude", "codex"):
@@ -128,7 +132,7 @@ def timing(name):
     t = sorted(ms.get(name, []))
     rank = lambda q: t[math.ceil(q * len(t)) - 1] if t else None  # nearest rank
     a = agents.get(name, {})
-    return {"ms_body_p50": rank(0.5), "ms_body_p95": rank(0.95), "ms_body_total": sum(t) if t else None,
+    return {"reasons": dict(sorted(reasons.get(name, {}).items())), "ms_body_p50": rank(0.5), "ms_body_p95": rank(0.95), "ms_body_total": sum(t) if t else None,
             "by_agent": {k: dict(zip(("fires", "blocks"), a.get(k, [0, 0]))) for k in ("claude", "codex")}}
 
 print(json.dumps({

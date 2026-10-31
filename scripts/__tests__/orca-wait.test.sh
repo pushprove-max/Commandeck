@@ -246,5 +246,8 @@ check "state_line_skips_unfinished_fence: a GO inside an unclosed fence shows th
 OUT=$(rwake $'Pass: review\n[P3] a note\nVERDICT: GO')
 check "state_line_keeps_pass_line: a plain GO round still shows its pass and GO" 1 \
   "$(grep -c 'last Codex round r5 (review) VERDICT: GO$' <<<"$OUT")"
+# Issue 507. Catches: a reviewer quoting a Pass: line in its report replacing the pass kind on the state line.
+OUT=$(rwake $'Pass: final\n[P3] the round quotes\n~~~text\nPass: review\n~~~\nVERDICT: GO')
+check "a quoted Pass line keeps the kind" 1 "$(grep -c 'last Codex round r5 (final) VERDICT: GO$' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

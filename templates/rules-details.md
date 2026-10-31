@@ -21,6 +21,10 @@ moved out of `AGENT_STARTUP.md` and `global-rules.md` unchanged.
    `--skip-plan --reason '<one line>'`, which the brief, the evidence and
    `.claude/routing-log` record.
 
+A Builder pass that failed twice on one tree for one reason (the refusal names it) is refused a third start, and the
+Builder asks main. Decide from the reason; to let the same tree run again, remove the record in the Builder worktree's
+git dir: `rm "$(git -C <worktree> rev-parse --absolute-git-dir)/builder-pass-failed"`. A changed tree needs no reset.
+
 ## Merging a unit
 
 4. Main: `bash scripts/merge-unit-local.sh <unit>` checks the GO pass against
@@ -56,3 +60,9 @@ moved out of `AGENT_STARTUP.md` and `global-rules.md` unchanged.
   cases. The failing test comes first.
 - "Create a PR" is a request to open a pull request for work already done.
   It is never an order to build something new.
+
+## Drift guard example
+
+The drift guard named under Planning and evidence has a runnable example, `templates/drift-guard-example.sh`. It takes
+two files, each with a `Retry limit:` line, and fails naming both files when the two lines differ. Copy it, change the
+fact it reads, and name the copy for the two places it guards.

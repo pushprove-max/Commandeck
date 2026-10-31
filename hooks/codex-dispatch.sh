@@ -34,8 +34,7 @@
 # The tool name used to decide alone, so a Codex PostToolUse Bash payload ran the
 # PRE-tool Bash guards a second time and reached none of the post ones -- the
 # read tracker, the staged-index warning and the rerun guard's completion record
-# were Claude-only, and so were the post-edit typecheck and brief freshness
-# passes behind an apply_patch. An event this script does not know is not
+# were Claude-only. An event this script does not know is not
 # guessed at: it exits 0 rather than running some other event's rules.
 #
 # WARNINGS ARE OUTPUT TOO. Half the post hooks say their piece and exit 0
@@ -179,7 +178,7 @@ hook_commands() {
 # dropped for that run, on every tool. A new guard is dropped for a read-only
 # run unless it is added here. Warning: the read-only proof below is then the
 # only thing between a write-capable run and almost no guards; never loosen it.
-READ_ONLY_KEEP=' bash-guardrails.sh suite-rerun-guard.sh '
+READ_ONLY_KEEP=' bash-guardrails.sh suite-rerun-guard.sh generated-read-guard.sh '
 
 # Whether THIS run is read-only, decided once per dispatch and only when a
 # guard off the keep-list comes up. Codex's payload names no sandbox (its permission_mode
@@ -326,7 +325,7 @@ context_out() {
 # groups and read the fields Codex already spells the same way.
 case "$EVENT" in
   Stop|SessionStart|UserPromptSubmit)
-    run_matcher "$EVENT" '' "$INPUT" || exit 2
+    run_matcher "$EVENT" '' "$INPUT" || { HOOK_FIRE_REASON=matcher-denied; exit 2; }
     exit 0
     ;;
   PreToolUse|PostToolUse) ;;
@@ -336,7 +335,7 @@ esac
 case "$TOOL" in
   # MCP calls pass through too: read-tracker.sh counts serena use for the symbol-first hooks.
   Bash|mcp__*)
-    run_matcher "$EVENT" "$TOOL" "$INPUT" || exit 2
+    run_matcher "$EVENT" "$TOOL" "$INPUT" || { HOOK_FIRE_REASON=matcher-denied; exit 2; }
     ;;
 
   apply_patch)
@@ -458,7 +457,7 @@ for f in files:
       [ -n "$one" ] || continue
       # Each adapted payload names its own tool: an "Add File" becomes a Write
       # and must reach the Write-only groups too.
-      run_matcher "$EVENT" "$(printf '%s' "$one" | jq -r '.tool_name // empty' 2>/dev/null)" "$one" || exit 2
+      run_matcher "$EVENT" "$(printf '%s' "$one" | jq -r '.tool_name // empty' 2>/dev/null)" "$one" || { HOOK_FIRE_REASON=matcher-denied; exit 2; }
     done <<<"$PAYLOADS"
     ;;
 esac

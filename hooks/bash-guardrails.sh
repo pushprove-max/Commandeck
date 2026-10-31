@@ -79,7 +79,7 @@ if writer:
             print(p); raise SystemExit
 PY
     IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I -c "$IW_PY")
-    [ -n "$IW_OUT" ] && { echo "BLOCKED: an inline script holds a write call and names $IW_OUT, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder) and name no tracked file." >&2; exit 2; }
+    [ -n "$IW_OUT" ] && { echo "BLOCKED: an inline script holds a write call and names $IW_OUT, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder) and name no tracked file." >&2; HOOK_FIRE_REASON=inline-script-write; exit 2; }
   fi
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).
@@ -97,7 +97,7 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # itself: this hook is off in a project that did not turn the strict tier on.
 . "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
 # Without the helper no end word is checked and every bare node --test would pass.
-type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; exit 2; }
+type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 # The one fence for a rewrite that replaces the call's text (a worker's search): the replacement must run exactly what
 # the call would. Any `$`, backtick, backslash, newline or process substitution in the RAW text, quoted or not,
 # refuses it (each can run or reshape something the replacement drops). The rest is read only through strip_quoted,
@@ -107,7 +107,7 @@ rewrite_safe() { # <raw command>: sets RW_TEXT to the quote-stripped text
   RW_TEXT=$(strip_quoted "$1")
 }
 ODD=$(strip_odd_end "$CMD")
-[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; exit 2; }
+[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; HOOK_FIRE_REASON=odd-heredoc-end; exit 2; }
 
 # Block node's test runner without the 4 GB heap cap.
 # Root cause of four WSL crashes on 2026-08-24: one uncapped
@@ -156,6 +156,7 @@ while IFS= read -r SEG; do
   HEAPS=$(echo "$SEG" | grep -oE -- '--max[-_]old[-_]space[-_]size(=|[[:space:]]+)[0-9]+' | grep -oE '[0-9]+$')
   if [ -z "$HEAPS" ] || [ -n "$(awk '$1 > 4096' <<<"$HEAPS")" ]; then
     echo "BLOCKED: bare node --test without --max-old-space-size=4096, or with a larger heap flag beside it. Add the flag (\`node --max-old-space-size=4096 --test\`) and drop any larger one, or run the project's own test script when it carries the cap." >&2
+    HOOK_FIRE_REASON=node-test-heap
     exit 2
   fi
 done < <(printf '%s\n' "$HEAP_CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/&/\n/g' -e 's/|/\n/g' -e 's/;/\n/g')
@@ -361,7 +362,7 @@ search_bounded() {
     *) [ -n "$SEARCH_BASE" ] || return 1; P=$SEARCH_BASE/$OP ;;
   esac
   # GNU realpath never fails under -m, so a failure is a realpath that cannot judge any path.
-  P=$(realpath -m -- "$P" 2>/dev/null) || { echo "BLOCKED: realpath -m failed (a realpath without -m, such as the Mac's own, is first on this hook's PATH), so no search path can be judged. Put GNU realpath first: brew install coreutils, or run /commandeck:setup." >&2; exit 2; }
+  P=$(realpath -m -- "$P" 2>/dev/null) || { echo "BLOCKED: realpath -m failed (a realpath without -m, such as the Mac's own, is first on this hook's PATH), so no search path can be judged. Put GNU realpath first: brew install coreutils, or run /commandeck:setup." >&2; HOOK_FIRE_REASON=realpath-missing; exit 2; }
   root_like "$P" && return 1
   case "$P" in *[*?[]*)
     while IFS= read -r M; do root_like "$(realpath -m -- "$M")" && return 1; done < <(compgen -G "$P")
@@ -616,6 +617,7 @@ for i in "${!SRCH_TEXT[@]}"; do
   # rule. Both sanctioned answers are named here.
   echo "Whole repo: to search the tree, name its top-level directories: $TOOL ... <dir> <dir>" >&2
   echo "Try: $TRY" >&2
+  HOOK_FIRE_REASON=unbounded-search
   exit 2
 done
 
@@ -703,7 +705,7 @@ while IFS= read -r LINE; do
         if [ "$KILL_SKIP" = 1 ]; then KILL_SKIP=0; continue; fi
         # A `-` before an unexpanded value is a process group nobody has read
         #, in first place too: `-s "$SIG"` is the signal's safe spelling.
-        case "$KILL_T" in -*\$*|-*\`*) echo "$KILL_MSG" >&2; exit 2 ;; esac
+        case "$KILL_T" in -*\$*|-*\`*) echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;; esac
         if [ "$KILL_FIRST" = 1 ]; then
           KILL_FIRST=0
           case "$KILL_T" in
@@ -713,7 +715,7 @@ while IFS= read -r LINE; do
           esac
         fi
         case "$KILL_T" in
-          -[0-9]*) echo "$KILL_MSG" >&2; exit 2 ;;
+          -[0-9]*) echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;;
           -*) continue ;;
           # Unexpanded: nobody has read which pid this is, unless it is a job
           # this command started.
@@ -722,29 +724,29 @@ while IFS= read -r LINE; do
               KILL_N=${BASH_REMATCH[1]:-${BASH_REMATCH[2]}}
               case "$KILL_SEEN" in *" $KILL_N "*) kill_child_ok "$KILL_N" && continue ;; esac
             fi
-            echo "$KILL_MSG" >&2; exit 2 ;;
+            echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;;
         esac
         # Pid 0 is every process in the caller's own group.
-        [[ $KILL_T =~ ^\+?0+$ ]] && { echo "$KILL_MSG" >&2; exit 2; }
-        case " $KILL_ANCESTORS " in *" $KILL_T "*) echo "$KILL_MSG" >&2; exit 2 ;; esac
+        [[ $KILL_T =~ ^\+?0+$ ]] && { echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2; }
+        case " $KILL_ANCESTORS " in *" $KILL_T "*) echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;; esac
       done ;;
     pkill|killall)
       shift
       for KILL_T in "$@"; do
         case "$KILL_T" in
           # Every process the user owns includes main. -USR1 is a signal, not -U.
-          -u*|-U|--uid|--uid=*|--euid|--euid=*|--user|--user=*) echo "$KILL_MSG" >&2; exit 2 ;;
+          -u*|-U|--uid|--uid=*|--euid|--euid=*|--user|--user=*) echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;;
           -*) continue ;;
         esac
         # The name in any case, and with `[a]` read as `a`.
         KILL_NAME=$(printf '%s' "${KILL_T,,}" | sed -E 's/\[(.)\]/\1/g')
-        case "$KILL_NAME" in *claude*|*node*|*orca*) echo "$KILL_MSG" >&2; exit 2 ;; esac
+        case "$KILL_NAME" in *claude*|*node*|*orca*) echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2 ;; esac
         # ponytail: a pattern is tried against the three bare names only, so a
         # regex needing more of the command line than the name can still pass;
         # match it against main's live `ps` lines if that ever bites.
         # Only "no match" (1) passes: an unreadable pattern (2) is not a pass.
         printf 'claude\nnode\norca\n' | grep -qiE -- "$KILL_T" 2>/dev/null
-        [ $? = 1 ] || { echo "$KILL_MSG" >&2; exit 2; }
+        [ $? = 1 ] || { echo "$KILL_MSG" >&2; HOOK_FIRE_REASON=kill-guard; exit 2; }
       done ;;
   esac
 done < <(split_search_segments "$CMD")
@@ -792,6 +794,7 @@ while IFS= read -r LINE; do
   shift; cli_subcommand "$ORCA_VALUED" "$@"
   [ "$SUBCMD" = "terminal read" ] || continue
   echo "BLOCKED: raw pane read. Use scripts/read-verdict.sh <handle> [lines] or seat.sh collect for content -- they filter outside main's context. For liveness use scripts/board.sh, or the state block orca-wait.sh prints with every wake." >&2
+  HOOK_FIRE_REASON=raw-pane-read
   exit 2
 done < <(split_search_segments "$CMD")
 exit 0

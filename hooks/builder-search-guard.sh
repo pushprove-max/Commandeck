@@ -176,4 +176,5 @@ if [ -n "$PAT" ]; then
     echo "Try: rg -n -e '${PAT//\'/\'\\\'\'}' ${TRYDIR:-src}" >&2
   elif [ -f "$PTH" ]; then echo "Try: grep -n -e '${PAT//\'/\'\\\'\'}' '${PTH//\'/\'\\\'\'}'" >&2; fi
 fi
+HOOK_FIRE_REASON=search-first
 exit 2

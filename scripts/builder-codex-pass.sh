@@ -109,11 +109,13 @@ pass_waits() {
     COMPANION=$(ls -d "$CLAUDE_DIR"/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1 || true)
     [ -n "$COMPANION" ] || die "no Codex plugin companion under $CLAUDE_DIR/plugins/cache/openai-codex/codex"
   fi
-  RECORD_WAIT=30 HELPER_STEP=0.2
+  # RETRY_WAITS: the waits before each rerun of a Codex reviewer at Codex's capacity (60 s, then 180 s; one pass was
+  # overloaded twice, 127 s apart, host #3327). The test switch makes both 0.
+  RECORD_WAIT=30 HELPER_STEP=0.2 RETRY_WAITS="60 180"
   [ -e "${COMPANION%/*}/commandeck-test-waits" ] || return 0
   RECORD_WAIT=$(cat "${COMPANION%/*}/commandeck-test-waits")
   [[ $RECORD_WAIT =~ ^[0-9]+$ ]] || die "${COMPANION%/*}/commandeck-test-waits must hold a number of seconds"
-  HELPER_STEP=0.02
+  HELPER_STEP=0.02 RETRY_WAITS="0 0"
 }
 [ "${1:-}" != --waits ] || { pass_waits; echo "record_wait=$RECORD_WAIT helper_step=$HELPER_STEP"; exit 0; }
 # The lowest severity that holds a merge (reviewBlockSeverity: P1, P2 or P3), as a digit, with the words the prompt
@@ -604,7 +606,8 @@ for path in sorted(glob.glob(os.path.join(home, *pattern), recursive=True)):
     if by == "claude":
         claude(path)
         continue
-    tid = None
+    tid = found = None
+    overloaded = False
     for raw in open(path, encoding="utf-8", errors="replace"):
         try:
             row = json.loads(raw)
@@ -618,12 +621,17 @@ for path in sorted(glob.glob(os.path.join(home, *pattern), recursive=True)):
             if not belongs(p.get("cwd"), wt):
                 break
             tid = str(p.get("id"))
-        elif row.get("type") == "response_item" and p.get("role") == "user":
+        elif found is None and row.get("type") == "response_item" and p.get("role") == "user":
             if m := next(filter(None, (head.search(c.get("text") or "") for c in p.get("content") or [] if isinstance(c, dict))), None):
-                print(tid, m.group(1), *issue_of(m))
-                break
+                found = (tid, m.group(1), *issue_of(m))
         elif row.get("type") == "event_msg" and p.get("type") in ("task_complete", "turn_aborted"):
+            # A try that ended at Codex's capacity with no reply is not a pass: it found nothing, so nothing is owed.
+            # reviewer_overloaded reads the same test, so this reads on to the end event to know it.
+            err = p.get("error")
+            overloaded = p.get("type") == "task_complete" and p.get("last_agent_message") is None and isinstance(err, dict) and err.get("codex_error_info") == "server_overloaded"
             break
+    if found and not overloaded:
+        print(*found)
 PY
 }
 # stop_strays <worktree> <session ids> -- stops every reviewer process a pass of
@@ -717,28 +725,64 @@ open_findings() {
 # unconfirmed suspect row, and is in main's rulings for this unit. A ledger row has no unit field: that file ties an id to the unit.
 ruling_id_ok() {
   local log=${COMMANDECK_RULING_LOG:-}
-  [[ $1 =~ ^r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}$ ]] || return 1
   [ -n "$log" ] || log=$(. "$HERE/../hooks/lib/project.sh" && pp_project "$MAIN_OF_WT" && echo "$HOME/.claude/rulings/$PP_PROJECT.jsonl")
-  jq -Rne --arg id "$1" '[inputs | fromjson? | select(.id == $id)] | length > 0 and (any(.[]; .void or (.pick == "suspect" and (.confirmed | not))) | not)' "$log" >/dev/null 2>&1 \
+  declare -F ruling_id_state >/dev/null || . "$HERE/../hooks/lib/ruling-id.sh"
+  ruling_id_state "$1" "$log" \
     && grep -qF -- "$1" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null
 }
 # test_edit_refusals <base> <head, empty for the index> -- issue 496: one line per test file that exists at <base> and loses a
-# line with no approval. An approval is a `Test edit: <path> ruling:<id>` line in main's rulings for this unit with an id
-# ruling_id_ok passes; a worktree copy never counts, and any other shape approves nothing. A listing failure is one line
-# too, so a git failure never reads as no edits.
+# line with no approval. An approval is a line in main's rulings for this unit with an id ruling_id_ok passes:
+# `Test edit: <path> test:<label> ruling:<id>` for each label test-edit-labels.sh maps a lost line to (`(file)` for a data
+# file's line), and `Test edit: <path> line:<exact old text> ruling:<id>` for each refused line, one approval spent on one line
+# per run. A worktree copy never counts, and any other shape approves nothing. A path-only line, the form before issue 504,
+# approves nothing either: the refusal prints the lines to add with its id, so main moves it by one copy.
+# A listing failure is one line too, so a git failure never reads as no edits.
 test_edit_refusals() {
-  local rows path lost checks l ok note= f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
+  local rows path lost checks l rest label n labels add id old ok rc err text i note= f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
+  local spare
   rows=$(cd "$WT" && bash "$HERE/new-test-count.sh" --edited "$1" ${2:+"$2"} 2>&1) \
     || { echo "cannot list the existing tests this branch edits: $rows"; return 0; }
   [ -n "$rows" ] || return 0
   [ -r "$f" ] || note=" ($f cannot be read, so nothing is approved)"
   while IFS=$'\t' read -r path lost checks; do
-    ok=
+    # Exit 2 carries its refused rows; any other failure, or 2 with no such row, says nothing of which tests.
+    err=$(mktemp) || { echo "$path is an existing test and loses $lost line(s); cannot tell which tests: mktemp failed"; continue; }
+    rc=0; labels=$(cd "$WT" && bash "$HERE/test-edit-labels.sh" "$path" "$1" ${2:+"$2"} 2>"$err") || rc=$?
+    if [ "$rc" != 0 ] && { [ "$rc" != 2 ] || [[ $'\n'$labels != *$'\n(line)\t'* ]]; }; then
+      echo "$path is an existing test and loses $lost line(s), $checks of them check lines; cannot tell which tests: $(cat "$err")"
+      rm -f -- "$err"; continue
+    fi
+    rm -f -- "$err"
+    add= old='<id>' spare=()
     while IFS= read -r l; do
-      [ "$l" = "Test edit: $path ruling:${l##*ruling:}" ] || continue
-      if ruling_id_ok "${l##*ruling:}"; then ok=1; break; fi
+      id=${l#"Test edit: $path ruling:"}
+      if [ "$id" != "$l" ] && [ "$old" = '<id>' ] && ruling_id_ok "$id"; then old=$id; fi
+      rest=${l#"Test edit: $path line:"}
+      [ "$rest" != "$l" ] && [[ $rest == *" ruling:"* ]] && ruling_id_ok "${rest##* ruling:}" && spare+=("${rest% ruling:*}")
     done < <(grep '^Test edit: ' "$f" 2>/dev/null)
-    [ -n "$ok" ] || echo "$path is an existing test and loses $lost line(s), $checks of them check lines, with no Test edit: line in main's rulings for $UNIT$note. No existing test changes without the owner's yes by name; when main adds the line, run builder-codex-pass.sh --ack-rulings $UNIT and the pass again. Try: bash $HERE/ask-main.sh \"Test edit: $path\" \"<the test, the change, whether a check gets looser>\""
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      if [[ $l == $'(line)\t'* ]]; then
+        # By parameter expansion, never `read`: a tab or an end space in the old text stays.
+        text=${l#*$'\t'}; text=${text#*$'\t'}; ok=
+        for ((i = 0; i < ${#spare[@]}; i++)); do
+          [ "${spare[i]}" = "$text" ] || continue
+          spare[i]=$'\n'; ok=1; break # spent: no line holds a newline, so it matches nothing again
+        done
+        [ -n "$ok" ] || add+=" Test edit: $path line:$text ruling:$old (1 line);"
+        continue
+      fi
+      label=${l%$'\t'*} n=${l##*$'\t'} ok=
+      while IFS= read -r l; do
+        rest=${l#"Test edit: $path test:"}
+        [ "$rest" != "$l" ] && [[ $rest == *" ruling:"* ]] || continue
+        [ "${rest% ruling:*}" = "$label" ] || continue
+        id=${rest##* ruling:}
+        if ruling_id_ok "$id"; then ok=1; break; fi
+      done < <(grep '^Test edit: ' "$f" 2>/dev/null)
+      [ -n "$ok" ] || add+=" Test edit: $path test:$label ruling:$old ($n line(s));"
+    done <<<"$labels"
+    [ -z "$add" ] || echo "$path is an existing test and loses $lost line(s), $checks of them check lines, with no Test edit: line in main's rulings for $UNIT$note. No existing test changes without the owner's yes by name; a line names one test, so a path-only line approves nothing. Lines main must add:$add when main adds them, run builder-codex-pass.sh --ack-rulings $UNIT and the pass again. Try: bash $HERE/ask-main.sh \"Test edit: $path\" \"<the test, the change, whether a check gets looser>\""
   done <<<"$rows"
 }
 
@@ -1910,6 +1954,30 @@ HANDED=$EARLIER FRESH=
 if [ "$KIND" = final ] && [ -z "$DESIGN" ] && [ "$FRESHC" = yes ]; then HANDED= SITES= NEWCODE= DEFERRED= AUTHOR= FRESH=$FRESH_HEAD; fi
 REST=${SUITE_TEXT:+$SUITE_TEXT$'\n'}${NOTE:+$NOTE$'\n'}${FRESH:+$FRESH$'\n'}${AUTHOR:+$'\n'$AUTHOR_HEAD$'\n'$AUTHOR$'\n'}${HOLDS:+$'\n'$HOLD_HEAD$'\n'$HOLDS$'\n'}${HANDED:+$'\n'$EARLIER_HEAD$'\n'$SAME_CLASS$'\n'$HANDED$'\n'$EARLIER_END$'\n'}${LIMITS:+$'\n'$LIMITS_HEAD$'\n'$LIMITS$'\n'}${CASES:+$'\n'$CASES_HEAD$'\n'$CASES$'\n'}${SITES:+$'\n'$SITES_HEAD$'\n'$SITES$'\n'}${NEWCODE:+$'\n'$NEWCODE_HEAD$'\n'$NEWCODE$'\n'}${DEFERRED:+$'\n'$DEFERRED_HEAD$'\n'$DEFERRED$'\n'}$'\n'$DIFF${CLAIMS:+$'\n\n'$CLAIMS_HEAD$'\n'$CLAIMS$'\n'}${ACCEPTED:+$'\n\n'$ACCEPTED_HEAD$'\n'$ACCEPTED$'\n'}
 [ "$BY" != codex ] || { GH_HAND=$(gh_hand_in) || exit 2; REST+=$'\n'$GH_HAND$'\n'; }
+# builder-pass-failed -- one tab-separated line per pass `<unit> <N> <kind> <tree> <reason> <count>`, in the worktree's git dir,
+# outside the tree. Written just before the pass dies on a failed reviewer (reviewers_die), read here before the launch,
+# dropped when a round file is written; main removes the file. A new tree or round misses the key. Two failures on one tree
+# for one reason refuse the third start, which would stop the same way.
+FAILED_REC=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-pass-failed
+TREE_ID=$(git -C "$WT" rev-parse "$SHA^{tree}") || die "cannot read the tree of $SHA in $WT"
+FKEY=$UNIT$'\t'$N$'\t'$KIND$'\t'$TREE_ID
+failed_rec() { [ ! -f "$FAILED_REC" ] || awk -F'\t' -v k="$FKEY" '$1 FS $2 FS $3 FS $4 == k' "$FAILED_REC"; }
+failed_drop() {
+  local t; [ -f "$FAILED_REC" ] || return 0
+  t=$(mktemp "$FAILED_REC.XXXXXX") && awk -F'\t' -v k="$FKEY" '$1 FS $2 FS $3 FS $4 != k' "$FAILED_REC" > "$t" && mv "$t" "$FAILED_REC" \
+    || die "cannot update $FAILED_REC"
+}
+# failed_note <reason> -- one more failure of this pass on this tree: count 1, or the count before plus one for the same reason.
+failed_note() {
+  local n=1 old; old=$(failed_rec)
+  [ -z "$old" ] || [ "$(cut -f5 <<<"$old")" != "$1" ] || n=$(($(cut -f6 <<<"$old") + 1))
+  failed_drop
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$UNIT" "$N" "$KIND" "$TREE_ID" "$1" "$n" >> "$FAILED_REC"
+}
+OLD_FAILURE=$(failed_rec)
+if [ "$(cut -f6 <<<"$OLD_FAILURE")" -ge 2 ] 2>/dev/null; then
+  die "pass $N ($KIND) of $UNIT failed twice on this tree for the same reason: $(cut -f5 <<<"$OLD_FAILURE"). A third start would stop the same way, so it does not run. Send main one question, which waits for its answer: bash $HERE/ask-main.sh \"$UNIT: pass $N keeps failing\" \"<the reason above, and what you tried>\""
+fi
 # Rows are written here, not by a hook: a background Bash call returns before Codex ends.
 LOG=$WT/.claude/builder-events.jsonl
 log_codex() { printf '{"ts":"%s","event":"%s","pass":"%s","round":%s%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$KIND" "$N" "${2:-}" >> "$LOG" || true; pp_unit_event "$UNIT" "$1"; }
@@ -2069,38 +2137,80 @@ else
     PP_PASS_SERENA_URL=$SERENA_URL PATH="$HERE/codex-no-helpers:$PATH" COMMANDECK_CODEX_TIER=$TIER node "$BROKER" serve --endpoint "unix:$SOCKS/$K.sock" --cwd "$RCWD" > "$SOCKS/$K.log" 2>&1 &
     BROKERS+=($!)
   done
-  : > "$SOCKS/launched"
-  for i in "${!FOCI[@]}"; do
-    K=$((i + 1))
-    for _ in $(seq 1 150); do [ -e "$SOCKS/$K.sock" ] && break; kill -0 "${BROKERS[i]}" 2>/dev/null || break; sleep "$HELPER_STEP"; done
-    [ -e "$SOCKS/$K.sock" ] || die "the Codex broker of reviewer $K did not start: $(tail -3 "$SOCKS/$K.log" 2>/dev/null)"
-    CODEX_COMPANION_APP_SERVER_ENDPOINT="unix:$SOCKS/$K.sock" \
-      node "$COMPANION" task --json --model "$MODEL" --effort "$EFFORT" --cwd "$RCWD" --prompt-file "$RUN-prompt-$K.md" > "$RUN-codex-$K.json" &
-    PIDS+=($!)
-  done
 fi
 # A launch that never reaches Codex leaves no session, and one pass once sat 41
 # minutes on it: with no session of this worktree by the limit, the
 # companions are stopped and the pass ends without a round file.
 SESSION_WAIT=${COMMANDECK_PASS_SESSION_WAIT:-180}
 # Each reviewer needs a session of its own: its prompt carries "Reviewer K of
-# M, round N.", so one reviewer's session never stands in for another's.
+# M, round N.", so one reviewer's session never stands in for another's. Its
+# launched-K stamp is rewritten only by its own launch: a retried reviewer's failed try cannot stand in for the
+# retry, and a reviewer not retried keeps its session.
 reviewer_session() {
   local f
   while IFS= read -r f; do
     ! grep -qF -- "Reviewer $1 of ${#FOCI[@]}, round $N." "$f" 2>/dev/null || { echo "$f"; return; }
-  done < <(find "$CODEX_DIR/sessions" -name 'rollout-*.jsonl' -newer "$SOCKS/launched" -exec grep -lF -- "$RCWD" {} + 2>/dev/null)
+  done < <(find "$CODEX_DIR/sessions" -name 'rollout-*.jsonl' -newer "$SOCKS/launched-$1" -exec grep -lF -- "$RCWD" {} + 2>/dev/null)
+}
+# launch_reviewers <k...> -- one try of those reviewers, each on its own broker, under the session limit; sets FAILED.
+launch_reviewers() {
+  local k i pids=() watch ks=("$@")
+  for k in "$@"; do : > "$SOCKS/launched-$k"; done
+  for k in "$@"; do
+    for _ in $(seq 1 150); do [ -e "$SOCKS/$k.sock" ] && break; kill -0 "${BROKERS[k - 1]}" 2>/dev/null || break; sleep "$HELPER_STEP"; done
+    [ -e "$SOCKS/$k.sock" ] || die "the Codex broker of reviewer $k did not start: $(tail -3 "$SOCKS/$k.log" 2>/dev/null)"
+    CODEX_COMPANION_APP_SERVER_ENDPOINT="unix:$SOCKS/$k.sock" \
+      node "$COMPANION" task --json --model "$MODEL" --effort "$EFFORT" --cwd "$RCWD" --prompt-file "$RUN-prompt-$k.md" > "$RUN-codex-$k.json" &
+    pids+=($!)
+  done
+  ( sleep "$SESSION_WAIT"
+    for k in "$@"; do
+      [ -n "$(reviewer_session "$k")" ] || printf '%s ' "$k" >> "$SOCKS/no-session"
+    done
+    [ ! -e "$SOCKS/no-session" ] || kill "${pids[@]}" 2>/dev/null ) &
+  watch=$!
+  FAILED=""
+  for i in "${!pids[@]}"; do wait "${pids[i]}" || FAILED+=" ${ks[i]}"; done
+  pkill -P "$watch" 2>/dev/null || true; kill "$watch" 2>/dev/null || true
+}
+# reviewer_end <k> -- the end event of reviewer k's latest try as one JSON line, empty while the session has none. Only the
+# session says why a reviewer failed: the companion's exit 1 is the same for any failure. `fromjson?` skips a half-written line.
+reviewer_end() {
+  local s; s=$(reviewer_session "$1"); [ -n "$s" ] || return 0
+  jq -Rnc '[inputs | fromjson? | select(.type == "event_msg" and (.payload.type == "task_complete" or .payload.type == "turn_aborted")) | .payload] | last // empty' "$s" 2>/dev/null || true
+}
+# reviewer_overloaded <k> -- whether its latest try ended at Codex's capacity with no reply. Codex writes the record after
+# the companion returns, so this waits within RECORD_WAIT for it. pass_threads reads the same test.
+reviewer_overloaded() {
+  local end=$((SECONDS + RECORD_WAIT)) said
+  while :; do
+    said=$(reviewer_end "$1")
+    [ -z "$said" ] || break
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep 0.5
+  done
+  [ "$(jq -r '.type == "task_complete" and .last_agent_message == null and ((.error | objects | .codex_error_info) == "server_overloaded")' <<<"$said" 2>/dev/null)" = true ]
+}
+# reviewer_stop_reason <k> -- why its latest try stopped, from the session alone, on one line of at most 80 characters:
+# the error's codex_error_info, else its message, else `aborted: <reason>`, else `no reason in the session`.
+reviewer_stop_reason() {
+  local why; why=$(reviewer_end "$1" | jq -r '
+    (if .type == "turn_aborted" then (if .reason then "aborted: \(.reason)" else empty end)
+     else (.error | objects | (.codex_error_info // .message) // empty) end)
+    | if type == "string" then . else tojson end | gsub("[\\n\\t\\r]"; " ") | .[:80]' 2>/dev/null || true)
+  echo "${why:-no reason in the session}"
+}
+# reviewers_die <reviewers> <head> <tail> -- the refusal for reviewers that failed or gave no verdict: <head>, why each
+# stopped, <tail>. It records the failure first. Only a Codex reviewer has a session to read.
+reviewers_die() {
+  local k why=
+  if [ "$BY" = codex ]; then
+    for k in $1; do why+="${why:+; }reviewer $k: $(reviewer_stop_reason "$k")"; done
+    failed_note "$why"
+  fi
+  die "$2${why:+ ($why)}$3"
 }
 # shortcut: a headless Claude reviewer has no such limit; it fails at once when it cannot start. Add one if a Claude pass ever hangs before its session.
-WATCH=""
-if [ "$BY" = codex ]; then
-  ( sleep "$SESSION_WAIT"
-    for i in "${!FOCI[@]}"; do
-      [ -n "$(reviewer_session "$((i + 1))")" ] || printf '%s ' "$((i + 1))" >> "$SOCKS/no-session"
-    done
-    [ ! -e "$SOCKS/no-session" ] || kill "${PIDS[@]}" 2>/dev/null ) &
-  WATCH=$!
-fi
 # A pass that waits silently reads as a hung one: say it started, then once a minute that it runs.
 echo "pass $N: ${#FOCI[@]} reviewer(s) started"
 ( T0=$SECONDS
@@ -2113,8 +2223,21 @@ echo "pass $N: ${#FOCI[@]} reviewer(s) started"
   done ) &
 TICKER=$!
 FAILED="" NOJSON=""
-for i in "${!PIDS[@]}"; do wait "${PIDS[i]}" || FAILED+=" $((i + 1))"; done
-[ -z "$WATCH" ] || { pkill -P "$WATCH" 2>/dev/null || true; kill "$WATCH" 2>/dev/null || true; }
+if [ "$BY" = codex ]; then
+  launch_reviewers $(seq 1 "${#FOCI[@]}")
+  # A capacity blip on a reviewer costs that reviewer's rerun, not the pass. Any other failure, alone or beside it, refuses
+  # below as it always did. The broker outlives its client, so a retry reuses reviewer K's socket.
+  for RETRY_WAIT in $RETRY_WAITS; do
+    [ -n "$FAILED" ] && [ ! -e "$SOCKS/no-session" ] || break
+    for K in $FAILED; do reviewer_overloaded "$K" || break 2; done
+    stamp "reviewer(s)$FAILED at capacity, retry in ${RETRY_WAIT}s"
+    sleep "$RETRY_WAIT"
+    launch_reviewers $FAILED
+  done
+else
+  for i in "${!PIDS[@]}"; do wait "${PIDS[i]}" || FAILED+=" $((i + 1))"; done
+fi
+# The ticker stops after the last try, so a pass waiting between tries still says it runs.
 pkill -P "$TICKER" 2>/dev/null || true; kill "$TICKER" 2>/dev/null || true
 # reviewer_id <k> -- the session of reviewer k: Claude's is the id this pass gave it, Codex's the thread it returned.
 reviewer_id() {
@@ -2138,10 +2261,10 @@ for i in "${!FOCI[@]}"; do
     || die "cannot record the prompt of $NAME $TID under $RHOME/builder-pass-prompts"
 done
 [ ! -e "$SOCKS/no-session" ] || die "no Codex session appeared within ${SESSION_WAIT}s of the launch for reviewer(s) $(tr -s ' ' < "$SOCKS/no-session" | sed 's/ $//'), so this was not a pass and no round file is written. Run the same pass again: builder-codex-pass.sh $(same_pass)"
-[ -z "$FAILED" ] || die "the $BY $KIND pass failed for reviewer(s)$FAILED; raw output in $RUN-$BY-<k>.json"
+[ -z "$FAILED" ] || reviewers_die "$FAILED" "the $BY $KIND pass failed for reviewer(s)$FAILED" "; raw output in $RUN-$BY-<k>.json"
 # A companion that answers without JSON gave no thread and no verdict: the pass
 # ended here with no word and no round file, and read as one still running.
-[ -z "$NOJSON" ] || die "reviewer$NOJSON answered without JSON, so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json. Run the same pass again: builder-codex-pass.sh $(same_pass)"
+[ -z "$NOJSON" ] || reviewers_die "$NOJSON" "reviewer$NOJSON answered without JSON" ", so this pass has no verdict and no round file is written; what the companion printed is in $RUN-codex-<k>.json"
 # A Claude reviewer's shell is not sandboxed as Codex's is, so the tree is
 # checked as well, files it added included.
 # shortcut: a change to a file that was already untracked is not seen; sandbox the session when Claude Code can.
@@ -2175,6 +2298,7 @@ PASS_WORD=${DESIGN:-$KIND}
 [ -z "$ISSUE_STEP" ] || PASS_WORD=issue-$ISSUE_STEP
 { printf '## %s (%s, read-only)\nReviewed: %s\n' "$HEAD_NAME" "$MODEL" "$SHA"; printf "$NAME: %s\n" "${TIDS[@]}"
   printf 'Pass: %s\nTiming: %s\nPre-review: rebase %s, tests %s, suite %s\n%s%s\n%s\n\n%s\n' "$PASS_WORD" "$TIMING" "$T_REBASE" "$T_TESTS" "$T_SUITE" "${SUITE:+$SUITE$'\n'}" "${RULE_LINE:+$RULE_LINE$'\n'}" "$BODY" "$VERDICT"; } > "$OUT"
+failed_drop
 # issue_tail -- a per-issue review ends here. No final-cycle counter or fix hand-off applies, and a NO-GO stays in this session;
 # the class stop does apply, through issue_step. A stop wakes main from the pass itself, so no Builder can forget it, and the
 # hold stands whether or not the wake got through: every rerun refuses until main's answer is there.

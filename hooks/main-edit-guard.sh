@@ -15,7 +15,7 @@ INPUT=$(cat)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.
-hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; exit 2; }
+hook_payload_loaded 2>/dev/null || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/edit-payload.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
 
 # A linked worktree is a worker; only the main checkout is governed.
 COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
@@ -43,6 +43,7 @@ case "$FILE_PATH" in "$TOP"/*)
     if [ "$N" -gt 3 ]; then
       echo "BLOCKED: hand this edit to a worker: write the batch brief, then $LAUNCH <unit> <batch-brief>. It would be file $N of main's uncommitted change set (cap 3, outside .claude/briefs/, .claude/rules/, todo/, docs/, memory and *.md); or commit what is done first." >&2
       echo "Do not retry it through Bash (sed -i, a redirect, tee)." >&2
+      HOOK_FIRE_REASON=main-edit-cap
       exit 2
     fi
   fi ;;
@@ -75,4 +76,5 @@ echo "BLOCKED: hand this edit to a worker: write the batch brief, then $LAUNCH <
 echo "Do not retry it through Bash (sed -i, a redirect, tee)." >&2
 echo "Still main's to edit directly: everything under .claude/ (briefs, config, rules, plans), docs/, todo/, any *.md, checkpoints, memory and the scratchpad." >&2
 echo "If this really is a same-turn mechanism fix that a Builder cannot make: COMMANDECK_MAIN_EDITS_OK=1 (owner ruling 2026-09-12)." >&2
+HOOK_FIRE_REASON=main-edits-code
 exit 2

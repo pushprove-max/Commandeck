@@ -213,6 +213,7 @@ if [ "$TOOL" = "Bash" ]; then
     [[ $seg =~ ^orca(-ide)?[[:space:]]+orchestration[[:space:]]+check([[:space:]]|$) ]] || continue
     [[ "$seg " =~ [[:space:]]--(wait|peek|all|ack|terminal|help)[[:space:]=] ]] && continue
     printf 'BLOCKED: a bare inbox check returns a batch and never acknowledges it, so the\nbatch replays on every check and later messages queue behind it. Drain the\ninbox with\n  bash %s/orca-wait.sh\nor give check one of --wait, --peek, --all, --ack or --terminal.\n' "${BASH_SOURCE[0]%/*}/../scripts" >&2
+    HOOK_FIRE_REASON=bare-inbox-check
     exit 2
   done < <(segments)
 fi
@@ -419,10 +420,12 @@ print("loop" if kind == 2 else "unread" if unread else "sleeploop:%d" % total if
   esac
   if [ "$WAITED" = loop ]; then
     printf 'BLOCKED: a wait inside a loop in a worker pane repeats past the prompt cache (a sleep loop of finite sleeps is rewritten under a cap instead; an ask, a test wait, a bgrun wait or a sleep that is not a finite number in a loop is not). A background test run: wait-test-run.sh <runner-pid> <output-file> from the plugin scripts (ends by 270 s; exit 3 means wait again). Anything else: start it with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
+    HOOK_FIRE_REASON=wait-in-loop
     exit 2
   fi
   if [ "$WAITED" = unread ]; then
     printf 'BLOCKED: this hook cannot read a wait in this call (a sleep operand or --timeout-ms that is not a number, such as $T), so it cannot hold it to the %s s prompt-cache budget. State the wait as a number, or start the call with Bash run_in_background.\n' "$LIMIT" >&2
+    HOOK_FIRE_REASON=wait-unreadable
     exit 2
   fi
   if [ "${WAITED:-0}" -gt "$LIMIT" ] 2>/dev/null; then
@@ -430,6 +433,7 @@ print("loop" if kind == 2 else "unread" if unread else "sleeploop:%d" % total if
     # Only a lone ask is rebuilt: with another wait beside it, a shorter ask would not bring the total under the limit.
     NMS=$(grep -oE -- '--timeout-ms(=|[[:space:]]+)[0-9]+' <<<"$CMD" | grep -oE '[0-9]+$')
     [ "$(grep -c . <<<"$NMS")" = 1 ] && [ "$WAITED" = "$(( (NMS + 999) / 1000 ))" ] && cap_try "${LIMIT}000"
+    HOOK_FIRE_REASON=wait-over-budget
     exit 2
   fi
   exit 0
@@ -453,6 +457,7 @@ Orca'"'"'s nudge wakes main. When the nudge lands, drain ONCE in the foreground:
 if [ "$TOOL" = "Monitor" ]; then
   if printf '%s' "$BARE" | grep -qE "$WAIT_RE"; then
     printf 'BLOCKED: the Orca inbox wait in a Monitor. A Monitor wakes main on its\nown timer, for nothing.\n%s\n' "$SINGLE_SHOT_FIX" >&2
+    HOOK_FIRE_REASON=monitor-inbox-wait
     exit 2
   fi
   printf '%s' "$BARE" | grep -qE 'orca-ide[[:space:]]+orchestration[[:space:]]+send[[:space:]]' && exit 0
@@ -465,6 +470,7 @@ so Orca's nudge wakes main (worker_done and escalation need a live
 dispatch; question and status do not). (The main-session rules,
 Waiting; owner ruling 2026-09-10.)
 EOF
+  HOOK_FIRE_REASON=wait-needs-dispatch
   exit 2
 fi
 
@@ -509,6 +515,7 @@ PY
 if [ "$TOOL" = "Bash" ] && printf '%s' "$CMD_CODE" | grep -qE 'orca-wait\.sh|orchestration[[:space:]]+check'; then
   if loop_wait; then
     printf 'BLOCKED: the Orca inbox wait inside a shell loop.\n%s\n' "$SINGLE_SHOT_FIX" >&2
+    HOOK_FIRE_REASON=inbox-wait-in-loop
     exit 2
   fi
 fi
@@ -551,4 +558,5 @@ For a file or process event, start ONE background watcher that ends with
 and block on check --wait for it. (The main-session rules, Waiting;
 owner ruling 2026-09-07.)
 EOF
+HOOK_FIRE_REASON=wait-needs-heartbeat
 exit 2
