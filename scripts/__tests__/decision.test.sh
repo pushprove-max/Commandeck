@@ -95,6 +95,18 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/
   bash -c "${SPEC/\$PP_SCRIPTS_Q/$(printf '%q' "$REAL/scripts")} cache" 2>&1)
 check "the spec's decision.sh command runs" "$DR|0" \
   "$OUT|$(cat "$REAL/scripts/seat.sh" "$REAL/hooks/ask-stop-records-decision.sh" | grep -v '^ *#' | grep -cE '(`|run )(decision|plan-check)\.sh ')"
+# Issue 522: holds takes a decision as the unit's by its id in the exact shapes the plugin writes, not by a sibling's.
+# Catches: a plan-<unit> question the merge and the closing pass miss because the id's dash hides the unit name.
+D add plan-hz 'Which lock?' none main >/dev/null
+D add review-stop-hz-r2 'Stop the review?' none main >/dev/null
+check "holds lists a plan-<unit> question" "Open question to the owner plan-hz: Which lock?
+Open question to the owner review-stop-hz-r2: Stop the review?" "$(D holds hz | sort)"
+# Catches: a sibling unit's ask (review-stop-<unit>-b-r7, plan-<unit>-b, <unit>-aa-q1, x<unit>) held against this unit.
+D add review-stop-hy-b-r7 'Stop the second review?' none main >/dev/null
+D add plan-hy-b 'Pick a database engine?' none main >/dev/null
+D add hy-aa-q1 'Rename the staging bucket?' none main >/dev/null
+D add xhy 'Rotate the signing certificate?' none main >/dev/null
+check "holds ignores a sibling's review stop" "|2" "$(D holds hy)|$(D holds hy-b | grep -c .)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -81,7 +81,7 @@ Worker-specific hooks:
 | `read-range-guard.sh` | Blocks a Builder's Read of a whole text file over 400 lines; names a `grep -n` and a range to read instead. |
 | `generated-read-guard.sh` | Blocks a whole read of a file `.gitattributes` marks `linguist-generated`, by Read or shell, in every seat, reviewers included; blocks a shell read of a saved tool output and points to the Read tool. A word in an `echo` passes. |
 | `companion-read-guard.sh` | Blocks an edit of a path listed in `.claude/companions.tsv` until this session has read its contract, and names the file to read. With no pairs file it does nothing. |
-| `read-record.sh` | Records the files a session reads, for `companion-read-guard.sh`, only when `.claude/companions.tsv` exists. Never blocks. |
+| `read-record.sh` | Records the files a session reads, for `companion-read-guard.sh`, only when `.claude/companions.tsv` exists. A Read that showed no text, such as one past the end of the file, is not recorded. Never blocks. |
 | `bugfix-test-lock.sh` | Blocks a file-tool edit of a test listed in `.claude/bugfix-lock`, so a failing test is not reshaped to agree with its bug. |
 | `ruling-cite-gate.sh` | Blocks a memory or rule line that claims an owner ruling with no id, or with an id the ruling log does not hold or holds as void. Reads added lines only. |
 | `stop-checks.sh` | Stop hook in a worktree: runs the commands in the main checkout's `.claude/stop-checks`, once per tree, under one deadline, and holds the turn saying failed, deadline or could not run. Does nothing with no such file; refuses a tracked one. |

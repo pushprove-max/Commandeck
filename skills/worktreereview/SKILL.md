@@ -44,7 +44,8 @@ It reads logs only, so it works after main has removed the worktree:
    ```
    It prints the stages, totals, clock split, Codex passes and guard refusals, and writes
    `result.json` and `notes.txt` to `/tmp/commandeck/worktreereview/<project>/<unit>/`. Stages are automatic:
-   Build, then each Codex pass and the fixing between passes, then Wrap-up.
+   Build, then each Codex pass and the fixing between passes, then Wrap-up. Planning (a seat tag or spec name
+   that says plan) before the Builder starts is `Plan and judge`, ahead of Build; its tokens and cost stay in that stage.
 
 3. **Split the Build stage when it covers several jobs.** Read `notes.txt` (the agent's own
    progress notes with UTC times) and find where it moved from one issue to the next and where
@@ -57,7 +58,9 @@ It reads logs only, so it works after main has removed the worktree:
 
 4. **Read what the numbers cannot tell you.** If the worktree still exists, read its evidence
    file (`.claude/briefs/<unit>-evidence.md`), above all "Not done / not checked". Read the
-   Codex findings in `result.json` (`passes[].message`). Check whether main has merged it
+   Codex findings in `result.json` (`passes[].message`). A pass with `tool_gaps` true had a reviewer
+   say Serena was unavailable, timed out or could not index, so its verdict may rest on text search alone; the page
+   notes it under the pass. Check whether main has merged it
    (`git log` on main, read-only) and what main said in the inbox.
 
 5. **Write `notes.json`** next to `result.json`. Keys: `title`, `summary`, `stage_notes`
@@ -93,7 +96,7 @@ Time a Builder sat waiting on the owner is not build time (the owner, 2026-10-14
 from every clock figure, share and flag, and leaves cost as it is: each `--exclude START=END` window
 (ISO UTC, repeatable; review.py passes it through), and the part of each idle gap over two minutes with
 nothing of the build running that sits inside an open decision in the main checkout's
-`.claude/metrics/decisions.jsonl` that names the unit in its `source` or `answer` (the last row per
+`.claude/metrics/decisions.jsonl` that names the unit in its `source` or `answer`, or whose id is exactly `<unit>`, `plan-<unit>` or `review-stop-<unit>-r<digits>` (the last row per
 decision and ask wins). A gap waiting on main or on nothing with no decision recorded is cut whole, and its
 reason names the cause. Idle after the Builder's `<UNIT>-DONE` line is not cut by itself: with no owner
 decision open it stays on the clock, as does time waiting on a merge. A gap with any session's background

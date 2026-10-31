@@ -62,11 +62,10 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   settings, or says in chat that this unit takes another tier, model or effort. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
-  written. Panel: `plan-author` writes the plan, and `plan-judge-fable` and `plan-judge-sol` both read it; a Panel unit estimated at 500 changed lines or fewer (`oneJudgeLines`), with no new-infrastructure trigger, gets one judge, the one Plan + judge picks, and `plan-tier.sh` says so.
+  written. Panel: `plan-author` writes the plan, and `plan-judge-opus` and `plan-judge-sol` both read it; a Panel unit estimated at 500 changed lines or fewer (`oneJudgeLines`), with no new-infrastructure trigger, gets one judge, the one Plan + judge picks, and `plan-tier.sh` says so. The batch's `Estimated size:` line also feeds the tiny route: a batch no risky trigger matched, estimated under 50 changed lines (`tinyPlanLines`), is One planner with no judge, so its plan gets neither the judge's read nor its revise round.
   A seat that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
   (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
-  only when the owner named another for that unit. A size target in a
-  planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
+  only when the owner named another for that unit. A size target in a planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
   trimming needed content to fit. One judge round and one revision, never a judging loop; `seat.sh` refuses a judge
   round past `planJudgeRounds` (2) started by hand, and main then rules on the open findings. The Sol judge may run
   on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never

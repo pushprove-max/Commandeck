@@ -27,7 +27,7 @@ for u in gu gb; do git -C "$PROJ" worktree add -q "$HOME/orca/workspaces/proj/$u
 echo gu > "$(git -C "$HOME/orca/workspaces/proj/gu" rev-parse --absolute-git-dir)/commandeck-plan-of"
 gl() { : > "$T/creates"; rm -f "$T/pane-up"; srun launch "$1" "${2:-gu}" "${3:-$T/judge-spec.md}" >"$T/out" 2>&1; echo "$?"; }
 echo "error connecting to api.github.com" > "$T/gh-fail"
-for r in plan-author plan-judge-sol plan-judge-fable builder; do
+for r in plan-author plan-judge-sol plan-judge-opus builder; do
   u=gu; [ "$r" != builder ] || u=gb; spec=$T/judge-spec.md; [ "$r" != builder ] || spec=$T/spec.md
   rc=$(gl "$r" "$u" "$spec")
   check "$r with no network for gh is refused at launch with the reason; no pane, no record" "2:1:0:0" \

@@ -47,17 +47,25 @@ echo 'echo ok' > "$W/scripts/lane-lib.sh"
 check "and once it is green the retry goes on to Codex" "0 yes" "$(fin 4 "$NOGO2") $(round 4)"
 
 # Issue 356: the round file says how long each pre-review step took, so a slow closing pass can be told from a slow
-# reviewer. r2 rebased and ran tests with no suite on; r5 is on top of main and runs only the suite.
+# reviewer. r2 rebased and ran tests with no suite on; r5 is on top of main, so it rebases nothing but runs the unit's tests and the suite (issue 526).
 cfg '.fullSuiteBeforeFinal = true | .testCommand = "echo \"1 passed, 0 failed\""'; echo five > "$W/a.sh"
 check "the final pass with the suite on runs" "0 yes" "$(fin 5 "$NOGO2") $(round 5)"
 cfg 'del(.fullSuiteBeforeFinal)'
 check "a closing pass's report carries one timing line per pre-review step" "1 1 1 1" \
   "$(grep -c '^Pre-review: ' "$B/$U-r2-reports.md") $(grep -cE '^Pre-review: rebase [0-9]+ s, tests [0-9]+ s, suite not run$' "$B/$U-r2-reports.md") \
-$(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests not run, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
+$(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests [0-9]+ s, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
 
 # Issue 385: a closing pass needs a green typecheck when the project sets one up (typecheckCommand), checked before any
 # reviewer; a project with none is told so and goes on. These passes are past the default cap of five.
 cfg '.reviewLoop.passCap = "20"'
+# Issue 526: with main unmoved the closing pass rebased nothing and so ran no test, and a red changed test was found
+# only after its GO. The unit breaks the file its own test covers; main stays where it is.
+# Catches: a closing pass with main unmoved going to the reviewer with a red test of what the unit changed.
+echo 'echo broken' > "$W/scripts/lib.sh"; echo five-b > "$W/a.sh"
+check "a closing pass with main unmoved runs the changed tests first" "2 1 no" \
+  "$(fin 6 "$NOGO2") $(grep -c "before the closing pass, tests that cover what $U changed are red" "$TMP/err") $(round 6)"
+echo 'echo ok' > "$W/scripts/lib.sh"
+
 cfg '.typecheckCommand = "echo \"src/x.ts(1,1): error TS2322: TYPE-PROBE\"; exit 1"'; echo six > "$W/a.sh"
 check "a closing pass on a red typecheck is refused before any reviewer" "2 1 1 no" \
   "$(fin 6 "$NOGO2") $(grep -c 'a closing pass needs a green typecheck, and `echo .*` is red in' "$TMP/err") $(grep -cx 'src/x.ts(1,1): error TS2322: TYPE-PROBE' "$TMP/err") $(round 6)"

@@ -26,13 +26,26 @@ LED=$REPO/.claude/metrics/decisions.jsonl; mkdir -p "${LED%/*}"
 row() { jq -nc --arg id "$1" --arg q "$2" --arg a "$3" '{id: $id, askedAt: "1999-01-01T00:00:00Z", question: $q, proposedDefault: "keep",
   source: "builder unit", answeredAt: (if $a == "" then null else "1999-01-02T00:00:00Z" end), answer: (if $a == "" then null else $a end)}'; }
 { row q-1999-01-01-open "Keep the old reply?" ""; row q-1999-01-01-done "Drop the cache?" "drop it"; } > "$LED"
+# Catches (#525): a closing pass spent while an owner question on the unit is open, so its GO rests on code the answer
+# may change; the merge refuses on the same open row, so the pass is lost either way.
+printf 'echo eighteen\n' > "$W/a.sh"; chk18() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" 18 final 2>&1); }
+check "a closing pass is refused while an owner question is open" "1 1 0" \
+  "$(chk18 | grep -c 'q-1999-01-01-open') $(chk18 | grep -c 'ask-main.sh') $(chk18 | grep -c '^check ok')"
+printf 'echo seventeen\n' > "$W/a.sh"
+# The scope record an earlier pass leaves after reading these rulings, so pass 17 stays a review and is not refused as closing.
+cat "$REPO/.claude/briefs/$U-main-rulings.md" "$REPO/.claude/briefs/$U-builder-brief.md" "$W/.claude/briefs/$U.md" 2>/dev/null | cksum \
+  > "$(git -C "$W" rev-parse --absolute-git-dir)/builder-pass-scope"
+# Pass 17 is one more pass on record, so the cap moves up one with it: every later pass keeps its place below the cap.
+cfg '.reviewLoop.passCap = 6'
+check "a review NO-GO with a P1 from the Builder's pane hands over" 0 "$(fpass "$W" 17 review "$NOGO")"
+check "the prompt names the open decision and the answered one with its answer" "1 1" \
+  "$(input 17 | grep -c 'Open question to the owner q-1999-01-01-open: Keep the old reply?') $(input 17 | grep -c 'The owner answered q-1999-01-01-done (Drop the cache?): drop it')"
+check "the hand-off has the HOLD section with the open id only, after the findings" "1 1 0 1" \
+  "$(hand 17 | grep -cx '## Open decisions (HOLD)') $(hand 17 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-open') \
+$(hand 17 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-done') $(hand 17 | grep '^## ' | sed -n '/What pass 17 found/,$p' | grep -cx '## Open decisions (HOLD)')"
+row q-1999-01-01-open "Keep the old reply?" "keep it" >> "$LED"
 printf 'echo eighteen\n' > "$W/a.sh"
 check "a final NO-GO with a P1 from the Builder's pane hands over" 0 "$(fpass "$W" 18 final "$NOGO")"
-check "the prompt names the open decision and the answered one with its answer" "1 1" \
-  "$(input 18 | grep -c 'Open question to the owner q-1999-01-01-open: Keep the old reply?') $(input 18 | grep -c 'The owner answered q-1999-01-01-done (Drop the cache?): drop it')"
-check "the hand-off has the HOLD section with the open id only, after the findings" "1 1 0 1" \
-  "$(hand 18 | grep -cx '## Open decisions (HOLD)') $(hand 18 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-open') \
-$(hand 18 | sed -n '/^## Open decisions/,/^## /p' | grep -c 'q-1999-01-01-done') $(hand 18 | grep '^## ' | sed -n '/What pass 18 found/,$p' | grep -cx '## Open decisions (HOLD)')"
 # Issues 260 and 266: a review after a closing pass that found a P1 merged nothing on its GO; it runs as the closing pass.
 printf 'echo nineteen\n' > "$W/a.sh"; chk19() { (cd "$W" && TMPDIR=$TMP PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_SH" --check "$U" 19 review 2>&1); }
 check "--check prints the same pick: final in place of review" 1 "$(chk19 | grep -c '^final in place of review: .*this is the closing pass, its GO merges and no separate final follows')"

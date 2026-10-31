@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.65.0 -- 2026-10-31
+
+### Plans
+
+- The Panel's second plan judge now runs on Opus. If you set `planJudgeFableEnabled`, `planJudgeFableModel`, `planJudgeFableEffort` or `planJudgeFableFast` in `/plugin` config, set them again as `planJudgeOpusEnabled`, `planJudgeOpusModel`, `planJudgeOpusEffort` and `planJudgeOpusFast`. The old keys are no longer read.
+- A small batch (estimated under 50 changed lines, `tinyPlanLines`) that no risky trigger matches now gets one planner and no judge.
+- The security trigger now also matches "auth" as a word, so a batch that says "fix the auth check" keeps its judge.
+- A plan judge round started by hand past the second for one plan is refused, and main rules on the open findings instead.
+- The plan check now asks for bad-input cases (absent, junk, empty, quoted) when a step parses or refuses input, or a `Bad input: none, <reason>` line.
+
+### Reviews
+
+- A closing pass now runs the tests that cover your changes before any reviewer, also when main has not moved.
+- A closing pass is refused while an owner question on the unit is open. The message names the call that sends it to main.
+- A Builder's helper report must now show its failing run before the fix.
+
+### Worktree report
+
+- Planning before the Builder starts is now its own stage, found by the seat's role, with its tokens counted.
+- A decision that names the unit only by its id now counts as the unit's wait. A sibling unit's decision does not.
+- A pass whose reviewer said Serena was unavailable, timed out or could not index now has a note under it.
+
+### Guards
+
+- A Read that returned no content no longer counts as reading the file.
+
+### Tests
+
+- The shell test runner now caps each file by CPU time. On a busy machine a file gets more wall-clock time, up to four times its cap.
+- The runner now judges each file on its own run, so a folder another test made before it started no longer leaves its result unrecorded.
+
 ## 0.64.0 -- 2026-10-31
 
 ### Reviews

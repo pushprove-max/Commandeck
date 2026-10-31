@@ -56,8 +56,8 @@ check "the call runs read-only outside the repository" "1:1:1:1:1:0:0:1:1" \
 fresh; ask ok COMMANDECK_SEAT=plan-author -- 'q'
 check "a plan-author pane may ask" 0 "$RC"
 
-fresh; ask ok COMMANDECK_SEAT=plan-judge-fable -- 'q'
-check "a plan-judge seat is refused" "2:0:0:1" "$RC:$([ -e "$LOG" ] && echo 1 || echo 0):$([ -e "$ROWS" ] && echo 1 || echo 0):$(grep -c 'REFUSED: codex-ask.sh is for Builder, plan-author and fix-round panes; this pane is plan-judge-fable' "$T/err")"
+fresh; ask ok COMMANDECK_SEAT=plan-judge-opus -- 'q'
+check "a plan-judge seat is refused" "2:0:0:1" "$RC:$([ -e "$LOG" ] && echo 1 || echo 0):$([ -e "$ROWS" ] && echo 1 || echo 0):$(grep -c 'REFUSED: codex-ask.sh is for Builder, plan-author and fix-round panes; this pane is plan-judge-opus' "$T/err")"
 
 fresh; ask ok 'COMMANDECK_OPTIONS={"codexReviewerAgent":"claude"}' -- 'q'
 check "a setup whose reviews run on Claude is refused" "2:1:0" \

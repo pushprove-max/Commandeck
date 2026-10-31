@@ -26,18 +26,18 @@ check "a panel word in an item line still picks Panel" "Panel" "$(tier '## The b
 # off in /plugin config is no seat, and plan-tier says so instead of planning it anyway.
 PANEL=('## The batch' '1. tighten the login check') PJ=('## The batch' '1. rework the screen')
 check "Panel: the author and both judges, each on its agent and model" \
-  "plan-author claude opus,plan-judge-fable claude fable,plan-judge-sol codex gpt-6.1-sol" "$(seats "${PANEL[@]}")"
+  "plan-author claude opus,plan-judge-opus claude opus,plan-judge-sol codex gpt-6.1-sol" "$(seats "${PANEL[@]}")"
 opts '{"planJudgeSolAgent": "claude"}'
 check "a judge on claude runs as itself on the Claude overlay: still two judge seats" \
-  "plan-author claude opus,plan-judge-fable claude fable,plan-judge-sol claude sonnet" "$(seats "${PANEL[@]}")"
+  "plan-author claude opus,plan-judge-opus claude opus,plan-judge-sol claude sonnet" "$(seats "${PANEL[@]}")"
 opts '{"planAuthorEnabled": false}'
 check "plan-author off: No plan, with the skip line naming why" "No plan|1" \
   "$(tier "${PJ[@]}")|$(run "${PJ[@]}" | grep -cxF "launch: builder-launch.sh --skip-plan --reason 'plan-author is off in /plugin config'")"
 opts '{"planJudgeSolEnabled": false}'
-check "sol off: Plan + judge runs the fable judge" "Plan + judge|plan-author claude opus,plan-judge-fable claude fable" \
+check "sol off: Plan + judge runs the opus judge" "Plan + judge|plan-author claude opus,plan-judge-opus claude opus" \
   "$(tier "${PJ[@]}")|$(seats "${PJ[@]}")"
-check "sol off: Panel runs fable alone" "plan-author claude opus,plan-judge-fable claude fable" "$(seats "${PANEL[@]}")"
-opts '{"planJudgeSolEnabled": false, "planJudgeFableEnabled": false}'
+check "sol off: Panel runs opus alone" "plan-author claude opus,plan-judge-opus claude opus" "$(seats "${PANEL[@]}")"
+opts '{"planJudgeSolEnabled": false, "planJudgeOpusEnabled": false}'
 check "both judges off: One planner, the plan unjudged, said" "One planner|plan-author claude opus|1" \
   "$(tier "${PANEL[@]}")|$(seats "${PANEL[@]}")|$(run "${PANEL[@]}" | grep -c 'so the plan installs unjudged')"
 opts '{"planJudgeSolAgent": "gemini"}'
@@ -53,7 +53,7 @@ efforts() { run "$@" | sed -n 's/^effort: //p' | paste -sd, -; }
 # The judges run on Codex: put back the stub the case above removed, or a host with no codex prints plan-author alone.
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/codex"; chmod +x "$T/bin/codex"; opts '{}'
 check "each seat prints its configured effort, so main can say what it picked" \
-  "plan-author high,plan-judge-fable high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
+  "plan-author high,plan-judge-opus high,plan-judge-sol high" "$(efforts "${PANEL[@]}")"
 opts '{"planAuthorEffort": "medium"}'
 check "an effort set in /plugin config is the one printed" "plan-author medium" "$(efforts "${PJ[@]}" | cut -d, -f1)"
 # Issue 362: a risky trigger on a small unit gets one judge; the estimate is the batch's own line, and without one the
@@ -86,7 +86,7 @@ nseat() { seats "$@" | awk -F, '{ print NF }'; }
 check "~500 gets one judge, ~501 two (issue 479)" "Panel 2 Panel 3 Panel 3" \
   "$(tier "${PANEL[@]}" 'Estimated size: ~500 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~500 changed lines') $(tier "${PANEL[@]}" 'Estimated size: ~501 changed lines') $(nseat "${PANEL[@]}" 'Estimated size: ~501 changed lines') $(tier '## The batch' '1. add a new queue' 'Estimated size: ~400 changed lines') $(nseat '## The batch' '1. add a new queue' 'Estimated size: ~400 changed lines')"
 opts '{"planJudgeSolEnabled": false}'
-check "a small Panel with Sol off keeps Fable (issue 479)" "plan-author claude opus,plan-judge-fable claude fable 0" \
+check "a small Panel with Sol off keeps Opus (issue 479)" "plan-author claude opus,plan-judge-opus claude opus 0" \
   "$(seats "${PANEL[@]}" 'Estimated size: ~400 changed lines') $(run "${PANEL[@]}" 'Estimated size: ~400 changed lines' | grep -c 'One planner')"
 opts '{}'
 # A routing file deployed before oneJudgeLines lacks the key, and setup adds only roles: the shipped limit stands in, so
@@ -100,5 +100,16 @@ export COMMANDECK_ROUTING="$T/bad.json"
 run "${PANEL[@]}" 'Estimated size: ~400 changed lines' >/dev/null; r=$?
 check "a oneJudgeLines that is no count refuses (issue 479)" "2" "$r"
 unset COMMANDECK_ROUTING
+# Issue 527: a batch no panel or risk trigger matched, estimated under review-limits.tinyPlanLines (50), has no judge:
+# One planner, and it says the estimate and the limit. The judge's read and its revise round are what it gives up.
+# Catches: a one-validator fix paying a judge round; a tiny rule that ignores the estimate's bound, the trigger pick,
+# or an old routing file without the key.
+T30='Estimated size: ~30 changed lines'; jq '."review-limits" |= del(.tinyPlanLines)' "$REAL/config/routing.json" > "$T/old2.json"
+check "a tiny plan skips the judge unless a panel trigger matches" \
+  "One planner|plan-author claude opus|1 Plan + judge Plan + judge Plan + judge Plan + judge One planner" \
+  "$(tier '## The batch' '1. rework the screen' "$T30")|$(seats '## The batch' '1. rework the screen' "$T30")|$(run '## The batch' '1. rework the screen' "$T30" | grep -c '~30 changed lines, under tinyPlanLines 50') $(tier '## The batch' '1. rework the screen' 'Estimated size: ~50 changed lines') $(tier '## The batch' '1. rework the screen') $(tier '## Notes' "$T30" '## The batch' '1. rework the screen') $(tier "${PANEL[@]}" "$T30") $(COMMANDECK_ROUTING=$T/old2.json tier '## The batch' '1. rework the screen' "$T30")"
+# Catches: a security item sent to One planner by its size alone, so the judge never reads a login change.
+check "a 30-line auth fix keeps a judge" "Plan + judge|plan-author claude opus,plan-judge-sol codex gpt-6.1-sol" \
+  "$(tier '## The batch' '1. fix the auth check' "$T30")|$(seats '## The batch' '1. fix the auth check' "$T30")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

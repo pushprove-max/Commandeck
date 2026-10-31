@@ -34,6 +34,12 @@ IFS=$'\t' read -r TIER WHY KEEP <<<"$PICK"
 # "Estimated size: ~<n> changed lines"; with none, or one at 150 or more, the Panel stands (one tier up when unsure).
 # A panel-always trigger (new infrastructure) keeps the Panel at any size: its risk does not shrink with its lines.
 EST=$(awk '/^#+ / { on = ($0 ~ /^#+ The batch/); next } on && match($0, /^Estimated size: ~[0-9]+ changed lines/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit }' "$BATCH")
+# Issue 527: decided first, on the trigger pick. Only a batch no panel trigger matched, estimated under review-limits.tinyPlanLines,
+# is One planner (no judge); a risky batch never is, whatever its size, and goes on to the downgrade below.
+if [ "$TIER" = 'Plan + judge' ] && [ -n "$EST" ]; then
+  TINY=$(pp_review_limit tinyPlanLines) || { echo "cannot read review-limits.tinyPlanLines from $(pp_routing)" >&2; exit 2; }
+  if [ "$((10#$EST))" -lt "$TINY" ]; then TIER='One planner' WHY="~$((10#$EST)) changed lines, under tinyPlanLines $TINY: no judge"; fi
+fi
 if [ "$TIER" = Panel ] && [ -n "$EST" ] && [ "$((10#$EST))" -lt 150 ]; then
   if [ -n "$KEEP" ]; then WHY="$WHY; $KEEP keeps the panel under 150 changed lines"
   else TIER='Plan + judge' WHY="$WHY, a small unit (~$((10#$EST)) changed lines, under 150): one judge"; fi
@@ -49,8 +55,9 @@ fi
 on() { local rc=0; pp_role_enabled "$1" 2>/dev/null || rc=$?; [ "$rc" != 2 ] || { pp_role_enabled "$1"; exit 2; }; return "$rc"; }
 case ${ONEJ:-$TIER} in
   'No plan') SEATS=() ;;
-  one|'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-fable) ;;
-  *) SEATS=(plan-author plan-judge-fable plan-judge-sol) ;;
+  'One planner') SEATS=(plan-author) ;;
+  one|'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-opus) ;;
+  *) SEATS=(plan-author plan-judge-opus plan-judge-sol) ;;
 esac
 # An author that is off is no plan; a judge that is off leaves the other to judge alone, and none leaves the plan unjudged.
 OUT=()
@@ -58,7 +65,7 @@ for r in ${SEATS[@]+"${SEATS[@]}"}; do
   if on "$r"; then OUT+=("$r"); else echo "off: $r ($(pp_role_key "$r" enabled)=false in /plugin config)"; fi
 done
 if [ "$TIER" != 'No plan' ] && [[ " ${OUT[*]-} " != *" plan-author "* ]]; then TIER='No plan' WHY='plan-author is off in /plugin config'
-elif [ "$TIER" != 'No plan' ] && [ "${#OUT[@]}" = 1 ]; then TIER='One planner' WHY="$WHY; every judge is off in /plugin config, so the plan installs unjudged"; fi
+elif [ "$TIER" != 'No plan' ] && [ "$TIER" != 'One planner' ] && [ "${#OUT[@]}" = 1 ]; then TIER='One planner' WHY="$WHY; every judge is off in /plugin config, so the plan installs unjudged"; fi
 echo "tier: $TIER (trigger: $WHY; from $TRIG)"
 [ "$TIER" != 'No plan' ] || { [[ $WHY == *' is off in '* ]] || WHY="Auto picked No plan: $WHY"; echo "launch: builder-launch.sh --skip-plan --reason '$WHY'"; exit 0; }
 # Each seat launches under its own name, on its own agent, model and effort keys, so two judges stay two seats.

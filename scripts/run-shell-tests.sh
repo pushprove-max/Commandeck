@@ -110,10 +110,11 @@ for v in $(compgen -e); do case $v in *_TEST_CASE) PARTIAL=$v; break ;; esac; do
 GD=$(git rev-parse --absolute-git-dir 2>/dev/null) || GD=
 STAMP=$([ -n "$GD" ] && mktemp "$GD/commandeck-test-stamp.XXXXXX" 2>/dev/null) || STAMP=
 trap '[ -z "$STAMP" ] || rm -f "$STAMP" "$STAMP".*' EXIT
+# tick <stamp> -- waits until the clock is past <stamp>: the run's at the start, a test's own before its file.
 tick() {
-  local n
+  local n t=$STAMP.tick$BASHPID
   for ((n = 0; n < 300; n++)); do
-    touch "$STAMP.tick" && [ -n "$(find "$STAMP.tick" -newercc "$STAMP" 2>/dev/null)" ] && return 0
+    touch "$t" && [ -n "$(find "$t" -newercc "$1" 2>/dev/null)" ] && return 0
     sleep 0.01
   done
   return 1
@@ -129,18 +130,44 @@ keep_paths() {
   done
   for d in "${!dirs[@]}"; do printf './%s\0' "$d"; done
 }
-# fence -- 0 while no kept path has a newer ctime than the stamp; a missing stamp, a vanished path or a failed find
-# breaks it.
+# newer <file-stamp> <dir-stamp> < <paths> -- the paths whose ctime breaks the fence: a file newer than the first stamp,
+# a directory newer than the second. A failed find (a vanished path) fails it.
+newer() {
+  xargs -0 sh -c 'f=$1 d=$2; shift 2; exec find "$@" -prune \( ! -type d -newercc "$f" -o -type d -newercc "$d" \) -print' sh "$1" "$2"
+}
+# untracked_dirs -- the folders no kept path names (pass 3 P2): each untracked tree git lists whole, an empty one
+# included, and every folder under it, NUL-separated. A failed listing or find (a folder gone meanwhile) fails it.
+untracked_dirs() (
+  set -o pipefail
+  git ls-files --others --exclude-standard --directory -z | while IFS= read -r -d '' p; do
+    if [[ $p == */ ]]; then find "./${p%/}" -type d -print0 || exit 1; fi
+  done
+)
+# fence_paths [<k>] -- the kept paths, and with k the untracked folders now in the checkout too.
+fence_paths() { cat "$STAMP.paths" && { [ -z "${1-}" ] || untracked_dirs; }; }
+# fence [<k>] -- 0 while the checkout is still TREE. With no k, no kept path has a newer ctime than the run's stamp. With
+# k (test k's own run, D10), a file newer than the run's stamp breaks it, and so does a directory newer than test k's
+# start stamp, a kept one or one git does not ignore that holds no kept file; a directory newer than only the run's
+# stamp passes if the untracked files still equal $STAMP.others (a temp folder an earlier test made and removed). A
+# missing stamp, a vanished path or a failed find or listing breaks it. The newer paths are left in FENCED for the message.
 fence() {
-  local out
-  [ -e "$STAMP" ] && out=$(xargs -0 sh -c 'exec find "$@" -prune -newercc "$0" -print -quit' "$STAMP" < "$STAMP.paths") && [ -z "$out" ]
+  local out dirs own=$STAMP
+  FENCED=
+  [ -e "$STAMP" ] || return 1
+  [ -z "${1-}" ] || own=$STAMP.t$1
+  [ -e "$own" ] || return 1
+  out=$(set -o pipefail; fence_paths "${1-}" | newer "$STAMP" "$own") || return 1
+  [ -z "$out" ] || { FENCED=$out; return 1; }
+  [ -n "${1-}" ] || return 0
+  dirs=$(set -o pipefail; fence_paths "$1" | newer "$STAMP" "$STAMP" 2>/dev/null) || return 1
+  [ -z "$dirs" ] || [ "$(git ls-files --others --exclude-standard -z | tr '\0' '\n')" = "$(tr '\0' '\n' < "$STAMP.others")" ] || { FENCED=$dirs; return 1; }
 }
 TREE=-
-if [ -n "$STAMP" ] && tick; then
+if [ -n "$STAMP" ] && tick "$STAMP"; then
   IDX=$STAMP.index
   if cp -p "$(git rev-parse --path-format=absolute --git-path index)" "$IDX" && GIT_INDEX_FILE=$IDX git add -A >/dev/null 2>&1 \
     && T=$(GIT_INDEX_FILE=$IDX git write-tree 2>/dev/null) && GIT_INDEX_FILE=$IDX git ls-files -z > "$STAMP.files" \
-    && keep_paths < "$STAMP.files" > "$STAMP.paths"; then TREE=$T; fi
+    && git ls-files --others --exclude-standard -z > "$STAMP.others" && keep_paths < "$STAMP.files" > "$STAMP.paths"; then TREE=$T; fi
 fi
 LEDGER=$(git rev-parse --absolute-git-dir 2>/dev/null)/commandeck-test-runs.tsv || LEDGER=
 # last_pass <rel> -- `<result>\t<tree>` of the ledger's last row for the file. A line that is not a whole row (not 4
@@ -272,37 +299,60 @@ STUB
 } > "$RES/stubbin/orca-ide"
 chmod +x "$RES/stubbin/orca-ide"
 export PATH="$RES/stubbin:$PATH"
+# bound <cap> -- `<limit> <load1> <cores>` (#506, D11): a file's cap times the load factor min(4, max(1, load1 / cores)),
+# rounded up to a whole second, read as the file starts. On an idle machine (or a load that cannot be read) it is the cap.
+bound() {
+  local cores load
+  cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null) || cores=
+  load=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load averages*: *\([0-9][0-9]*\(\.[0-9]*\)\{0,1\}\).*/\1/p')
+  awk -v cap="$1" -v l="${load:-0}" -v c="${cores:-0}" 'BEGIN { f = c > 0 ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4
+    n = cap * f; r = int(n); if (r < n) r++; printf "%d %s %s\n", r, l, c }'
+}
 run_one() {
-  local start rc secs line
+  local start rc secs line lim load cores
   start=$(date +%s)
+  read -r lim load cores <<<"$(bound "${CAP[$1]}")"
   live start "${REL[$1]}" "$start"
+  # This test's own start stamp, ticked past, so fence "$1" judges the test on its own run (D10).
+  [ -z "$STAMP" ] || { touch "$STAMP.t$1" && tick "$STAMP.t$1"; } || rm -f "$STAMP.t$1"
   # review-round.sh's default self-review is a REAL Codex review: every test
   # sets its own stub, and one that does not runs this poison and fails below.
-  COMMANDECK_RUNNING_TEST="$2" COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
-    timeout "${CAP[$1]}" bash "$2" > "$RES/$1.out" 2>&1; rc=$?
+  # Past its cap on a busy machine a file passes only on its CPU seconds: bash's `times` in a subshell around the run
+  # counts the file's reaped processes (`0m1.690s 0m0.089s`, user and system).
+  ( COMMANDECK_RUNNING_TEST="$2" COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
+      timeout "$lim" bash "$2" > "$RES/$1.out" 2>&1; rc=$?; times > "$RES/$1.cpu"; exit "$rc" ); rc=$?
   secs=$(( $(date +%s) - start ))
-  echo "$rc $secs" > "$RES/$1.rc"
+  sed -n 2p "$RES/$1.cpu" | awk '{ t = 0; for (i = 1; i <= 2; i++) { split($i, a, /[ms]/); t += a[1] * 60 + a[2] } printf "%.2f\n", t }' > "$RES/$1.cpu.tmp" \
+    && mv "$RES/$1.cpu.tmp" "$RES/$1.cpu" || rm -f "$RES/$1.cpu"
+  echo "$rc $secs $lim $load $cores" > "$RES/$1.rc"
   line=$(status_line "$1")
   live end "${REL[$1]}" "${line%% *}" "$secs"
   # The ledger --skip-passed reads: one row per local file, one printf each (an append under 4 KB is atomic).
   # A row at a tree the test did not run on would let --skip-passed reuse a result of another tree; `-` is no tree.
   # The fence holding after the file ended proves it read exactly TREE.
   if [ -z "$PARTIAL" ] && [ -n "$LEDGER" ] && [ "$TREE" != - ]; then
-    if fence; then printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REL[$1]}" "${line%% *}" "$TREE" >> "$LEDGER" 2>/dev/null
-    else printf 'run-shell-tests: the tree changed while %s ran; its result is not recorded\n' "${REL[$1]}"; fi
+    if fence "$1"; then printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REL[$1]}" "${line%% *}" "$TREE" >> "$LEDGER" 2>/dev/null
+    else printf 'run-shell-tests: the tree changed while %s ran; its result is not recorded\n' "${REL[$1]}"
+      [ -z "$FENCED" ] || printf 'run-shell-tests: newer: %s\n' "${FENCED//$'\n'/ }"; fi
   fi
   # One printf per line: parallel files then cannot interleave inside a line.
   printf -- '-- %s\n' "$line"
 }
 # The result line of finished test $1. The live `-- ` line and the sorted
 # report both print it, so the two cannot drift.
+# A file that ran past its cap (only a busy machine lets it) says so, and passes only with exit 0 and its CPU at or under
+# the cap; a missing CPU count does not pass.
 status_line() {
-  local rc secs why
-  read -r rc secs < "$RES/$1.rc"
+  local rc secs lim load cores cpu why past=
+  read -r rc secs lim load cores < "$RES/$1.rc"
+  cpu=$(cat "$RES/$1.cpu" 2>/dev/null) || cpu=
+  [ "$secs" -le "${CAP[$1]}" ] || past="past its ${CAP[$1]} s cap: $secs s wall, ${cpu:-no} s CPU"
   if [ -e "$RES/$1.companion" ]; then why="ran the Codex companion path: set COMMANDECK_SELF_REVIEW_CMD to a stub"
-  elif [ "$rc" -eq 0 ]; then printf 'ok   %-58s %ss' "$(basename "${TESTS[$1]}")" "$secs"; return
-  elif [ "$rc" -eq 124 ]; then why="HUNG past ${CAP[$1]}s"
-  else why="rc=$rc"; fi
+  elif [ "$rc" -eq 0 ] && { [ -z "$past" ] || awk -v c="${cpu:-x}" -v m="${CAP[$1]}" 'BEGIN { exit !(c ~ /^[0-9.]+$/ && c + 0 <= m) }'; }; then
+    printf 'ok   %-58s %ss%s' "$(basename "${TESTS[$1]}")" "$secs" "${past:+ $past}"; return
+  elif [ "$rc" -eq 124 ]; then why="HUNG past ${lim}s"; [ "$lim" = "${CAP[$1]}" ] || why+=" (load $load on $cores cores)"
+  elif [ "$rc" -eq 0 ]; then why=$past
+  else why="rc=$rc${past:+, $past}"; fi
   printf 'FAIL %-58s %ss %s' "$(basename "${TESTS[$1]}")" "$secs" "$why"
 }
 
@@ -354,7 +404,7 @@ save_seconds() {
   read_seconds || SAVED=()
   for i in ${RUN[@]+"${RUN[@]}"}; do
     [ -f "$RES/$i.rc" ] || continue
-    read -r _ SAVED["$(basename "${TESTS[$i]}")"] < "$RES/$i.rc"
+    read -r _ SAVED["$(basename "${TESTS[$i]}")"] _ < "$RES/$i.rc"
   done
   for i in "${!TESTS[@]}"; do LIVE[$(basename "${TESTS[$i]}")]=1; done
   if [ -d "$SECS_FILE" ]; then why="$SECS_FILE is a directory"

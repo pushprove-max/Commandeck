@@ -63,6 +63,12 @@ STARTED = re.compile(r'running in background with ID: (\w+)|Async agent launched
 # The tool's own status tag, with nothing ahead of it but the tool's other one-line tags.
 ENDED = re.compile(r'\s*(?:<(?!status>)(\w+)>[^<>\n]*</\1>\s*)*<status>(?:completed|failed|killed)</status>')
 JOB_TOOLS = ('TaskOutput', 'BashOutput', 'TaskStop', 'KillShell')
+# A seat's tag (seat.sh) names its role; a plan spec's name says the same where no tag is typed (#528).
+SPEC = re.compile(r'Your task spec is the file\s+(\S+?)\.?\s')
+SEAT_TAG = re.compile(r'Seat tag seat-([\w-]+?)-\d+-\d+\b')
+PLAN_SPEC = re.compile(r'-plan-(?:spec|author|judge-|revise)')
+# A reviewer's symbol-search outage, said in any of its messages, not only the last (#530).
+TOOL_GAP = re.compile(r'\bSerena\b[^.\n]{0,40}\b(?:unavailable|timed out|could not index)\b')
 # A call that puts a question to main or waits on its inbox.
 ASK = re.compile(r'orchestration\s+(?:ask\b|check\b[^;&|]*--wait|send\b[^;&|]*--type\s+(?:question|escalation))')
 TICK = 10  # clock slots per second: hook phases run well under a second
@@ -139,10 +145,18 @@ def refusal(blocked):
     return f'{hook}: {why}' if why else hook
 
 
+def role_of(text):
+    """'plan' or 'build' when this user message carries a seat tag or a spec name, else None."""
+    if tag := SEAT_TAG.search(text):
+        return 'plan' if tag.group(1).startswith('plan-') else 'build'
+    if spec := SPEC.search(text + ' '):
+        return 'plan' if PLAN_SPEC.search(spec.group(1)) else 'build'
+
+
 def read_session(path):
     """One Claude session log -> its calls, tool calls, wake-ups, questions to main and failed pass launches."""
     s = {'usage': {}, 'tools': {}, 'results': {}, 'outcome': {}, 'woken': {}, 'turn_ends': [], 'users': [],
-         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'dones': [], 'down': [], 'first': None, 'last': None, 'final': ''}
+         'compactions': [], 'notes': [], 'blocked': [], 'asks': [], 'dones': [], 'down': [], 'role': None, 'first': None, 'last': None, 'final': ''}
     tasks, asked = {}, {}  # background task id -> its call; a job tool's call -> the job's call it asks about
     for e in rows_of(path):
         when = e.get('timestamp')
@@ -203,6 +217,7 @@ def read_session(path):
                         s['blocked'].append((ts(when), hook.group(1) if hook else 'unnamed hook', body[hook.end():hook.end() + 400] if hook else ''))
                 elif b.get('type') == 'text':
                     text += b.get('text', '')
+            s['role'] = s['role'] or role_of(text)
             for mm in re.finditer(r'<tool-use-id>(toolu_\w+)</tool-use-id>', text):
                 s['woken'].setdefault(mm.group(1), ts(when))
         elif e.get('type') == 'attachment' and when and (e.get('attachment') or {}).get('type') == 'queued_command':
@@ -304,6 +319,8 @@ def decisions_for(path, unit):
     # The name is a whole token of the launcher's alphabet: unit-2, unit.v1, unit. and v2.unit beside unit are
     # other units. A sentence's full stop reads as part of the name, so at worst a cut is missed, never a wrong one.
     named = re.compile(r'(?<![A-Za-z0-9._-])' + re.escape(unit) + r'(?![A-Za-z0-9._-])')
+    # An id is the unit's only as exactly <unit>, plan-<unit> or review-stop-<unit>-r<digits> (issue 522).
+    is_units_id = lambda i: i in (unit, 'plan-' + unit) or re.fullmatch('review-stop-' + re.escape(unit) + '-r[0-9]+', str(i)) is not None
     try:
         lines = open(path, errors='replace').read().splitlines()
     except OSError:
@@ -324,7 +341,7 @@ def decisions_for(path, unit):
             # A Builder's question to main waits on main, not the owner: it stays on the clock.
             if d.get('askedAt') and d.get('waitsOn') != 'main':
                 asks[d['id']].append((ts(d['askedAt']), ts(d['answeredAt']) if d.get('answeredAt') else None,
-                                      bool(named.search(f"{d.get('source') or ''} {d.get('answer') or ''}"))))
+                                      bool(named.search(f"{d.get('source') or ''} {d.get('answer') or ''}")) or is_units_id(d['id'])))
         except (ValueError, TypeError, AttributeError):
             continue
     # A window closes at its answer, or at the next ask of the same decision, which replaces it whichever
@@ -350,7 +367,7 @@ def compaction_of(e):
 def read_codex(path, worktree):
     """One Codex session record -> a pass, or None when it ran somewhere else."""
     p = {'file': path, 'start': None, 'end': None, 'complete': False, 'usage': {}, 'calls': 0,
-         'model': None, 'effort': None, 'message': '', 'rows': []}
+         'model': None, 'effort': None, 'message': '', 'rows': [], 'role': None, 'tool_gaps': False}
     here, tier = None, None
     for n, e in enumerate(rows_of(path)):
         pay = e.get('payload') or {}
@@ -361,6 +378,8 @@ def read_codex(path, worktree):
             # Only this row logs the speed tier; the dashboard reads the model from it too.
             # A tier read as null is the standard one ("default"); None stays "never read" (codex_row).
             p['model'], tier = pay['thread_settings'].get('model') or p['model'], pay['thread_settings'].get('service_tier') or 'default'
+        elif e.get('type') == 'response_item' and pay.get('type') == 'message' and pay.get('role') == 'user' and not p['role']:
+            p['role'] = role_of(' '.join(c.get('text') or '' for c in pay.get('content') or [] if isinstance(c, dict)))
         elif e.get('type') == 'token_usage_record':
             # One response's counts, as the dashboard's row for it; None when it cannot be used.
             p['rows'].append(PRICES.codex_row(e, p['model'], tier) if PRICES else None)
@@ -377,6 +396,8 @@ def read_codex(path, worktree):
         elif pay.get('type') == 'task_complete':
             p['complete'] = True
             p['message'] = pay.get('last_agent_message') or ''
+        if pay.get('type') in ('agent_message', 'task_complete'):
+            p['tool_gaps'] = p['tool_gaps'] or bool(TOOL_GAP.search(pay.get('message') or pay.get('last_agent_message') or ''))
     if here is None:
         return None
     verdict = re.findall(r'VERDICT:\s*(NO-GO|GO)', p['message'])
@@ -419,6 +440,7 @@ def fold_passes(records, rounds=None):
                 o['usage'][k] = (o['usage'].get(k) or 0) + (v or 0)
             # A thread cut off mid-way leaves the pass unfinished, whatever the others said.
             o['complete'] = o['complete'] and p['complete']
+            o['tool_gaps'] = o['tool_gaps'] or p['tool_gaps']
             # Only a reviewer gives a verdict; a helper thread changes none.
             if p['verdict'] in ('GO', 'NO-GO'):
                 o['findings'] += p['findings']
@@ -604,13 +626,29 @@ def number_passes(passes, rounds, launches):
     Codex, or a pass that died before it wrote its file. A worktree with no round
     file at all is not a Builder's, and keeps the launch-line numbers.
     """
-    for i, p in enumerate(passes, 1):
+    for p in passes:
+        if p.get('role') == 'plan':
+            p['n'], p['kind'] = 0, 'planning'
+    for i, p in enumerate([p for p in passes if p.get('role') != 'plan'], 1):
         if rounds:
             named = [v for t, v in rounds.items() if t == p.get('sid') or any(f.endswith(f'-{t}.jsonl') for f in p['files'])]
             p['n'], p['kind'] = max(named) if named else (0, 'not a pass')
         else:
             near = [l for l in launches if -5 <= p['start'] - l[0] <= 180]
             p['n'], p['kind'] = (near[-1][1], near[-1][2]) if near else (i, 'review')
+
+
+def plan_split(stages, t0, sessions, runs, split_given):
+    """Planning before the Builder starts is its own stage (#528); a hand --split keeps its stages."""
+    planning = [x for x in sessions + runs if x.get('role') == 'plan']
+    builders = [x.get('first') or x['start'] for x in sessions + runs if x.get('role') != 'plan']
+    ends = [x.get('last') or x['end'] for x in planning]
+    if split_given or not ends or not builders or not t0 < max(ends) < min(builders):
+        return stages
+    stages[:] = [[t0, 'Plan and judge', 'build']] + [s for s in stages if s[0] >= min(builders)]
+    if len(stages) < 2 or stages[1][0] > min(builders):
+        stages.insert(1, [min(builders), 'Build', 'build'])
+    return stages
 
 
 def review_flag(passes, max_min):
@@ -662,11 +700,16 @@ def main():
     passes = []
     if sessions:
         t0, t1 = sessions[0]['first'], max(s['last'] for s in sessions)
-        for day in codex_days(t0, t1):
-            for f in glob.glob(os.path.expanduser(f'~/.codex/sessions/{day}/*.jsonl')):
-                p = read_codex(f, wt)
-                if p and p['start'] and t0 - 60 <= p['start'] <= t1 + 60:
-                    passes.append(p)
+        # From t0's day to the day of the run's last record, whichever client wrote it: a Codex Builder can run on after Claude stops.
+        seen = set()
+        while days := [d for d in codex_days(t0, t1) if d not in seen]:
+            for day in days:
+                seen.add(day)
+                for f in glob.glob(os.path.expanduser(f'~/.codex/sessions/{day}/*.jsonl')):
+                    p = read_codex(f, wt)
+                    if p and p['start'] and t0 - 60 <= p['start']:
+                        passes.append(p)
+                        t1 = max(t1, p['end'])
     else:
         # A worktree a Codex seat built alone: its Codex records are the run, whatever day they are filed under.
         passes = [p for f in glob.glob(os.path.expanduser('~/.codex/sessions/*/*/*/*.jsonl')) for p in [read_codex(f, wt)] if p and p['start']]
@@ -683,7 +726,7 @@ def main():
             passes.append({'file': sess['name'], 'files': [], 'sid': sess['name'], 'start': sess['first'], 'end': sess['last'], 'complete': True,
                            'usage': {}, 'calls': 0, 'model': next((m for _, _, m in sess['usage'].values() if m), None), 'effort': None,
                            'message': sess['final'], 'rows': [], 'threads': 1, 'verdict': verdict[-1] if verdict else 'none',
-                           'findings': len(re.findall(extras.FINDING_HEAD, sess['final'], re.M))})
+                           'findings': len(re.findall(extras.FINDING_HEAD, sess['final'], re.M)), 'tool_gaps': False})
     passes.sort(key=lambda p: p['start'])
     for p in passes:
         # command_s and longest are worked out once the cut windows are known.
@@ -702,6 +745,8 @@ def main():
     cursor = t0
     done = 0  # passes so far: the work before the first one is the build, after it a fix round
     for p in runs:
+        if p.get('role') == 'plan':
+            continue  # planning is no stage of its own: plan_split puts it in `Plan and judge`
         s, e = max(p['start'], cursor), max(p['end'], cursor)
         if s > cursor:
             stages.append([cursor, f'Fix round {done}' if done else 'Build', 'fix' if done else 'build'])
@@ -710,6 +755,7 @@ def main():
         cursor = e
     if cursor < t1:
         stages.append([cursor, 'Wrap-up' if done else 'Build', 'build'])
+    stages = plan_split(stages, t0, sessions, runs, bool(a.split))
     day0 = datetime.fromtimestamp(t0, timezone.utc)
     for spec in a.split:
         when, label = spec.split('=', 1)
@@ -1020,7 +1066,7 @@ def main():
         'cut_s': round(cut_s, 1),
         'unexplained': unexplained, 'unexplained_s': round(unexplained_s, 1),
         'passes': [{k: p[k] for k in ('n', 'kind', 'start', 'end', 'complete', 'model', 'effort', 'verdict', 'findings', 'usage', 'calls', 'threads',
-                                      'commands', 'command_s', 'longest', 'cut_s', 'unexplained_s', 'message')} for p in passes],
+                                      'commands', 'command_s', 'longest', 'cut_s', 'unexplained_s', 'message', 'tool_gaps')} for p in passes],
     }
     for p, row in zip(passes, result['passes']):
         # A response with no price leaves the pass unpriced: a partial sum would read as the pass's cost.

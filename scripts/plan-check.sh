@@ -465,6 +465,24 @@ if [ "$PC_NT" -gt 0 ]; then
     refuse "$PLAN says New tests: ${PC_LINE% *} but names $PC_NT cases; make them agree, or give the difference after \` -- <reason>\`"
   fi
 fi
+# Issue 524: a plan whose `## Steps` or `## Cuts` say pars, refus, reject or validat lists its bad inputs under `## What can
+# go wrong`: an absent or missing, a junk or trailing, an empty and a quoted one. `Bad input: none, <reason>` opts out; a
+# bare `Bad input: none,` does not. Only those two sections are read, so the template's own words refuse no plan.
+PC_BAD=$(PC_PLANTEXT=$PT python3 -I - <<'PY'
+import os, re
+text = os.environ['PC_PLANTEXT']
+fenced = set(map(int, os.environ['PC_FENCED'].split()))
+text = '\n'.join(l for n, l in enumerate(text.split('\n'), 1) if n not in fenced)
+def section(name):
+    m = re.search(rf'^## {name}\b.*?(?=^## |\Z)', text, re.M | re.S | re.I)
+    return m.group(0) if m else ''
+if re.search(r'pars|refus|reject|validat', section('Steps') + section('Cuts'), re.I) and not re.search(r'^Bad input: none, \S', text, re.M):
+    cases = section('What can go wrong').lower()
+    print(' and '.join(w for w, r in (('absent or missing', 'absent|missing'), ('junk or trailing', 'junk|trailing'),
+                                      ('empty', 'empty'), ('quoted', 'quot')) if not re.search(r, cases)))
+PY
+) || { echo "REFUSED: $PLAN bad-input check not run -- python3 failed" >&2; exit 2; }
+[ -z "$PC_BAD" ] || refuse "$PLAN parses or refuses input and its What can go wrong list has no $PC_BAD case: list one row each, or write 'Bad input: none, <reason>'"
 # Issue 456: a line under `## Done` is `- #<n> Done: <user action> -- <what the user sees>`; one with no ` -- `, a side under
 # three words or a side (action or outcome) that is a one- or two-word parenthesized label (`(API)`) names a component. Issue 458: outside
 # a fence, a line under `## Stated limits` that says follow-up, or any line starting `Follow-up:`, holds a filed issue

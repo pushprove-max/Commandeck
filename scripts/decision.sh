@@ -275,13 +275,14 @@ case "${1:-}" in
     fold ;;
   holds)
     # holds <unit>: issue 265. One line per decision whose id, question or source names <unit>, the open ones
-    # first. No ledger prints nothing; one that cannot be read exits 1, never reads as none.
+    # first. The id names it only as exactly <unit>, plan-<unit> or review-stop-<unit>-r<digits> (issue 522). No ledger prints nothing; one that cannot be read exits 1, never reads as none.
     [ $# -eq 2 ] || usage
     [ -e "$L" ] || exit 0
     lock -s
     cur=$(fold) || exit 1
     jq -r --arg u "$2" '($u | gsub("\\."; "\\.")) as $re
-      | [.[] | select((.id + " " + .question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])"))]
+      | [.[] | select(.id == $u or .id == "plan-" + $u or (.id | test("^review-stop-" + $re + "-r[0-9]+$"))
+          or ((.question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])")))]
       | (.[] | select(.answeredAt == null) | "Open question to the owner \(.id): \(.question)"),
         (.[] | select(.answeredAt != null) | "The owner answered \(.id) (\(.question)): \(.answer)")' <<<"$cur" ;;
   rulings)

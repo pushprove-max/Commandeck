@@ -31,7 +31,9 @@ starts, and the merge refuses a GO whose range did not start at the unit's
 base. With no closing pass, the first pass must have read from that base too.
 
 A closing pass first rebases onto local main and runs the tests that cover
-what changed. When setup recorded a typecheck command (`typecheckCommand`), it
+what changed. With main unmoved it rebases nothing and still runs the tests
+that cover the unit's own changes. It refuses while `decision.sh holds <unit>`
+lists an open owner question, and names the `ask-main.sh` call to send. When setup recorded a typecheck command (`typecheckCommand`), it
 must be green too: a red typecheck stops the pass before any reviewer runs and
 names the command and its log; with none set, the pass says so and goes on.
 The typecheck has a 300 s limit: a run past it stops the pass and names the

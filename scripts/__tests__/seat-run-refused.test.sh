@@ -37,13 +37,15 @@ check "a refused launch: run exits with the launch's code, opens no pane, and se
 # Issue 312: a seat the owner turned off in /plugin config is refused at its launch, by hand too, naming the key, with
 # no pane and no record: plan-tier.sh skips it, and a hand launch must not plan it anyway.
 SET=$HOME/.claude/settings.json; cp "$SET" "$T/settings.keep"
-for r in plan-author:planAuthorEnabled plan-judge-sol:planJudgeSolEnabled plan-judge-fable:planJudgeFableEnabled; do
+for r in plan-author:planAuthorEnabled plan-judge-sol:planJudgeSolEnabled plan-judge-opus:planJudgeOpusEnabled; do
   jq --arg k "${r#*:}" '.pluginConfigs["commandeck@commandeck"].options[$k] = false' "$T/settings.keep" > "$SET"; : > "$T/creates"
   OUT=$(seat_sh launch "${r%%:*}" off-unit "$T/spec.md" 2>&1); RC=$?
   check "${r#*:}=false: seat.sh launch ${r%%:*} is refused naming the key, opens no pane, writes no record" "2:1:0:no" \
     "$RC:$(grep -c "REFUSED: ${r%%:*} is off (${r#*:}=false in /plugin config); nothing was opened" <<<"$OUT"):$(grep -c . "$T/creates"):$(ls "$HOME/.commandeck/scratch/"*/seat-off-unit-"${r%%:*}".txt >/dev/null 2>&1 && echo yes || echo no)"
 done
 cp "$T/settings.keep" "$SET"
+# The rounds above count toward pu's judge-round cap; this case starts with none so the cap does not refuse it.
+rm -f "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-*.txt.rounds
 printf 'Judge the plan, run four.\nEnd on a verdict line.\n' > "$T/run-bg.md"; echo 'VERDICT: GO' > "$T/screen"; rm -f "$T/pane-up"
 OUT=$( (cd "$PROJ" && env -u COMMANDECK_FOREGROUND -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_SCRATCH -u COMMANDECK_ROUTING -u CLAUDE_CONFIG_DIR CLAUDECODE=1 \
   COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 COMMANDECK_LOOP_POLL_SECONDS=0 PATH="$BIN:$PATH" timeout 20 bash "$REAL/scripts/seat.sh" run plan-judge-sol pu "$T/run-bg.md" </dev/null 2>&1) )

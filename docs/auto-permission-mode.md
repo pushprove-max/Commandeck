@@ -36,7 +36,7 @@ Orca version. Orca disables the Auto choice on a host that is too old.
   since Auto changes who answers an approval, not the sandbox.
 - **Main's restart keeps its permission mode.** When the launch line has quotes or braces, the restart reads the parent's real argv and passes on `--dangerously-skip-permissions` or one `--permission-mode <mode>`; a permission word that sits inside another option's value grants nothing.
 - **Seats that must stay restricted** (the reviewer and the Sol judge are Codex
-  with a read-only sandbox; the Fable judge is a Claude pane with the write tools denied) are unaffected by Auto for what they can write.
+  with a read-only sandbox; the Opus judge is a Claude pane with the write tools denied) are unaffected by Auto for what they can write.
 
 ## What was and was not checked
 

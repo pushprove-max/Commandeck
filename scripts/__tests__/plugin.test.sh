@@ -64,7 +64,7 @@ check "a profile value equals the key's manifest default wherever the default is
     | select($c.default != null and $c.default != "project" and $c.default != .value) | $k' "$REAL/config/recommended.json" | paste -sd' ' -)"
 check "the profile recommends an Opus Builder at medium effort (Opus at medium builds as well as Sonnet at high, for less)" "opus medium" \
   "$(jq -r '.options | "\(.builderModel) \(.builderEffort)"' "$REAL/config/recommended.json")"
-check "the set is the 26 role keys (issue 312; the Fable judge has four and no agent key) and the 17 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349), the three prompt-cache options, one for each role (issue 367), and the review workflow's three (blocking severity, pass cap, fresh closing reviewer; issue 373), among them" 43 "$(jq '.userConfig | length' "$M")"
+check "the set is the 26 role keys (issue 312; the Opus judge has four and no agent key) and the 17 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349), the three prompt-cache options, one for each role (issue 367), and the review workflow's three (blocking severity, pass cap, fresh closing reviewer; issue 373), among them" 43 "$(jq '.userConfig | length' "$M")"
 # The recommended profile (config/recommended.json) is the one place setup's recommended values live. Every option is in it
 # or asked by name, so none is left for an owner who takes the recommended set to find in /config; every value is one its
 # key takes; and it holds nothing that is one machine's (a path, an address, a name).
@@ -86,11 +86,11 @@ check "the profile holds no path, address or name: no value with a slash, an at 
 # Issue 373: a review loop with no pass cap never ends, so no option, flag or question offers one.
 check "no setup question, flag or option offers No cap for the review loop" 0 \
   "$(cat "$REAL/skills/setup/SKILL.md" "$REAL/scripts/setup.sh" "$M" | grep -c 'No cap\|--max-rounds\|maxReviewRounds')"
-# The second plan judge is a Claude seat on Fable that cannot write the plan it judges; the Astra judge role and its
+# The second plan judge is a Claude seat on Opus that cannot write the plan it judges; the Astra judge role and its
 # options are gone, and nothing outside the tests reads them.
-check "the Fable judge is a read-only Claude reviewer on fable at high, and no Astra judge role is left" \
-  "claude fable high true false Write,Edit,NotebookEdit,Agent:false:" \
-  "$(jq -r '.roles["plan-judge-fable"] | "\(.agent) \(.model) \(.effort) \(.reviewer) \(.edits) \(.tools | join(","))"' "$REAL/config/routing.json"):$(jq '.roles | has("plan-judge-astra")' "$REAL/config/routing.json"):$(cd "$REAL" && grep -rnE 'planJudgeAstra|plan-judge-astra' scripts hooks config templates skills docs README.md .claude-plugin --exclude-dir=__tests__)"
+check "the Opus judge is a read-only Claude reviewer on opus at high, and no Astra judge role is left" \
+  "claude opus high true false Write,Edit,NotebookEdit,Agent:false:" \
+  "$(jq -r '.roles["plan-judge-opus"] | "\(.agent) \(.model) \(.effort) \(.reviewer) \(.edits) \(.tools | join(","))"' "$REAL/config/routing.json"):$(jq '.roles | has("plan-judge-astra")' "$REAL/config/routing.json"):$(cd "$REAL" && grep -rnE 'planJudgeAstra|plan-judge-astra' scripts hooks config templates skills docs README.md .claude-plugin --exclude-dir=__tests__)"
 # A key setup passes to setup.sh --option that the manifest lacks is refused there, so the question would break.
 check "every option key setup's SKILL.md names is a manifest option" "" \
   "$( { grep -o -- '--option [A-Za-z]*=' "$REAL/skills/setup/SKILL.md" | sed 's/^--option //; s/=$//'; grep -o '`[A-Za-z]*Fast`' "$REAL/skills/setup/SKILL.md" | tr -d '`'; } | sort -u \

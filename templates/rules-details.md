@@ -25,6 +25,11 @@ A Builder pass that failed twice on one tree for one reason (the refusal names i
 Builder asks main. Decide from the reason; to let the same tree run again, remove the record in the Builder worktree's
 git dir: `rm "$(git -C <worktree> rev-parse --absolute-git-dir)/builder-pass-failed"`. A changed tree needs no reset.
 
+Before the closing pass the Builder lands all pending work: main's judges answered, `post-fix-checks.sh` green on the
+touched tests. The closing pass then runs the tests that cover the branch's changes, even when main has not moved, and
+refuses while an owner question on the unit is open, so a question that blocks the merge goes to main the turn it is
+named.
+
 ## Merging a unit
 
 4. Main: `bash scripts/merge-unit-local.sh <unit>` checks the GO pass against

@@ -27,7 +27,7 @@ multi() { local s=$1 d=$2; shift 2; printf '%s\n' "$@" | jq -Rn --arg s "$s" --a
 # record <session> <repo> <json after the common fields> -- one PostToolUse payload through read-record.sh
 record() { jq -cn --arg s "$1" --arg d "$2" --argjson x "$3" '{session_id: $s, cwd: $d, hook_event_name: "PostToolUse"} + $x' \
   | CLAUDE_PROJECT_DIR=$2 bash "$ROOT/hooks/lib/run-hook.sh" "$REC" >/dev/null 2>&1; }
-readx() { jq -cn --arg f "$1" '{tool_name: "Read", tool_input: {file_path: $f}, tool_response: {type: "text"}}'; }
+readx() { jq -cn --arg f "$1" '{tool_name: "Read", tool_input: {file_path: $f}, tool_response: {type: "text", file: {filePath: $f, content: "x\n", numLines: 1}}}'; }
 bashx() { jq -cn --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}, tool_response: {}}'; }
 tracker() { [ -e "/tmp/claude-read-tracker-$1" ] && echo yes || echo no; }
 
@@ -63,6 +63,13 @@ for c in 'false && cat src/contract.ts' 'true || cat src/contract.ts' 'if false;
 check "an errored Read counts for nothing" "2 no 0" "$(edit "$SD" "$R" src/ring.ts) $(tracker "$SD") $(python3 -I "$ROOT/hooks/lib/shell_reads.py" 'cat src/empty.ts' "$R" proof | wc -l | tr -d ' ')"
 # Catches: a shared tracker, so one session's read opens another session's edit.
 check "another session's read counts for nothing" "2 0" "$(edit "$SA" "$R" src/ring.ts) $(edit "$SB" "$R" src/ring.ts)"
+# Catches (#531): a Read past the end of the contract, which answers `content: ""`, or a response with no file object,
+# recorded as a read, so the paired edit opens though the agent saw no line of the contract.
+SF=$(uuidgen | tr A-F a-f)
+record "$SF" "$R" "$(jq -cn --arg f "$R/src/contract.ts" '{tool_name: "Read", tool_input: {file_path: $f, offset: 900}, tool_response: {type: "text", file: {filePath: $f, content: "", numLines: 0}}}')"
+record "$SF" "$R" "$(jq -cn --arg f "$R/src/contract.ts" '{tool_name: "Read", tool_input: {file_path: $f}, tool_response: {type: "text"}}')"
+check "an empty Read counts for nothing" "2 no" "$(edit "$SF" "$R" src/ring.ts) $(tracker "$SF")"
+rm -f "/tmp/claude-read-tracker-$SF"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -86,6 +86,9 @@ and a fix that touches a save updates that save's row in the same commit.
   child worktree (the Agent tool's worktree isolation); apply its diff here with
   `git apply` and remove that worktree. In an isolated worktree a helper runs plain
   single commands from its root: no pipes, `cd &&` or heredocs.
+  A helper that writes code quotes its failing run, the red lines before its fix,
+  in its report; read that run before you take its diff, and send back a diff
+  whose report shows none.
 - Every helper prompt, Explore included, carries three caps: at most 15 lines,
   an answer by the 20th tool call with what it has, and one `NOT FOUND: <what
   it searched, where>` line for anything it did not find. Before sending a
@@ -185,7 +188,9 @@ and a fix that touches a save updates that save's row in the same commit.
   leak check searches only an image's text chunks; its pixels are a human check.
 - Every test run starts in the background (Bash `run_in_background`), whatever its length, and so does every
   other command that can run in the background; only quick reads stay in the foreground. Work on while it runs.
-  Read every background result before the closing pass: a red one costs that pass.
+  Read every background result before the closing pass: a red one costs that pass. Land all pending work first:
+  main's judges answered and `post-fix-checks.sh` green on the touched tests. The closing pass runs the tests that
+  cover your changes before any reviewer, even when main has not moved.
 - Not run: every touched test together before review, any test after a GO
   with nothing changed since, a timing run the batch does not ask for.
 - When you read a test result, write the machine's load beside it in the
@@ -210,6 +215,8 @@ and a fix that touches a save updates that save's row in the same commit.
   `ask`. When main says an owner question is open that would change the fix in progress, build only what the
   answer cannot change, then wait for main's answer with `check --wait --timeout-ms 240000 --ack <the deliveryId your last read returned>`, resumed until 9
   minutes in all (one wait over 270 s is refused by the cache-budget hook); a question that cannot change the fix never holds it.
+  A question that blocks the merge goes to main the turn you name it: the closing pass refuses while an owner
+  question on the unit is open.
 - Never commit by hand, never push. The pass script below commits exactly what
   {reviewer} reviews; main merges.
 

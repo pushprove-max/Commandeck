@@ -138,18 +138,18 @@ done
 jq '.roles.builder.agent = "codex" | .roles.builder.model = "gpt-9.1-sol"' "$REAL/config/routing.json" > "$T/codex-builder.json"
 BCMD=$(COMMANDECK_ROUTING=$T/codex-builder.json bash -c '. "$1/scripts/paths.sh" && pp_route builder && printf "%s\n" "$RT_CMD"' _ "$REAL")
 check "a Codex seat that is not a reviewer keeps multi_agent" "1:0" "$(grep -c '^codex ' <<<"$BCMD"):$(grep -c multi_agent <<<"$BCMD")"
-# The Fable judge is a Claude seat with no agent key: its routed tools list is the plugin's read-only gate.
+# The Opus judge is a Claude seat with no agent key: its routed tools list is the plugin's read-only gate.
 rm -f "$T/pane-up"
-COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-fable pu "$T/judge-spec.md" >"$T/out" 2>&1
-check "plan-judge-fable launches Claude Fable at high with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
-  "$?:$(jrec plan-judge-fable | grep -c 'claude --model fable --effort high --disallowedTools Write,Edit,NotebookEdit')"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-opus pu "$T/judge-spec.md" >"$T/out" 2>&1
+check "plan-judge-opus launches Claude Opus at high with Write, Edit and NotebookEdit denied (its record says so)" "0:1" \
+  "$?:$(jrec plan-judge-opus | grep -c 'claude --model opus --effort high --disallowedTools Write,Edit,NotebookEdit')"
 # Issue 397: a plan author may start helpers; a Claude judge in the same planning worktree may not (its pane denies Agent).
 rm -f "$T/pane-up"
 COMMANDECK_SEAT_FORCE=1 srun launch plan-author pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "a plan-author seat's pane can start helpers" "0:0" \
   "$?:$(jrec plan-author | grep -Ec -- '--disallowedTools [^ ]*Agent')"
 check "a Claude plan judge in the same planning worktree cannot start helpers" "1:1" \
-  "$(jrec plan-judge-fable | grep -c -- '--disallowedTools Write,Edit,NotebookEdit,Agent'):$(jrec plan-judge-sol | grep -c -- '--disallowedTools Write,Edit,NotebookEdit,Agent')"
+  "$(jrec plan-judge-opus | grep -c -- '--disallowedTools Write,Edit,NotebookEdit,Agent'):$(jrec plan-judge-sol | grep -c -- '--disallowedTools Write,Edit,NotebookEdit,Agent')"
 # Pass 8: a judge launched on its own --model needs no default model: with the Sol family's sources taken away one at
 # a time (its cache entry, then the whole cache), the named model still launches.
 cap '{"planJudgeSolAgent": "codex"}'
@@ -160,7 +160,7 @@ for gone in "the Sol cache entry" "the models cache"; do
   check "plan-judge-sol --model gpt-9.1-astra launches with $gone gone" "0:1" "$?:$(jrec plan-judge-sol | grep -c 'codex --model gpt-9.1-astra ')"
 done
 check "two judges on Claude are two seats with two records" "2:2" \
-  "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,fable}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,fable}.txt | grep -c '^role=plan-judge-')"
+  "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,opus}.txt | wc -l | tr -d ' '):$(cat "$HOME/.commandeck/scratch/"*/seat-pu-plan-judge-{sol,opus}.txt | grep -c '^role=plan-judge-')"
 
 # Issue 315: a tool update rewrote another tool's hook in the Codex home, so its hash is stale and a Codex pane opens
 # on "N hooks need review" and sits there. With trust-all off the launch ends phase=failed within the tui-idle wait and
@@ -183,18 +183,18 @@ check "trust-all on: the launch trusts the modified hook again before the pane o
 # nothing and is not checked. jplan <plan text> -- pv's planning worktree holding that plan.
 VWT=$HOME/orca/workspaces/proj/pv
 [ -d "$VWT" ] || { git -C "$PROJ" worktree add -q "$VWT" && echo pv > "$(git -C "$VWT" rev-parse --absolute-git-dir)/commandeck-plan-of"; mkdir -p "$VWT/.claude/plans"; }
-jplan() { printf '%s\n' "$1" > "$VWT/.claude/plans/pv.md"; rm -f "$T/pane-up" "$HOME/.commandeck/scratch/"*/seat-pv-plan-judge-fable.txt; : > "$T/creates"; }
+jplan() { printf '%s\n' "$1" > "$VWT/.claude/plans/pv.md"; rm -f "$T/pane-up" "$HOME/.commandeck/scratch/"*/seat-pv-plan-judge-opus.txt; : > "$T/creates"; }
 printf 'Judge the plan.\nPlan: .claude/plans/pv.md\nEnd on a verdict line.\n' > "$T/pv-spec.md"
-VREC() { ls "$HOME/.commandeck/scratch/"*/seat-pv-plan-judge-fable.txt 2>/dev/null | grep -c .; }
+VREC() { ls "$HOME/.commandeck/scratch/"*/seat-pv-plan-judge-opus.txt 2>/dev/null | grep -c .; }
 jplan $'## What can go wrong\n\n- a case: its test\n\n- Planned size: 1 files, 1 changed lines\n\n## Decisions\n\n1. **Keep it.** No test named here.'
-COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-fable pv "$T/pv-spec.md" >"$T/out" 2>&1; RC=$?
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-opus pv "$T/pv-spec.md" >"$T/out" 2>&1; RC=$?
 check "a judge launch on a Tests: plan is refused" "2:1:1:0:0" \
   "$RC:$(grep -c 'REFUSED: .*pv.md has decisions or accepted failure modes with no Test: line' "$T/out"):$(grep -c '1\. \*\*Keep it\.\*\*' "$T/out"):$(grep -c . "$T/creates"):$(VREC)"
 jplan $'## What can go wrong\n\n- a case: its test'
-COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-fable pv "$T/pv-spec.md" >"$T/out" 2>&1; RC=$?
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 seat_sh launch plan-judge-opus pv "$T/pv-spec.md" >"$T/out" 2>&1; RC=$?
 check "a judge launch on a plan with no size line is refused" "2:1:0:0" \
   "$RC:$(grep -c 'REFUSED: .*pv.md has no size line' "$T/out"):$(grep -c . "$T/creates"):$(VREC)"
-COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-fable pv "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
+COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-opus pv "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
 check "a judge with no Plan: line is not checked" "0:1:1" "$RC:$(grep -c . "$T/creates"):$(VREC)"
 rm -f "$T/pane-up"
 

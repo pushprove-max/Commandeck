@@ -177,5 +177,7 @@ BODY=$SAVED
 BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$T" | sed -E 's/ +/ /g')
 check "the Builder template asks each new test to name its bug and lists extras (issue 433)" "Each new test names the bug it catches. A test past that is an extra: list it under \`## Extra tests\` in the evidence file."
 check "the Builder template makes a shared builder the default for test data, with an example (issue 434)" "Arrange test data with one shared builder per domain object (a fixture function in shell tests), one or two lines per test. When a test needs a new field, extend the builder; never hand-build the object in the test: \`\`\`sh unit() {"
+# Catches (#529): a helper's diff taken as tested on the helper's word, with no failing run shown before its fix.
+check "a helper report shows its red run" "A helper that writes code quotes its failing run, the red lines before its fix, in its report; read that run before you take its diff, and send back a diff whose report shows none."
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

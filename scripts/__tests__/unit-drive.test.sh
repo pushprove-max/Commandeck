@@ -142,14 +142,14 @@ check "a takeover before the first run begins leaves one driver; an unknown-stat
   "B=0 started=2 launches=1 refusedA=1 unknown=2:1:0:drive-tk2-777" "$out"
 
 # The seats the driver runs are the ones plan-tier prints, run in that order, none other.
-seats() { echo "$(calls "run plan-author $1")$(calls "run plan-judge-sol $1")$(calls "run plan-judge-fable $1")$(calls "launch --from-plan $1")"; }
+seats() { echo "$(calls "run plan-author $1")$(calls "run plan-judge-sol $1")$(calls "run plan-judge-opus $1")$(calls "launch --from-plan $1")"; }
 u=ss; mkb $u; drive $u; out="plus=$(seats $u)"
 u=sp; mkb $u '2. tighten the login check'; drive $u; out+=" panel=$(seats $u)"
 opts '{"planJudgeSolEnabled": false}'; u=sf; mkb $u; drive $u; out+=" solOff=$(seats $u)"
-opts '{"planJudgeSolEnabled": false, "planJudgeFableEnabled": false}'; u=so; mkb $u; drive $u; out+=" onePlanner=$(seats $u)"
+opts '{"planJudgeSolEnabled": false, "planJudgeOpusEnabled": false}'; u=so; mkb $u; drive $u; out+=" onePlanner=$(seats $u)"
 opts '{"planJudgeSolEnabled": "maybe"}'; u=sm; mkb $u; c0=$(wc -l < "$CALLS"); drive $u
 out+=" refused=$(cat "$T/start-$u.rc"):$(done_of $u | grep -c "^STOP unit=$u stage=tier: plan-tier.sh refused (exit 2): REFUSED: /plugin config planJudgeSolEnabled"):$(($(wc -l < "$CALLS") - c0))"
-check "the driver runs only the seats plan-tier prints: the Fable judge when Sol is off, no judge for One planner, a stop on a refused Enabled value (issue 443)" \
+check "the driver runs only the seats plan-tier prints: the Opus judge when Sol is off, no judge for One planner, a stop on a refused Enabled value (issue 443)" \
   "plus=1101 panel=1111 solOff=1011 onePlanner=1001 refused=0:1:0" "$out"
 
 # No plan: the driver starts no seat and no Builder, and the one STOP line hands main the skip launch.
@@ -158,7 +158,7 @@ check "on No plan the driver starts nothing and hands main --skip-plan (issue 44
   "$(($(wc -l < "$CALLS") - c0)) $(done_of $u | grep -c .) $(done_of $u | grep -c "^STOP unit=$u stage=tier: No plan; next: bash .*builder-launch.sh --skip-plan --reason 'plan-author is off in /plugin config' $u $T/b/$u-batch.md\$") $(($(grep -c . "$T/to-main") - t0))"
 
 # The service reads /plugin config from the profile main started under: CLAUDE_CONFIG_DIR crosses the service boundary.
-# The default home has every seat on and the profile has Sol off, so the profile's settings show as the Fable judge.
+# The default home has every seat on and the profile has Sol off, so the profile's settings show as the Opus judge.
 opts '{}'; mkdir -p "$T/profile"; jq -n '{pluginConfigs: {"commandeck@commandeck": {options: {planJudgeSolAgent: "claude", planJudgeSolEnabled: false}}}}' > "$T/profile/settings.json"
 u=pf; mkb $u; E+=(CLAUDE_CONFIG_DIR="$T/profile"); drive $u; E=("${E[@]:0:${#E[@]}-1}")
 check "the driver's service keeps the caller's CLAUDE_CONFIG_DIR, so its seats are the active profile's (issue 443)" "profile=1011" "profile=$(seats $u)"

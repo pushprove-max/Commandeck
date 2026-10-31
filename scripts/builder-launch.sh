@@ -158,8 +158,10 @@ if [ "$FROM" = 1 ]; then
   done
   # Both judges off in /plugin config (issue 312): the plan installs unjudged, the author's PLAN-DONE plan below.
   # Off is exit 1 alone: a value an Enabled key does not take (2) stops the launch, naming the key.
-  if [ -z "$J" ]; then
-    for r in plan-judge-sol plan-judge-fable; do
+  # Issue 527: a tiny batch is One planner (plan-tier.sh): no judge ran, so no verdict is asked for.
+  TINYTIER=$(bash "$HERE/plan-tier.sh" "$BATCH" 2>/dev/null | sed -n 's/^tier: \([^(]*\) (.*/\1/p') || true
+  if [ -z "$J" ] && [ "$TINYTIER" != 'One planner' ]; then
+    for r in plan-judge-sol plan-judge-opus; do
       rc=0; OFF=$(pp_role_enabled "$r" 2>&1) || rc=$?
       [ "$rc" != 2 ] || nope "${OFF#REFUSED: }"
       [ "$rc" = 1 ] || nope "no plan judge's verdict on $WP in $PP_SCRATCH; run the plan judge on it first"
@@ -189,13 +191,13 @@ if [ "$FROM" = 1 ]; then
     # rulings file after the judge ran, and the Builder writes them into the plan. The plan must still be the bytes the
     # judge read; whether it is small is read from its size line (plan_checks).
     RUL=$PP_MAIN/.claude/briefs/$UNIT-main-rulings.md
-    # Issue 444: the selected judge's, as plan-tier.sh selects it: Sol, or Fable while Sol is off in /plugin config (a
+    # Issue 444: the selected judge's, as plan-tier.sh selects it: Sol, or Opus while Sol is off in /plugin config (a
     # value the key does not take, 2, stops the launch naming it).
     STANDIN=
     if [ -z "$WANT" ] && [ -s "$RUL" ] && [ "$RUL" -nt "$J" ]; then
       case $J in
         "$PP_SCRATCH/seat-$UNIT-plan-judge-sol.txt") STANDIN=1 ;;
-        "$PP_SCRATCH/seat-$UNIT-plan-judge-fable.txt")
+        "$PP_SCRATCH/seat-$UNIT-plan-judge-opus.txt")
           rc=0; OFF=$(pp_role_enabled plan-judge-sol 2>&1) || rc=$?
           [ "$rc" != 2 ] || nope "${OFF#REFUSED: }"
           [ "$rc" != 1 ] || STANDIN=1 ;;

@@ -179,6 +179,9 @@ MADE_FROM = {
     # 0.62.0 main-session.md: a follow-up to a seat goes through seat.sh revise; a plan's one question section; a limit
     # added after the plan judge's GO carries its ruling id; the one-judge rule for a small Panel unit
     "702b08c7": ("4083592b",), "4f20e61c": ("5c61b810",), "2e9e3e76": ("8aa8b56d",), "895a7e56": ("bbe121f7",),
+    # 0.64.0 main-session.md: a hand-started judge round is capped; 0.65.0: the second judge runs on Opus and a tiny
+    # batch gets one planner and no judge
+    "49f25da0": ("895a7e56",), "25071f40": ("49f25da0",),
 }
 
 

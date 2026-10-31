@@ -7,7 +7,7 @@
 # Two tests of one label are `<label> #1`, `<label> #2`. A test whose lines hold a second test gives no label, nor does a label
 # that could pose as a row (`(file)`, `(line)`, ` #<n>`) or is not plain text. Any other line of a code file is refused,
 # comments and helpers too: the reader does not judge code, so a helper that registers a test cannot pass as harmless, and each
-# refused line needs its own `line:` approval (). A line of a `.json`, `.txt`, `.md`, `.yml`
+# refused line needs its own `line:` approval (the owner's ruling). A line of a `.json`, `.txt`, `.md`, `.yml`
 # or `.yaml` file is `(file)`. A failure of git or of this reader exits 3, so it never reads as no edits.
 set -uo pipefail
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac

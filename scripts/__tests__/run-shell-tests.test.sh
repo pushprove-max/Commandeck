@@ -356,6 +356,48 @@ rm -f "$COMMANDECK_SHELL_TEST_SECONDS"; NH=$TMP/nohome; mkdir -p "$NH"
 # Catches: the top-of-file export going, so a whole run in this test saves into $HOME/.commandeck/shell-test-seconds.tsv.
 check "a test box never writes the real list (the run saved to the file this test named, and not under HOME)" "yes no" \
   "$([ -s "$COMMANDECK_SHELL_TEST_SECONDS" ] && echo yes) $([ -e "$NH/.commandeck" ] && echo yes || echo no)"
+# #506: a file's result record is `<rc> <secs> <limit> <load1> <cores>`, and the list keeps the seconds field alone.
+# Catches: save_seconds reading past the seconds field, so the row is `<secs> <limit> ...` and every later run skips it.
+check "a whole run saves each file's wall seconds alone from its five-field result record" "1" \
+  "$(grep -cE $'^[0-9]+\tt\\.test\\.sh$' "$COMMANDECK_SHELL_TEST_SECONDS")"
+# #506: each test is judged on its own run. Two files, one job so a runs first; `a` makes and removes a folder in the repo
+# root (as main-edit-guard.test.sh does), which bumps the root's ctime. The sorted names are ledger rows or fence messages.
+mkfence() { rm -rf "$1"; mkdir -p "$1/scripts/__tests__"; git -C "$1" init -q
+  printf '#!/usr/bin/env bash\n%s\n' "$2" > "$1/scripts/__tests__/a-f.test.sh"; printf '#!/usr/bin/env bash\ntrue\n' > "$1/scripts/__tests__/b-f.test.sh"
+  git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm base; }
+fenced() { (cd "$1" && env -u COMMANDECK_RUNNING_TEST COMMANDECK_SHELL_TEST_JOBS=1 COMMANDECK_SHELL_TEST_SECONDS=$1/none timeout 60 bash "$RUNNER" > "$1.out" 2>&1)
+  FROWS=$(cut -f2 "$(git -C "$1" rev-parse --absolute-git-dir)/commandeck-test-runs.tsv" 2>/dev/null | sed 's|.*/||' | paste -sd' ' -)
+  FMSG=$(sed -n 's/^run-shell-tests: the tree changed while .*\/\(.*\) ran; .*/\1/p' "$1.out" | paste -sd' ' -); }
+# Catches: one test's temp folder in the root marking every later result unrecorded (the run-wide fence broke for all).
+mkfence "$TMP/f1" 'mkdir "$(dirname "$0")/../../tmpd"; rmdir "$(dirname "$0")/../../tmpd"'; fenced "$TMP/f1"
+check "a temp folder made and removed before a test leaves its result recorded" "b-f.test.sh | a-f.test.sh" "$FROWS | $FMSG"
+# Catches: a folder entry made and removed during a test passing, and the message not naming the newer path.
+mkfence "$TMP/f2" 'touch "$(dirname "$0")/../../extra"; rm -f "$(dirname "$0")/../../extra"'; fenced "$TMP/f2"
+check "a folder entry made during a test stops its record" "b-f.test.sh | a-f.test.sh | 1" \
+  "$FROWS | $FMSG | $(grep -c '^run-shell-tests: newer: \./\.$' "$TMP/f2.out")"
+# Catches: a folder no kept path names escaping the fence. f3: `a` leaves an empty folder and `b` makes and removes a file
+# in it. f4: an empty folder is there before the run and `a` leaves a file in it, so `b` runs on another tree.
+mkfence "$TMP/f3" 'mkdir "$(dirname "$0")/../../tmpd"'
+printf '#!/usr/bin/env bash\ntouch "$(dirname "$0")/../../tmpd/x"; rm "$(dirname "$0")/../../tmpd/x"\n' > "$TMP/f3/scripts/__tests__/b-f.test.sh"
+git -C "$TMP/f3" -c user.name=t -c user.email=t@t commit -qam b; fenced "$TMP/f3"; F3="$FROWS | $FMSG | $(grep -c '^run-shell-tests: newer: \./tmpd$' "$TMP/f3.out")"
+mkfence "$TMP/f4" 'touch "$(dirname "$0")/../../e/x"'; mkdir "$TMP/f4/e"; fenced "$TMP/f4"
+check "a folder no kept path names is fenced too (an earlier test's empty folder; an empty folder there before the run)" \
+  " | a-f.test.sh b-f.test.sh | 1 /  | a-f.test.sh b-f.test.sh" "$F3 / $FROWS | $FMSG"
+
+# #506 (D11): under load a file's cap is a CPU bound, not a wall-clock one. One file under `# timeout: 1`, with getconf and
+# uptime the stubs above; the heaviest cases, so last.
+# cpu_run <cores> <uptime's load text> <test body> -- the runner's result line for that file.
+CPUN=0
+cpu_run() { local d=$TMP/cpu$((CPUN += 1)); mkdir -p "$d/scripts/__tests__"; printf '#!/usr/bin/env bash\n# timeout: 1\n%s\n' "$3" > "$d/scripts/__tests__/t.test.sh"
+  git -C "$d" init -q && git -C "$d" add -A && git -C "$d" -c user.name=t -c user.email=t@t commit -qm base
+  (cd "$d" && env -u COMMANDECK_RUNNING_TEST CORES=$1 UT="$2" PATH="$JB/stub:$PATH" timeout 30 bash "$RUNNER" scripts/__tests__/t.test.sh 2>&1) | sed -n 's/^-- //p'; }
+BUSY='load averages: 8.00 8.00 8.00'
+# Catches: the CPU bound loosening the cap on an idle machine, where a file past its cap is hung as before.
+check "an idle machine keeps the wall cap" 1 "$(cpu_run 8 'load averages: 0.10 0.10 0.10' 'sleep 2' | grep -cE '^FAIL t\.test\.sh +[0-9]+s HUNG past 1s$')"
+# Catches: a starved file failing on wall time with CPU to spare (load 8 on 2 cores: four times the cap of wall time).
+check "a slow test under load passes within its CPU cap" 1 "$(cpu_run 2 "$BUSY" 'sleep 2' | grep -cE '^ok +t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, 0\.[0-9]+ s CPU$')"
+# Catches: a CPU hog passing on a busy machine because the wall limit grew with the load.
+check "a test past its CPU cap fails" 1 "$(cpu_run 2 "$BUSY" 'until ((SECONDS >= 2)); do :; done' | grep -cE '^FAIL t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, [1-9][0-9.]* s CPU$')"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

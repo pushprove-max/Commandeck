@@ -9,9 +9,10 @@
 # Self-test: bash hooks/__tests__/companion-read-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
-IFS=$'\001' read -r SID TOOL CWD FILE CMD EVENT ERR < <(jq -r '[.session_id // "", .tool_name // "", .cwd // "",
+IFS=$'\001' read -r SID TOOL CWD FILE CMD EVENT ERR SHOWN < <(jq -r '[.session_id // "", .tool_name // "", .cwd // "",
   .tool_input.file_path // "", (.tool_input.command // "" | gsub("[\u0001\n]"; " ")), .hook_event_name // "",
-  (if (.tool_response | type) == "object" then (.tool_response.is_error // (.tool_response.error | if . then true else false end) // false) else false end | tostring)]
+  (if (.tool_response | type) == "object" then (.tool_response.is_error // (.tool_response.error | if . then true else false end) // false) else false end | tostring),
+  ((.tool_response | objects | .file | objects | .content | strings | length > 0) // false | tostring)]
   | join("\u0001")' <<<"$INPUT" 2>/dev/null)
 HEX='[0-9A-Fa-f]'
 [[ ${SID-} =~ ^$HEX{8}-$HEX{4}-$HEX{4}-$HEX{4}-$HEX{12}$ ]] || exit 0
@@ -27,7 +28,8 @@ record() { # $1 = path
 
 case "$TOOL" in
   Read)
-    [ -n "$FILE" ] || exit 0
+    # Only a Read that showed text is a read: one past the end answers `content: ""` (#531).
+    [ -n "$FILE" ] && [ "${SHOWN-}" = true ] || exit 0
     case "$FILE" in /*) ;; *) FILE=$CWD/$FILE ;; esac
     [ -f "$FILE" ] && record "$(realpath -m "$FILE")" ;;
   Bash)

@@ -71,7 +71,7 @@ go oc
 OLD=$'- [P2] (class: lost-reply) OLD-P2 -- oc.txt:1 -- drops a reply -- cat oc.txt'
 tpass oc 2 final "$OLD"$'\nVERDICT: NO-GO' >/dev/null
 jq -nc '{id: "q-oc-open", askedAt: "1999-01-01T00:00:00Z", question: "Keep the oc reply?", proposedDefault: "keep",
-  source: "builder oc", answeredAt: null, answer: null}' >> "$LED"
+  source: "builder oc", answeredAt: "1999-01-02T00:00:00Z", answer: "keep it"}' >> "$LED"
 printf '\nDifferent fix r3: AUTHOR-PROBE took another fix\n\n## Main-only (deferred)\n- DEFERRED-PROBE: a settings entry\n' >> "$WS/oc/.claude/briefs/oc-evidence.md"
 echo fixed > "$WS/oc/oc.txt"
 check "an open carried-over P2 holds the loop: the closing pass that lists pass 2's P2 again ends NO-GO, prints no stop, and --verify refuses it as a P2 below the cap" "0 1 0 2 1" \
@@ -82,7 +82,7 @@ check "the closing prompt carries decisions and accepted failure modes but no ea
 $(prompt oc 3 | grep -c 'Do not open the evidence file, the round reports or fix hand-offs under .claude/briefs .*, or git log') \
 $(prompt oc 3 | grep -c 'Findings of the earlier passes') $(prompt oc 3 | grep -c 'OLD-P2') $(prompt oc 3 | grep -c 'DEFERRED-PROBE') \
 $(prompt oc 3 | grep -c 'Sites checked: the Builder') $(prompt oc 3 | grep -c 'New code checked: the Builder') $(prompt oc 3 | grep -c '^Earlier pass ') \
-$(prompt oc 3 | sed -n '/^Accepted failure modes, from the plan: /,$p' | grep -c 'ACCEPTED-PROBE') $(prompt oc 3 | grep -c 'Open question to the owner q-oc-open')"
+$(prompt oc 3 | sed -n '/^Accepted failure modes, from the plan: /,$p' | grep -c 'ACCEPTED-PROBE') $(prompt oc 3 | grep -c 'The owner answered q-oc-open (Keep the oc reply?): keep it')"
 
 # 3. The count is the passes on record: pass 9, the third, is below the cap. A narrowed pass keeps its history.
 mk pn; go pn; echo two > "$WS/pn/pn.txt"

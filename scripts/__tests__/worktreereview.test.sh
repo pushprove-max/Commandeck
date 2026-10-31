@@ -470,6 +470,23 @@ r = collected('u475', [user(0), say(10, 'Waiting on a reply.'), turn_end(12), us
 check('an idle wait is cut with its cause (issue 475)', [(12, 1200, 'waiting on nothing, no decision recorded')],
       [(round(w['start'] - T0), round(w['end'] - T0), w['reason']) for w in r['cut']])
 
+# --- #522: a decision is the unit's by its id too, but only in the exact shapes the plugin writes. ---
+# Catches: an owner wait left on the build clock because its decision's source and answer never name the unit.
+done522 = lambda u: [user(0), say(10, f'All built.\n{u.upper()}-DONE'), turn_end(12), user(1200), say(1210, 'Merged.'), turn_end(1212)]
+main522 = f'{TMP}/main522'
+os.makedirs(f'{main522}/.claude/metrics')
+subprocess.run(['git', 'init', '-q', main522], check=True)
+def ask522(*ids):
+    write(f'{main522}/.claude/metrics/decisions.jsonl', [row for i in ids for row in (
+        {'id': i, 'askedAt': at(400), 'answeredAt': None, 'source': 'main'},
+        {'id': i, 'askedAt': at(400), 'answeredAt': at(700), 'answer': 'yes'})])
+cuts = lambda r: [(round(w['start'] - T0), round(w['end'] - T0), w['reason']) for w in r['cut']]
+ask522('plan-u522')
+check('an id-only decision is cut', [(400, 700, 'decision plan-u522')], cuts(collected('u522', done522('u522'), '--main', main522)))
+# Catches: a sibling unit's decision (review-stop-<unit>-b-r7, plan-<unit>-b, <unit>-aa-q1, x<unit>) cut from this build.
+ask522('review-stop-u523-b-r7', 'plan-u523-b', 'u523-aa-q1', 'xu523')
+check("a sibling unit's id is not cut", [], cuts(collected('u523', done522('u523'), '--main', main522)))
+
 print(f'{passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)
 PY

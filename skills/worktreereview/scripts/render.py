@@ -207,6 +207,9 @@ for p in R['passes']:
                  f'<td class="r">{100 * u.get("cached_input_tokens", 0) / max(1, u.get("input_tokens", 0)):.0f}%</td><td class="r">{n(u.get("output_tokens", 0))}</td>'
                  f'<td class="r">{p["threads"]}</td><td><span class="{cls}">{p["verdict"]}</span> {p["findings"] or ""}</td><td>{txt(finding)}'
                  + (f'<details><summary>All {len(every)} findings</summary>{ul(every)}</details>' if every else '') + '</td></tr>')
+    # An older result has no tool_gaps key: no note.
+    if p.get('tool_gaps'):
+        prows.append(f'<tr><td></td><td colspan="8">Pass {p["n"]}: a reviewer said Serena was unavailable, so this verdict may rest on text search alone</td></tr>')
 if R.get('lines_changed') is not None:
     prows.append(f'<tr><td></td><td colspan="8">Lines changed by the build: {n(R["lines_changed"])}</td></tr>')
 elif 'lines_changed' in R:

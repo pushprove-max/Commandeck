@@ -1662,6 +1662,15 @@ precheck() {
     fi
   fi
   if [ "$KIND" = final ]; then
+    # Issue 525: an open owner question on the unit holds the merge, so a closing pass before its answer is spent on code
+    # the answer may change. An unreadable ledger is said in the prompt instead (holds below), as before.
+    local open
+    open=$(COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" holds "$UNIT" 2>/dev/null | grep '^Open question to the owner ') || true
+    [ -z "$open" ] \
+      || refuse "an owner question on $UNIT is open, and the merge waits on its answer, so a closing pass now could be spent on code the answer changes:
+$open
+Ask main for the answer first, then rerun the pass.
+Try: bash $HERE/ask-main.sh '$UNIT: owner answer needed' '<the open question ids above, and what the build needs to know>'"
     [ ! -d "$gd/rebase-merge" ] && [ ! -d "$gd/rebase-apply" ] \
       || refuse "a rebase is in progress in $WT, so the closing pass cannot rebase onto main. Finish or abort it (main resolves a conflict), then rerun the pass.
 Try: git -C $WT status"
@@ -1731,28 +1740,35 @@ test_call() {
   return "$rc"
 }
 rebase_and_test() {
-  local old new conflicts files tests own t log=$PP_SCRATCH/$UNIT-rebase-r$N.log pend t0=$SECONDS tests_green
+  local old new conflicts files tests own t log=$PP_SCRATCH/$UNIT-rebase-r$N.log pend t0=$SECONDS tests_green when what
   [ "$KIND" = final ] || return 0
   # A red run leaves the unit already on main, so a retry would find nothing to do: the old base stays on record until the tests pass.
   pend=$(git -C "$WT" rev-parse --absolute-git-dir)/builder-rebase-pending-$UNIT
   old=$(cat "$pend" 2>/dev/null) || old=$(git -C "$WT" merge-base main HEAD) || die "cannot find where $UNIT left local main in $WT"
   new=$(git -C "$WT" rev-parse -q --verify main) || die "cannot find local main in $WT"
-  [ "$old" != "$new" ] || return 0
-  stamp "rebase start"
-  if ! COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase main >/dev/null 2>&1; then
-    conflicts=$(git -C "$WT" diff --name-only --diff-filter=U | paste -sd' ' -)
-    COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase --abort >/dev/null 2>&1 || true
-    die "REBASE CONFLICT: $UNIT does not rebase onto current local main (${conflicts:-no file named}). The rebase was aborted and the branch is as it was; no reviewer was run. Main resolves the conflict, then run the pass again: builder-codex-pass.sh $UNIT $N final"
+  # Issue 526: with main unmoved there is nothing to rebase, but the tests that cover what the unit changed still run
+  # before the reviewer, so a red one is not first found after the closing GO.
+  if [ "$old" = "$new" ]; then
+    files=$(git -C "$WT" diff --name-only "$new...HEAD") || die "cannot list what $UNIT changed in $WT"
+    when="before the closing pass" what=$UNIT
+  else
+    stamp "rebase start"
+    if ! COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase main >/dev/null 2>&1; then
+      conflicts=$(git -C "$WT" diff --name-only --diff-filter=U | paste -sd' ' -)
+      COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" rebase --abort >/dev/null 2>&1 || true
+      die "REBASE CONFLICT: $UNIT does not rebase onto current local main (${conflicts:-no file named}). The rebase was aborted and the branch is as it was; no reviewer was run. Main resolves the conflict, then run the pass again: builder-codex-pass.sh $UNIT $N final"
+    fi
+    stamp "rebase end"
+    echo "rebased $UNIT onto local main ${new:0:8} (was based on ${old:0:8})"
+    T_REBASE="$((SECONDS - t0)) s" t0=$SECONDS
+    echo "$old" > "$pend"
+    files=$({ git -C "$WT" diff --name-only "$new...HEAD"; git -C "$WT" diff --name-only "$old" "$new"; } | sort -u)
+    when="after the rebase onto main" what="$UNIT or main"
   fi
-  stamp "rebase end"
-  echo "rebased $UNIT onto local main ${new:0:8} (was based on ${old:0:8})"
-  T_REBASE="$((SECONDS - t0)) s" t0=$SECONDS
-  echo "$old" > "$pend"
-  files=$({ git -C "$WT" diff --name-only "$new...HEAD"; git -C "$WT" diff --name-only "$old" "$new"; } | sort -u)
   stamp "test selection start"
   tests=$(cd "$WT" && bash "$HERE/shell-tests-for.sh" --hops 2 <<<"$files") || die "shell-tests-for.sh failed in $WT"
   stamp "test selection end"
-  [ -n "$tests" ] || { rm -f "$pend"; echo "no shell test covers the files $UNIT or main changed since the old base"; return 0; }
+  [ -n "$tests" ] || { rm -f "$pend"; echo "no shell test covers the files $what changed since the old base"; return 0; }
   mkdir -p "$PP_SCRATCH" || die "cannot make $PP_SCRATCH for the rebase test log"
   # An `# own-lane:` test is skipped by the ordinary run, so it gets its own call, as the merge does.
   own=$(for t in $tests; do sed -n '1,5p' "$WT/$t" | grep -q '^# own-lane:' && echo "$t"; done || true)
@@ -1763,11 +1779,11 @@ rebase_and_test() {
   # shellcheck disable=SC2086 -- the same
   [ "$tests_green" = 0 ] || [ -z "$own" ] || test_call "own-lane tests" --own-lane $own || tests_green=0
   [ "$tests_green" = 1 ] \
-    || die "after the rebase onto main, tests that cover what $UNIT or main changed are red (full output $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
+    || die "$when, tests that cover what $what changed are red (full output $log); no reviewer was run. Fix it, then run the pass again: builder-codex-pass.sh $UNIT $N final
 $(grep -E '^(FAIL|       FAIL)' "$log" | head -10)"
   rm -f "$pend"
   T_TESTS="$((SECONDS - t0)) s"
-  echo "tests after the rebase: $(grep -E '^[0-9]+ passed' "$log" | tail -1)"
+  echo "tests ${when% onto main}: $(grep -E '^[0-9]+ passed' "$log" | tail -1)"
 }
 # typecheck_green -- issue 385: a closing (final) pass needs a green typecheck when the project sets one up
 # (typecheckCommand in main's commandeck.json, written by setup), so no closing pass is spent on a tree whose types are

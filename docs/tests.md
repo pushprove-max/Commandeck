@@ -24,7 +24,10 @@ bash scripts/run-shell-tests.sh --skip-passed
 It skips a file whose last result in this checkout was a pass at the same tree
 only (HEAD plus every uncommitted and untracked file), and prints that file's
 result as passed. A result is recorded only if no file of the tree changed
-while that file ran, even an edit undone before it ended. Files run on the PC are never skipped. A run with a
+while that file ran, even an edit undone before it ended. Each file is judged on
+its own run: a change made before it started does not stop its record, and a
+folder made and removed during it does. A result left unrecorded prints
+`run-shell-tests: newer:` and the paths that changed. Files run on the PC are never skipped. A run with a
 test-case selector set (any `*_TEST_CASE` variable) records and reuses nothing.
 
 A run handed to the PC keeps going there when its connection drops. The
@@ -90,7 +93,12 @@ The runner needs Bash 4+ and GNU tools. CI uses Ubuntu's jq 1.7; verify against
 that version when changing jq programs. Test concurrency and per-file timeout
 can be set with `COMMANDECK_SHELL_TEST_JOBS` and
 `COMMANDECK_SHELL_TEST_TIMEOUT`. Defaults are half the CPUs (at least one)
-and 120 seconds, except a test's own timeout marker. One `*.test.sh` file holds
+and 120 seconds, except a test's own timeout marker. The cap is the file's CPU
+time. On a loaded machine (load above the core count) the wall-clock limit
+grows by load per core, up to four times the cap, and a file past its cap on the
+wall clock still passes if it used no more CPU than the cap. Its line says
+`past its <cap> s cap: <wall> s wall, <cpu> s CPU`, and a hung file names the
+load it ran under. One `*.test.sh` file holds
 at most 500 lines (`COMMANDECK_SHELL_TEST_MAX_LINES`): the runner fails a longer
 file before it runs and names the cap. Split such a file by section.
 

@@ -43,15 +43,15 @@
       },
       "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round, no judging loop. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
     },
-    "plan-judge-fable": {
+    "plan-judge-opus": {
       "agent": "claude",
-      "model": "fable",
+      "model": "opus",
       "effort": "high",
       "reviewer": true,
       "tools": ["Write", "Edit", "NotebookEdit", "Agent"],
       "unboxed": true,
       "edits": false,
-      "note": "The Panel answer's second judge, beside plan-judge-sol: a read-only Claude pane on Fable at high that reads the plan and prints its findings; off, the other judge judges alone."
+      "note": "The Panel answer's second judge, beside plan-judge-sol: a read-only Claude pane on Opus at high that reads the plan and prints its findings; off, the other judge judges alone."
     },
     "builder": {
       "agent": "claude",
@@ -96,7 +96,8 @@
     "oneJudgeLines": 500,
     "perIssueRegular": 3,
     "planJudgeRounds": 2,
-    "note": "Per Codex review. calls: model calls one review session may make. diffLines and maxIssues: a plan's planned changed lines and distinct Closes issues; plan-check.sh refuses a plan over either unless it carries a Split override line. oneJudgeLines: plan-tier.sh gives a Panel unit estimated at or under this many changed lines one judge. perIssueRegular: the regular reviews one issue gets on the per-issue workflow before main is asked to continue or redesign. planJudgeRounds: the verdicts one plan judge seat may give one plan; seat.sh refuses a launch past it, and main rules on the open findings instead (the driver runs one round, so this caps rounds started by hand). A routing file of your own that lacks diffLines, maxIssues, oneJudgeLines or planJudgeRounds takes the value here."
+    "tinyPlanLines": 50,
+    "note": "Per Codex review. calls: model calls one review session may make. diffLines and maxIssues: a plan's planned changed lines and distinct Closes issues; plan-check.sh refuses a plan over either unless it carries a Split override line. oneJudgeLines: plan-tier.sh gives a Panel unit estimated at or under this many changed lines one judge. perIssueRegular: the regular reviews one issue gets on the per-issue workflow before main is asked to continue or redesign. planJudgeRounds: the verdicts one plan judge seat may give one plan; seat.sh refuses a launch past it, and main rules on the open findings instead (the driver runs one round, so this caps rounds started by hand). tinyPlanLines: plan-tier.sh gives a batch no panel or risk trigger matched, estimated under this many changed lines, One planner and no judge. A routing file of your own that lacks diffLines, maxIssues, oneJudgeLines, planJudgeRounds or tinyPlanLines takes the value here."
   },
   "seat-liveness": {
     "backgroundMaxMinutes": 20,

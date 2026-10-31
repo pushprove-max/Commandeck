@@ -17,7 +17,7 @@ A null effort is omitted from the command.
 | orchestrator | Claude / opus | medium | `orchestratorModel`, `orchestratorEffort` | no: it is the session that runs everything |
 | plan-author | Claude / opus | high | `planAuthorModel`, `planAuthorEffort`, `planAuthorEnabled`, `planAuthorFast` | yes: no plan |
 | plan-judge-sol | Codex / sol (Claude: sonnet) | high | `planJudgeSol` + `Agent`, `Model`, `Effort`, `Enabled`, `Fast` | yes |
-| plan-judge-fable | Claude / fable | high | `planJudgeFable` + `Model`, `Effort`, `Enabled`, `Fast` | yes |
+| plan-judge-opus | Claude / opus | high | `planJudgeOpus` + `Model`, `Effort`, `Enabled`, `Fast` | yes |
 | builder | Claude / opus | medium | `builderModel`, `builderEffort` | no: no branch to review or merge |
 | fixer | Claude / opus (first fix round: the Builder's) | medium | `fixerFirstModel`, `fixerFirstEffort`, `fixerModel`, `fixerEffort`, `fixerEnabled` | yes: every fix pass runs as the Builder was launched |
 | codex-reviewer | Codex / sol (Claude: sonnet, headless) | medium | `codexReviewer` + `Agent`, `Model`, `Effort`, `Fast` | no: the merge check needs its GO |
@@ -40,7 +40,7 @@ effort the Builder was launched with, every later one on Opus medium by default.
 `fixerFirstModel=opus` and `fixerFirstEffort=medium` run the first one on Opus
 medium too. The reviewer and the Sol judge can
 run on Claude (`<role>Agent=claude`): a Claude reviewer or judge cannot write.
-The Claude-only profile sets those two agent keys to `claude`. The Fable judge
+The Claude-only profile sets those two agent keys to `claude`. The Opus judge
 always runs on Claude and has no agent key.
 
 A helper is a built-in subagent type: `Explore` (Haiku) for search and lookup,
@@ -108,6 +108,9 @@ From the pass cap on the record, `review` runs as the closing pass
 The per-issue review workflow reads one more limit, `review-limits.perIssueRegular` in
 `config/routing.json`: the regular reviews of one issue in a row with no GO before main is
 asked (3 by default; a whole number of 1 or more).
+`review-limits.tinyPlanLines` (50 by default; a whole number of 0 or more; a routing file without it takes that value) is the
+size under which a batch's `Estimated size:` line, with no panel or risky trigger matched, picks One planner: no
+judge. That route gives up the judge's read of the plan and its revise round; a security item never takes it.
 `generatedFiles` lets merge accept a tail of commits changing only the listed
 generated paths after the reviewed commit; do not list handwritten source.
 

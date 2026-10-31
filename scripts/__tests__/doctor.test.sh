@@ -212,7 +212,7 @@ printf '{"models": [{"slug": "gpt-9.1-sol"}, {"slug": "gpt-9.1-astra"}]}\n' > "$
 echo "error connecting to api.github.com" > "$T/gh-fail-sandbox"
 OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
 check "the doctor reports a seat type that cannot reach GitHub, with its sandbox and the reason, and exits 1" "1:1:1" \
-  "$(grep -c '^FAIL github read: codex read-only + network (plan-judge-sol): no network in the sandbox: error connecting to api.github.com' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox (orchestrator, plan-author, plan-judge-fable, builder, fixer)$' <<<"$OUT"):$RC"
+  "$(grep -c '^FAIL github read: codex read-only + network (plan-judge-sol): no network in the sandbox: error connecting to api.github.com' <<<"$OUT"):$(grep -c '^ok   github read: claude, no sandbox (orchestrator, plan-author, plan-judge-opus, builder, fixer)$' <<<"$OUT"):$RC"
 rm -f "$T/gh-fail-sandbox"
 OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
 check "with GitHub reachable from every seat the doctor says so for each agent and mode" "1:1" \
@@ -220,10 +220,10 @@ check "with GitHub reachable from every seat the doctor says so for each agent a
 # Same agent and sandbox, other credentials: a second Codex seat's routed token is its own, so a read as Sol proves nothing for it.
 sed -i.bak '2a\
 [ "${GH_TOKEN:-}" != invalid ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }' "$BIN/gh"; rm -f "$BIN/gh.bak"
-jq '.roles["plan-judge-fable"] = .roles["plan-judge-sol"] + {shellEnv: {GH_TOKEN: "invalid"}}' "$REAL/config/routing.json" > "$T/routing.json"
+jq '.roles["plan-judge-opus"] = .roles["plan-judge-sol"] + {shellEnv: {GH_TOKEN: "invalid"}}' "$REAL/config/routing.json" > "$T/routing.json"
 OUT=$(in_proj env COMMANDECK_ROUTING="$T/routing.json" timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1); RC=$?
 check "a seat whose own environment cannot read GitHub fails alone, though another seat of its agent and mode reads" "1:1:1" \
-  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-fable): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
+  "$(grep -c '^ok   github read: codex read-only + network (plan-judge-sol)$' <<<"$OUT"):$(grep -c '^FAIL github read: codex read-only + network (plan-judge-opus): no credentials visible in the sandbox: HTTP 401: Bad credentials' <<<"$OUT"):$RC"
 
 # Issue 334: an Orca launch overwrote a profile's settings file and the session-start repair put setup's parts back:
 # the doctor says so, naming the file, when, and what.

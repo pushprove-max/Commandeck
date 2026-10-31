@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.64.0-111111?style=flat-square" alt="Version 0.64.0">
+  <img src="https://img.shields.io/badge/version-0.65.0-111111?style=flat-square" alt="Version 0.65.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -174,7 +174,7 @@ panes. More: [docs/dashboard.md](docs/dashboard.md).
 
 The Sol plan judge runs Codex read-only for files, but with network on and your
 `gh` sign-in, so it can write to GitHub and reach any host. Every guard
-still runs in its pane. The Fable judge is a Claude pane with the write tools
+still runs in its pane. The Opus judge is a Claude pane with the write tools
 denied.
 
 Setup checks all of this and prints the exact step for anything missing.
@@ -388,11 +388,11 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `planAuthorModel` | `project`, `opus`, `sonnet`, `fable` | The plan author's model (project: Opus) |
 | `planAuthorEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | The plan author's effort (project: high) |
 | `planAuthorFast` | `true`, `false` (default) | The fast tier |
-| `planJudgeSolEnabled`, `planJudgeFableEnabled` | `true` (default), `false` | Whether each judge reads the plan; with both off the plan installs unjudged |
-| `planJudgeSolAgent` | `project`, `codex`, `claude` | Who runs the Sol judge (the Fable judge always runs on Claude) |
-| `planJudgeSolModel`, `planJudgeFableModel` | a family, a model id, or a Claude model | Each judge's model (project: sol on the Sol judge, or sonnet on Claude; fable on the Fable judge) |
-| `planJudgeSolEffort`, `planJudgeFableEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Each judge's effort (project: high) |
-| `planJudgeSolFast`, `planJudgeFableFast` | `true`, `false` (default) | The fast tier |
+| `planJudgeSolEnabled`, `planJudgeOpusEnabled` | `true` (default), `false` | Whether each judge reads the plan; with both off the plan installs unjudged |
+| `planJudgeSolAgent` | `project`, `codex`, `claude` | Who runs the Sol judge (the Opus judge always runs on Claude) |
+| `planJudgeSolModel`, `planJudgeOpusModel` | a family, a model id, or a Claude model | Each judge's model (project: sol on the Sol judge, or sonnet on Claude; opus on the Opus judge) |
+| `planJudgeSolEffort`, `planJudgeOpusEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | Each judge's effort (project: high) |
+| `planJudgeSolFast`, `planJudgeOpusFast` | `true`, `false` (default) | The fast tier |
 
 **Wakes, relay and panes**
 
@@ -472,7 +472,7 @@ Uninstall takes out only what setup added. Details:
 - The single prompt-cache answer, `--cache-ttl` (0.48.0). Use
   `mainPromptCacheTtl`, `workerPromptCacheTtl` and `relayPromptCacheTtl`.
 - The old second-judge options (0.48.0). The Panel's second judge is the
-  Fable judge, set with the `planJudgeFable*` options.
+  Opus judge, set with the `planJudgeOpus*` options.
 
 What each version changed: [CHANGELOG.md](CHANGELOG.md).
 

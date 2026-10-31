@@ -7,7 +7,7 @@
 # batch; a missing batch, spec or Order line is refused. Then it starts `run` as the service drive-<unit>-<epoch>.
 # --dry-run prints the preflight result and the stages, and creates nothing.
 # run --owner <service> ... -- the stages. Tier runs plan-tier.sh on the batch first; the later stages run only the
-# roles its `seat:` lines name (plan-author, then each judge: Sol, Fable when Sol is off, both on Panel, none for One
+# roles its `seat:` lines name (plan-author, then each judge: Sol, Opus when Sol is off, both on Panel, none for One
 # planner). Each stage is skipped when its seat record already holds its result, so a re-run of start resumes and never
 # runs a second judge round. Exit 2 from plan-tier.sh stops at tier. `No plan` starts no seat and no Builder: the stop
 # line hands main `builder-launch.sh --skip-plan`. A judge NO-GO, a failed stage or a refused launch is a stop: one

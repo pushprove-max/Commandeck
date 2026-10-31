@@ -16,7 +16,8 @@ means. Then the tests to write first, and how the batch will be reviewed.
 An item that adds a step to the build, merge, review or push flow carries a
 `Catches:` line: what the step catches that no existing step does.
 Optional: a line `Estimated size: ~<n> changed lines`. Under 150, a risky trigger gets
-one plan judge, not two; with no line, or 150 or more, the plan tier stays Panel.
+one plan judge, not two; with no line, or 150 or more, the plan tier stays Panel. Under 50 with no risky
+trigger, the plan has no judge (One planner).
 
 - Name every reader of anything an item deletes (exports, docs, scripts that
   call it), so none is left calling it.
@@ -62,7 +63,8 @@ it lives, who writes it, who reads it, when it resets, and what a retry runs. Wr
 Required: builder-launch.sh refuses a batch with no such section in it or in its plan. The cases a reviewer and
 every fix round check the build against, one named test per case: limits (empty, tiny, huge, cut off mid-way),
 timing (two actions or replies in either order, retries, timeouts) and odd data (special characters, missing
-fields, duplicates, old shapes).
+fields, duplicates, old shapes). A plan whose steps or cuts parse, refuse, reject or validate input lists its
+bad-input cases (absent or missing, junk or trailing, empty, quoted) here, or writes `Bad input: none, <reason>`.
 
 - <case>: <the test that checks it>
 
