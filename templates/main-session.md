@@ -67,7 +67,8 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
   only when the owner named another for that unit. A size target in a
   planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
-  trimming needed content to fit. One judge round and one revision, never a judging loop. The Sol judge may run
+  trimming needed content to fit. One judge round and one revision, never a judging loop; `seat.sh` refuses a judge
+  round past `planJudgeRounds` (2) started by hand, and main then rules on the open findings. The Sol judge may run
   on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never
   refuse an answer for a missing tool. Launch each seat under its own role name and the build's unit name: every
   plan seat works in the unit's own worktree `<unit>`, which its first launch cuts from main and marks as
