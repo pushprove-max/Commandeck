@@ -121,6 +121,8 @@
   helper or a test that names both sides. Preview the same edit to all of them
   first (a dry run) so none is missed: a text search misses a copy that was
   renamed.
+- Pick the smallest change that FULLY solves the problem: no half-built
+  features, no extra design.
 - A plan step that adds an abstraction, a config surface, a dependency or a
   file names the simplest alternative it considered and why that loses. A step
   that adds flexibility the request did not ask for is a review finding: P1
