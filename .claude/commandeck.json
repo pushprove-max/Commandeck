@@ -1,5 +1,8 @@
 {
   "testCommand": "bash ci/version-check.sh main && bash scripts/run-shell-tests.sh --changed",
   "fullSuiteBeforeFinal": false,
-  "serena": true
+  "serena": true,
+  "reviewLoop": {
+    "passCap": 99
+  }
 }
