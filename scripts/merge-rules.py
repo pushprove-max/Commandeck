@@ -182,6 +182,8 @@ MADE_FROM = {
     # 0.64.0 main-session.md: a hand-started judge round is capped; 0.65.0: the second judge runs on Opus and a tiny
     # batch gets one planner and no judge
     "49f25da0": ("895a7e56",), "25071f40": ("49f25da0",),
+    # 0.67.0 main-session.md: the hand-started judge round cap is lifted again
+    "60dbe5c3": ("25071f40",),
 }
 
 

@@ -330,21 +330,6 @@ launch)
     echo "Change the spec, or rerun it on purpose with COMMANDECK_SEAT_FORCE=1." >&2
     exit 2
   fi
-  # One plan gets at most review-limits.planJudgeRounds judge rounds; past that main rules on the open findings and the
-  # build starts. A round is a launch whose verdict collect read: collect writes one tagged line per verdict.
-  # The plan's count is the most rounds any of its judge seats has, so a renamed or swapped judge does not restart it.
-  if [[ $ROLE == plan-judge-* ]]; then
-    JCAP=$(pp_review_limit planJudgeRounds) || { echo "REFUSED: cannot read review-limits.planJudgeRounds from $(pp_routing); nothing was opened" >&2; exit 2; }
-    JDONE=0
-    for JR in "$SCRATCH/seat-${SEAT_REPO:+$SEAT_REPO@}$UNIT"-plan-judge-*.txt.rounds; do
-      [ -f "$JR" ] || continue
-      JN=$(cut -d' ' -f1 "$JR" | sort -u | grep -c . || true)
-      [ "${JN:-0}" -le "$JDONE" ] || JDONE=$JN
-    done
-    [ "$JDONE" -lt "$JCAP" ] || {
-      echo "REFUSED: the $UNIT plan has had $JDONE judge rounds, the review-limits.planJudgeRounds cap of $JCAP; rule on its open findings instead. Nothing was opened." >&2
-      exit 2; }
-  fi
   # Delegate by contract (ruling 2026-09-13, orchestrator invariant 3): the
   # allowed changes a spec asks for must match the sandbox the seat runs in.
   # The certifier is `--sandbox read-only`; its spec on 2026-09-13 told it to
@@ -813,7 +798,6 @@ collect)
   pp_close_items "$H"
   pp_pane_close "$H" "verdict collected" || true
   echo "verdict=$V" >> "$REC"
-  [[ $ROLE != plan-judge-* ]] || echo "$(sed -n 's/^tag=//p' "$REC" | tail -1) $V" >> "$REC.rounds"
   pp_unit_event "$UNIT" seat-verdict
   echo "collected=$(date +%s)" >> "$REC"
   [[ $ROLE != plan-author* ]] || plan_lines >> "$REC"
