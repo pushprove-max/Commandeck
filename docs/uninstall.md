@@ -22,7 +22,13 @@ bash "$PLUGIN/scripts/uninstall.sh" --delete-data
 Uninstall stops that project's watcher, removes its dashboard registration
 when setup added it, and restores managed project files. In merged settings
 it removes the plugin's entries and preserves your later edits. A `changed
-since setup` line means that file cannot be restored byte for byte. The last
+since setup` line means that file cannot be restored byte for byte. A rule
+file Auto Setup rewrote comes back byte for byte whatever it holds; one that
+setup itself created (a global CLAUDE.md from an earlier Custom setup) comes
+back to its text from right before Auto Setup rewrote it, without the
+plugin's blocks, and is not deleted. An edit
+you made after the rewrite is first kept beside it
+(`<file>.commandeck-edited-<date>`), and the uninstall says where. The last
 project releases the machine's managed Codex hooks, dashboard job, global
 entries and unchanged managed status line.
 

@@ -1,0 +1,35 @@
+{
+  "note": "Auto Setup's two profiles, as overrides of config/recommended.json: auto-setup.sh --args sends every recommended option, then a profile's options over them, then its flags. claude takes everything claude-openai has, with its own options on top. Model families only, never a version.",
+  "profiles": {
+    "claude-openai": {
+      "options": {
+        "maxBuilders": 3,
+        "fixerEffort": "medium"
+      },
+      "flags": [
+        "--strict",
+        "--name", "Chief of Staff",
+        "--dashboard", "--bind", "127.0.0.1", "--hosts", "",
+        "--trust-all-hooks", "on",
+        "--auto-mode", "add",
+        "--notify-wrapper", "yes",
+        "--rules", "merge", "--rules-drop", "",
+        "--own-startup", "merge", "--own-main-session", "merge",
+        "--worker-skills-off", "", "--worker-plugins-off", "",
+        "--builder-clear-line", "", "--issue-sizing", "",
+        "--small-build", "", "--new-test-cap", "",
+        "--max-review-min", "", "--max-test-percent", "", "--max-usd", ""
+      ]
+    },
+    "claude": {
+      "options": {
+        "codexReviewerAgent": "claude",
+        "codexReviewerModel": "opus",
+        "codexReviewerEffort": "medium",
+        "planJudgeSolAgent": "claude",
+        "planJudgeSolModel": "opus",
+        "planJudgeSolEffort": "high"
+      }
+    }
+  }
+}

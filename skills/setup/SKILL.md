@@ -2,7 +2,7 @@
 name: setup
 description: Set this project up for the commandeck workflow. Use when the owner runs /commandeck:setup or says "set up commandeck", "install the workflow here". Run it in the project's main checkout.
 disable-model-invocation: true
-allowed-tools: Bash(bash *), Bash(python3 *), AskUserQuestion
+allowed-tools: Bash(bash *), Bash(python3 *), AskUserQuestion, Write(~/.commandeck/scratch/**)
 ---
 
 # /commandeck:setup
@@ -10,7 +10,9 @@ allowed-tools: Bash(bash *), Bash(python3 *), AskUserQuestion
 Ask each question once, show the owner every change before it is made, then
 run one script. Do not edit any settings or rules file yourself: `setup.sh`
 records what was there before it changes it and copies an owner's file beside
-it first, and an edit made around it cannot be undone by uninstall.
+it first, and an edit made around it cannot be undone by uninstall. Auto Setup
+writes its merged rule text only into the staging folder `auto-setup.sh
+--sources` names, never into a rule file: `setup.sh` writes it from there.
 
 Rule: a refused or failed question call is not an answer: say which question it was and the error (such as `Invalid tool parameters`), ask the same thing again in plain text, and never skip it or assume a default.
 
@@ -54,9 +56,47 @@ orchestrator that hands each build to a Builder pane in its own worktree, has
 each build reviewed, and merges it locally only after review and tests pass.
 Setup will write its config (`.claude/commandeck.json`), permission rules,
 git's local exclude list, two background jobs (a watcher and, if chosen, the
-dashboard), and only what the answers below choose; nothing is written until
-the owner has seen the full list and said Apply. Then read back the "Found"
+dashboard), and only what the answers below choose; with Custom, nothing is
+written until the owner has seen the full list and said Apply, and Auto Setup
+applies its profile with no preview. Then read back the "Found"
 lines `--questions begin` printed, in plain words.
+
+Then ask:
+
+   Ask "Setup": Auto Setup (recommended) | Custom
+   - Auto Setup: one more question, then the plugin's reference profile is applied with the values detected here, and your rule files are merged with the plugin's and tightened (each one backed up first; uninstall puts the originals back). Go to "Auto Setup" below.
+   - Custom: every question below, as before; setup never edits your own rule text. Go to step 1.
+
+## Auto Setup
+
+Auto asks one question, plus the global CLAUDE.md question when that file is
+there, and nothing else: no project-file question, no preview, no Apply, no
+demo build.
+
+1. Ask the profile. Only when `--questions begin` printed both "Codex reviewer: ready" and "Codex model: found":
+   Ask "Auto profile": Claude + Codex (recommended) | Claude Only
+   Otherwise:
+   Ask "Auto profile": Claude Only (recommended) | Stop
+   - Claude + Codex: the reference profile; Codex reviews each build and runs the second plan judge, on the newest model the Codex CLI reports. `claude-openai`
+   - Claude Only: the same profile, with the reviewer and the second plan judge on Opus at the same efforts. `claude`
+   - Stop: run `setup.sh --questions end` and stop.
+2. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/auto-setup.sh --sources`. It empties the staging folder and prints, tab-separated, `staging <folder>`, `template <name> <path>` for the plugin's four rule templates, and `file <key> <path>` or `linked <key> <path>` for each of the owner's rule files. A `linked` file is a link to or from AGENTS.md or the global file: leave it alone.
+   For each `file` line, read the file and the templates it is weighed against (AGENT_STARTUP.md and main-session.md for the project's files; global-claude.md and global-rules.md for `global/CLAUDE.md`). Write its merged text, with the Write tool, to `<folder>/<key>` (`<folder>/global/CLAUDE.md` for the global file):
+   - drop each owner line that a plugin template rule already states (the plugin's rule still loads);
+   - drop each owner line that conflicts with a plugin rule: the plugin's rule wins;
+   - tighten the wording of what is left, keeping every rule the plugin does not state;
+   - compare each file only with the plugin's templates, never with the owner's other files;
+   - keep the front matter the file opens with as its first lines, and write no `<!-- commandeck:` line.
+   A file that needs no change is not staged. For each dropped conflicting line, add one line to `<folder>/conflicts.tsv`: `<key>`, the owner's line, the plugin's rule, separated by tabs (no tab inside a field). Write nothing outside the staging folder.
+3. When step 2 printed a `file global/CLAUDE.md` line: stage it as above (a file that needs no change stays unstaged), run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/auto-setup.sh --global-preview <folder>`, and show what it printed, as printed: the change, and one `CONFLICT:` line per line the plugin's rule replaces. That file applies to every project on this machine. Then:
+   Ask "Global CLAUDE.md": Optimize it (recommended) | Leave it as it is
+   - Optimize it: the staged text replaces the file (a copy is made first), and the plugin's rules it lacks are added in marked blocks. `--global-rewrite yes --global-claude merge --global-rules merge`
+   - Leave it as it is: no byte of the file changes. `--global-rewrite no --global-claude skip --global-rules skip`
+   With no global file, ask the same question with no preview: Optimize it creates the file with the plugin's rules (`--global-claude install --global-rules install`); Leave it as it is sends `--global-claude skip --global-rules skip`.
+   With a `linked global/CLAUDE.md` line (the global file and AGENTS.md are one file), stage nothing for it and ask the same question with no preview: Optimize it adds the plugin's rules in marked blocks and keeps your text (`--global-claude merge --global-rules merge`); Leave it as it is sends `--global-claude skip --global-rules skip`.
+4. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --auto <claude-openai|claude> --rules-rewrite <folder>` and step 3's flags. If it stops on a `--rules-rewrite:` line, it changed nothing: fix the staged file it names (the folder is kept) and run the same command again. Any other stop: read its line to the owner.
+5. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh`. If it prints `relay: <n> commits behind main`, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase` and show its line.
+6. Show setup's summary as printed, its `rules:` and `auto:` lines included: each rule file rewritten or left, each conflict settled, each backup path, each detected value and where it came from, and the dashboard's address. Run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh` and show every line that is not `ok`. Stop there.
 
 ## 1. The questions
 
@@ -163,7 +203,7 @@ Ask them in this order, up to four questions per call.
    When a relay already exists, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh`. If it prints `relay: <n> commits behind main`:
    Ask "Relay": Rebase it (recommended) | Leave as is
    - Rebase it: its worktree moves onto the project's local main, so its hooks and rules are current. Say how many commits behind, and that the relay pane may be running and sees the change. After Apply, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/relay-sync.sh --rebase`; it refuses and changes nothing when the worktree has uncommitted changes or the rebase conflicts: show its line.
-   - Leave as is: nothing is run. Never run `--rebase` without this answer.
+   - Leave as is: nothing is run. In Custom, never run `--rebase` without this answer.
 8. A dashboard?
    Ask "Dashboard": On, this machine only (recommended) | Off | <saved names, if any>
    - On, this machine only: a local web page of builds and costs, served by a background job, reachable from this machine only. `--dashboard --bind 127.0.0.1 --hosts ''`

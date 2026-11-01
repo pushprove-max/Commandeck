@@ -1,5 +1,31 @@
 ## What setup asks
 
+The first question is Setup: Auto Setup (recommended) or Custom.
+
+Auto Setup asks one more question, Auto profile: Claude + Codex (offered when the Codex reviewer is ready and its
+model was found) or Claude Only. Then it applies the plugin's reference profile (`config/auto-profile.json`, over
+`config/recommended.json`) with no preview. Claude Only puts the reviewer and the second plan judge on Opus at the
+same efforts. The profiles name model families only (`opus`, `sol`), never a version. Auto detects the rest:
+
+| Detected | How |
+|---|---|
+| Merge check | `npm test` when package.json has a `test` script other than npm's placeholder, else `make test` when the Makefile has a `test:` target, else none (and the full suite off) |
+| Typecheck | `npm run typecheck` when package.json has that script, else `npx tsc --noEmit` when a root `tsconfig.json` is there, else none |
+| Screen code | `web/src/` when it exists, else none |
+| Lockfile reads | denied for each lockfile git tracks |
+| Context window | 1M when the model setting ends in `[1m]`, else 200K |
+
+Auto also merges your rule files (`CLAUDE.md`, `.claude/rules/`, your own `AGENT_STARTUP.md` and
+`.claude/main-session.md`) with the plugin's rules, drops what the plugin already states, lets the plugin's rule win
+a conflict, and tightens the rest. Each file is copied beside it first (`<file>.commandeck-bak-<date>`), and uninstall
+puts the original back byte for byte. A rule file linked to or from `AGENTS.md` or the global file is left as it is.
+The global `~/.claude/CLAUDE.md` serves every project, so Auto shows its planned change, with each conflicting line
+flagged, and asks Global CLAUDE.md: Optimize it or Leave it as it is. The report lists each rewritten file, each
+settled conflict and its backup, each detected value and where it came from, and the dashboard's local address,
+with the one command that opens it to the network once a password is set.
+
+Custom asks the questions below, as before, and never edits your own rule text.
+
 Each question says what its choices do, offers the recommended one first
 (a saved answer first on a rerun), and is asked only when it applies. While
 setup asks, the picker guard's stray-keypress option is off.

@@ -71,7 +71,7 @@ if [ -n "$LAST" ] && [ -s "$IL_MACHINE" ]; then
     il_notify ''
     # The owner's wrapper is theirs to edit: uninstall only says which line now calls nothing.
     W=$(il_notify_wrapper)
-    [ -z "$W" ] || ! il_notify_hooks "$W" | grep -qxF "$IL_LINK/hooks/codex-notify.sh" \
+    [ -z "$W" ] || ! grep -qxF "$IL_LINK/hooks/codex-notify.sh" <<<"$(il_notify_hooks "$W")" \
       || echo "codex notify: the wrapper $W still calls $IL_LINK/hooks/codex-notify.sh, which uninstall has removed; take this line out of it: $(grep -v '^[[:space:]]*#' "$W" | grep -F "$IL_LINK/hooks/codex-notify.sh" | head -1)"
   done < <(jq -r '.entries | keys[] | select(endswith("/hooks.json"))' "$IL_MACHINE")
   ! il_has "$IL_MACHINE" "$IL_GLOBAL" || [ ! -e "$IL_GLOBAL" ] || il_global_out

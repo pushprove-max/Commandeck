@@ -1021,19 +1021,164 @@ il_global() {
   il_put "$IL_MACHINE" "$IL_GLOBAL" "$(IL_BEGIN="<!-- commandeck:$2:begin -->" IL_END="<!-- commandeck:$2:end -->" il_block_text "$IL_GLOBAL" <(printf '%s\n' "$body"))"
 }
 
-# il_backup <manifest> <file> -- a copy of an owner's file, <file>.commandeck-bak-<date>, made before setup
+# il_backup <manifest> <file> [rewrite] -- a copy of an owner's file, <file>.commandeck-bak-<date>, made before setup
 # first changes it that day, beside it where the owner sees it. Recorded as kind "backup": uninstall
 # removes it once the file is back to the bytes it copies, and keeps it otherwise. An existing one is kept.
 il_backup() {
   local b=$2.commandeck-bak-$(date +%Y%m%d)
-  # A file setup itself created holds nothing of the owner's to keep.
-  [ -s "$2" ] && [ ! -e "$b" ] && [ "$(jq -r --arg p "$2" '.entries[$p].prior // empty' "$1" 2>/dev/null)" != "did not exist" ] || return 0
+  [ -s "$2" ] && [ ! -e "$b" ] || return 0
+  # A file setup itself created holds nothing of the owner's to keep. A rules rewrite (<kind> rewrite) backs up every
+  # file it replaces, whatever its prior: il_restore drops a backup that holds nothing outside the plugin's blocks.
+  [ "${3-}" = rewrite ] || [ "$(jq -r --arg p "$2" '.entries[$p].prior // empty' "$1" 2>/dev/null)" != "did not exist" ] || return 0
   # A plan says it once per file: the copy is taken once, before the first change.
   if [ -n "${IL_PLAN:-}" ]; then
     case $'\n'${IL_BAK_SAID:-} in *$'\n'"$2"$'\n'*) return 0 ;; esac; IL_BAK_SAID+=$2$'\n'
     echo "plan: would copy $2 to $b first (a backup; yours to keep)"; return 0
   fi
   il_record "$1" backup "$b" && cp -p "$2" "$b" && { [ -z "${IL_WROTE:-}" ] || printf 'backup\t%s\n' "$b" >> "$IL_WROTE"; }
+}
+
+# --- Auto Setup's rules rewrite (issue 536): the owner's rule files replaced by the text the skill staged ---
+# Kind "rewrite" is a merge entry whose file setup replaced whole: `written` names the blob of the text it wrote, so
+# uninstall can tell a later edit (kept beside the file) from setup's own text before it puts the prior bytes back.
+
+# il_keep_edit <file> -- prints <file>.commandeck-edited-<date>, or the first free -<n> after it, and copies the file
+# there (not in a plan). The copy is the owner's: no manifest records it.
+il_keep_edit() {
+  local e n=1 c
+  e=$1.commandeck-edited-$(date +%Y%m%d) c=$e
+  while [ -e "$c" ]; do c=$e-$n; n=$((n + 1)); done
+  [ -n "${IL_PLAN:-}" ] || cp -p "$1" "$c" || return 1
+  printf '%s\n' "$c"
+}
+# il_rule_sources -- the owner's rule files Auto may rewrite, one a line: `file|linked<TAB><key><TAB><path>`. A file whose
+# real path is AGENTS.md's or the global file's (a link either way) is linked: setup writes the Codex block or the
+# global blocks through it, so Auto leaves it as it is. So is the global file when it and AGENTS.md are one file.
+il_rule_sources() {
+  local p k r ra rg
+  ra=$(readlink -f "$IL_AGENTS" 2>/dev/null) || ra=; rg=$(readlink -f "$IL_GLOBAL" 2>/dev/null) || rg=
+  for p in "$PP_MAIN/CLAUDE.md" "$PP_MAIN"/.claude/rules/*.md "$PP_MAIN/AGENT_STARTUP.md" "$PP_MAIN/.claude/main-session.md"; do
+    [ -f "$p" ] || continue
+    k=${p#"$PP_MAIN"/} r=$(readlink -f "$p")
+    if [ "$r" = "$ra" ] || [ "$r" = "$rg" ]; then printf 'linked\t%s\t%s\n' "$k" "$p"; else printf 'file\t%s\t%s\n' "$k" "$p"; fi
+  done
+  # The global file and AGENTS.md as one file (a link either way): setup writes the Codex block through it, so it is
+  # linked too.
+  [ ! -f "$IL_GLOBAL" ] || if [ -n "$ra" ] && [ "$rg" = "$ra" ]; then printf 'linked\tglobal/CLAUDE.md\t%s\n' "$IL_GLOBAL"; else printf 'file\tglobal/CLAUDE.md\t%s\n' "$IL_GLOBAL"; fi
+}
+# il_rules_strip <file> -- the file with every plugin marked block out.
+il_rules_strip() { awk '/^<!-- commandeck:([a-z-]+:)?begin -->$/ { skip = 1 } !skip { print } /^<!-- commandeck:([a-z-]+:)?end -->$/ { skip = 0 }' "$1"; }
+# il_rules_owned <file> -- the file holds text outside the plugin's blocks. One awk reads it whole: no pipe whose reader
+# stops early decides it.
+il_rules_owned() { awk '/^<!-- commandeck:([a-z-]+:)?begin -->$/ { skip = 1 } !skip && /[^[:space:]]/ { n = 1 } /^<!-- commandeck:([a-z-]+:)?end -->$/ { skip = 0 } END { exit !n }' "$1"; }
+# il_rules_same <file> <text file> -- the file holds that text, the plugin's blocks aside: a block setup added since,
+# the blank lines beside it (il_block_text puts one before it, il_own one after) and trailing blank lines are no edit
+# of the owner's. Every other line counts, blank ones too: a paragraph break the owner adds is an edit.
+il_rules_same() {
+  [ -f "$1" ] && [ -f "$2" ] || return 1
+  awk 'function blank(s) { return s ~ /^[[:space:]]*$/ }
+    FILENAME == ARGV[1] { w[++nw] = $0; next }
+    /^<!-- commandeck:([a-z-]+:)?begin -->$/ { while (nc && blank(c[nc])) nc--; if (!nc || c[nc] != SUBSEP) c[++nc] = SUBSEP; skip = 1; next }
+    skip { if ($0 ~ /^<!-- commandeck:([a-z-]+:)?end -->$/) { skip = 0; after = 1 }; next }
+    after && blank($0) { next }
+    { after = 0; c[++nc] = $0 }
+    END {
+      while (nc && blank(c[nc])) nc--; while (nw && blank(w[nw])) nw--
+      # SUBSEP stands where a block was: any blank lines of the text there are its separator.
+      for (i = 1; i <= nc; i++) {
+        if (c[i] == SUBSEP) { while (j < nw && blank(w[j + 1])) j++; continue }
+        if (j >= nw || c[i] != w[j + 1]) exit 1
+        j++
+      }
+      exit (j < nw)
+    }' "$2" "$1"
+}
+# il_rewrite_aside <file> <written sha> -- an edit of a file setup rewrote, made since its last write, copied beside it
+# and named; fails, naming the file, when the copy cannot be made, so the caller leaves the file and its record.
+il_rewrite_aside() {
+  local e
+  [ -e "$1" ] || return 0
+  ! il_rules_same "$1" "$IL_DIR/blobs/${2#sha256:}" || return 0
+  e=$(il_keep_edit "$1") || { echo "could not copy your edit of $1 aside, left as it is: $1"; return 1; }
+  echo "kept your edit of $1, made after setup rewrote it, beside it: $e"
+}
+# il_front <file> -- the front matter the file opens with (--- to ---), or nothing.
+il_front() { awk 'NR == 1 && !/^---[ \t]*$/ { exit } { b = b $0 "\n" } NR > 1 && /^---[ \t]*$/ { printf "%s", b; exit }' "$1"; }
+# il_rules_manifest <key> -- the manifest a rule file's entry is in: the global file is the machine's.
+il_rules_manifest() { if [ "$1" = global/CLAUDE.md ]; then echo "$IL_MACHINE"; else echo "$IL_PROJECT"; fi; }
+# il_rules_check <staging folder> <yes|no|''> -- refuses (one line, exit 1) a staging folder setup cannot write as it
+# is: none there; a name --sources did not list as a file, or listed as linked; a plugin marker; front matter the
+# original opens with and the staged text lacks; a conflicts.tsv line without three fields; a staged global file with
+# no yes or no. Changes nothing.
+il_rules_check() {
+  local d=$1 g=$2 src p k o fm
+  [ -d "$d" ] || { echo "setup: --rules-rewrite: no staging folder at $d (auto-setup.sh --sources makes it). Nothing was changed" >&2; return 1; }
+  src=$(il_rule_sources)
+  while IFS= read -r -d '' p; do
+    k=${p#"$d"/}
+    [ "$k" != conflicts.tsv ] || continue
+    o=$(K=$k awk -F'\t' '$2 == ENVIRON["K"] { print $1 "\t" $3; exit }' <<<"$src")
+    case ${o%%$'\t'*} in
+      file) ;;
+      linked) echo "setup: --rules-rewrite: $k links to AGENTS.md or the global CLAUDE.md, so Auto leaves it; take it out of $d. Nothing was changed" >&2; return 1 ;;
+      *) echo "setup: --rules-rewrite: $d holds '$k', which names no rule file auto-setup.sh --sources listed. Nothing was changed" >&2; return 1 ;;
+    esac
+    [ -f "$p" ] && [ ! -L "$p" ] || { echo "setup: --rules-rewrite: $p is not a plain file. Nothing was changed" >&2; return 1; }
+    ! grep -q '<!-- commandeck:' "$p" || { echo "setup: --rules-rewrite: the staged $k holds a plugin marker (<!-- commandeck:); setup adds the plugin's blocks itself. Nothing was changed" >&2; return 1; }
+    fm=$(il_front "${o#*$'\t'}")
+    [ -z "$fm" ] || [ ! -s "$p" ] || [ "$(head -n "$(grep -c '' <<<"$fm")" "$p")" = "$fm" ] \
+      || { echo "setup: --rules-rewrite: the staged $k does not open with the front matter ${o#*$'\t'} opens with. Nothing was changed" >&2; return 1; }
+    [ "$k" != global/CLAUDE.md ] || case $g in yes|no) ;; *) echo "setup: --rules-rewrite: global/CLAUDE.md is staged, so --global-rewrite yes or no must say whether to write it. Nothing was changed" >&2; return 1 ;; esac
+  done < <(find "$d" -mindepth 1 ! -type d -print0)
+  [ ! -e "$d/conflicts.tsv" ] || awk -F'\t' 'NF != 3 { print "setup: --rules-rewrite: conflicts.tsv line " NR " has " NF " fields, not three (<file>, your line, the plugin'"'"'s rule). Nothing was changed" > "/dev/stderr"; bad = 1; exit } END { exit bad }' "$d/conflicts.tsv"
+}
+# il_rules_staged <staging folder> <yes|no|''> -- the files this run rewrites, `<key><TAB><path>`: listed, not linked,
+# staged and not empty; the global file only on yes.
+il_rules_staged() {
+  local s k p
+  while IFS=$'\t' read -r s k p; do
+    [ "$s" = file ] && [ -s "$1/$k" ] || continue
+    [ "$k" != global/CLAUDE.md ] || [ "$2" = yes ] || continue
+    printf '%s\t%s\n' "$k" "$p"
+  done < <(il_rule_sources)
+}
+# il_rules_record <staging folder> <yes|no|''> -- the manifest step: each file this run rewrites recorded as kind merge
+# (il_record keeps an earlier setup's first prior). A file it does not write gets no record from here.
+il_rules_record() {
+  local k p
+  while IFS=$'\t' read -r k p; do il_record "$(il_rules_manifest "$k")" merge "$p" || return 1; done < <(il_rules_staged "$1" "$2")
+}
+# il_rules_rewrite <staging folder> <yes|no|''> -- each staged file written over its original, run after il_rules_record
+# and before il_global and il_own add the plugin's blocks. Per file: a same-day edit since setup's last write is copied
+# aside first (il_backup keeps one copy a day), then the day's backup, then kind rewrite and the written text's blob,
+# together, then the text. Prints one `rules:` line per file and per settled conflict.
+il_rules_rewrite() {
+  local d=$1 g=$2 s k p m b w e t bf done=
+  while IFS=$'\t' read -r s k p; do
+    if [ "$s" = linked ]; then echo "rules: $k links to $(readlink -f "$p"), left as it is"; continue; fi
+    if [ "$k" = global/CLAUDE.md ] && [ -e "$d/$k" ] && [ "$g" != yes ]; then echo "rules: $p left as it is (Leave it)"; continue; fi
+    [ -e "$d/$k" ] || { echo "rules: $k left as it is (nothing staged for it)"; continue; }
+    [ -s "$d/$k" ] || { echo "rules: $k left as it is (staged empty)"; continue; }
+    m=$(il_rules_manifest "$k") b=$p.commandeck-bak-$(date +%Y%m%d)
+    w=$(jq -r --arg p "$p" '.entries[$p].written // empty' "$m" 2>/dev/null) || w=
+    if [ -e "$b" ] && ! il_rules_same "$p" "$b" && ! { [ -n "$w" ] && il_rules_same "$p" "$IL_DIR/blobs/${w#sha256:}"; }; then
+      e=$(il_keep_edit "$p") || return 1
+      echo "rules: $([ -z "${IL_PLAN:-}" ] || echo 'would keep')$([ -n "${IL_PLAN:-}" ] || echo kept) your edit of $k since today's backup, byte for byte: $e"
+    fi
+    il_backup "$m" "$p" rewrite || return 1
+    # `before`: the text right before the first rewrite, the plugin's blocks out as uninstall takes them out; a file setup
+    # created comes back to it (the owner's ruling, 2026-11-01). A later rewrite keeps the first.
+    t=$(mktemp) && printf '%s\n' "$(il_rules_strip "$p")" > "$t" && bf=$(il_sha "$t") || { rm -f "${t:-}"; return 1; }
+    if [ -z "${IL_PLAN:-}" ]; then cp "$t" "$IL_DIR/blobs/$bf" || { rm -f "$t"; return 1; }; fi
+    rm -f "$t"
+    w=$(il_sha "$d/$k") || return 1
+    if [ -z "${IL_PLAN:-}" ]; then cp "$d/$k" "$IL_DIR/blobs/$w" || return 1; fi
+    il_set "$m" --arg p "$p" --arg w "sha256:$w" --arg b "sha256:$bf" '.entries[$p].kind = "rewrite" | .entries[$p].written = $w | .entries[$p].before //= $b' || return 1
+    il_write "$p" < "$d/$k" || return 1
+    echo "rules: rewrote $k$([ ! -e "$b" ] || echo " (the original: $b)")"
+    done+=$k$'\n'
+  done < <(il_rule_sources)
+  [ ! -f "$d/conflicts.tsv" ] || D=$done awk -F'\t' 'index("\n" ENVIRON["D"], "\n" $1 "\n") { print "rules: conflict settled in " $1 ": yours \"" $2 "\"; the plugin'"'"'s rule wins: \"" $3 "\" (yours stays in the backup)" }' "$d/conflicts.tsv"
 }
 
 # il_rules_against -- the project's own rule files main loads, as merge-rules.py arguments: CLAUDE.md and
@@ -1059,7 +1204,7 @@ il_own() {
   shift 4
   [ -f "$f" ] || return 0
   # A merge block an earlier run added comes out on any other answer.
-  [ "$c" = merge ] || ! il_cat "$f" | grep -qxF '<!-- commandeck:merge:begin -->' \
+  [ "$c" = merge ] || ! grep -qxF '<!-- commandeck:merge:begin -->' <<<"$(il_cat "$f")" \
     || il_put "$m" "$f" "$(IL_BEGIN='<!-- commandeck:merge:begin -->' IL_END='<!-- commandeck:merge:end -->' il_block_text "$f")"
   case $c in
     merge) il_record "$m" merge "$f"
@@ -1122,13 +1267,31 @@ il_empty() {
 # was there, then the manifest itself. Run it after the plugin's entries are
 # out of the merge files. Prints one line per path it had to leave.
 il_restore() {
-  local m=$1 kind prior p blob
-  while IFS=$'\t' read -r kind prior p; do
+  local m=$1 kind prior written p blob d rows fail= empty="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  # The whole entry list first: a manifest jq cannot read stays, with its bytes, rather than going unread.
+  rows=$(jq -r '.entries | to_entries | sort_by(.value.kind == "backup")[] | select(.value.prior and .value.kind != "dir") | [.value.kind, .value.prior, (.value.written // "-"), (.value.before // "-"), .key] | @tsv' "$m") \
+    || { echo "could not read the install record $m; it stays, with the bytes setup kept" >&2; return 1; }
+  while IFS=$'\t' read -r kind prior written before p; do
+    [ -n "$p" ] || continue
     blob=$IL_DIR/blobs/${prior#sha256:}
-    if [ "$kind" = backup ]; then
-      # Last (sorted so): the file it copies is back by now, or was left as the owner changed it.
-      if cmp -s "$p" "${p%.commandeck-bak-*}"; then rm -f "$p"
-      elif [ -e "$p" ]; then echo "kept setup's copy of ${p%.commandeck-bak-*} as it was before setup: $p"; fi
+    if [ "$kind" = rewrite ]; then
+      # Setup replaced the owner's text whole, whatever the prior: an edit made since its last write is copied beside
+      # the file first, then the prior comes back, read only here.
+      il_rewrite_aside "$p" "$written" || { fail=1; continue; }
+      case $prior in
+        # A file setup created comes back to its text right before the first rewrite, never removed (the
+        # owner's ruling, 2026-11-01); through a link, into the link's target.
+        "did not exist"|"dangling link") if [ ! -e "$IL_DIR/blobs/${before#sha256:}" ]; then echo "the bytes setup kept for $p are gone ($IL_DIR/blobs/${before#sha256:}), left as it is: $p"
+           else [ -e "$p" ] && [ "$(il_sha "$p")" = "${before#sha256:}" ] || il_write "$p" < "$IL_DIR/blobs/${before#sha256:}"; fi ;;
+        *) if [ ! -s "$blob" ] && [ "$prior" != "$empty" ]; then echo "the bytes setup kept for $p are gone ($blob), left as it is: $p"
+           else [ -e "$p" ] && [ "$(il_sha "$p")" = "${prior#sha256:}" ] || il_write "$p" < "$blob"; fi ;;
+      esac
+    elif [ "$kind" = backup ]; then
+      # Last (sorted so): the file it copies is back by now, or was left as the owner changed it. A backup with nothing
+      # outside the plugin's blocks holds nothing of the owner's.
+      d=${p##*.commandeck-bak-}; [[ $d =~ ^[0-9]{8}$ ]] && d=${d:0:4}-${d:4:2}-${d:6:2}
+      if cmp -s "$p" "${p%.commandeck-bak-*}" || { [ -e "$p" ] && ! il_rules_owned "$p"; }; then rm -f "$p"
+      elif [ -e "$p" ]; then echo "kept setup's copy of ${p%.commandeck-bak-*} as it was on $d, before setup changed it that day: $p"; fi
     elif [ "$prior" = "dangling link" ]; then
       # What setup wrote through the link goes; the link stays as it was.
       [ -L "$p" ] && [ -e "$p" ] || continue
@@ -1138,14 +1301,16 @@ il_restore() {
       [ -e "$p" ] || continue
       if [ "$kind" = own ] || il_empty "$p"; then rm -f "$p"
       else echo "changed since setup, left as it is: $p"; fi
-    elif [ ! -s "$blob" ] && [ "$prior" != "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+    elif [ ! -s "$blob" ] && [ "$prior" != "$empty" ]; then
       echo "the bytes setup kept for $p are gone ($blob), left as it is: $p"
     elif [ ! -e "$p" ] || [ "$kind" = own ] || il_same "$p" "$blob"; then
       [ -e "$p" ] && [ "$(il_sha "$p")" = "${prior#sha256:}" ] || il_write "$p" < "$blob"
     else echo "changed since setup, left as it is: $p"; fi
-  done < <(jq -r '.entries | to_entries | sort_by(.value.kind == "backup")[] | select(.value.prior and .value.kind != "dir") | [.value.kind, .value.prior, .key] | @tsv' "$m")
+  done <<<"$rows"
   # The folders setup made, deepest first; one that now holds something stays.
   jq -r '.entries | to_entries[] | select(.value.kind == "dir") | .key' "$m" | awk '{ print length($0) "\t" $0 }' | sort -rn | cut -f2- \
     | while IFS= read -r p; do rmdir "$p" 2>/dev/null || true; done
+  # An edit that could not be copied aside keeps the manifest and so the blobs: uninstall again restores the rest.
+  if [ -n "$fail" ]; then echo "the install record stays, with the bytes setup kept, so uninstall can run again: $m" >&2; return 1; fi
   rm -f "$m"
 }

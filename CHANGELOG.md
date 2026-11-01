@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.67.0 -- 2026-11-01
+
+### Setup
+
+- `/commandeck:setup` now asks Auto Setup or Custom first. Custom is the same questions as before, and it never edits your rule text.
+- Auto Setup asks one question: Claude + Codex, offered when the Codex reviewer is ready, or Claude Only, which runs the reviewer and the second plan judge on Opus. It then applies the plugin's reference profile, with the merge check, typecheck, screen folders, lockfile rule and context window detected in the project.
+- Auto Setup merges your rule files with the plugin's rules, drops duplicates and conflicting lines (the plugin's rule wins), and tightens the rest. Each file is copied beside it first. The report lists each rewritten file, each settled conflict and its backup.
+- Your global rules file changes only after you see its planned change, with each conflicting line flagged, and pick Optimize it.
+- Uninstall puts every rule file Auto Setup rewrote back byte for byte. A global rules file an earlier Custom setup created comes back to its text from right before Auto Setup, and is not deleted. An edit you made after the rewrite is kept in a file beside it.
+- The recommended set's Codex seats now save the model family `sol`, so each launch runs the newest Codex model and not a pinned version.
+
 ## 0.66.0 -- 2026-10-31
 
 ### Tests

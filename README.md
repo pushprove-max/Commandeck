@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.66.0-111111?style=flat-square" alt="Version 0.66.0">
+  <img src="https://img.shields.io/badge/version-0.67.0-111111?style=flat-square" alt="Version 0.67.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -197,8 +197,13 @@ Open Claude Code in your project's primary git checkout on `main`, then run:
 /commandeck:setup
 ```
 
-Setup asks its questions, shows a preview of every file it would create or
-change, and writes nothing until you choose Apply. It never commits. Then
+Setup first asks Auto Setup or Custom. Auto Setup asks one more question
+(Claude + Codex, or Claude Only), detects the merge check, typecheck, screen
+folders and context window, merges your rule files with the plugin's (each
+backed up first; uninstall restores them byte for byte) and applies the
+plugin's reference profile. Custom asks every question, shows a preview of
+every file it would create or change, and writes nothing until you choose
+Apply. Setup never commits. Then
 check the wiring:
 
 ```text

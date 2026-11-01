@@ -10,6 +10,7 @@
 #          [--global-claude|--global-rules install|block|merge|skip] [--notify-wrapper yes|no] [--install-missing]
 #          [--block-at P1|P2|P3] [--pass-cap <n>] [--fresh-closing yes|no] [--closing-pass yes|no] [--full-suite on|off] [--trust-all-hooks on|off] [--lockfile-deny on|off] [--small-build <lines>|off] [--new-test-cap <n>|off] [--max-review-min <minutes>|off] [--max-test-percent <n>|off] [--max-usd <n>|off] [--review-flags off]
 #          [--own-startup|--own-main-session replace|merge|skip] [--rules merge|skip] [--rules-drop|--rules-keep <rule id>|'']
+#          [--auto claude-openai|claude [--rules-rewrite <staging folder>] [--global-rewrite yes|no]]   (Auto Setup: auto-setup.sh)
 #          [--addons <name>[,<name>...]|none] [--main-cache-ttl 5m|1h|leave] [--worker-cache-ttl 5m|1h|leave] [--relay-cache-ttl 5m|1h|leave] [--auto-mode add|leave|remove] [--plan]
 #          [--worker-skills-off <skill>[,<skill>...]|''] [--worker-plugins-off <plugin@marketplace>[,...]|''] [--keep-word <word>=<name>[,<name>...]|<word>=]
 #   or: setup.sh --questions begin|end
@@ -54,11 +55,16 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/requirements.sh"
 # A value is never read as a flag: `--name --install-missing` names the relay, and is no yes.
 # The options that take a value: this loop and the full parse below both read this one list.
-TAKES=' --profile --scope --name --persona --test-command --typecheck-command --screen-paths --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --lockfile-deny --small-build --new-test-cap --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions '
-INSTALL= ASKED= OPT= PLAN= QUESTIONS= REC= AGENTS=
+TAKES=' --profile --scope --name --persona --test-command --typecheck-command --screen-paths --bind --port --hosts --status-line --builder-clear-line --issue-sizing --option --notify-wrapper --global-claude --global-rules --block-at --pass-cap --fresh-closing --closing-pass --full-suite --trust-all-hooks --lockfile-deny --small-build --new-test-cap --max-review-min --max-test-percent --max-usd --review-flags --own-startup --own-main-session --rules --rules-drop --rules-keep --addons --main-cache-ttl --worker-cache-ttl --relay-cache-ttl --auto-mode --worker-skills-off --worker-plugins-off --keep-word --questions --auto --rules-rewrite --global-rewrite '
+INSTALL= ASKED= OPT= PLAN= QUESTIONS= REC= AGENTS= AUTOP= RREW= GREW= RW= GSET= ADET=
 for a; do
   if [ -n "$OPT" ]; then
     [ "$OPT" != --profile ] || ASKED=$a; [ "$OPT" != --questions ] || QUESTIONS=$a
+    # --auto names the profile too: the requirements checked are its.
+    [ "$OPT" != --auto ] || { AUTOP=$a; ASKED=$a; }
+    # Auto's rules rewrite flags, read here so a misuse is refused before anything is checked or installed (D14).
+    [ "$OPT" != --rules-rewrite ] || RW=1
+    [ "$OPT" != --global-rewrite ] || { GREW=$a; RW=1; GSET=1; }
     # The seats that run on Codex or Claude by an --option answer: rec_agent reads the last of each.
     [ "$OPT" != --option ] || case $a in codexReviewerAgent=*|planJudgeSolAgent=*) AGENTS="$AGENTS $a" ;; esac
     OPT=; continue
@@ -70,6 +76,10 @@ for a; do
     --recommended) REC=1 ;;
   esac
 done
+# Custom never edits the owner's rule text: a rewrite comes only with --auto. No die yet: it is defined below.
+if [ -n "$RW" ] && [ -z "$AUTOP" ]; then echo "setup: --rules-rewrite and --global-rewrite go with --auto <profile> only: Custom setup never edits your rule text. Nothing was changed" >&2; exit 2; fi
+if [ -n "$GSET" ]; then case $GREW in yes|no) ;; *) echo "setup: --global-rewrite takes yes or no, not '$GREW'. Nothing was changed" >&2; exit 2 ;; esac; fi
+case $AUTOP in ''|claude-openai|claude) ;; *) echo "setup: --auto takes claude-openai or claude, not '$AUTOP'. Nothing was changed" >&2; exit 2 ;; esac
 # The picker guard's decoy is off while this marker is under an hour old (worker-ask-guard.sh).
 ASKING=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/commandeck-setup-questions
 case $QUESTIONS in
@@ -107,7 +117,7 @@ need "$ASKED"
 die() { echo "setup: $*" >&2; exit 1; }
 # toks <flag> <answer> -- a token count for the Builder clear line or the issue sizing: 140000, 140k or 140K (140000), off, or '' (the default).
 toks() { [[ $2 =~ ^(off|[1-9][0-9]*[kK]?)?$ ]] || die "$1 takes a number of tokens (140000 or 140k), or off, not '$2'. Nothing was changed"; [[ $2 == *[kK] ]] && echo "${2%[kK]}000" || echo "$2"; }
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,9\}//' >&2; exit 2; }
 # `false` is a stored answer: `// empty` would drop it and the default would come back.
 old() { jq -r "$1 | if . == null then empty else . end" "$IL_CONFIG" 2>/dev/null || true; }
 
@@ -306,6 +316,13 @@ if [ -n "$REC" ]; then
   rec_expand
   set -- ${EXP[@]+"${EXP[@]}"} "$@"
 fi
+# --auto <profile> (issue 536): the Auto profile and the detected values come first the same way, one argument a line.
+if [ -n "$AUTOP" ]; then
+  AA=$(bash "$HERE/auto-setup.sh" --args "$AUTOP") || die "auto-setup.sh --args $AUTOP failed (above). Nothing was changed"
+  AX=(); while IFS= read -r a; do AX+=("$a"); done <<<"$AA"
+  ADET=$(bash "$HERE/auto-setup.sh" --report detected) || ADET=
+  set -- "${AX[@]}" "$@"
+fi
 while [ $# -gt 0 ]; do
   # Two case statements, not one with `;;&`: Bash 3.2 cannot parse that.
   case $TAKES in *" $1 "*) [ $# -ge 2 ] || usage ;; esac
@@ -332,6 +349,11 @@ while [ $# -gt 0 ]; do
       if [ "$rc" = 0 ]; then set -- "${OF%% *}" "${OF#* }" "${@:3}"; continue; fi
       GIVEN=$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '.[$k] = $v' <<<"$GIVEN"); shift 2 ;;
     --recommended) shift ;;
+    --auto) shift 2 ;;
+    # Auto's rules rewrite: the staging folder the skill wrote, and the owner's answer for the global file. Never saved.
+    # (Both were checked after the first loop: D14.)
+    --rules-rewrite) RREW=$2; shift 2 ;;
+    --global-rewrite) GREW=$2; shift 2 ;;
     --issue-sizing) SIZING=$(toks --issue-sizing "$2") || exit 1; shift 2 ;;
     # The owner's answer to the question below, for this run only: an owner's wrapper is changed only on yes.
     --notify-wrapper) case $2 in yes|no) NWRAP=$2 ;; *) usage ;; esac; shift 2 ;;
@@ -482,6 +504,9 @@ for f in "$PP_MAIN/.claude/settings.json" "$PP_MAIN/.claude/settings.local.json"
   [ ! -s "$f" ] || jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "$f is not a JSON object; fix it first. Nothing was changed"
 done
 
+# Auto's staged rules (il_rules_check), refused here as a whole, before anything is recorded or written.
+[ -z "$RW" ] || il_rules_check "$RREW" "$GREW" || exit 1
+
 # --- the manifest, before the first change ---
 # Every write below to a profile's settings file or a manifest holds il_profile_lock, so a launch's repair in another
 # pane waits and does not write from a stale read. Let go before the panes it opens, whose launches repair.
@@ -496,6 +521,8 @@ il_has "$IL_MACHINE" "$IL_LINK" || [ -n "$PLAN" ] || rm -f "$IL_LINK"
 il_record "$IL_MACHINE" own "$IL_LINK"
 il_record "$IL_PROJECT" merge "$IL_EXCLUDE"
 il_record "$SM" merge "$SETTINGS"
+# The rule files this run rewrites, and only those: one it leaves (declined, unstaged, staged empty) keeps no record from here.
+[ -z "$RREW" ] || il_rules_record "$RREW" "$GREW" || die "could not record the rule files about to be rewritten; nothing was changed"
 # Workflows are switched on in the project's own settings at either scope: the machine's file is every project's.
 PSET=$PP_MAIN/.claude/settings.json WF=$PP_MAIN/.claude/workflows/test-audit.js
 il_record "$IL_PROJECT" merge "$PSET"
@@ -617,6 +644,12 @@ else
          grep -q '[^[:space:]]' "$HOME/.commandeck/dashboard/projects" 2>/dev/null || bash "$HERE/dashboard.sh" --uninstall >/dev/null; }
 fi
 [ -n "$PLAN" ] || bash "$HERE/main-watch.sh" --install >/dev/null
+# Auto's rewrite goes first: il_global and il_own then add the plugin's blocks to the rewritten text.
+RULES_LINES=
+if [ -n "$RREW" ]; then
+  if [ -n "$PLAN" ]; then il_rules_rewrite "$RREW" "$GREW" | sed 's/^rules:/plan: rules:/' || die "the rules rewrite cannot run (above)"
+  else RULES_LINES=$(il_rules_rewrite "$RREW" "$GREW") || die "the rules rewrite stopped part way (above); bash $(printf '%q' "$HERE")/uninstall.sh puts back what it changed"; fi
+fi
 il_global "$GCLAUDE" claude-md "$IL_ROOT/templates/global-claude.md" --global-claude
 il_global "$GRULES" rules "$IL_ROOT/templates/global-rules.md" --global-rules
 D=$(jq -r 'to_entries[] | select(.value == "keep-mine" or .value == "keep-both") | (if .value == "keep-mine" then "--drop" else "--keep" end), .key' <<<"$DROPS")
@@ -788,6 +821,9 @@ echo "full suite before the final review: $([ "$FULL_ON" = true ] && echo on || 
 [ "$PROFILE" != claude-openai ] || echo "trust every hook in the Codex home before each Codex launch: $([ "$TRUSTALL" = true ] && echo on || echo off) (setup.sh --trust-all-hooks on|off)"
 echo "prompt cache: main ${MCACHE_ON:-not answered}, workers ${WCACHE_ON:-not answered}, relay ${RCACHE_ON:-not answered}"
 for n in ${NOTES[@]+"${NOTES[@]}"}; do echo "$n"; done
+# Auto's report (issue 536): each rule file it rewrote or left, each conflict it settled, then the detected values.
+[ -z "$RULES_LINES" ] || printf '%s\n' "$RULES_LINES"
+[ -z "$AUTOP" ] || { [ -z "$ADET" ] || printf '%s\n' "$ADET"; bash "$HERE/auto-setup.sh" --report dashboard; }
 # The config setup wrote is the project's, and so is a merge into the owner's startup files: a unit's
 # worktree has them only once git holds them. Setup never commits.
 # After the relay's worktree is set up: its pane's TTL as Claude Code will read it, and the main checkout's local file.

@@ -8,7 +8,11 @@ SETUP=$(cd "$(dirname "$0")/.." && pwd)/setup.sh
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 
-PRE=$(sed -n '/^TAKES=/,/^done/p' "$SETUP")
+# The first loop's cut is kept only when it ends on that loop's `done` within 40 lines. A cut past it (the `done`
+# changed) would eval the rest of setup.sh; an empty one runs nothing and fails the yes check below. Its evals run
+# on a throwaway HOME.
+PRE=$(sed -n '/^TAKES=/,/^done$/p' "$SETUP"); { [ "$(grep -c '' <<<"$PRE")" -le 40 ] && [ "$(tail -n 1 <<<"$PRE")" = done ]; } || PRE=
+RHOME=$HOME FH=$(mktemp -d); export HOME=$FH
 # The full parse's labels; a branch that ends `shift ;;` on its line takes no value.
 OPTS=$(sed -n '/^while \[ \$# -gt 0 \]/,/^done/p' "$SETUP" | grep -vE 'shift ;;' \
   | grep -oE '^[[:space:]]+--[a-z-]+(\|--[a-z-]+)*\)' | tr -d ' )' | tr '|' '\n')
@@ -21,6 +25,7 @@ done
 check "no option's value is read as --install-missing" '' "$GRANTED"
 GRANTED=$(set -- --profile claude --install-missing; eval "$PRE"; echo "$INSTALL")
 check "a real --install-missing after a value is still the owner's yes" 1 "$GRANTED"
+HOME=$RHOME; rm -rf "$FH"
 
 # Issue 333: setup rebuilds commandeck.json from what it carries over. The owner's never-decide list is theirs and
 # setup asks nothing about it, so a re-run (and update.sh, which runs setup) must carry it over as saved.
@@ -107,14 +112,14 @@ check "and the redirected pairs reach the project's review loop too (cap, blocki
   "$(jq -c '{passCap: (.reviewPassCap | tostring), blockAt: .reviewBlockSeverity}' <<<"$REC_WANT")" \
   "$(rec "rec_expand; $APPLY"'; jq -c "{passCap, blockAt}" <<<"$RL"')"
 check "a Codex model in the profile is skipped and named on the Claude profile, and only those two" "2 1 1" \
-  "$(rec 'PROFILE=claude; rec_expand; echo "${#REC_SKIPPED[@]} $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "codexReviewerModel=gpt-6.1-sol skipped: the seat runs on Claude") $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=gpt-6.1-sol skipped")"')"
+  "$(rec 'PROFILE=claude; rec_expand; echo "${#REC_SKIPPED[@]} $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "codexReviewerModel=sol skipped: the seat runs on Claude") $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=sol skipped")"')"
 # Pass 1 (effective-agent-mismatch): the seat's agent is the one the run ends with, not the profile's alone.
 check "a Claude judge asked for on the Codex profile drops the Codex judge model, and keeps the reviewer's" "1 1 0" \
-  "$(rec 'AGENTS=" planJudgeSolAgent=claude" ASKED=claude-openai; rec_expand; echo "${#REC_SKIPPED[@]} $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=gpt-6.1-sol skipped: the seat runs on Claude") $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "codexReviewerModel")"')"
+  "$(rec 'AGENTS=" planJudgeSolAgent=claude" ASKED=claude-openai; rec_expand; echo "${#REC_SKIPPED[@]} $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=sol skipped: the seat runs on Claude") $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "codexReviewerModel")"')"
 check "a Codex judge asked for on the Claude profile keeps the Codex model" "1 0" \
   "$(rec 'AGENTS=" planJudgeSolAgent=codex" ASKED=claude; rec_expand; echo "${#REC_SKIPPED[@]} $(printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel")"')"
 check "with no profile asked, the Agent key /config saved decides" "1" \
-  "$(CFG='{"enabledPlugins":{"commandeck@commandeck":true},"pluginConfigs":{"commandeck@commandeck":{"options":{"planJudgeSolAgent":"claude"}}}}' rec 'PROFILE=claude-openai; rec_expand; printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=gpt-6.1-sol skipped"')"
+  "$(CFG='{"enabledPlugins":{"commandeck@commandeck":true},"pluginConfigs":{"commandeck@commandeck":{"options":{"planJudgeSolAgent":"claude"}}}}' rec 'PROFILE=claude-openai; rec_expand; printf "%s\n" "${REC_SKIPPED[@]}" | grep -c "planJudgeSolModel=sol skipped"')"
 check "a Codex fast tier the Codex home cannot take is skipped and named (the profile's fast tiers are off, so a hand-written On)" "1 0" \
   "$(rec 'FASTOK=1; rec_skip codexReviewerFast true | grep -c "service_tier"; FASTOK=0; rec_skip codexReviewerFast true | wc -l | tr -d " "' | paste -sd' ' -)"
 check "a later --option beats --recommended: the profile's pairs come first, so the owner's pair is applied last" "off" \
