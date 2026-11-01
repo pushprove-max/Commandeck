@@ -104,7 +104,7 @@ fr() { rm -f "$T/sends"; printf 'handle=%s\nunit=u9\nrole=builder\ncmd=export CO
   [ -z "${4:-}" ] || printf '%s\n' "$4" >> "$T/rec"
   echo hand-off > "$BR/$1"; cp "$T/rec" "$T/rec.before"
   LOGS=$T/home/.claude/projects/$(printf '%s' "${BR%/.claude/briefs}" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$LOGS"
-  (sleep 1; echo "$BR/$1" > "$LOGS/s-$1.jsonl") &
+  echo "$BR/$1" > "$LOGS/s-$1.jsonl"; touch -t 209901010000 "$LOGS/s-$1.jsonl"
   (cd "$T/p" && env -u CLAUDE_CONFIG_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_SCRATCH="$SC" COMMANDECK_WORKSPACES="$T/ws" \
     COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 timeout 10 bash "$REAL/scripts/builder-fresh-round.sh" term_x "$BR/$1" "$T/rec" > "$T/fr.out" 2>&1); R=$?
   SEQ=$(sed 's/--text //' "$T/sends" | paste -sd, -); NEWREC=$(diff "$T/rec.before" "$T/rec" | sed -n 's/^> //p' | grep -v '^session=' | paste -sd' ' -); echo "$SEQ" >> "$T/allseq"; }

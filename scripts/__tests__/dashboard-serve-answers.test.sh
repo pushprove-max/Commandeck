@@ -436,6 +436,8 @@ ts = [threading.Thread(target=post) for _ in range(4)]
 print(*sorted(got))
 PY
 )
+# The restart runs detached: wait for its line (up to 10 s), then the same 0.5 s for a second one that must not come.
+for _ in $(seq 100); do [ "$(wc -l < "$T/restarts" 2>/dev/null)" -ge 2 ] 2>/dev/null && break; sleep 0.1; done
 sleep 0.5
 check "issue 294: four restarts at once run --restart once; the rest get 429" "202 429 429 429|2" "$OUT|$(wc -l < "$T/restarts" | tr -d ' ')"
 # Issue 321: the service has no terminal, so Orca refused its sends for want of a sender. It sends only through

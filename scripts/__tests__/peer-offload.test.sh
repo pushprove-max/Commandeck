@@ -119,6 +119,36 @@ check "an unreachable PC: the files run here once, and the reason is said" "0 1 
   "$RC $(here where) $(there where) $(grep -c 'unreachable or asleep' <<<"$OUT") $(grep -c 'running here, once' <<<"$OUT")"
 rm -f "$T/down"
 
+# A whole-suite run (no files named) on a Mac with a peer configured runs on the PC from any checkout, whatever the
+# chain host says; with no peer it runs here as it always did. red.test.sh makes each whole run exit 1, and mac.test.sh
+# (`# host: mac`) runs here after it. Catches: a whole run left on the loaded Mac by the main-checkout or chain-host gate.
+inmac() { grep -c "^$1 $T/mac\$" "$T/where"; }
+OUT=$(run "$T/mac"); RC=$?
+check "a whole-suite run from the main checkout runs on the PC" "1 1 0 1 1" "$RC $(there where) $(inmac where) $(inmac mac) $(calls)"
+rm -f "$T/mac-home/.config/devenv/chain-host"
+OUT=$(run "$T/wt"); RC=$?
+check "a whole-suite run with no chain-host file runs on the PC" "1 1 0 1 1" "$RC $(there where) $(here where) $(here mac) $(calls)"
+echo mac > "$T/mac-home/.config/devenv/chain-host"
+OUT=$(run "$T/wt"); RC=$?
+check "a whole-suite run with chain host mac runs on the PC" "1 1 0 1 1" "$RC $(there where) $(here where) $(here mac) $(calls)"
+echo pc > "$T/mac-home/.config/devenv/chain-host"
+# Catches: an outside contributor's machine, with no peer, refused or told it runs "here, once" as if a PC were down.
+mv "$T/mac-home/.config/devenv/peer" "$T/peer.kept"
+OUT=$(run "$T/wt"); RC=$?
+check "a whole-suite run with no peer file runs here, as today" "1 1 0 0 0" \
+  "$RC $(here where) $(there where) $(calls) $(grep -c 'running here, once\|no peer' <<<"$OUT")"
+mv "$T/peer.kept" "$T/mac-home/.config/devenv/peer"
+# Catches: a whole run with its PC asleep falling back to the Mac, mac-marked files included.
+touch "$T/down"
+OUT=$(run "$T/mac"); RC=$?
+check "a whole-suite run from the main checkout with the PC down refuses: exit 2, nothing runs here or there" "2 0 0 0 1" \
+  "$RC $(inmac where) $(inmac mac) $(there where) $(grep -c '^run-shell-tests: the PC (pc) cannot be reached' <<<"$OUT")"
+rm -f "$T/down"
+# Catches: the PC script deleting its scratch worktree from inside it, so git prints an error after the exit line.
+OUT=$(run "$T/wt" scripts/__tests__/where.test.sh); RC=$?
+check "a finished run on the PC prints no git error after its exit line" "0 1 0" \
+  "$RC $(grep -c '^offload: exit 0$' <<<"$OUT") $(sed -n '/^offload: exit/,$p' <<<"$OUT" | grep -c 'Unable to read current working directory\|^fatal:')"
+
 # Every ordering found so far (Decision G13-3), in order: the exit line lost after the start (r4: 255, then 2); the
 # start and exit lines lost (r5, r7: 255, then 2); a drop after the session opened, before anything ran (r7: 255).
 # What came back over ssh never proves what the PC did, so each one fails and nothing runs here, whatever piece of the

@@ -131,29 +131,6 @@ find "$CODEX_HOME/sessions" -name 'rollout-*-thr-p1-9-[23].jsonl' -exec rm -f {}
 check "a partial pass whose one reviewer said GO does not clear an earlier P1: the next launch refuses, naming review-stop-p1-r9" "2 1" \
   "$(tpass --check p1 10 final) $(grep -c 'review-stop-p1-r9' "$TMP/perr")"
 
-# 5. The cap, and file then merge (O5): pass 5 with only P2 and P3 open stops; the merge refuses until each open class
-# names an OPEN issue, one issue per class (the first file a finding cites; no-file when none).
-mk cp; go cp
-for n in 2 3 4; do tpass cp "$n" final $'- [P2] (class: lost-reply) CP-P2 -- cp.txt:1 -- drops a reply -- cat cp.txt\nVERDICT: NO-GO' >/dev/null; done
-CAP=$'- [P2] (class: lost-reply) CAP-A -- cp.txt:1 -- drops a reply -- cat cp.txt\n- [P2] (class: lost-reply) CAP-B -- cp.txt:2 -- drops another -- cat cp.txt\n- [P3] (class: wording) CAP-C -- a nit with no place -- none\nVERDICT: NO-GO'
-check "pass 5 with an open P2 files it and merges: STOP (cap), and --verify takes the NO-GO as a cap stop with one Open finding line per finding" "0 1 0 1 3" \
-  "$(tpass cp 5 final "$CAP") $(grep -c '^STOP (cap): ' "$TMP/pout") $(verify cp) $(grep -c 'rule: cap stop$' "$TMP/vout") $(grep -c '^Open finding: ' "$TMP/vout")"
-check "two findings of one class file one issue: the open classes are cp.txt and no-file" "cp.txt no-file" \
-  "$(sed -n 's/^Open finding: \([^ ]*\) .*/\1/p' "$TMP/vout" | awk '!s[$0]++' | paste -sd' ' -)"
-H0=$(git -C "$REPO" rev-parse HEAD)
-check "the merge refuses until the open findings are filed: step 1, naming each class and --filed, main unchanged" "1 1 1 1 $H0" \
-  "$(merge cp) $(grep -c '^FAILED step 1 filing: .*cp\.txt.*no-file' "$TMP/out") $(grep -c -- "--filed '<class>=#<n>'" "$TMP/out") \
-$(grep -c 'comment the finding there' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
-check "a filed issue must be open: a closed one, a class not open, a filing left out and a failed gh read each refuse" "1 1 1 1 1 1 1 1 $H0" \
-  "$(merge cp --filed 'cp.txt=#9' --filed 'no-file=#8') $(grep -c '#9 .*CLOSED' "$TMP/out") \
-$(merge cp --filed 'cp.txt=#7' --filed 'no-file=#8' --filed 'zz.sh=#8') $(grep -c 'zz\.sh' "$TMP/out") \
-$(merge cp --filed 'cp.txt=#7') $(grep -c 'no-file' "$TMP/out") \
-$(touch "$TMP/gh-view-fails"; merge cp --filed 'cp.txt=#7' --filed 'no-file=#8') $(grep -c 'GH-PROBE-ERROR' "$TMP/out") $(git -C "$REPO" rev-parse HEAD)"
-rm -f "$TMP/gh-view-fails"
-check "a duplicate comments instead of filing: an existing OPEN issue is accepted for each class, and the squash names each filing" "0 1 1 1" \
-  "$(merge cp --filed 'cp.txt=#7' --filed 'no-file=#8') $(grep -c '^DONE unit=cp merged=local' "$TMP/out") \
-$(git -C "$REPO" log -1 --format=%B | grep -cx 'Filed: #7 cp.txt') $(git -C "$REPO" log -1 --format=%B | grep -cx 'Filed: #8 no-file')"
-
 # 6. The cap ends the loop only on an open P2 (the host's rule): a closing NO-GO at the cap that names no P2 (only a
 # P3 here) is no cap stop, so it cannot merge with nothing to file.
 mk c3; go c3
@@ -180,46 +157,7 @@ printf '\n## Sites checked (pass 6)\nSearch: grep -rn base .\n- a.sh:1 fixed, a 
 check "a P1 in a pass that ended after a higher-numbered clean pass is a REVIEW STOP naming that pass" "0 0 1" \
   "$(tpass lt 20 final) $(tpass lt 8 final "$LTP1") $(grep -c '^REVIEW STOP: .*decision review-stop-lt-r8' "$TMP/pout")"
 
-# 9. Issue 373: the owner picks the lowest severity that holds a merge (reviewBlockSeverity). The setup answer reaches the
-# pass as COMMANDECK_REVIEW_LOOP, which beats /config. At P3 a GO beside a P3 is no GO; at P1 a GO beside a P2 ends the
-# loop and the P2 is filed like any open finding. Either way the reviewer is told the levels it was asked for.
 loop() { COMMANDECK_REVIEW_LOOP=$1 "${@:2}"; } # <reviewLoop json> <command...>
-# The blocking severity is in every prompt, so a build keeps the one its first pass was sent: its passes run under it.
-mk bk3; loop '{"blockAt":"P3"}' go bk3 >/dev/null
-BK3=$'- [P3] (class: wording) BK3-NIT -- bk3.txt:1 -- reads oddly -- cat bk3.txt\nVERDICT: GO'
-check "blockAt P3: a GO beside a P3 is read as NO-GO, and the prompt names P0 to P3" "0 1 1" \
-  "$(loop '{"blockAt":"P3"}' tpass bk3 2 final "$BK3") $(last bk3 2 | grep -cx 'VERDICT: NO-GO') \
-$(prompt bk3 2 | grep -c 'VERDICT: GO when you list no P0, P1, P2 or P3 finding (known gaps alone are GO)')"
-mk bk1; loop '{"blockAt":"P1"}' go bk1 >/dev/null
-BK1=$'- [P2] (class: wording) BK1-NIT -- bk1.txt:1 -- reads oddly -- cat bk1.txt\nVERDICT: GO'
-check "blockAt P1: a GO beside a P2 ends the loop with the P2 open, and the prompt names P0 and P1" "0 1 1 0 1 1" \
-  "$(loop '{"blockAt":"P1"}' tpass bk1 2 final "$BK1") $(last bk1 2 | grep -cx 'VERDICT: GO') \
-$(grep -c '^STOP (threshold): .*names no P0 or P1, so the review loop ends with only P2 and P3 findings open' "$TMP/pout") \
-$(loop '{"blockAt":"P1"}' verify bk1) $(grep -c '^Open finding: bk1.txt - \[P2\] (class: wording) BK1-NIT' "$TMP/vout") \
-$(prompt bk1 2 | grep -c 'VERDICT: GO when you list no P0 or P1 finding (P2 and P3 findings and known gaps alone are GO)')"
-mk bk2; go bk2
-check "with the default, a GO beside a P2 stays NO-GO and the prompt is the one it always was" "0 1 1" \
-  "$(tpass bk2 2 final "$BK1") $(last bk2 2 | grep -cx 'VERDICT: NO-GO') \
-$(prompt bk2 2 | grep -c 'VERDICT: GO when you list no P0, P1 or P2 finding (P3 findings and known gaps alone are GO)')"
-
-# 10. Issue 373: the cap is the owner's number (reviewPassCap), and the fresh closing reviewer is the owner's choice.
-# A cap of 3 stops the third pass on record, where the default 5 lets it run on.
-mk pc; go pc
-PC=$'- [P2] (class: lost-reply) PC-P2 -- pc.txt:1 -- drops a reply -- cat pc.txt\nVERDICT: NO-GO'
-tpass pc 2 final "$PC" >/dev/null
-check "a cap of 3 makes the third pass on record a cap stop, and --verify takes it as one" "0 1 0 1" \
-  "$(loop '{"passCap":"3"}' tpass pc 3 final "$PC") $(grep -c '^STOP (cap): .*at or past the cap of 3, and names an open P2' "$TMP/pout") \
-$(loop '{"passCap":"3"}' verify pc) $(grep -c 'rule: cap stop$' "$TMP/vout")"
-mk pd; go pd
-tpass pd 2 final "$PC" >/dev/null
-check "and the default cap of 5 lets the same third pass run on: no stop, and --verify refuses a P2 below the cap" "0 0 2" \
-  "$(tpass pd 3 final "$PC") $(grep -c '^STOP' "$TMP/pout") $(verify pd)"
-mk fc; go fc
-tpass fc 2 final $'- [P2] (class: lost-reply) FC-P2 -- fc.txt:1 -- drops a reply -- cat fc.txt\nVERDICT: NO-GO' >/dev/null
-echo fixed > "$WS/fc/fc.txt"
-check "freshClosing no: the closing pass is handed the earlier finding and the history files stay open to it, and --verify takes its GO" "0 1 0 0" \
-  "$(loop '{"freshClosing":"no"}' tpass fc 3 final) $(prompt fc 3 | grep -c 'FC-P2') \
-$(prompt fc 3 | grep -c 'Do not open the evidence file, the round reports or fix hand-offs') $(loop '{"freshClosing":"no"}' verify fc)"
 
 # 11. Issue 376: a round that is missing a reviewer's verdict never clears an earlier P0 or P1. Three ways a verdict is
 # missing: a short round, a round with no answer at all (a cut row), a reply with no verdict (said none).

@@ -142,9 +142,9 @@ The suite already fits in 10 minutes on the PC (runs B, C: 260 s at 8 jobs, 147 
 
 ## Breaks
 
-- Break: scripts/__tests__/run-shell-tests.test.sh -- a whole-suite run whose PC cannot be reached refuses: exit 2, nothing runs here, one line says why -- run-shell-tests.sh case 4 whole-scope branch
-- Break: scripts/__tests__/peer-offload.test.sh -- a whole-suite run with chain host mac runs on the PC -- peer-offload.sh PO_WHOLE gate
-- Break: scripts/__tests__/peer-offload.test.sh -- a whole-suite run from the main checkout runs on the PC -- peer-offload.sh main gate under PO_WHOLE
+Break: scripts/__tests__/run-shell-tests.test.sh -- a whole-suite run whose PC cannot be reached refuses: exit 2, nothing runs here, one line says why -- run-shell-tests.sh case 4 whole-scope branch
+Break: scripts/__tests__/peer-offload.test.sh -- a whole-suite run with chain host mac runs on the PC -- peer-offload.sh PO_WHOLE gate
+Break: scripts/__tests__/peer-offload.test.sh -- a whole-suite run from the main checkout runs on the PC -- peer-offload.sh main gate under PO_WHOLE
 
 ## What can go wrong
 
@@ -267,6 +267,9 @@ Edit rule: the owner's answer to Q4: an edit that follows the intended change an
 - r4 (Sol P3): Catches: lines on C5 and C6.
 - r4: Sol P1 (C4 in the test setup, not seat.sh) is held for the owner's decision; C4 is unchanged.
 - r5 2026-10-31 (owner's answers): the seat-run fix stays in the test setup (C4, D10), seat.sh unchanged, Sol P1 closed; Q4 yes, so C5 fixes the dashboard-serve-answers wait unconditionally; Main answers gain both; the question section is empty; Test edits list each existing test edit by file and test name, or by the exact old line where no test holds it.
+
+- Build 2026-10-31: the three Break lines lose their leading `- `, the form break-run.sh and the pass's break gate read (`^Break: `); as bullets neither saw them. Content unchanged.
+- Build 2026-10-31, C7's logs (~/.commandeck/scratch/): commandeck-fast-tests-c7-base.log (155 s), -c7-tip.log (160 s, green, threshold 58 s, no HUNG), -c7-mac-a.log (319 s, 8 jobs) and -c7-mac-b.log (399 s, 4 jobs), both green; -c7-tip-overlapped.log is a tip run that shared the PC with another worker's run (not counted). A1: -c7-a1.log, 15 jobs, no cage kill.
 
 ## Facts
 

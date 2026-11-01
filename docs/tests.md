@@ -93,7 +93,10 @@ The runner needs Bash 4+ and GNU tools. CI uses Ubuntu's jq 1.7; verify against
 that version when changing jq programs. Test concurrency and per-file timeout
 can be set with `COMMANDECK_SHELL_TEST_JOBS` and
 `COMMANDECK_SHELL_TEST_TIMEOUT`. Defaults are half the CPUs (at least one)
-and 120 seconds, except a test's own timeout marker. The cap is the file's CPU
+and 120 seconds, except a test's own timeout marker. On the PC a handed-off
+run defaults to the CPUs less the 1-minute load, at least a quarter of the
+CPUs, and a whole-suite run there starts its files slowest first from the
+PC's own saved seconds. The cap is the file's CPU
 time. On a loaded machine (load above the core count) the wall-clock limit
 grows by load per core, up to four times the cap, and a file past its cap on the
 wall clock still passes if it used no more CPU than the cap. Its line says

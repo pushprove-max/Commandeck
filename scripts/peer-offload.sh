@@ -112,19 +112,23 @@ EOF
 #   established). The code is the whole outcome (Decision G13-3, revision 7): a caller runs the command here only on
 #   exactly 3 or 4, and every other code is final.
 # Routes only a Mac linked worktree whose chain host is pc, outside a test run (COMMANDECK_HOOK_FIRE_LOG unset) and
-# not on the peer itself (COMMANDECK_OFFLOADED unset). Run from the checkout's top folder.
+# not on the peer itself (COMMANDECK_OFFLOADED unset). With PO_WHOLE set (the runner's whole-suite run) it routes any
+# Mac checkout, the main one included, whatever the chain host, when a peer is configured; with none it returns 3.
+# Run from the checkout's top folder.
 pr_offload() {
   [ "${1:-}" != --fetch ] || { pr_fetch "${2:-}"; return; }
   [ -z "${COMMANDECK_OFFLOADED:-}" ] || return 3
   . "$PO_DIR/host-services.sh" || { echo "offload: $PO_DIR/host-services.sh did not load" >&2; return 2; }
   local peer root gdir cdir idx= tree patch= bundle= log= slog= nonce envs='' argv='' arg v rc orc
-  [ -z "${COMMANDECK_HOOK_FIRE_LOG:-}" ] && [ "$(hs_os)" = Darwin ] && [ "$(hs_chain_host 2>/dev/null)" = pc ] || return 3
+  [ -z "${COMMANDECK_HOOK_FIRE_LOG:-}" ] && [ "$(hs_os)" = Darwin ] || return 3
+  peer=$(pr_peer || true)
+  if [ -n "${PO_WHOLE:-}" ]; then [ -n "$peer" ] || return 3
+  else [ "$(hs_chain_host 2>/dev/null)" = pc ] || return 3; fi
   root=$(git rev-parse --show-toplevel 2>/dev/null) \
     && gdir=$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P) && cdir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P) \
     || { echo "offload: git could not name this checkout's folders" >&2; return 2; }
-  [ "$gdir" != "$cdir" ] || return 3
-  peer=$(pr_peer || true)
-  [ -n "$peer" ] || { echo "offload: no peer in ~/.config/devenv/peer; running here" >&2; return 4; }
+  [ "$gdir" != "$cdir" ] || [ -n "${PO_WHOLE:-}" ] || return 3
+  [ -n "$peer" ] || { echo "offload: no peer in ~/.config/devenv/peer" >&2; return 4; }
   # unavail <code> <reason>: the one line a caller that runs the command here (4), or fails (2), prints first.
   unavail() { echo "offload: $2" >&2; rm -f "$idx" "$patch" "$bundle" "$log" "$slog"; return "$1"; }
   idx=$(mktemp) && patch=$(mktemp) && bundle=$(mktemp) && log=$(mktemp) && slog=$(mktemp) \
@@ -198,7 +202,8 @@ rc=\$(cat "\$S/rc" 2>/dev/null)
 # A footer that could not be written (the session cut, under a SIGPIPE ignored from the start, as a GitHub runner's
 # steps have it) never reached the host: the run stays for --fetch.
 echo "offload-exit: $nonce \$rc" && echo "offload: exit \$rc" && echo "offload-done: $nonce" || exit 1
-rm -rf "\$S"; git worktree prune; S=
+# Leave the scratch worktree before deleting it, or git prints an error from a folder that is gone.
+cd "\$R"; rm -rf "\$S"; git worktree prune; S=
 EOF
   orc=${PIPESTATUS[0]}
   # The nonce makes the status the script's own, never a line the command printed. A status that arrived is the

@@ -51,12 +51,18 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TIMEOUT=${COMMANDECK_SHELL_TEST_TIMEOUT:-120}
 MAX_LINES=${COMMANDECK_SHELL_TEST_MAX_LINES:-500}
 # Default jobs (#506): half the CPUs, one less when the machine is already busy (uptime's first load figure at or over
-# the CPU count; one that cannot be read cuts nothing).
+# the CPU count; one that cannot be read cuts nothing). On the PC (COMMANDECK_OFFLOADED), which runs the files slowest
+# first: the CPUs less the load's integer part, at least a quarter of the CPUs (at least 1), at most the CPUs.
 default_jobs() {
-  local cores load
+  local cores load floor
   cores=$(getconf _NPROCESSORS_ONLN) || cores=2
   load=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load averages*: *\([0-9][0-9]*\).*/\1/p')
-  if [ -n "$load" ] && [ "$load" -ge "$cores" ] 2>/dev/null; then echo $(( cores / 2 - 1 )); else echo $(( cores / 2 )); fi
+  if [ -n "${COMMANDECK_OFFLOADED:-}" ]; then
+    floor=$(( cores / 4 )); [ "$floor" -ge 1 ] || floor=1
+    [[ $load =~ ^[0-9]+$ ]] || load=0
+    load=$(( cores - 10#$load )); [ "$load" -ge "$floor" ] || load=$floor; [ "$load" -le "$cores" ] || load=$cores
+    echo "$load"
+  elif [ -n "$load" ] && [ "$load" -ge "$cores" ] 2>/dev/null; then echo $(( cores / 2 - 1 )); else echo $(( cores / 2 )); fi
 }
 JOBS=${COMMANDECK_SHELL_TEST_JOBS:-$(default_jobs)}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
@@ -222,7 +228,10 @@ fi
 # all but those marked `# host: mac` in their first five lines, which run here below. The hand-off's exit code is its
 # whole outcome, from a fixed list (Decision G13-3, revision 7): only 3 (not routed) and 4 (unreachable: no peer, or the
 # PC asleep) run the files here, once. 2 (refused there, or the hand-off failed here) runs nothing here and exits 2.
-# Every other code is final, a red run or a lost connection included. The main checkout and the PC never hand off.
+# Every other code is final, a red run or a lost connection included. The PC never hands off, and the main checkout
+# hands off only a whole-suite run. A whole-suite run (SCOPE=whole) sets PO_WHOLE: on a Mac with a peer configured it
+# goes to the PC whatever the chain host, as the bare command when no file stays here, so the PC orders and saves its
+# own seconds, and with the PC unreachable (4) it refuses; with no peer it runs here (3).
 OFF_RC=0 OFFLOADED=0
 MACF=() RESTF=()
 ROOTP=$(pwd -P)
@@ -232,13 +241,19 @@ for t in "${TESTS[@]}"; do
 done
 if [ "${#RESTF[@]}" -gt 0 ]; then
   OFFARGS=(bash scripts/run-shell-tests.sh); [ "$ONLY_OWN_LANE" = 0 ] || OFFARGS+=(--own-lane)
+  # A whole run with no file kept here sends the bare command, so the PC's run is whole-scope too.
+  [ "$SCOPE" = whole ] && [ "${#MACF[@]}" = 0 ] && RESTF=()
   # A subshell: host-services.sh, which peer-offload.sh loads, exports what the tests must not inherit.
   ( export "${OFF_ENV[@]}"; . "$HERE/peer-offload.sh" || { echo "run-shell-tests: $HERE/peer-offload.sh did not load" >&2; exit 2; }
-    pr_offload "${OFFARGS[@]}" "${RESTF[@]}" )
+    PO_WHOLE=; [ "$SCOPE" != whole ] || PO_WHOLE=1
+    pr_offload "${OFFARGS[@]}" ${RESTF[@]+"${RESTF[@]}"}; rc=$?
+    [ "$rc" != 4 ] || [ -z "$PO_WHOLE" ] || echo "run-shell-tests: the PC ($(pr_peer)) cannot be reached, and a whole-suite run with a peer configured runs only there; nothing ran. Wake the PC, or run named files or --changed here" >&2
+    exit "$rc" )
   OFF_RC=$?
   case $OFF_RC in
     3) OFF_RC=0 ;;
-    4) echo "run-shell-tests: running here, once"; OFF_RC=0 ;;
+    4) [ "$SCOPE" != whole ] || exit 2
+       echo "run-shell-tests: running here, once"; OFF_RC=0 ;;
     2) echo "run-shell-tests: the hand-off to the PC was refused or failed (reason above); nothing ran here" >&2; exit 2 ;;
     *) OFFLOADED=1 TESTS=(${MACF[@]+"${MACF[@]}"})
        [ "${#TESTS[@]}" -gt 0 ] || exit "$OFF_RC" ;;

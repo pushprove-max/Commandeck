@@ -176,6 +176,23 @@ for step in "fail 2 " "0 0 mac off" "1 1 mac off" "2 2 off" "3 0 mac off touched
 done
 check "... an unreachable PC (4) says it runs the files here, once" 1 "$(PO_STUB=4 bash -c 'cd "$1" && bash "$2" scripts/__tests__/touched.test.sh' _ "$R" "$TMP/stub/scripts/run-shell-tests.sh" 2>&1 | grep -c 'running here, once')"
 rm -f "$R/scripts/__tests__/mac.test.sh"
+# A whole-suite run (no files named) hands off with PO_WHOLE set, so pr_offload routes it from any Mac checkout with a
+# peer. A second stub logs what it was handed: `off whole=<PO_WHOLE> <args>`. stub_run <code> [args]: the runner there.
+mkdir -p "$TMP/stub2/scripts"; cp "$REAL"/scripts/*.sh "$TMP/stub2/scripts/"
+printf 'pr_peer() { echo pc; }\npr_offload() { echo "off whole=${PO_WHOLE:-} $*" >> "$RAN"; return "$PO_STUB"; }\n' > "$TMP/stub2/scripts/peer-offload.sh"
+stub_run() { local c=$1; shift; : > "$RAN"; OUT=$(cd "$R" && PO_STUB=$c bash "$TMP/stub2/scripts/run-shell-tests.sh" "$@" 2>&1); RC=$?; }
+# Catches: a whole run handing the PC its file list, so the PC run is not whole-scope and never orders or saves its seconds.
+stub_run 0; WHOLE=$(cat "$RAN"); stub_run 0 scripts/__tests__/touched.test.sh; NAMED=$(cut -d' ' -f1-2 "$RAN")
+check "a whole-suite run with no host: mac file hands the PC the bare command, so the PC reads and saves its own seconds" \
+  "0 off whole=1 bash scripts/run-shell-tests.sh|off whole=" "$RC $WHOLE|$NAMED"
+# Catches: --skip-passed with no files kept local, or sent to the PC, where files are never skipped.
+stub_run 0 --skip-passed
+check "a --skip-passed run with no files is a whole run: it hands off with PO_WHOLE and without --skip-passed" \
+  "0 off whole=1 bash scripts/run-shell-tests.sh" "$RC $(cat "$RAN")"
+# Catches: a whole run with its PC down falling back to the Mac it was meant to spare.
+stub_run 4
+check "a whole-suite run whose PC cannot be reached refuses: exit 2, nothing runs here, one line says why" \
+  "2 1 1" "$RC $(wc -l < "$RAN" | tr -d ' ') $(grep -c '^run-shell-tests: the PC (pc) cannot be reached' <<<"$OUT")"
 
 # Issue 349: a run writes a live table, <git dir>/commandeck-test-live/<pid>.tsv, that the units mod reads: `run`, `file`
 # for every file the run decides on, `start` and `end` as each file launches and ends. Gone when the run exits.
@@ -339,6 +356,12 @@ jobs_for() { env -u COMMANDECK_RUNNING_TEST -u COMMANDECK_SHELL_TEST_JOBS ${3:+C
 check "default jobs fall with the load (under the cores half, at or over one less, never below 1, unreadable cuts nothing, the variable wins)" \
   "4 3 3 4 4 1 5" \
   "$(jobs_for 8 'load averages: 2.50 3.00 3.10') $(jobs_for 8 'load averages: 8.00 3.00 3.10') $(jobs_for 8 'load average: 9.12, 8.00, 7.00') $(jobs_for 8 'load averages: 7.99 9 9') $(jobs_for 8 'no figures here') $(jobs_for 2 'load averages: 5.00 1 1') $(jobs_for 8 'load averages: 20.0 1 1' 5)"
+# On the PC (COMMANDECK_OFFLOADED) the default is the cores less the load's integer part, at least a quarter of the cores
+# (at least 1), at most the cores. Catches: an idle PC kept at half its cores, a busy one cut to 0, or a load figure
+# absent, junk, empty or quoted read as a cut.
+check "an offloaded run's default jobs are the cores less the load, at least a quarter of the cores" \
+  "16 15 4 16 16 16 5 1 5" \
+  "$(COMMANDECK_OFFLOADED=1 jobs_for 16 'load averages: 0.10 0.20 0.30') $(COMMANDECK_OFFLOADED=1 jobs_for 16 'load average: 1.50, 1.00, 1.00') $(COMMANDECK_OFFLOADED=1 jobs_for 16 'load average: 20.00, 9, 9') $(COMMANDECK_OFFLOADED=1 jobs_for 16 'no figures here') $(COMMANDECK_OFFLOADED=1 jobs_for 16 '') $(COMMANDECK_OFFLOADED=1 jobs_for 16 'load averages: "3.0" 1 1') $(COMMANDECK_OFFLOADED=1 jobs_for 8 'load averages: 3.00 1 1') $(COMMANDECK_OFFLOADED=1 jobs_for 2 'load averages: 5.00 1 1') $(COMMANDECK_OFFLOADED=1 jobs_for 16 'load averages: 0.10 1 1' 5)"
 
 # #506: a python import in a test wrote __pycache__ into a kept folder, and the fence read it as an edit to the tree.
 PY=$TMP/py; mkdir -p "$PY/scripts/__tests__"

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.65.0-111111?style=flat-square" alt="Version 0.65.0">
+  <img src="https://img.shields.io/badge/version-0.66.0-111111?style=flat-square" alt="Version 0.66.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -498,8 +498,13 @@ worktree under `~/.cache/commandeck-offload/`, inside a memory cage, and
 their result is the run's.
 
 - A test file marked `# host: mac` in its first lines stays on the Mac.
-- The main checkout, and the peer itself, never hand off.
-- When the peer cannot be reached, the tests run on the Mac once.
+- With a peer configured, a whole-suite run (no files named) from any Mac
+  checkout, the main one included, goes to the peer whatever the chain host
+  says. When the peer cannot be reached it runs nothing and exits 2. With no
+  peer configured it runs on this machine.
+- A run of named files or `--changed` from the main checkout stays on the
+  Mac. The peer itself never hands off.
+- When the peer cannot be reached, a run of named files runs on the Mac once.
 - When the peer refuses the tree, the run fails with exit 2 and runs nothing.
 - When the connection drops after the tests started, the run fails and the
   tests do not run again on the Mac. The run keeps going on the peer; collect

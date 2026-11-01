@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.66.0 -- 2026-10-31
+
+### Tests
+
+- With a PC peer configured, a whole shell-suite run (no test files named) from any Mac checkout, the main one included, now runs on the PC, whatever the chain host setting says. If the PC cannot be reached, it runs nothing and exits 2 with one line that says how to go on. With no peer configured, the suite runs locally as before.
+- On the PC, a handed-off run now uses the cores less the current load (at least a quarter of the cores), and a whole-suite run starts its slowest files first.
+- The slow review-threshold test is split in two, fixed waits in two tests no longer fail on a busy machine, and the seat-run test's dead-pane and detached checks pass again.
+- A finished PC run no longer prints a git error after its exit line.
+
 ## 0.65.0 -- 2026-10-31
 
 ### Plans
