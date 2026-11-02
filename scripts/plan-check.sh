@@ -279,6 +279,7 @@ PY
 # caps sized for a 5-issue one. Issue 480's caps and its override are read here for that, and refused on below.
 PC_LCAP=$(pp_review_limit diffLines) || refuse "cannot read review-limits.diffLines from $(pp_routing)"
 PC_ICAP=$(pp_review_limit maxIssues) || refuse "cannot read review-limits.maxIssues from $(pp_routing)"
+[ "$PC_ICAP" -gt 0 ] || refuse "review-limits.maxIssues in $(pp_routing) is $PC_ICAP: it must be a positive integer"
 PC_LINES=${SIZE#* }
 PC_ISSUES=$({ [ -z "$BATCH" ] || bash "$(dirname "${BASH_SOURCE[0]}")/brief-issues.sh" "$BATCH" | jq -r '.[] | numbers'
   grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un | wc -l | tr -d ' ' || true)

@@ -66,5 +66,12 @@ plan 10 "$ELEVEN" $'Split override: the owner ordered one unit\n'"$CASES$R2"; ou
 plan 10 "$ELEVEN" $'Split override: the owner ordered one unit\n'"$CASES$R3"; r=$(PATH="$T/bin:$PATH" pc); out+=" past=$r:$(refused 'section ## Routing is [0-9]* bytes, cap 2100')"
 check "a Split-override plan's section caps scale with its issues" "unscaled=2:1 scaled=0 past=2:1" "$out"
 
+# The scale divides by maxIssues: a 0 there would divide by zero and leave the caps unscaled, so it is refused.
+printf '{"review-limits":{"calls":60,"maxIssues":0}}\n' > "$T/routing.json"
+TWO=$'\n## Issue cases\n\n- #1 Body 1 -- src/x.ts -- t-one\n- #2 Body 1 -- src/x.ts -- t-one\n'
+plan 10 'Closes: #1 #2' $'Split override: the owner ordered one unit\n'"$TWO"
+r=$(COMMANDECK_ROUTING=$T/routing.json PATH="$T/bin:$PATH" pc)
+check "a maxIssues of 0 is refused" "2:1" "$r:$(refused "review-limits.maxIssues in $T/routing.json is 0: it must be a positive integer")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
