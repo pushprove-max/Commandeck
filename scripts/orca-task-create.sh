@@ -28,8 +28,8 @@ refresh_sender() {
 for attempt in 1 2; do
   refresh_sender
   reply=$(orca-ide orchestration task-create "${args[@]}" --json)
-  # The reply's top-level id is the request's; the task id is the task_ one.
-  id=$(jq -r 'first(.. | objects | .id? | strings | select(startswith("task_"))) // empty' <<<"$reply" 2>/dev/null)
+  # The reply's top-level id is the request's; the task id is the task_ one, under .id or .taskId.
+  id=$(jq -r 'first(.. | objects | (.id?, .taskId?) | strings | select(startswith("task_"))) // empty' <<<"$reply" 2>/dev/null)
   [ -z "$id" ] || { echo "$id"; exit 0; }
 done
 echo "task-create failed after $attempt attempts: $(jq -r '.error.message // .' <<<"$reply" 2>/dev/null || echo "$reply")" >&2
