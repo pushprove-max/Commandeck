@@ -54,5 +54,17 @@ plan 1001 'Closes: none' 'Split override:'; r=$(pc); out="bare=$r:$(refused "$SP
 plan 1001 'Closes: none' $'```\nSplit override: fenced\n```'; r=$(pc); out+=" fenced=$r:$(refused "$SPLIT")"
 check "a bare Split override fails (issue 480)" "bare=2:1 fenced=2:1" "$out"
 
+# A one-unit plan the owner ordered for 53 issues could not fit section caps sized for 5. Under a Split override each
+# section cap is times ceil(Closes issues / maxIssues): 11 issues over a cap of 5 triple it, and the tripled cap holds.
+# A gh stub gives each issue one Body case, and one Issue cases row per issue covers it.
+mkdir -p "$T/bin"; printf '#!/usr/bin/env bash\necho "A fixture issue."\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"
+ELEVEN='Closes: #1 #2 #3 #4 #5 #6 #7 #8 #9 #10 #11'
+CASES=$'\n## Issue cases\n\n'"$(for i in $(seq 1 11); do printf -- '- #%s Body 1 -- src/x.ts -- t-one\n' "$i"; done)"
+R2=$'\n## Routing\n\n'"$(printf -- '- %0700d\n' 0 0)" R3=$'\n## Routing\n\n'"$(printf -- '- %0700d\n' 0 0 0)"
+plan 10 'Closes: none' "$R2"; r=$(pc); out="unscaled=$r:$(refused 'section ## Routing is [0-9]* bytes, cap 700')"
+plan 10 "$ELEVEN" $'Split override: the owner ordered one unit\n'"$CASES$R2"; out+=" scaled=$(PATH="$T/bin:$PATH" pc)"
+plan 10 "$ELEVEN" $'Split override: the owner ordered one unit\n'"$CASES$R3"; r=$(PATH="$T/bin:$PATH" pc); out+=" past=$r:$(refused 'section ## Routing is [0-9]* bytes, cap 2100')"
+check "a Split-override plan's section caps scale with its issues" "unscaled=2:1 scaled=0 past=2:1" "$out"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

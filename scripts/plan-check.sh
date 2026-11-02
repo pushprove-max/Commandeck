@@ -274,10 +274,23 @@ PY
 # Issue 426: the plan budget. One `Goal:` line of at most 200 characters; a `## Steps` section of one-line steps
 # `- new|modify|delete <path>[ ~<line>] -- <what>`; prose (a line that is not structure, wrapped or not) only under
 # `## Why`; each `##` section under its byte cap. The caps are the 75th percentile of a sample of real plans, rounded
-# up to 100 bytes; text above the first `##` heading and an unlisted section take the other cap.
-out=$(PC_PLANTEXT=$PT python3 -I - "$PLAN" <<'PY'
+# up to 100 bytes; text above the first `##` heading and an unlisted section take the other cap. A Split-override plan's
+# caps are each times ceil(Closes issues / review-limits.maxIssues), at least 1: a 53-issue one-unit plan cannot fit
+# caps sized for a 5-issue one. Issue 480's caps and its override are read here for that, and refused on below.
+PC_LCAP=$(pp_review_limit diffLines) || refuse "cannot read review-limits.diffLines from $(pp_routing)"
+PC_ICAP=$(pp_review_limit maxIssues) || refuse "cannot read review-limits.maxIssues from $(pp_routing)"
+PC_LINES=${SIZE#* }
+PC_ISSUES=$({ [ -z "$BATCH" ] || bash "$(dirname "${BASH_SOURCE[0]}")/brief-issues.sh" "$BATCH" | jq -r '.[] | numbers'
+  grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un | wc -l | tr -d ' ' || true)
+PC_SPLIT=0
+awk -v fenced="$PC_FENCED" 'BEGIN { n = split(fenced, a, " "); for (i = 1; i <= n; i++) f[a[i]] = 1 }
+  !(NR in f) && /^Split override:[ \t]*[^ \t]/ { ok = 1 } END { exit !ok }' <<<"$PT" && PC_SPLIT=1
+PC_CAPMULT=1
+[ "$PC_SPLIT" = 0 ] || [ "$PC_ISSUES" -le "$PC_ICAP" ] || PC_CAPMULT=$(( (PC_ISSUES + PC_ICAP - 1) / PC_ICAP ))
+out=$(PC_PLANTEXT=$PT PC_CAPMULT=$PC_CAPMULT python3 -I - "$PLAN" <<'PY'
 import os, re, sys
 label = sys.argv[1]
+MULT = int(os.environ['PC_CAPMULT'])
 CAPS = [('Why', 1200), ('Prior art', 1600), ('Data design', 5500), ('What can go wrong', 9000),
         ('Decisions already made', 8300), ('Question for the owner', 700), ('Assumptions', 2300), ('What exists', 1600),
         ('Cuts', 10700), ('Not in this unit', 700), ('Accepted failure modes', 1100), ('Stated limits', 600),
@@ -352,6 +365,7 @@ elif steps == 0:
     bad.append('## Steps has no step under it')
 for name in [''] + order:
     key, cap = cap_of(name)
+    cap *= MULT
     if sizes.get(name, 0) > cap:
         bad.append('section %s is %d bytes, cap %d' % (name and '## ' + name or key, sizes[name], cap))
 for b in bad:
@@ -378,14 +392,8 @@ if [ -n "$BATCH" ]; then
 fi
 # Issue 480: a plan over the review-limits caps (changed lines, distinct Closes issues, as issue_check lists them) is split
 # unless a `Split override: <reason>` line stands outside a fence; a bare key is none. An unreadable key refuses.
-PC_LCAP=$(pp_review_limit diffLines) || refuse "cannot read review-limits.diffLines from $(pp_routing)"
-PC_ICAP=$(pp_review_limit maxIssues) || refuse "cannot read review-limits.maxIssues from $(pp_routing)"
-PC_LINES=${SIZE#* }
-PC_ISSUES=$({ [ -z "$BATCH" ] || bash "$(dirname "${BASH_SOURCE[0]}")/brief-issues.sh" "$BATCH" | jq -r '.[] | numbers'
-  grep -h '^Closes:' <<<"$PT"$'\n'"$BT" | grep -oE '#[0-9]+' | tr -d '#'; } | sort -un | wc -l | tr -d ' ' || true)
 if [ "$PC_LINES" -gt "$PC_LCAP" ] || [ "$PC_ISSUES" -gt "$PC_ICAP" ]; then
-  awk -v fenced="$PC_FENCED" 'BEGIN { n = split(fenced, a, " "); for (i = 1; i <= n; i++) f[a[i]] = 1 }
-    !(NR in f) && /^Split override:[ \t]*[^ \t]/ { ok = 1 } END { exit !ok }' <<<"$PT" \
+  [ "$PC_SPLIT" = 1 ] \
     || refuse "$PLAN is over a cap ($PC_LINES changed lines, cap $PC_LCAP; $PC_ISSUES Closes issues, cap $PC_ICAP): split the unit, or carry a line 'Split override: <reason>' (a bare 'Split override:' is no override)"
 fi
 # Issue 462: a plan that names test cases carries the `New tests:` line the pass's cap reads, so its Builder never stops to
