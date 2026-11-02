@@ -5,11 +5,13 @@
 # incident traces to, and Codex has neither tool.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks and zero inline write or search warnings across 90 days of real rows from a project that installs the plugin
 # Issue 247, in a Builder and in any tier: a python3/perl/node script in the command (-c/-e, a here-document, a
 # pipe) that writes a tracked file goes around Edit and the guards on it. A tripwire for honest mistakes, not a
 # wall (ruling 1, 2026-10-20): a script that holds a write call and quotes a path git tracks is refused.
 # Known gaps: a write call this list does not name (subprocess, os.write on a descriptor), a path or mode built
 # in code, a script file run by name, and writes by shell (>, sed -i, cp): the Edit guards never see those either.
+IW_NOTE='' SEARCH_NOTE=''
 if [ "${COMMANDECK_BUILDER-}" = 1 ]; then
   IW=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
   if [[ $IW =~ (^|[^[:alnum:]_.-])(python[0-9.]*|perl|node)([[:space:]]|$) ]]; then  # r2: /usr/bin/python3 too
@@ -79,13 +81,25 @@ if writer:
             print(p); raise SystemExit
 PY
     IW_OUT=$(cd "$(jq -r '.cwd // "."' <<<"$INPUT")" 2>/dev/null && IW=$IW python3 -I -c "$IW_PY")
-    [ -n "$IW_OUT" ] && { echo "BLOCKED: an inline script holds a write call and names $IW_OUT, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder) and name no tracked file." >&2; HOOK_FIRE_REASON=inline-script-write; exit 2; }
+    [ -n "$IW_OUT" ] && {
+      IW_NOTE="An inline script holds a write call and names $IW_OUT, a tracked file. Make the change with the \`Edit\` tool, which the guards on Edit see; an inline script may write a scratch path (\$TMPDIR, the unit's scratch folder) and name no tracked file."
+      HOOK_FIRE_REASON=inline-script-write
+    }
   fi
 fi
+# The note is a warning, never a pass (pass 12): every check below still screens the call, a refusal below still
+# refuses it, and each exit that lets it through hands the note on through allow_json, in the one JSON reply.
+# allow_json [<jq object>] -- the reply for a call let through: the object (default {}) with the inline-write note
+# and SEARCH_NOTE, when set, joined as its additionalContext; prints nothing when there is neither object nor note.
+allow_json() {
+  local m=$IW_NOTE${IW_NOTE:+${SEARCH_NOTE:+$'\n\n'}}$SEARCH_NOTE o=${1-}
+  [ -n "$m" ] || [ -n "$o" ] || return 0
+  jq -cn --arg m "$m" --argjson o "${o:-null}" '{hookSpecificOutput: ({hookEventName: "PreToolUse"} + ($o // {}) + (if $m == "" then {} else {additionalContext: $m} end))}'
+}
 # Strict tier: off unless the project turned it on (lib/project.sh).
-{ . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
+{ . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || { allow_json; exit 0; }
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-[ -z "$CMD" ] && exit 0
+[ -z "$CMD" ] && { allow_json; exit 0; }
 
 # A here-document's end word is one plain word (letters, digits, _ . -): bare,
 # in one pair of quotes, or after one backslash. Every other `<<` is refused
@@ -584,26 +598,26 @@ for i in "${!SRCH_TEXT[@]}"; do
     done
     [ -z "$BAD" ] && continue
   fi
-  # A worker's missing, `.`, root or literal-parent path is rewritten to the checkout root with the output capped at 200
-  # lines (the cap bounds the 2026-09-10 flood); only when the whole call is this one simple search with one unbounded
-  # operand. The rewrite single-quotes every word, so a call the shell would expand or chain (rewrite_safe, no
-  # unquoted `| ; & < > ( )` or ~ * ? [ {) would search for something else: it stays refused below, as main's does.
+  # A missing, `.`, root or literal-parent path (main's or a worker's) is rewritten to the checkout root with the output
+  # capped at 200 lines (the cap bounds the 2026-09-10 flood); only when the whole call is this one simple search with one
+  # unbounded operand. The rewrite single-quotes every word, so a call the shell would expand or chain (rewrite_safe, no
+  # unquoted `| ; & < > ( )` or ~ * ? [ {) would search for something else: it is not rewritten and runs with the warning.
   # The subshell keeps pipefail local, and the drain after head lets the search finish, so the exit is the search's
   # own (0, 1 or 2), never head's and never 141. No PIPESTATUS: the Bash tool's shell may be zsh.
-  # Refused too: a word load_words dropped (`!`, `time`, a leading `(`) or a `#` comment, which the rebuild would not carry.
+  # Not rewritten either: a word load_words dropped (`!`, `time`, a leading `(`) or a `#` comment, which the rebuild would not carry.
   SIMPLE_SEARCH=0
-  # strip_quoted removes a comment, so it is read off the raw text: any `#` that starts a word (even in quotes) refuses.
+  # strip_quoted removes a comment, so it is read off the raw text: any `#` that starts a word (even in quotes) keeps the call unrewritten.
   if [ "$WORDS_DROPPED" = 0 ] && [[ $CMD != *[[:space:]]'#'* && $CMD != '#'* ]] && rewrite_safe "$CMD"; then
     case "$RW_TEXT" in *['|;&<>()~*?[{']*) ;; *) SIMPLE_SEARCH=1 ;; esac
   fi
-  if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ] && [ "$NBAD" = 1 ] && [ "$SIMPLE_SEARCH" = 1 ]; then
+  if [ "$NBAD" = 1 ] && [ "$SIMPLE_SEARCH" = 1 ]; then
     SEARCH_ROOT=$(git rev-parse --show-toplevel)
     [ -z "$BAD_IDX" ] || WORDS[BAD_IDX]=$SEARCH_ROOT # the operand's own position, never a pattern word equal to it
     CAPPED=""; for W in "${WORDS[@]}"; do CAPPED+="$(shq "$W") "; done
     [ "$BAD" = "(no path)" ] && CAPPED+=$(shq "$SEARCH_ROOT")
     jq -cn --arg c "( set -o pipefail; { ${CAPPED% }; } 2>&1 | { head -n 200; cat >/dev/null; } )" --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
-      --arg r "a worker's $TOOL over an unbounded path ($BAD) was rewritten to search the checkout root with the output capped at 200 lines" \
-      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecisionReason: $r, updatedInput: ($ti + {command: $c})}}'
+      --arg r "$TOOL over an unbounded path ($BAD) was rewritten to search the checkout root with the output capped at 200 lines" \
+      '{permissionDecisionReason: $r, updatedInput: ($ti + {command: $c})}' | { read -r o; allow_json "$o"; }
     exit 0
   fi
   # The advice names a directory that is there: the first one of the checkout.
@@ -611,14 +625,12 @@ for i in "${!SRCH_TEXT[@]}"; do
   if [ "$FILES_MODE" = 1 ]; then TRY="rg --files $TRYDIR"
   elif [ "$TOOL" = grep ]; then TRY="grep -rn -e $(shq "$PATTERN") $TRYDIR"
   else TRY="rg -n -e $(shq "$PATTERN") $TRYDIR"; fi
-  echo "BLOCKED: $TOOL over an unbounded path: $BAD. Name a directory relative to the checkout (\`rg <pattern> scripts/\`), an existing file, or an absolute log path such as /tmp/<unit>-*.log -- never the checkout root, a parent of it, or an unresolved variable. A repo-wide search took main down on 2026-09-10." >&2
-  # The rule never said how to ask the whole-repo question, which is sometimes
-  # the real one: 19 of 51 blocks were followed by another block of this same
-  # rule. Both sanctioned answers are named here.
-  echo "Whole repo: to search the tree, name its top-level directories: $TOOL ... <dir> <dir>" >&2
-  echo "Try: $TRY" >&2
+  # The search runs; the note rides as context, emitted once at the end (a later guard may still refuse the call).
+  # It says how to ask the whole-repo question, which is sometimes the real one: both sanctioned answers are named.
+  SEARCH_NOTE=${SEARCH_NOTE:-"$TOOL over an unbounded path: $BAD. Name a directory relative to the checkout (\`rg <pattern> scripts/\`), an existing file, or an absolute log path such as /tmp/<unit>-*.log -- never the checkout root, a parent of it, or an unresolved variable. A repo-wide search took main down on 2026-09-10.
+Whole repo: to search the tree, name its top-level directories: $TOOL ... <dir> <dir>
+Try: $TRY"}
   HOOK_FIRE_REASON=unbounded-search
-  exit 2
 done
 
 # Block a kill that can reach main's own session (owner ruling 2026-09-17).
@@ -629,12 +641,16 @@ done
 # here: a negative-pid target, a pid in this hook's own ancestor chain, and a
 # pkill/killall pattern naming the binaries main itself runs.
 KILL_ANCESTORS=""
-KILL_PID=$$
-while [ -n "$KILL_PID" ] && [ "$KILL_PID" -gt 1 ] 2>/dev/null; do
-  KILL_ANCESTORS="$KILL_ANCESTORS $KILL_PID"
-  # ps, not /proc: the Mac has no /proc, so the chain stopped at this hook.
-  KILL_PID=$(ps -o ppid= -p "$KILL_PID" 2>/dev/null | tr -d ' ')
-done
+# The walk is one ps and one tr per level and only the kill check reads it, so a call with no kill word skips it. The
+# strip is the kill parser's own (below): a quoted or split word (`k''ill`) still walks.
+case "${CMD//[\'\"\\]/}" in *kill*)
+  KILL_PID=$$
+  while [ -n "$KILL_PID" ] && [ "$KILL_PID" -gt 1 ] 2>/dev/null; do
+    KILL_ANCESTORS="$KILL_ANCESTORS $KILL_PID"
+    # ps, not /proc: the Mac has no /proc, so the chain stopped at this hook.
+    KILL_PID=$(ps -o ppid= -p "$KILL_PID" 2>/dev/null | tr -d ' ')
+  done ;;
+esac
 KILL_MSG="BLOCKED: this kill can reach main's own session. Kill a stray waiter by BARE literal pid only (kill -TERM 123 456) -- never pid 0 or the negative process-group form, never an unexpanded \$VAR, \$(...) or backtick target, except a job this same command started: a plain NAME=\$! before the kill, with NAME appearing nowhere else in the command but as \$NAME (sleep 30 & W=\$!; kill \$W) -- never a pid from main's own tree, never pkill/killall by user (-u), and never pkill on claude/node/orca in any case or behind a regex. scripts/board.sh prints the waiter ROOT pids."
 # A job the same command started: `$!` is a child of the command's own
 # shell, never main or an ancestor. Nothing is evaluated, so name $1 passes only
@@ -793,8 +809,35 @@ while IFS= read -r LINE; do
   case "${1-}" in *orca-ide|orca|*/orca) ;; *) continue ;; esac
   shift; cli_subcommand "$ORCA_VALUED" "$@"
   [ "$SUBCMD" = "terminal read" ] || continue
+  # A lone `terminal read --terminal <handle> [--lines N]` becomes read-verdict.sh <handle> <N or 40; read-verdict's own 120 is a pane dump>. Anything else keeps the
+  # block: another flag, no handle, a handle that is not one plain word ($VAR, quote, glob), a pipe or chain, a word before orca.
+  RV_H="" RV_N="" RV_OK=1
+  read -r RV_FIRST _ <<<"$CMD"
+  case "$RV_FIRST" in *orca-ide|orca|*/orca) ;; *) RV_OK=0 ;; esac
+  rewrite_safe "$CMD" || RV_OK=0
+  case "${RW_TEXT-}" in *['|;&<>()~*?[{']*) RV_OK=0 ;; esac
+  [ ${#GLOBALS[@]} -eq 0 ] || RV_OK=0 # a flag before the subcommand (--pairing-code ...) keeps the block
+  set -- "${REST[@]}"
+  while [ "$RV_OK" = 1 ] && [ $# -gt 0 ]; do
+    if [ $# -lt 2 ]; then RV_OK=0; break; fi
+    case "$1" in
+      --terminal) [ -z "$RV_H" ] && RV_H=$2 || RV_OK=0 ;;
+      --lines) [ -z "$RV_N" ] && RV_N=$2 || RV_OK=0 ;;
+      *) RV_OK=0 ;;
+    esac
+    shift 2
+  done
+  [[ $RV_H =~ ^[A-Za-z0-9_.:-]+$ ]] || RV_OK=0
+  [ -z "$RV_N" ] || { [[ $RV_N =~ ^[0-9]+$ ]] && [ "$RV_N" -ge 1 ] && [ "$RV_N" -le 500 ]; } 2>/dev/null || RV_OK=0
+  if [ "$RV_OK" = 1 ]; then
+    jq -cn --arg c "bash $(shq "${BASH_SOURCE[0]%/*}/../scripts/read-verdict.sh") $RV_H ${RV_N:-40}" --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
+      --arg r "a raw pane read was rewritten to read-verdict.sh, which filters outside main's context" \
+      '{permissionDecisionReason: $r, updatedInput: ($ti + {command: $c})}' | { read -r o; allow_json "$o"; }
+    exit 0
+  fi
   echo "BLOCKED: raw pane read. Use scripts/read-verdict.sh <handle> [lines] or seat.sh collect for content -- they filter outside main's context. For liveness use scripts/board.sh, or the state block orca-wait.sh prints with every wake." >&2
   HOOK_FIRE_REASON=raw-pane-read
   exit 2
 done < <(split_search_segments "$CMD")
+allow_json
 exit 0

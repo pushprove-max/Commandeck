@@ -9,7 +9,7 @@ This Mac's log cannot show whether a shipped guard earns its place.
 - The log covers the project `Commandeck` only. It spans 8 days: window start 2026-10-23T08:54:03Z, earliest retained row 2026-10-22T01:00:47Z.
 - The Commandeck plugin is not installed on this Mac. `hooks/hooks.json` does not run here.
 - Worker seats wire four hooks through `.claude/settings.local.json`: agent-model-guard.sh, builder-event-log.sh, builder-search-guard.sh, claude-worker-notify.sh. Only these four have session traffic.
-- Every other row comes from self-tests that write to the real log. The evidence is non-UUID session ids, and `_old-guard.sh` is a fixture name (a repo grep found no file or reference for it, so this is inference).
+- Every other row comes from self-tests that write to the real log. The evidence is non-UUID session ids, and _old-guard.sh is a fixture name (a repo grep found no file or reference for it, so this is inference).
 - So `fires 0` means not wired here. A high block count means a self-test exercised the hook. Neither says anything about use.
 - "Real rows" below counts rows whose session_id is a UUID. It can differ a little from the Fires column, which comes from the summary. companion-read-guard.sh and read-record.sh have UUID rows, but those are this unit's own test runs, so they are not counted as use.
 - Rows with `registered: false` are not shipped in `hooks/hooks.json`. `generated-read-guard.sh`, `companion-read-guard.sh`, `read-record.sh`, `bugfix-test-lock.sh` and `ruling-cite-gate.sh` are new in this unit.
@@ -87,7 +87,7 @@ Hooks with at least 100 blocks. Except for builder-search-guard.sh, every count 
 
 ## Log problems found
 
-- Self-tests write to the real fire log. Test rows (non-UUID session ids, fixture names such as `_old-guard.sh`) mix with session rows, so `scripts/hook-fire-log-summary.sh` reports test traffic as hook behavior. Proposed fix, for a unit: self-tests set a separate log path, or the summary drops non-UUID sessions by default.
+- Self-tests write to the real fire log. Test rows (non-UUID session ids, fixture names such as _old-guard.sh) mix with session rows, so `scripts/hook-fire-log-summary.sh` reports test traffic as hook behavior. Proposed fix, for a unit: self-tests set a separate log path, or the summary drops non-UUID sessions by default.
 - The review should be rerun from a project that installs the plugin. Only then do `hooks/hooks.json` hooks produce real rows, and only then can a "retire when" line be checked.
 
 ## Blockers below 100 blocks (no verdict here)

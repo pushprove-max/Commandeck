@@ -202,5 +202,48 @@ echo b >> "$WS/vc/vc.txt"; loop '{"closingPass":"no"}' tpass vc 3 review >/dev/n
 check "--verify refuses a cut-off pass after the first pass in the no-closing-pass chain, naming it" "2 1" \
   "$(loop '{"closingPass":"no"}' verify vc) $(grep -c 'thr-vc-2-1.*was cut off before it answered' "$TMP/verr")"
 
+# 12. Issue 563: a P3 of an earlier GO round the Builder fixed stops being open at the merge once the evidence says
+# `Fixed in <commit>: <that P3 line>` and the commit, on the unit branch and not on main, changed the line the P3 cites
+# or one beside it. Anything less keeps it open, and a finding of the pass under merge is never cleared.
+fx() { # <unit> <earlier GO round's findings>: the unit's fixing commit (FIXSHA) changes line 10 of <unit>.txt after that round
+  local u=$1 f=$WS/$1/$1.txt
+  mk "$u"; go "$u"; for i in $(seq 1 20); do echo "line $i"; done > "$f"; git -C "$WS/$u" commit -qam "setup $u"
+  tpass "$u" 2 review "$2"$'\nVERDICT: GO' >/dev/null
+  sed 's/^line 10$/fixed 10/' "$f" > "$f.new" && mv "$f.new" "$f"; git -C "$WS/$u" commit -qam "fix $u"
+  FIXSHA=$(git -C "$WS/$u" rev-parse HEAD); echo changed >> "$f"
+}
+fixed_in() { printf 'Fixed in %s: %s\n' "$2" "$3" >> "$WS/$1/.claude/briefs/$1-evidence.md"; } # <unit> <sha> <line>
+p3() { echo "- [P3] (class: wording) $1 -- $2 -- reads oddly -- cat x"; } # <id> <file:line>
+nstop() { grep -c '^STOP (threshold)' "$TMP/pout"; }
+nopen() { grep -c "^Open finding: $1" "$TMP/vout"; } # <class and id regex>: --verify's list, so read after verify
+L=$(p3 FX-CLEAR fx1.txt:10); fx fx1 "$L"; fixed_in fx1 "$FIXSHA" "$L"
+check "a Fixed in line naming a commit that changed the cited line clears an earlier GO-round P3" "0 0 0 0" \
+  "$(tpass fx1 3 final) $(nstop) $(verify fx1) $(nopen '')"
+L=$(p3 FX-OTHER fx2.txt:3); fx fx2 "$L"; fixed_in fx2 "$FIXSHA" "$L"
+check "a Fixed in line naming a commit that changed only other lines keeps it open" "0 1 0 1" \
+  "$(tpass fx2 3 final) $(nstop) $(verify fx2) $(nopen 'fx2.txt .*FX-OTHER')"
+# A commit of main that the unit merged in is in the tip and in main: it is not the unit's fix.
+L=$(p3 FX-MAIN a.txt:1); mk fx3; go fx3
+echo mainfix > "$REPO/a.txt"; git -C "$REPO" commit -qam "main fix"; MAINSHA=$(git -C "$REPO" rev-parse HEAD); git -C "$WS/fx3" merge -q --no-edit main
+tpass fx3 2 review "$L"$'\nVERDICT: GO' >/dev/null; echo more >> "$WS/fx3/fx3.txt"; fixed_in fx3 "$MAINSHA" "$L"
+check "a Fixed in line naming a commit on main keeps it open" "0 1 0 1" \
+  "$(tpass fx3 3 final) $(nstop) $(verify fx3) $(nopen 'a.txt .*FX-MAIN')"
+L='- [P3] (class: wording) FX-NOFILE -- reads oddly -- cat x'; fx fx4 "$L"; fixed_in fx4 "$FIXSHA" "$L"
+check "a Fixed in line for a finding that cites no file and line keeps it open" "0 1 0 1" \
+  "$(tpass fx4 3 final) $(nstop) $(verify fx4) $(nopen 'no-file .*FX-NOFILE')"
+# The closing pass itself names the P3 the Builder says it fixed: that finding is of the pass under merge.
+L=$(p3 FX-NOW fx5.txt:10); fx fx5 "$(p3 FX-EARLIER fx5.txt:10)"; fixed_in fx5 "$FIXSHA" "$L"
+check "a Fixed in line never clears a finding of the pass under merge" "0 1 0 1" \
+  "$(tpass fx5 3 final "$L"$'\nVERDICT: GO') $(nstop) $(verify fx5) $(nopen 'fx5.txt .*FX-NOW')"
+# Bad evidence: an unknown sha, a short one, a non-hex one, trailing text, no line and a quoted line each leave their P3
+# open; the one well-formed line clears its own.
+G=$(p3 FX-GOOD fx6.txt:10); U=$(p3 FX-UNKNOWN fx6.txt:10); S=$(p3 FX-SHORT fx6.txt:10); H=$(p3 FX-HEX fx6.txt:10)
+T=$(p3 FX-TRAIL fx6.txt:10); N=$(p3 FX-NOLINE fx6.txt:10); Q=$(p3 FX-QUOTED fx6.txt:10)
+fx fx6 "$G"$'\n'"$U"$'\n'"$S"$'\n'"$H"$'\n'"$T"$'\n'"$N"$'\n'"$Q"
+fixed_in fx6 "$FIXSHA" "$G"; fixed_in fx6 0000000000000000000000000000000000000000 "$U"; fixed_in fx6 "${FIXSHA:0:4}" "$S"
+fixed_in fx6 zzzzzzz "$H"; fixed_in fx6 "$FIXSHA" "$T extra"; fixed_in fx6 "$FIXSHA" ""; fixed_in fx6 "$FIXSHA" "\"$Q\""
+check "a Fixed in line with an unknown, short or non-hex sha, trailing text, no line or a quoted line keeps its P3 open, and a well-formed one clears its own" "0 1 0 6 0" \
+  "$(tpass fx6 3 final) $(nstop) $(verify fx6) $(nopen 'fx6.txt') $(nopen 'fx6.txt .*FX-GOOD')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

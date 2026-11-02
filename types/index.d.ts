@@ -7,11 +7,15 @@ export type UnitsRow = {
   unit: string; stage: string; round: number | null; verdict: string | null; verdictRound: number | null; findings: string; usd: number
   ageSec: number | null; red: boolean; issues: number | null; built: number | null; startedAt: number | null
   closes: string[]; costs: UnitsCosts; plan: UnitsSeat; judges: UnitsSeat
+  model: string | null; effort: string | null; working: boolean; stageSince: number | null
 }
 export type UnitsProgress = { done: number; failed: number; firstFail: string | null }
 export type UnitsState = {
   now: number
-  snap: { note: string | null; staleMin: number | null; rows: UnitsRow[]; merged: string[]; mergedAt: { unit: string; at: number }[]; chain: null; finishedUsd: Record<string, number> }
+  snap: {
+    note: string | null; staleMin: number | null; rows: UnitsRow[]; merged: string[]; mergedAt: { unit: string; at: number }[]; chain: null; finishedUsd: Record<string, number>
+    limit: { pct: number; resetsAt: number } | null; asks: { id: string; question: string; askedAt: number | null; unit: string | null }[]; unread: string[]
+  }
   merges: { unit: string; status: 'running' | 'stopped' | 'refused'; m: UnitsProgress & { step: string | null; total: number | null; refused: { step: string; reason: string } | null; ended: boolean }; elapsedSec: number }[]
   tests: { owner: string; kind: string; p: UnitsProgress; total: number | null; elapsedSec: number }[]
   notes: { merges: string[]; tests: string[] }
@@ -25,6 +29,8 @@ declare module 'claude-code' {
       // What the units mod draws, and which of its band, pane and status line are on.
       unitsState: UnitsState | null
       unitsView: { band: boolean; pane: boolean; status: boolean }
+      // The working mark's turn (0-3); only the motion clock moves it.
+      unitsFrame: number
     }
   }
 }

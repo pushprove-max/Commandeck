@@ -20,8 +20,9 @@
 # Self-test: bash hooks/__tests__/agent-model-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: Agent calls without a `model` are zero across 90 days of real rows
 . "${BASH_SOURCE[0]%/*}/lib/helper-pane.sh"
-# The matcher is a regex; TaskCreate, TaskList and the rest are not agents.
+# The matcher is a regex, so other tools whose names start with Task reach here; they are not agents.
 case "$(jq -r '.tool_name // empty' <<<"$INPUT")" in Agent|Task) ;; *) exit 0 ;; esac
 # Issue 397: the helper models are routing settings, not constants here.
 # An overlay written before helpers existed has no map (setup keeps its builder row as it is): the shipped one applies.

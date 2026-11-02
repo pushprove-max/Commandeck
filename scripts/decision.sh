@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
-#           | reopen <id> | list | holds <unit> | push-ask | rulings <term>...
+#           | reopen <id> | list | holds <unit> | push-ask | rulings <term>... | deliver <id> <text>
+#           | test-edit <unit> <path> <test label> <ruling id>
+# answer (issue 569) also sends the answer to the asking pane after the row closes, on stderr: `delivered: <id> to <target>`,
+# `queued: <id> to <unit>` (the Builder is not running; the answer waits for its next start), `unknown: <id> to <target> timed
+# out; check the unit's pane before resending` (the send was cut at 20 s and may have gone) or `not delivered: <id> ...`; exit
+# stays 0. The target is the unit of a `<unit> asks` source (answer-worker.sh, its stdout dropped), else the first `term_` handle
+# in the source; a source of main, AskUserQuestion or decision.sh sends nothing. COMMANDECK_NO_DELIVER=1 sends nothing (the
+# dashboard, ruling-log.sh and answer-worker.sh close rows that way); `deliver <id> <text>` is the send alone. --correct sends nothing.
+# test-edit (issue 574): appends `Test edit: <path> test:<label> ruling:<id>` to main's .claude/briefs/<unit>-main-rulings.md once,
+# only for a ruling id the ruling log holds unvoided; the line builder-codex-pass.sh's test_edit_refusals accepts.
 # rulings <term>... (issue 477): the owner's earlier picker answers from the ruling log, for a plan author to read before it
 # writes a question. Void and decoy rows are left out; a term is plain text matched in any case on the question or the
 # answer; newest first, one line each, `<id> <et>: <question> -> <answer>`. Exit 0 with nothing printed when no row matches.
@@ -24,7 +33,7 @@
 # answer-worker.sh answers it). The row carries waitsOn: "main", so the Needs
 # Owner card lists it as waiting on main, never as the owner's; it is never a
 # repeat of an owner's question, only of its own id.
-# Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG.
+# Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG; COMMANDECK_ANSWER_WORKER (the send's script).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "$0")/paths.sh" || exit 1
@@ -32,7 +41,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask | rulings <term>..."; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask | rulings <term>... | deliver <id> <text> | test-edit <unit> <path> <test label> <ruling id>"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -48,6 +57,26 @@ fold() {
 }
 
 append() { printf '%s\n' "$1" >> "$L" || die "could not append to $L"; printf '%s\n' "$1"; }
+# deliver_answer <id> <text> <source> -- send an owner's answer to the pane that asked (issue 569) and print one line on
+# stderr: delivered, queued, unknown or not delivered. A source of main, AskUserQuestion or decision.sh names no pane: no line.
+# Each send waits at most 20 s; one cut there may already have gone, so it reads unknown, check the pane before resending,
+# never not delivered (F13). Returns 0 for delivered or queued.
+deliver_answer() {
+  local id=$1 text=$2 src=$3 target aw tmo= err rc
+  case $src in main|AskUserQuestion|decision.sh*) return 0 ;; esac
+  if [[ $src =~ ^([A-Za-z0-9][A-Za-z0-9._-]*)\ asks$ ]] && [ -d "${PP_WORKSPACES:-/nonexistent}/${BASH_REMATCH[1]}" ]; then target=${BASH_REMATCH[1]}
+  else target=$(grep -oE 'term_[0-9a-f]+' <<<"$src" | head -1); fi
+  [ -n "$target" ] || { echo "not delivered: $id: its source names no unit or terminal handle" >&2; return 1; }
+  aw=${COMMANDECK_ANSWER_WORKER:-$(dirname "$0")/answer-worker.sh}
+  if command -v timeout >/dev/null; then tmo="timeout 20"; elif command -v gtimeout >/dev/null; then tmo="gtimeout 20"; fi
+  err=$($tmo bash "$aw" "$target" "$text" "$id" 2>&1 >/dev/null); rc=$?
+  if [ $rc = 0 ]; then echo "delivered: $id to $target" >&2
+  elif [ $rc = 124 ]; then echo "unknown: $id to $target timed out; check the unit's pane before resending" >&2; return 1
+  elif grep -q '^queued: ' <<<"$err"; then echo "queued: $id to $target" >&2
+  # answer-worker's own deadline: the answer is in the unit's inbox, unread (no timeout on PATH lets decision.sh reach it)
+  elif grep -q '^answer-worker: NOT acknowledged: ' <<<"$err"; then echo "unknown: $id to $target not acknowledged; check the unit's pane before resending" >&2; return 1
+  else echo "not delivered: $id to $target: $(tail -1 <<<"$err" | tr '\n' ' ')" >&2; return 1; fi
+}
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # fresh <askedAt> -- now, for a new snapshot of an id last asked at <askedAt>
 # (empty for a new id). askedAt is how the watcher's seen mark and answer
@@ -235,7 +264,32 @@ case "${1:-}" in
     jq -e '.answeredAt == null' <<<"$prev" >/dev/null || die "decision $2 is already answered (a wrongly recorded answer: add --correct)"
     [ -z "$asked" ] || jq -e --arg a "$asked" '.askedAt == $a' <<<"$prev" >/dev/null \
       || die "decision $2 was reopened after this answer read it"
-    append "$(jq -c --arg a "$3" --arg at "$(now)" '.answeredAt = $at | .answer = $a' <<<"$prev")" ;;
+    append "$(jq -c --arg a "$3" --arg at "$(now)" '.answeredAt = $at | .answer = $a' <<<"$prev")"
+    # The row is closed and the lock released before the send, which can take 20 s.
+    exec 9<&-
+    [ "${COMMANDECK_NO_DELIVER:-}" = 1 ] || deliver_answer "$2" "$3" "$(jq -r .source <<<"$prev")" || true ;;
+  deliver)
+    [ $# -eq 3 ] && [ -n "$3" ] || usage
+    lock -s
+    prev=$(fold | jq -c --arg id "$2" '.[] | select(.id == $id)') || exit 1
+    [ -n "$prev" ] || die "unknown decision $2"
+    exec 9<&-
+    deliver_answer "$2" "$3" "$(jq -r .source <<<"$prev")" ;;
+  test-edit)
+    # test-edit <unit> <path> <label> <ruling id>: the owner's yes to one edited test, in the shape test_edit_refusals reads.
+    [ $# -eq 5 ] || usage
+    u=$2 path=$3 label=$4 rid=$5
+    [[ $u =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $u != *..* ]] || die "bad unit: $u"
+    [ -n "$path" ] && [ -n "$label" ] || die "a path and a test label are required"
+    case "$path$label" in *$'\n'*|*$'\r'*) die "a path or label holds a newline" ;; esac
+    [[ $label != *" ruling:"* ]] || die "a label may not hold ' ruling:'"
+    . "$(dirname "$0")/../hooks/lib/ruling-id.sh" || exit 1
+    ruling_id_state "$rid" "$RULINGS" || die "ruling $rid is not a logged, unvoided ruling in $RULINGS"
+    f=$PP_MAIN/.claude/briefs/$u-main-rulings.md
+    line="Test edit: $path test:$label ruling:$rid"
+    ! grep -qxF -- "$line" "$f" 2>/dev/null || { echo "$line"; exit 0; }
+    mkdir -p "${f%/*}" && printf '%s\n' "$line" >> "$f" || die "could not write $f"
+    echo "$line" ;;
   reopen)
     # reopen <id>: The owner's answer was not theirs (an Orca banner closed a
     # chat ask). The fresh askedAt keeps a prompt that arrived before the
@@ -282,7 +336,7 @@ case "${1:-}" in
     cur=$(fold) || exit 1
     jq -r --arg u "$2" '($u | gsub("\\."; "\\.")) as $re
       | [.[] | select(.id == $u or .id == "plan-" + $u or (.id | test("^review-stop-" + $re + "-r[0-9]+$"))
-          or ((.question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])")))]
+          or (.source != "decision.sh push-ask" and ((.question + " " + .source) | test("(^|[^A-Za-z0-9._-])" + $re + "($|[^A-Za-z0-9._-])"))))]
       | (.[] | select(.answeredAt == null) | "Open question to the owner \(.id): \(.question)"),
         (.[] | select(.answeredAt != null) | "The owner answered \(.id) (\(.question)): \(.answer)")' <<<"$cur" ;;
   rulings)

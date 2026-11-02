@@ -35,6 +35,7 @@
     "unitsBand": "auto",
     "unitsPane": "auto",
     "unitsStatus": "auto",
+    "motion": false,
     "mainPromptCacheTtl": "1h",
     "workerPromptCacheTtl": "5m",
     "relayPromptCacheTtl": "1h"

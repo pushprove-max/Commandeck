@@ -84,5 +84,39 @@ check "two reads get a peek line (issue 473)" "1 0 1" \
 old_state() { fresh; printf '%s 2 0\n' "$(date +%s%3N)" > "/tmp/claude-batch-$S"; sleep 0.3; turn ls; }
 check "an old state file still nudges (issue 473)" nudge "$(old_state)"
 
+# Issue 539: a second lone look is refused before it runs (PreToolUse), but only on proof: the call's own transcript
+# line is the last of its message (stop_reason set) and the message holds one call. Anything less is advice only, as
+# a batched turn must never be refused. State files stay `NOW STREAK NAGGED`; a refusal adds a fourth field.
+pre_line() { # <tool_use id> <message id> <stop_reason, empty for null>
+  jq -cn --arg u "$1" --arg m "$2" --arg r "$3" '{type: "assistant", message: {id: $m, stop_reason: (if $r == "" then null else $r end), content: [{type: "tool_use", id: $u}]}}'
+}
+pre() { # <tool_use id> <transcript path, empty for none> -> refused or quiet
+  local out
+  out=$(jq -cn --arg s "$S" --arg u "$1" --arg t "$2" '{hook_event_name: "PreToolUse", session_id: $s, tool_name: "Bash",
+    tool_input: {command: "ls"}, tool_use_id: $u} + (if $t == "" then {} else {transcript_path: $t} end)' | bash "$HOOK" 2>/dev/null)
+  case "$out" in *'"deny"'*BATCHING:*) echo refused ;; *) echo quiet ;; esac
+}
+lone_tr() { pre_line u2 m2 tool_use > "$TR"; }
+check "a second lone look is refused naming the batching fix" refused "$(fresh; turn ls >/dev/null; lone_tr; pre u2 "$TR")"
+check "a repeat of the refused call passes" refused/quiet "$(fresh; turn ls >/dev/null; lone_tr; echo "$(pre u2 "$TR")/$(pre u2 "$TR")")"
+check "an edit or test run between looks resets the count" quiet "$(fresh; turn ls >/dev/null; turn 'touch x' >/dev/null; lone_tr; pre u2 "$TR")"
+# Two lines of one message: the call finds its sibling and counts two, so it is a batch.
+batch_tr() { { pre_line u1 m1 ''; pre_line u2 m1 tool_use; } > "$TR"; }
+check "calls batched in one turn are never refused" quiet "$(fresh; turn ls >/dev/null; batch_tr; pre u2 "$TR")"
+# The first line of a batch carries no stop_reason yet and its sibling has not landed: one call, but not proven alone.
+check "a batched call whose sibling line lands late is never refused" quiet "$(fresh; turn ls >/dev/null; pre_line u1 m1 '' > "$TR"; pre u1 "$TR")"
+# A prompt zeroes the count but leaves the said-once mark: `NOW 0 1` after a `NOW 2 1` file.
+new_prompt() { fresh; printf '%s 2 1\n' "$(date +%s%3N)" > "/tmp/claude-batch-$S"
+  jq -cn --arg s "$S" '{hook_event_name: "UserPromptSubmit", session_id: $s, prompt: "go"}' | bash "$HOOK" >/dev/null 2>&1
+  lone_tr; echo "$(cut -d' ' -f2- "/tmp/claude-batch-$S" | head -1)/$(pre u2 "$TR")"; }
+check "a new prompt resets the count and keeps the advice said once" "0 1/quiet" "$(new_prompt)"
+check "a seat with no transcript is never refused" quiet "$(fresh; turn ls >/dev/null; pre u2 '')"
+# Same state and proof in a default-tier main (no strictHooks) and a strict one: only the strict one refuses.
+MP2=$(mktemp -d); git init -q "$MP2"; trap 'rm -rf /tmp/claude-batch-bil$$-* "$TR" "$MP" "$MP2"' EXIT
+tier_pre() { # <project dir> -- a main seat with a three-field state file and a proven lone call
+  (cd "$1" && unset COMMANDECK_SEAT COMMANDECK_BUILDER COMMANDECK_HOOK_TIER && fresh
+   printf '%s 1 0\n' "$(date +%s%3N)" > "/tmp/claude-batch-$S"; lone_tr; pre u2 "$TR"); }
+check "a default-tier main is never refused" quiet/refused "$(tier_pre "$MP2")/$(tier_pre "$MP")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

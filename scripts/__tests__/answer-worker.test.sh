@@ -96,6 +96,17 @@ check "an answer naming its question closes that one only" "u1-msg_q2" "$(open)"
 # The bare msg_ form names the reply, so it must close the ledger's <unit>-msg_ question too, or it stays on the dashboard.
 OUT=$(answer term_b "keep it" msg_q2)
 check "an answer naming a bare msg_ id closes the unit's <unit>-msg_ question" ":0" "$(open):$(grep -c 'no open question' <<<"$OUT")"
+# Issue 569: an owner-bound question (no waitsOn: the owner's to answer, main sends it on) is closed by the id main names, never
+# by a send with no id; the close sends nothing, and a later decision.sh answer on it is refused as already answered.
+(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" \
+  bash "$REAL/scripts/decision.sh" add u1-msg_ob "Should the owner approve the schema change?" none 'u1 asks' >/dev/null)
+answer term_b "keep it as is" >/dev/null
+OB1=$(open | grep -c u1-msg_ob)
+answer term_b "yes, approved" u1-msg_ob >/dev/null
+OB2=$(open | grep -c u1-msg_ob)
+LATER=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" bash "$REAL/scripts/decision.sh" answer u1-msg_ob again 2>&1 >/dev/null; echo "rc=$?")
+check "an owner's chat answer sent with answer-worker closes the unit's owner-bound row, a later decision.sh answer on it is refused, and with no id it closes no owner-bound row" \
+  "1 0 1 1" "$OB1 $OB2 $(grep -c 'already answered' <<<"$LATER") $(grep -c 'rc=1' <<<"$LATER")"
 
 # Past its done marker, beside its reviewer, Orca still says working: the Builder's own log says its turn is over.
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"All built.\nU-DONE"}]},"timestamp":"2026-10-15T10:01:00Z","sessionId":"s1"}' \

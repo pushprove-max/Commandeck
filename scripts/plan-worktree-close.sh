@@ -69,7 +69,18 @@ from_plan() {
 # Ignored caches the tools keep in a worktree (issue 342): serena's index, the scratch folder, and the settings file
 # whether or not it still matches the generated one. They are no plan content, so they never block an adoption.
 tool_cache() {
-  case $1 in .serena|.serena/*|.claude/scratch|.claude/scratch/*|.claude/settings.local.json) return 0 ;; *) return 1 ;; esac
+  local f
+  case $1 in
+    .serena|.serena/*|.claude/scratch|.claude/scratch/*|.claude/settings.local.json) return 0 ;;
+    # Issue 564: a __pycache__ folder is a cache only while it holds nothing but compiled files, and no link at all.
+    __pycache__/|*/__pycache__/)
+      [ -d "$WT/$1" ] && [ ! -L "$WT/$1" ] || return 1
+      while IFS= read -r f; do
+        case $f in *.pyc|*.pyo) [ -f "$f" ] && [ ! -L "$f" ] || return 1 ;; *) return 1 ;; esac
+      done < <(find "$WT/${1%/}" -mindepth 1)
+      return 0 ;;
+    *) return 1 ;;
+  esac
 }
 # scan <layer> <reader> <git args> -- every path git lists must read the same as on main; HIT names the first that does not.
 scan() {

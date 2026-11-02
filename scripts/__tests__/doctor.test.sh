@@ -250,5 +250,16 @@ check "the doctor names each role's prompt cache and where it is written" "1:1:1
   "$(grep -c '^ok prompt cache: main 1h (.claude/main-session.settings.json;' <<<"$OUT"):$(grep -c "^ok prompt cache: workers 5m (each worktree's .claude/settings.local.json; subagents: subagentPromptCacheTtl in .claude/settings.json)" <<<"$OUT"):$(grep -c '^ok prompt cache: relay 1h ' <<<"$OUT"):$(grep -c '^warn' <<<"$OUT")"
 rm -rf "$T/ws/Builder-fix" "$PROJ/.claude/main-session.settings.json"
 
+# #537: macOS malloc stack logging filled a disk with one scratch file; the doctor warns on any file over 100 MB. A
+# sparse file (truncate) costs no disk but reads as that size.
+SCR=$(lib 'printf %s "$PP_SCRATCH"'); mkdir -p "$SCR"
+truncate -s 101M "$SCR/stack-logs.big"
+OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
+check "doctor warns on a scratch file over 100 MB" 1 "$(grep -c "^warn scratch: .*stack-logs.big" <<<"$OUT")"
+rm -f "$SCR/stack-logs.big"; truncate -s 1M "$SCR/small.file"
+OUT=$(in_proj timeout 60 bash "$REAL/scripts/doctor.sh" 2>&1)
+check "doctor says nothing about a scratch folder with only small files" 0 "$(grep -c "^warn scratch:" <<<"$OUT")"
+rm -f "$SCR/small.file"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

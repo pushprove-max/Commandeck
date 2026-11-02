@@ -14,7 +14,7 @@ test('mid-run merge and test logs show step and counts in /units and the status 
   const text = await units($)
   expect(text).toContain('◐ u  check 2 files · 1 failed (first b.test.sh)')
   expect(text).toContain('▸ main  shell 1/4 files')
-  expect(w.status.at(-1)).toBe('1 building · 1 merging · 1 testing · today $1.00')
+  expect(w.status.at(-1)).toBe('◐ 1 building · ◐ 1 merging · ▸ 1 testing · today $1.00')
   // The mod finds the plugin's own scripts through its folder's parent.
   expect(w.runs.some(r => r[0] === 'bash' && r.includes(ROOT))).toBe(true)
 })
@@ -202,7 +202,7 @@ test('a seat whose launch failed shows nothing for it', async ($, on) => {
   await start($, 'main')
   const text = await units($)
   expect(text).toContain('Plan ✓  Judges ○')
-  expect(text).not.toContain('◐')
+  expect(text).not.toContain('Judges ◐')
 })
 
 
@@ -211,7 +211,7 @@ test('a unit merged today from a plugin snapshot shows in the pane\'s merged-tod
   await start($, 'main')
   const lines = (await units($)).split('\n')
   expect(lines.some(l => /^MERGED TODAY +1/.test(l))).toBe(true)
-  expect(lines.some(l => /^✓ v +\d\d:\d\d/.test(l))).toBe(true)
+  expect(lines.some(l => /^✓ v +\d\d?:\d\d [AP]M/.test(l))).toBe(true)
 })
 
 
@@ -219,8 +219,8 @@ test('config and the command each toggle each view', quiet, async ($, on) => {
   const w = world(on, 'worker', { [DATA]: snap([unit('u')]) })
   await start($, 'worker')
   expect(w.opened).toEqual(['units'])
-  expect((await draw($, 'AbovePrompt')).join('')).toContain('● u Building')
-  expect(w.status.at(-1)).toBe('1 building · today $1.00')
+  expect((await draw($, 'AbovePrompt')).join('')).toContain('◐ u Building')
+  expect(w.status.at(-1)).toBe('◐ 1 building · today $1.00')
   await units($, 'band off')
   expect(await draw($, 'AbovePrompt')).toEqual(['engine'])
   expect(w.opened).toEqual(['units'])
@@ -229,7 +229,7 @@ test('config and the command each toggle each view', quiet, async ($, on) => {
   await units($, 'status off')
   expect(w.status.at(-1)).toBe(undefined)
   await units($, 'band on')
-  expect((await draw($, 'AbovePrompt')).join('')).toContain('● u Building')
+  expect((await draw($, 'AbovePrompt')).join('')).toContain('◐ u Building')
   expect(w.status.at(-1)).toBe(undefined)
 })
 
@@ -246,7 +246,7 @@ for (const [seat, isOn] of [['main', true], ['cos', true], ['worker', false]] as
   test(`main and Chief of Staff default on, worker and reviewer default off: ${seat}`, async ($, on) => {
     const w = world(on, seat, { [DATA]: snap([unit('u')]) })
     await start($, seat)
-    expect([w.opened.length === 1, w.status.at(-1) !== undefined, (await draw($, 'AbovePrompt')).join('').includes('● u Building')]).toEqual([isOn, isOn, isOn])
+    expect([w.opened.length === 1, w.status.at(-1) !== undefined, (await draw($, 'AbovePrompt')).join('').includes('◐ u Building')]).toEqual([isOn, isOn, isOn])
   })
 }
 
@@ -255,9 +255,9 @@ test('the relay keeps its units summary beside the auto-decide mode, across poll
   const w = world(on, 'cos', { [DATA]: snap([unit('u')]) })
   on('store.get', () => ({ value: undefined }))
   await start($, 'cos')
-  expect(w.status.at(-1)).toBe('1 building · today $1.00 · auto-decide off')
+  expect(w.status.at(-1)).toBe('◐ 1 building · today $1.00 · auto-decide off')
   await w.clock.advance(5000)
-  expect(w.status.at(-1)).toBe('1 building · today $1.00 · auto-decide off')
+  expect(w.status.at(-1)).toBe('◐ 1 building · today $1.00 · auto-decide off')
 })
 
 test('a checkout with no Commandeck setup registers nothing', async ($, on) => {
@@ -267,4 +267,45 @@ test('a checkout with no Commandeck setup registers nothing', async ($, on) => {
   expect(w.opened).toEqual([])
   expect(w.status).toEqual([])
   expect(w.runs.some(r => r[0] === 'bash')).toBe(false)
+})
+
+// Motion is off unless asked for, and only the motion clock moves the working mark, never the 5-second poll.
+const turning = (motion: boolean) => async ($: any, on: any) => {
+  const w = world(on, 'main', { [DATA]: snap([unit('u')]) })
+  await start($, 'main')
+  const mark = async () => [/([◐◓◑◒]) u /.exec((await draw($, 'AbovePrompt')).join(''))?.[1], w.status.at(-1)?.[0]]
+  const sent = w.status.length
+  await w.clock.advance(3000)
+  const fourth = motion ? '◒' : '◐'
+  expect([...(await mark()), w.status.length - sent]).toEqual([fourth, fourth, motion ? 3 : 0])
+  await units($)
+  expect(await mark()).toEqual([fourth, fourth])
+  // The unit stops working: the clock stops and the mark stands still at once.
+  w.files.set(DATA, { text: snap([unit('u', { agents: 'claude:done' })]), at: NOW + 1 })
+  await w.clock.advance(2000)
+  const n = w.status.length
+  await w.clock.advance(3000)
+  expect([w.status.length - n, w.status.at(-1)]).toEqual([0, '✗ u at its prompt 1m · ◐ 1 · $1.00'])
+}
+test('motion off draws the working mark still', { options: { unitsBand: 'on', unitsPane: 'on', unitsStatus: 'on', motion: false } }, turning(false))
+test('motion on turns the working mark each second', { options: { unitsBand: 'on', unitsPane: 'on', unitsStatus: 'on', motion: true } }, turning(true))
+
+// The mod's only state is atoms: a full run of every view, command and poll leaves the disk as it found it.
+test('the views write no file', { options: { unitsBand: 'on', unitsPane: 'on', unitsStatus: 'on', motion: true } }, async ($, on) => {
+  const w = world(on, 'main', {
+    [DATA]: snap([unit('u')]), [STATE]: state(8, 'check'), [LOG]: `${attempt(8)}STEP 4 check: x\n`,
+    [`${GIT}/commandeck-test-live/77.tsv`]: table('run\t100\t2', 'file\ta.sh', 'file\tb.sh'),
+  })
+  w.live.add(8).add(77)
+  const before = [...w.files].map(([p, f]) => [p, f.text])
+  await start($, 'main')
+  await w.clock.advance(5000)
+  await units($)
+  await units($, 'band off')
+  await units($, 'status off')
+  await draw($, 'AbovePrompt')
+  await draw($, 'Pane')
+  expect(w.writes).toEqual([])
+  expect(w.runs.filter(r => !['git', 'bash', 'kill', 'ps'].includes(r[0]))).toEqual([])
+  expect([...w.files].map(([p, f]) => [p, f.text])).toEqual(before)
 })

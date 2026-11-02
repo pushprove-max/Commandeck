@@ -11,6 +11,7 @@
 # A tripwire against the skipped read, not a boundary. Self-test: bash hooks/__tests__/companion-read-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that lists companions in .claude/companions.tsv
 IFS=$'\001' read -r SID CWD < <(jq -r '[.session_id // "", .cwd // ""] | join("\u0001")' <<<"$INPUT" 2>/dev/null)
 HEX='[0-9A-Fa-f]'
 [[ ${SID-} =~ ^$HEX{8}-$HEX{4}-$HEX{4}-$HEX{4}-$HEX{12}$ ]] || exit 0

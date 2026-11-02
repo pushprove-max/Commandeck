@@ -54,35 +54,22 @@ check "one reason on three lines closes none" "1 3" "$RC $(grep -c '^- ' <<<"$OU
 OUT=$(closed_with '- answer on the beta schema -- see old.md' '- gamma report export -- shipped' '- delta cache warmup -- dropped'); RC=$?
 check "a pointer line closes nothing" "1 1" "$RC $(grep -c 'beta schema' <<<"$OUT")"
 
-# Issue 281: an item restated with a new status tail, a todo pointer, or closed in place is carried; a missing one is
+# Issue 281: an item restated with a new status tail, or closed in place, is carried; a missing one is
 # listed once however many times the chain repeats it.
 cat > "$TMP/b3.md" <<'MD'
 ## Queue (in order)
 - open: zeta migration plan -- reason: waiting on the schema
-- eta dashboard fix = todo #2
 - theta cleanup
 - iota release notes
 - iota release notes -- restated: still needed
-
-## Todo list (the owner's on-screen checklist)
-- [ ] kappa docs pass
 MD
 cat > "$TMP/n3.md" <<'MD'
 ## Queue (in order)
 - zeta migration plan -- still open: schema answered, plan next
 - CLOSED: theta cleanup -- removed in the last merge
-
-## Todo list (the owner's on-screen checklist)
-- [ ] kappa docs pass
-- [>] eta dashboard fix review with the owner
 MD
 OUT=$(carry "$TMP/b3.md" "$TMP/n3.md"); RC=$?
-check "restated tails, a todo pointer and a CLOSED: line carry; the missing item is listed once" "1 1 1" "$RC $(grep -c 'iota release notes' <<<"$OUT") $(grep -c '^- ' <<<"$OUT")"
-sed 's/\[>\] eta dashboard fix/[>] other dashboard fix/' "$TMP/n3.md" > "$TMP/n3b.md"
-check "a todo pointer whose todo starts with another word carries nothing" 1 "$(carry "$TMP/b3.md" "$TMP/n3b.md" | grep -c 'eta dashboard fix')"
-# The pointed todo must name the whole subject: one that shares only its first word is another task.
-sed 's/\[>\] eta dashboard fix review with the owner/[>] eta delete production backups/' "$TMP/n3.md" > "$TMP/n3c.md"
-check "a todo pointer whose todo shares only the first word carries nothing" 1 "$(carry "$TMP/b3.md" "$TMP/n3c.md" | grep -c 'eta dashboard fix')"
+check "restated tails and a CLOSED: line carry; the missing item is listed once" "1 1 1" "$RC $(grep -c 'iota release notes' <<<"$OUT") $(grep -c '^- ' <<<"$OUT")"
 
 # An item is kept by a new item of the same subject, and closed by a close line that starts with it: a line that
 # only mentions it inside another item ("Q-9 discuss Q-3 later") keeps and closes nothing.
@@ -470,6 +457,13 @@ for g in $(seq 0 10); do
 done
 OUT=$(timeout 20 python3 "$REAL/scripts/checkpoint-context.py" aged "$TMP/dense/g0.md" 2>&1); RC=$?
 check "aged on eleven files that each carry every other one exits 0 in time and lists nothing" "0 " "$RC $OUT"
+
+# #553: the Todo list section is no open section. An item written only there keeps nothing, and one inherited there
+# is not required to be restated.
+printf '## Queue (in order)\n- alpha job\n- gamma job\n\n## Todo list\n- [ ] beta step\n' > "$TMP/t1.md"
+printf '## Queue (in order)\n- gamma job\n\n## Todo list\n- [ ] alpha job\n' > "$TMP/t2.md"
+OUT=$(carry "$TMP/t1.md" "$TMP/t2.md"); RC=$?
+check "a Todo list section carries nothing in the checkpoint gate" "1 - alpha job" "$RC $OUT"
 
 echo
 echo "$PASS passed, $FAIL failed"

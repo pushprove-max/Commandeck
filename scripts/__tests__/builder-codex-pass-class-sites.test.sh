@@ -58,5 +58,18 @@ for d in "${DIRS[@]}"; do [ ! -d "$d" ] || for f in "$d"/*; do [ -e "$NORG/${f##
 check "a pass with no rg on PATH is refused, naming rg, and starts no round" "2 1 no" \
   "$(chk 4 "$NORG") $(grep -c 'no rg (ripgrep) on PATH' "$TMP/err") $([ -e "$B/$U-r4-reports.md" ] && echo yes || echo no)"
 
+# #550 (D30): a flaw the reviewers report twice leaves the fix round as two items and returns next pass. Two findings share a
+# cause when one's search hits hold the other's site: a.sh:1's search hits b.sh:1 and b.sh:1's own search hits itself, so
+# they are one item with one fix group; c.sh:1's search hits only c.sh:1, so it stays its own item.
+printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n' "$U" > "$SC/seat-$U-builder.txt"
+R4=$'- [P1] (class: x) first half -- a.sh:1 -- why -- cmd\nClass search: rg -n built a.sh b.sh\n- [P1] (class: x) second half -- b.sh:1 -- why -- cmd\nClass search: rg -n built b.sh\n- [P1] (class: y) unrelated -- c.sh:1 -- why -- cmd\nClass search: rg -n other c.sh\nVERDICT: NO-GO'
+printf 'echo built four\n' > "$W/a.sh"
+fpass "$W" 4 review "$R4" >/dev/null
+check "two findings whose searches hit each other's site become one item naming both places and one fix group" "1 0 1 1" \
+  "$(hand 4 | grep -c '^- one cause, 2 places: a.sh:1 .*first half; b.sh:1 .*second half') $(hand 4 | grep -c '^- Group [0-9]* (a.sh):') \
+$(hand 4 | grep -c '^- Group [0-9]* (a.sh, b.sh):') $(hand 4 | grep -c '^## Findings by cause')"
+check "a finding whose search hits no other finding stays a separate item" "1 0 1" \
+  "$(hand 4 | grep -c '^- Group [0-9]* (c.sh):') $(hand 4 | grep '^- one cause' | grep -c 'c.sh') $(wc -l < "$B/$U-r4-causes.txt" | tr -d ' ')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

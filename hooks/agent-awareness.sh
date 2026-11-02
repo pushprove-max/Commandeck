@@ -20,6 +20,7 @@
 set +e
 [ -t 0 ] || IFS= read -r -d '' INPUT
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "${INPUT-}" UserPromptSubmit
+# Retire when: zero fires across 90 days of rows from a project that installs the plugin and has coordinator sessions
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/paths.sh" || exit 1
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/host-services.sh"
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
@@ -212,10 +213,26 @@ fi
 workers=$(ps -eo pid=,ppid=,args= 2>/dev/null | awk '
   { pid = $1; up[pid] = $2; c = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", c); cmd[pid] = c; order[++n] = pid }
   # The program, not a word in the command text: argv0, or the script node/bun
-  # runs. AI is its argv index. A shell that merely mentions claude is neither.
-  function agent(s,   a, b) {
-    split(s, a, " "); b = a[1]; sub(/.*\//, "", b); AI = 1
-    if (b == "node" || b == "bun") { b = a[2]; sub(/.*\//, "", b); AI = 2 }
+  # runs, past their own options (the word after -r, -C, --require, --import,
+  # --loader, --experimental-loader or --conditions is a value; -e, -p, --eval
+  # and --print run no script). Any other option may take the next word as its
+  # value (--inspect-port 9229, pass 13): a word right after an option written
+  # without = ends the options only when it is claude or codex, so no list of
+  # value options is kept. AI is its argv index. A shell that merely
+  # mentions claude is neither.
+  function agent(s,   a, b, k) {
+    k = split(s, a, " "); b = a[1]; sub(/.*\//, "", b); AI = 1
+    if (b == "node" || b == "bun") {
+      for (AI = 2; AI <= k; AI++) {
+        if (a[AI] ~ /^(-e|-p|--eval|--print)$/) return ""
+        if (a[AI] == "--") { AI++; break }
+        if (a[AI] ~ /^(-r|-C|--require|--import|--loader|--experimental-loader|--conditions)$/) { AI++; continue }
+        if (a[AI] ~ /^-/) continue
+        b = a[AI]; sub(/.*\//, "", b)
+        if (b == "claude" || b == "codex" || a[AI - 1] !~ /^-[^=]*$/) break
+      }
+      b = a[AI]; sub(/.*\//, "", b)
+    }
     return b == "claude" || b == "codex" ? b : ""
   }
   # Headless claude is -p/--print anywhere after the program (`claude --model
@@ -270,7 +287,7 @@ if [ "$(hs_os)" != Darwin ] && [ -n "$scope" ] && [ -r "$scope/memory.stat" ]; t
   max=$(cat "$scope/memory.max"); [ "$max" = max ] && max=uncapped || max="$(( max / 1073741824 )) GB cap"
   panes=$(printf '%s' "${LIVE:-[]}" | jq -r 'length' 2>/dev/null)
   # Since 2026-09-11 every dispatched pane runs inside its own systemd scope
-  # (`pane-box.sh`, 8 GB each), and a scope lands under app.slice OUTSIDE Orca's
+  # (the pane box, 8 GB each), and a scope lands under app.slice OUTSIDE Orca's
   # cgroup. So the cage number above no longer counts the workers at all, and
   # reading it alone would say 3 GB while four panes held 30. Sum the boxes.
   boxed=0; nboxes=0

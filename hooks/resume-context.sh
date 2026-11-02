@@ -20,6 +20,7 @@
 set -u
 input=$(cat 2>/dev/null || true)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
+# Retire when: zero fires across 90 days from a project that installs the plugin, with main restarts logged
 [ "${COMMANDECK_REVIEWER:-}" = 1 ] && exit 0
 [ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ] || exit 0
 # Named for this checkout by context-clear-stop.sh; another project's marker is not ours.
@@ -98,8 +99,6 @@ resumed() { # parts cut to fit ("" for none) -> the RESUMED line
     echo "# RESUMED MAIN: board.sh and the checkpoint are below, but the run binding FAILED.${cut:+ $cut}"
   fi
 }
-# Both binding outcomes; checkpoint.md's Resume section carries the same line.
-TODO_RULE='TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record. A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint'"'"'s Closed section keeps it.'
 # The old session's transcript sits beside the new one, named by its id; with
 # no transcript_path, the project folder comes from paths.sh, never a newest-file guess.
 if [ -n "$transcript" ]; then tdir=$(dirname "$transcript")
@@ -152,7 +151,7 @@ GONE: $more more seat runs named in $cp are not running and left no result; chec
     gone="runs not checked: the process list could not be read, so the seat runs this checkpoint names may be gone; run \`bash scripts/seat.sh status <role> <unit>\` for each"
   fi
 fi
-left=$(( 10239 - $(bytes "$aged") - $(bytes "$gone") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") - $(bytes "$TODO_RULE") ))
+left=$(( 10239 - $(bytes "$aged") - $(bytes "$gone") - $(head -1 "$HERE/../templates/main-session.md" 2>/dev/null | wc -c) - $(bytes "$(resumed "the checkpoint past $KEPT; board.sh; the owner's prompts")") - $(bytes "$bind") ))
 room=$(( left - $(bytes "$board_ptr") - prompts_ptr ))
 # The resumed checkpoint is a summary, not a copy: past 3,000 bytes it is cut, and its last line names the file.
 [ "$room" -le 3000 ] || room=3000
@@ -178,7 +177,7 @@ prompts=$(python3 "$HERE/../scripts/checkpoint-context.py" messages "$tpath" "$l
 grep -qF 'the resume budget' <<<"$prompts" && cut="${cut:+$cut; }the owner's prompts"
 
 # Issue 283: the payload's size, beside the stop hook's cp_bytes, is what a restart costs the new main.
-out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" "$TODO_RULE" ${aged:+"$aged"} ${gone:+"$gone"} "$prompts")
+out=$(resumed "$cut"; printf '%s\n' "$bind" "$board" "$ckpt" ${aged:+"$aged"} ${gone:+"$gone"} "$prompts")
 # <cp>.delivered is context-clear-restart.sh's proof that a relaunched main got this context: written only once it is
 # printed, naming the token this session was started with, then the session. Ancestry above is written before, so it
 # cannot serve. A failed write leaves no receipt; the helper then keeps the old pane up.

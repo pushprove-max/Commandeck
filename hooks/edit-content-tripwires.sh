@@ -21,6 +21,7 @@
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin (docs and specs are skipped)
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
@@ -186,6 +187,10 @@ while IFS= read -r _rec; do
   case "$_pair_path" in
     *.test.*|*__tests__*|*vite.config*|*jest*|*.env*|*e2e/*) continue ;;
     */hooks/*.sh|hooks/*.sh) continue ;;  # the hook scripts quote the form; a project's src/hooks does not
+  esac
+  # Prose and specs name a local address as text or a fixture; only app code ships one.
+  case "$_pair_path" in
+    *.md|*.mdx|*.txt|*.spec.*|docs/*|*/docs/*|test/*|*/test/*|tests/*|*/tests/*) continue ;;
   esac
   if printf '%s' "$_c64" | base64 -d 2>/dev/null | grep -qE "$_LOCALHOST_RE"; then
     echo "BLOCKED: HTTP fetch to a local address in $_pair_path. In containers, localhost doesn't resolve to the expected service. Use the service name or environment variable for the URL." >&2

@@ -12,6 +12,7 @@
 # Worker panes (linked worktrees) and reviewer panes are exempt.
 input=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
+# Retire when: zero fires across 90 days from a project that installs the plugin, while context-line.sh fires
 # Every run leaves one line, so a stop that clears nothing can be explained.
 mkdir -p "$HOME/.claude/checkpoints" 2>/dev/null
 echo "$(date +%FT%T) stop-hook: pid=$$ ppid=$PPID cwd=$PWD handle=${ORCA_TERMINAL_HANDLE:-unset} $(printf '%s' "$input" | jq -c '{session_id,stop_hook_active,transcript_path}' 2>/dev/null)" >> "$HOME/.claude/checkpoints/clear-hook.log"
@@ -29,6 +30,16 @@ ctx=$(context_size "$transcript") || ctx=0
 # /handoff (skills/handoff) leaves this marker to restart below the line.
 handoff="$HOME/.claude/checkpoints/$sid.handoff"
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || [ -f "$handoff" ] || exit 0
+# #532: past the line only, before main's /handoff request is taken: another session in main's checkout (an Orca
+# automation) must neither be restarted as main nor consume main's request. Only the run's coordinator is main; a
+# coordinator Orca cannot name restarts nothing.
+. "$(dirname "$0")/lib/project.sh" 2>/dev/null
+pp_is_main_pane; mp=$?
+if [ "$mp" != 0 ]; then
+  echo "$(date +%FT%T) stop-hook: not main ($mp): run ${PP_MAIN_RUN:-?} coordinator ${PP_MAIN_COORD:-unknown}" >> "$HOME/.claude/checkpoints/clear-hook.log"
+  [ "$mp" = 1 ] || echo "context-clear: run $PP_MAIN_RUN has $([ "$mp" = 3 ] && echo "no coordinator" || echo "an unknown coordinator (Orca's run list did not answer)"); no restart" >&2
+  exit 0
+fi
 # The restart helper gave up on this session (the typed prompt and the relaunch both failed): no stop retries it; the
 # owner restarts main by hand, told by the dashboard's crit alert.
 if [ -e "$HOME/.claude/checkpoints/$sid.restart-failed" ]; then

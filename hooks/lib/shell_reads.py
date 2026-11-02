@@ -10,8 +10,11 @@ Prints one line per file, tab separated, to standard output:
   read<TAB><path>    an existing file another reading tool shows part of: a head,
                      tail or `sed -n a,bp` window shorter than the file, `sed Nq`,
                      a search, jq <filter>, diff
-  saved<TAB><path>   a word under */tool-results/* in a stage that is no echo or
-                     printf; a quoted word is kept whole, spaces included
+  saved<TAB><path><TAB><program><TAB><bound>
+                     a word under */tool-results/* in a stage that is no echo or
+                     printf; a quoted word is kept whole, spaces included. The
+                     bound is the digits of rg/grep `-m N` or head/tail `-n N`
+                     over one regular file, else `-`
 
 Run it as `python3 -I shell_reads.py`. Users: generated-read-guard.sh (dump,
 saved) and read-record.sh (dump, read, with `proof`). It judges the command text
@@ -74,9 +77,61 @@ def expand(w):
     return os.path.expandvars(os.path.expanduser(w))
 
 
-def emit(kind, path):
+def emit(kind, path, *extra):
     if '\n' not in path and '\t' not in path:
-        print(kind, path, sep='\t')
+        print(kind, path, *extra, sep='\t')
+
+
+# Search flags that change neither which lines print nor how many: with them and -m N, the output is at most N lines.
+SEARCH_PLAIN = {'-i', '--ignore-case', '-S', '--smart-case', '-F', '--fixed-strings', '-w', '--word-regexp',
+                '-n', '--line-number', '-N', '--no-line-number', '-H', '--with-filename', '--no-heading', '-s', '--no-messages'}
+
+
+def line_bound(tool, words, cwd):
+    """The line cap a rg/grep `-m N` or a head/tail `-n N` puts on the output, as digits; '-' for any other shape.
+    An allowlist: only shapes read in full are bounded. head/tail take their last count (as the tools do) and no
+    byte or +N form; a search takes the last -m and refuses any flag outside SEARCH_PLAIN, so a context flag
+    (-A/-B/-C) or an unknown one cannot print past the cap. Both caps count per file, so the one operand must be
+    a single regular file (one_file)."""
+    if tool in ('head', 'tail'):
+        window = head_tail_window(words)
+        counted = any(w.startswith('-') and w != '-' for w in words)  # a bare head/tail keeps no bound, as before
+        if not (counted and window and window[2] == 'l'):
+            return '-'
+        # head_tail_window took the word after each -n/-c/--lines/--bytes as its count, so it is no operand
+        operands = [w for j, w in enumerate(words) if not w.startswith('-') and not (j and words[j - 1] in SHORT)]
+        return str(window[1]) if one_file(operands, cwd) else '-'
+    if tool not in SEARCH:
+        return '-'
+    bound, i, opts, positional, pattern_given = '-', 0, True, [], False
+    while i < len(words):
+        w = words[i]
+        i += 1
+        if not opts or not w.startswith('-') or w == '-':
+            positional.append(w)
+            continue
+        if w == '--':
+            opts = False
+            continue
+        m = re.fullmatch(r'-m(\d+)|--max-count=(\d+)', w)
+        if m:
+            bound = m[1] or m[2]
+        elif w in ('-m', '--max-count') and i < len(words) and words[i].isdigit():
+            bound, i = words[i], i + 1
+        elif w in ('-e', '--regexp') and i < len(words):
+            i, pattern_given = i + 1, True
+        elif w not in SEARCH_PLAIN:
+            return '-'
+    operands = positional if pattern_given else positional[1:]
+    return bound if one_file(operands, cwd) else '-'
+
+
+def one_file(operands, cwd):
+    """A per-file cap bounds the command only over one regular file named literally. A glob, brace, variable or
+    tilde (which the shell may expand to many words), a directory, a second operand or none (rg then searches
+    the folder it runs in) repeats the cap per file."""
+    return (len(operands) == 1 and not any(c in operands[0] for c in '*?[{$`~')
+            and os.path.isfile(os.path.join(cwd, operands[0])))
 
 
 def head_tail_window(words):
@@ -191,7 +246,7 @@ def main(cmd, cwd, proof=False):
         if tool not in QUIET and not proof:
             for w in words:
                 if '/tool-results/' in expand(w) and not w.startswith('-'):
-                    emit('saved', os.path.normpath(os.path.join(cwd, expand(w))))
+                    emit('saved', os.path.normpath(os.path.join(cwd, expand(w))), tool, line_bound(tool, words, cwd))
         window = None
         if tool in DUMP:
             kind = 'dump'

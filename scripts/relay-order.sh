@@ -30,6 +30,16 @@ pp_project "$PP_MAIN"
 LOG=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 DEC=$(bash "$PP_SCRIPTS/decision.sh" list | jq -c --arg id "$ID" '.[] | select(.id == $id)') || exit 1
 [ -n "$DEC" ] || { echo "relay-order: unknown decision $ID; nothing changed" >&2; exit 1; }
+DELIV= FRESH=
+ERRF=$(mktemp) || exit 1; trap 'rm -f "$ERRF"' EXIT
+# The delivery line decision.sh answer printed on stderr, if any; the one a resume repeats, as recorded under
+# `$COS_KEY.deliveries` (`<id>@<askedAt>`, a tab, the line; any other line shape reads as none).
+delivery_line() { grep -E '^(delivered|queued|unknown|not delivered): ' "$ERRF" | tail -1; }
+recorded_delivery() {
+  local l; l=$(awk -F'\t' -v k="$(jq -r '"\(.id)@\(.askedAt)"' <<<"$1")" '$1 == k && NF == 2 && $2 != "" {l = $2} END {print l}' "$COS_KEY.deliveries" 2>/dev/null)
+  [ -n "$l" ] || l="unknown: an earlier relay call recorded this answer; check the unit's pane before resending"
+  printf '%s\n' "$l"
+}
 refuse() { echo "relay-order: decision $ID is already answered \"$(jq -r .answer <<<"$DEC")\"; nothing changed" >&2; exit 1; }
 # r1: an answered row whose answer is exactly what this call would write is a send that failed before, resumed from
 # the row alone (no second entry or answer; the seen mark, the mode file and the log need not be there).
@@ -47,11 +57,14 @@ if [ -n "$AUTO" ]; then
       printf -- '- **Why**: %s Trade-off weighed: %s. Would pick differently if: %s.\n' "$(flat "$WHY")" "$(flat "$TRADE")" "$(flat "$WOULD")"
       printf -- '- **Reversible**: %s\n' "$(flat "$REV")"
     } >> "$ALOG" || { echo "relay-order: could not write the log $ALOG; nothing changed" >&2; exit 1; }
-    if ! ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS (auto-decided)" 2>&1); then
+    # decision.sh's stderr is kept apart from the row: its delivery line goes to main's note (issue 569).
+    if ! ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS (auto-decided)" 2>"$ERRF"); then
+      ROW=$(cat "$ERRF")
       printf -- '- **Ledger**: not recorded (%s)\n' "$(flat "$ROW")" >> "$ALOG"
       echo "relay-order: the entry is in $ALOG but the ledger did not take the answer: $ROW; main was NOT told" >&2; exit 1
     fi
-  elif jq -e --arg a "$WORDS (auto-decided)" '.answer == $a' <<<"$DEC" >/dev/null; then ROW=$DEC
+    ROW=$(grep '^{' <<<"$ROW" | tail -1); DELIV=$(delivery_line) FRESH=1
+  elif jq -e --arg a "$WORDS (auto-decided)" '.answer == $a' <<<"$DEC" >/dev/null; then ROW=$DEC; DELIV=$(recorded_delivery "$DEC")
   else refuse; fi
   WHAT="$ID auto-decided, logged" SUBJ="auto-decided for the owner on $ID"
   BODY="$WORDS. Why: $WHY. Reversible: $REV. Log: ${ALOG:-none (auto-decide is off now)}"
@@ -63,18 +76,23 @@ else
   RID=$(tail -1 <<<"$RIDS")
   [ -n "$RID" ] || { echo "relay-order: no ruling in $LOG gives those words to $ID's question since it was asked; nothing changed" >&2; exit 1; }
   if jq -e '.answeredAt == null' <<<"$DEC" >/dev/null; then
-    ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)") || exit 1
+    ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)" 2>"$ERRF") || { cat "$ERRF" >&2; exit 1; }
+    DELIV=$(delivery_line) FRESH=1
   # r1: the owner's order reverses an auto-decision; the auto answer goes to the row's history. Only an auto answer:
   # one the owner gave stays.
   elif jq -e '.answer // "" | endswith(" (auto-decided)")' <<<"$DEC" >/dev/null; then
-    ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)" --correct) || exit 1
+    ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)" --correct 2>"$ERRF") || { cat "$ERRF" >&2; exit 1; }
+    DELIV="not sent by the ledger" FRESH=1
   # Resume with the ruling it stored, if that one still gives these words (r2: not the newest).
   elif OLD=$(jq -r --arg w "$WORDS" '.answer // "" | select(startswith($w + " (") and endswith(")")) | .[($w | length) + 2:-1]' <<<"$DEC") \
-    && [ -n "$OLD" ] && grep -qxF -- "$OLD" <<<"$RIDS"; then ROW=$DEC RID=$OLD
+    && [ -n "$OLD" ] && grep -qxF -- "$OLD" <<<"$RIDS"; then ROW=$DEC RID=$OLD DELIV=$(recorded_delivery "$DEC")
   else refuse; fi
   WHAT="$ID answered with $RID" SUBJ="order from the owner on $ID ($RID)" BODY=$WORDS
 fi
+[ -z "$DELIV" ] || BODY=$BODY$'\n'"Delivery: $DELIV"
 jq -r '"\(.id)@\(.askedAt)"' <<<"$ROW" >> "$COS_KEY.decisions-seen"
+# A fresh delivery line is kept, so a retry of this order (main not told) repeats it instead of answering again.
+[ -z "$FRESH" ] || [ -z "$DELIV" ] || printf '%s\t%s\n' "$(jq -r '"\(.id)@\(.askedAt)"' <<<"$ROW")" "$(printf '%s' "$DELIV" | tr '\n\t' '  ')" >> "$COS_KEY.deliveries"
 bash "$PP_SCRIPTS/to-main.sh" question "$SUBJ" "$BODY" >/dev/null; rc=$?
 case $rc in
   0) echo "relay-order: $WHAT, main told, marked seen" ;;

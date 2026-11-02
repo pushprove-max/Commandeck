@@ -1,5 +1,9 @@
 // Pure parsers for the units mod. No `$` here: every function takes a whole file's text, so a log cut off mid-line, rewritten
 // by a rerun, or noisy for 17,000 bytes gives the same counts as a clean one. Callers re-parse when size or mtime moves.
+import {
+  C, bar, blocked, builtOf, cardModel, fitWidth, fmtSec, headerModel, legend, limitSegs, mergedModel, plain, resetIn, shortName, since, spread, stageColor,
+  stageCounts, stageOf, stepRow, usd, waitingModel, workMark,
+} from './units-elements'
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g
 // run-shell-tests.sh pads the name and may follow the seconds with `rc=1` or `HUNG past ...`.
@@ -90,22 +94,63 @@ export type Row = {
   unit: string; stage: string; round: number | null; verdict: string | null; verdictRound: number | null; findings: string; usd: number
   ageSec: number | null; red: boolean; issues: number | null; built: number | null; startedAt: number | null
   closes: string[]; costs: Costs; plan: SeatState; judges: SeatState
+  model: string | null; effort: string | null; working: boolean; stageSince: number | null
 }
 export type Costs = { plan: number; build: number; review: number; fix: number; total: number }
 export type SeatState = 'done' | 'running' | null
+// A merged unit; its finished cost is the snapshot's `finishedUsd[unit]`.
+export type Merged = { unit: string; at: number }
+// `unit` is the live unit the ask's id names (holds' rule), else null.
+export type Ask = { id: string; question: string; askedAt: number | null; unit: string | null }
 // `chain` is always null: the plugin has no push-chain lane to show.
 export type Snap = {
-  note: string | null; staleMin: number | null; rows: Row[]; merged: string[]; mergedAt: { unit: string; at: number }[]; chain: null
+  note: string | null; staleMin: number | null; rows: Row[]; merged: string[]; mergedAt: Merged[]; chain: null
   finishedUsd: Record<string, number>
   // The dashboard's Cost today for this project (`limit.today[<project>]`), split by folder; null when it has none.
   day: Day | null
+  // The 7-day limit, the owner's open questions, and the fields the snapshot lacks or carries as junk, each named.
+  limit: { pct: number; resetsAt: number } | null; asks: Ask[]; unread: string[]
+  // main's and the chief of staff's cost today (`seats.main.today`, `seats.relay.today`); null when the snapshot has none.
+  seatUsd: { main: SeatUsd | null; chiefOfStaff: SeatUsd | null }
 }
+export type SeatUsd = { usd: number; partial: boolean }
 // `merged` holds the units of finishedBuilds and mergedSincePush, the folders the split counts as merged.
 export type Day = { total: number; byFolder: Record<string, number>; complete: boolean; merged: string[] }
 
 // pp_standing_wt's folders, lowercased as dashboard.sh writes their stage: standing panes, never units.
 export const NOT_UNITS = new Set(['chief-of-staff', 'fast-lane', 'research-lane'])
-export const emptySnap = (note: string | null): Snap => ({ note, staleMin: null, rows: [], merged: [], mergedAt: [], chain: null, finishedUsd: {}, day: null })
+export const emptySnap = (note: string | null): Snap => ({ note, staleMin: null, rows: [], merged: [], mergedAt: [], chain: null, finishedUsd: {}, day: null, limit: null, asks: [], unread: [], seatUsd: { main: null, chiefOfStaff: null } })
+// scripts/codex-helpers.sh's ROLE_LANES: the stage each launch role works in; null is a seat that is never a unit's.
+export const ROLE_LANES: Record<string, string | null> = {
+  'plan-author': 'planning', 'brief-reviewer': 'planning', 'plan-author-arch': 'planning', 'brief-reviewer-arch': 'planning', 'plan-author-hard': 'planning',
+  'brief-reviewer-hard': 'planning', 'plan-judge-sol': 'planning', 'plan-judge-opus': 'planning', investigator: 'planning', debugger: 'planning', 'debugger-pipeline': 'planning',
+  implementer: 'building', 'implementer-light': 'building', 'race-implementer': 'building', escalation: 'building', builder: 'building',
+  reviewer: 'review', 'codex-reviewer': 'review', 'codex-reviewer-risky': 'review', 'luna-reviewer': 'review', refuter: 'review', certifier: 'review',
+  'judge-fable': 'review', 'judge-luna': 'review', 'judge-luna-high': 'review', 'judge-sol-high': 'review', 'judge-sol-xhigh': 'review',
+  fixer: 'fixing', 'design-fixer': 'fixing',
+  'e2e-driver': null, companion: null, 'automation-claude': null, 'main-session': null, 'release-captain': null,
+}
+const str = (v: unknown) => (typeof v === 'string' && v ? v : null)
+const time = (v: unknown) => { const t = Date.parse(String(v ?? '')); return Number.isFinite(t) ? t : null }
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+// The live seat: a planning unit's running plan seat, else the record of the recorded role, else the records of the
+// stage's lane when they agree. No such record leaves the model unknown, never another seat's.
+const seatOf = (u: any): { model: string | null; effort: string | null } => {
+  const recs: any[] = (Array.isArray(u.seats) ? u.seats : []).filter((x: any) => str(x?.model))
+  let pick: any = null
+  if (u.stage === 'planning') pick = (Array.isArray(u.plan?.seats) ? u.plan.seats : []).filter((x: any) => str(x?.model) && !x.completedAt).at(-1) ?? null
+  else if (str(u.seatRole)) pick = recs.find(x => x.role === u.seatRole) ?? null
+  else {
+    const lane = recs.filter(x => Object.hasOwn(ROLE_LANES, x.role) && ROLE_LANES[x.role] === u.stage)
+    if (lane.length && lane.every(x => x.model === lane[0].model && x.effort === lane[0].effort)) pick = lane[0]
+  }
+  return { model: str(pick?.model), effort: str(pick?.effort) }
+}
+// holds' rule (scripts/decision.sh): the ledger has no unit field, so an id names a unit only as <unit>, plan-<unit> or
+// review-stop-<unit>-r<digits>, and only a unit in flight is named.
+const unitOfAsk = (id: string, units: string[]): string | null =>
+  units.find(u => id === u || id === `plan-${u}` || (id.startsWith(`review-stop-${u}-r`) && /^\d+$/.test(id.slice(`review-stop-${u}-r`.length)))) ?? null
+const missing = (name: string, v: unknown) => `${name}: ${v === undefined || v === null ? 'not in the snapshot' : 'unreadable'}`
 const STAGE_COST: Record<string, keyof Costs> = { planning: 'plan', building: 'build', review: 'review', fixing: 'fix' }
 const costsOf = (stages: any[]): Costs => {
   const c: Costs = { plan: 0, build: 0, review: 0, fix: 0, total: 0 }
@@ -149,11 +194,40 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
       built: Array.isArray(b?.built) && Array.isArray(b?.issues) ? b.issues.filter((i: unknown) => b.built.includes(i)).length : len(b?.built),
       startedAt: Number.isFinite(started) ? started : null,
       closes: [],
+      ...seatOf(x),
+      working: /:working/.test(String(x.agents ?? '')),
+      stageSince: time(x.stageSince),
     }
   })
+  const lim = j.limit
+  const limit = num(lim?.usedPct) !== null && time(lim?.resetsAt) !== null ? { pct: lim.usedPct as number, resetsAt: time(lim.resetsAt) as number } : null
+  const decisions = p.needsOwner?.decisions
+  const decisionsError = str(p.sources?.decisions?.error)
+  const names = rows.map((r: Row) => r.unit)
+  const asks: Ask[] = (Array.isArray(decisions) ? decisions : []).filter((d: any) => str(d?.id)).map((d: any) => ({
+    id: d.id as string, question: String(d.question ?? '').replace(/\s+/g, ' ').trim(), askedAt: time(d.askedAt), unit: unitOfAsk(d.id, names),
+  })).sort((a: Ask, b: Ask) => (a.askedAt ?? Infinity) - (b.askedAt ?? Infinity))
+  // A seat with no `seats` entry or no `today` has nothing to show; a `today` whose usd is not a non-negative number is junk, named.
+  const seatNotes: string[] = []
+  const seatToday = (key: string, name: string): SeatUsd | null => {
+    const t = p.seats?.[key]?.today
+    if (!t || typeof t !== 'object') return null
+    if (num(t.usd) === null || t.usd < 0) { seatNotes.push(missing(name, t.usd)); return null }
+    return { usd: t.usd, partial: t.partial === true }
+  }
+  const seatUsd = { main: seatToday('main', 'main cost today'), chiefOfStaff: seatToday('relay', 'chief of staff cost today') }
+  // No decisions ledger yet, or no finished-builds record yet, is a project with nothing to show there, not a problem.
+  const unread = [
+    ...(limit ? [] : [missing('7d limit', lim?.usedPct ?? lim)]),
+    ...(Array.isArray(decisions) || decisionsError?.startsWith('no ledger at ') ? [] : [`decisions: ${decisionsError ?? 'not in the snapshot'}`]),
+    ...(Array.isArray(u.finishedBuilds) || u.finishedBuilds === null ? [] : [missing('finished builds', u.finishedBuilds)]),
+    ...(Number.isFinite(at) ? [] : [missing('updated at', j.updatedAt)]),
+    ...seatNotes,
+  ]
   // Every merge this checkout made is in finishedBuilds; mergedSincePush drops one once it is pushed, so a push would
   // take today's merges, and their spend, off the pane.
-  const merged = (u.finishedBuilds ?? []).map((m: any) => ({ unit: String(m.unit), at: Date.parse(m.at ?? '') }))
+  const finished: any[] = Array.isArray(u.finishedBuilds) ? u.finishedBuilds : []
+  const merged = finished.map((m: any) => ({ unit: String(m.unit), at: Date.parse(m.at ?? '') }))
   const d = j.limit?.today?.[project]
   const day: Day | null = d && Number.isFinite(d.spentUsd) ? {
     total: Number(d.spentUsd),
@@ -168,13 +242,15 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
     merged: merged.map((m: { unit: string }) => m.unit),
     mergedAt: merged.filter((m: { at: number }) => Number.isFinite(m.at)),
     chain: null,
-    finishedUsd: Object.fromEntries((u.finishedBuilds ?? []).filter((f: any) => Number.isFinite(f?.cost?.total?.usd)).map((f: any) => [String(f.unit), Number(f.cost.total.usd)])),
+    finishedUsd: Object.fromEntries(finished.filter((f: any) => Number.isFinite(f?.cost?.total?.usd)).map((f: any) => [String(f.unit), Number(f.cost.total.usd)])),
     day,
+    limit,
+    asks,
+    unread,
+    seatUsd,
   }
 }
 
-// Minutes and hours only: seconds churn every poll and say nothing a person acts on.
-export const fmtSec = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : `${Math.max(1, Math.floor(s / 60))}m`)
 // A count is shown only when it is known: an unknown total gives "N files", never "N/?".
 const counts = (p: Progress, total: number | null) => `${total ? `${p.done}/${total}` : `${p.done}`} files${p.failed ? ` · ${p.failed} failed (first ${p.firstFail})` : ''}`
 
@@ -186,76 +262,17 @@ export type State = { now: number; snap: Snap; merges: MergeView[]; tests: TestV
 // One run of styled text; a line is a list of them. The plain text of every view is the same runs joined.
 export type Seg = { t: string; c?: string; b?: boolean; d?: boolean }
 export type Line = Seg[]
-const C = { name: 'whiteBright', stage: 'cyan', ok: 'green', run: 'yellow', bad: 'red', head: 'blueBright' }
-const plain = (l: Line) => l.map(x => x.t).join('')
-const usd = (n: number) => `$${n.toFixed(2)}`
-
-const STAGES: Record<string, string> = { planning: 'Planning', building: 'Building', fixing: 'Fixing', review: 'Review', 'waiting-main': 'Waiting on main', merging: 'Merging' }
-const stageOf = (r: Row) => `${STAGES[r.stage] ?? r.stage.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase())}${r.round ? ` r${r.round}` : ''}`
-const bar = (done: number, of: number) => { const n = Math.min(10, Math.max(0, Math.round((done / of) * 10))); return '█'.repeat(n) + '░'.repeat(10 - n) }
-const clockOf = (t: number) => new Date(t).toTimeString().slice(0, 5)
-// The date suffix every unit name carries says nothing on a live board.
-export const shortName = (u: string) => u.replace(/-\d{4}-\d{2}-\d{2}$/, '')
-const since = (t: number | null, now: number) => (t ? fmtSec(Math.max(0, Math.round((now - t) / 1000))) : '')
 
 // A plan's `Closes: issue 1, issue 2` (or `Closes: #1 #2`) line names the unit's issues before any Builder log does.
 export const closesOf = (plan: string): string[] => (/^Closes:\s*(.+)$/m.exec(plan)?.[1].match(/#\d+|\bissue\s+\d+/gi) ?? []).map(x => `#${x.replace(/\D/g, '')}`)
 
-// What is wrong with a unit, if anything, so a healthy unit carries no warning text.
-const warnOf = (r: Row) => (r.red ? '⚠ at its prompt' : null)
-
-type Step = 'done' | 'running' | 'todo'
-// The five steps a unit walks. Planning reads its seats' records; later stages imply the earlier steps finished.
-export const stepsOf = (r: Row, merging: boolean): [string, Step][] => {
-  const after = (n: number): Step[] => ['done', 'done', 'done', 'done', 'done'].map((x, i) => (i < n ? 'done' : i === n ? 'running' : 'todo')) as Step[]
-  // dashboard.sh writes 'review', not 'reviewing'.
-  const late: Record<string, number> = { building: 2, fixing: 3, review: 3 }
-  let s: Step[]
-  if (merging) s = after(4)
-  else if (r.stage === 'planning') {
-    const plan: Step = r.plan === 'done' ? 'done' : 'running'
-    const judges: Step = r.judges === 'running' ? 'running' : r.judges === 'done' ? 'done' : 'todo'
-    s = [judges === 'running' ? 'done' : plan, judges, 'todo', 'todo', 'todo']
-  } else if (r.stage === 'waiting-main') s = r.verdict === 'GO' ? after(4).map((x, i) => (i === 4 ? 'todo' : x)) : after(3)
-  else s = after(late[r.stage] ?? 2)
-  return ['Plan', 'Judges', 'Build', 'Review', 'Merge'].map((n, i) => [n, s[i]])
-}
-// Builders record no per-issue status in their evidence, so a finished Build step is what says every issue is built.
-export const builtOf = (r: Row, merging: boolean) => (stepsOf(r, merging)[2][1] === 'done' ? (r.issues ?? 0) : (r.built ?? 0))
-const MARK: Record<Step, Seg> = { done: { t: '✓', c: C.ok }, running: { t: '◐', c: C.run }, todo: { t: '○', d: true } }
-
-// Text on the left, a value pushed to the right edge of `w` columns.
-const spread = (left: Line, right: Seg | null, w: number): Line => {
-  if (!right) return left
-  const gap = Math.max(2, w - plain(left).length - right.t.length)
-  return [...left, { t: ' '.repeat(gap) }, right]
-}
-
-const unitModel = (r: Row, s: State, w: number, merging: boolean): Line[] => {
-  const time = since(r.startedAt, s.now)
-  const out: Line[] = [spread([{ t: '● ', c: C.stage }, { t: shortName(r.unit), c: C.name, b: true }], { t: `${stageOf(r)}${time ? ` · ${time}` : ''}`, c: C.stage }, w)]
-  out.push([{ t: '  ' }, ...stepsOf(r, merging).flatMap(([n, st], i): Seg[] => [...(i ? [{ t: '  ' }] : []), { t: `${n} `, d: st === 'todo' }, MARK[st]])])
-  const built = builtOf(r, merging)
-  if (r.issues) out.push([{ t: '  ' }, { t: bar(built, r.issues), c: C.ok }, { t: `  ${built} of ${r.issues} issues built` }])
-  else if (r.closes.length) out.push([{ t: `  ${r.closes.join(' ')}`, d: true }])
-  const verdict: Line = r.verdict
-    ? [{ t: `  r${r.verdictRound ?? r.round ?? ''} ` }, { t: r.verdict, c: r.verdict === 'GO' ? C.ok : C.bad, b: true }, ...(r.findings ? [{ t: ` · ${r.findings}` }] : [])]
-    : [{ t: '' }]
-  if (r.verdict || r.costs.total > 0) out.push(spread(verdict, r.costs.total > 0 ? { t: usd(r.costs.total), b: true } : null, w))
-  const parts = (['plan', 'build', 'review', 'fix'] as const).filter(k => r.costs[k] > 0).map(k => `${k} ${usd(r.costs[k])}`)
-  if (parts.length > 1) out.push([{ t: `  ${parts.join(' · ')}`, d: true }])
-  const warn = warnOf(r)
-  if (warn) out.push([{ t: `  ${warn}`, c: C.bad, b: true }])
-  return out
-}
-
 const mergeModel = (v: MergeView, w: number): Line =>
-  v.status === 'refused' ? [{ t: '✗ ', c: C.bad }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  refused at ${v.m.refused?.step}: ${v.m.refused?.reason}`, c: C.bad }]
-    : v.status === 'stopped' ? [{ t: '✗ ', c: C.bad }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  stopped${v.m.step ? ` at ${v.m.step}` : ''}, no result`, c: C.bad }]
-      : spread([{ t: '◐ ', c: C.run }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  ${v.m.step ? v.m.step.replace(/^\d+ /, '') : 'merging'}${v.m.done || v.m.total ? ` ${counts(v.m, v.m.total)}` : ''}` }], { t: fmtSec(v.elapsedSec), d: true }, w)
+  v.status === 'refused' ? fitWidth([{ t: '✗ ', c: C.bad }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  refused at ${v.m.refused?.step}: ${v.m.refused?.reason}`, c: C.bad }], w)
+    : v.status === 'stopped' ? fitWidth([{ t: '✗ ', c: C.bad }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  stopped${v.m.step ? ` at ${v.m.step}` : ''}, no result`, c: C.bad }], w)
+      : spread([{ t: '◐ ', c: C.build }, { t: shortName(v.unit), c: C.name, b: true }, { t: `  ${v.m.step ? v.m.step.replace(/^\d+ /, '') : 'merging'}${v.m.done || v.m.total ? ` ${counts(v.m, v.m.total)}` : ''}` }], { t: fmtSec(v.elapsedSec), d: true }, w)
 
 const testModel = (v: TestView, w: number): Line =>
-  spread([{ t: '▸ ', c: C.run }, { t: shortName(v.owner), c: C.name, b: true }, { t: `  ${v.kind} ${counts(v.p, v.total)}`, c: v.p.failed ? C.bad : undefined }], { t: fmtSec(v.elapsedSec), d: true }, w)
+  spread([{ t: '▸ ', c: C.build },{ t: shortName(v.owner), c: C.name, b: true }, { t: `  ${v.kind} ${counts(v.p, v.total)}`, c: v.p.failed ? C.bad : undefined }], { t: fmtSec(v.elapsedSec), d: true }, w)
 
 const mergedToday = (s: State) => s.snap.mergedAt.filter(m => new Date(m.at).toDateString() === new Date(s.now).toDateString()).sort((a, b) => b.at - a.at)
 
@@ -285,71 +302,113 @@ export const todaySplit = (s: State): [string, number][] => {
   return [...sums, ['other', d.total - named] as [string, number]].filter(([, n]) => Math.abs(n) >= 0.005)
 }
 
+// The one list of read problems: a work source could hide a unit, an ask, a merge or a test run, so it keeps every view
+// up and is named in each; a figure gap (the 7-day limit, a seat's cost today) shows only under CANNOT READ. Every view reads problems
+// through here, so a new source joins this list and nowhere else.
+const FIGURE = /^(7d limit|main cost today|chief of staff cost today): /
+export const readProblems = (s: State) => {
+  const all = [s.snap.note, ...s.snap.unread, ...s.notes.merges, ...s.notes.tests].filter((n): n is string => !!n)
+  return { all, work: all.filter(n => !FIGURE.test(n)) }
+}
+const workLine = (s: State) => {
+  const w = readProblems(s).work
+  return w.length ? `${w[0]}${w.length > 1 ? ` +${w.length - 1}` : ''}` : ''
+}
+const runningUnits = (s: State) => new Set(s.merges.filter(v => v.status === 'running').map(v => v.unit))
+const todaySeg = (s: State): Seg | null => (todayUsd(s) > 0 ? { t: todayText(s), c: C.cost, b: true } : null)
+
 // The pane and /units: a header, then sections drawn only when they hold something.
-export const paneModel = (s: State, w: number): Line[] => {
-  const out: Line[] = []
-  const merging = new Set(s.merges.filter(v => v.status === 'running').map(v => v.unit))
-  const head = (title: string, right: Seg | null) => { if (out.length) out.push([]); out.push(spread([{ t: title, c: C.head, b: true }], right, w)) }
-  const total = todayUsd(s)
-  out.push(spread([{ t: 'UNITS', c: C.head, b: true }], total > 0 ? { t: todayText(s), b: true } : null, w))
+export const paneModel = (s: State, w: number, frame = 0): Line[] => {
+  const out: Line[] = headerModel(s, w, todaySeg(s))
+  const merging = runningUnits(s)
+  const head = (title: string, right: Seg | null) => { out.push([]); out.push(spread([{ t: title, c: C.head, b: true }], right, w)) }
   const split = todaySplit(s)
-  if (split.length) out.push([{ t: `  ${split.map(([k, n]) => `${k} ${usd(n)}`).join(' · ')}`, d: true }])
-  else if (total > 0 && !s.snap.day) out.push([{ t: '  units only', d: true }])
-  if (s.snap.rows.length) { head(`BUILDING  ${s.snap.rows.length}`, null); for (const r of s.snap.rows) out.push(...unitModel(r, s, w, merging.has(r.unit))) }
+  if (split.length) out.push(fitWidth([{ t: `  ${split.map(([k, n]) => `${k} ${usd(n)}`).join(' · ')}`, d: true }], w))
+  else if (todayUsd(s) > 0 && !s.snap.day) out.push([{ t: '  units only', d: true }])
+  // First section under the header: a short pane cuts the lower ones, and an unreadable source must stay in view.
+  const shown = [...(!s.snap.note && s.snap.staleMin ? [`dashboard data is ${s.snap.staleMin} min old`] : []), ...readProblems(s).all]
+  if (shown.length) { head('CANNOT READ', null); out.push(...shown.map((n): Line => fitWidth([{ t: `⚠ ${n}`, c: C.bad }], w))) }
+  const today = mergedToday(s)
+  if (s.snap.rows.length || s.snap.asks.length || today.length) out.push(legend(w))
+  if (s.snap.asks.length) { head(`WAITING ON OWNER  ${s.snap.asks.length}`, null); out.push(...waitingModel(s, w)) }
+  if (s.snap.rows.length) { head(`BUILDING  ${s.snap.rows.length}`, null); for (const r of s.snap.rows) out.push(...cardModel(r, s, w, merging.has(r.unit), frame)) }
   if (s.merges.length) { head(`MERGING  ${s.merges.length}`, null); out.push(...s.merges.map(v => mergeModel(v, w))) }
   if (s.tests.length) { head('TESTS', null); out.push(...s.tests.map(v => testModel(v, w))) }
-  const today = mergedToday(s)
   if (today.length) {
     const sum = today.reduce((n, m) => n + (s.snap.finishedUsd[m.unit] ?? 0), 0)
-    head(`MERGED TODAY  ${today.length}`, sum > 0 ? { t: usd(sum), b: true } : null)
-    for (const m of today) {
-      const cost = s.snap.finishedUsd[m.unit]
-      out.push(spread([{ t: '✓ ', c: C.ok }, { t: shortName(m.unit).padEnd(22), d: true }, { t: clockOf(m.at), d: true }], cost ? { t: usd(cost), d: true } : null, w))
-    }
+    head(`MERGED TODAY  ${today.length}`, sum > 0 ? { t: usd(sum), c: C.cost, b: true } : null)
+    out.push(...today.map(m => mergedModel(m, s.snap.finishedUsd[m.unit], w)))
   }
-  const notes = [s.snap.note ?? (s.snap.staleMin ? `dashboard data is ${s.snap.staleMin} min old` : null), ...s.notes.merges, ...s.notes.tests]
-  const shown = notes.filter((n): n is string => !!n)
-  if (shown.length) { head('CANNOT READ', null); out.push(...shown.map((n): Line => [{ t: `⚠ ${n}`, c: C.bad }])) }
   return out
 }
 
 export const paneLines = (s: State, w = 56): string[] => paneModel(s, w).map(plain)
 
-// The band: one row, one short segment per live thing.
-export const bandModel = (s: State): Line => {
-  const merging = new Set(s.merges.filter(v => v.status === 'running').map(v => v.unit))
-  const parts: Line[] = [
-    ...s.snap.rows.map((r): Line => {
-      const warn = warnOf(r)
-      return [{ t: '● ', c: C.stage }, { t: shortName(r.unit), c: C.name, b: true }, { t: ` ${stageOf(r)}`, c: C.stage },
-        ...(r.issues ? [{ t: ` ${builtOf(r, merging.has(r.unit))}/${r.issues}` }] : []), ...(r.startedAt ? [{ t: ` ${since(r.startedAt, s.now)}`, d: true }] : []),
-        ...(warn ? [{ t: ` ${warn}`, c: C.bad, b: true }] : [])]
-    }),
+const mark = (r: Row, frame: number) => (r.working ? workMark(frame) : '○')
+// The unit row 2 shows whole: the working unit with the most spend, else the one with the most spend.
+const busiest = (rows: Row[]) => [...rows].sort((a, b) => Number(b.working) - Number(a.working) || b.costs.total - a.costs.total)[0]
+
+// The band: up to three rows, each cut to `w`. Row 1 waiting on owner and the limit, row 2 the busiest unit's step row,
+// row 3 everything else short.
+export const bandModel = (s: State, w: number, frame = 0): Line[] => {
+  const merging = runningUnits(s)
+  const a = s.snap.asks[0]
+  const holds = a?.unit ? ` · blocks ${shortName(a.unit)}` : ''
+  const right: Line = [...limitSegs(s, false), ...(todayUsd(s) > 0 ? [{ t: `${s.snap.limit ? ' · ' : ''}${todayText(s)}`, c: C.cost, b: true }] : [])]
+  const row1: Line = a ? spread([{ t: `◆ waiting on owner ${s.snap.asks.length}`, c: C.max, b: true }, { t: ` · ${a.id}` }, { t: `${a.askedAt ? ` ${since(a.askedAt, s.now)}` : ''}${holds}`, d: true }], right.length ? right : null, w) : right
+  const top = busiest(s.snap.rows)
+  const row2: Line = top ? (() => {
+    const m = merging.has(top.unit)
+    const time = since(top.stageSince ?? top.startedAt, s.now)
+    return [{ t: `${mark(top, frame)} `, c: stageColor(m ? 'merging' : top.stage) }, { t: shortName(top.unit), c: C.name, b: true }, { t: ` ${stageOf(top)}  `, d: true }, ...stepRow(top, m),
+      ...(top.issues ? [{ t: `  ${bar(builtOf(top, m), top.issues)}`, c: C.ok }, { t: ` ${builtOf(top, m)}/${top.issues}` }] : []),
+      ...(top.costs.total > 0 ? [{ t: ` · ${usd(top.costs.total)}`, c: C.cost }] : []), ...(time ? [{ t: ` · ${time}`, d: true }] : []),
+      ...(blocked(top, s) ? [{ t: '  ⏸ owner', c: C.max }] : []), ...(top.red ? [{ t: '  ⚠ at its prompt', c: C.bad, b: true }] : [])]
+  })() : []
+  const merged = mergedToday(s).length
+  const problems = workLine(s)
+  // A read problem leads row 3, so the cut to `w` never drops it behind the other units.
+  const rest: Line[] = [
+    ...(problems ? [[{ t: `⚠ ${problems}`, c: C.bad }]] : []),
+    ...s.snap.rows.filter(r => r !== top).map((r): Line => [{ t: `${mark(r, frame)} `, c: stageColor(r.stage) }, { t: shortName(r.unit), c: C.name, b: true },
+      { t: ` ${stageOf(r)}${r.issues ? ` ${builtOf(r, merging.has(r.unit))}/${r.issues}` : ''}${(r.stageSince ?? r.startedAt) ? ` ${since(r.stageSince ?? r.startedAt, s.now)}` : ''}`, d: true },
+      ...(blocked(r, s) ? [{ t: ' ⏸ owner', c: C.max }] : []), ...(r.red ? [{ t: ' ⚠', c: C.bad, b: true }] : [])]),
+    ...(merged ? [[{ t: '✓ ', c: C.ok }, { t: `${merged} merged today` }]] : []),
     // A stopped or refused merge shows in the side pane only; the band lists live merges.
     ...s.merges.filter(v => v.status === 'running').map((v): Line =>
-      [{ t: '◐ ', c: C.run }, { t: shortName(v.unit), c: C.name, b: true }, { t: ` merging${v.m.step ? ` · ${v.m.step.replace(/^\d+ /, '')}` : ''}` }]),
-    ...(s.tests.length ? [[{ t: '▸ ', c: C.run }, { t: `${s.tests.length} test run${s.tests.length > 1 ? 's' : ''}` }]] : []),
-    ...(s.snap.note ? [[{ t: `⚠ ${s.snap.note}`, c: C.bad }]] : []),
+      [{ t: '◐ ', c: C.ok }, { t: shortName(v.unit), c: C.name, b: true }, { t: ` merging${v.m.step ? ` · ${v.m.step.replace(/^\d+ /, '')}` : ''}` }]),
+    ...(s.tests.length ? [[{ t: '▸ ', c: C.build }, { t: `${s.tests.length} test run${s.tests.length > 1 ? 's' : ''}` }]] : []),
   ]
-  return parts.flatMap((p, i) => [...(i ? [{ t: '   ' }] : []), ...p])
+  const row3 = rest.flatMap((p, i) => [...(i ? [{ t: '   ' }] : []), ...p])
+  return [row1, row2, row3].filter(r => r.length).map(r => fitWidth(r, w))
 }
-export const bandLine = (s: State) => plain(bandModel(s))
 
-export const isIdle = (s: State) => !s.snap.rows.length && !s.merges.length && !s.tests.length && !s.snap.note && !s.notes.merges.length && !s.notes.tests.length
+// Open asks, today's merges and an unreadable work source keep every view up after the last unit finishes.
+export const isIdle = (s: State) => !s.snap.rows.length && !s.merges.length && !s.tests.length && !readProblems(s).work.length
+  && !s.snap.asks.length && !mergedToday(s).length
 
-export const tableText = (s: State) => (isIdle(s) ? 'No live units.' : paneLines(s).join('\n'))
+// /units prints into the transcript, so it takes the transcript's width rather than the pane's.
+export const tableText = (s: State, w = 56) => (isIdle(s) ? 'No live units.' : paneLines(s, w).join('\n'))
 
-// The status line: counts and today's spend; the plugin's name already labels it.
-export const summaryLine = (s: State): string | undefined => {
+// The status line, plain text (Claude Code draws no colour there): the worst open state leads.
+export const summaryLine = (s: State, frame = 0): string | undefined => {
   if (isIdle(s)) return undefined
-  const total = todayUsd(s)
-  const parts = [
-    s.snap.rows.length ? `${s.snap.rows.length} building` : '',
-    s.merges.length ? `${s.merges.length} merging` : '',
-    s.tests.length ? `${s.tests.length} testing` : '',
-    s.snap.note ? 'dashboard unreadable' : '',
-    total > 0 ? todayText(s) : '',
+  const problems = workLine(s)
+  const trouble = [
+    ...(problems ? [`✗ ${problems}`] : []),
+    ...s.merges.filter(v => v.status === 'refused').map(v => `✗ ${shortName(v.unit)} merge refused`),
+    ...s.snap.rows.filter(r => r.red).map(r => `✗ ${shortName(r.unit)} at its prompt${r.ageSec !== null ? ` ${fmtSec(r.ageSec)}` : ''}`),
   ]
+  const asks = s.snap.asks.length ? `◆ ${s.snap.asks.length} for owner` : ''
+  const merged = mergedToday(s).length
+  const counts = stageCounts(s)
+  const lim = s.snap.limit
+  const total = todayUsd(s)
+  const tests = s.tests.length ? `▸ ${s.tests.length} testing` : ''
+  const parts = trouble.length
+    ? [...trouble, asks, [...counts.map(([, n]) => `${workMark(frame)} ${n}`), ...(merged ? [`✓ ${merged}`] : [])].join(' '), tests, lim ? `${Math.round(lim.pct)}%` : '', total > 0 ? (s.snap.day?.complete === false ? todayText(s) : usd(total)) : '']
+    : [asks, ...counts.map(([st, n]) => `${workMark(frame)} ${n} ${st}`), merged ? `✓ ${merged} merged` : '', tests,
+      lim ? `7d ${Math.round(lim.pct)}%${resetIn(lim.resetsAt, s.now, true) ? ` ↻${resetIn(lim.resetsAt, s.now, true)}` : ''}` : '', total > 0 ? todayText(s) : '']
   return parts.filter(Boolean).join(' · ') || undefined
 }
 

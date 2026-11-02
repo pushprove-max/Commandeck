@@ -81,13 +81,15 @@ q() { # first option label of each question
   jq -cn --args '{tool_name:"AskUserQuestion",tool_input:{questions:[$ARGS.positional[] | {question:"Q?",options:[{label:.},{label:"Real"}]}]}}' "$@"
 }
 hookq() { CLAUDE_PROJECT_DIR=$1 bash "$HOOK" >/dev/null 2>&1; echo $?; }
-check "main without the decoy first is refused" 2 "$(q "Real choice" | hookq "$MAIN")"
+q4() { jq -cn '{tool_name:"AskUserQuestion",tool_input:{questions:[{question:"Q?",options:[{label:"A"},{label:"B"},{label:"C"},{label:"D"}]}]}}'; }
+check "main without the decoy first, on four options, is refused" 2 "$(q4 | hookq "$MAIN")"
 check "main with the decoy first may ask" 0 "$(q "$ASK_DECOY" | hookq "$MAIN")"
-check "main with the decoy on one question only is refused" 2 "$(q "$ASK_DECOY" "Real choice" | hookq "$MAIN")"
-MSG=$(q "Real choice" | CLAUDE_PROJECT_DIR=$MAIN bash "$HOOK" 2>&1 >/dev/null)
+check "main with the decoy on one question only, the other at four options, is refused" 2 \
+  "$(jq -c --argjson f "$(q4)" '.tool_input.questions += $f.tool_input.questions' <<<"$(q "$ASK_DECOY")" | hookq "$MAIN")"
+MSG=$(q4 | CLAUDE_PROJECT_DIR=$MAIN bash "$HOOK" 2>&1 >/dev/null)
 case "$MSG" in *"$ASK_DECOY"*) R=0 ;; *) R=1 ;; esac
 check "the refusal names the exact decoy label to put first" 0 "$R"
-R=$(q "Real choice" | jq -c '.session_id = "s-refused"' | hookq "$MAIN")
+R=$(q4 | jq -c '.session_id = "s-refused"' | hookq "$MAIN")
 check "a refused picker never opens, so it stamps nothing" 1 "$([ ! -e "$BOX/rulings/ask-open/s-refused" ] && echo 1 || echo 0)"
 check "a worker with the decoy first is still blocked" 2 "$(q "$ASK_DECOY" | hookq "$WT")"
 MSG=$(q "Real choice" | CLAUDE_PROJECT_DIR=$WT bash "$HOOK" 2>&1 >/dev/null)
@@ -102,8 +104,25 @@ date +%s > "$MAIN/.git/commandeck-setup-questions"
 check "while setup asks, main needs no decoy" 0 "$(q "Real choice" | hookq "$MAIN")"
 check "and a worker is still blocked" 2 "$(q "Real choice" | hookq "$WT")"
 echo $(( $(date +%s) - 7200 )) > "$MAIN/.git/commandeck-setup-questions"
-check "a marker two hours old is stale: the decoy is back" 2 "$(q "Real choice" | hookq "$MAIN")"
+check "a marker two hours old is stale: the decoy is back" 2 "$(q4 | hookq "$MAIN")"
 rm -f "$MAIN/.git/commandeck-setup-questions"
+
+# G11 (D9): a main picker with room for one more option is not worth a refusal and a retry: the hook
+# puts the decoy first itself. Four options is the picker's limit, so there it keeps the block.
+OUT=$(q "Real choice" | CLAUDE_PROJECT_DIR=$MAIN bash "$HOOK" 2>/dev/null; echo "rc=$?")
+check "a picker with no decoy opens with it added: exit 0" 0 "${OUT##*rc=}"
+check "a picker with no decoy opens with it added: decoy first, options kept, answered ask" \
+  '"ask" ["— don'"'"'t pick: ask me again —","Real choice","Real"]' \
+  "$(jq -c --arg d "$ASK_DECOY" '.hookSpecificOutput | "\(.permissionDecision | tojson) \([.updatedInput.questions[0].options[].label] | tojson)"' <<<"${OUT%rc=*}" 2>/dev/null | jq -r .)"
+check "a four-option picker with no decoy still blocks" 2 "$(q4 | hookq "$MAIN")"
+
+# G11 (D65): ask_decoy_apply is the one rewrite both hooks read a picker by: the decoy goes first on each question lacking
+# it, and a question already at 4 options gives nothing and exit 1, so the guard keeps its block and the recorder skips it.
+q3() { jq -cn '{tool_name:"AskUserQuestion",tool_input:{questions:[{question:"Q?",options:[{label:"A"},{label:"B"},{label:"C"}]}]}}'; }
+check "a three-option picker gets the decoy first" '["— don'"'"'t pick: ask me again —","A","B","C"] 0' \
+  "$(. "$SOURCE/hooks/lib/ask-decoy.sh"; O=$(ask_decoy_apply "$(q3)"); R=$?; echo "$(jq -c '[.questions[0].options[].label]' <<<"$O") $R")"
+check "a four-option picker is not rewritten" ' 1' \
+  "$(. "$SOURCE/hooks/lib/ask-decoy.sh"; O=$(ask_decoy_apply "$(q4)"); R=$?; echo "$O $R")"
 
 echo
 echo "$PASS passed, $FAIL failed"

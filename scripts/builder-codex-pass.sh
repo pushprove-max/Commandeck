@@ -131,13 +131,14 @@ esac
 # asks for JSON against a schema only that plugin's own review command
 # attaches; FORMAT replaces that block's content, so the prompt carries one
 # output instruction, and every other block goes out as the plugin wrote it.
-FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. Under each blocking finding write one line, Class search: rg <arguments>, a read-only rg search run from the repository root whose hits are every place with the same mistake, the <file>:<line> of that finding among them; the author must answer for each hit. A known gap carries no Class search line. P0 is critical, P1 high, P2 medium, P3 low. A gap in documentation, plan wording or a failure table is P3 unless it hides a real defect; then rate the defect. A review finding blocks the merge only when normal use would hit the bug. A finding that needs an agent deliberately bypassing a guard, or an odd setup, does not block: list it after a line that reads exactly KNOWN GAPS:, one plain line each (- <title> -- <file>:<line> -- what it needs), with no severity level and no class tag. Your last line must be exactly VERDICT: GO when you list no '"$BLOCK_LEVELS"' finding ('"$BLOCK_NONE"' alone are GO), otherwise exactly VERDICT: NO-GO.'
+FORMAT='No schema is provided, so do not return JSON. List each finding as one line: - [P<0-3>] (class: <tag>) <title> -- <file>:<line> -- <why it matters> -- <the exact failing input or command>. Leave out a finding you cannot give one for, whatever its level, and never invent one. The class is one short kebab-case tag for the kind of defect (for example old-format-case), the same tag for the same kind in every pass. Under each blocking finding write one line, Class search: rg <arguments>, a read-only rg search run from the repository root whose hits are every place with the same mistake, the <file>:<line> of that finding among them; the author must answer for each hit. When two of your findings are one flaw, make the Class search of each hit the <file>:<line> of the other; the pass joins findings into one item on those hits. A known gap carries no Class search line. P0 is critical, P1 high, P2 medium, P3 low. A gap in documentation, plan wording or a failure table is P3 unless it hides a real defect; then rate the defect. A review finding blocks the merge only when normal use would hit the bug. A finding that needs an agent deliberately bypassing a guard, or an odd setup, does not block: list it after a line that reads exactly KNOWN GAPS:, one plain line each (- <title> -- <file>:<line> -- what it needs), with no severity level and no class tag. Your last line must be exactly VERDICT: GO when you list no '"$BLOCK_LEVELS"' finding ('"$BLOCK_NONE"' alone are GO), otherwise exactly VERDICT: NO-GO.'
 # A pass is proved by this prompt, whole. A build whose earlier passes were sent another
 # (the plugin was updated mid-build) is refused, and the refusal ends with the one way on.
 UPDATED='If the plugin was updated during this build, its earlier passes were sent the earlier prompt and count no longer: move the build to a new unit (a new worktree made from this branch) and review that from pass 1'
 OPEN='<structured_output_contract>' CLOSE='</structured_output_contract>'
 LABEL='branch diff against main'
 # The diff goes out in the prompt, so the reads left are the ones around it.
+# wording: begin
 GUIDANCE='The diff is in the review input below; do not fetch it again, and do not re-read a file it shows whole. Read what else you need (a caller, a test, a rule file) with read-only commands. Put reads that do not depend on each other in one tool call, not one call each. Read cold: read the diff, then the unit brief (.claude/briefs/<unit>.md), draft your findings, and only then open the author'"'"'s evidence and check its claims against the files; read first, it anchors the review. Scope is the diff, the brief and the callers of what the diff changes: open any other file only to confirm or refute one finding, and say which, never a generated file, and make no tour of the surrounding module. A '"$BLOCK_LEVELS"' finding also carries a failing test after its line: one complete, self-contained test file in a fenced block whose first line names its path, written to fail on the diff as it stands and to pass once the finding is fixed; write it to no disk. When that test would cost more than the finding, the failing input or command stands alone and you say why in one line. A P2 or P3 whose test is written and whose fix is under ten lines may carry the fix as a fenced unified diff: the Builder applies it, runs the test green, and the next pass reads it; a reviewer never reviews its own fix. This prompt, the brief and the dispatch spec outrank the startup file and every skill where they conflict: finish the work they authorize before you ask anything, and if you stop early, quote the exact instruction that stopped you, with its file. A read-only sandbox may refuse every orca command: an orca call that answers runtime_unavailable is by design, so do not retry one or report it as a failure; your reply and its VERDICT line reach main. GitHub: read issues, linked issues and pull request checks and labels with gh issue view, gh pr view and gh pr checks (each with -R <owner/repo>) where your shell reaches GitHub; where it has no network, the GitHub reads made on the host at launch are in the review input. A GitHub read you need that fails or is not there is BLOCKED: GitHub read failed: <command>: <first error line>, on a line of its own, and then stop.'
 # The Codex plugin's line made every NO-GO pass return exactly one finding.
 ONE='Prefer one strong finding over several weak ones.'
@@ -161,7 +162,7 @@ FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the chang
 # Asked in every pass and by every reviewer, after its focus. The test rules go in whole: the Claude reviewer runs
 # --restricted, so it cannot open a file outside the review worktree, and a Codex sandbox may not either.
 TEST_RULES=$(<"$HERE/../templates/test-rules.md") && [ -n "$TEST_RULES" ] || die "the plugin has no test rules file $HERE/../templates/test-rules.md; every reviewer is asked to judge tests by it"
-LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path. Gate readers: a fix to a reader that guards a gate must be an allowlist that accepts only the shapes it fully understands and refuses every other one with an error naming the line; a fix that adds support for one more input shape instead is a class-miss finding.
+LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path. Gate readers: a fix to a reader that guards a gate must be an allowlist that accepts only the shapes it fully understands and refuses every other one with an error naming the line; a fix that adds support for one more input shape instead is a class-miss finding. Smaller change: Is there a smaller change that fully solves the problem? A yes is a finding that names the smaller change and why it fully solves the problem; it is never a reason to cut scope the problem needs.
 
 $TEST_RULES"
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -181,6 +182,7 @@ ANGLES=(
   "Angle 2 of 3, behaviour: wrong results, edge cases, failure paths and callers the change breaks. Trace each changed branch with a concrete input. $SETTINGS $CALLERS $LATER $ORDERINGS"
   'Angle 3 of 3, tests and words: a changed behaviour with no test, a test that cannot fail, and comments, rule text or docs the change leaves untrue.'
 )
+# wording: end
 # The first line of the review input says which pass this is, then "Reviewer <k>
 # of <n>, round <N>." The merge reads the pass's kind, its reviewers and its
 # round from that line, so a GO of another kind or another round is not taken
@@ -707,16 +709,41 @@ earlier_passes() {
     sed 1,2d <<<"$proof" | { grep -E "$FINDING" || true; } | sed 's/^\([[:space:]]*\)@/\1\\@/'
   done <<<"$tids"
 }
+# builder_fixed <worktree> <tip> -- issue 563: the finding lines the Builder's evidence says it fixed, one per line, for
+# open_findings to leave out of the earlier GO rounds' P3s. The evidence holds `Fixed in <commit>: <the P3 line>`, with
+# a commit (7 to 40 hex) that is in <tip> and not in main, and whose diff touches the file:line the P3 cites or a line
+# within 3 of it (before or after the commit). A line that fails any of that clears nothing: trailing text or a quoted
+# line is another text, an unknown or main's commit is no fix of this unit, a P3 citing no file:line has nothing to
+# match. It proves the commit changed that place, not that it fixed it.
+builder_fixed() {
+  local ev=$1/.claude/briefs/$UNIT-evidence.md sha line cite file n tip
+  [ -r "$ev" ] || return 0
+  tip=$(git -C "$1" rev-parse --verify -q "$2^{commit}") || return 0
+  while IFS= read -r line; do
+    sha=${line#Fixed in }; sha=${sha%%: *}; line=${line#"Fixed in $sha: "}
+    [[ $sha =~ ^[0-9a-f]{7,40}$ ]] && [ -n "$line" ] || continue
+    sha=$(git -C "$1" rev-parse --verify -q "$sha^{commit}") || continue
+    git -C "$1" merge-base --is-ancestor "$sha" "$tip" && ! git -C "$1" merge-base --is-ancestor "$sha" main || continue
+    cite=$(grep -oE -m1 '[-A-Za-z0-9_./]+\.[A-Za-z0-9]+:[0-9]+' <<<"$line") || continue
+    file=${cite%:*} n=${cite##*:}
+    git -C "$1" diff -U0 --no-renames "$sha^" "$sha" -- ":(literal)$file" 2>/dev/null | awk -v n="$n" '
+      /^@@ / { split($2, o, ","); split($3, w, ",")
+        for (k = 0; k < 2; k++) { s = k ? substr(w[1], 2) : substr(o[1], 2); c = k ? w[2] : o[2]; if (c == "") c = 1; if (c == 0) c = 1
+          if (s - 3 <= n && n <= s + c - 1 + 3) hit = 1 } }
+      END { exit !hit }' && printf '%s\n' "$line"
+  done < <(grep -E '^Fixed in [0-9a-f]+: ' "$ev")
+}
 # open_findings <finding lines of the pass under merge> <earlier_passes text> -- issue 366: what is open at a merge, one
 # "Open finding: <class> <line>" each. That is every finding line of the pass under merge, and the P3 lines of every
 # earlier round whose every declared reviewer is on record and said GO (a GO round gets no fix round, so its P3s were
 # never fixed; a NO-GO round's went to its fix round). Deduped by exact line. A class is the first <file>:<line> the
-# line cites, the line dropped; no-file when it cites none.
+# line cites, the line dropped; no-file when it cites none. CLEARED (builder_fixed) lists the P3 lines left out.
 open_findings() {
   { printf '%s\n' "$1"
-    awk -v blk="$BLK" -v low="(^|[^A-Za-z0-9])P[0-$BLK]([^0-9]|\$)" -v high="(^|[^A-Za-z0-9])P[$((BLK + 1))-3]([^0-9]|\$)" '$1 == "@" && $3 == "cut" { cur = ""; next }
+    awk -v blk="$BLK" -v low="(^|[^A-Za-z0-9])P[0-$BLK]([^0-9]|\$)" -v high="(^|[^A-Za-z0-9])P[$((BLK + 1))-3]([^0-9]|\$)" 'BEGIN { m = split(ENVIRON["CLEARED"], cl, "\n"); for (i = 1; i <= m; i++) if (cl[i] != "") cleared[cl[i]] = 1 }
+      $1 == "@" && $3 == "cut" { cur = ""; next }
       $1 == "@" { r = $6; if (!(r in of)) { of[r] = $5; ok[r] = 1; order[++n] = r } got[r, $4] = 1; if ($11 != "GO") ok[r] = 0; cur = r; next }
-      blk < 3 && $0 ~ high && $0 !~ low { p3[cur] = p3[cur] $0 "\n" }
+      blk < 3 && $0 ~ high && $0 !~ low && !($0 in cleared) { p3[cur] = p3[cur] $0 "\n" }
       END { for (i = 1; i <= n; i++) { r = order[i]; for (k = 1; k <= of[r]; k++) if (!got[r, k]) ok[r] = 0; if (ok[r]) printf "%s", p3[r] } }' <<<"$2"; } \
     | awk 'NF && !seen[$0]++ { c = "no-file"; if (match($0, "[-A-Za-z0-9_./]+\\.[A-Za-z0-9]+:[0-9]+")) { c = substr($0, RSTART, RLENGTH); sub(/:[0-9]+$/, "", c) } print "Open finding: " c " " $0 }'
 }
@@ -1010,7 +1037,7 @@ if [ "${1:-}" = --verify ]; then
     done
   fi
   # Issue 366: what is open is printed before the proof line (main-watch reads the last line), and names the rule.
-  OPEN_LINES=$(open_findings "$NOW_LINES" "$PASSES")
+  OPEN_LINES=$(CLEARED=$(builder_fixed "$WT" "$WANT") open_findings "$NOW_LINES" "$PASSES")
   if [ "$RULE" = "closing GO" ]; then
     if [ -n "$CAPPED" ]; then RULE="cap stop"; elif [ -n "$OPEN_LINES" ]; then RULE="threshold stop"; fi
   fi
@@ -1416,17 +1443,23 @@ Try: printf '\\n## New code checked (pass $1)\\n- <path>:<line> meets <plan line
 # fix_groups <round file> -- the pass's findings in groups that share no file, as "- Group <i> (<files>):" then one
 # "  - <finding>" line each, groups in the order their first finding appears. A finding is grouped under every file it cites,
 # so two findings that cite a common file land in one group; a finding that cites no file is in no group and stays with the Builder.
+# An optional <causes file> (#550) joins the files of each shared cause's sites into one group.
 fix_groups() {
-  local l files
+  local l files causes=
+  [ ! -s "${2:-}" ] || causes=$(paste -sd'|' "$2")
   while IFS= read -r l; do
     files=$(grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:[0-9]+' <<<"$l" | sed 's/:[0-9]*$//' | sort -u | paste -sd' ' - || true)
     printf '%s\t%s\n' "$files" "${l:0:200}"
-  done < <(grep -E '^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' "$1" || true) | awk -F'\t' '
+  done < <(grep -E '^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]' "$1" || true) | awk -F'\t' -v causes="$causes" '
     function find(x) { while (p[x] != x) x = p[x]; return x }
     { text[NR] = $2; n = split($1, f, " "); if (!n) next
       for (i = 1; i <= n; i++) { if (!(f[i] in p)) { p[f[i]] = f[i]; ord[++m] = f[i] } if (i > 1) { a = find(f[1]); b = find(f[i]); if (a != b) p[b] = a } }
       first[NR] = f[1] }
     END {
+      nc = split(causes, cl, "|")
+      for (i = 1; i <= nc; i++) { nf = split(cl[i], cf, " "); a = ""
+        for (j = 1; j <= nf; j++) { x = cf[j]; sub(/:[0-9]*$/, "", x); if (!(x in p)) continue
+          if (a == "") a = find(x); else { b = find(x); if (a != b) p[b] = a } } }
       for (k = 1; k <= NR; k++) if (k in first) { r = find(first[k]); if (!(r in seen)) { seen[r] = 1; roots[++g] = r } }
       for (x = 1; x <= m; x++) { r = find(ord[x]); files[r] = files[r] (files[r] == "" ? "" : ", ") ord[x] }
       for (i = 1; i <= g; i++) {
@@ -1435,19 +1468,29 @@ fix_groups() {
       }
     }'
 }
-# class_sites <round file> <txt> <md> -- runs each reviewer's `Class search: rg ...` line (host change, owner order
+# findings_by_cause <round file> <causes file> -- #550: one line per shared cause, every site named with its finding's title.
+findings_by_cause() {
+  awk 'NR == FNR { c[FNR] = $0; n = FNR; next }
+       /^[[:space:]]*([-*][[:space:]]*)?\[P[0-3]\]/ && match($0, / -- [^ :]+:[0-9]+ -- /) {
+         s = substr($0, RSTART + 4, RLENGTH - 8); t = $0; sub(/^[^]]*\][[:space:]]*/, "", t); sub(/ -- .*/, "", t); if (!(s in title)) title[s] = t }
+       END { for (i = 1; i <= n; i++) { m = split(c[i], f, " "); l = "- one cause, " m " places: "
+         for (j = 1; j <= m; j++) l = l (j > 1 ? "; " : "") f[j] " " title[f[j]]
+         print l } }' "$2" "$1"
+}
+# class_sites <round file> <txt> <md> <causes> -- runs each reviewer's `Class search: rg ...` line (host change, owner order
 # 2026-10-25: a fixer that chose its own search searched its fix's shape, not the bug's). The text is the reviewer's, so
 # it runs as rg with no shell, rg's program-running flags refused, and a search must hit its own finding's file:line or
 # it owes nothing. A search under KNOWN GAPS: has no finding above it. Writes every hit as path:line to <txt> and the
-# searches, refusals and hits to <md>.
+# searches, refusals and hits to <md>. <causes> (#550) gets one line per shared cause: the findings' sites, space-joined.
+# Two findings share a cause when one's search hits hold the other's site, transitively.
 class_sites() {
-  python3 -I - "$1" "$WT" "$2" "$3" <<'PY'
+  python3 -I - "$1" "$WT" "$2" "$3" "$4" <<'PY'
 import re, shlex, subprocess, sys
-out, wt, txt, md = sys.argv[1:5]
+out, wt, txt, md, causes = sys.argv[1:6]
 CAP = 200
 FINDING = re.compile(r'^\s*(?:[-*]\s*)?\[P[0-3]\]')
 SITE = re.compile(r' -- ([^ :]+):(\d+) -- ')
-cur, hits, lines = None, [], []
+cur, hits, lines, allsites, joins = None, [], [], [], []
 for line in open(out, encoding='utf-8', errors='replace'):
     line = line.rstrip('\n')
     if line.strip() == 'KNOWN GAPS:':
@@ -1456,6 +1499,8 @@ for line in open(out, encoding='utf-8', errors='replace'):
     if FINDING.match(line):
         m = SITE.search(line)
         cur = (m.group(1).removeprefix('./'), m.group(2)) if m else None
+        if cur and cur not in allsites:
+            allsites.append(cur)
         continue
     m = re.match(r'^\s*Class search:\s*(.+?)\s*$', line)
     if not m:
@@ -1490,9 +1535,26 @@ for line in open(out, encoding='utf-8', errors='replace'):
     if len(found) > CAP:
         refuse(f'{len(found)} hits, over {CAP}: too broad to be one class'); continue
     lines.append(f'- {cmd} ({len(found)} hits)')
+    joins.append((cur, found))
     for f in found:
         if f not in hits:
             hits.append(f)
+parent = {s: s for s in allsites}
+def root(s):
+    while parent[s] != s:
+        s = parent[s]
+    return s
+for own, found in joins:
+    for s in found:
+        if s in parent:
+            parent[root(s)] = root(own)
+groups = {}
+for s in allsites:
+    groups.setdefault(root(s), []).append(s)
+with open(causes, 'w') as c:
+    for g in groups.values():
+        if len(g) > 1:
+            c.write(' '.join(f'{p}:{n}' for p, n in sorted(g, key=lambda h: (h[0], int(h[1])))) + '\n')
 with open(txt, 'w') as t:
     t.writelines(f'{p}:{n}\n' for p, n in sorted(hits, key=lambda h: (h[0], int(h[1]))))
 with open(md, 'w') as d:
@@ -1610,7 +1672,7 @@ limits_refuse() {
       ok=1; ruling_id_ok "$id" || { ok=0; break; }
     done
     [ "$ok" = 1 ] || refuse "$1 adds a stated limit after the plan judge's GO (compared with $2) with no ruling id main's rulings for $UNIT carry: $line
-Ask main for the owner's ruling on it, or remove the line. Main logs the ruling and adds its id to $UNIT-main-rulings.md, and the line ends with ruling:<id>."
+Ask main for the owner's ruling on it, or remove the line. Main logs the ruling and adds its id to $UNIT-main-rulings.md, and the line ends with ruling:<id>.$([ "$1" = ".claude/briefs/$UNIT.md" ] || printf '\nA tracked plan cannot hold a ruling id (the leak test bans ids in tracked files): remove the line from %s and put the limit in .claude/briefs/%s.md with its ruling id.' "$1" "$UNIT")"
   done
 }
 # limits_check -- #468: a limit the Builder adds after the plan judge's GO is read against a baseline it cannot write: main's
@@ -2357,7 +2419,7 @@ FILE_THEN_MERGE="Print your DONE line and run no fix round: main files one issue
 if [ "$KIND" = final ] && [ -z "$DESIGN" ] && [ -z "$SUITE_RED" ]; then
   # What is open is read over the whole record, as --verify reads it: this pass's findings and the P3s of earlier GO rounds.
   NOW_FOUND=$(grep -v '^@ ' <<<"$THIS")
-  if [ "$VERDICT" = "VERDICT: GO" ] && [ -n "$(open_findings "$NOW_FOUND" "$PASSES")" ]; then
+  if [ "$VERDICT" = "VERDICT: GO" ] && [ -n "$(CLEARED=$(builder_fixed "$WT" HEAD) open_findings "$NOW_FOUND" "$PASSES")" ]; then
     echo "STOP (threshold): ${OUT##*/} names no $BLOCK_LEVELS, so the review loop ends with only $BELOW findings open. $FILE_THEN_MERGE"
     exit 0
   elif [ "$VERDICT" = "VERDICT: NO-GO" ] && [ "$COUNT" -ge "$REVIEW_CAP" ] && [ "$(p01_count <<<"$NOW_FOUND")" = 0 ] \
@@ -2373,8 +2435,8 @@ fi
 [ "$VERDICT" = "VERDICT: GO" ] && [ -n "$DESIGN" ] \
   && echo "DESIGN GO: this GO approves the design and merges nothing. Next: write the code, then builder-codex-pass.sh $UNIT $((N + 1)) final; print your DONE line only after that pass's GO."
 # The reviewers' class searches run on every NO-GO, before any hand-off check, so a pass with no hand-off writes them too.
-CS_TXT=$WT/.claude/briefs/$UNIT-r$N-class-sites.txt CS_MD=$WT/.claude/briefs/$UNIT-r$N-class-sites.md
-[ "$VERDICT" != "VERDICT: NO-GO" ] || class_sites "$OUT" "$CS_TXT" "$CS_MD" || die "could not run the reviewers' class searches of ${OUT##*/}"
+CS_TXT=$WT/.claude/briefs/$UNIT-r$N-class-sites.txt CS_MD=$WT/.claude/briefs/$UNIT-r$N-class-sites.md CS_CAUSES=$WT/.claude/briefs/$UNIT-r$N-causes.txt
+[ "$VERDICT" != "VERDICT: NO-GO" ] || class_sites "$OUT" "$CS_TXT" "$CS_MD" "$CS_CAUSES" || die "could not run the reviewers' class searches of ${OUT##*/}"
 
 # A fix round starts in a fresh session of the same pane instead of a context grown through the whole build.
 # A fix round goes to the seat record's pane whoever ran the pass; a long GO pass hands over only in the Builder's own pane, from its own worktree.
@@ -2451,7 +2513,11 @@ WRITING=$HAND
   printf 'A fix that touches a save updates that save'"'"'s row in the evidence file'"'"'s failure table (its steps, what is left after each, the one recovery) in the same commit; the next reviewer checks the code against the table.\n'
   printf '\n## What pass %s found (%s)\n\n' "$N" "${OUT##*/}"; cat "$OUT"
   # Findings in separate files can be fixed at once; the Builder runs the helpers, this only names the groups.
-  FIXGROUPS=$(fix_groups "$OUT")
+  if [ -s "$CS_CAUSES" ]; then
+    printf '\n## Findings by cause\n\nEach line below is one item: findings the reviewers'"'"' class searches tie together share one cause. Fix the cause once, in every place named, rather than finding by finding.\n\n'
+    findings_by_cause "$OUT" "$CS_CAUSES"
+  fi
+  FIXGROUPS=$(fix_groups "$OUT" "$CS_CAUSES")
   if [ "$(grep -c '^- Group ' <<<"$FIXGROUPS")" -ge 2 ]; then
     printf '\n## Parallel fix groups\n\nThese findings share no file, so each group can be fixed on its own. Run one Agent helper per group, each with `isolation: "worktree"`, and give it only its group'"'"'s findings and files. Apply the helpers'"'"' diffs here in group order; if two diffs touch one file, drop the parallel run and fix the rest serially. Run the round'"'"'s tests once on the combined tree. A finding that cites no file is yours. It is still one commit and one pass.\n\n%s\n' "$FIXGROUPS"
   fi

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.67.0-111111?style=flat-square" alt="Version 0.67.0">
+  <img src="https://img.shields.io/badge/version-0.68.0-111111?style=flat-square" alt="Version 0.68.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -282,8 +282,9 @@ line or option. `/commandeck:revoke undo` takes a choice back.
 2. Main picks a plan tier from the brief: no plan, a plan and one judge, or a
    panel of two judges. A plan is never a build order. `scripts/unit-drive.sh
    start` can carry the unit from there: it runs only the plan seats the tier
-   names, one judge round, and the launch, and stops once, naming the next
-   command, when a stage needs main. A plan has one goal line, one line per
+   names, revises and judges the plan again until every judge says GO on one
+   version, then launches; it stops once, naming the next command, only on an
+   owner question or a seat error. Plan seats never count against the Builder cap. A plan has one goal line, one line per
    step and a list of facts, each naming the file lines it rests on and the
    day they were read; a fact whose lines do not exist is refused before any
    judge reads the plan. A unit over the size limits is split unless main
@@ -415,6 +416,7 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | Option | Values | What it sets |
 |---|---|---|
 | `unitsBand`, `unitsPane`, `unitsStatus` | `auto` (default), `on`, `off` | The band above the prompt, the side pane and the status line. `auto` is on in main and the Chief of Staff, off in worker and reviewer panes |
+| `motion` | `false` (default), `true` | Whether a unit's working mark turns once a second while the unit works |
 
 **Dashboard**
 

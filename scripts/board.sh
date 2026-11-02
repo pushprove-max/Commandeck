@@ -50,9 +50,17 @@ ONLY=${1:-}
 # where it is written down for the watcher and every pane. Orca's machine-wide
 # current-run file is never read: another project on the machine moves it.
 # Main checkout only: a worktree pane is unbound, or bound to something else.
-IS_MAIN=0 CUR=
+IS_MAIN=0 CUR= MP=0
 if [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ]; then
   IS_MAIN=1
+  # #532: this git-dir check also passes an Orca automation at the repo root. Only the run's coordinator is main (pp_is_main_pane
+  # 0): it alone writes the run file and binds. Every other answer binds nothing and writes nothing; its line is printed below.
+  . "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/project.sh"
+  pp_is_main_pane; MP=$?
+fi
+if [ "$IS_MAIN" = 1 ] && [ "$MP" = 0 ]; then
+  [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || [ "$PP_MAIN_COORD" != "$ORCA_TERMINAL_HANDLE" ] \
+    || { mkdir -p "$SCRATCH" && printf 'handle=%s\n' "$ORCA_TERMINAL_HANDLE" > "$SCRATCH/main-pane.txt"; }
   CUR=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty')
   if [ -n "$CUR" ] && [ "$CUR" != "$RUN" ] && mkdir -p "$SCRATCH" && printf '%s\n' "$CUR" > "$PP_RUN_FILE.$$" && mv "$PP_RUN_FILE.$$" "$PP_RUN_FILE"; then RUN=$CUR; fi
 fi
@@ -73,7 +81,21 @@ echo "RUN=${RUN:-NONE}  WS=$WS  SCRATCH=$SCRATCH  ROOT=$ROOT"
 # for.
 # Main checkout only: a worktree pane (the relay pane, a worker) is always unbound, and
 # binding there moves main's run to it and leaves main's inbox empty.
-if [ "$IS_MAIN" = 1 ] && [ -z "$CUR" ]; then
+if [ "$IS_MAIN" = 1 ] && [ "$MP" != 0 ]; then
+  # Not proven main (#532). A run with no coordinator, or whose coordinator pane is gone (main's old pane closed), is not
+  # taken by whoever asks: only main's own explicit run-use claims it, and its next board.sh answers main.
+  LIVE=?
+  if [ "$MP" = 1 ]; then
+    TL=$(timeout 10 orca-ide terminal list --json 2>/dev/null) && jq -e . >/dev/null 2>&1 <<<"$TL" \
+      && LIVE=$(jq -r --arg h "$PP_MAIN_COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]?
+        | select(.handle == $h and .connected != false and .orphaned != true)] | length' <<<"$TL" 2>/dev/null) || LIVE=?
+  fi
+  if [ "$MP" = 3 ] || [ "$LIVE" = 0 ]; then
+    echo "THIS TERMINAL IS NOT BOUND: run $PP_MAIN_RUN has no live coordinator (${PP_MAIN_COORD:-none}); if this pane is main: orca-ide orchestration run-use --id $PP_MAIN_RUN"
+  else
+    echo "not main: the run's coordinator is ${PP_MAIN_COORD:-unknown}"
+  fi
+elif [ "$IS_MAIN" = 1 ] && [ -z "$CUR" ]; then
   if [ -n "$RUN" ] && orca-ide orchestration run-use --id "$RUN" >/dev/null 2>&1; then
     echo "BOUND this terminal to $RUN (it was unbound; no rebind, so no driver was fenced)"
   else

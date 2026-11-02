@@ -58,5 +58,14 @@ check "but alone: the unchanged worktree list is not reprinted, and the banner s
 ROWS=$(bash "$HERE/scripts/startup-size.sh" --per-prompt 2>/dev/null | awk -F'\t' '$2 == "agent-awareness.sh" { printf "%s=%s ", $1, ($3 > 0) }')
 check "startup-size --per-prompt shows the banner on main's row only" "main=1 worker=0 builder=0 chief-of-staff=0 " "$ROWS"
 
+# (pass 8) A headless worker node or bun starts with its own options before the script is still a worker; the word
+# after a node option that takes one (--require) is not the script; (pass 13) nor is a value given to any other option
+# as the next word (`--inspect-port 9229`). The hook's own awk program reads a stubbed ps.
+SRC=$(sed -n '/^workers=\$(ps -eo/,/print p, cmd\[p\] } }.)$/p' "$HERE/hooks/agent-awareness.sh"); PROG=${SRC#*awk \'}; PROG=${PROG%\')}
+W=$(printf '%s\n' '10 1 /Applications/Orca.app/Contents/MacOS/Orca' '20 10 node --max-old-space-size=4096 /opt/homebrew/bin/codex exec fix' \
+  '21 10 bun --smol /x/claude -p hi' '22 10 node --require /x/claude.js app.js -p' \
+  '23 10 node --inspect-port 9229 /opt/homebrew/bin/codex exec fix' | awk "$PROG" | awk '{ printf "%s ", $1 }')
+check "a headless worker started with node or bun options is listed" "20 21 23 " "$W"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

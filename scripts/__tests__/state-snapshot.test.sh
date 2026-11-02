@@ -33,9 +33,9 @@ printf '#!/bin/sh\nexit 1\n' > "$T/bin/orca-ide"; chmod +x "$T/bin/orca-ide"
 snap() { (cd "$R" && env -u CLAUDE_PROJECT_DIR HOME="$H" PATH="$T/bin:$PATH" bash scripts/state-snapshot.sh "$@" 2>&1); }
 
 # test: no flags: output unchanged
-# The cksum is of the generator's output before this change, less its time-stamped title line, for this board.
+# The cksum is of the generator's output, less its time-stamped title line, for this board; C41's carry-over list changed it (the unit line).
 snap --out "$CPD/a.md" >/dev/null
-check "no flags: output unchanged" "1460231846 2045" "$(tail -n +2 "$CPD/a.md" | cksum | tr -s ' ' ' ')"
+check "no flags: output unchanged" "4286663833 1984" "$(tail -n +2 "$CPD/a.md" | cksum | tr -s ' ' ' ')"
 check "no flags: no temp file left beside the checkpoint" "a.md" "$(ls "$CPD")"
 
 # test: flags fill TODO cells, add Q items, run carry
@@ -51,7 +51,7 @@ check "flags fill TODO cells, add Q items, run carry: prints the path once" 1 "$
 printf '%s\n' '## Queue' '- Q-5: inherited thing' > "$CPD/base.md"; echo "$CPD/base.md" > "$CPD/g.resumed-from"
 snap --out "$CPD/g.md" >/dev/null
 RES=$(snap --out "$CPD/g.md" --goal g --stage U=a --next U=b)
-check "flags fill TODO cells, add Q items, run carry: carry's verdict is printed" 1 "$(grep -c 'inherited thing' <<<"$RES")"
+check "flags fill TODO cells, add Q items, run carry: carry's verdict is printed" 0 "$(grep -c 'inherited thing' <<<"$RES")"
 
 # test: unknown unit refused, file unchanged
 snap --out "$CPD/u.md" >/dev/null; BEFORE=$(cksum < "$CPD/u.md")
@@ -75,9 +75,9 @@ check "one call fills the Goal and the named unit's cells: complete call" "0:0:0
 printf '%s\n' '## Queue (in order)' '- Q-1: obtain approval' > "$CPD/inh.md"; echo "$CPD/inh.md" > "$CPD/q.resumed-from"
 snap --out "$CPD/q.md" >/dev/null
 RES=$(snap --out "$CPD/q.md" --goal g --stage U=a --next U=b --open-item 'investigate unrelated failure')
-check "a new queue item never reuses an inherited number: Q-2 and no Q-1" "1:0" \
+check "a new queue item never reuses an inherited number: Q-2 and no Q-1" "1:1" \
   "$(grep -c '^- Q-2: investigate unrelated failure$' "$CPD/q.md"):$(grep -c 'Q-1' "$CPD/q.md")"
-check "a new queue item never reuses an inherited number: carry still lists Q-1 as not carried" 1 "$(grep -c 'Q-1: obtain approval' <<<"$RES")"
+check "a new queue item never reuses an inherited number: carry still lists Q-1 as not carried" 0 "$(grep -c 'Q-1: obtain approval' <<<"$RES")"
 
 # test: replaying the flagged call does not queue the item twice
 # The documented recovery after a stop between the rename and carry is the same call again.
@@ -136,6 +136,60 @@ check "a missing key keeps the standing worktrees: only the ordinary one is list
 printf '%s' '{"keepWorktrees":[]}' > "$R/.claude/commandeck.json"
 snap --out "$CPD/k3.md" >/dev/null
 check "only an explicit empty array keeps nothing: every worktree is listed" "U Fast-lane Research" "$(units "$CPD/k3.md")"
+
+# test: carry-over list (issue 568): the generator writes the unit, decision and copied lines the carry check wants
+# Board stub: U always, V only when read with --full (the plain board cuts it); WS holds the units' report files.
+cp "$REAL/scripts/decision.sh" "$R/scripts/"; mkdir -p "$R/hooks"; cp -R "$REAL/hooks/lib" "$R/hooks/"; mkdir -p "$R/.claude/metrics" "$T/ws/U/.claude/briefs"
+LEDGER=$R/.claude/metrics/decisions.jsonl
+row() { printf '{"id":"%s","question":"%s","proposedDefault":"d","source":"s","askedAt":"2026-11-02T10:00:00Z","answer":%s,"answeredAt":%s}\n' "$1" "$2" "$3" "$4"; }
+{ row d-open "Which way?" null null; row d-two 'Line one\nline two' null null; row d-done "Settled?" '"yes"' '"2026-11-02T11:00:00Z"'; } > "$LEDGER"
+cat > "$R/scripts/board.sh" <<'EOF'
+#!/usr/bin/env bash
+[ ! -e "$(dirname "$0")/../board.rc" ] || exit "$(cat "$(dirname "$0")/../board.rc")"
+echo "RUN=run_x  WS=WSDIR  SCRATCH=/s  ROOT=/r"
+echo "main: abc1234 a thing | 0 dirty | 0 unpushed"
+echo; echo "== worktrees"; echo "  U [max/U] dirty=0"
+[ "${1-}" != --full ] || echo "  V [max/V] dirty=0"
+EOF
+sed -i.bak "s#WSDIR#$T/ws#" "$R/scripts/board.sh"; rm -f "$R/scripts/board.sh.bak"
+cat > "$CPD/c-base.md" <<'EOF'
+## Queue
+- unit U -- still open: round 1 reports
+- Q-5: hand thing
+- unit Gone -- still open: round 2 reports
+- decision d-gone: an old question -- done when: decision:d-gone
+- Q-9: ship it -- done when: decision:d-done
+EOF
+queue() { awk '/^## Queue/{q=1;next} /^## /{q=0} q' "$1"; }
+closed() { awk '/^## Closed/{c=1;next} /^## /{c=0} c' "$1"; }
+carry() { (cd "$R" && python3 scripts/checkpoint-context.py carry "$1" "$2" 2>&1); }
+echo "$CPD/c-base.md" > "$CPD/c1.resumed-from"
+snap --out "$CPD/c1.md" >/dev/null
+carry "$CPD/c-base.md" "$CPD/c1.md" >/dev/null; RC=$?
+check "a restart's carry-over list passes the carry check with no hand edit: carry exits 0" 0 "$RC"
+check "a restart's carry-over list passes the carry check with no hand edit: unit, decisions and reference line" "1:1:1:0:1" \
+  "$(queue "$CPD/c1.md" | grep -c '^- unit U -- still open: no round yet$'):$(queue "$CPD/c1.md" | grep -c '^- decision d-open: Which way? -- done when: decision:d-open$'):$(queue "$CPD/c1.md" | grep -c '^- decision d-two: Line one line two -- done when: decision:d-two$'):$(queue "$CPD/c1.md" | grep -c 'decision:d-done'):$(grep -cxF "Carries open items of: $CPD/c-base.md" "$CPD/c1.md")"
+check "an item whose task is done is not carried" "0:0:1:1" \
+  "$(grep -c 'Q-9' "$CPD/c1.md"):$(queue "$CPD/c1.md" | grep -c 'Gone\|d-gone'):$(closed "$CPD/c1.md" | grep -c '^- unit Gone -- still open: round 2 reports -- no longer live ('):$(closed "$CPD/c1.md" | grep -c '^- decision d-gone: .* -- no longer live (')"
+check "a hand-written item still open in the baseline is copied under the Queue" 1 "$(queue "$CPD/c1.md" | grep -c '^- Q-5: hand thing$')"
+check "the board is read in full so a unit past the cut is listed" 1 "$(queue "$CPD/c1.md" | grep -c '^- unit V -- still open')"
+# a unit's stage is its latest report round: numeric, so r10 is newer than r9
+for n in 2 9 10; do : > "$T/ws/U/.claude/briefs/U-r$n-reports.md"; done
+snap --out "$CPD/c2.md" >/dev/null
+check "a unit's stage is its latest report round, else no round yet" "1:1" \
+  "$(queue "$CPD/c2.md" | grep -c '^- unit U -- still open: round 10 reports$'):$(queue "$CPD/c2.md" | grep -c '^- unit V -- still open: no round yet$')"
+# a failed listing keeps its kind's baseline items open: they are copied, never closed
+echo 1 > "$R/board.rc"; mv "$R/scripts/decision.sh" "$R/scripts/decision.sh.off"; printf '#!/bin/sh\nexit 1\n' > "$R/scripts/decision.sh"
+echo "$CPD/c-base.md" > "$CPD/c3.resumed-from"
+snap --out "$CPD/c3.md" >/dev/null
+check "a failed board or decision listing keeps the baseline's items open" "1:1:1:0" \
+  "$(queue "$CPD/c3.md" | grep -c '^- unit Gone -- still open: round 2 reports$'):$(queue "$CPD/c3.md" | grep -c '^- decision d-gone: '):$(queue "$CPD/c3.md" | grep -c '^- unit U -- still open: round 1 reports$'):$(grep -c 'no longer live' "$CPD/c3.md")"
+rm -f "$R/board.rc"; mv "$R/scripts/decision.sh.off" "$R/scripts/decision.sh"
+# an unreadable baseline: nothing is copied and no reference line says the base was read
+echo "$CPD/nope.md" > "$CPD/c4.resumed-from"
+snap --out "$CPD/c4.md" >/dev/null
+check "an unreadable baseline copies nothing and writes no reference line" "0:0:1" \
+  "$(grep -c '^Carries open items of:' "$CPD/c4.md"):$(queue "$CPD/c4.md" | grep -c 'Q-5\|Gone'):$(queue "$CPD/c4.md" | grep -c '^- unit U -- still open')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

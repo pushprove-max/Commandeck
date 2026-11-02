@@ -137,5 +137,27 @@ ai
 check "a MEMORY.md line linking ./old.md, an archived memory, moves to the archive" "$PTR|- [Old](./old.md): x" \
   "$(cat "$T/mem/MEMORY.md" "$T/mem/MEMORY-archive.md" 2>/dev/null | paste -sd'|' -)"
 
+# dead-ref reads a tracked top-level directory, a bare script name and a link target too (#548); a fenced line is an example.
+rm -rf "$R/templates" "$R/docs" "$R/hooks" "$R/.claude"; mkdir -p "$R/templates" "$R/docs" "$R/src" "$R/scripts"
+: > "$R/src/keep.ts"; : > "$R/scripts/real.sh"; : > "$R/docs/real.md"; git -C "$R" add -A
+printf 'a `src/deleted.ts`\nb `ghost.sh`\nc [l](../docs/gone.md)\nd `src/keep.ts` `real.sh` [l](../docs/real.md)\n' > "$R/templates/a.md"
+check "a template citing a gone path, script or link is flagged with file and line" \
+  "templates/a.md:1 dead-ref src/deleted.ts $RULE|templates/a.md:2 dead-ref ghost.sh $RULE|templates/a.md:3 dead-ref ../docs/gone.md $RULE" \
+  "$(audit | paste -sd'|' -)"
+printf '`src/live.ts` and `https://x.test/scripts/zzz.sh`\n[a](#x) [m](mailto:a@b.c) [u](https://x.test/p.md) [s](/abs/gone.md) `src/<name>.ts`\n```\n`src/fenced-gone.ts` `fenced.sh` [l](gone.md)\n```\n' > "$R/templates/a.md"
+: > "$R/src/live.ts"; git -C "$R" add -A
+OUT=$(audit); RC=$?
+check "a live path, a URL and a fenced example are not flagged" "0:" "$RC:$OUT"
+# Pass 3 (class markdown-fence-drift): fences follow fence.sh's one rule. A tilde fence and a longer fence holding a
+# shorter delimiter hide their examples; a gone path after the fence closes is still flagged.
+printf '~~~\n`src/tilde-gone.ts`\n~~~\n````\n```\n`src/inner-gone.ts`\n````\n`src/after-gone.ts`\n' > "$R/templates/a.md"
+check "only the gone path outside every fence form is flagged" "templates/a.md:8 dead-ref src/after-gone.ts $RULE" "$(audit)"
+printf 'see `src/deleted.ts`\n' > "$R/templates/a.md"
+check "the doctor's lint call flags the same gone path" "templates/a.md:1 dead-ref src/deleted.ts $RULE" \
+  "$(python3 "$REAL/scripts/instruction-lint.py" --repo "$R" --memory-dir "$T/mem" --global "$T/no-global.md" 2>&1)"
+printf 'a `.test.sh` command and the project'"'"'s `.claude/settings.json` are not this plugin'"'"'s files; `.claude/rules/gone.md` is read\n' > "$R/templates/a.md"
+check "an extension fragment and a project .claude/ runtime file are not flagged; a gone .claude/rules/ path is" \
+  "templates/a.md:1 dead-ref .claude/rules/gone.md $RULE" "$(audit)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

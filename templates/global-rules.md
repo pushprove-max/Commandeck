@@ -30,6 +30,9 @@
   and says why. A test that passes for the fixer does not end the finding: the
   fixer rules on it in the evidence file. A reviewer stays read-only; its fix
   diff is checked by another reviewer, never by its author.
+- A P2 or P3 fix under ten lines may come with its failing test as a fenced
+  diff; a longer fix, a P1 or a design change goes to the implementer. The fix
+  packet lists each reviewer test path under `## Reviewer tests`.
 - A reviewer reads the diff and the brief first, drafts its findings, and only
   then reads the author's evidence, which would anchor the review if read first.
 - A review finding blocks the merge only when normal use would hit the bug,
@@ -55,6 +58,8 @@
   and don't re-read a file you just edited.
 - Keep context small: read line ranges, not whole files, and send a long
   output to a file and read the part you need.
+- A closing reply over about 3,000 characters that names no file path is
+  written to a file instead, and the reply names the path.
 - A code comment says only what the code cannot: the why, a limit and its
   upgrade path, a contract another file relies on, a hazard. Never what the
   next line does, who or which tool wrote or reviewed it, a finding's
@@ -75,6 +80,15 @@
   expected, and a pass claim carries runner totals. A zero diff reported done
   is a failure. Every worker is an Orca pane
   the owner can open; Orca's task list is the dispatch ledger.
+- Main also checks that the worktree head, the main head and `origin/main` are
+  unchanged after a dispatch, that no symlink is staged, and that a pass claim
+  without runner totals gets a focused rerun by main.
+- Author, review and triage-only worktrees never use a build slot. There is no
+  fixed cap on live builds: open slots as the queue needs while memory allows,
+  and prefer independent run-ahead units so no slot waits on a chain. Hand a
+  long integration unit to a cold pane at its first green checkpoint. Record a
+  unit parked on purpose with `unit-hold.sh <unit> hold|release '<reason>'`, so
+  the build review does not count the parked time as stage time.
 - When a `gh` read fails mid-task, print `BLOCKED: GitHub read failed:
   <command>: <first error line>` on a line of its own and stop. Never go on
   from a brief's copy of an issue: main reads that line and decides.
@@ -87,6 +101,9 @@
   continue from your last message." Interrupt a resumable pane before closing
   it; close reviewers after their verdict. Memory, not a pane count, is the
   limit (`config/pane-budget.json`).
+- Never launch an agent by hand with `setsid` or `nohup`; the launcher scripts
+  detach it. A test run goes through the project's script, which carries the
+  memory cap. When a worker must name many test files, run two per invocation.
 
 ## Tests and planning
 
@@ -101,6 +118,11 @@
   code changed since the last full pass, or when a push or merge guard requires
   it. A fix to tooling tests, a scanner allow-list, or a timeout re-runs only
   those tests.
+- A pass never waits for green: a test run still owed when a pass is due starts
+  in the background in the same turn as the pass, and a test that then fails
+  costs that pass. A test killed at its time limit gave no result: rerun that
+  one test once with no other test running; a second timeout stops work on that
+  item and goes to main as one question. Never raise a time limit on your own.
 - An exception, allowlist or exemption entry in a guard or its test stands
   only when the same test proves the alternative it claims, or the entry cites
   an owner ruling id. A comment is not proof.
@@ -121,6 +143,14 @@
   helper or a test that names both sides. Preview the same edit to all of them
   first (a dry run) so none is missed: a text search misses a copy that was
   renamed.
+- One map per unit, explored once. Before dispatch, a map lists for every
+  symbol the unit will change its inbound callers (a symbol tool's
+  find-references), its sibling implementations, and the tables and routes it
+  reaches. The unit, review and design briefs point at that map, and main
+  updates it when a review adds a caller.
+- A script that changes many records pastes its dry-run output into the first
+  review prompt and keeps its decision logic in pure functions a test can call,
+  with `main()` limited to I/O.
 - Pick the smallest change that FULLY solves the problem: no half-built
   features, no extra design.
 - A plan step that adds an abstraction, a config surface, a dependency or a

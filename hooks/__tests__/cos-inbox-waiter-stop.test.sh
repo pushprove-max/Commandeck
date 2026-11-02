@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Self-test for cos-inbox-waiter-stop.sh.
+# Self-test for cos-inbox-waiter-stop.sh and cos-inbox-arm-stop.sh.
 # Run directly: bash hooks/__tests__/cos-inbox-waiter-stop.test.sh
 #
 # Why each case matters: the Chief-of-Staff pane wakes only while its inbox
-# poller (`scripts/cos-watch-inbox.sh`) runs, so a live poller for this
-# pane must pass or the pane can never end a turn. Another pane's poller does
+# poller (`scripts/cos-watch-inbox.sh`) runs. The arm hook (asyncRewake, never
+# blocks) starts one for this pane when none runs, and its exit 2 with the
+# poller's text wakes the pane, so no turn is spent re-arming it (issue 575).
+# A live poller for this pane means no second one. Another pane's poller does
 # not wake this one, and a poller started with no handle may be another
 # project's (the process list is the whole machine's). A live `orchestration
-# check --wait` alone must block: main's sends go to the run, that waiter never
+# check --wait` alone is no poller: main's sends go to the run, that waiter never
 # sees them, and it hid main's messages for hours on 2026-10-11. A command that
 # only mentions the script (an editor, a `cat`) is not a poller and would leave
-# the pane deaf. Every other pane runs this hook on every turn and must never
-# be held, and `stop_hook_active` must pass or the block would loop forever.
+# the pane deaf. The stop ending a wake turn (stop_hook_active) starts the next
+# poller only when the wake left its mark, or the chain would arm with no wake.
+# Every other pane runs both hooks on every turn and must never be held or armed,
+# and `stop_hook_active` must pass the waiter or its block would loop forever.
 # The decisions, alerts and limit watchers are required too: the decisions
 # watcher was never started in a real session and an open owner decision sat
 # unseen. Each one records its pid per project (cos-lib.sh cos_wait), so another
@@ -69,32 +73,90 @@ run() {
   echo "$rc $(jq -r '.decision // "none"' <<<"${out:-{\}}" 2>/dev/null)"
 }
 
+# The arm hook runs from a copy of the plugin whose poller is a stub, so the real inbox is never read.
+PLG=$BOX/plugin; mkdir -p "$PLG/hooks" "$PLG/scripts"
+cp -R "$SOURCE/hooks/lib" "$PLG/hooks/lib"; cp "$SOURCE/hooks/cos-inbox-arm-stop.sh" "$PLG/hooks/"
+cat >"$PLG/scripts/cos-watch-inbox.sh" <<EOF
+#!/usr/bin/env bash
+echo "\$\$ \$*" >>"$BOX/started"
+[ ! -e "$BOX/poller.msg" ] || { cat "$BOX/poller.msg"; exit 0; }
+[ ! -e "$BOX/poller.hang" ] || exec sleep 30
+exit 0
+EOF
+# arm <worktree> <stop_hook_active JSON> [handle] -> "<exit status> <stderr>"; poller starts are logged to $BOX/started.
+arm() {
+  local err rc
+  err=$(printf '{"stop_hook_active":%s}' "$2" \
+    | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$1 ORCA_TERMINAL_HANDLE=${3-$H} \
+      COMMANDECK_REVIEWER= bash "$PLG/hooks/cos-inbox-arm-stop.sh" 2>&1 >/dev/null)
+  rc=$?
+  echo "$rc $err" | tr '\n' ' ' | sed 's/ *$//'
+}
+started() { [ -e "$BOX/started" ] && wc -l <"$BOX/started" | tr -d ' ' || echo 0; }
+fresh() { rm -f "$BOX/started" "$BOX/poller.msg" "$BOX/poller.hang" "$KEY.inbox-woke"; }
+
 P=/x/plugin/scripts/cos-watch-inbox.sh
 procs ""
-check "Chief-of-Staff with no poller blocks" "0 block" "$(run "$COS" false)"
-OUT=$(jq -cn '{stop_hook_active:false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH \
-  CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H bash "$HOOK" 2>/dev/null | jq -r .reason)
-check "the block names the poller and this pane's handle" 1 "$(case $OUT in *"/cos-watch-inbox.sh $H"*) echo 1;; *) echo 0;; esac)"
-check "the block says to run it in the background" 1 "$(case $OUT in *background*) echo 1;; *) echo 0;; esac)"
-check "the block says why check --wait is not enough" 1 "$(case $OUT in *"check --wait"*) echo 1;; *) echo 0;; esac)"
+check "Chief-of-Staff with no poller and every other watcher up is not blocked" "0 none" "$(run "$COS" false)"
+fresh
+check "a stop with no inbox poller starts one for this pane and does not block" "0 1 $H" \
+  "$(arm "$COS" false | cut -d' ' -f1) $(started) $(cut -d' ' -f2- "$BOX/started")"
 
-procs "bash $P term_other-2222" "bash $P ${H}2"
-check "a poller for another pane does not count" "0 block" "$(run "$COS" false)"
+fresh; echo "main: build done" >"$BOX/poller.msg"
+OUT=$(arm "$COS" false)
+check "the poller's message comes back on stderr with exit 2" "2 1" \
+  "${OUT%% *} $(case $OUT in *"main: build done"*) echo 1;; *) echo 0;; esac)"
+check "and the wake leaves the mark" "yes" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
 
-procs "/bin/zsh -c orca-ide orchestration check --terminal $H --json" \
-  "orca-ide orchestration check --terminal $H --wait --types worker_done,question --json" \
-  "node /x/orca-ide orchestration check --terminal $H --wait --timeout-ms 600000 --json"
-check "a live check --wait for this pane alone blocks" "0 block" "$(run "$COS" false)"
+fresh
+check "a poller that ends with no message wakes nobody" "0 1" "$(arm "$COS" false | cut -d' ' -f1) $(started)"
+check "and leaves no mark" "no" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
 
-procs "cat $P" "vim $P $H" "/bin/zsh -c tail -f /tmp/log # $P"
-check "a command that only mentions the poller script blocks" "0 block" "$(run "$COS" false)"
+fresh; procs "bash $P $H"
+check "a stop with this pane's poller already running starts no second one" "0 0" "$(arm "$COS" false | cut -d' ' -f1) $(started)"
+procs "$P $H"; fresh
+arm "$COS" false >/dev/null
+check "a poller run directly counts" "0" "$(started)"
 
-procs "bash $P $H"
-check "a live poller with this pane's handle passes" "0 none" "$(run "$COS" false)"
-procs "/bin/bash $P"
-check "a live poller with no handle argument, whose pane is unknown, blocks" "0 block" "$(run "$COS" false)"
-procs "$P $H"
-check "a poller run directly passes" "0 none" "$(run "$COS" false)"
+fresh; procs "bash $P term_other-2222" "bash $P ${H}2"
+arm "$COS" false >/dev/null
+check "a poller for another pane does not count" 1 "$(started)"
+fresh; procs "cat $P" "vim $P $H" "/bin/zsh -c tail -f /tmp/log # $P" "/bin/bash $P" \
+  "orca-ide orchestration check --terminal $H --wait --types worker_done,question --json"
+arm "$COS" false >/dev/null
+check "a command that only mentions the script, or a poller with no handle, does not count" 1 "$(started)"
+
+fresh; procs ""; : >"$KEY.inbox-woke"
+check "the stop after a wake starts the next poller" "0 1" "$(arm "$COS" true | cut -d' ' -f1) $(started)"
+check "and clears the mark" "no" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
+check "a second stop of the same chain, with no wake before it, starts none" "0 1" "$(arm "$COS" true | cut -d' ' -f1) $(started)"
+fresh
+for A in '"true"' 1 '"yes"' null; do
+  arm "$COS" "$A" >/dev/null
+done
+check "a stop_hook_active that is not JSON true reads as not active" 4 "$(started)"
+fresh; : >"$KEY.inbox-woke"; printf 'junk{' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+  bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1
+check "junk input reads as not active" 1 "$(started)"
+
+# The hook ends the poller it started when the harness stops it.
+fresh; : >"$BOX/poller.hang"
+printf '{"stop_hook_active":false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+  bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1 &
+HPID=$!
+for _ in $(seq 50); do [ "$(started)" = 1 ] && break; sleep 0.1; done
+PPID_=$(cut -d" " -f1 "$BOX/started")
+kill -TERM "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null; sleep 0.3
+check "stopping the hook ends the poller it started" "gone" "$(kill -0 "${PPID_:-0}" 2>/dev/null && echo alive || echo gone)"
+fresh
+
+for who in "AGENT_KIND=codex" "COMMANDECK_REVIEWER=1"; do
+  printf '{"stop_hook_active":false}' | env "$who" HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+    bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1
+done
+arm "$WT" false >/dev/null; arm "$MAIN" false >/dev/null; arm "$COS" false "" >/dev/null
+check "a non-relay pane, a reviewer, Codex and a pane with no handle start none" 0 "$(started)"
+fresh
 
 procs "bash $P $H"
 for w in decisions alerts limit check; do
@@ -113,10 +175,11 @@ check "another project's alerts watcher does not count" "0 block" "$(run "$COS" 
 OTHER=$BOX/b/main; git init -q "$OTHER"; up decisions alerts limit check
 for f in "$KEY".*.pid; do mv "$f" "$(key "$OTHER").${f#"$KEY".}"; done
 check "the same-named project's watchers do not count for this one" "0 block" "$(run "$COS" false)"
-up decisions alerts limit check
+up alerts limit check
 ln -s "$SOURCE" "$BOX/home/.commandeck/plugin"; procs ""
 OUT=$(jq -cn '{stop_hook_active:false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H bash "$HOOK" 2>/dev/null | jq -r .reason)
-check "with setup's stable link in place the block names the poller through it" 1 "$(case $OUT in *"bash $BOX/home/.commandeck/plugin/scripts/cos-watch-inbox.sh $H"*) echo 1;; *) echo 0;; esac)"
+check "with the inbox poller missing and the decisions watcher down, the stop blocks naming only the decisions watcher" "1 0" \
+  "$(case $OUT in *"bash $BOX/home/.commandeck/plugin/scripts/cos-watch-decisions.sh"*) echo 1;; *) echo 0;; esac) $(case $OUT in *cos-watch-inbox*|*alerts*|*limit*) echo 1;; *) echo 0;; esac)"
 rm "$BOX/home/.commandeck/plugin"
 
 procs ""

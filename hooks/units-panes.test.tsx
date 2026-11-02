@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { WS, SCR, NOW, DATA, STATE, unit, snap, world, start, units, draw, quiet, state, DONE, band } from './units-world'
+import { bandModel, paneModel, parseSnapshot } from './units-sources'
+import type { Line, State } from './units-sources'
 
 // The views over a snapshot: layout, toasts, placeholders and the order polls publish in.
 
@@ -21,7 +23,7 @@ test('overlapping polls publish in the order they started', async ($, on) => {
   await Promise.race([fast, w.clock.advance(1)])
   release()
   await Promise.all([slow, fast])
-  expect((await draw($, 'AbovePrompt')).join('')).toContain('● u Building r2')
+  expect((await draw($, 'AbovePrompt')).join('')).toContain('◐ u Building r2')
   expect(await units($)).toContain('r2 NO-GO')
   expect(w.toasts).toEqual(['u: verdict 2 NO-GO'])
 })
@@ -30,7 +32,7 @@ test('a Builder pane at its prompt shows red, a working one does not', async ($,
   world(on, 'main', { [DATA]: snap([unit('idle', { agents: 'claude:done' }), unit('busy')]) })
   await start($, 'main')
   const text = await units($)
-  expect(text).toMatch(/● idle +Building\n.*\n +\$1\.00\n  ⚠ at its prompt/)
+  expect(text).toMatch(/○ idle · model unknown +Building │\n.*\n.* +\$1\.00 │\n│   ⚠ at its prompt/)
   expect(text.match(/⚠ at its prompt/g)).toHaveLength(1)
 })
 
@@ -52,22 +54,24 @@ test('the pane shows steps, issues, review, costs and today\'s merges, and nothi
   await start($, 'main')
   const lines = (await units($)).split('\n')
   const at_ = (s: string) => lines.findIndex(l => l.includes(s))
-  const b = at_('● b')
-  expect(lines[0]).toMatch(/^UNITS +today \$22\.96$/)
-  expect(lines[b]).toMatch(/^● b +Fixing r2 · 48m$/)
-  expect(lines.slice(b + 1, b + 5)).toEqual([
-    '  Plan ✓  Judges ✓  Build ✓  Review ◐  Merge ○',
-    '  ██████████  6 of 6 issues built',
-    expect.stringMatching(/^  r1 NO-GO · 2 P2 +\$3\.75$/),
-    '  plan $1.00 · build $2.00 · review $0.50 · fix $0.25',
+  const b = at_('◐ b')
+  const inner = (from: number, n: number) => lines.slice(from, from + n).map(l => l.replace(/ +│$/, ''))
+  expect(lines[0]).toMatch(/^UNITS · 1 planning · 1 fixing +today \$22\.96$/)
+  expect(lines[b]).toMatch(/^│ ◐ b · model unknown +Fixing r2 · 48m │$/)
+  expect(inner(b + 1, 4)).toEqual([
+    '│   Plan ✓  Judges ✓  Build ✓  Review ◐  Merge ○',
+    '│   ██████████  6 of 6 issues built',
+    expect.stringMatching(/^│   r1 NO-GO · 2 P2 +\$3\.75$/),
+    '│   plan $1.00 · build $2.00 · review $0.50 · fix $0.25',
   ])
-  const p = at_('● p')
-  expect(lines[p]).toMatch(/^● p +Planning · 12m$/)
-  expect(lines.slice(p + 1, p + 3)).toEqual(['  Plan ✓  Judges ◐  Build ○  Review ○  Merge ○', '  #12 #34'])
+  const p = at_('◐ p')
+  expect(lines[p]).toMatch(/^│ ◐ p · model unknown +Planning · 12m │$/)
+  expect(inner(p + 1, 2)).toEqual(['│   Plan ✓  Judges ◐  Build ○  Review ○  Merge ○', '│   #12 #34'])
   expect(lines[at_('MERGED TODAY')]).toMatch(/^MERGED TODAY  1 +\$19\.21$/)
-  expect(lines[at_('✓ m')]).toMatch(/^✓ m +\d\d:\d\d +\$19\.21$/)
-  expect(lines.join('\n')).not.toMatch(/old|none|unknown|nothing|git -C|\/\?|MERGING/)
-  expect(lines.every(l => l.length <= 56)).toBe(true)
+  expect(lines[at_('✓ m')]).toMatch(/^✓ m +\d\d?:\d\d [AP]M +\$19\.21$/)
+  // `· model unknown` is the card's text for a unit with no live seat; nothing else may say unknown.
+  expect(lines.join('\n').replace(/ · model unknown/g, '')).not.toMatch(/old|none|unknown|nothing|git -C|\/\?|MERGING/)
+  expect(lines.every(l => l.length <= 100)).toBe(true)
 })
 
 
@@ -84,9 +88,9 @@ test('issues built count the evidence while building and every issue once the bu
   expect(out).toContain('1 of 4 issues built')
   expect(out).toContain('2 of 2 issues built')
   // The stage dashboard.sh writes for a review round is 'review'.
-  const r = lines.findIndex(l => l.startsWith('● r'))
-  expect(lines[r]).toMatch(/Review r2$/)
-  expect(lines.slice(r + 1, r + 3)).toEqual(['  Plan ✓  Judges ✓  Build ✓  Review ◐  Merge ○', '  ██████████  3 of 3 issues built'])
+  const r = lines.findIndex(l => l.startsWith('│ ◐ r '))
+  expect(lines[r]).toMatch(/Review r2 │$/)
+  expect(lines.slice(r + 1, r + 3).map(l => l.replace(/ +│$/, ''))).toEqual(['│   Plan ✓  Judges ✓  Build ✓  Review ◐  Merge ○', '│   ██████████  3 of 3 issues built'])
 })
 
 
@@ -159,4 +163,48 @@ test('a missing, broken or oversize snapshot or log shows its placeholder', asyn
   w.files.set(DATA, { text: 'x'.repeat(4_100_000), at: NOW + 1 })
   await w.clock.advance(5000)
   expect(await units($)).toContain('units: snapshot too big')
+})
+
+// The snapshot's fields drawn as cards: stage colour, the live seat's model and effort, the working mark (host Part 1).
+const T0 = Date.UTC(2026, 10, 1, 16, 0, 0)
+const iso = (minAgo: number) => new Date(T0 - minAgo * 60_000).toISOString()
+const card = (unit: string, extra: object = {}) => ({ unit, stage: 'building', agents: 'claude:working', ageSec: 360, stageSince: iso(4), builder: { cost: { stages: [{ stage: 'building', usd: 2 }] } }, ...extra })
+const view = (inFlight: object[], project: object = {}, top: object = {}) =>
+  `window.DASH = ${JSON.stringify({ updatedAt: iso(0), home: 'p', ...top, projects: { p: { path: '/repo', units: { inFlight, finishedBuilds: [] }, needsOwner: { decisions: [] }, ...project } } })};`
+const stateOf = (text: string): State => ({ now: T0, snap: parseSnapshot(text, T0, 'p'), merges: [], tests: [], notes: { merges: [], tests: [] } })
+const txt = (l: Line) => l.map(x => x.t).join('')
+
+test('a unit card shows stage colour, model, effort and working mark', () => {
+  const s = stateOf(view([
+    card('x', { seatRole: 'builder', seats: [{ role: 'builder', model: 'claude-opus-5-5', effort: 'medium' }] }),
+    card('p', { stage: 'planning', agents: '', builder: null }),
+    card('r', { stage: 'review', seatRole: 'reviewer', seats: [{ role: 'reviewer', model: 'gpt-6.1-sol', effort: 'high' }] }),
+  ]))
+  const m = paneModel(s, 60)
+  const x = m.findIndex(l => txt(l).includes(' x · '))
+  // The frame, the card's first row and its right border take the stage colour; a planning unit is another colour.
+  expect([m[x - 1][0].c, m[x][0].c, m[x].at(-1)?.c]).toEqual(['suggestion', 'suggestion', 'suggestion'])
+  expect(txt(m[x])).toMatch(/^│ ◐ x · Opus 5\.5 · medium +Building · 4m │$/)
+  const p = m.findIndex(l => txt(l).includes(' p · '))
+  expect([m[p][0].c, txt(m[p]).slice(0, 4)]).toEqual(['planMode', '│ ○ '])
+  // A unit with no live seat says so, dim, and a Codex seat's model is shown as recorded.
+  const dim = m[p].find(seg => seg.t.includes('model unknown'))
+  expect([txt(m[p]).includes('○ p · model unknown'), dim?.d]).toEqual([true, true])
+  expect(txt(m.find(l => txt(l).includes(' r · '))!)).toContain('◐ r · gpt-6.1-sol · high ')
+})
+
+test('a missing or junk field joins the unread note naming it', () => {
+  const junk = stateOf(view([card('x', { stageSince: 'junk' })], { needsOwner: { decisions: [{ id: 'q', question: 'one\n"two"' }] } }, { limit: { usedPct: '58', resetsAt: 'x' } }))
+  expect([junk.snap.limit, junk.snap.asks[0].askedAt, junk.snap.asks[0].question, junk.snap.rows[0].stageSince]).toEqual([null, null, 'one "two"', null])
+  expect(junk.snap.unread).toEqual(['7d limit: unreadable'])
+  const shown = [...paneModel(junk, 72).map(txt), ...bandModel(junk, 120).map(txt)].join('\n')
+  expect(shown).toContain('CANNOT READ\n⚠ 7d limit: unreadable')
+  expect(shown).not.toMatch(/NaN|undefined|null/)
+  const unread = (project: object, top: object = {}) => parseSnapshot(view([], project, top), T0, 'p').unread
+  expect(unread({ needsOwner: undefined })).toEqual(['7d limit: not in the snapshot', 'decisions: not in the snapshot'])
+  expect(unread({ needsOwner: { decisions: null }, sources: { decisions: { error: 'ledger malformed' } } })).toContain('decisions: ledger malformed')
+  // A project that never kept a ledger has nothing waiting: that is no problem to name.
+  expect(unread({ needsOwner: { decisions: null }, sources: { decisions: { error: 'no ledger at /r/decisions.jsonl' } } })).toEqual(['7d limit: not in the snapshot'])
+  expect(unread({ units: { inFlight: [], finishedBuilds: 'x' } })).toContain('finished builds: unreadable')
+  expect(parseSnapshot(view([], {}, { updatedAt: 'nope' }), T0, 'p').unread).toContain('updated at: unreadable')
 })

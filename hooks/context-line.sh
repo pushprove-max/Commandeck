@@ -13,6 +13,7 @@
 # goes on in a fresh session of the same pane.
 input=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
+# Retire when: zero fires across 90 days from a project that installs the plugin, with main sessions past 200K logged
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then
@@ -24,7 +25,7 @@ if [ "$(git rev-parse --git-dir 2>/dev/null)" != "$(git rev-parse --git-common-d
   TOP=$(git rev-parse --show-toplevel); UNIT=${TOP##*/}; HAND=$TOP/.claude/briefs/$UNIT-handoff.md
   # The seat record takes the new session's id, so main-watch follows the new log; no record, no argument.
   REC=$(pp_run_file 2>/dev/null) && [ -f "${REC%/*}/seat-$UNIT-builder.txt" ] && REC=" $(printf '%q' "${REC%/*}/seat-$UNIT-builder.txt")" || REC=
-  echo "CONTEXT $((ctx / 1000))K is over this Builder's $((LINE / 1000))K clear line: finish this step, then write $HAND for a fresh session of this pane: first the line 'Read .claude/briefs/$UNIT.md, then go on from here.', then decisions, unresolved findings, current commit, test evidence and what is left. Then start this in the background (run_in_background) and end the turn: bash $(printf '%q' "$(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)")/builder-fresh-round.sh ${ORCA_TERMINAL_HANDLE:-<the handle of this pane>} $(printf '%q' "$HAND")$REC"
+  echo "CONTEXT $((ctx / 1000))K is over this Builder's $((LINE / 1000))K clear line: finish this step, then write $HAND for a fresh session of this pane: first the line 'Read .claude/briefs/$UNIT.md, then go on from here.', then four non-empty lines -- Unit: (this unit and the brief .claude/briefs/$UNIT.md), Cut: (the cut in hand), Tests: (what ran, its result, and the evidence file .claude/briefs/$UNIT-evidence.md), Open findings: (unresolved review findings, or none) -- then decisions, current commit and what is left. Then start this in the background (run_in_background) and end the turn: bash $(printf '%q' "$(cd "${BASH_SOURCE[0]%/*}/../scripts" && pwd)")/builder-fresh-round.sh ${ORCA_TERMINAL_HANDLE:-<the handle of this pane>} $(printf '%q' "$HAND")$REC"
   exit 0
 fi
 # A /handoff whose restart did not finish keeps its marker (context-clear-restart.sh spends it only once a
@@ -41,6 +42,16 @@ TPL=$(cd "$(dirname "$0")/../templates" && pwd)
 . "$(dirname "$0")/lib/context-size.sh"
 ctx=$(context_size "$transcript") || exit 0
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || exit 0
+# #532: past the line only, so Orca is asked once a crossing. Another session in main's checkout (an automation) is not
+# main and is told nothing; a coordinator Orca cannot name is not proof of main either.
+. "${BASH_SOURCE[0]%/*}/lib/project.sh" 2>/dev/null
+pp_is_main_pane; mp=$?
+[ "$mp" = 1 ] && exit 0
+if [ "$mp" != 0 ]; then
+  HOOK_FIRE_ADVISE=1
+  echo "context-line: run $PP_MAIN_RUN has $([ "$mp" = 3 ] && echo "no coordinator" || echo "an unknown coordinator (Orca's run list did not answer)"), so this pane is not asked to clear"
+  exit 0
+fi
 HOOK_FIRE_ADVISE=1
 # Issue 275: pane-budget-gate.sh lets main past its line write only the checkpoint.
 # A first run has no checkpoints folder; a marker not written lets every tool through, so that is said.

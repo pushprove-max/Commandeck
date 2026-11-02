@@ -20,6 +20,7 @@
 # cannot inspect a Write/Edit payload.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero advises across 90 days of rows from a project that installs the plugin, with Edit and Write calls logged
 
 fail() {
   HOOK_FIRE_ADVISE=1

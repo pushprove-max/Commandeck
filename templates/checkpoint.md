@@ -18,17 +18,13 @@ resume block carries, prints them current.
 - <marker or verdict> from <pane> -> <the exact command main runs when it lands>
 
 ## Rulings this session not yet in memory or a rule file
-Sweep first: run `bash scripts/repeat-report.sh` and turn its top
-items into fixes. Then every correction or ruling from the owner this session, and every
+Every correction or ruling from the owner this session, and every
 friction main hit twice, is saved to memory or a rule, or fixed, BEFORE this
 is written. List here only what could not be saved yet, and why.
 - <ruling, who, when>
 
 ## Queue (in order)
 - Q-<n> <unit not started, with its blocker>; n is the next free number, never reused, and Q-<n> is the item's key however it is reworded
-
-## Todo list (the owner's on-screen checklist; the resumed main rebuilds it first)
-- [x|>| ] <one step each: done, in progress, next; same wording as the live list>
 
 
 ## Gotchas learned this session
@@ -50,7 +46,7 @@ session resumed from, or "none" on a fresh start. The carry-over check follows
 that file and its own references.
 
 ## Closed since last checkpoint
-Every open item (Waiting on, unsaved rulings, Queue, unchecked or > Todo) of
+Every open item (Waiting on, unsaved rulings, Queue) of
 the checkpoint this session resumed from stays open above, is carried by
 reference, or is closed here; the restart is refused otherwise. A
 carried item that is done is closed here, verbatim, with what closed it: one
@@ -78,9 +74,6 @@ line per item, each with its own reason (`Q-<n> -- <reason>` closes a Queue item
   `git -C <main> log --oneline main..<unit-branch>`. A seat commits its work,
   so `git -C <wt> diff --stat` and the board's dirty count are both empty on a
   finished unit and read as "nothing was done".
-- TODO LIST: recreate only the unfinished items, `[ ]` next and `[>]` in progress (status in_progress), every TaskCreate in ONE reply; `[x]` items stay done in this checkpoint and are not recreated. Later updates ride in the same reply as the work they record. A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint's Closed section keeps it.
-  Load the tools via ToolSearch `select:TaskCreate,TaskUpdate,TaskList`
-  (`templates/main-session.md`, Show the owner a checklist).
 - Nothing to arm: main-watch.sh posts every finished, unhandled item
   and Orca's nudge wakes main. On a nudge, drain in the foreground with
   `bash scripts/orca-wait.sh`, and close an item's task once handled.

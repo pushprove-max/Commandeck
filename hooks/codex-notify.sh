@@ -16,6 +16,7 @@ HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # Codex launches this outside the dispatcher, so its fire-log row is Codex's.
 AGENT_KIND=codex
 . "$HERE/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$PAYLOAD" Notify
+# Retire when: Orca wakes the main session on a Codex turn end itself, shown by 90 days of wakes with zero fires here
 # The project's own run file, never Orca's machine-wide one (lib/project.sh).
 RUN_FILE=$(. "$HERE/lib/project.sh" && pp_run_file) || exit 0
 [ -s "$RUN_FILE" ] || exit 0

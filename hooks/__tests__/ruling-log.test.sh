@@ -27,7 +27,7 @@ check "a prompt whose first word is a root folder is the owner's words too" 3 "$
 prompt "/artifacts is the output directory to create"
 check "a path that does not exist yet is the owner's words too" 4 "$(rows)"
 # The handoff's resume prompt is typed by a script: logged void, it answers no open ask.
-prompt "resume from the checkpoint /x/cp.md (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from /x/cp.md; the old pane term_a closes now."
+prompt "resume from the checkpoint /x/cp.md (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from /x/cp.md; the old pane term_a closes now."
 check "the handoff's resume prompt, with its first-line instruction, is machine text: not logged" 4 "$(rows)"
 
 # The log holds the owner's rulings: machine text and prompts typed into any other pane are not logged. A reviewer's
@@ -69,6 +69,13 @@ prompt "Export Batch: yes, ship it"
 check "a prompt naming an ask by its id without the day closes that one only" "retry-cap u1-msg_1" "$(open)"
 prompt "retry-cap no, and u1-msg_1 the new one"
 check "a Builder's question waiting on main stays open whatever the owner types" "u1-msg_1" "$(open)"
+# Issue 569: a Builder's question bound for the owner (no waitsOn) is closed by the owner's chat reply naming it; the hook only
+# records, so the unit gets nothing from it (main sends the owner's words with answer-worker.sh and the row id).
+mkdir -p "$T/ws/u2"; printf '#!/usr/bin/env bash\necho sent >> "%s/aw.log"\n' "$T" > "$T/aw"; chmod +x "$T/aw"
+dec add u2-msg_9 "Approve the schema migration for u2?" none "u2 asks"
+(cd "$T/p" && COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_ANSWER_WORKER="$T/aw" jq -n '{hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "u2-msg_9: yes, approve it"}' | COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_ANSWER_WORKER="$T/aw" bash "$HOOK" >/dev/null 2>&1)
+check "an owner's chat reply naming a Builder's question closes the row and sends the unit nothing" "0 0" \
+  "$(open | grep -c u2-msg_9) $([ -e "$T/aw.log" ] && echo 1 || echo 0)"
 
 # Issue 232: a picker answer that came back empty read as a ruling of nothing, and main went on. The hook says to
 # ask once more as a single question, logs no ruling, and leaves the decision open; so does the decoy's label.

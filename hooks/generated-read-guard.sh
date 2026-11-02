@@ -13,16 +13,19 @@
 # `rg`, `grep`, a shorter `head` or `tail`, `sed -n 'a,bp'`, `sed Nq`, `jq <filter>` and a ranged Read pass.
 #
 # Saved output: a shell command with a word under */tool-results/* in a stage that is no echo or printf opens a
-# permission prompt no person is there to answer. The Read and Grep tools read it with none.
+# permission prompt no person is there to answer. The Read and Grep tools read it with none. A bounded query passes:
+# rg/grep with `-m N`, head/tail with `-n N`, N 1-500, over one regular file named literally; cat, sed, an absent or
+# junk bound, and a glob, directory or second file (the cap counts per file) still block.
 #
 # Issue 509 was a host guard that refused a word named in an echo. Here a word prefilter only picks whether to
 # run the lexer (lib/shell_reads.py); the lexer decides, and an echo reads nothing. A lexer that fails reads as no
-# paths: this hook is `onFailure: block`, and a crash must not stop every Bash call.
+# paths, so a crash never refuses a Bash call.
 #
 # A tripwire, not a boundary: it judges the command text, so a path held in a variable or read by a script the
 # command runs passes. Self-test: bash hooks/__tests__/generated-read-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin (bounded reads pass)
 set -uo pipefail
 HERE=${BASH_SOURCE[0]%/*}
 
@@ -49,13 +52,13 @@ refuse_saved() { # $1 = path
   exit 2
 }
 
-TOOL=$(jq -r '.tool_name // empty' <<<"$INPUT" 2>/dev/null)
-case "$TOOL" in
+# One jq start for the payload's four fields. read merges the tabs of an empty field and would shift the next one up,
+# so an absent limit is `-`; the offset defaults to 0 as before, so a limit with no offset is a whole read from line 1.
+IFS=$'\t' read -r TOOL LIMIT OFFSET FILE < <(jq -r '[(.tool_name // "-"), (.tool_input.limit // "-"), (.tool_input.offset // 0), (.tool_input.file_path // "")] | join("\t")' <<<"$INPUT" 2>/dev/null)
+[ "${LIMIT-}" = "-" ] && LIMIT=""
+case "${TOOL-}" in
   Read)
-    FILE=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")
     [ -f "$FILE" ] || exit 0
-    LIMIT=$(jq -r '.tool_input.limit // empty' <<<"$INPUT")
-    OFFSET=$(jq -r '.tool_input.offset // 0' <<<"$INPUT")
     WHOLE=0
     if [ -z "$LIMIT" ]; then WHOLE=1
     elif [[ $LIMIT =~ ^[0-9]+$ && $OFFSET =~ ^[0-9]+$ ]] && [ "$OFFSET" -le 1 ] && [ "$LIMIT" -ge "$(wc -l < "$FILE")" ]; then WHOLE=1
@@ -67,10 +70,12 @@ case "$TOOL" in
     CWD=$(jq -r '.cwd // empty' <<<"$INPUT")
     CWD=${CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}
     [[ $CMD =~ (cat|nl|tac|less|more|bat|awk|sed|head|tail|jq|cut|sort|uniq|od|xxd|strings|column|grep|rg|json\.tool|show|cat-file|tool-results) ]] || exit 0
-    while IFS=$'\t' read -r KIND ABS; do
+    while IFS=$'\t' read -r KIND ABS _ BOUND; do
       [ -n "${ABS-}" ] || continue
       case "$KIND" in
-        saved) refuse_saved "$ABS" ;;
+        saved) # a rg/grep -m N or head/tail -n N of 1-500 lines is the bounded read; the lexer gives `-` for any other shape
+          [[ ${BOUND-} =~ ^[0-9]{1,4}$ ]] && [ "$((10#$BOUND))" -ge 1 ] && [ "$((10#$BOUND))" -le 500 ] && continue
+          refuse_saved "$ABS" ;;
         dump) if REL=$(generated_rel "$ABS"); then refuse_generated "$REL"; fi ;;
       esac
     done < <(python3 -I "$HERE/lib/shell_reads.py" "$CMD" "$CWD" 2>/dev/null) ;;

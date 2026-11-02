@@ -3,6 +3,7 @@
 # never asks serena.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: no project turns on the strict tier in 90 days of rows
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')

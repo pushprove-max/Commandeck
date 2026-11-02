@@ -69,6 +69,15 @@ check "a final after a NO-GO with no evidence and no test command lists all thre
 $(grep -c "^- pass 14 ended NO-GO, and .* has no usable '## New code checked (pass 14)' section" "$TMP/err") $(grep -c '^- fullSuiteBeforeFinal is on' "$TMP/err") $(git -C "$W" rev-parse HEAD)"
 cfg 'del(.fullSuiteBeforeFinal)'; cfg ".testCommand = \"bash $TMP/suite-red.sh\""
 
+# #547 #551 (D29): one smaller-change ask is in LENS, which every pass kind carries; it is asked in the first pass (r1,
+# adversarial) and again in the closing pass (r14, final), and a yes must name the change, never cut scope.
+check "the adversarial pass prompt asks whether a smaller change fully solves the problem" 1 \
+  "$(grep -c 'Is there a smaller change that fully solves the problem?' "$B/$U-r1-prompt-1.md")"
+check "the closing pass prompt carries the smaller-change question" 1 \
+  "$(grep -c 'Is there a smaller change that fully solves the problem?' "$B/$U-r14-prompt-1.md")"
+check "the pass ask makes a yes name the smaller change and why it solves it" "1 1" \
+  "$(grep -c 'A yes is a finding that names the smaller change and why it fully solves the problem' "$B/$U-r14-prompt-1.md") $(grep -c 'never a reason to cut scope the problem needs' "$B/$U-r14-prompt-1.md")"
+
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

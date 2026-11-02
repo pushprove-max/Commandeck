@@ -67,5 +67,56 @@ STOP=$(cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin2:$P
   COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" --full 2>&1 | grep '^  u1 builder:')
 check "a stopped Builder shows its newest report, verdict, kind and age" "1" \
   "$(grep -c '^  u1 builder: newest report u1-r12-reports.md: GO (review), 1[12][0-9] min ago$' <<<"$STOP")"
+
+# #532: board.sh binds whoever calls it, and in the main checkout only a git-dir check stood between an Orca automation
+# at the repo root and the run. Only the run's coordinator is main: it binds as before and records itself in
+# main-pane.txt; a second pane binds nothing, rewrites nothing, and a fresh main whose old pane is closed (or a run with
+# no coordinator) is told the run-use line instead, because only main's own explicit run-use proves a pane is main.
+mkdir -p "$T/bin3"
+cat > "$T/bin3/orca-ide" <<'EOF'
+#!/bin/sh
+D=${COMMANDECK_SCRATCH%/*}
+echo "$*" >> "$D/orca3.log"
+case "$1 $2" in
+  "orchestration run-current") cat "$D/run-current" 2>/dev/null || echo '{}' ;;
+  "orchestration run-list") cat "$D/run-list" 2>/dev/null || exit 1 ;;
+  "terminal list") cat "$D/term-list" 2>/dev/null || exit 1 ;;
+  "orchestration run-use") echo '{"ok":true}' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/bin3/orca-ide"
+S3=$T/d3/scratch; mkdir -p "$S3"
+mb() { rm -f "$T/d3/orca3.log" "$S3/main-pane.txt"; echo "$RUNFILE" > "$S3/current-run"
+  (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_RUN HOME="$T/home" PATH="$T/bin3:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$S3" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= ORCA_TERMINAL_HANDLE=me BOARD_UNCUT=1 bash "$REAL/scripts/board.sh" 2>&1); }
+runlist() { printf '{"result":{"runs":[{"id":"run_a","coordinator_handle":%s}]}}\n' "$1" > "$T/d3/run-list"; }
+termlist() { printf '{"result":{"terminals":[%s]}}\n' "$1" > "$T/d3/term-list"; }
+used() { grep -c '^orchestration run-use' "$T/d3/orca3.log" 2>/dev/null || true; }
+RUNFILE=run_a; rm -f "$T/d3/run-current"
+runlist '"me"'; termlist '{"handle":"me"}'; OUT=$(mb)
+check "board.sh in the run's coordinator pane binds as before and writes main-pane.txt" "1:handle=me" \
+  "$(grep -c '^BOUND this terminal to run_a' <<<"$OUT"):$(cat "$S3/main-pane.txt" 2>/dev/null)"
+# Orca's current run moved to another run: a second pane must not pull the run file along with it.
+printf '{"result":{"run":{"id":"run_b"}}}\n' > "$T/d3/run-current"
+runlist '"other"'; termlist '{"handle":"other"},{"handle":"me"}'; OUT=$(mb)
+check "board.sh in a second pane neither binds the run nor rewrites the run file" "0:run_a:no:1" \
+  "$(used):$(cat "$S3/current-run"):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -c "^not main: the run's coordinator is other" <<<"$OUT")"
+rm -f "$T/d3/run-current"
+runlist '"old"'; termlist '{"handle":"me"}'; OUT=$(mb)
+check "a fresh main whose old coordinator pane is closed is told the run-use line and neither binds nor writes main-pane.txt" "0:no:1" \
+  "$(used):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -cF 'THIS TERMINAL IS NOT BOUND: run run_a has no live coordinator (old); if this pane is main: orca-ide orchestration run-use --id run_a' <<<"$OUT")"
+runlist '""'; termlist '{"handle":"me"}'; OUT=$(mb)
+check "a fresh main on a run with no coordinator is told the run-use line and neither binds nor writes main-pane.txt" "0:no:1" \
+  "$(used):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -cF 'THIS TERMINAL IS NOT BOUND: run run_a has no live coordinator (none); if this pane is main: orca-ide orchestration run-use --id run_a' <<<"$OUT")"
+# The extra rule: an automation (or any pane) in the main folder never claims the run, even with the old pane gone and
+# Orca's run-current empty -- the one case that used to bind it.
+runlist '"old"'; rm -f "$T/d3/term-list"; OUT=$(mb)
+check "with the terminal list failing, a second pane still binds nothing and names the coordinator" "0:no:1" \
+  "$(used):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -c "^not main: the run's coordinator is old" <<<"$OUT")"
+rm -f "$T/d3/run-list"; OUT=$(mb)
+check "with the run list failing, board.sh binds nothing and names the coordinator unknown" "0:no:1" \
+  "$(used):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -c "^not main: the run's coordinator is unknown" <<<"$OUT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

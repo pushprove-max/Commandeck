@@ -216,6 +216,14 @@ else
   echo "NOT RUN: the serena-bridge.py cases need the Python behind an installed serena (none on this host)"
 fi
 
+# D26 (#540): the pane-budget gate skips its server check for Serena's read-only tools and the Codex wrapper enables only
+# those same tools; one list drifting from the other would leave a read tool checked or an edit tool let through.
+# Name parity only: stubs here prove no connection (A9's live Codex seat does).
+GATE_NAMES=$(grep -o 'mcp__serena__[a-z_]*' "$REAL/hooks/pane-budget-gate.sh" | sed 's/^mcp__serena__//' | sort -u | paste -sd, -)
+CODEX_NAMES=$(grep -o 'enabled_tools=\[[^]]*\]' "$REAL/scripts/codex-no-helpers/codex" | grep -o '[a-z_]*' | grep -vx enabled_tools | sort -u | paste -sd, -)
+check "the Codex wrapper lists the same six read-only Serena tools as the gate" \
+  "find_declaration,find_implementations,find_referencing_symbols,find_symbol,get_diagnostics_for_file,get_symbols_overview:$CODEX_NAMES" "$GATE_NAMES:$CODEX_NAMES"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

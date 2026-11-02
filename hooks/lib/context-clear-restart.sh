@@ -74,7 +74,7 @@ sleep "${COMMANDECK_RESTART_SETTLE_S:-3}"
 # The restart is complete only once the replacement ACCEPTS the prompt. A refused
 # send used to be logged as a success and the old pane closed anyway, which
 # destroyed the only pane holding the context.
-prompt="resume from the checkpoint $cp (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); rebuild its Todo list with TaskCreate and keep it current on every step; arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from $cp; the old pane $old closes now."
+prompt="resume from the checkpoint $cp (its text, board.sh and the run-use binding are already in your SessionStart context; do not fetch them again, except a part its RESUMED line names as cut); arm nothing (main-watch.sh wakes you); then service whichever marker has landed. Your first line to the owner is: Handoff done: this is the new main session, resumed from $cp; the old pane $old closes now."
 sent=$(orca-ide terminal send --terminal "$new" --text "$prompt" --enter --json 2>>"$log")
 sent_ok=0
 printf '%s' "$sent" | jq -e '.ok' >/dev/null 2>&1 && sent_ok=1

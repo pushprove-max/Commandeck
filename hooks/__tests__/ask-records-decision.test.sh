@@ -164,5 +164,34 @@ check "a Chief of Staff pane that disappears again: the next question goes out" 
 touch "$TMP/cos-up"; echo '{}' > "$TMP/main/.claude/commandeck.json"
 check "a live pane but no relay named: nothing is refused" 0 "$(cask 'Region' 'Which region?')"
 
+# G11 (D9): worker-ask-guard.sh puts the decoy on a main picker that has room for it, and Claude Code runs both hooks
+# on the original input, so this one must record that decoy-less picker too (one row); a four-option one is refused there.
+nask() { # header question n -> exit code; a picker of n options with no decoy
+  jq -cn --arg h "$1" --arg q "$2" --argjson n "$3" --arg cwd "$TMP/main" \
+    '{cwd: $cwd, tool_name: "AskUserQuestion", tool_input: {questions: [{header: $h, question: $q,
+      options: [range($n) | {label: "Opt \(.)"}]}]}}' \
+  | env -u CLAUDE_PROJECT_DIR -u COMMANDECK_REVIEWER HOME="$TMP/home" COMMANDECK_MAIN="$TMP/main" \
+      COMMANDECK_HOOK_FIRE_LOG="$TMP/fire.jsonl" bash "$REAL/hooks/ask-records-decision.sh" >"$TMP/out" 2>"$TMP/err"; echo $?
+}
+ROWS3=$(wc -l < "$L")
+check "a decoy-less picker the guard rewrites is recorded: let through" 0 "$(nask 'Lunch spot' 'Which lunch spot?' 3)"
+check "a decoy-less picker the guard rewrites is recorded: one row, its options kept" "$((ROWS3 + 1)) lunch-spot-$DAY Opt 0|Opt 1|Opt 2" \
+  "$(wc -l < "$L" | tr -d ' ') $(tail -1 "$L" | jq -r '"\(.id) \(.options | join("|"))"')"
+ROWS4=$(wc -l < "$L")
+check "a four-option picker with no decoy is not recorded" "0 $ROWS4" "$(nask 'Dinner spot' 'Which dinner spot?' 4) $(wc -l < "$L" | tr -d ' ')"
+
+check "a recorded picker with the decoy added keeps its 2-4 answer buttons" 1 \
+  "$(jq -s --arg id "lunch-spot-$DAY" '[.[] | select(.id == $id)] | last | (.options | length) as $n | if $n >= 2 and $n <= 4 then 1 else 0 end' "$L")"
+# Setup's own questions go without the decoy (owner ruling Q5): while setup.sh's marker is fresh the guard does not rewrite
+# and so this hook does not record, or a setup question would sit in the owner's decisions as an open row.
+date +%s > "$TMP/main/.git/commandeck-setup-questions"
+ROWS5=$(wc -l < "$L")
+GOUT=$(jq -cn --arg cwd "$TMP/main" '{cwd: $cwd, tool_name: "AskUserQuestion", tool_input: {questions: [{header: "Setup name", question: "What name?",
+  options: [{label: "Opt 0"}, {label: "Opt 1"}, {label: "Opt 2"}]}]}}' \
+  | env -u COMMANDECK_REVIEWER HOME="$TMP/home" CLAUDE_PROJECT_DIR="$TMP/main" COMMANDECK_RULING_LOG="$TMP/rulings/log.jsonl" bash "$REAL/hooks/worker-ask-guard.sh" 2>/dev/null)
+check "a setup question during setup is neither rewritten nor recorded" "0 $ROWS5 0" \
+  "$(nask 'Setup name' 'What name?' 3) $(wc -l < "$L" | tr -d ' ') $(grep -c updatedInput <<<"$GOUT")"
+rm -f "$TMP/main/.git/commandeck-setup-questions"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

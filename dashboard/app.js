@@ -192,7 +192,11 @@
       window.fetch('answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: asked, id: d.id, askedAt: d.askedAt, answer }) })
         .then(loggedIn).then((r) => (r.ok ? r.json().then((j) => {
           if (j.picker) pickerOpen.add(d.id);
-          return `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}${j.picker ? "; main's picker for it was open: pick or press Esc in main's pane" : ''}`;
+          // The host's word on the send to the asking Builder (issue 569); a delivered one, or a reply without it, reads as before.
+          const sent = typeof j.delivery === 'string' && j.delivery && !/^delivered/.test(j.delivery) ? j.delivery : '';
+          const how = /^queued/.test(sent) ? 'queued: the Builder is not running; the answer waits and is shown first when it starts'
+            : /^unknown/.test(sent) ? 'delivery unknown: the dashboard stopped mid-send; check the Builder\'s pane' : sent;
+          return `Answered: ${answer} (ruling ${j.ruling || 'not logged'})${how ? `; ${how}` : ''}${j.unsent ? '; not sent yet, sent again on the next refresh' : ''}${j.picker ? "; main's picker for it was open: pick or press Esc in main's pane" : ''}`;
         })
           : `Not answered: ${r.status === 409 ? 'it was answered or asked again since this page read it' : `the host said ${r.status}`}`))
         .catch(() => 'Not answered: the host could not be reached')
@@ -1291,30 +1295,6 @@
   }
 
 
-  // Ordered like the terminal's list: in progress, then pending, then done.
-  const TODO_BADGE = { in_progress: ['now', 'ok'], pending: ['waiting', ''], completed: ['done', 'ok'] };
-  function renderTodos(t) {
-    const items = t && Array.isArray(t.items) ? t.items.filter(Boolean) : null;
-    note('todos', items ? '' : 'Main session task list not measured');
-    sub('todos-sub', items ? `${items.length} items` : '');
-    if (!items) { byId('todos-count').textContent = ''; put(byId('todos-bar'), []); put(byId('todos-list'), []); return; }
-    const done = items.filter((i) => i.status === 'completed');
-    const rank = (i) => (i.status === 'in_progress' ? 0 : 1);
-    const open = items.filter((i) => i.status !== 'completed').sort((a, b) => rank(a) - rank(b));
-    const now = items.filter((i) => i.status === 'in_progress').length, n = Math.max(1, items.length);
-    put(byId('todos-bar'), [mbar([[(100 * done.length) / n, 'g'], [(100 * now) / n, 'b']], 'h10'),
-      cap([strong(`${done.length} of ${items.length}`), ' done'], `${now} in progress`)]);
-    byId('todos-count').textContent = `${items.length} task${items.length === 1 ? '' : 's'} (${done.length} done, ${open.length} open), session ${String(t.sessionId).slice(0, 8)}`;
-    put(byId('todos-list'), items.length === 0 ? [h('li', 'empty', 'No tasks')] : open.concat(done).map((i) => {
-      const li = h('li', i.status === 'completed' ? 'done' : null);
-      const [text, tone] = TODO_BADGE[i.status] || [String(i.status), ''];
-      li.append(badge(text, tone), ' ', h('span', 'todo-text', i.status === 'in_progress' ? i.activeForm || i.subject : i.subject));
-      li.dataset.status = String(i.status);
-      li.dataset.id = String(i.id);
-      return li;
-    }));
-  }
-
   // Running first, newest first within each, as the collector ordered them.
   function renderAgents(a) {
     const items = a && Array.isArray(a.items) ? a.items.filter(Boolean) : null;
@@ -1804,7 +1784,6 @@
     renderSeat('relay-seat', d.seats && d.seats.relay, !(d.seats && 'relay' in d.seats));
     const hostInfo = renderHost(d.host);
     renderCost(d.costPerRole, d.seats);
-    renderTodos(d.todos);
     renderAgents(d.agents);
     renderAlerts(d.alerts, d.sources && d.sources.alerts, now);
     renderResolved(d.alertsResolved);

@@ -27,5 +27,16 @@ out+=" redfirst=$(ntp 'New tests: nt 3' 'Break: a.test.sh -- t-one -- src/x.ts')
 out+=" zero=$(ntp 'New tests: nt 03')"
 check "a wrong New tests line is refused (issue 462)" "missing=2:1 match=0 bare=0 differs=2:1 reason=0 fenced=0 redfirst=0 zero=0" "$out"
 
+# issue 562 (D46): the gate and break-run.sh read only a Break: line at the left margin, so a bulleted, indented or bold one
+# passed the check and then got no red run. A bulleted `Break: none` is skipped by the gate, a fenced one is fixture text.
+# under ## Why, where prose is allowed, so a bold or unspaced marker is not refused as prose first
+bk() { ntp 'New tests: nt 3' $'\n## Why\n\n'"$1"; }
+B='Break: a.test.sh -- t-one -- src/x.ts'
+r=$(bk "- $B"); out="bullet=$r:$(grep -c 'line 2[0-9]*: - Break: a.test.sh' "$T/err"):$(grep -c 'start it at the left margin' "$T/err")"
+out+=" star=$(bk "* $B") plus=$(bk "+ $B") nospace=$(bk "-$B") indent=$(bk "  $B") bold=$(bk "**$B") blank=$(bk "- Break:")"
+check "a bulleted, indented or bold Break line is refused naming its line" "bullet=2:1:1 star=2 plus=2 nospace=2 indent=2 bold=2 blank=2" "$out"
+out="margin=$(bk "$B") none=$(bk '- Break: none -- nothing to break') fenced=$(bk $'```\n'"- $B"$'\n```') quoted=$(bk "> - $B")"
+check "a margin Break line, a bulleted Break none and a fenced bulleted Break pass" "margin=0 none=0 fenced=0 quoted=0" "$out"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

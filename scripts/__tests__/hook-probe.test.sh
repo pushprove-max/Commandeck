@@ -14,8 +14,8 @@ git -C "$T/p" worktree add -q "$T/wt" -b u
 probe() { (cd "$T/wt" && HOME="$T/home" TMPDIR="$T/tmp" bash "$REAL/scripts/hook-probe.sh" "$@" 2>&1); }
 before=$(find "$T/home" "$T/tmp" | sort)
 OUT=$(probe hooks/no-poll-loops.sh 'sleep 400')
-check "a 400 s sleep in a worker is refused, with the hook's message" "refuse (2) 1" \
-  "$(head -1 <<<"$OUT") $(grep -c 'past the prompt cache' <<<"$OUT")"
+check "a 400 s sleep in a worker is warned, with the hook's message" "allow yes" \
+  "$(head -1 <<<"$OUT") $(grep -q 'past the prompt cache' <<<"$OUT" && echo yes)"
 check "a short sleep is allowed" allow "$(probe hooks/no-poll-loops.sh 'sleep 5' | head -1)"
 check "nothing is written under HOME or TMPDIR" "$before" "$(find "$T/home" "$T/tmp" | sort)"
 check "an unknown hook is a usage error" 2 "$(probe hooks/no-such.sh 'true' >/dev/null; echo $?)"

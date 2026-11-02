@@ -224,7 +224,7 @@ git -C "$TEST_REPO" worktree add -q "$TEST_REPO/wt" 2>/dev/null
 # run_wt <payload> -- the hook in a linked worktree (a worker pane); TTL=1h sets the pane's prompt cache life.
 run_wt() { (cd "$TEST_REPO/wt" && printf '%s\n' "$1" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u CLAUDE_CODE_PROMPT_CACHE_TTL \
   ${TTL:+CLAUDE_CODE_PROMPT_CACHE_TTL=$TTL} "$HOOK" 2>&1); echo "rc=$?"; }
-for c in 'orca orchestration check' 'orca-ide orchestration check --json' 'cd /tmp && orca orchestration check --run r1'; do
+for c in 'orca-ide orchestration check --json' 'cd /tmp && orca orchestration check --run r1'; do
   check "a bare check blocks: $c" 2 "$(run_hook "$(bg "$c" false)")"
 done
 check "a bare check blocks in a worker pane too" rc=2 "$(run_wt "$(bg 'orca orchestration check --json' false)" | tail -1)"
@@ -237,6 +237,10 @@ check "a bare check named in a commit message passes" 0 "$(run_hook "$(bg 'git c
 # stated waits are summed against one budget (270 s, wait-test-run.sh's default; 540 s under the 1-hour cache), and a
 # foreground sleep loop, which states no end, is refused. A background call or a Monitor ends the turn: not held.
 rc_wt() { run_wt "$(bg "$1" "${2:-false}")" | tail -1; }
+# D4/D5: a wait past the cache or one the hook cannot read runs with a warning. wn prints the exit code, plus " no-note"
+# when neither warning text came out; lim prints the limit the warning names ("none" when there was no warning).
+wn() { local o; o=$(run_wt "$(bg "$1" false)"); grep -q 'prompt cache\|cannot read' <<<"$o" && tail -1 <<<"$o" || echo "$(tail -1 <<<"$o") no-note"; }
+lim() { run_wt "$(bg "$1" false)" | grep -o 'at most [0-9]* s' | head -1 | tr -dc '0-9' | grep . || echo none; }
 # #407: a worker's sleep loop is rewritten, not refused. rw_wt prints "<exit>:<rewritten|none>": rewritten when the
 # hook printed a `timeout <L> bash -c ...` command. rwf_wt <field> <cmd> prints one field of the printed updatedInput.
 RW=rc=0:rewritten
@@ -249,21 +253,21 @@ OUT=$(run_wt "$(bg 'until grep -q passed /tmp/t.log; do sleep 5; done' false)")
 check "a worker's foreground sleep loop on a test log is rewritten, the reason saying exit 124 means wait again" $RW:1 \
   "$(rw_wt 'until grep -q passed /tmp/t.log; do sleep 5; done'):$(grep -c '124' <<<"$OUT" | tr -d ' ')"
 check "a worker's while kill -0 sleep loop is rewritten" $RW "$(rw_wt 'while kill -0 123; do sleep 5; done')"
-check "a worker's ask of --timeout-ms 600000 is refused" rc=2 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
-check "and its --resume rerun" rc=2 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000 --resume m1')"
-check "and under the 1-hour cache" rc=2 "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
-check "a quoted timeout is the number bash passes" rc=2 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms "600000"')"
+check "a worker's ask of --timeout-ms 600000 runs with the note" rc=0 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
+check "and its --resume rerun" rc=0 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000 --resume m1')"
+check "and under the 1-hour cache" rc=0 "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 600000')"
+check "a quoted timeout is the number bash passes" rc=0 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms "600000"')"
 OUT=$(run_wt "$(bg 'orca-ide orchestration ask --from t --question q --timeout-ms 240000; orca-ide orchestration ask --from t --question r --timeout-ms 240000' false)")
-check "two asks of 240 s in one call (480 s) are refused, the sum named" rc=2:1 "$(tail -1 <<<"$OUT"):$(grep -c 'up to 480 s in all' <<<"$OUT")"
-check "sleep 180; sleep 180 is refused" rc=2 "$(rc_wt 'sleep 180; sleep 180')"
-check "sleep 400 is refused" rc=2 "$(rc_wt 'sleep 400')"
-check "sleep 5m is refused" rc=2 "$(rc_wt 'sleep 5m')"
-check "two wait-test-run.sh waits (540 s) are refused" rc=2 "$(rc_wt 'bash scripts/wait-test-run.sh 1 a.out; bash scripts/wait-test-run.sh 2 b.out')"
+check "two asks of 240 s in one call (480 s) run with the note, the sum named on stderr and in the context" rc=0:2 "$(tail -1 <<<"$OUT"):$(grep -c 'up to 480 s in all' <<<"$OUT")"
+check "sleep 180; sleep 180 runs with the note" rc=0 "$(rc_wt 'sleep 180; sleep 180')"
+check "sleep 400 runs with the note" rc=0 "$(rc_wt 'sleep 400')"
+check "sleep 5m runs with the note" rc=0 "$(rc_wt 'sleep 5m')"
+check "two wait-test-run.sh waits (540 s) run with the note" rc=0 "$(rc_wt 'bash scripts/wait-test-run.sh 1 a.out; bash scripts/wait-test-run.sh 2 b.out')"
 check "an ask of --timeout-ms 240000 passes" rc=0 "$(rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms 240000')"
 check "--timeout-ms=540000 passes under the 1-hour cache" rc=0 "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000')"
 # Issue 367: each pane's limit follows its own role's TTL, which setup writes per role.
-check "a relay pane at 1h may wait 540 s, a Builder at 5m only 270 s" "rc=0 rc=2" \
-  "$(TTL=1h rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000') $(TTL=5m rc_wt 'orca-ide orchestration ask --from t --question q --timeout-ms=540000')"
+check "a relay pane at 1h may wait 540 s unwarned, a Builder at 5m is warned at 270 s, a 1h wait of 600 s is warned at 540 s" "none 270 540" \
+  "$(TTL=1h lim 'orca-ide orchestration ask --from t --question q --timeout-ms=540000') $(TTL=5m lim 'orca-ide orchestration ask --from t --question q --timeout-ms=540000') $(TTL=1h lim 'orca-ide orchestration ask --from t --question q --timeout-ms=600000')"
 check "a sleep 20 and an ask of 200 s (220 s) pass" rc=0 "$(rc_wt 'sleep 20; orca-ide orchestration ask --from t --question q --timeout-ms 200000')"
 check "one wait-test-run.sh wait passes" rc=0 "$(rc_wt 'bash scripts/wait-test-run.sh 123 out.txt')"
 check "sleep 20 && npm test passes" rc=0 "$(rc_wt 'sleep 20 && npm test')"
@@ -277,18 +281,18 @@ check "a worker's plain command passes" rc=0 "$(rc_wt 'sleep 1 && date')"
 check "a worker's /bin/sleep loop is rewritten" $RW "$(rw_wt 'while kill -0 $$; do /bin/sleep 5; done')"
 check "a worker's sleep loop past an inner loop named done is rewritten" $RW "$(rw_wt 'while true; do for done in a; do :; done; sleep 5; done')"
 check "a worker's sleep loop past an echo of \${done} is rewritten" $RW "$(rw_wt 'while true; do echo ${done}; sleep 5; done')"
-check "/bin/sleep 400 is refused" rc=2 "$(rc_wt '/bin/sleep 400')"
+check "/bin/sleep 400 runs with the cache warning" rc=0 "$(wn '/bin/sleep 400')"
 check "a wait-test-run.sh in a loop is refused" rc=2 "$(rc_wt 'for n in 1 2; do bash scripts/wait-test-run.sh $$ /dev/null; done')"
 check "an ask in a loop is refused" rc=2 "$(rc_wt 'for n in 1 2; do orca-ide orchestration ask --from t --question q --timeout-ms 240000; done')"
 check "a sleep in a while condition is rewritten" $RW "$(rw_wt 'while sleep 5; do date; done')"
-check "sleep 200 200 (400 s) is refused" rc=2 "$(rc_wt 'sleep 200 200')"
+check "sleep 200 200 (400 s) runs with the cache warning" rc=0 "$(wn 'sleep 200 200')"
 check "sleep 2m 100 (220 s) passes" rc=0 "$(rc_wt 'sleep 2m 100')"
 check "a search for a --timeout-ms pattern passes" rc=0 "$(rc_wt "rg -n -- '--timeout-ms=600000' .")"
 check "a loop with no wait passes" rc=0 "$(rc_wt 'for f in a b; do echo done; done; sleep 10')"
-for c in 'env sleep 400' 'timeout 600 sleep 400' 'echo $(sleep 400)' 'sleep infinity' 'until false; do ./scripts/wait-test-run.sh 1 a.out; done' \
-  'X=1 command /usr/bin/sleep 400'; do
-  check "the same guard's other ways round: $c is refused" rc=2 "$(rc_wt "$c")"
+for c in 'env sleep 400' 'timeout 600 sleep 400' 'echo $(sleep 400)' 'sleep infinity' 'X=1 command /usr/bin/sleep 400'; do
+  check "the same guard's other ways round: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
+check "the same guard's other ways round: a looped wait-test-run.sh is still refused" rc=2 "$(rc_wt 'until false; do ./scripts/wait-test-run.sh 1 a.out; done')"
 check "main: a /bin/sleep loop is refused" 2 "$(run_hook "$(json 'while true; do /bin/sleep 30; gh pr view 1; done')")"
 # r2 findings: a wrapper's options, a redirection anywhere in the command, and any duration GNU sleep (or orca's
 # --timeout-ms) accepts are read as bash and sleep read them; a sleep operand the hook cannot read is refused.
@@ -297,7 +301,7 @@ for c in 'env -u FOO orca-ide orchestration ask --from t --question q --timeout-
   '> /dev/null orca-ide orchestration ask --from t --question q --timeout-ms 600000' '2>&1 sleep 400' 'sleep>/dev/null 400' \
   'sleep 5m>/dev/null' 'sleep 4e2' 'sleep +400' 'sleep 0x190' 'sleep 4e0m 100' \
   'sleep $T' 'orca-ide orchestration ask --from t --question q --timeout-ms 6e5'; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the note" rc=0 "$(rc_wt "$c")"
 done
 for c in 'while true; do sleep 4e2; done' 'while true; do sleep +1; done'; do
   check "worker: $c is rewritten" $RW "$(rw_wt "$c")"
@@ -305,7 +309,7 @@ done
 for c in 'sleep .5' 'sleep 1e1 2>/dev/null' 'env -u FOO sleep 200' 'sleep 100 >&2'; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
 done
-check "worker: an unreadable sleep operand is named, not summed" 1 "$(run_wt "$(bg 'sleep $T' false)" | grep -c 'cannot read')"
+check "worker: an unreadable sleep operand is named, not summed (stderr and context)" 2 "$(run_wt "$(bg 'sleep $T' false)" | grep -c 'cannot read')"
 for c in 'while true; do env -u X sleep 30; done' 'while true; do sleep +5; done' 'while true; do > /dev/null sleep 5; done' \
   'while true; do timeout --signal=TERM 9 sleep 5; done' 'sleep 30 >/dev/null; gh pr checks 1; sleep 30 >/dev/null; gh pr checks 1'; do
   check "main: $c is refused" 2 "$(run_hook "$(json "$c")")"
@@ -328,7 +332,7 @@ check "main: a chain of quoted sleeps is refused" 2 "$(run_hook "$(json 'sleep "
 check "a wait loop behind a leading 2>&1 blocks" 2 "$(run_hook "$(bg 'while true; do 2>&1 bash scripts/orca-wait.sh; done' true)")"
 for c in 'env -a custom sleep 400' 'env --argv0 custom sleep 400' 'env -P /bin sleep 400' 'command -p sleep 400' \
   'env -u "FOO" sleep 400'; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 for c in 'command -v sleep bash' 'command -V sleep' 'command -pv sleep'; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
@@ -344,12 +348,12 @@ for c in 'while true; do "done"; sleep 5; gh pr view 1; done' 'while true; do "s
   check "main: a sleep loop behind quoting blocks: $c" 2 "$(run_hook "$(json "$c")")"
 done
 for c in 's\leep 400' '\sleep 400' '"sl"eep 400'; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 check "worker: a sleep loop behind a quoted done is rewritten" $RW "$(rw_wt 'while true; do "done"; sleep 100; done')"
 # r6 finding: an empty pair of quotes changes no word bash passes; it only keeps a reserved word from reading as one.
 for c in 'sleep"" 400' "sleep'' 400" 'sleep 400""' 'sl""eep 400'; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 check "worker: a sleep loop behind done\"\" is rewritten" $RW "$(rw_wt 'while true; do done""; sleep 100; done')"
 for c in 'orca orchestration check""' 'orca orchestration"" check' 'orca"" orchestration check'; do
@@ -357,12 +361,12 @@ for c in 'orca orchestration check""' 'orca orchestration"" check' 'orca"" orche
 done
 check "worker: a bare check\"\" blocks" rc=2 "$(rc_wt 'orca orchestration check""')"
 check "main: a sleep loop behind done\"\" blocks" 2 "$(run_hook "$(json 'while true; do done""; sleep 5; gh pr view 1; done')")"
-check "worker: X=\"\" sleep 400 is refused" rc=2 "$(rc_wt 'X="" sleep 400')"
+check "worker: X=\"\" sleep 400 runs with the cache warning" rc=0 "$(wn 'X="" sleep 400')"
 check "a quoted done as an argument still passes" 0 "$(run_hook "$(json 'echo "done"; sleep 4')")"
 check "worker: an escaped semicolon is an argument, not a second command" rc=0 "$(rc_wt 'find . -name x -exec sleep 1 \;')"
 # r7 finding: quoting next to quoting (an empty pair, an escape, a quoted span) is still one word bash passes.
 for c in '"""sleep" 400' '""\sleep 400' "''\"sleep\" 400" '"""s"\leep 400' '""""sleep 400'; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 for c in '"""orca" orchestration check' '""\orca orchestration check' 'orca """orchestration" check'; do
   check "a bare check behind adjacent quoting blocks: $c" 2 "$(run_hook "$(bg "$c" true)")"
@@ -375,7 +379,7 @@ check "worker: an escaped quote before \"\"sleep is the word \"sleep, passes" rc
 for c in "bash -c 'sleep 400'" 'sh -c "sleep 400"' "zsh -c 'sleep 300'" "eval 'sleep 400'" "env -S 'sleep 400'" \
   "\$'sleep' 400" '$"sleep" 400' "bash -lc 'sleep 400'" "timeout 900 bash -c 'sleep 400'" "bash -c \"bash -c 'sleep 400'\"" \
   "sleep 200; bash -c 'sleep 100'" "env -u X -S 'sleep 400'"; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 check "worker: a sleep loop inside bash -c is rewritten" $RW "$(rw_wt "bash -c 'for i in 1 2; do sleep 1; done'")"
 check "worker: bash -c inside a loop is rewritten" $RW "$(rw_wt "for i in 1 2; do bash -c 'sleep 1'; done")"
@@ -388,25 +392,25 @@ done
 for c in "bash -c \$'sleep 400'" 'bash -c $"sleep 400"' "env -S \$'sleep 400'" "sh -c \$'echo \\'hi\\'; sleep 400'" \
   "bash -c \$'sleep\\x20400'" "bash -c \"bash -c \$'sleep 400'\"" "echo 'cost \$'; bash -c 'sleep 400'" \
   "bash -c \$'sleep\\cI400'" "env -S \$'sleep\\cI400'" "bash -c \$'sleep\\ci400'"; do
-  check "worker: $c is refused" rc=2 "$(rc_wt "$c")"
+  check "worker: $c runs with the cache warning" rc=0 "$(wn "$c")"
 done
 for c in "bash -c \$'echo sleep 400'" "bash -c \$'sleep 100'" 'bash -c $"sleep 100"' "bash -c \$'sleep\\cI100'" \
   "bash -c \$'echo \\x; sleep 100'"; do
   check "worker: $c passes" rc=0 "$(rc_wt "$c")"
 done
-check "worker: a shell string the hook cannot read is refused, and says why" 1 \
+check "worker: a shell string the hook cannot read runs with a note saying why (stderr and context)" 2 \
   "$(run_wt "$(bg "bash -c 'sleep \"400'" false)" | grep -c 'cannot read')"
 # \c of a non-ASCII character: bash takes one byte of it, the decoder cannot say what; read as unread, not a crash that allows.
-check "worker: bash -c \$'sleep 400; echo \\cß' is refused as unread" 1 \
+check "worker: bash -c \$'sleep 400; echo \\cß' runs with a note as unread" 2 \
   "$(run_wt "$(bg "bash -c \$'sleep 400; echo \\cß'" false)" | grep -c 'cannot read')"
-check "worker: ... and the decoder rejects it, no traceback in the refusal" 0 \
+check "worker: ... and the decoder rejects it, no traceback in the note" 0 \
   "$(run_wt "$(bg "bash -c \$'sleep 400; echo \\cß'" false)" | grep -c 'Traceback')"
 check "worker: bash -c \$'echo \\cß' names no wait and passes" rc=0 "$(rc_wt "bash -c \$'echo \\cß'")"
 # Any crash of the wait reader (the one `python3 -I`) is a wait not read: it printed nothing, which once allowed.
 mkdir -p "$TEST_REPO/crashpy"
 printf '#!/bin/sh\n[ "$1" = -I ] && exit 1\nexec %s "$@"\n' "$(command -v python3)" > "$TEST_REPO/crashpy/python3"
 chmod +x "$TEST_REPO/crashpy/python3"
-check "worker: a crashed wait reader refuses, not allows" 1 \
+check "worker: a crashed wait reader runs with a note, not silently (stderr and context)" 2 \
   "$(PATH="$TEST_REPO/crashpy:$PATH" run_wt "$(bg 'sleep 400' false)" | grep -c 'cannot read')"
 
 # #407 / #417: a worker's sleep loop runs under `timeout L bash -c <the call>`, L being what the call's other waits leave
@@ -447,17 +451,17 @@ check "a test wait in a worker loop stays refused" rc=2 "$(run_wt "$(bgt 'until 
 
 # #406: bgrun.sh runs and waits count against the same worker budget. A run waits its last --max before any `--`
 # (else 25); a `wait` waits its --max (else the whole LIMIT). A command after `--` is the job's, never a wait.
-check "bgrun waits count against the worker wait budget: one passes, two (540 s) are refused naming it, a run plus a wait is refused" \
-  "rc=0 rc=2:1 rc=2" \
-  "$(rc_wt 'bash scripts/bgrun.sh wait /tmp/a.log') $(OUT=$(run_wt "$(bg 'bash scripts/bgrun.sh wait /tmp/a.log; bash scripts/bgrun.sh wait /tmp/b.log' false)"); echo "$(tail -1 <<<"$OUT"):$(grep -c 'up to 540 s in all' <<<"$OUT")") $(rc_wt 'bash scripts/bgrun.sh --max 25 -- true; bash scripts/bgrun.sh wait /tmp/a.log')"
-check "a bgrun run counts its --max, and the job after -- is not a wait" "rc=0 rc=0 rc=2" \
-  "$(rc_wt 'bash scripts/bgrun.sh -- npm test') $(rc_wt 'bash scripts/bgrun.sh --max 100 --lines 5 -- sleep 999') $(rc_wt 'bash scripts/bgrun.sh --max 200 -- true; bash scripts/bgrun.sh --max 100 -- true')"
-check "an unreadable bgrun --max is refused, not counted as the default (MAX=600 would outwait the cache)" "rc=2 rc=2 rc=2 rc=2" \
-  "$(MAX=600 rc_wt 'bash scripts/bgrun.sh --max "$MAX" -- sleep 999') $(MAX=600 rc_wt 'bash scripts/bgrun.sh wait /tmp/job.log --max "$MAX"') $(rc_wt 'bash scripts/bgrun.sh --max') $(rc_wt 'bash scripts/bgrun.sh wait /tmp/job.log --max')"
+check "bgrun waits count against the worker wait budget: one passes unwarned, two (540 s) run with the cache warning naming it, a run plus a wait runs with the cache warning" \
+  "rc=0 rc=0:2 rc=0" \
+  "$(rc_wt 'bash scripts/bgrun.sh wait /tmp/a.log') $(OUT=$(run_wt "$(bg 'bash scripts/bgrun.sh wait /tmp/a.log; bash scripts/bgrun.sh wait /tmp/b.log' false)"); echo "$(tail -1 <<<"$OUT"):$(grep -c 'up to 540 s in all' <<<"$OUT")") $(wn 'bash scripts/bgrun.sh --max 25 -- true; bash scripts/bgrun.sh wait /tmp/a.log')"
+check "a bgrun run counts its --max, and the job after -- is not a wait" "rc=0 rc=0 rc=0" \
+  "$(rc_wt 'bash scripts/bgrun.sh -- npm test') $(rc_wt 'bash scripts/bgrun.sh --max 100 --lines 5 -- sleep 999') $(wn 'bash scripts/bgrun.sh --max 200 -- true; bash scripts/bgrun.sh --max 100 -- true')"
+check "an unreadable bgrun --max runs with a note, not counted as the default (MAX=600 would outwait the cache)" "rc=0 rc=0 rc=0 rc=0" \
+  "$(MAX=600 wn 'bash scripts/bgrun.sh --max "$MAX" -- sleep 999') $(MAX=600 wn 'bash scripts/bgrun.sh wait /tmp/job.log --max "$MAX"') $(wn 'bash scripts/bgrun.sh --max') $(wn 'bash scripts/bgrun.sh wait /tmp/job.log --max')"
 check "a readable or absent bgrun --max still passes" "rc=0 rc=0 rc=0" \
   "$(rc_wt 'bash scripts/bgrun.sh --max 25 -- sleep 999') $(rc_wt 'bash scripts/bgrun.sh -- true') $(rc_wt 'bash scripts/bgrun.sh --max 25 -- true --max "$MAX"')"
-check "an unreadable wait-test-run.sh max is refused, not counted as 270; an absent or numeric one passes" "rc=2 rc=0 rc=0" \
-  "$(MAX=600 rc_wt 'bash scripts/wait-test-run.sh 1 a.out "$MAX"') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out 100')"
+check "an unreadable wait-test-run.sh max runs with a note, not counted as 270; an absent or numeric one passes" "rc=0 rc=0 rc=0" \
+  "$(MAX=600 wn 'bash scripts/wait-test-run.sh 1 a.out "$MAX"') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out') $(rc_wt 'bash scripts/wait-test-run.sh 1 a.out 100')"
 check "a bgrun wait inside a worker loop is refused as a loop" 2:1 \
   "$(OUT=$(run_wt "$(bg 'for i in 1 2; do bash scripts/bgrun.sh wait /tmp/a.log; done' false)"); echo "$(tail -1 <<<"$OUT" | sed 's/rc=//'):$(grep -c 'inside a loop' <<<"$OUT")")"
 
@@ -466,6 +470,28 @@ check "id_ending_sleep_passes: a worker command with an id ending -sleep, alone 
   "$(rc_wt 'bash scripts/x.sh --id job-sleep') $(rc_wt 'echo run-sleep | cat')"
 check "real_sleep_loop_refused: a worker loop that waits on a real wait command is still refused" "rc=2" \
   "$(rc_wt 'for i in 1 2 3; do bash scripts/bgrun.sh wait /tmp/a.log; done')"
+
+# G6 (D4): a lone bare inbox check is rewritten to the drain that acknowledges, keeping --run; anything else keeps the block.
+# rw_cmd prints "<exit>:<printed updatedInput.command, or none>"; wt_ctx the worker's printed note (additionalContext), or none.
+S="${HOOK%/*}/../scripts"; I="env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR"
+rw_cmd() { local o rc; o=$(cd "$TEST_REPO" && printf '%s\n' "$(bg "$1" false)" | $I "$HOOK" 2>/dev/null); rc=$?; printf '%s:%s' "$rc" "$(jq -r '.hookSpecificOutput.updatedInput.command // "none"' <<<"${o:-null}")"; }
+check "a bare inbox check is rewritten to orca-wait.sh" "0:bash $S/orca-wait.sh|0:bash $S/orca-wait.sh --run r1|0:bash $S/orca-wait.sh --run run_2" \
+  "$(rw_cmd 'orca orchestration check')|$(rw_cmd 'orca-ide orchestration check --run r1')|$(rw_cmd '  orca orchestration check --run run_2  ')"
+for c in 'orca orchestration check --json x' "orca orchestration check --run ''" 'orca orchestration check --run r1 extra' 'orca orchestration check --json' \
+  'cd /tmp && orca orchestration check --run r1' 'orca orchestration check; ls' 'orca orchestration check | cat' 'orca orchestration check""' \
+  'env -u X orca orchestration check' $'orca orchestration check\nrm -rf x' 'orca orchestration check --run $R'; do
+  check "a quoted, chained or junk inbox check is never rewritten: $c" "2:none" "$(rw_cmd "$c")"
+done
+check "a quoted, chained or junk inbox check is never rewritten" "2:none 2:none 2:none" \
+  "$(rw_cmd 'orca orchestration check""') $(rw_cmd 'orca orchestration check; ls') $(rw_cmd 'orca orchestration check --run r1 extra')"
+check "a quoted, chained or junk inbox check is never rewritten: an echo of it passes as before" "0:none" "$(rw_cmd 'echo "orca orchestration check"')"
+# G8 (D5): a long or unreadable wait in a worker pane runs with a note, not a refusal; a wait in a loop with no end is still refused.
+wt_ctx() { local o; o=$(cd "$TEST_REPO/wt" && printf '%s\n' "$(bg "$1" false)" | $I -u CLAUDE_CODE_PROMPT_CACHE_TTL "$HOOK" 2>/dev/null); jq -r '.hookSpecificOutput.additionalContext // "none"' <<<"${o:-null}"; }
+ASK='orca-ide orchestration ask --from t --question q --timeout-ms'
+check "a worker's long ask runs with the cache warning" "rc=0:1:1:none" \
+  "$(rc_wt "$ASK 600000"):$(wt_ctx "$ASK 600000" | grep -c 'up to 600 s in all'):$(wt_ctx "$ASK 600000" | grep -c 'prompt cache'):$(wt_ctx "$ASK 240000")"
+check "an unreadable wait runs with a note" "rc=0:1" "$(rc_wt 'sleep $T'):$(wt_ctx 'sleep $T' | grep -c 'cannot read')"
+check "an endless sleep loop is still refused" "rc=2 rc=2" "$(rc_wt "for n in 1 2; do $ASK 240000; done") $(rc_wt 'while true; do sleep inf; done')"
 
 # The wrapper that runs every self-test in the push gate asserts `0 failed` on
 # stdout, so the summary is worded the way every sibling words it.

@@ -13,6 +13,7 @@
 # edit that changes only the date inside an old ruling line pays too. Old lines are left alone. Silent when it passes.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin, or ruling-log.sh is retired
 # A substring test before the first jq, so an unrelated edit costs no fork.
 case $INPUT in *memory/*|*.claude/rules/*) ;; *) exit 0 ;; esac
 . "${BASH_SOURCE[0]%/*}/lib/project.sh"

@@ -184,6 +184,12 @@ MADE_FROM = {
     "49f25da0": ("895a7e56",), "25071f40": ("49f25da0",),
     # 0.67.0 main-session.md: the hand-started judge round cap is lifted again
     "60dbe5c3": ("25071f40",),
+    # 0.68.0 main-session.md: the Panel runs Sol first, unit-drive.sh loops plan versions and plan seats skip the
+    # Builder cap; past the clear line only the checkpoint, decision.sh add and TaskStop run; the Also standing rule
+    # loses the checklist; the Suggestions rule no longer names a script the plugin lacks
+    "2659eb01": ("60dbe5c3",), "5ea4eaeb": ("5e73f876",), "701575f7": ("918c136f",), "6afb47a7": ("a78ec6d6",),
+    # the scripts send the relay's FYI events (issue 570); an answer the ledger delivered is not resent (issue 569)
+    "f3139e7b": ("6a82c4ab",), "af80fa89": ("b2a85a66",),
 }
 
 

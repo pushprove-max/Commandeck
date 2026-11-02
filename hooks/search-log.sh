@@ -17,6 +17,7 @@
 # ring and can miss a follow-up. Upgrade when the report shows any of these matters.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: the report script is unused, or the code-server-versus-rg question (issue 298) is answered
 read -r -d '' PY <<'PYEOF'
 import hashlib, json, os, re, shlex, sys, time
 

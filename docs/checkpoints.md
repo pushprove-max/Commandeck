@@ -6,6 +6,7 @@ clear line, a Stop hook asks for a checkpoint at
 goal, live units, waits, queue, rulings and how to resume.
 `scripts/state-snapshot.sh` fills the mechanical fields, and its `--goal`,
 `--stage`, `--next` and `--open-item` flags fill the judgment ones in one call.
+It also writes the carry-over list: one line per live unit and open decision, and each earlier open item the carry check still lists.
 An unfilled checkpoint does not restart main. A fresh checkpoint
 is under 30 minutes old.
 

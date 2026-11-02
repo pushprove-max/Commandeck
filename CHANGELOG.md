@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.68.0 -- 2026-11-02
+
+### Guards
+
+- Calls that were refused now run with a one-line note: an inline script writing a tracked file, an unbounded search (main's simple one is capped at 200 lines), a call past main's clear line, a long or unreadable wait, and a Builder's large search.
+- Rewritten and run: a bare inbox check, a raw pane read with a handle, and a picker without the decoy.
+- Passes: a clean `worktree remove --force`, a bounded read of saved output, and localhost text in docs and specs.
+- A hook that times out lets the call through instead of blocking it.
+- A second lone read-only call in a row (strict tier, planner seats, Builders) is refused with a batch hint; before, a hint came after the third.
+- A first Serena read draws no "serena is not running" note.
+- A reply past 3,000 characters that names no file is sent back once.
+- The checklist rule and the checklist-guard hook are gone.
+
+### Units
+
+- Units pane, band and status line: a header with stage counts, spend and the 7-day gauge, a waiting-on-the-owner list, framed stage-coloured cards, a band of up to 3 rows, and a status line led by the worst state. A new `motion` option (off) turns the working mark.
+- The units views show what each owner question blocks; no PC or dev-deploy element is drawn.
+- A push question no longer holds a closing pass or the merge.
+- A planning worktree with only Python caches is adopted; a plan-limit refusal names the unit brief; a Builder's plan judge opens in its own worktree; merge closes the Builder's task from a long-job pane.
+- A merge of a plan with cuts left marks the done cuts, names the next and tasks it; the open cuts' issues and the Builder's task stay open.
+- The unit driver loops plan versions until the judges say GO, then launches the Builder; an open owner question in the plan pauses it until answered.
+- A launch from a plan whose files changed on main is refused, saying to judge it again.
+- An Orca automation in the main checkout is no longer checkpointed or restarted as main, and its board call no longer binds main's run. Main with no Orca run restarts as before; with a run whose coordinator cannot be read, the restart is skipped with one line.
+- A fresh main whose old pane closed, or on a run with no coordinator, is no longer bound by the board: it is shown the exact `orca-ide orchestration run-use --id <run>` line and spends that one call.
+- A picker whose decoy the guard adds is recorded in the decision ledger.
+
+### Review
+
+- New `/commandeck:maxreview` skill.
+- The Opus plan judge is refused until Sol has judged as many rounds; the Panel runs Sol first.
+- Plan judges restate each section, ask for a smaller change and check every named item; review passes ask for a smaller change; the fix hand-off groups one flaw's findings.
+- The Builder's carry-over prompt names Unit, Cut, Tests and Open findings lines.
+- A break run now takes the file and line to break: it breaks, runs and restores, and refuses a test already red and a leftover backup.
+
+### Doctor
+
+- A new warning for a scratch file over 100 MB.
+- Doctor, setup and CI flag more dead references.
+
 ## 0.67.0 -- 2026-11-01
 
 ### Setup

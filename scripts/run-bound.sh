@@ -28,7 +28,7 @@ closed() {
   orca-ide terminal show --terminal "$1" --json 2>/dev/null \
     | jq -e '.ok == false and (.error.code | IN("terminal_handle_stale", "terminal_gone", "terminal_not_found"))' >/dev/null 2>&1
 }
-COORD=$(orca-ide orchestration run-list --json 2>/dev/null \
+COORD=$(orca-ide orchestration run-list --full --json 2>/dev/null \
   | jq -r --arg r "$RUN" '.result.runs[]? | select(.id == $r) | .coordinator_handle // empty' 2>/dev/null)
 # AN OPEN PANE NEVER TAKES THE RUN FROM A LIVE COORDINATOR either: after
 # a context-clear restart the old main pane stayed open, its drivers ran run-use

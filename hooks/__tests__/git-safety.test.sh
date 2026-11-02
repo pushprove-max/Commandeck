@@ -55,9 +55,9 @@ blocks 'git clean"" -fdx' 'git clean -f""dx' 'git"" clean -fdx' "git restore'' .
 passes 'git clean"" -n' 'git stash"" list'
 # r7 finding: quoting next to quoting is still the one word bash passes.
 blocks '"""git" clean -fdx' '""\git clean -fdx' 'git """clean" -fdx' "git ''\"clean\" -fdx" 'git ""\reset --hard'
-# --- issue 357: a forced remove is allowed only for a temporary worktree this session added on an absent path ---
-# Real worktrees under a scratch TMPDIR. pre/post are the PreToolUse and PostToolUse (--record-add) calls of one
-# session; "ran" is the command really run between them, as Claude Code does.
+# --- issue 357, pass 2 (D6): a forced remove passes only a clean worktree, whoever added it (the session grant is gone) ---
+# Real worktrees under a scratch TMPDIR. pre/post are the hook calls around each add (post's --record-add flag is now
+# ignored: the hook records nothing); "ran" is the command really run between them, as Claude Code does.
 WT=$(mktemp -d); export TMPDIR=$WT/tmp COMMANDECK_SCRATCH=$WT/scr; mkdir -p "$TMPDIR" "$COMMANDECK_SCRATCH"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 git init -q "$WT/repo" && git -C "$WT/repo" commit -q --allow-empty -m init
@@ -69,7 +69,13 @@ rm_cmd() { echo "git worktree remove --force $1"; }
 # A adds a worktree and puts an uncommitted file in it.
 A=$TMPDIR/wt-a; (cd "$WT/repo" && pre sA "$(add_cmd "$A")" >/dev/null && git worktree add -q "$A" HEAD) && post sA "$(add_cmd "$A")" >/dev/null
 echo work > "$A/uncommitted.txt"
+# Catches (pass 2, D6): ownership excusing a dirty tree, so a forced remove of the session's own tmp worktree deletes
+# the work left in it. Owned or not, a forced remove passes only a clean tree.
+check "a tmp worktree this session added, holding untracked work: forced remove blocked, the file kept" \
+  "2 yes" "$(pre sA "$(rm_cmd "$A")") $([ -f "$A/uncommitted.txt" ] && echo yes || echo no)"
+mv "$A/uncommitted.txt" "$WT/aside.txt" # clean now: the issue 357 pass below is for a clean owned tree
 check "removing a tmp worktree this session added is allowed" 0 "$(pre sA "$(rm_cmd "$A")")"
+mv "$WT/aside.txt" "$A/uncommitted.txt" # dirty again for session B's cases
 # B's add on A's path fails (the path exists); B's forced remove of it is then blocked.
 (cd "$WT/repo" && pre sB "$(add_cmd "$A")" >/dev/null; git worktree add -q "$A" HEAD 2>/dev/null || true)
 post sB "$(add_cmd "$A")" >/dev/null
@@ -87,70 +93,13 @@ check "a forced remove with no session id stays blocked" 2 "$(run "$(rm_cmd "$A"
 check "forced removal of a worktree the session did not create stays blocked" 2 "$(pre sOther "$(rm_cmd "$A")")"
 # (outside /tmp, /private/tmp and TMPDIR: under the home folder)
 E=$HOME/.git-safety-test-$$; (cd "$WT/repo" && pre sE "$(add_cmd "$E")" >/dev/null && git worktree add -q "$E" HEAD) && post sE "$(add_cmd "$E")" >/dev/null
-check "a worktree this session added outside the temporary folder is not owned" 2 "$(pre sE "$(rm_cmd "$E")")"
+SE_CLEAN=$(pre sE "$(rm_cmd "$E")"); echo x > "$E/work.txt"
+check "a worktree this session added outside the temporary folder: clean passes, with untracked work it blocks" "0 2" "$SE_CLEAN $(pre sE "$(rm_cmd "$E")")"
+rm -f "$E/work.txt"
 # r1 findings. A relative path is resolved by git from a folder the hook cannot see (a -C, or a cd earlier in the
 # command): it is never owned, even when the session's folder holds a worktree of that name the session owns.
 check "a relative path after -C or cd is never owned: both forced removes block" "2 2" \
   "$(PCWD=$TMPDIR pre sA "git -C $TMPDIR/other worktree remove --force wt-a") $(PCWD=$TMPDIR pre sA "cd $TMPDIR/other && git worktree remove --force wt-a")"
-# Every ownership ordering the review passes found, in order (class stale-worktree-owner). Ownership is proved only
-# by one add: its own success, which PostToolUse shows only for a command on the fixed list, and the claim its
-# PreToolUse wrote beside the absent path, which no later hooked add of the path has replaced.
-# 1 (pass 1) a reused path: A adds and removes P; B adds a new worktree at P and leaves work in it.
-P=$TMPDIR/wt-p
-(cd "$WT/repo" && pre sA "$(add_cmd "$P")" >/dev/null && git worktree add -q "$P" HEAD) && post sA "$(add_cmd "$P")" >/dev/null
-git -C "$WT/repo" worktree remove "$P"
-(cd "$WT/repo" && pre sB "$(add_cmd "$P")" >/dev/null && git worktree add -q "$P" HEAD) && post sB "$(add_cmd "$P")" >/dev/null
-echo b > "$P/b.txt"
-S1="$(pre sA "$(rm_cmd "$P")") $(pre sB "$(rm_cmd "$P")")"
-# 2 (pass 1) a failed add on a held path: A's add of Q fails (B's worktree is there), so no PostToolUse fires.
-Q=$TMPDIR/wt-q
-(cd "$WT/repo" && pre sB "$(add_cmd "$Q")" >/dev/null && git worktree add -q "$Q" HEAD) && post sB "$(add_cmd "$Q")" >/dev/null
-(cd "$WT/repo" && pre sA "$(add_cmd "$Q")" >/dev/null; git worktree add -q "$Q" HEAD 2>/dev/null)
-S2=$(pre sA "$(rm_cmd "$Q")")
-# 3 (pass 2) concurrent adds: both PreToolUse calls see R absent; B's plain add wins; A's `add; true` fails but exits
-# 0, and A's PostToolUse runs first. B then leaves work in R.
-R=$TMPDIR/wt-r; RR="$(add_cmd "$R"); true"
-pre sA "$RR" >/dev/null; pre sB "$(add_cmd "$R")" >/dev/null
-git -C "$WT/repo" worktree add -q "$R" HEAD; (cd "$WT/repo" && git worktree add -q "$R" HEAD 2>/dev/null; true)
-post sA "$RR" >/dev/null; post sB "$(add_cmd "$R")" >/dev/null
-echo b > "$R/b.txt"
-S3="$(pre sA "$(rm_cmd "$R")") $(pre sB "$(rm_cmd "$R")") $([ -f "$R/b.txt" ] && echo kept || echo lost)"
-# 4 (pass 2 sweep) a chained remove: B owns R, but another call before or after the remove could change the path.
-S4="$(pre sB "git worktree list; $(rm_cmd "$R")") $(pre sB "$(rm_cmd "$R") && true")"
-# 5 the retry: the grant, the one piece of ownership state, is deleted between A's add and its remove. The forced
-# remove blocks and names the plain remove, which the hook lets through and git carries out on a clean worktree.
-U=$TMPDIR/wt-u
-(cd "$WT/repo" && pre sA "$(add_cmd "$U")" >/dev/null && git worktree add -q "$U" HEAD) && post sA "$(add_cmd "$U")" >/dev/null
-rm -f "$(git -C "$U" rev-parse --path-format=absolute --git-dir)/commandeck-owner"
-MSG=$(bash "$HOOK" 2>&1 >/dev/null <<<"$(payload sA "$(rm_cmd "$U")")"); RC=$?
-S5="$RC $(grep -qF 'git worktree remove <path>' <<<"$MSG" && echo named || echo unnamed) $(pre sA "git worktree remove $U")"
-git -C "$WT/repo" worktree remove "$U" 2>/dev/null; S5="$S5 $([ -e "$U" ] && echo there || echo gone)"
-# 6 (pass 4) a late record step: A's add of V succeeds, but its PostToolUse waits while the clean worktree is removed
-# and B re-adds V and leaves work in it; then A's record step runs, then B's.
-V=$TMPDIR/wt-v
-(cd "$WT/repo" && pre sA "$(add_cmd "$V")" >/dev/null && git worktree add -q "$V" HEAD)
-git -C "$WT/repo" worktree remove "$V"
-(cd "$WT/repo" && pre sB "$(add_cmd "$V")" >/dev/null && git worktree add -q "$V" HEAD); echo b > "$V/b.txt"
-post sA "$(add_cmd "$V")" >/dev/null; post sB "$(add_cmd "$V")" >/dev/null
-S6="$(pre sA "$(rm_cmd "$V")") $(pre sB "$(rm_cmd "$V")") $([ -f "$V/b.txt" ] && echo kept || echo lost)"
-# 7 (pass 4 sweep) an add that adds nothing: B's worktree at X has no grant (B's add was chained); A's
-# `git --version worktree add X HEAD` exits 0 and adds nothing, through both hooks.
-X=$TMPDIR/wt-x; XB="$(add_cmd "$X") && true" XA="git --version worktree add $X HEAD"
-(cd "$WT/repo" && pre sB "$XB" >/dev/null && git worktree add -q "$X" HEAD) && post sB "$XB" >/dev/null
-pre sA "$XA" >/dev/null; git --version >/dev/null; post sA "$XA" >/dev/null
-S7=$(pre sA "$(rm_cmd "$X")")
-# 8 the retry, for the claim: deleted between A's PreToolUse and its record step. No grant; the forced remove blocks
-# and names the plain remove, which runs.
-Y=$TMPDIR/wt-y
-(cd "$WT/repo" && pre sA "$(add_cmd "$Y")" >/dev/null && git worktree add -q "$Y" HEAD)
-rm -f "$TMPDIR/.commandeck-add.wt-y"; post sA "$(add_cmd "$Y")" >/dev/null
-MSG=$(bash "$HOOK" 2>&1 >/dev/null <<<"$(payload sA "$(rm_cmd "$Y")")"); RC=$?
-S8="$RC $(grep -qF 'git worktree remove <path>' <<<"$MSG" && echo named || echo unnamed) $(pre sA "git worktree remove $Y")"
-git -C "$WT/repo" worktree remove "$Y" 2>/dev/null; S8="$S8 $([ -e "$Y" ] && echo there || echo gone)"
-check "every ownership ordering found so far, in order: reused path, failed add on a held path, concurrent adds with a masked failure, chained remove, lost grant retried by a plain remove, late record step, an add that adds nothing, lost claim retried by a plain remove" \
-  "2 0|2|2 0 kept|2 2|2 named 0 gone|2 0 kept|2|2 named 0 gone" "$S1|$S2|$S3|$S4|$S5|$S6|$S7|$S8"
-check "the claim is written beside the absent path by its add, and B's add on A's existing path leaves A's claim" sA \
-  "$(cat "$TMPDIR/.commandeck-add.wt-a" 2>/dev/null)"
 # The one-word checkout is looked up where git runs: under -C, that folder, not the session's.
 mkdir -p "$WT/co"; echo x > "$WT/co/only-here.txt"
 check "git -C <dir> checkout <a file only that folder has> blocks" 2 "$(pre sX "git -C $WT/co checkout only-here.txt")"
@@ -170,12 +119,47 @@ check "a commit outside a Builder pane passes"                0 "$(run 'git comm
 check "the pass script run in a Builder pane passes"          0 "$(brc 'bash scripts/builder-codex-pass.sh u 2 review')"
 check "git log naming commit in a Builder pane passes"        0 "$(brc 'git log --grep commit')"
 check "a Builder's staging and status calls pass"             0 "$(brc 'git add -A && git status --porcelain')"
-check "--record-add never blocks, even on a Builder commit"   0 \
-  "$(COMMANDECK_BUILDER=1 bash "$HOOK" --record-add >/dev/null 2>&1 <<<"$(cmd 'git commit -m wip')"; echo $?)"
 LONE=$(mktemp -d); cp "$HOOK" "$LONE/"
 check "a missing strip-quoted.sh blocks"        2 \
   "$(bash "$LONE/git-safety.sh" >/dev/null 2>&1 <<<"$(cmd 'git push --force')"; echo $?)"
 rm -rf "$LONE"
+
+# --- a forced remove of a worktree with nothing to lose passes; any uncommitted or untracked work still blocks ---
+# The owner's rule blocks only on uncommitted work, so `git status --porcelain --untracked-files=all` decides alone.
+CW=$(mktemp -d); export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+git init -q "$CW/repo" && echo v1 > "$CW/repo/tracked.txt" && git -C "$CW/repo" add tracked.txt && git -C "$CW/repo" commit -q -m init
+for N in clean untracked modified; do git -C "$CW/repo" worktree add -q "$CW/wt-$N" HEAD; done
+check "a clean worktree remove --force passes" 0 "$(run "git worktree remove --force $CW/wt-clean")"
+echo scratch > "$CW/wt-untracked/new.txt"
+echo v2 > "$CW/wt-modified/tracked.txt"
+check "a worktree with uncommitted or untracked work still blocks: an untracked file" 2 "$(run "git worktree remove --force $CW/wt-untracked")"
+check "a worktree with uncommitted or untracked work still blocks: a modified file" 2 "$(run "git worktree remove --force $CW/wt-modified")"
+check "a worktree with uncommitted or untracked work still blocks" "2 2" \
+  "$(run "git worktree remove --force $CW/wt-untracked") $(run "git worktree remove --force $CW/wt-modified")"
+check "a worktree with uncommitted or untracked work still blocks: a missing path" 2 "$(run "git worktree remove --force $CW/wt-missing")"
+check "a worktree with uncommitted or untracked work still blocks: a git failure (not a repository)" 2 "$(run "git worktree remove --force $CW")"
+
+# D63: status never shows an edit to a file marked assume-unchanged or skip-worktree, so a forced remove of such a tree
+# would delete the edit unseen. ls-files -v tags those files lowercase or S; either one is work to lose.
+for N in assume skip; do git -C "$CW/repo" worktree add -q "$CW/wt-$N" HEAD; echo hidden > "$CW/wt-$N/tracked.txt"; done
+git -C "$CW/wt-assume" update-index --assume-unchanged tracked.txt
+git -C "$CW/wt-skip" update-index --skip-worktree tracked.txt
+check "a force remove of a worktree with an assume-unchanged edit is blocked" 2 "$(run "git worktree remove --force $CW/wt-assume")"
+check "a force remove of a worktree with a skip-worktree edit is blocked" 2 "$(run "git worktree remove --force $CW/wt-skip")"
+rm -rf "$CW"
+
+# --- D64: checkout/restore --ours|--theirs passes when every path is unmerged where the call runs ---
+# A merge left f.txt unmerged; other.txt is clean. The paths are the words after `--`, and for restore with no `--` its plain words.
+CF=$(mktemp -d); git init -q -b main "$CF" && printf 'a\n' > "$CF/f.txt" && printf 'o\n' > "$CF/other.txt" && git -C "$CF" add . && git -C "$CF" commit -q -m init
+git -C "$CF" checkout -q -b side && printf 'side\n' > "$CF/f.txt" && git -C "$CF" commit -q -am side
+git -C "$CF" checkout -q main && printf 'main\n' > "$CF/f.txt" && git -C "$CF" commit -q -am main
+git -C "$CF" merge side >/dev/null 2>&1
+check "checkout --ours of an unmerged path passes" 0 "$(run "git -C $CF checkout --ours -- f.txt")"
+check "checkout --theirs of a path that is not unmerged is blocked" 2 "$(run "git -C $CF checkout --theirs -- other.txt")"
+# -C makes f.txt unmerged where the call runs, so only the --git-dir flag can block it.
+check "restore --ours with --git-dir is blocked" 2 "$(run "git -C $CF --git-dir $CF/.git restore --ours -- f.txt")"
+check "restore --theirs of an unmerged path without -- passes" 0 "$(run "git -C $CF restore --theirs f.txt")"
+rm -rf "$CF"
 
 echo
 echo "$PASS passed, $FAIL failed"

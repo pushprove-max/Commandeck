@@ -113,5 +113,25 @@ check "accepted:false and both closes refused: the helper gives up, opens no sec
   "$([ -e "$T/phonestuck.restart-failed" ] && echo yes || echo no) $(grep -c "AUTO RESTART FAILED for $T/phonestuck.md: " "$T/phonestuck.log") $(cat "$T/creates.n") $(closes | grep -q 'term_old=' && echo yes || echo no)"
 rm -f "$T/refuse-close" "$T/phone"
 
+# #553: main keeps no on-screen checklist, so the restart tells the new main to rebuild none (the harness task tools are
+# off for main, and a prompt naming them sends it to load tools that are not there).
+mkdir -p "$T/bin2"
+cat > "$T/bin2/orca-ide" <<EOF
+#!/usr/bin/env bash
+a=("\$@"); for ((i = 0; i < \${#a[@]}; i++)); do [ "\${a[i]}" != --text ] || printf '%s\n' "\${a[i+1]}" >> "$T/prompt-texts"; done
+exec "$T/bin/orca-ide" "\$@"
+EOF
+chmod +x "$T/bin2/orca-ide"
+rm -f "$T/creates.n" "$T/calls.log" "$T/prompt-texts" "$MARK"; echo term_old > "$T/scratch/handles/main"; echo "checkpoint prompt" > "$T/prompt.md"
+jq -n --arg p "$T/p" '{result: {terminals: [{handle: "term_old", worktreePath: $p, agentIdentity: "claude"}]}}' > "$T/list.json"
+(cd "$T/p" && "${E[@]}" PATH="$T/bin2:$T/bin:$PATH" bash "$REAL/hooks/lib/context-clear-restart.sh" term_old "$T/prompt.md" true "$T/prompt.log" >/dev/null 2>&1)
+check "the resume prompt names no todo tool or list" "yes 0" \
+  "$([ -s "$T/prompt-texts" ] && echo yes) $(grep -ciE 'todo|TaskCreate|TaskUpdate|TaskList' "$T/prompt-texts" 2>/dev/null)"
+# The allow-list that names the tools to let them through past main's clear line (pane-budget-gate.sh's case arm) stays;
+# it is matched by its text, not its line, so a header line added above it does not break the check.
+check "no rule, hook, template or checkpoint file names a todo tool or list" "" \
+  "$(cd "$REAL" && grep -nE 'TaskCreate|TaskUpdate|TaskList|TodoWrite|Todo list' templates/*.md hooks/*.sh hooks/lib/* skills/handoff/SKILL.md scripts/checkpoint-context.py \
+    | grep -vE '^hooks/pane-budget-gate\.sh:[0-9]+: +TaskCreate\|TaskUpdate\|TaskList\|TaskGet\|TaskStop\|TodoWrite\) exit 0 ;;$')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

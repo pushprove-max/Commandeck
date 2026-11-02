@@ -50,6 +50,6 @@ hash() { sha256sum < "$WS/$1/.claude/plans/$1.md" | cut -d' ' -f1; }
 fpunit() { planned "$1"; mkdir -p "$WS/$1/.claude/plans" "$WS/$1/.claude/briefs"; printf "plan of %s\n%s\n" "$1" "$PSZ" > "$WS/$1/.claude/plans/$1.md"
   batchfor "$1"; sed "s#\.claude/plans/toy\.md#.claude/plans/$1.md#" "$T/batch.md" > "$WS/$1/.claude/briefs/$1-batch.md"; }
 # judged <unit> <GO|NO-GO> <collected> -- the judge's record as seat.sh leaves it: the plan hashed at launch, then the verdict.
-judged() { printf 'role=plan-judge-%s\nlaunched=100\nplan=%s\nplanhash=%s\nverdict=VERDICT: %s\ncollected=%s\n' \
-  "${4:-claude}" "$WS/$1/.claude/plans/$1.md" "$(hash "$1")" "$2" "$3" > "$SCR/seat-$1-plan-judge-${4:-claude}.txt"; }
+judged() { printf 'role=plan-judge-%s\nlaunched=100\nplan=%s\nplanhash=%s\nmainsha=%s\nverdict=VERDICT: %s\ncollected=%s\n' \
+  "${4:-claude}" "$WS/$1/.claude/plans/$1.md" "$(hash "$1")" "$(git -C "$P" rev-parse refs/heads/main)" "$2" "$3" > "$SCR/seat-$1-plan-judge-${4:-claude}.txt"; }
 onmain() { git -C "$P" show "main:.claude/plans/$1.md" 2>/dev/null | head -1 | grep . || echo none; } # the plan's first line

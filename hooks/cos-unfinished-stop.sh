@@ -10,6 +10,7 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: no project registers it (it is not in hooks/hooks.json) for 90 days, or the Chief-of-Staff pane is retired
 [ "$(jq -r '.stop_hook_active // false' <<<"$INPUT" 2>/dev/null)" = true ] && exit 0
 [ "${COMMANDECK_REVIEWER:-}" = 1 ] && exit 0
 ROOT=${CLAUDE_PROJECT_DIR:-$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null)}

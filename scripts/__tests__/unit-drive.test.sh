@@ -12,18 +12,38 @@ cp -R "$REAL/.claude-plugin" "$T/plug/"
 cp "$T/plug/scripts/builder-launch.sh" "$T/plug/scripts/builder-launch.real.sh"
 cat > "$T/plug/scripts/seat.sh" <<EOF
 #!/usr/bin/env bash
-echo "\$* DRIVER=\${COMMANDECK_DRIVER:-unset} BATCH=\${COMMANDECK_BATCH:-unset}" >> "$CALLS"
+echo "\$* FORCE=\${COMMANDECK_SEAT_FORCE:-0} DRIVER=\${COMMANDECK_DRIVER:-unset} BATCH=\${COMMANDECK_BATCH:-unset}" >> "$CALLS"
 [ "\$1 \$2" != "launch builder" ] || { echo "launch builder \$3" >> "$T/seats"; exit 0; }
-[ "\$1" = run ] || exit 0
-role=\$2 unit=\$3 plan=$WS/\$3/.claude/plans/\$3.md
-if [ "\$role" = plan-author ]; then
-  [ -f "\$plan" ] || { mkdir -p "\$(dirname "\$plan")"; printf 'plan of %s\n%s\n' "\$unit" "$PSZ" > "\$plan"; }
+role=\$2 unit=\$3 plan=$WS/\$3/.claude/plans/\$3.md rec=$SCR/seat-\$3-\$2.txt
+n=\$(grep -c "^launch \$role \$unit " "$CALLS")
+case \$1 in
+launch) # a judge: the record seat.sh leaves at launch, the plan hashed then and main's sha
+  [ ! -e "$T/launch-fails-\$unit-\$role" ] || { echo "REFUSED: \$role is off; nothing was opened" >&2; exit 2; }
+  printf 'role=%s\nlaunched=%s\nplan=%s\nplanhash=%s\nmainsha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "\$role" "\$((\$(wc -l < "$CALLS") + 100))" "\$plan" \
+    "\$(sha256sum < "\$plan" | cut -d' ' -f1)" > "\$rec" ;;
+wait) [ ! -e "$T/edit-on-wait-\$unit" ] || { rm -f "$T/edit-on-wait-\$unit"; echo 'edited while judged' >> "\$plan"; } ;;
+collect) # this launch's verdict and report: verdict-<unit>-<role>[-<n>] and report-<unit>-<role>-<n> in \$T
+  v=\$(cat "$T/verdict-\$unit-\$role-\$n" "$T/verdict-\$unit-\$role" 2>/dev/null | head -1); v=\${v:-VERDICT: GO}
+  rp=$SCR/reports/\$unit-\$role-\$(sed -n 's/^launched=//p' "\$rec").md; mkdir -p "$SCR/reports"
+  if [ -e "$T/noreport-\$unit-\$role" ]; then :
+  elif [ -f "$T/report-\$unit-\$role-\$n" ]; then cp "$T/report-\$unit-\$role-\$n" "\$rp"
+  else printf '# report of %s\n%s\n' "\$role" "\$v" > "\$rp"; fi
+  [ ! -e "\$rp" ] || echo "report=\$rp" >> "\$rec"
+  printf 'verdict=%s\ncollected=%s\n' "\$v" "\$(date +%s)" >> "\$rec" ;;
+run) # the plan author: the first run writes the plan; a forced run is a revision of it
+  if [ ! -f "\$plan" ]; then
+    mkdir -p "\$(dirname "\$plan")"; printf 'plan of %s\n%s\n' "\$unit" "$PSZ" > "\$plan"
+    [ ! -e "$T/plan-question-\$unit" ] || printf '\n## Question for the owner\n\nShould the thing be done?\n' >> "\$plan"
+  elif [ "\${COMMANDECK_SEAT_FORCE:-0}" = 1 ] && [ ! -e "$T/norevise-\$unit" ]; then
+    if [ -e "$T/revise-opens-question-\$unit" ]; then rm -f "$T/revise-opens-question-\$unit"; printf '\n## Question for the owner\n\nShould the thing be done?\n' >> "\$plan"
+    elif grep -q '^## Question for the owner' "\$plan"; then
+      sed '/^## Question for the owner/,\$d' "\$plan" > "\$plan.t" && mv "\$plan.t" "\$plan"; printf '## Question for the owner\n\nNone: answered as D9\n' >> "\$plan"
+    else echo "revised at call \$(wc -l < "$CALLS")" >> "\$plan"; fi
+  fi
   echo "snap \$unit launch=\$(grep -c '^Launch:' "\$COMMANDECK_BATCH") plan=\$(grep -c '^## Plan' "\$COMMANDECK_BATCH")" >> "$T/snap"
-  v=PLAN-DONE
-else v=\$(cat "$T/verdict-\$unit-\$role" 2>/dev/null || echo 'VERDICT: GO'); fi
-printf 'role=%s\nlaunched=%s\nplan=%s\nplanhash=%s\nverdict=%s\ncollected=%s\n' "\$role" "\$((\$(wc -l < "$CALLS") + 100))" "\$plan" \
-  "\$(sha256sum < "\$plan" | cut -d' ' -f1)" "\$v" "\$(date +%s)" > "$SCR/seat-\$unit-\$role.txt"
-[ "\$v" = PLAN-DONE ] || [ "\$v" = 'VERDICT: GO' ]
+  printf 'role=%s\nlaunched=%s\nplan=%s\nplanhash=%s\nverdict=PLAN-DONE\ncollected=%s\n' "\$role" "\$((\$(wc -l < "$CALLS") + 100))" "\$plan" \
+    "\$(sha256sum < "\$plan" | cut -d' ' -f1)" "\$(date +%s)" > "\$rec" ;;
+esac
 EOF
 cat > "$T/plug/scripts/builder-launch.sh" <<EOF
 #!/usr/bin/env bash
@@ -92,7 +112,7 @@ MW=$(cd "$REAL" && ( . "$REAL/scripts/__tests__/fixtures/main-watch-merge-setup.
   echo "reports=$(posts 'main-watch: dc pass') landing=$(posts 'main-watch: dc merged into local main') all=$(grep -c . "$T/sends")" ) 2>&1 | tail -1)
 check "the driver carries a unit from plan through a NO-GO, a fix round and a closing GO to the merge, main told only of the landing (issue 443)" \
   "0 1 1 1 1 1 told=0 reports=0 landing=1 all=1" \
-  "$(cat "$T/start-$u.rc") $(grep -c "^run plan-author $u .*DRIVER=1 BATCH=$WS/$u/.claude/briefs/$u-batch.md\$" "$CALLS") $(calls "run plan-judge-sol $u") $(grep -c "^launch builder $u" "$T/seats") $(git -C "$P" log --format=%s main | grep -c "^plan($u): plan") $([ -s "$MARK" ] && echo 1 || echo 0) told=$(grep -c . "$T/to-main") $MW"
+  "$(cat "$T/start-$u.rc") $(grep -c "^run plan-author $u .*DRIVER=1 BATCH=$WS/$u/.claude/briefs/$u-batch.md\$" "$CALLS") $(calls "launch plan-judge-sol $u") $(grep -c "^launch builder $u" "$T/seats") $(git -C "$P" log --format=%s main | grep -c "^plan($u): plan") $([ -s "$MARK" ] && echo 1 || echo 0) told=$(grep -c . "$T/to-main") $MW"
 
 # A batch with no Launch line and no Plan section gets both before any seat; a batch with no Order line is refused once.
 u=wl; mkb $u; cp "$T/b/$u-batch.md" "$T/b/$u.before"; ud start --dry-run $(args $u) > "$T/dry.out" 2>&1
@@ -105,11 +125,11 @@ check "the driver writes a missing Launch line and Plan section into the batch b
 
 # A judge NO-GO stops once, naming the fix; starting again with no rulings repeats no stage; rulings newer than the
 # judge's record carry on to the launch; a refused launch is its own stop.
-u=st; mkb $u; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol"; drive $u
-out="stop=$(done_of $u | grep -c "^STOP unit=$u stage=judge: plan-judge-sol returned VERDICT: NO-GO on .*; next: main rules on the findings in .*$u-main-rulings.md, then bash .*unit-drive.sh start $u ") lines=$(done_of $u | grep -c .) told=$(grep -c "stopped at judge" "$T/to-main")"
-drive $u; out+=" again=$(calls "run plan-author $u")$(calls "run plan-judge-sol $u") lines=$(done_of $u | grep -c .)"
-mkdir -p "$P/.claude/briefs"; touch -t 200001010000 "$SCR/seat-$u-plan-judge-sol.txt"; echo 'Accepted F1.' > "$P/.claude/briefs/$u-main-rulings.md"; drive $u
-out+=" ruled=$(calls "run plan-judge-sol $u")$(calls "run plan-author $u")$(calls "launch --from-plan $u") cleared=$([ -e "$SCR/unit-loop-$u.done" ] || echo gone)"
+u=st; mkb $u; touch "$T/launch-fails-$u-plan-judge-sol"; drive $u
+out="stop=$(done_of $u | grep -c "^STOP unit=$u stage=judge: plan-judge-sol: REFUSED: plan-judge-sol is off; nothing was opened; next: bash .*unit-drive.sh start $u ") lines=$(done_of $u | grep -c .) told=$(grep -c "stopped at judge" "$T/to-main")"
+j0=$(calls "launch plan-judge-sol $u"); drive $u; out+=" again=$(calls "run plan-author $u")$(($(calls "launch plan-judge-sol $u") - j0)) lines=$(done_of $u | grep -c .)"
+rm -f "$T/launch-fails-$u-plan-judge-sol"; j0=$(calls "launch plan-judge-sol $u"); drive $u
+out+=" ruled=$(($(calls "launch plan-judge-sol $u") - j0))$(calls "run plan-author $u")$(calls "launch --from-plan $u") cleared=$([ -e "$SCR/unit-loop-$u.done" ] || echo gone)"
 u=lr; mkb $u; touch "$T/refuse-launch"; drive $u; rm -f "$T/refuse-launch"
 out+=" launchstop=$(done_of $u | grep -c "^STOP unit=$u stage=launch: builder-launch.sh refused: REFUSED: 3 Builders are running")"
 check "the driver stops once, naming the fix, and a resume repeats no finished stage (issue 443)" \
@@ -142,7 +162,7 @@ check "a takeover before the first run begins leaves one driver; an unknown-stat
   "B=0 started=2 launches=1 refusedA=1 unknown=2:1:0:drive-tk2-777" "$out"
 
 # The seats the driver runs are the ones plan-tier prints, run in that order, none other.
-seats() { echo "$(calls "run plan-author $1")$(calls "run plan-judge-sol $1")$(calls "run plan-judge-opus $1")$(calls "launch --from-plan $1")"; }
+seats() { echo "$(calls "run plan-author $1")$(calls "launch plan-judge-sol $1")$(calls "launch plan-judge-opus $1")$(calls "launch --from-plan $1")"; }
 u=ss; mkb $u; drive $u; out="plus=$(seats $u)"
 u=sp; mkb $u '2. tighten the login check'; drive $u; out+=" panel=$(seats $u)"
 opts '{"planJudgeSolEnabled": false}'; u=sf; mkb $u; drive $u; out+=" solOff=$(seats $u)"
@@ -172,6 +192,101 @@ check "the driver's service runs on the project its start resolved, though it st
 # The tier stage keeps no file of its own: plan-tier's refusal reaches the STOP line from memory (Data design: no other
 # state is added).
 check "the tier stage writes no drive-<unit>.tier file, refused or not (issue 443)" "0" "$(find "$SCR" -name 'drive-*.tier' | grep -c .)"
+
+# The plan loop (#559): the driver judges plan versions (the plan's sha256) until every judge the tier names says GO on one
+# version with no question line; a NO-GO or a question gets a revision; main hears only a question, a seat error or a stop.
+nt() { grep -c . "$T/to-main"; }
+stopped() { done_of "$1" | grep -c "^STOP unit=$1 stage=$2: $3"; }
+calllog() { grep -E "$2" "$CALLS" | grep " $1 " | awk '{sub(/plan-judge-/, "", $2); print $1 ":" $2}' | tr '\n' ' '; }
+rep() { printf '# report\n%s\n' "$2" > "$T/report-$1"; }
+mkdir -p "$P/.claude/metrics"; : > "$P/.claude/metrics/decisions.jsonl"
+answer() { jq -cn --arg id "plan-$1" --arg at "$2" --arg a "$3" '{id: $id, question: "q", proposedDefault: "d", source: "s", askedAt: "2000-01-01T00:00:00Z", answeredAt: $at, answer: $a}' >> "$P/.claude/metrics/decisions.jsonl"; }
+begin() { ud start $(args "$1") > "$T/start-$1.out" 2> "$T/start-$1.err"; SVC=$(tail -1 "$T/started"); }
+until_() { local i; for i in $(seq 100); do eval "$1" && return 0; sleep 0.2; done; return 1; }
+running() { [ ! -e "$T/hs/$SVC" ]; }
+slog() { cat "$T/hs/$SVC.log"; }
+panel='2. tighten the login check'
+opts '{}'
+
+u=l1; mkb $u; drive $u
+check "the loop runs the author, then the judges the tier names, then launches" \
+  "run:plan-author launch:plan-judge-sol wait:plan-judge-sol collect:plan-judge-sol launch:--from-plan " \
+  "$(grep -E "^(run|launch|wait|collect) " "$CALLS" | grep " $u " | awk '{print $1 ":" $2}' | tr '\n' ' ')"
+
+u=l2; mkb $u "$panel"; drive $u; seq=$(calllog $u '^(launch|wait|collect) plan-judge')
+check "a Panel launches Sol then Opus before either is waited on" "launch:sol launch:opus  0 2 2" \
+  "$(echo "$seq" | tr ' ' '\n' | grep . | head -2 | tr '\n' ' ') $(echo "$seq" | tr ' ' '\n' | grep . | tail -n +3 | grep -c '^launch') $(echo "$seq" | tr ' ' '\n' | grep -c '^wait') $(echo "$seq" | tr ' ' '\n' | grep -c '^collect')"
+
+u=l3; mkb $u "$panel"
+echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol-1"; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-opus-1"
+rep $u-plan-judge-sol-1 $'- [P1] sol finding alpha\nVERDICT: NO-GO'; rep $u-plan-judge-opus-1 $'- [P2] opus finding beta\nVERDICT: NO-GO'; drive $u
+check "a NO-GO revision carries every finding from both reports" "alpha=1 beta=1 revisions=1 builder=1" \
+  "alpha=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'sol finding alpha') beta=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'opus finding beta') revisions=$(grep -c "^run plan-author $u .* FORCE=1 " "$CALLS") builder=$(calls "launch --from-plan $u")"
+
+u=l4; mkb $u "$panel"; t0=$(nt); drive $u; SVC=$(tail -1 "$T/started")
+check "both GO on one version launches the Builder" "sol=1 opus=1 revisions=0 builder=1" \
+  "sol=$(calls "launch plan-judge-sol $u") opus=$(calls "launch plan-judge-opus $u") revisions=$(grep -c "^run plan-author $u .* FORCE=1 " "$CALLS") builder=$(calls "launch --from-plan $u")"
+check "the author-to-launch run sends main nothing" "0" "$(($(nt) - t0))"
+check "each loop step logs its time, plan version and verdict" "1 1 1" \
+  "$(slog | grep -c "^unit-drive: [0-9]*-[0-9]*-[0-9]*T[0-9:]*Z $u plan=[0-9a-f]\{8\} collect plan-judge-sol VERDICT: GO\$") $(slog | grep -c "^unit-drive: [0-9]*-[0-9]*-[0-9]*T[0-9:]*Z $u plan=[0-9a-f]\{8\} collect plan-judge-opus VERDICT: GO\$") $(slog | grep -c "^unit-drive: [0-9]*-[0-9]*-[0-9]*T[0-9:]*Z $u plan=[0-9a-f]\{8\} launch plan-judge-sol\$")"
+
+u=l6; mkb $u "$panel"; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-opus-1"; drive $u
+check "a GO on an older plan version is not a pass" "sol=2 opus=2 builder=1 revisions=1" \
+  "sol=$(calls "launch plan-judge-sol $u") opus=$(calls "launch plan-judge-opus $u") builder=$(calls "launch --from-plan $u") revisions=$(grep -c "^run plan-author $u .* FORCE=1 " "$CALLS")"
+
+# #599: the loop has no round cap. Two NO-GO versions (both judges, then Opus alone) are each revised and judged again,
+# and the third version, which both pass, launches the Builder; main is sent nothing and nobody launches a seat by hand.
+u=l3r; mkb $u "$panel"; t0=$(nt)
+echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol-1"; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-opus-1"
+echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-opus-2"; drive $u
+check "a plan needing three judge rounds runs to GO and launches the Builder with no hand launch" "sol=3 opus=3 revisions=2 builder=1 stops=0 main=0" \
+  "sol=$(calls "launch plan-judge-sol $u") opus=$(calls "launch plan-judge-opus $u") revisions=$(grep -c "^run plan-author $u .* FORCE=1 " "$CALLS") builder=$(calls "launch --from-plan $u") stops=$(done_of $u | grep -c '^STOP') main=$(($(nt) - t0))"
+
+u=l7; mkb $u; touch "$T/launch-fails-$u-plan-judge-sol"; drive $u
+check "a failed or refused seat stops the loop with the seat's error" "stop=1 builder=0" \
+  "stop=$(stopped $u judge "plan-judge-sol: REFUSED: plan-judge-sol is off; nothing was opened; next: ") builder=$(calls "launch --from-plan $u")"
+
+u=l8; mkb $u; touch "$T/noreport-$u-plan-judge-sol"; drive $u
+check "a pass with a missing report is refused with a stop" "stop=1 builder=0" \
+  "stop=$(stopped $u judge "no report of plan-judge-sol") builder=$(calls "launch --from-plan $u")"
+
+u=l9; mkb $u; rep $u-plan-judge-sol-1 $'- > `QUESTION for the OWNER:` ship it?\nVERDICT: GO'; drive $u
+check "a GO report holding a question line is not a pass" "sol=2 revisions=1 builder=1" \
+  "sol=$(calls "launch plan-judge-sol $u") revisions=$(grep -c "^run plan-author $u .* FORCE=1 " "$CALLS") builder=$(calls "launch --from-plan $u")"
+
+u=la; mkb $u; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol-1"; touch "$T/norevise-$u"; drive $u
+check "a revision that leaves the plan unchanged stops" "stop=1 sol=1 builder=0" \
+  "stop=$(stopped $u revise "the revision left the plan unchanged") sol=$(calls "launch plan-judge-sol $u") builder=$(calls "launch --from-plan $u")"
+
+u=lb; mkb $u; touch "$T/edit-on-wait-$u"; drive $u
+check "a plan edited while it is judged stops" "stop=1 builder=0" \
+  "stop=$(stopped $u judge "the plan changed while it was judged") builder=$(calls "launch --from-plan $u")"
+
+# The question pause: an open Question section is sent to main once per version, and the loop waits on decision plan-<unit>.
+E+=(COMMANDECK_LOOP_POLL_SECONDS=1)
+u=qa; mkb $u; touch "$T/plan-question-$u"; begin $u; until_ "[ \$(grep -c 'asks the owner' $T/to-main) -ge 1 ]"; sleep 2
+out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u") asked=$(grep -c 'asks the owner' "$T/to-main") file=$(grep -c '^[0-9a-f]\{64\} [0-9]\{9,\}$' "$SCR/drive-$u.asked")"
+answer $u "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "do it"; waitrc "$SVC"
+check "an open Question section pauses the loop until plan-<unit> is answered" \
+  "paused=yes sol=0 asked=1 file=1 released=1 asked=1" \
+  "$out released=$(calls "launch plan-judge-sol $u") asked=$(grep -c 'asks the owner' "$T/to-main")"
+check "an answered question is written into the plan and the section reads None:" "none=1 answer=1 builder=1" \
+  "none=$(grep -c '^None: answered as D9' "$WS/$u/.claude/plans/$u.md") answer=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'do it') builder=$(calls "launch --from-plan $u")"
+
+u=qs; mkb $u; touch "$T/plan-question-$u"; answer $u 2000-01-01T00:00:00Z "an older round's answer"; n0=$(grep -c 'asks the owner' "$T/to-main"); begin $u
+until_ "[ \$(grep -c 'asks the owner' $T/to-main) -gt $n0 ]"; sleep 2
+out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u")"
+answer $u "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "now"; waitrc "$SVC"
+check "an answer from an earlier plan version does not release the pause" "paused=yes sol=0 released=1 builder=1" \
+  "$out released=$(calls "launch plan-judge-sol $u") builder=$(calls "launch --from-plan $u")"
+
+u=qq; mkb $u; touch "$T/revise-opens-question-$u"; rep $u-plan-judge-sol-1 $'- [P2] cite it\nQuestion for the owner: ship it?\nVERDICT: GO'; n0=$(grep -c 'asks the owner' "$T/to-main"); begin $u
+until_ "[ \$(grep -c 'asks the owner' $T/to-main) -gt $n0 ]"; sleep 2
+out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u") builder=$(calls "launch --from-plan $u")"
+answer $u "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "ship it"; waitrc "$SVC"
+check "a question line pauses the loop until plan-<unit> is answered" "paused=yes sol=1 builder=0 released=2 builder=1" \
+  "$out released=$(calls "launch plan-judge-sol $u") builder=$(calls "launch --from-plan $u")"
+E=("${E[@]:0:${#E[@]}-1}")
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

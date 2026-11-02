@@ -30,7 +30,11 @@ out+=" optout=$(bip 'parse the input' '- a case: t-one' 'Bad input: none, a gate
 out+=" stem=$(bip 'Validating the input' '- a case: t-one' '')"
 check "a plan with bad-input cases passes" "all=0 noparse=0 optout=0 stem=2" "$out"
 # Catches: the check reading only the fixture plans, so the last unit's plan (parsers, no junk row) goes through.
-PLAN_CHECK_ROOT=$REAL bash "$PC" "$REAL/.claude/plans/plugin-open-2026-10-31.md" "$T/batch.md" >/dev/null 2>"$T/err"
+# Read at the plan's own commit (774aba3): its Facts cites hold for that tree, and a later cut that shortens a cited file
+# refuses the plan on Facts before the bad-input check is reached. plan-check reads cites from the plan's own checkout
+# (PLAN_CHECK_ROOT is for a plan on stdin), so the copy is made a checkout.
+mkdir -p "$T/at"; git -C "$REAL" archive 774aba3 | tar -x -C "$T/at"; git -C "$T/at" init -q
+bash "$PC" "$T/at/.claude/plans/plugin-open-2026-10-31.md" "$T/batch.md" >/dev/null 2>"$T/err"
 check "the last unit's plan is asked for bad-input rows" "1" "$(grep -c 'list one row each, or write .Bad input: none, <reason>.' "$T/err")"
 
 echo "$PASS passed, $FAIL failed"

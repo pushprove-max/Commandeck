@@ -109,10 +109,13 @@ issue_check() {
     c=$(issue_cases "$n") || exit 2
     cases+=$(sed "s/^/$n /" <<<"$c")$'\n'
   done
-  out=$(PC_CASES=$cases PC_TEXT=$text python3 -I - "$label" "$planless" <<'PY'
+  # Fenced lines are fixture text by fence.sh's one rule, as every other plan check reads them.
+  out=$(PC_CASES=$cases PC_TEXT=$text PC_IC_FENCED=$(awk "$PP_AWK_FENCE"'fence($0) || flen { print NR }' <<<"$text") \
+    python3 -I - "$label" "$planless" <<'PY'
 import os, re, sys
 label, planless = sys.argv[1], sys.argv[2] == '1'
-rows, steps, accept, sec, fence = {}, set(), [], '', False
+rows, steps, accept, sec = {}, set(), [], ''
+fenced = set(os.environ['PC_IC_FENCED'].split())
 
 def expand(path):
     """scripts/{a,b}.sh is scripts/a.sh and scripts/b.sh; a group with no comma is literal."""
@@ -121,11 +124,8 @@ def expand(path):
         return [path]
     return [p for alt in m.group(1).split(',') for p in expand(path[:m.start()] + alt + path[m.end():])]
 
-for line in os.environ['PC_TEXT'].split('\n'):
-    if line.startswith('```'):
-        fence = not fence
-        continue
-    if fence:
+for n, line in enumerate(os.environ['PC_TEXT'].split('\n'), 1):
+    if str(n) in fenced:
         continue
     h = re.match(r'(#+)[ \t]+(.*)', line)
     if h:
@@ -526,5 +526,19 @@ if later:
 sys.exit(2 if done_bad or later else 0)
 PY
 ) || { [ -n "$out" ] || out="REFUSED: $PLAN Done and follow-up lines: check not run -- python3 failed"; printf '%s\n' "$out" >&2; exit 2; }
+# Issue 562: the pass's break gate (builder-codex-pass.sh) and break-run.sh read only a `Break:` at the left margin, so a
+# bulleted, indented or bold one passes every other check and then gets no red run. Outside a fence such a line is refused,
+# each named; a bulleted `Break: none` is skipped by the gate and passes. Both readers stay as they are.
+break_check() {
+  local bad
+  bad=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next }
+    /^Break:/ { next }
+    /^[ \t]*(([-*+]|\*\*)[ \t]*)*Break:/ {
+      rest = $0; sub(/^[ \t]*(([-*+]|\*\*)[ \t]*)*Break:[ \t]*/, "", rest)
+      if (rest ~ /^none([ \t]|$)/) next
+      print "  - line " NR ": " $0 }' <<<"$PT")
+  [ -z "$bad" ] || { printf 'REFUSED: %s has a Break line that is not at the left margin (the break gate reads only a line that starts with Break:): start it at the left margin, no bullet, indent or bold:\n%s\n' "$PLAN" "$bad" >&2; exit 2; }
+}
+break_check
 issue_check
 echo "size $SIZE"

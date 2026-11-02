@@ -19,5 +19,12 @@ rb rb2 "$OFF"
 check "--review-base refuses a commit that is not on main (issue 430)" "2 1 no-file no-worktree" \
   "$RC $(grep -c "REFUSED: --review-base $OFF is not a commit on main" "$T/out") $([ -e "$P/.claude/briefs/rb2-review-base.md" ] && echo file || echo no-file) $([ -e "$WS/rb2" ] && echo worktree || echo no-worktree)"
 
+# Issue 560: the launcher and the merge read one plan reader (paths.sh pp_plan_section_paths and pp_brief_plans). A plan
+# named in plain text under Plan passes the launcher, and the merge, reading main's copy of the brief the launch wrote,
+# finds that same plan, so a deletion the plan lists is not refused at the merge for a plan it read as empty.
+build pr1
+check "the launcher and the merge read the same plan paths" "0 .claude/plans/toy.md .claude/plans/toy.md" \
+  "$RC $(. "$T/plug/scripts/paths.sh" >/dev/null 2>&1; pp_plan_section_paths "$T/batch.md" | paste -sd' ' -) $(. "$T/plug/scripts/paths.sh" >/dev/null 2>&1; pp_brief_plans "$P/.claude/briefs/pr1-builder-brief.md" | paste -sd' ' -)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

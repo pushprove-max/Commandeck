@@ -43,6 +43,7 @@
 # Self-test: bash hooks/__tests__/merge-lock-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of rows from a project that installs the plugin, with merges logged
 cd "$(jq -r '.cwd // empty' <<<"$INPUT")" 2>/dev/null || true
 
 # live <common git dir> -- 0 and STATE set when a merge holds main there with a live pid; a dead pid is stale.

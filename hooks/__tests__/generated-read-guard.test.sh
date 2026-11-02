@@ -51,5 +51,36 @@ check "a shell read of saved output is refused" "2 2 1 1" \
 # Catches: the saved rule firing on an echo or printf that only names the path (issue 509 again, for saved output).
 check "an echo naming saved output passes" "0 0" "$(run "$(bashp "echo \"$SP/x.txt\"")") $(run "$(bashp "printf '%s\\n' \"$SP/x.txt\"")")"
 
+# Catches: every shell read of saved output refused, which leaves a seat no cheap bounded query of a big tool result.
+# A match cap on rg or grep and a line cap on head or tail (1-500) pass; the guard keeps the cap on what reaches the context.
+check "a bounded rg or head on saved output passes" "0 0 0 0 0 0 0 0" "$(run "$(bashp "rg -m 5 a \"$SP/x.txt\"")") $(run "$(bashp "grep -m 3 a \"$SP/x.txt\"")") $(run "$(bashp "head -n 20 \"$SP/x.txt\"")") $(run "$(bashp "tail -n 500 \"$SP/x.txt\"")") $(run "$(bashp "rg -m 1 a \"$SP/x.txt\" | head -n 3")") $(run "$(bashp "head -n 1 \"$SP/x.txt\"")") \
+$(run "$(bashp "head -n 1000 -n 20 \"$SP/x.txt\"")") $(run "$(bashp "rg -m 3 -i -n a \"$SP/x.txt\"")")"
+# Catches: a bound that is not a number 1-500 taken as a bound: head -n with its number missing (the path is read as the number),
+# a negative or junk count, 0, 501, rg with no -m, and sed, which has no bound this check reads.
+check "an absent, junk or negative bound still blocks" "2 2 2 2 2 2 2 2 2 2 2 2" "$(run "$(bashp "head -n \"$SP/x.txt\"")") $(run "$(bashp "head -n -5 \"$SP/x.txt\"")") $(run "$(bashp "head -n abc \"$SP/x.txt\"")") $(run "$(bashp "rg a \"$SP/x.txt\"")") $(run "$(bashp "head -n 0 \"$SP/x.txt\"")") $(run "$(bashp "head -n 501 \"$SP/x.txt\"")") $(run "$(bashp "tail -n +5 \"$SP/x.txt\"")") $(run "$(bashp "sed -n 1,5p \"$SP/x.txt\"")") \
+$(run "$(bashp "head -n 20 -n 1000 \"$SP/x.txt\"")") $(run "$(bashp "rg -m 1 -A 10000 a \"$SP/x.txt\"")") \
+$(run "$(bashp "grep -m 1 -C 50000 a \"$SP/x.txt\"")") $(run "$(bashp "head -c 100 \"$SP/x.txt\"")")"
+# (pass 1) The last four above: a count the command overrides (head and tail use their last), a search context flag that
+# prints past -m, and a byte count. The pass case before it gains a later smaller count and plain search flags beside -m.
+# Catches: the bound of one stage excusing another: a cat of saved output next to a bounded rg is still a cat.
+check "cat on saved output still blocks" "2 2 2" "$(run "$(bashp "cat \"$SP/x.txt\"")") $(run "$(bashp "rg -m 5 a \"$SP/x.txt\"; cat \"$SP/x.txt\"")") $(run "$(bashp "cat -n \"$SP/x.txt\" | head -n 5")")"
+# (pass 7) Catches: a per-file cap taken as the command's bound. rg -m and head -n cap each file, so a glob, a brace, a
+# directory, a second file or no path at all (rg searches the folder it runs in) prints past the cap.
+mkdir -p "$SP/d"; seq 1 50 > "$SP/y.txt"; seq 1 50 > "$SP/d/z.txt"
+check "a per-file cap over many saved files still blocks" "2 2 2 2 2 2 2" "$(run "$(bashp "head -n 500 \"$SP\"/*")") $(run "$(bashp "rg -m 1 a \"$SP/\"")") $(run "$(bashp "rg -m 1 a \"$SP/d\"")") \
+$(run "$(bashp "head -n 500 \"$SP/x.txt\" \"$SP/y.txt\"")") $(run "$(bashp "grep -m 1 a \"$SP/x.txt\" \"$SP/y.txt\"")") $(run "$(bashp "tail -n 5 \"$SP\"/{x,y}.txt")") $(run "$(bashp "rg -m 1 \"$SP/x.txt\"")")"
+
+# Catches: a limit that covers the file read as ranged: offset 1 and limit 300 on a 300-line file is the whole file (r9).
+check "a 300-line generated file read with offset 1 and limit 300 is still refused" 2 "$(run "$(readp "$R/gen.json" '{"offset":1,"limit":300}')")"
+# Catches: an absent limit taken as a bound (the one-jq read must not let an empty field slide into the next one).
+check "a Read with no limit of a generated file is still refused" 2 "$(run "$(readp "$R/gen.json")")"
+# Catches: an offset default lost in the one-jq read: a limit with no offset still starts at line 1, so it is a whole read.
+check "a Read of a generated file with limit 5000 and no offset is refused" 2 "$(run "$(readp "$R/gen.json" '{"limit":5000}')")"
+# Catches: a Read paying one jq start per field (tool, file, limit, offset): a jq shim counts the starts for one payload.
+mkdir -p "$T/shim"; JQ_REAL=$(command -v jq)
+printf '#!/bin/sh\necho x >> "%s/jq.log"\nexec "%s" "$@"\n' "$T" "$JQ_REAL" > "$T/shim/jq"; chmod +x "$T/shim/jq"
+rm -f "$T/jq.log"; printf '%s' "$(readp "$R/gen.json" '{"offset":100,"limit":20}')" | PATH="$T/shim:$PATH" CLAUDE_PROJECT_DIR=$R bash "$ROOT/hooks/lib/run-hook.sh" "$HOOK" >/dev/null 2>&1
+check "a Read of a generated file with offset 100 and limit 20 starts jq once for the payload" 1 "$(wc -l < "$T/jq.log" | tr -d ' ')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

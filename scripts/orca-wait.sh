@@ -343,7 +343,7 @@ serve() {  # serve <message JSON> <pane-to-unit map> <driven units>
       # queue at once, where the relay and the dashboard see it, not behind main's read (issue 305). Any other waits on main.
       wo=(--waits-on main)
       if jq -r '[.subject // "", .body // ""] | join(" ")' <<<"$m" | pp_owner_bound; then wo=()
-        echo "  next: it waits for the owner's answer, on the decision queue now; send it on: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
+        echo "  next: it waits for the owner's answer, on the decision queue now. The ledger sends a dashboard or relay answer itself: a note reading delivered or queued is not sent again; one reading not delivered or not sent by the ledger (a reversal), one reading unknown once the unit's pane shows no answer, and an answer the owner gives you in chat, you send on: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"
       else echo "  next: it waits for your answer: bash $PP_SCRIPTS_Q/answer-worker.sh $from \"<text>\" $unit-$id"; fi
       # Recorded like an owner's ask; a replayed message is the same id and adds nothing.
       bash "$PP_SCRIPTS/decision.sh" add "$unit-$id" "$subject: $(jq -r '.body // "" | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:300]' <<<"$m")" none "$unit asks" "${wo[@]}" >/dev/null 2>&1 \
@@ -464,6 +464,13 @@ state_block() {  # once per wake, never per message -- the board main would othe
   # The terse wake lists only main-watch items: those are the tasks main closes
   # by id, and every other open task belongs to a driver or a seat.
   tj=$(orca-ide orchestration task-list --json 2>/dev/null)
+  # A landed-merge main-watch item is done when it is posted (main-watch.sh posts it once): close its task and drop it from the
+  # listing (issue 571, D72). Anchored on the spec's start, so a spec quoting the text mid-line stays; a failed close stays open.
+  while IFS= read -r tid; do
+    [ -n "$tid" ] && pp_task_close "$tid" completed >/dev/null 2>&1 \
+      && tj=$(jq -c --arg id "$tid" '.result.tasks |= map(select(.id != $id))' <<<"$tj" 2>/dev/null || printf '%s' "$tj")
+  done < <(jq -r '.result.tasks[]? | select(.status != "completed" and .status != "failed"
+      and ((.spec // "") | test("^main-watch item: main-watch: [^ ]+ merged into local main at [0-9a-f]+[.] "))) | .id' <<<"$tj" 2>/dev/null)
   tasks=$(jq -r --argjson full "$FULL" '[.result.tasks[]? | select(.status != "completed" and .status != "failed")]
       | (length | tostring),
         ((if $full == 1 then .[:10] else map(select((.spec // "") | startswith("main-watch item"))) end)[]

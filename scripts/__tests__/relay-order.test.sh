@@ -169,5 +169,50 @@ check "the reversal again tells main with the ruling id, marks it seen and corre
 printf '%s\n' '{"id":"r-x-no","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship x now?","answer":"no"}' >> "$COMMANDECK_RULING_LOG"
 OUT=$(order ship-x no); RC=$?
 check "a new ruling does not replace an answer the owner gave: only an auto-decided one" "1 yes, ship it (r-19991017-111111-p-d4e5f6)" "$RC $(ans ship-x)"
+# Issue 569: an owner's answer to a Builder's question reaches the unit once, through the ledger in decision.sh answer; the
+# note's body ends `Delivery: <line>`, a resumed order repeats the recorded line, and a reversal says the ledger sent nothing.
+DELS=${SEEN%.decisions-seen}.deliveries
+mkdir -p "$T/ws/u9"
+printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >> "%s/aw.log"; echo >> "%s/aw.log"\necho "worker stdout line"\n' "$T" "$T" > "$T/aw"
+chmod +x "$T/aw"; : > "$T/aw.log"
+E+=(COMMANDECK_ANSWER_WORKER="$T/aw")
+dec add u9-msg_r1 "Which lock for the cache, flock or lockf?" none "u9 asks" >/dev/null
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) # not before the ask: the ruling must be given since the decision was asked
+printf '%s\n' '{"id":"r-19991017-131313-p-aa11bb","utc":"'"$NOW"'","source":"prompt","question":null,"answer":"use flock"}' >> "$COMMANDECK_RULING_LOG"
+: > "$T/sent"
+OUT=$(order u9-msg_r1 "use flock"); RC=$?
+# The worker's own stdout line never reaches decision.sh's stdout, the row relay-order parses: jq reports nothing in its output.
+check "an owner answer relayed through relay-order reaches the unit once" "0 1 u9|use flock (r-19991017-131313-p-aa11bb)|u9-msg_r1| 1 delivered: u9-msg_r1 to u9 0" \
+  "$RC $(grep -c . "$T/aw.log") $(head -1 "$T/aw.log") $(jq -r .body "$T/sent" | grep -c '^Delivery: delivered') $(jq -r .body "$T/sent" | sed -n 's/^Delivery: //p') $(grep -c '^jq: ' <<<"$OUT")"
+# A retry after main was not told: the seen mark goes, the first call's line is repeated and the unit is not sent again.
+unseen u9-msg_r1; : > "$T/sent"
+OUT=$(order u9-msg_r1 "use flock"); RC=$?
+check "a retried relay order after a failed note to main repeats the first call's delivery line" "0 1 delivered: u9-msg_r1 to u9" \
+  "$RC $(grep -c . "$T/aw.log") $(jq -r .body "$T/sent" | sed -n 's/^Delivery: //p')"
+# Nothing usable recorded for the retry: unknown, never a second send.
+unseen u9-msg_r1; : > "$T/sent"; printf 'junk\nu9-msg_r1@x\ta\tb\n' > "$DELS"
+OUT=$(order u9-msg_r1 "use flock"); RC=$?
+check "a retry with no usable recorded line says Delivery: unknown, and sends nothing" "0 1 1" \
+  "$RC $(grep -c . "$T/aw.log") $(jq -r .body "$T/sent" | grep -c '^Delivery: unknown: an earlier relay call')"
+# (pass 9, the owner's answer) Catches: decision.sh's unknown line (a send cut at its deadline) dropped from
+# main's note, so main reads no delivery word. The stub timeout runs the worker, then exits 124 as a deadline does.
+mkdir -p "$T/tbin"; printf '#!/usr/bin/env bash\nshift; "$@"; exit 124\n' > "$T/tbin/timeout"; chmod +x "$T/tbin/timeout"; cp "$T/tbin/timeout" "$T/tbin/gtimeout"
+dec add u9-msg_r9 "Which index for the cache, btree or hash?" none "u9 asks" >/dev/null
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' '{"id":"r-19991017-141414-p-cc22dd","utc":"'"$NOW"'","source":"prompt","question":null,"answer":"use btree"}' >> "$COMMANDECK_RULING_LOG"
+: > "$T/sent"
+OUT=$(cd "$T/p" && "${E[@]}" PATH="$T/tbin:$T/bin:$PATH" bash "$REAL/scripts/relay-order.sh" u9-msg_r9 "use btree" 2>&1)
+check "a relayed answer whose send is cut at its deadline tells main unknown, check the pane before resending" \
+  "unknown: u9-msg_r9 to u9 timed out; check the unit's pane before resending" "$(jq -r .body "$T/sent" | sed -n 's/^Delivery: //p')"
+# Issue 569: main's rules (main-session.md, and the next line orca-wait.sh prints for an owner-bound question) say what is sent
+# again and what is not: a delivered or queued answer is never sent twice; not delivered, a reversal, and an owner's chat answer
+# are sent once with answer-worker and the row id, even when the hook already closed the row.
+MS=$(tr '\n' ' ' < "$REAL/templates/main-session.md" | tr -s ' ')
+OW=$(grep 'it waits for the owner' "$REAL/scripts/orca-wait.sh")
+check "main's rules say an answer the ledger delivered is not resent, and an owner's chat answer is sent once with answer-worker even when the hook closed its row" "1 1 1 1 1" \
+  "$(grep -c 'saying an answer was `delivered` or `queued` is not sent again' <<<"$MS") $(grep -c 'not delivered. or .not sent by the ledger' <<<"$MS") $(grep -c 'whether or not the hook already closed the row' <<<"$MS") $(grep -c 'a note reading delivered or queued is not sent again' <<<"$OW") $(grep -c 'answer the owner gives you in chat, you send on: bash .*answer-worker.sh' <<<"$OW")"
+# (pass 9) Catches: main told by one rule to resend an unknown at once, or by the other never: both say once the pane shows none.
+check "main's rules resend an unknown delivery only once the unit's pane shows no answer" "1 1" \
+  "$(grep -c '`unknown` once the unit.s pane shows no answer' <<<"$MS") $(grep -c 'one reading unknown once the unit.s pane shows no answer' <<<"$OW")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

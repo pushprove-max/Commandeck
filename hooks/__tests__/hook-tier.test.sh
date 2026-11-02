@@ -35,7 +35,7 @@ rc() { run "$@" | head -1 | cut -d'|' -f1; }
 # The payloads are refusing ones: strict proves it, so the silence below is the
 # gate and not a payload nothing would have refused.
 check "strict: a focused test is refused"      2 "$(rc strict test-skip-only-blocker "$SKIP")"
-check "strict: a search of / is refused"       2 "$(rc strict bash-guardrails "$SEARCH")"
+check "strict: a search of / is rewritten"     0+yes "$(rc strict bash-guardrails "$SEARCH")+$(run strict bash-guardrails "$SEARCH" | grep -q updatedInput && echo yes)"
 check "strict: a web fetch is advised"         yes "$([ -n "$(run strict web-fetch-blocker "$FETCH" | cut -d'|' -f2-)" ] && echo yes)"
 
 for h in $STRICT; do

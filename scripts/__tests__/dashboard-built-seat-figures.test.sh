@@ -28,6 +28,14 @@ check "main: working now, the first call of a session begun today as the rebuild
 check "main: twelve hourly token sums, the last hour holding the newest calls" "$(bins "[$((NOW - 60)), $E, $((NOW - 20))]")" "$(seat main .hourly)"
 check "the relay: working now, twelve hourly sums, and two sub-agent runs today at \$0.02" "[true,$(bins "[$((NOW - 30)), $((NOW - 20)), $((NOW - 10))]"),{\"count\":2,\"usd\":0.02},1]" \
   "$(seat relay '[.live, .hourly, .sideRuns, .week.sessions]')"
+# Main's cost today is every call since midnight in every session of its folder, a restarted session and a sub-agent
+# included (c, d and b: $0.03; a, three days back, is not today's). Issue 581's header reads it.
+check "main's cost today sums every session since midnight, a restarted session and a sub-agent included" '[0.03,false]' "$(seat main '[.today.usd, .today.partial]')"
+# A call whose model has no price leaves the day a floor: partial, never a bare amount.
+jq -cn --arg t "$(iso $((NOW - 5)))" '{type: "assistant", timestamp: $t, requestId: "u", message: {id: "u", model: "claude-nonesuch-1", usage: {input_tokens: 1, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}}' > "$M/s4.jsonl"
+rm -f "$T"/out/cache/limit-requests.json; dash
+check "a seat with an unpriced call reads partial today" '[0.03,true]' "$(seat main '[.today.usd, .today.partial]')"
+rm -f "$M/s4.jsonl"
 # s2's transcript deleted, its rows still cached: when it began cannot be read, so the rebuild cost is unknown, not $0.01.
 mv "$M/s2.jsonl" "$T/s2.jsonl"; dash; mv "$T/s2.jsonl" "$M/s2.jsonl"
 check "a session begun today whose transcript is gone leaves the rebuild cost unknown" 'null' "$(seat main .rebuildUsd)"

@@ -103,7 +103,10 @@ reported() { [[ $ROLE == plan-author* ]] && [ "${1:-PLAN-DONE}" = PLAN-DONE ] &&
 if [[ $CMDNAME == launch && $ROLE == plan-* ]]; then
   mkdir -p "$SCRATCH" && exec {PLAN_LOCK_FD}>>"$SCRATCH/${SEAT_REPO:+$SEAT_REPO@}$UNIT-plan-worktree.lock" && flock -w 600 "$PLAN_LOCK_FD" \
     || { echo "cannot lock $SCRATCH/$UNIT-plan-worktree.lock; nothing was opened" >&2; exit 1; }
-  if [ -d "$WT" ] && [ "$(cat "$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)/$PLAN_OF" 2>/dev/null)" != "$UNIT" ]; then
+  # #566: an unmarked worktree whose Builder seat is live is the Builder's own, and a plan seat (a judge of the plan it
+  # runs on) opens beside it; a record with no live pane is no seat.
+  if [ -d "$WT" ] && [ "$(cat "$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null)/$PLAN_OF" 2>/dev/null)" != "$UNIT" ] \
+     && [ -z "$(pp_seat_pane "unit-$UNIT" "$WT")" ]; then
     echo "REFUSED: $WT is not $UNIT's planning worktree (no plan seat of $UNIT made it; a Builder unit of that name may own it). Nothing was opened." >&2
     exit 2
   fi
@@ -206,6 +209,8 @@ run)
     COMMANDECK_FOREGROUND=1 nohup "${DETACH[@]}" bash "$0" run "$ROLE" "$UNIT" "$SPEC" --marker "$MARKER" "$@" > "$LOG" 2>&1 < /dev/null &
     echo "seat.sh run $ROLE $UNIT: running detached, pid $!; log $LOG. Its verdict comes to main as a wake."; exit 0
   fi
+  # The relay hears the outcome from here, once: ok on a GO, fail on anything else (a refused launch included).
+  trap 'rc=$?; pp_relay_event "$UNIT" "seat-$ROLE" "$([ "$rc" = 0 ] && echo ok || echo fail)" "exit $rc${V:+, $V}${RP:+, report $RP}"' EXIT
   # No verdict sends nothing from collect, so this one line is that outcome's wake. A question, as collect's own:
   # orca-wait.sh drops a status sent from main's handle, which a run started by main sends from.
   none() { bash "$PP_SCRIPTS/to-main.sh" question "seat $ROLE $UNIT: $1" "$2" >/dev/null 2>&1 || true; }
@@ -329,6 +334,21 @@ launch)
     echo "REFUSED: $ROLE already finished this exact spec for $UNIT ($PREV_VERDICT; $REC)." >&2
     echo "Change the spec, or rerun it on purpose with COMMANDECK_SEAT_FORCE=1." >&2
     exit 2
+  fi
+  # #535: Opus judges a plan beside Sol, never ahead of it. A round of Opus waits until the Sol seat's rounds (one per
+  # collected launch tag, so a launch collected twice is one) reach Opus's own; the Sol seat must exist. No cap on rounds.
+  # Sol off in /plugin config is no Sol seat (plan-tier.sh then runs Opus alone); a value the key does not take stops here.
+  # COMMANDECK_SEAT_FORCE=1, the owner's run-on-purpose switch (above), also lets Opus run without Sol.
+  if [ "$ROLE" = plan-judge-opus ] && [ "${COMMANDECK_SEAT_FORCE:-0}" != 1 ]; then
+    judge_rounds() { [ -f "$1" ] && cut -d' ' -f1 "$1" | sort -u | grep -c . || echo 0; }
+    SOLON=0; pp_role_enabled plan-judge-sol 2>/dev/null || SOLON=$?
+    [ "$SOLON" != 2 ] || { pp_role_enabled plan-judge-sol >&2 || true; exit 2; }
+    SOLREC=$SCRATCH/seat-${SEAT_REPO:+$SEAT_REPO@}$UNIT-plan-judge-sol.txt
+    if [ "$SOLON" = 0 ]; then
+      [ -f "$SOLREC" ] && [ "$(judge_rounds "$SOLREC.rounds")" -ge "$(judge_rounds "$REC.rounds")" ] || {
+        echo "REFUSED: a plan-judge-opus round on $UNIT needs a plan-judge-sol seat with at least as many rounds; launch Sol first. Nothing was opened." >&2
+        exit 2; }
+    fi
   fi
   # Delegate by contract (ruling 2026-09-13, orchestrator invariant 3): the
   # allowed changes a spec asks for must match the sandbox the seat runs in.
@@ -467,6 +487,9 @@ launch)
       && sed "s#^Plan: \.claude/plans/$UNIT\.md\$#Plan: $SNAP (a read-only copy of .claude/plans/$UNIT.md taken at launch: judge this file, never the live one)#" "$SPEC" > "$PTR"; } \
       || { echo "cannot copy the plan for $ROLE $UNIT to $SCRATCH; closing pane $H" >&2; pp_pane_close "$H" "launch: plan copy failed" || true; exit 1; }
     PLAN_REC=$(printf 'plan=%s\nplanhash=%s' "$WT/.claude/plans/$UNIT.md" "$(sha256sum < "$SNAP" | cut -d' ' -f1)")
+    # #538: the main commit the plan worktree sits on, i.e. the files the judge could read; builder-launch.sh --from-plan
+    # refuses a record without it, and a Steps file changed on main since.
+    PLAN_REC+=$'\n'"mainsha=$(git -C "$WT" merge-base HEAD refs/heads/main 2>/dev/null || true)"
   fi
   # orca-task-create.sh retries a missing id once and prints Orca's reason;
   # a launch it fails closes the pane rather than leave a stale seat record.
@@ -510,11 +533,19 @@ launch)
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines, the budget and that each Facts citation resolves."
-  # Host rule drift: the plan judge's reading.
-  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Read the plan as a Builder who cannot ask: list every place a wrong guess would change the code. Try to falsify each claim under Claims to falsify and each Facts line (read the cited lines). Name the established industry practice for the problem: a departure the plan does not justify is a finding. On a revised plan, recheck only what its Plan change log names; a revised plan is not judged again."
+  # Host rule drift: the plan judge's reading. Under unit-drive.sh (COMMANDECK_DRIVER=1) a plan is judged once per version.
+  JROUND='On a revised plan, re-read the whole plan and recheck every earlier finding and what its Plan change log names; a revised plan is not judged again.'
+  [ "${COMMANDECK_DRIVER:-0}" != 1 ] || JROUND='Each round is a full read of one plan version.'
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Read the plan as a Builder who cannot ask: list every place a wrong guess would change the code. Try to falsify each claim under Claims to falsify and each Facts line (read the cited lines). Name the established industry practice for the problem: a departure the plan does not justify is a finding. $JROUND"
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan or batch line that describes existing placeholder UI (a disabled control, 'coming soon' copy) as context is a finding: an open problem until the plan removes it or names it on a \`Placeholder:\` line."
   # Issue 457: a stated limit can strand a fix, so the judge reads the limits for a fix nothing in production reaches.
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A stated limit that leaves a planned fix with no real caller in production (no client sends it, a gate blocks it, nothing routes to it) makes your verdict NO-GO unless the owner approved that limit by name."
+  # #546 #547 #549: the judge asks (hand-written specs would otherwise omit them), one line each.
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" First restate each section of the plan in one or two plain sentences of your own, in your report; a section you cannot restate, or whose restatement contradicts the plan, is a blocking finding naming the section."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Is there a smaller change that fully solves the problem? A yes is a finding naming the smaller change and why it fully solves it; never a reason to cut scope the problem needs."
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Confirm every file, function and test the plan names exists or is marked new (a new step, a Produces: line, or a red-first case marks new); a named item neither found nor marked new is a blocking finding naming it."
+  # #554: one pass lists every finding the judge can defend; a re-judge re-reads the whole plan and owns what it missed. The count is the judge's own statement, no script reads it.
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" List every finding you can defend in one pass, ranked by severity, before the verdict. On a re-judge, re-read the whole plan, state \`Re-read: whole plan\`, and check every earlier finding; a finding you could have raised from the earlier text is a finding too: mark it \"missed earlier\" in its text and end your findings with \`Missed earlier: <n>\`."
   # Issue 413: a judge prints its inputs in one call from the frozen copy; with no copy it is never pointed at the live plan.
   [[ $ROLE != plan-judge-* || -z ${SNAP:-} ]] || SPEC_TEXT+=" Print your inputs in one call with \`bash $PP_SCRIPTS/peek.sh --unit $UNIT --plan $SNAP\`: it reads the read-only copy your spec's Plan: line names, never the live plan."
   # Issue 397: a plan author may start helpers, and is told to.
@@ -721,7 +752,8 @@ collect)
   # The same holds for a file an earlier collect wrote (the record lists it): it is the pane text of a seat that
   # had not finished, and this collect's is newer.
   RO=0; seat_readonly && RO=1
-  if [ -n "$REPORT" ] && { [ "$RO" = 1 ] || [ ! -s "$REPORT" ] || grep -qxF "report=$REPORT" "$REC"; } && [ -n "$OUT" ]; then
+  # Issue 561: with no verdict read, a report already on disk is kept: a rerun's partial pane text is not newer news.
+  if [ -n "$REPORT" ] && { [ "$RO" = 1 ] || [ ! -s "$REPORT" ] || grep -qxF "report=$REPORT" "$REC"; } && { [ -n "$V" ] || [ ! -s "$REPORT" ]; } && [ -n "$OUT" ]; then
     # A report with no `# ` heading would transcribe as an empty file and the pane
     # is closed right after, so fall back to the whole pane text.
     BODY=$(printf '%s\n' "$OUT" | sed -n '/^# /,$p'); [ -n "$BODY" ] || BODY=$OUT
@@ -765,6 +797,8 @@ collect)
     fi
     [ -z "$DFD" ] || exec {DFD}>&-
   fi
+  # Issue 561: a record whose last verdict=/revised= line is a verdict already holds it (a revise appends revised=, so a revised seat has none).
+  if [ -z "$V" ]; then LASTV=$(grep -E '^(verdict|revised)=' "$REC" | tail -1 || true); case $LASTV in verdict=?*) echo "closed seat=$ROLE unit=$UNIT ${LASTV#verdict=}"; exit 0 ;; esac; fi
   [ -n "$V" ] || { echo "no VERDICT yet on $H (pane kept open)"; exit 3; }
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac
   # SETTLE BEFORE ANYTHING ENDS THE SEAT (host issue 2998): the seat's task and every task answer-worker.sh made to carry
@@ -798,6 +832,8 @@ collect)
   pp_close_items "$H"
   pp_pane_close "$H" "verdict collected" || true
   echo "verdict=$V" >> "$REC"
+  # #535: one line per judge round, keyed by the launch tag so a launch collected twice counts once; the Opus gate reads it.
+  [[ $ROLE != plan-judge-* ]] || echo "$(sed -n 's/^tag=//p' "$REC" | tail -1) $V" >> "$REC.rounds"
   pp_unit_event "$UNIT" seat-verdict
   echo "collected=$(date +%s)" >> "$REC"
   [[ $ROLE != plan-author* ]] || plan_lines >> "$REC"

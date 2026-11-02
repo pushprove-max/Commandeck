@@ -15,6 +15,7 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero fires across 90 days from a project that installs the plugin, with AskUserQuestion calls logged (the decoy included)
 ROOT=${CLAUDE_PROJECT_DIR:-$(jq -r '.cwd // empty' <<<"$INPUT")}
 GITDIR=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
 COMMON=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
@@ -30,6 +31,12 @@ if [ "$GITDIR" = "$COMMON" ] || pp_standing_wt "${TOP##*/}"; then
   # marker, and the end of setup, or --questions end, takes it away. One older than an hour is stale.
   ASKING=$(cat "$COMMON/commandeck-setup-questions" 2>/dev/null)
   if [ "$GITDIR" = "$COMMON" ] && [[ $ASKING =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - ASKING )) -lt 3600 ]; then :
+  elif ! ask_decoy_first "$INPUT" && TI=$(ask_decoy_apply "$INPUT"); then
+    # Room for one more option (D9, issue G11): put the decoy first here instead of refusing. "ask" keeps the picker in
+    # front of the owner. ask-records-decision.sh records this same picker on the original input (it runs in parallel).
+    REWRITE=$(jq -cn --argjson ti "$TI" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask",
+      permissionDecisionReason: "the decoy option was put first (an Orca alert typed into a picker picks its first option)",
+      updatedInput: $ti}}')
   elif ! ask_decoy_first "$INPUT"; then
     printf '%s\n' \
       "BLOCKED: every question's FIRST option must be the decoy, label exactly: \`$ASK_DECOY\`" \
@@ -40,6 +47,7 @@ if [ "$GITDIR" = "$COMMON" ] || pp_standing_wt "${TOP##*/}"; then
   OPEN="$(dirname "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/x}")/ask-open"
   SID=$(jq -r '.session_id // empty' <<<"$INPUT")
   [ -n "$SID" ] && mkdir -p "$OPEN" 2>/dev/null && date +%s%3N > "$OPEN/$SID" 2>/dev/null
+  [ -z "${REWRITE:-}" ] || { HOOK_FIRE_ASK=1; printf '%s\n' "$REWRITE"; }
   exit 0
 fi
 

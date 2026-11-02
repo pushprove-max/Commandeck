@@ -6,6 +6,7 @@
 # not here. Never blocks a tool call.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: the builder-events file has no reader (no script or report opens it) for 90 days
 ROOT=${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}
 [ -n "$ROOT" ] || exit 0
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)

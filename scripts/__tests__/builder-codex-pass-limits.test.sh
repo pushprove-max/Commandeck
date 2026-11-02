@@ -67,5 +67,13 @@ mkdir -p "$WS/lp/.claude/plans"; printf '%s\n' '# plan' '## Stated limits' '- ba
 tpass lp 1 adversarial >/dev/null
 check "a pass leaves its lock free (issue 468)" no "$([ -e "$(git -C "$WS/lp" rev-parse --absolute-git-dir)/builder-pass.lock" ] && echo held || echo no)"
 
+# #565: a ruling id cannot stand in a tracked plan (the leak test bans ids in tracked files), so a plan-file limit with no id
+# is told to go in the unit brief, where the id may stand.
+lim lq '- base limit: 3 hosts.' '- plan: .claude/plans/lq.md'
+mkdir -p "$WS/lq/.claude/plans"; printf '%s\n' '# plan' '## Stated limits' '- a plan limit: 9 hosts.' > "$WS/lq/.claude/plans/lq.md"
+QE=$(tpass lq 1 adversarial)
+check "a plan limit with no id is refused naming the unit brief" "2 1" \
+  "$QE $(grep -c 'put the limit in .claude/briefs/lq.md with its ruling id' "$TMP/perr")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

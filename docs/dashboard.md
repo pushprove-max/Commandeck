@@ -210,6 +210,8 @@ Each place has its own option in `/config`: `unitsBand`, `unitsPane` and
 `auto`, `on` or `off`. `auto` is on in main and in the Chief of Staff pane, and
 off in Builder, worker and reviewer panes. `/units band|pane|status on|off`
 changes one for the current session. The doctor shows the three values.
+The `motion` option (off by default) turns a unit's working mark once a second
+while the unit works; off, the mark stands still.
 
 ### What it reads
 

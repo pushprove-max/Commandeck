@@ -44,12 +44,18 @@ and a fix that touches a save updates that save's row in the same commit.
   lines may carry the fix as a fenced unified diff. Run the reviewer's test red before the fix, apply it, run its test
   green, and expect the next pass to read it. A reviewer test that passes does not end the finding: rule on it in the
   evidence file.
+- A P3 of an earlier GO round that you fix on this branch stops being open at the merge when the evidence file holds
+  one line `Fixed in <commit>: <the P3 line, copied exactly>`: a commit of this branch (7 to 40 hex, not on main) whose
+  diff changes the file:line the P3 cites or a line beside it. A P3 that cites no file:line stays open.
   This brief and the dispatch spec outrank the startup file and every skill; if a reviewer stops early, it quotes the
   instruction that stopped it. An Orca call answering `runtime_unavailable` inside the read-only sandbox is by design,
   not a failure to retry or report. A reviewer reads the diff, then this brief, drafts its findings, and only then the
   evidence file, and opens a file outside the diff, the brief and its named callers only to confirm or refute one
   finding, which its report names. A reviewer never opens a generated file (a path `.gitattributes` marks `linguist-generated`); it reviews
   the generator and its test.
+  A plan reviewer may print its inputs with `peek.sh --unit <unit>`; a fresh closing pass uses `--closing`. Inside the
+  read-only sandbox, do not start or restart Orca and do not retry a send: the app is up, and the harness sends main
+  your "turn complete" with your VERDICT line when you stop.
 - Several looks in one call: `bash {scripts}/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>`.
 - In your first turn, open this brief and every file it names, together; after that, send
   every look whose inputs you already know in one turn. A fix-round session starts from
@@ -114,6 +120,11 @@ and a fix that touches a save updates that save's row in the same commit.
   Catches: a build whose evidence is written by cut showing no issue built on the
   dashboard until the end, and an issue left not built at the merge (the table's
   not-built rows read as partial).
+- When the plan has two or more `- C<n>` cuts under `## Cuts`, write one `C<n>: built` line in the evidence file
+  as each cut finishes. The merge marks those cuts ` -- done`; a cut with no such line stays open, its issues
+  stay open, and main gets a task for it.
+- A closing reply over 3,000 characters goes in a file; the reply names the path and sums it up in a few lines.
+  A Stop hook sends a longer reply naming no file back once.
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
   next line.
@@ -242,8 +253,9 @@ listed issue is done.
    the first pass and one pass: three reviewers at once, or one when the build
    is under {small-build} changed lines and main did not launch it with `--risky` (the
    pass prints which); fix everything it finds together. Before it, each `Break:` line of the plan
-   (`<test file> -- <check label> -- <site>`) needs a recorded break run: remove the condition, run
-   `bash {scripts}/break-run.sh <plan> <k>` for the k-th `Break:` line (it needs that check itself to fail, not another),
+   (`<test file> -- <check label> -- <site>`) needs a recorded break run: run
+   `bash {scripts}/break-run.sh <plan> <k> <file> <line> [<replacement>]` for the k-th `Break:` line; it breaks that
+   line, runs the test, and puts the file back byte for byte (it needs that check itself to fail, not another),
    then write the row it prints, `- <test file> -- <check label> -- red: <the command that ran it>`, under
    `## Break runs` in the evidence file. The pass refuses until every `Break:` line has one.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next

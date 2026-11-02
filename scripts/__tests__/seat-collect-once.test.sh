@@ -52,5 +52,15 @@ check "a seat with no session log sends on each collect: a duplicate, never sile
 # The launch and the verdict each append a line to the unit event stream the dashboard's live follower reads.
 check "a state change hits the stream (issue 466)" "seat-launch seat-verdict" "$(jq -r 'select(.unit == "seat-builder") | .event' "$SC/unit-events.jsonl" | sort -u | paste -sd' ' -)"
 
+# A collect that reads no verdict (the pane closed, or a partial pane text) keeps the report an earlier collect saved and
+# says the seat is closed with its recorded verdict; a revised seat's last line is no verdict (issue 561).
+RPT=$(sed -n 's/^report=//p' "$REC" | tail -1); printf '# Findings\n[P1] a saved finding\nVERDICT: GO\n' > "$RPT"
+printf 'Still thinking.\nno verdict here\n' > "$T/screen"; col >"$T/out"; RC=$?
+check "a second collect after the pane closed keeps the saved report" 1 "$(grep -c 'a saved finding' "$RPT")"
+check "a second collect on a recorded verdict prints it and exits 0" "0:1" \
+  "$RC:$(grep -cx 'closed seat=builder unit=seat-builder VERDICT: GO' "$T/out")"
+echo "revised=task_9" >> "$REC"; col >"$T/out"; RC=$?
+check "a revised seat's collect with no new verdict still says no VERDICT yet" "3:1" "$RC:$(grep -c 'no VERDICT yet' "$T/out")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

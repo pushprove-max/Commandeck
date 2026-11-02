@@ -13,6 +13,7 @@
 
 [ -t 0 ] || IFS= read -r -d '' INPUT
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "${INPUT-}" SessionStart
+# Retire when: zero fires across 90 days of rows from a project that installs the plugin, with sessions logged
 PLUGIN=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
 # The paths printed below ride into checkpoints and outlive this session, and the
 # plugin's own folder is versioned: an update leaves them naming the old one. So

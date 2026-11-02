@@ -6,6 +6,7 @@
 set -uo pipefail
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin (the clear line is a note)
 # Issue 275: past its clear line (context-line.sh leaves the marker) main may only write its checkpoint and end the
 # turn, so the Stop hook restarts it before auto-compact does. Main only, as context-clear-stop.sh decides it: not a
 # reviewer, not a linked worktree. Ahead of the strict-tier exit, and builtins until the marker is found.
@@ -36,8 +37,9 @@ if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
     [ -n "$s" ] && [ "$s" -ef "${BASH_SOURCE[0]%/*}/../scripts/${s##*/}" ] || return 1
     case ${s##*/} in
       state-snapshot.sh)
-        [ "$n" -ge 3 ] && [ "${W[i+1]}" = --out ] && [ "${W[i+2]}" = "$CP" ] || return 1
-        k=$((i + 3)); [ "${W[k]-}" != --force ] || k=$((k + 1))
+        if [ "$n" -ge 2 ] && [ "${W[i+1]}" = "--out=$CP" ]; then k=$((i + 2))
+        else [ "$n" -ge 3 ] && [ "${W[i+1]}" = --out ] && [ "${W[i+2]}" = "$CP" ] || return 1; k=$((i + 3)); fi
+        [ "${W[k]-}" != --force ] || k=$((k + 1))
         while [ "$k" -lt "${#W[@]}" ]; do
           case ${W[k]} in --goal|--stage|--next|--open-item) [ $((k + 1)) -lt "${#W[@]}" ] || return 1; k=$((k + 2)) ;; *) return 1 ;; esac
         done ;;
@@ -84,14 +86,24 @@ if [ -n "$PAST" ] && [ -e "$PAST" ] && [ "${COMMANDECK_REVIEWER:-}" != 1 ] \
     # TaskStop: context-clear-stop.sh holds the restart while a helper agent runs and tells main to stop it.
     TaskCreate|TaskUpdate|TaskList|TaskGet|TaskStop|TodoWrite) exit 0 ;;
   esac
-  echo "BLOCKED: main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out with --goal/--stage/--next/--open-item, checkpoint-context.py carry, decision.sh add to record an ask, TaskStop and the task-list tools also pass), then end the turn; the Stop hook restarts main." >&2
-  HOOK_FIRE_REASON=past-clear-line
-  exit 2
+  # Warn shape (as the missing-server note below): the call runs; main is told what the clear line asks.
+  NOTE="main is past its clear line: write the checkpoint $CP now (Write or Edit; Read of it, of the checkpoint it resumed from and of the template, state-snapshot.sh --out with --goal/--stage/--next/--open-item, checkpoint-context.py carry, decision.sh add to record an ask, TaskStop and the task-list tools are the calls meant for it), then end the turn; the Stop hook restarts main."
+  echo "$NOTE" >&2
+  jq -n --arg m "$NOTE" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
+  exit 0
 fi
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
-IFS=$'\t' read -r TOOL SID < <(printf '%s' "$INPUT" | jq -r '[.tool_name // "", .session_id // ""] | @tsv')
+# A separator that is not whitespace, so an empty tool name stays an empty field and is not read as the session id.
+IFS=$'\001' read -r TOOL SID < <(printf '%s' "$INPUT" | jq -r '[.tool_name // "", .session_id // ""] | join("\u0001")')
 MCP_CHECKED=/tmp/claude-mcp-checked-$SID
+# #540: a read-only Serena call says nothing about the server, so it sets the first-call mark and passes with no note, no
+# wait and no down stamp. Serena's edit tools, any other name and an empty name still get the check below. The
+# Codex wrapper (scripts/codex-no-helpers/codex) enables these same six tools.
+case "$TOOL" in
+  mcp__serena__find_symbol|mcp__serena__find_referencing_symbols|mcp__serena__find_declaration|mcp__serena__find_implementations|mcp__serena__get_symbols_overview|mcp__serena__get_diagnostics_for_file)
+    [ -z "$SID" ] || : > "$MCP_CHECKED"; exit 0 ;;
+esac
 case "$TOOL" in Edit|Write|Bash) ;; *) { [ -z "$SID" ] || [ -e "$MCP_CHECKED" ]; } && exit 0 ;; esac
 # The budget is a worker pane's; the main checkout (git dir == common dir) is
 # the orchestrator's session and runs for thousands of turns by design.

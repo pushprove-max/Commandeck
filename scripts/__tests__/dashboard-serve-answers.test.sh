@@ -447,5 +447,51 @@ check "the dashboard service's answer send (to main and the relay) goes through 
   "$(grep -c 'orca-ide' "$ROOT/scripts/dashboard_serve.py"):$(grep -c 'orca-ide' "$ROOT/scripts/decision.sh"):$(grep -c "^SCRIPT = {'main': 'to-main.sh', 'relay': 'cos-tell.sh'}$" "$ROOT/scripts/dashboard_serve.py")"
 
 
+# Issue 569: the dashboard answers with COMMANDECK_NO_DELIVER=1 and sends the unit the answer itself, after the ruling is
+# logged, so the unit gets the ruling id once; the delivery line goes into the reply and main's message. A stub
+# answer-worker records what it was sent; $T/aw-fail makes it fail.
+mkdir -p "$T/ws/u1"
+printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >> "%s/aw.log"; echo >> "%s/aw.log"\n[ ! -e "%s/aw-fail" ] || { echo "answer-worker: pane gone" >&2; exit 1; }\n' "$T" "$T" "$T" > "$T/aw"; chmod +x "$T/aw"
+D add u1-msg_d1 'Should the cache be warmed at boot?' none 'u1 asks' >/dev/null
+D add u1-msg_d2 'Is the fixture directory safe to delete?' none 'u1 asks' >/dev/null
+D add u1-msg_d3 'May the Builder rebase the long branch?' none 'u1 asks' >/dev/null
+printf '#!/usr/bin/env bash\nprintf "%%s|" "${0##*/}" "$@" >> "%s/sent"; echo >> "%s/sent"\n' "$T" "$T" > "$P/scripts/to-main.sh"; cp "$P/scripts/to-main.sh" "$P/scripts/cos-tell.sh"
+: > "$T/aw.log"; : > "$T/sent"
+OUT=$(env HOME="$T/home" COMMANDECK_RULING_LOG="$T/rulings.jsonl" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_ANSWER_WORKER="$T/aw" python3 - "$P/scripts" "$W" "$(at u1-msg_d1)" "$(at u1-msg_d2)" "$(at u1-msg_d3)" "$T" <<'PY'
+import functools, http.client, http.server, json, os, sys, threading
+sys.path.insert(0, sys.argv[1])
+import dashboard_serve as d
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(d.Handler, directory=sys.argv[2]))
+threading.Thread(target=s.serve_forever, daemon=True).start()
+own = "127.0.0.1:%d" % s.server_address[1]
+def req(body):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=60)
+    c.request("POST", "/answer", json.dumps(body), {"Content-Type": "application/json", "Host": own, "Origin": "http://" + own})
+    r = c.getresponse()
+    return r.status, json.loads(r.read() or b"{}")
+ask = lambda i, at, a: {"project": "proj", "id": i, "askedAt": at, "answer": a}
+st, j = req(ask("u1-msg_d1", sys.argv[3], "yes, warm it"))
+print(st, j.get("delivery"), j.get("ruling"), sep="\t")
+open(os.path.join(sys.argv[6], "aw-fail"), "w").close()
+# The kept send, as it stands before the row closes (the host stopped there), is read from inside log_ruling.
+orig = d.log_ruling
+def spy(*a):
+    print(json.dumps([m["args"][-1] for m in json.load(open(sys.argv[2] + "/answer-retry.json"))]))
+    return orig(*a)
+d.log_ruling = spy
+st, j = req(ask("u1-msg_d2", sys.argv[4], "no"))
+print(st, j.get("delivery"), sep="\t")
+PY
+)
+RIDD=$(sed -n 1p <<<"$OUT" | cut -f3)
+check "a dashboard answer reaches the unit once, carrying its ruling id" "200 1 u1|yes, warm it (ruling $RIDD)|u1-msg_d1|" \
+  "$(sed -n 1p <<<"$OUT" | cut -f1) $(grep -c '|u1-msg_d1|' "$T/aw.log") $(head -1 "$T/aw.log")"
+# main and the relay each get the line (2)
+check "the reply says delivered, and main's message ends Delivery: with that line" "delivered: u1-msg_d1 to u1 2" \
+  "$(sed -n 1p <<<"$OUT" | cut -f2) $(grep -c 'Delivery: delivered: u1-msg_d1 to u1' "$T/sent" | tr -d ' ')"
+check "a dashboard answer that cannot be delivered says not delivered in the reply and in main's message" "200 not delivered: u1-msg_d2 to u1 2 1" \
+  "$(sed -n 3p <<<"$OUT" | cut -f1) $(sed -n 3p <<<"$OUT" | cut -f2 | sed 's/: answer-worker.*//') $(grep -c 'Delivery: not delivered: u1-msg_d2' "$T/sent" | tr -d ' ') $(D list | jq -r '[.[] | select(.id == "u1-msg_d2" and .answer == "no")] | length')"
+check "a retried dashboard send after a host stop says Delivery: unknown" "1" "$(sed -n 2p <<<"$OUT" | grep -c 'Delivery: unknown: the dashboard host stopped before or during the send; check the unit.s pane before resending')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

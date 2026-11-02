@@ -8,6 +8,7 @@
 set -u
 input=$(cat 2>/dev/null || true)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$input"
+# Retire when: zero fires across 90 days from a project that installs the plugin, with profile launches logged
 case $(jq -r '.source // empty' <<<"$input" 2>/dev/null) in startup|resume) ;; *) exit 0 ;; esac
 [ -n "${CLAUDE_CONFIG_DIR:-}" ] || exit 0
 F=$CLAUDE_CONFIG_DIR/settings.json

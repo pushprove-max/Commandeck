@@ -38,6 +38,7 @@
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin
 
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 

@@ -332,5 +332,12 @@ mk ur; go ur
 for f in "$COMMANDECK_WORKSPACES"/ur/.claude/briefs/ur-r[0-9]*-reports.md; do grep -v '^Pass: ' "$f" > "$f.new" && mv "$f.new" "$f"; done
 check "an unread round leaves passes null" "0 true true" \
   "$(merge ur) $(jq -sr 'map(select(.unit == "ur")) | .[0] | has("passes") and .passes == null' "$UL" 2>/dev/null) $(jq -sr 'map(select(.unit == "ur")) | .[0].gaps | index("passes") != null' "$UL" 2>/dev/null)"
+# #570: a merge sends the relay one `FYI event: <unit> merge <ok|fail>` note; a merge refused after it took the lock, one fail.
+echo run_1 > "$TMP/scratch/current-run"
+mk ev1; go ev1; : > "$TMP/orca-calls"; R1=$(merge ev1); O1=$(grep -c 'FYI event: ev1 merge ok' "$TMP/orca-calls"):$(grep -c 'FYI event: ev1 merge fail' "$TMP/orca-calls")
+mk ev2; : > "$TMP/orca-calls"; R2=$(merge ev2); O2=$(grep -c 'FYI event: ev2 merge fail' "$TMP/orca-calls"):$(grep -c 'FYI event: ev2 merge ok' "$TMP/orca-calls")
+rm -f "$TMP/scratch/current-run"
+check "a merge sends the relay one ok event and a refused merge one fail event" "0:1:0 1:1:0" "$R1:$O1 $R2:$O2"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

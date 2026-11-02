@@ -23,6 +23,7 @@
 # command. Bare `orca` is the same binary on the Mac and is read the same way.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that installs the plugin, or the launchers refuse a duplicate pane themselves
 CMD=$(jq -r '.tool_input.command // empty' <<<"$INPUT")
 case $CMD in *orca*) ;; *) exit 0 ;; esac
 # Only text bash runs can launch or send: a mention in quotes, a comment or a

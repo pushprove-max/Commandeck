@@ -27,7 +27,8 @@ trigger, the plan has no judge (One planner).
 - Each item names its test file and case, and says which case fails before the
   change (red first) and which only pins behaviour that already holds. An item
   whose files are all docs or config may name none: say why, and the command
-  that proves it.
+  that proves it. That holds only when every file of the item is .json, .yaml,
+  .yml, .toml, .md or .txt.
 
 - Optional: to have each issue reviewed alone before the whole-branch passes, add one line to this batch,
   `Review workflow: per-issue #<a> #<b>`, naming every issue the plan closes. Leave it out for the usual review.

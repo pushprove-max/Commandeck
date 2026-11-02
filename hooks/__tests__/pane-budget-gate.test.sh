@@ -133,7 +133,7 @@ check "a pane 1200 turns in is not refused" 0 "$(role_run 1200)"
 H=$BOX/home; mkdir -p "$H/.claude/checkpoints"; CPF=$H/.claude/checkpoints/msid.md
 printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}' > "$BOX/main-log.jsonl"
 line_hook() { (cd "$BOX/m" && jq -cn --arg t "$BOX/main-log.jsonl" '{session_id:"msid", transcript_path:$t, prompt:"go"}' \
-  | HOME=$H COMMANDECK_CLEAR_LINE=$1 bash "$ROOT/hooks/context-line.sh" >/dev/null 2>&1); }
+  | env -u ORCA_TERMINAL_HANDLE HOME=$H COMMANDECK_CLEAR_LINE=$1 bash "$ROOT/hooks/context-line.sh" >/dev/null 2>&1); }
 line_hook 1000
 check "under the line context-line.sh leaves no marker" no "$([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no)"
 line_hook 10
@@ -141,9 +141,9 @@ check "past the line it leaves the marker" yes "$([ -e "$H/.claude/checkpoints/m
 gate() { # dir tool input-json -> exit code
   jq -cn --arg tool "$2" --argjson in "$3" '{session_id:"msid", tool_name:$tool, tool_input:$in}' \
     | HOME=$H CLAUDE_PROJECT_DIR=$1 COMMANDECK_HOOK_TIER=default "$HOOK" >/dev/null 2>"$BOX/gate.err"; echo $?; }
-check "main past the line: a Bash call is refused" 2 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
-check "the refusal says write the checkpoint, then end the turn" 1 "$(grep -c "write the checkpoint $CPF.*then end the turn" "$BOX/gate.err")"
-check "an Edit of another file is refused" 2 "$(gate "$BOX/m" Edit '{"file_path":"/x/other.md"}')"
+check "main past the line: a Bash call runs with the note" 0 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+check "the note says write the checkpoint, then end the turn" 1 "$(grep -c "write the checkpoint $CPF.*then end the turn" "$BOX/gate.err")"
+check "an Edit of another file runs with the note" 0 "$(gate "$BOX/m" Edit '{"file_path":"/x/other.md"}')"
 check "the checkpoint Write is allowed" 0 "$(gate "$BOX/m" Write "$(jq -cn --arg f "$CPF" '{file_path:$f}')")"
 check "a Read of the checkpoint template is allowed" 0 "$(gate "$BOX/m" Read "$(jq -cn --arg f "$ROOT/templates/checkpoint.md" '{file_path:$f}')")"
 check "a Read of the checkpoint it resumed from is allowed" 0 \
@@ -161,9 +161,9 @@ for c in "python3 -c print(123) checkpoint-context.py carry a b" "python3 -c 'pr
   "bash $ROOT/scripts/state-snapshot.sh --out $CPF --force x" "env X=1 python3 $ROOT/scripts/checkpoint-context.py carry a b" \
   "python3 $ROOT/scripts/checkpoint-context.py carry a *" "python3 $ROOT/scripts/checkpoint-context.py carry a {b,c}" \
   "python3 -X importtime $ROOT/scripts/checkpoint-context.py carry a b" ""; do
-  check "past the line, refused: ${c:-an empty command}" 2 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
+  check "past the line, runs with the note: ${c:-an empty command}" 0 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
 done
-check "an allowed command chained to another is refused" "2 2 2" \
+check "an allowed command chained to another runs with the note" "0 0 0" \
   "$(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b; rm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a b\nrm -rf x"}') $(gate "$BOX/m" Bash '{"command":"python3 /p/scripts/checkpoint-context.py carry a $(rm -rf x)"}')"
 check "the task-list tools are allowed" 0 "$(gate "$BOX/m" TaskUpdate '{"taskId":"1","status":"completed"}')"
 # Host fix 3a7cc613: ask-stop-records-decision.sh holds a turn that asks the owner until `decision.sh add` runs, and the
@@ -177,13 +177,13 @@ DEC="bash $ROOT/scripts/decision.sh add q-1"
 decgate() { gate "$BOX/m" Bash "$(jq -cn --arg c "$DEC $1 wait main" '{command:$c}')"; }
 check "past the line, a question holding an apostrophe passes, however it is quoted" "0 0 0 0 0" \
   "$(decgate "'What'\\''s next?'") $(decgate "'Can we ship the owner'\"'\"'s fix?'") $(decgate "\"What's next? (a; b)\"") $(decgate "\"Say \\\"hi\\\" now\"") $(decgate "What\\'s\\ next")"
-check "past the line, quoting that runs or chains something is still refused" "2 2 2 2 2 2" \
+check "past the line, quoting that runs or chains something runs with the note" "0 0 0 0 0 0" \
   "$(decgate "\"\$(id)\"") $(decgate "\"\`id\`\"") $(decgate "'open") $(decgate "\"open") $(decgate "'a'\\''b'; rm -rf x") $(decgate "\"\${HOME}\"")"
 check "past the line, TaskStop is allowed" 0 "$(gate "$BOX/m" TaskStop '{"task_id":"abc123"}')"
 for c in "bash $ROOT/scripts/decision.sh answer q-1 yes" "python3 $ROOT/scripts/decision.sh add q-1 'q?' d main" \
   "bash /p/scripts/decision.sh add q-1 'q?' d main" "bash $ROOT/scripts/decision.sh add q-1 'q?' d" \
   "bash $ROOT/scripts/decision.sh add q-1 'q?' d main; rm -rf x" "bash $ROOT/scripts/decision.sh add q-1 \$(rm -rf x) d main"; do
-  check "past the line, refused: $c" 2 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
+  check "past the line, runs with the note: $c" 0 "$(gate "$BOX/m" Bash "$(jq -cn --arg c "$c" '{command:$c}')")"
 done
 check "a worker pane with the marker is never refused" 0 "$(gate "$BOX/lw" Bash '{"command":"git status"}')"
 check "a reviewer is never refused" 0 "$(COMMANDECK_REVIEWER=1 gate "$BOX/m" Bash '{"command":"git status"}')"
@@ -202,16 +202,16 @@ for tick in 1 2; do
     "$(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}') $([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no)"
 done
 : > "$H/.claude/checkpoints/msid.past-line"
-check "a marker with no transcript to read still refuses" 2 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
+check "a marker with no transcript to read still runs with the note" 0 "$(gate "$BOX/m" Bash '{"command":"git status"}')"
 usage 250000
-check "a marker still past the line still refuses" 2 "$(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}')"
+check "a marker still past the line still runs with the note" 0 "$(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}')"
 rm -f "$H/.claude/checkpoints/msid.past-line"
 # A first-run HOME has no checkpoints folder: the marker write failed silently and the gate let everything through.
 prompt_hook() { (cd "$BOX/m" && jq -cn --arg t "$BOX/main-log.jsonl" '{session_id:"msid", transcript_path:$t, prompt:"go"}' \
-  | HOME=$H bash "$ROOT/hooks/context-line.sh" 2>&1); }
+  | env -u ORCA_TERMINAL_HANDLE HOME=$H bash "$ROOT/hooks/context-line.sh" 2>&1); }
 H=$BOX/home2; mkdir -p "$H" "$BOX/m/.claude"; usage 141001; printf '{"standardContext": true}\n' > "$BOX/m/.claude/commandeck.json"
 prompt_hook >/dev/null
-check "no checkpoints folder, standard context at 141001: the marker is written and git status is refused" "yes 2" \
+check "no checkpoints folder, standard context at 141001: the marker is written and git status runs with the note" "yes 0" \
   "$([ -e "$H/.claude/checkpoints/msid.past-line" ] && echo yes || echo no) $(cd "$BOX/m" && tgate "$BOX/m" Bash '{"command":"git status"}')"
 # A marker that cannot be written at all is said, never silent: the gate cannot hold the session then.
 H=$BOX/home3; mkdir -p "$H/.claude"; : > "$H/.claude/checkpoints"
@@ -232,10 +232,10 @@ check "flagged snapshot allowed past the line; a chained command refused: the fl
   "$(snapgate "$SNAP --goal 'ship U' --stage 'U=build it'") $(snapgate "$SNAP --force --goal word --next U=merge --open-item 'a \$b; c'") $(snapgate "$SNAP --goal 'x --out /tmp/other.md'")"
 check "flagged snapshot allowed past the line: a value holding an escaped quote, single or double quoted" "0 0" \
   "$(snapgate "$SNAP --goal 'a'\\''b'") $(snapgate "$SNAP --goal \"it's done\"")"
-check "flagged snapshot allowed past the line; a chained command refused: a chain, a substitution, a second line, a redirect" "2 2 2 2" \
+check "flagged snapshot allowed past the line; a chained command runs with the note: a chain, a substitution, a second line, a redirect" "0 0 0 0" \
   "$(snapgate "$SNAP --goal 'x'; rm y") $(snapgate "$SNAP --goal \"\$(id)\"") $(snapgate "$SNAP --goal 'x'
 rm y") $(snapgate "$SNAP --goal 'x' > /tmp/z")"
-check "other path refused: another --out, a flag before --out, a value with no flag, a flag with no value" "2 2 2 2" \
+check "other path runs with the note: another --out, a flag before --out, a value with no flag, a flag with no value" "0 0 0 0" \
   "$(snapgate "bash $ROOT/scripts/state-snapshot.sh --out /tmp/other.md --goal 'x'") $(snapgate "bash $ROOT/scripts/state-snapshot.sh --goal 'x' --out $CPF") $(snapgate "$SNAP 'x'") $(snapgate "$SNAP --goal")"
 rm -f "$H/.claude/checkpoints/msid.past-line"
 
@@ -244,6 +244,49 @@ rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp
 first_call "${S}z" "$BOX/lw" >/dev/null
 check "the gate prints the start command (issue 470)" "1:1:1" \
   "$(grep -c 'serena is not running' "$ERR"):$(grep -c '^saw: claude pid [0-9]*, shared status 1' "$ERR"):$(grep -c '^Try: bash .*serena-shared.sh start ' "$ERR")"
+rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp-down-serena
+
+# D3 (G5): past the clear line the checkpoint write must never be refused for its spelling, and any other call runs with a
+# note that says what to do, so main is never frozen at its line.
+H=$BOX/home; CPF=$H/.claude/checkpoints/msid.md; : > "$H/.claude/checkpoints/msid.past-line"
+pastline() { # tool input-json -> "exit:note-lines:context-lines"; stderr in note.err, stdout in note.out
+  RC=$(jq -cn --arg tool "$1" --argjson in "$2" '{session_id:"msid", tool_name:$tool, tool_input:$in}' \
+    | HOME=$H CLAUDE_PROJECT_DIR="$BOX/m" COMMANDECK_HOOK_TIER=default "$HOOK" 2>"$BOX/note.err" >"$BOX/note.out"; echo $?)
+  echo "$RC:$(grep -c "write the checkpoint $CPF" "$BOX/note.err"):$(jq -r '.hookSpecificOutput.additionalContext // empty' "$BOX/note.out" 2>/dev/null | grep -c "write the checkpoint $CPF")"
+}
+check "past the line the --out= form passes" "0:0:0 0:0:0" \
+  "$(pastline Bash "$(jq -cn --arg c "bash $ROOT/scripts/state-snapshot.sh --out=$CPF --force --goal x" '{command:$c}')") $(pastline Bash "$(jq -cn --arg c "bash $ROOT/scripts/state-snapshot.sh --out=$CPF" '{command:$c}')")"
+check "past the line a call runs with the checkpoint note" "0:1:1 0:1:1 0:1:1" \
+  "$(pastline Bash '{"command":"git status"}') $(pastline Edit '{"file_path":"/x/other.md"}') $(pastline Bash "$(jq -cn --arg c "bash $ROOT/scripts/state-snapshot.sh --out=/tmp/other.md" '{command:$c}')")"
+rm -f "$H/.claude/checkpoints/msid.past-line"
+
+# D26 (#540): a read-only Serena call proves nothing about the server, so it sets the first-call mark and passes with no
+# note, no wait and no down stamp; Serena's edit tools, an unlisted name and an empty name still get the check.
+first_named() { # session dir tool -> the hook's exit code, with no server under the session
+  jq -cn --arg sid "$1" --arg log "$BOX/log.jsonl" --arg t "$3" '{session_id:$sid, transcript_path:$log, tool_name:$t, tool_input:{}}' > "$BOX/in-$1"
+  IN="$BOX/in-$1" CLAUDE_PROJECT_DIR="$2" PANE_BUDGET_CONFIG="$BOX/budget-nocompact.json" PATH="$BOX/psbin:$BOX/bin:$PATH" \
+    COMMANDECK_MCP_WAIT=3 "$BOX/claude" "$BOX/fake-claude.sh"; echo $?
+}
+rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp-down-serena
+SERENA_READS=""
+for t in find_symbol find_referencing_symbols find_declaration find_implementations get_symbols_overview get_diagnostics_for_file; do
+  : > "$BOX/sleeps"; RC=$(first_named "${S}r-$t" "$BOX/lw" "mcp__serena__$t")
+  SERENA_READS+="$RC:$(grep -c . "$BOX/sleeps"):$(grep -c 'not running' "$ERR"):$([ -e "/tmp/claude-mcp-checked-${S}r-$t" ] && echo marked):$([ -e "$HEALTH/mcp-down-serena" ] && echo stamp || echo clean) "
+done
+check "a Serena read as the first call draws no missing-server note and sets the mark" \
+  "$(for _ in 1 2 3 4 5 6; do printf '0:0:0:marked:clean '; done)" "$SERENA_READS"
+SERENA_OTHERS=""
+for t in mcp__serena__replace_symbol_body mcp__serena__find_symbolx mcp__serena__ ""; do
+  rm -f "$HEALTH"/mcp-down-serena; RC=$(first_named "${S}e-${t:-empty}" "$BOX/lw" "$t")
+  SERENA_OTHERS+="$RC:$(grep -c 'serena is not running' "$ERR") "
+done
+check "a Serena edit tool as the first call still gets the missing-server note" "0:1 0:1 0:1 0:1 " "$SERENA_OTHERS"
+# After a Serena read the session's mark is set, but the budget on Edit, Write and Bash is the same as ever.
+first_named "${S}b" "$BOX/lw" mcp__serena__find_symbol >/dev/null
+printf '{"context":10,"compactions":2}\n' > "$BOX/budget.json"; rm -f "$BOX/w/.claude/briefs/w-handoff.md" "$BOX/lw/.claude/briefs/lw-handoff.md"
+check "an Edit past the budget is still refused after a Serena call" 2 \
+  "$(jq -cn --arg sid "${S}b" --arg log "$BOX/log.jsonl" '{session_id:$sid, transcript_path:$log, tool_name:"Edit", tool_input:{file_path:"/x/f"}}' \
+    | CLAUDE_PROJECT_DIR="$BOX/lw" PANE_BUDGET_CONFIG="$BOX/budget.json" "$HOOK" >/dev/null 2>&1; echo $?)"
 rm -f /tmp/claude-mcp-checked-"${S}"* /tmp/claude-mcp-down-"${S}"* "$HEALTH"/mcp-down-serena
 
 echo "$PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

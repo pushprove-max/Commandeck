@@ -26,8 +26,8 @@
 #   Codex `Stop`         -> the Stop matcher's hooks, payload UNCHANGED. Codex's
 #                           Stop event already carries `cwd`, `session_id`,
 #                           `stop_hook_active` and `transcript_path` under the
-#                           same names, plus `last_assistant_message`, which
-#                           Claude Code does not send.
+#                           same names, plus `last_assistant_message`, as
+#                           Claude Code's Stop event does.
 # `Delete File` sections produce no payload: no content hook screens a removal.
 #
 # THE PAYLOAD'S OWN EVENT DECIDES, and only the five events below are dispatched.
@@ -85,6 +85,7 @@ trace() { # step, [timestamp]
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: Codex reads hooks/hooks.json directly
 
 # The three tools this script itself needs. jq reads every payload, python3
 # parses the trust table and the patch, git resolves the checkout: without any

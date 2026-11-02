@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.67.0",
+  "version": "0.68.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -257,6 +257,12 @@
       "description": "A status line that appears when a unit's verdict or a merge needs a look. auto: on in main and the Chief of Staff, off in worker and reviewer panes. on: every pane. off: none. /units status on|off changes it for the session.",
       "options": ["auto", "on", "off"],
       "default": "auto"
+    },
+    "motion": {
+      "type": "boolean",
+      "title": "Motion",
+      "description": "The working mark of a unit turns once a second while the unit works. Off: the mark stands still.",
+      "default": false
     },
     "mainPromptCacheTtl": {
       "type": "string",

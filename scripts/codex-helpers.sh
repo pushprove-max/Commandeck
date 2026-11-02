@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # codex-helpers.sh stop <worktree> | orphans    (sourced: open_pane, live_pane_with_title, pane_is_busy)
 #   stop <worktree>  kill, by pid, every Codex app-server-broker.mjs serving that
-#                    worktree (`serve --cwd <worktree>`) and its codex app-server child
+#                    worktree (`serve --cwd <worktree>`) and its codex app-server child,
+#                    and every TypeScript language server working inside it
 #   orphans          print the pids of brokers whose --cwd no longer exists, and
-#                    their children, on one line
+#                    their children, and of language servers whose folder is gone, on one line
 # The Codex plugin starts one broker pair per worktree and nothing stops it when
 # the worktree goes: nine pairs outlived their worktrees by 2 to 16 hours on
 # 2026-09-18. merge-unit-local.sh and ship-unit.sh call `stop` after the
@@ -15,6 +16,32 @@ set -uo pipefail
 brokers() {
   ps -eo pid=,ppid=,args= | awk '/app-server-broker\.mjs serve/ {
     for (i = 3; i < NF; i++) if ($i == "--cwd") { print $1, $(i + 1); break } }'
+}
+# "<pid> <cwd>", one line per TypeScript language server (issue 577): typescript-language-server or tsserver, as the
+# command or its script. The script is the second word, or, for node or bun, the first word after their options (the
+# word after -r, -C, --require, --import, --loader, --experimental-loader or --conditions is that option's value;
+# -e, -p, --eval and --print run no script). Any other option may also take the next word as its value
+# (`--inspect-port 9229`, pass 13), so a word right after an option written without "=" ends the options only when it
+# is a server; otherwise the search goes on past it. No list of value options is kept: a new one cannot hide a server.
+# The folder is /proc's (a removed one reads "... (deleted)"), else lsof's
+# (macOS has no /proc); a server whose folder cannot be read is not listed, so it is left alone.
+tsservers() {
+  local pid cwd
+  ps -eo pid=,args= | awk 'function srv(w,   n, a) { n = split(w, a, "/"); return a[n] ~ /^(typescript-language-server|tsserver(\.js)?)$/ }
+    { if (srv($2)) { print $1; next }
+      n = split($2, b, "/"); i = 3
+      if (b[n] ~ /^(node|nodejs|bun)$/) for (; i <= NF; i++) {
+        if ($i ~ /^(-e|-p|--eval|--print)$/) next
+        if ($i == "--") { i++; break }
+        if ($i ~ /^(-r|-C|--require|--import|--loader|--experimental-loader|--conditions)$/) { i++; continue }
+        if ($i ~ /^-/) continue
+        if (srv($i) || $(i - 1) !~ /^-[^=]*$/) break
+      }
+      if (i <= NF && srv($i)) print $1 }' | while read -r pid; do
+    cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || cwd=$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    cwd=${cwd% (deleted)}
+    [ -z "$cwd" ] || echo "$pid $cwd"
+  done
 }
 # Broker pids on stdin -> those pids plus their direct children.
 with_children() {
@@ -180,10 +207,13 @@ case "${1:-}" in
     wt=${2:-}; [ -n "$wt" ] || { echo "usage: codex-helpers.sh stop <worktree>" >&2; exit 2; }
     wt=${wt%/}
     pids=$(brokers | awk -v wt="$wt" '$2 == wt { print $1 }' | with_children)
-    [ -z "$pids" ] || { kill $pids 2>/dev/null || true; echo "stopped Codex helpers for $wt: $(echo $pids)"; }
+    # A server's folder is the worktree or under it: the "/" keeps a sibling sharing the name prefix out; == is literal when quoted.
+    pids=$(echo $pids $(tsservers | while read -r pid cwd; do [ "$cwd" = "$wt" ] || [[ $cwd == "$wt"/* ]] && echo "$pid"; done))
+    [ -z "${pids// /}" ] || { kill $pids 2>/dev/null || true; echo "stopped Codex helpers for $wt: $(echo $pids)"; }
     ;;
   orphans)
-    brokers | while read -r pid cwd; do [ -d "$cwd" ] || echo "$pid"; done | with_children | sort -n | tr '\n' ' ' | sed 's/ $//'
+    { brokers | while read -r pid cwd; do [ -d "$cwd" ] || echo "$pid"; done | with_children
+      tsservers | while read -r pid cwd; do [ -d "$cwd" ] || echo "$pid"; done; } | sort -nu | tr '\n' ' ' | sed 's/ $//'
     ;;
   *) echo "usage: codex-helpers.sh stop <worktree> | orphans" >&2; exit 2 ;;
 esac

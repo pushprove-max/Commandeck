@@ -22,17 +22,23 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: the decisions ledger gets its rows from another writer, shown by 90 days of zero fires and non-empty rows
 [ "${COMMANDECK_REVIEWER:-}" = 1 ] && exit 0
 ROOT=${CLAUDE_PROJECT_DIR:-$(jq -r '.cwd // empty' <<<"$INPUT")}
 GITDIR=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
 COMMON=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 [ "$GITDIR" = "$COMMON" ] || exit 0
-# worker-ask-guard.sh refuses a main picker whose first option is not the
-# decoy; record nothing for it, or the corrected retry is a repeat of a
-# question the owner never saw. The one refusal that runs AFTER recording is the Chief of Staff redirect below (issue 350).
+# worker-ask-guard.sh refuses a main picker whose first option is not the decoy
+# when it has 4 options, and adds the decoy to one with fewer (both hooks run in
+# parallel on the original input, so this one records that picker itself). Record
+# nothing for the refused one, or the corrected retry is a repeat of a question
+# the owner never saw. The one refusal that runs AFTER recording is the Chief of Staff redirect below (issue 350).
 # ponytail: mirrors the one picker guard there is; a new AskUserQuestion guard must also run here, before recording.
 . "${BASH_SOURCE[0]%/*}/lib/ask-decoy.sh" || exit 0
-ask_decoy_first "$INPUT" || exit 0
+# The guard skips a setup question while the setup marker is fresh (worker-ask-guard.sh), so nothing is recorded then.
+ASKING=$(cat "$COMMON/commandeck-setup-questions" 2>/dev/null)
+if [[ $ASKING =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - ASKING )) -lt 3600 ]; then exit 0; fi
+ask_decoy_first "$INPUT" || ask_decoy_apply "$INPUT" >/dev/null || exit 0
 
 DECIDE="$(dirname "${BASH_SOURCE[0]}")/../scripts/decision.sh"
 LOG="$(dirname "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/x}")/ask-records-decision.log"

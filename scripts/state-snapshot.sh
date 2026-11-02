@@ -44,9 +44,12 @@ mkdir -p "$(dirname "$OUT")" || exit 1
 # The result is built beside --out and moved over it once it is complete, so a refusal or a failed save leaves --out
 # as it was. A flagged call fills an existing checkpoint as it stands, or generates one first.
 NEW="$OUT.new.$$"
-trap 'rm -f "$NEW"' EXIT
+BASE=""; ANC=$HOME/.claude/checkpoints/$(basename "$OUT" .md).resumed-from
+[ ! -e "$ANC" ] || BASE=$(head -1 "$ANC")
+trap 'rm -f "$NEW" "$NEW.board" "$NEW.dec"' EXIT
 if [ "$FLAGGED" = 0 ] || [ ! -e "$OUT" ]; then
-BOARD=$(bash "$(dirname "${BASH_SOURCE[0]}")/board.sh" 2>&1)
+# --full: the plain board cuts long worktree lists, and a unit past the cut would be left out of the carry-over list.
+BOARD=$(bash "$(dirname "${BASH_SOURCE[0]}")/board.sh" --full 2>&1); BRC=$?
 
 # One awk over the board rather than a second round of git and systemctl calls:
 # board.sh is the one home for those queries, and a snapshot that asked its own
@@ -72,7 +75,7 @@ def section(name):
             body.append(line)
     return body
 
-units = [l.split()[0] for l in section("worktrees") if l.startswith("  ") and not l.strip().startswith("brief")]
+units = [l.split()[0] for l in section("worktrees") if re.match(r"  \S", l) and not l.strip().startswith("brief")]
 keep = os.environ.get("KEEP_WT", "").splitlines()
 units = [u for u in units if u not in keep]
 seats, tasks, loops = {}, {}, {}
@@ -122,8 +125,7 @@ main runs when it lands.
 
 ## Rulings this session not yet in memory or a rule file
 
-TODO: first run \`bash scripts/repeat-report.sh\` and turn its top items
-into fixes; then save every correction or ruling from the owner this session, and every
+TODO: save every correction or ruling from the owner this session, and every
 friction main hit twice, to memory or a rule, or fix it; then list only what
 could not be saved yet, and why, or "none".
 
@@ -164,6 +166,76 @@ refused while one is neither.
 """)
 PY
 [ $? = 0 ] || exit 1
+# The carry-over list (issue 568): the unit and decision lines, then every inherited item the carry check still lists,
+# so the restart's check finds nothing missing. A failed listing leaves its kind's baseline items copied, never closed.
+printf '%s' "$BOARD" > "$NEW.board"
+DEC=$(bash "$(dirname "${BASH_SOURCE[0]}")/decision.sh" list 2>/dev/null); DRC=$?
+printf '%s' "$DEC" > "$NEW.dec"
+python3 -I - "$NEW" "$BASE" "$BRC" "$DRC" "$(dirname "${BASH_SOURCE[0]}")/checkpoint-context.py" <<'PY' || exit $?
+import glob, json, os, re, subprocess, sys
+path, base, brc, drc, carry_py = sys.argv[1:]
+board = open(path + ".board", errors="replace").read()
+lines = open(path).read().splitlines()
+
+def cells(l):
+    return [c.strip() for c in l.strip()[1:-1].split("|")]
+
+def body(name):
+    s = next((i for i, l in enumerate(lines) if l.startswith("## " + name)), None)
+    if s is None: return None, None
+    return s + 1, next((i for i in range(s + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+
+# Units: one line per unit-table row. The stage sits in the status tail, so the item's key ("unit <U>") holds across rounds.
+ws = (re.search(r"WS=(\S+)", board) or [None, ""])[1]
+table = [cells(l)[0] for l in lines if l.startswith("| ") and not l.startswith("| unit ") and "|---|" not in l]
+queue = []
+for u in (u for u in table if not u.startswith("(")):
+    rounds = [int(m.group(1)) for f in glob.glob(os.path.join(ws, u, ".claude", "briefs", u + "-r*-reports.md")) if (m := re.search(r"-r(\d+)-reports\.md$", f))]
+    queue.append(f"- unit {u} -- still open: " + (f"round {max(rounds)} reports" if rounds else "no round yet"))
+live_units, hit = set(), False
+for l in board.splitlines():
+    if l.startswith("== "): hit = l[3:].strip().startswith("worktrees"); continue
+    if hit and (m := re.match(r"  (\S+)", l)): live_units.add(m.group(1))
+# A closed line's "(<n>)" is its number: carry closes a line only when its reason differs from every other line's.
+# Decisions: each open one, its question on one line of at most 120 characters (" -- " would end the item's key early).
+open_ids, dec_read = {}, False
+if drc == "0":
+    try:
+        rows = json.loads(open(path + ".dec", errors="replace").read())
+        open_ids = {r["id"]: " ".join(str(r.get("question", "")).split()).replace(" -- ", " - ")[:120] for r in rows if r.get("answeredAt") is None}
+        dec_read = True
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+queue += [f"- decision {i}: {q} -- done when: decision:{i}" for i, q in open_ids.items()]
+board_read = brc == "0"
+def put(name, new):
+    s, e = body(name)
+    lines[s:e] = [""] + new + [""]
+# The unit and decision lines are saved first: carry lists only what the new file's own text leaves out.
+if queue:
+    put("Queue", queue)
+    open(path, "w").write("\n".join(lines) + "\n")
+closed, ref = [], []
+if base:
+    r = subprocess.run([sys.executable, carry_py, "carry", base, path], capture_output=True, text=True)
+    if r.returncode in (0, 1):
+        ref = [f"Carries open items of: {base}"]
+        for l in r.stdout.splitlines():
+            raw = l[2:] if l.startswith("- ") else l
+            m = re.match(r"unit (\S+)", raw)
+            d = re.match(r"decision ([^:\s]+):", raw)
+            if board_read and m and m.group(1) not in live_units:
+                closed.append(f"- {raw} -- no longer live ({len(closed) + 1})")
+            elif dec_read and d and d.group(1) not in open_ids:
+                closed.append(f"- {raw} -- no longer live ({len(closed) + 1})")
+            else:
+                queue.append(f"- {raw}")
+if queue or ref:
+    put("Queue", (queue or ['TODO or "none".']) + ([""] + ref if ref else []))
+if closed:
+    put("Closed since last checkpoint", closed)
+open(path, "w").write("\n".join(lines) + "\n")
+PY
 fi
 if [ "$FLAGGED" = 0 ]; then
   mv -f "$NEW" "$OUT" || { echo "could not save the checkpoint to $OUT" >&2; exit 1; }
@@ -172,8 +244,6 @@ if [ "$FLAGGED" = 0 ]; then
 fi
 [ -e "$NEW" ] || cp "$OUT" "$NEW" || exit 1
 # Q numbers are never reused, so the numbering continues past the checkpoint this session resumed from.
-BASE=""; ANC=$HOME/.claude/checkpoints/$(basename "$OUT" .md).resumed-from
-[ ! -e "$ANC" ] || BASE=$(head -1 "$ANC")
 python3 -I - "$NEW" "$GOAL" "$BASE" "${FILLS[@]+"${FILLS[@]}"}" <<'PY' || exit $?
 import re, sys
 path, goal, base, *fills = sys.argv[1:]

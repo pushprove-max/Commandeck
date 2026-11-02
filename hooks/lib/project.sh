@@ -92,5 +92,22 @@ pp_run_file() {
   . "$(dirname "${BASH_SOURCE[0]}")/../../scripts/project-main.sh" && pp_main_resolve || return 1
   printf '%s' "${COMMANDECK_SCRATCH:-$HOME/.commandeck/scratch/${PP_MAIN//[^A-Za-z0-9]/-}}/current-run"
 }
+# pp_is_main_pane -- is this pane main? The main checkout also holds an Orca automation or a second session, so only the
+# run's coordinator pane is. The run is COMMANDECK_RUN, else the run file (pp_run_file), else Orca's run-current.
+# 0 main (also: no Orca handle, or no run from all three: nothing to tell main from); 1 not main; 2 unknown (run-list
+# failed or does not list the run); 3 the run is listed with no coordinator. Sets PP_MAIN_RUN and PP_MAIN_COORD.
+pp_is_main_pane() {
+  local f
+  PP_MAIN_RUN=${COMMANDECK_RUN:-} PP_MAIN_COORD=
+  [ -n "${ORCA_TERMINAL_HANDLE:-}" ] || return 0
+  [ -n "$PP_MAIN_RUN" ] || { f=$(pp_run_file 2>/dev/null) && PP_MAIN_RUN=$(tr -d '[:space:]' < "$f" 2>/dev/null); } || true
+  [ -n "$PP_MAIN_RUN" ] || PP_MAIN_RUN=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty' 2>/dev/null)
+  [ -n "$PP_MAIN_RUN" ] || return 0
+  PP_MAIN_COORD=$(orca-ide orchestration run-list --full --json 2>/dev/null | jq -er --arg r "$PP_MAIN_RUN" \
+    '.result.runs | if type == "array" then first(.[] | select(.id == $r)) | (.coordinator_handle // "") else error end' 2>/dev/null) || { PP_MAIN_COORD=; return 2; }
+  [ -n "$PP_MAIN_COORD" ] || return 3
+  [ "$PP_MAIN_COORD" = "$ORCA_TERMINAL_HANDLE" ] && return 0
+  return 1
+}
 # The symbol-first hooks also need serena: setup records "serena": true when it is installed.
 pp_serena() { [ "${COMMANDECK_SERENA-}" = 1 ] || pp_flag serena; }

@@ -323,6 +323,19 @@ def keep(directory, msgs, drop=()):
         write(directory, 'answer-retry.json', held + list(new.values()))
 
 
+def deliver_to_unit(directory, main, id, text):
+    """Issue 569: the answer to the unit that asked, after the ruling is logged so the unit gets the ruling id. The one
+    line decision.sh deliver prints on stderr (delivered, queued, unknown or not delivered), or '' for a row naming no pane.
+    A send cut at a deadline may already have gone: unknown, never not delivered (F13)."""
+    try:
+        r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'deliver', id, text], cwd=directory,
+                           env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=25)
+    except subprocess.TimeoutExpired:
+        return "unknown: %s timed out; check the unit's pane before resending" % id
+    lines = [l for l in r.stderr.splitlines() if re.match(r'(delivered|queued|unknown|not delivered): ', l)]
+    return lines[-1] if lines else ('' if r.returncode == 0 else 'not delivered: %s' % id)
+
+
 def send(directory, msgs):
     """Each message sent with its script, kept in the file until it is delivered. The number that failed, and
     whether main's own picker was open."""
@@ -882,7 +895,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for m in msgs:
             m['key'] = secrets.token_hex(8)
             m['ask'] = {'askedAt': a['askedAt'], 'answer': a['answer']}
-            m['args'].append('%s (no ruling id: the dashboard host stopped before logging it)' % a['answer'])
+            # A host stopped before the send ends leaves this text; the normal path replaces its last line (issue 569).
+            m['args'].append('%s (no ruling id: the dashboard host stopped before logging it)\nDelivery: unknown: the dashboard host stopped before or during the send; check the unit\'s pane before resending' % a['answer'])
         with SENDS:
             FLYING.update(m['key'] for m in msgs)
         try:
@@ -894,7 +908,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                    % (os.path.join(self.directory, 'answer-retry.json'), e.strerror or e))
         try:
             r = subprocess.run(['bash', os.path.join(HERE, 'decision.sh'), 'answer', a['id'], a['answer'], '--asked-at', a['askedAt']], cwd=self.directory,
-                               env=dict(os.environ, COMMANDECK_MAIN=main), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+                               env=dict(os.environ, COMMANDECK_MAIN=main, COMMANDECK_NO_DELIVER='1'), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
             r = None
         if r is None or r.returncode != 0:
@@ -914,10 +928,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_error(code, why[0])
         row = json.loads(r.stdout.strip().splitlines()[-1])
         rid = log_ruling(main, row, a['answer'])
+        text = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
+        delivery = deliver_to_unit(self.directory, main, a['id'], text)
         for m in msgs:
-            m['args'][-1] = '%s (%s)' % (a['answer'], 'ruling %s' % rid if rid else 'no ruling id: the ruling log could not be written')
+            m['args'][-1] = text + ('\nDelivery: ' + delivery if delivery else '')
         unsent, picker = send(self.directory, msgs)
-        self.reply(200, {'ruling': rid, 'unsent': unsent, 'picker': picker})
+        self.reply(200, {'ruling': rid, 'unsent': unsent, 'picker': picker, 'delivery': delivery})
 
     def unsent(self, a):
         """Issue 295: the owner's word on one kept send ({key, action}): `retry` puts it back to pending with its count

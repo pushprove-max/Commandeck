@@ -180,5 +180,32 @@ fpunit t2; printf '\n## The batch\n\nEstimated size: ~30 changed lines\n' >> "$W
 out+=" $RC:$(onmain t2):$(grep -c "^REFUSED: no plan judge's verdict" "$T/out")"
 check "a tiny plan launches with no judge verdict" "0:plan of t1:1 2:none:1" "$out"
 
+# #538: the files a plan's Steps name must be as the judges saw them. A judge's record carries the main sha it read (the
+# fixture's `judged` writes it); a Steps file changed on main since is refused, at main's tip and again at the sha the
+# worktree resets to, and a record with no sha is refused rather than read as fresh.
+# Catches: a Builder started on a plan whose files moved on main after the judges read them.
+mkdir -p "$P/src"; echo one > "$P/src/x.ts"; echo one > "$P/src/other.ts"
+git -C "$P" add -A && git -C "$P" -c user.name=t -c user.email=t@t commit -q -m "src files"
+STEPPLAN=$'Goal: change x\n\n- Planned size: 1 file, 10 changed lines\nNew tests: @U@ 1\n\n## Steps\n\n- modify src/x.ts -- change it\n\n## Facts\n\n- x exists -- src/x.ts:1 (observed: 2026-11-02)\n\n## Acceptance test\n\n- test file path: src/x.test.ts (t-one)\n\n## Issue cases\n\n- #1 Fix 1 -- src/x.ts -- t-one\n'
+# stepunit <unit> -- a planning worktree whose plan has a Steps section naming src/x.ts, judged GO at main's tip.
+stepunit() { fpunit "$1"; printf '%s' "${STEPPLAN//@U@/$1}" > "$WS/$1/.claude/plans/$1.md"; judged "$1" GO 200; }
+moveon() { echo "$1" > "$P/$2"; git -C "$P" add "$2" && git -C "$P" -c user.name=t -c user.email=t@t commit -q -m "main moves $2"; }
+stepunit s1; moveon changed src/x.ts; fp s1
+check "a judged plan whose Steps file changed on main is refused" "2:1:none:0" \
+  "$RC:$(grep -c "^REFUSED: --from-plan: main changed a file .*s1.md's Steps name since the judges read it: src/x.ts" "$T/out"):$(onmain s1):$(grep -c . "$T/seats")"
+stepunit s2; moveon changed src/other.ts; fp s2
+check "a plan judged before main moved on other files still launches" "0:Goal: change x:1" "$RC:$(onmain s2):$(grep -cx 'launch builder s2' "$T/seats")"
+# Origin is ahead on the Steps file: the install's sync moves main after the first check, and the second check, at the
+# sha the worktree resets to, refuses before adoption (the planner's worktree is not reset to main).
+stepunit s3; BEFORE=$(git -C "$WS/s3" rev-parse HEAD)
+git clone -q --bare "$P" "$T/origin.git" && git -C "$P" remote add origin "$T/origin.git" && git clone -q "$T/origin.git" "$T/oc"
+echo moved > "$T/oc/src/x.ts"; git -C "$T/oc" -c user.name=t -c user.email=t@t commit -q -am moved && git -C "$T/oc" push -q origin main; fp s3
+check "main moving during the launch refuses before adoption" "2:1:0:same" \
+  "$RC:$(grep -c '^REFUSED: --from-plan: main moved while this launch ran and changed a file .*s3.md.s Steps name: src/x.ts' "$T/out"):$(grep -c . "$T/seats"):$([ "$(git -C "$WS/s3" rev-parse HEAD)" = "$BEFORE" ] && echo same || echo reset)"
+git -C "$P" remote remove origin
+stepunit s4; sed -i.bak '/^mainsha=/d' "$SCR/seat-s4-plan-judge-claude.txt"; fp s4
+check "a judge record with no main sha is refused" "2:1:none:0" \
+  "$RC:$(grep -c 'REFUSED: .*seat-s4-plan-judge-claude.txt records no main sha (none)' "$T/out"):$(onmain s4):$(grep -c . "$T/seats")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

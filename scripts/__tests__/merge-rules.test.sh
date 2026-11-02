@@ -43,7 +43,7 @@ check "keep both for a rule made from two loads it, though keep mine was saved f
 # Main writes each planner's spec from the planning rule, so that rule is where a planner hears to name a fitting
 # mattpocock-skills skill (the owner's, 2026-10-17); it stays one rule. An owner who kept their own wording of the
 # planning rule before (871dfc54) does not get the reworded one too.
-check "the planning rule names the skills line, inside the same rule" "1:43" \
+check "the planning rule names the skills line, inside the same rule" "1:42" \
   "$(MS | awk '/^- \*\*/ { p = /Plan before every build/ } p' | grep -c 'If the mattpocock-skills plugin'):$(MS --units | wc -l | tr -d ' ')"
 check "an owner who kept their own planning rule does not get the reworded one" 0 \
   "$(MS --drop 871dfc54 | grep -c 'If the mattpocock-skills plugin')"
@@ -55,7 +55,7 @@ check "an owner who kept their own AGENT_STARTUP planning step does not get the 
 # out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
 # Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
 ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
-for pair in d2e4dc5b:3e156378 401e8893:71c7e94b 702b08c7:b1471fa8 80518d00:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e b2a85a66:48b02596 4439c5bf:487d3e9e; do
+for pair in d2e4dc5b:3e156378 401e8893:71c7e94b 702b08c7:b1471fa8 80518d00:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e af80fa89:48b02596 4439c5bf:487d3e9e; do
   new=${pair%:*} old=${pair#*:}
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"

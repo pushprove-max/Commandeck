@@ -31,12 +31,12 @@
 - **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
   needs the detail.
 - **Mark a memory no longer needed `status: archived`, never delete it**: the next start moves it out of MEMORY.md.
-- **Also standing (Details)**: heads-up items, stated limits, checklist, announcements, re-asks, helpers, effort, tooling.
+- **Also standing (Details)**: heads-up items, stated limits, announcements, re-asks, helpers, effort, tooling.
 
 ## Main never compacts: write the checkpoint, the hook restarts main
 
 THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K line", or a batch ends: finish the step, write
-`~/.claude/checkpoints/<session_id>.md` in ONE `state-snapshot.sh --out <that file> --goal --stage --next` call (the line prints it), then END THE TURN. NEVER type or send a `/clear`.
+`~/.claude/checkpoints/<session_id>.md` in ONE `state-snapshot.sh --out <that file> --goal --stage --next` call (the line prints it), then END THE TURN. NEVER type or send a `/clear`. Past the line every tool call but the checkpoint, `decision.sh add` and `TaskStop` is refused. A restart at the line is routine: do not report how often main restarts and do not propose moving the line.
 
 ## Details (not injected)
 
@@ -62,11 +62,11 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   settings, or says in chat that this unit takes another tier, model or effort. No plan: launch with `--skip-plan --reason '<one line>'`. One planner: a
   `plan-author` seat writes the plan. Plan + judge: `plan-author` writes it, `plan-judge-sol` reads it, and the
   planner revises it once with the judge's findings only when the verdict is NO-GO; on GO the plan goes as
-  written. Panel: `plan-author` writes the plan, and `plan-judge-opus` and `plan-judge-sol` both read it; a Panel unit estimated at 500 changed lines or fewer (`oneJudgeLines`), with no new-infrastructure trigger, gets one judge, the one Plan + judge picks, and `plan-tier.sh` says so. The batch's `Estimated size:` line also feeds the tiny route: a batch no risky trigger matched, estimated under 50 changed lines (`tinyPlanLines`), is One planner with no judge, so its plan gets neither the judge's read nor its revise round.
+  written. Panel: `plan-author` writes the plan, and `plan-judge-sol` then `plan-judge-opus` read it (Sol first: `seat.sh` refuses an Opus round ahead of Sol's); a Panel unit estimated at 500 changed lines or fewer (`oneJudgeLines`), with no new-infrastructure trigger, gets one judge, the one Plan + judge picks, and `plan-tier.sh` says so. The batch's `Estimated size:` line also feeds the tiny route: a batch no risky trigger matched, estimated under 50 changed lines (`tinyPlanLines`), is One planner with no judge, so its plan gets neither the judge's read nor its revise round.
   A seat that is off in `/plugin` config is left out, and `plan-tier.sh` says so. Each seat runs on its printed model and effort
   (`seat.sh launch <role> <unit> <spec>`, or `seat.sh run`: one call, one line back); `--model <alias> --effort <level>`
   only when the owner named another for that unit. A size target in a planner's spec is soft: the planner exceeds it when the content needs it and says why in the plan, never
-  trimming needed content to fit. One judge round and one revision, never a judging loop. The Sol judge may run
+  trimming needed content to fit. By hand, one judge round and one revision; `unit-drive.sh` loops plan versions until every judge says GO on one. Plan and judge seats never count against the Builder cap. The Sol judge may run
   on Claude by its agent key (`planJudgeSolAgent=claude`); `plan-tier.sh` prints the seat it runs. Never
   refuse an answer for a missing tool. Launch each seat under its own role name and the build's unit name: every
   plan seat works in the unit's own worktree `<unit>`, which its first launch cuts from main and marks as
@@ -117,11 +117,6 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 - Roles, models and review rounds are the role table in the plugin's
   `config/routing.json`. Do not restate them here. The non-negotiable
   is the review convergence, not who types the diff.
-- Checklist: show the owner one (todo tool; Orca task list for dispatched work), updated in the reply that does
-  the work; on a wake, every task-list change goes in ONE reply as one batch of calls, recording the same. A
-  resume recreates only the unfinished items, in one reply. An item done is deleted (TaskUpdate status deleted),
-  never marked completed; the checkpoint's Closed section keeps it. At most 8 open items; a subject of 80
-  characters at most, with no ids (no message, task or dispatch id, commit hash or issue number).
 - Re-asks: never ask the owner a question they already have; `decision.sh` exits 3 (and the picker is blocked) on a question still
   open or answered in the last 24 hours and names the earlier decision and
   answer: use it. Two re-asks are allowed: a picker retry after the decoy voided
@@ -133,6 +128,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
 - Announce every worker at dispatch time (agent, model, worktree, task); report what it came back with when it finishes.
+  The scripts send the seat, launch, merge and CI events to the relay as held `FYI event:` notes; do not repeat them.
 - relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`, which stores the note in your run
   (`run:<id>`), the mailbox the relay's inbox poller reads, and exits 1 when Orca does not confirm it. Never `--to
   <its handle>`: that mailbox is live-only, and notes sent while the pane was busy were lost. The poller prints every
@@ -146,7 +142,10 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   relayed answer, and the ledger row then answers `<words> (<ruling id>)` with the auto answer in its history. Ask the
   owner directly only when no such pane is running. Ledger: AskUserQuestion records itself; a plain-chat ask needs
   `decision.sh add` in the same turn or the Stop is held; when the owner answers, run `decision.sh answer <id>
-  '<answer>'` (agent-awareness lists the open ids every turn).
+  '<answer>'` (agent-awareness lists the open ids every turn). A note, or `decision.sh answer`'s own stderr line, saying an
+  answer was `delivered` or `queued` is not sent again; one saying `not delivered` or `not sent by the ledger` (a reversal),
+  `unknown` once the unit's pane shows no answer, and an answer the owner gives you in chat, you send on with
+  `answer-worker.sh <unit> '<answer>' <row id>`, whether or not the hook already closed the row.
 - Helper agents (owner ruling 2026-10-10): a helper that searches or looks up is `Explore` (Haiku); one that
   edits, runs, tests or judges is `general-purpose` (Sonnet). On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
@@ -171,7 +170,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
 - Orchestrator role: draft and critique intents and briefs with the owner, make
   architecture calls, arbitrate reviewer disagreements, triage incidents into
   intents. The plugin's `config/routing.json` holds roles and models.
-- Suggestions: when: at each checkpoint, after `repeat-report.sh`, and in a
+- Suggestions: when: at each checkpoint and in a
   batch's final report; mid-task only when the cost is blocking the task. Each
   suggestion says, in plain English, what it costs today (with a count), what
   would change, and roughly what it costs to build. A declined suggestion goes

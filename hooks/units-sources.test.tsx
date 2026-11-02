@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { closesOf, newestAttempt, paneLines, parseMergeLog, parseSnapshot, parseTestLive, seatFromGit, seenOf, summaryLine, todaySplit, todayUsd, toasts } from './units-sources'
-import type { Seen } from './units-sources'
+import { bandModel, closesOf, newestAttempt, paneLines, paneModel, parseMergeLog, parseSnapshot, parseTestLive, seatFromGit, seenOf, summaryLine, todaySplit, todayUsd, toasts } from './units-sources'
+import type { Line, MergeView, Seen, State } from './units-sources'
 
 // The parsers read whole files and hold no state: whatever a log looks like at a poll, the counts come from that text
 // alone. These pin the cases where a bounded tail, a byte offset or a half-written line would lose a total.
@@ -153,7 +153,7 @@ test("today's total equals the dashboard's and splits by folder", () => {
   expect(parts.map(([, n]) => n)).toEqual([10, 5, 8, 4, 3])
   expect(parts.reduce((n, [, x]) => n + x, 0)).toBe(30)
   const lines = paneLines(s, 100)
-  expect(lines[0]).toMatch(/^UNITS +today \$30\.00$/)
+  expect(lines[0]).toMatch(/^UNITS · 1 building +today \$30\.00$/)
   expect(lines[1]).toBe(`  merged ${d(10)} · in flight ${d(5)} · main ${d(8)} · lanes ${d(4)} · other ${d(3)}`)
   // A part the folders do not name is still in the total: the rest is not attributed.
   expect(todaySplit(dayOf({ spentUsd: 30, complete: true, byFolder: { 'live-unit': 5 } }))).toEqual([['in flight', 5], ['other', 25]])
@@ -161,8 +161,9 @@ test("today's total equals the dashboard's and splits by folder", () => {
 
 test('a partial day reads at least', () => {
   const s = dayOf({ spentUsd: 30, complete: false, byFolder })
-  expect(paneLines(s, 100)[0]).toMatch(/^UNITS +today at least \$30\.00$/)
-  expect(summaryLine(s)).toBe(`1 building · today at least ${d(30)}`)
+  expect(paneLines(s, 100)[0]).toMatch(/^UNITS · 1 building +today at least \$30\.00$/)
+  // This snapshot names no decisions and its unit sits at its prompt, so trouble leads; the partial day still reads at least.
+  expect(summaryLine(s)).toBe(`✗ decisions: not in the snapshot · ✗ live-unit at its prompt · ◐ 1 ✓ 1 · today at least ${d(30)}`)
 })
 
 test('with no dashboard day the total is the units\' own sum, marked units only', () => {
@@ -171,7 +172,7 @@ test('with no dashboard day the total is the units\' own sum, marked units only'
   expect(todayUsd(s)).toBe(139)
   expect(todaySplit(s)).toEqual([])
   const [head, mark] = paneLines(s, 100)
-  expect(head).toMatch(/^UNITS +today /)
+  expect(head).toMatch(/^UNITS · 1 building +today /)
   expect(head.endsWith(` ${d(139)}`)).toBe(true)
   expect(mark).toBe('  units only')
 })
@@ -244,4 +245,165 @@ test('verdict toasts: initial, discovered, repeated, changed, delayed and after 
   expect(toasts(c, d)).toEqual(['x: verdict 1 GO'])
   expect(toasts(null, e)).toEqual([])
   expect(toasts(e, f)).toEqual(['w: verdict 4 NO-GO'])
+})
+
+// Host Part 1: the snapshot's own fields drawn in the pane, band and status line.
+const T1 = Date.UTC(2026, 10, 1, 16, 0, 0)
+const iso = (minAgo: number) => new Date(T1 - minAgo * 60_000).toISOString()
+const RESET = T1 + (3 * 86400 + 4 * 3600 + 600) * 1000
+const LIMIT = { usedPct: 58, resetsAt: new Date(RESET).toISOString(), today: { p: { spentUsd: 30, complete: true, byFolder: {} } } }
+const u = (unit: string, extra: object = {}) => ({ unit, stage: 'building', agents: 'claude:working', ageSec: 360, stageSince: iso(4), builder: { cost: { stages: [{ stage: 'building', usd: 2 }] } }, ...extra })
+const fin = (unit: string, minAgo: number) => ({ unit, how: 'merged', at: iso(minAgo), sha: `sha-${unit}`, cost: { total: { usd: 3 } } })
+const ask = (id: string, minAgo: number | null) => ({ id, question: `Q ${id}?`, source: 'main', askedAt: minAgo === null ? undefined : iso(minAgo), answeredAt: null, answer: null })
+const snapOf = (units: object = {}, project: object = {}, top: object = {}) =>
+  `window.DASH = ${JSON.stringify({ updatedAt: iso(0), home: 'p', limit: LIMIT, ...top, projects: { p: { path: '/repo', units: { inFlight: [], mergedSincePush: [], finishedBuilds: [], ...units }, needsOwner: { decisions: [] }, ...project } } })};`
+const st = (text: string, more: Partial<State> = {}): State => ({ now: T1, snap: parseSnapshot(text, T1, 'p'), merges: [], tests: [], notes: { merges: [], tests: [] }, ...more })
+const txt = (l: Line) => l.map(x => x.t).join('')
+const pane = (s: State, w: number) => paneModel(s, w).map(txt)
+const refused: MergeView = { unit: 'mm', status: 'refused', m: parseMergeLog('FAILED step 1 proof: no GO\n'), elapsedSec: 0 }
+// One snapshot holding every element: an ask blocking x, x and y working, z at its prompt, one planning, one merge today.
+const busy = () => st(snapOf({
+  inFlight: [u('x'), u('y', { builder: { cost: { stages: [{ stage: 'building', usd: 5 }] } } }), u('z', { agents: 'claude:done', builder: { cost: { stages: [{ usd: 9 }] } } }), u('p', { stage: 'planning', builder: null })],
+  finishedBuilds: [fin('m', 30)],
+}, { needsOwner: { decisions: [ask('plan-x', 30)] } }))
+
+test('the header shows stage counts, spend and the 7-day gauge', () => {
+  const s = busy()
+  s.tests = [{ owner: 'u', kind: 'tests', p: { done: 1, failed: 0, firstFail: null }, total: 2, elapsedSec: 60 }]
+  const [head, limit] = pane(s, 72)
+  expect(head).toMatch(/^UNITS · 1 planning · 3 building · 1 waiting on owner +today \$30\.00$/)
+  expect(limit).toMatch(/^7d ▰▰▰▰▰▰▱▱▱▱ 58% ↻ 3d 4h +tests 1 running$/)
+})
+
+test('waiting on the owner lists open decisions with age', () => {
+  // Oldest first; an ask with no time comes last and carries no age.
+  const s = st(snapOf({ inFlight: [u('x'), u('y')] }, { needsOwner: { decisions: [ask('b', 5), ask('a', 30), ask('no-time', null)] } }))
+  const lines = pane(s, 72)
+  const at = lines.findIndex(l => l.startsWith('WAITING ON OWNER'))
+  expect(lines[at]).toBe('WAITING ON OWNER  3')
+  expect(lines.slice(at + 1, lines.findIndex(l => l.startsWith('BUILDING'))).filter(l => /^│ (◆|  )/.test(l)).map(l => l.replace(/ +│$/, '').replace(/ {2,}/g, '  '))).toEqual([
+    '│ ◆ a  30m', '│  Q a?', '│ ◆ b  5m', '│  Q b?', '│ ◆ no-time', '│  Q no-time?',
+  ])
+})
+
+// holds' rule (scripts/decision.sh): the ledger has no unit field, so an id names a unit only as <unit>, plan-<unit> or
+// review-stop-<unit>-r<n>, and only a unit in flight is blocked.
+test('an ask whose id names a unit shows the unit it blocks', () => {
+  const decisions = [ask('plan-gone', 40), ask('plan-y', 30), ask('review-stop-z-r2', 20), ask('x', 10), ask('q-x-note', 5)]
+  const s = st(snapOf({ inFlight: [u('x'), u('y'), u('z')] }, { needsOwner: { decisions } }))
+  expect(s.snap.asks.map(a => `${a.id}:${a.unit}`)).toEqual(['plan-gone:null', 'plan-y:y', 'review-stop-z-r2:z', 'x:x', 'q-x-note:null'])
+  const lines = pane(s, 72)
+  expect(lines.filter(l => l.includes('⏸ waits on owner'))).toHaveLength(3)
+  expect(lines.filter(l => / · \w+ waits +│$/.test(l)).map(l => /· (\w+) waits/.exec(l)?.[1])).toEqual(['y', 'z', 'x'])
+  // The band names the oldest ask; it names no unit when that ask's id names none.
+  expect(txt(bandModel(s, 160)[0])).toContain('plan-gone 40m')
+  expect(txt(bandModel(s, 160)[0])).not.toContain('blocks')
+})
+
+test('merged today reads finished builds, so a push does not empty it', () => {
+  // Nothing is unpushed, yet today's merge stays; one from 30 hours back never counts.
+  const s = st(snapOf({ mergedSincePush: [], finishedBuilds: [fin('m', 30), fin('gone', 60 * 30)] }))
+  expect(pane(s, 72).filter(l => l.startsWith('✓ ') || l.startsWith('MERGED'))).toEqual([expect.stringMatching(/^MERGED TODAY  1 +\$3\.00$/), expect.stringMatching(/^✓ m /)])
+  expect(s.snap.merged).toEqual(['m', 'gone'])
+})
+
+test('the band puts owner questions and the limit first, the busiest unit second', () => {
+  const rows = bandModel(busy(), 160).map(txt)
+  expect(rows).toHaveLength(3)
+  expect(rows[0]).toMatch(/^◆ waiting on owner 1 · plan-x 30m · blocks x +7d ▰▰▰▰▰▰▱▱▱▱ 58% · today \$30\.00$/)
+  // y is the working unit with the most spend; z spent more but sits at its prompt.
+  expect(rows[1]).toMatch(/^◐ y Building  Plan ✓  Judges ✓  Build ◐  Review ○  Merge ○ · \$5\.00 · 4m$/)
+  expect(rows[2]).toBe('◐ x Building 4m ⏸ owner   ○ z Building 4m ⚠   ◐ p Planning 4m   ✓ 1 merged today')
+  expect(bandModel(st(snapOf()), 120).map(txt)).toEqual(['7d ▰▰▰▰▰▰▱▱▱▱ 58% · today ' + d(30)])
+})
+
+test('the status line leads with the worst state', () => {
+  const s = busy()
+  s.merges = [refused]
+  expect(summaryLine(s)).toBe('✗ mm merge refused · ✗ z at its prompt 6m · ◆ 1 for owner · ◐ 1 ◐ 3 ✓ 1 · 58% · ' + d(30))
+  // Without trouble the counts name their stage and the limit shows its reset.
+  const calm = st(snapOf({ inFlight: [u('x'), u('p', { stage: 'planning', builder: null })], finishedBuilds: [fin('m', 30)] }, { needsOwner: { decisions: [ask('a', 30)] } }))
+  expect(summaryLine(calm)).toBe('◆ 1 for owner · ◐ 1 planning · ◐ 1 building · ✓ 1 merged · 7d 58% ↻3d · today ' + d(30))
+})
+
+test('sections with nothing to show take no lines', () => {
+  const s = st(snapOf({}, {}, { limit: undefined }))
+  expect(pane(s, 56)).toEqual(['UNITS', '', 'CANNOT READ', '⚠ 7d limit: not in the snapshot'])
+  expect([bandModel(s, 120), summaryLine(s)]).toEqual([[], undefined])
+})
+
+// Issue 581: the snapshot's seats.main.today and seats.relay.today ({usd, partial}) drawn under the 7-day gauge.
+const seatsOf = (seats: unknown) => st(snapOf({}, { seats }))
+const cost = (usd: unknown, partial?: boolean) => ({ today: { tokens: 1, usd, ...(partial === undefined ? {} : { partial }) } })
+
+test('the header gives main and chief of staff each a line with today\'s cost', () => {
+  const lines = pane(seatsOf({ main: cost(58.5, false), relay: cost(12.25, false) }), 72)
+  expect(lines.slice(0, 4)).toEqual([expect.stringMatching(/^UNITS +today /), expect.stringMatching(/^7d /), `main ${d(58.5)} today`, `chief of staff ${d(12.25)} today`])
+})
+
+test('a figure with an unpriced call reads partial, never a bare dollar amount', () => {
+  const lines = pane(seatsOf({ main: cost(58.5, true), relay: cost(12.25, false) }), 72)
+  expect(lines[2]).toBe(`main ${d(58.5)} partial today`)
+  expect(lines[3]).toBe(`chief of staff ${d(12.25)} today`)
+})
+
+test('a project with no chief of staff draws only the main line', () => {
+  const s = seatsOf({ main: cost(1, false) })
+  expect(pane(s, 72).filter(l => /today$/.test(l) && !l.startsWith('UNITS'))).toEqual([`main ${d(1)} today`])
+  expect(s.snap.unread).toEqual([])
+})
+
+test('an absent or junk seat figure draws no line and the unread note names the junk one', () => {
+  const lines = (seats: unknown) => pane(seatsOf(seats), 72).filter(l => /^(main|chief of staff) /.test(l))
+  // Absent: no seats, null or a string, a null seat, no today. Nothing drawn and nothing said.
+  for (const seats of [undefined, null, 'x', { main: null }, { main: {}, relay: { today: null } }]) {
+    expect(lines(seats)).toEqual([])
+    expect(seatsOf(seats).snap.unread.filter(n => /cost today/.test(n))).toEqual([])
+  }
+  // Junk: a figure that is not a non-negative number. The other seat's line stays.
+  for (const usd of ['58', NaN, null, -1]) {
+    const s = seatsOf({ main: cost(usd), relay: cost(2, false) })
+    expect(lines({ main: cost(usd), relay: cost(2, false) })).toEqual([`chief of staff ${d(2)} today`])
+    expect(s.snap.unread.filter(n => /cost today/.test(n))).toEqual([expect.stringMatching(/^main cost today: /)])
+    // A figure gap is never a work-source problem: the band and status line stay clear of it.
+    expect(bandModel(s, 160).map(txt).join('')).not.toContain('cost today')
+    expect(pane(s, 72).join('\n')).toContain('⚠ main cost today: ')
+  }
+})
+
+// Issue 582: CANNOT READ is the first section under the header, so a short pane never cuts it off.
+test('the cannot-read section sits right under the header, above every section', () => {
+  const s = busy()
+  s.merges = [refused]
+  s.notes.tests = ['tests: one table unreadable']
+  const lines = pane(s, 72)
+  const at = lines.indexOf('CANNOT READ')
+  const first = (re: RegExp) => lines.findIndex(l => re.test(l))
+  expect(at).toBeGreaterThan(-1)
+  for (const title of [/^■ plan/, /^WAITING ON OWNER/, /^BUILDING/, /^MERGING/, /^MERGED TODAY/]) expect(at).toBeLessThan(first(title))
+  expect(lines.slice(at + 1, at + 2)).toEqual(['⚠ tests: one table unreadable'])
+})
+
+test('an unreadable source is still in view when a short pane cuts the lower sections', () => {
+  const s = busy()
+  s.notes.merges = ['merges: log unreadable']
+  expect(pane(s, 72).slice(0, 8)).toContain('⚠ merges: log unreadable')
+})
+
+// Issue 583: the page's clock (dashboard/app.js hm) is 12-hour; so is the merged-today row.
+const mergedAt = (h: number, m: number) => {
+  const at = new Date(2026, 10, 1, h, m).toISOString()
+  const s = st(snapOf({ finishedBuilds: [{ unit: 'm', how: 'merged', at, cost: { total: { usd: 3 } } }] }), { now: new Date(2026, 10, 1, 23, 59).getTime() })
+  return pane(s, 72).find(l => l.startsWith('✓ m'))
+}
+
+test('a time after noon reads h:mm PM in the merged-today row', () => {
+  expect(mergedAt(15, 5)).toMatch(/^✓ m +3:05 PM +\$3\.00$/)
+  expect(mergedAt(23, 59)).toMatch(/ 11:59 PM /)
+})
+
+test('midnight and noon read 12:07 AM and 12:00 PM', () => {
+  expect(mergedAt(0, 7)).toMatch(/ 12:07 AM /)
+  expect(mergedAt(12, 0)).toMatch(/ 12:00 PM /)
+  expect(mergedAt(9, 4)).toMatch(/ 9:04 AM /)
 })

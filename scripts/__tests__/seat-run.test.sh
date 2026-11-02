@@ -74,5 +74,14 @@ DLOG=$(ls "$HOME/.commandeck/scratch/"*/run-*pe-plan-judge-sol.log 2>/dev/null |
 check "a detached run started from a shell that is then killed (with its process group) still finishes and collects" "1:1" \
   "$(grep -c '^seat=plan-judge-sol unit=pe VERDICT: GO report=' "$DLOG" 2>/dev/null):$(grep -c "run-det.md" "$(ls "$HOME/.commandeck/scratch/"*/seat-pe-plan-judge-sol.txt 2>/dev/null)")"
 
+# #570: a seat run sends the relay one `FYI event: <unit> seat-<role> <ok|fail>` note, from the script, whatever the verdict.
+plan_unit pf; SD=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1); echo run_1 > "${SD}current-run"
+printf 'Judge the plan, run five.\nPlan: .claude/plans/pf.md\nEnd on a verdict line.\n' > "$T/run-ev.md"; echo 'VERDICT: GO' > "$T/screen"
+OUT=$(rrun plan-judge-sol pf "$T/run-ev.md" 2>/dev/null); RC=$?; rm -f "${SD}current-run"
+check "a seat run sends the relay exactly one event for a verdict" "0:1:0" \
+  "$RC:$(grep -c -- '--subject FYI event: pf seat-plan-judge-sol ok ' "$T/wakes"):$(grep -c -- 'FYI event: pf seat-plan-judge-sol fail' "$T/wakes")"
+check "main's rules say the scripts send the seat, launch, merge and CI events and main does not repeat them" "1:1" \
+  "$(grep -c 'The scripts send the seat, launch, merge and CI events to the relay' "$REAL/templates/main-session.md"):$(grep -c 'do not repeat them' "$REAL/templates/main-session.md")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

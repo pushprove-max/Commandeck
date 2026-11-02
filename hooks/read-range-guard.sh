@@ -6,6 +6,7 @@
 # Self-test: bash hooks/__tests__/read-range-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of rows from a project that installs the plugin, with Builder sessions logged
 [ "${COMMANDECK_BUILDER-}" = 1 ] || exit 0
 MAX=400
 IFS=$'\001' read -r AID FILE RANGED < <(jq -r '[.agent_id // "", .tool_input.file_path // "",

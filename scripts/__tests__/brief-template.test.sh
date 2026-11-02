@@ -69,8 +69,6 @@ SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "
 check "main's class rule: one retry path, tested state by state" "$RETRY"
 check "main-session.md sends the Builder to redesign on the third return and asks the owner only for a policy call" "answer redesign by default, and send the Builder to redesign the whole mechanism. Ask the owner only for a real policy call (what the product promises, security posture, a stated limit)."
 check "main-session.md leaves the second return to the Builder, sending main nothing" "is the Builder's to fix by design, and it sends main nothing for it."
-check "main's checklist rule names the 8-item cap, the 80-character subject and no ids" "At most 8 open items; a subject of 80 characters at most, with no ids (no message, task or dispatch id, commit hash or issue number)."
-check "main's checklist rule says a done item is deleted, never marked completed" "An item done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint's Closed section keeps it."
 # Host issue 3165: main's card names the large-read rule inside its 40 lines; Details hold the example prompt.
 check "main's card names the large-read rule and the 10 KB line" "a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question"
 check "main's Details hold the large-read example prompt" "Large reads (host issue 3165): a read over 10 KB goes to a background \`Explore\` helper with one precise question and the file path"

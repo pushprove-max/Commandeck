@@ -1,6 +1,6 @@
 # Commands and skills
 
-The plugin ships seven skills. Type these in Claude Code; setup, update,
+The plugin ships eight skills. Type these in Claude Code; setup, update,
 uninstall, handoff, worktreereview and revoke require an explicit user invocation.
 Doctor can also be selected by the model when diagnosing wiring.
 
@@ -22,6 +22,7 @@ Doctor can also be selected by the model when diagnosing wiring.
 | uninstall | Removing project wiring and choosing whether to delete gathered data. |
 | handoff | Checkpointing and restarting the main session on demand. |
 | worktreereview | A running or finished unit's HTML time, token and cost report. |
+| maxreview | An on-demand whole-branch Codex review loop (`/commandeck:maxreview`) that reads its wording live from the Builder pass script. |
 | revoke | Taking out one of setup's values in an Orca profile's settings: a permission rule, an auto-mode line, the status line or a /config option. For the status line or an option, `--keep` keeps the value you set yourself. Under Orca, each launch puts setup's settings back, so a hand edit is undone. A choice made here holds for every pane on the profile. A setup rerun leaves a chosen value out and says so. `undo` takes a value off the list; setup's value is back at the next launch. With no argument, it lists setup's values. |
 
 Setup also installs this project workflow. Give it repository-relative
@@ -51,7 +52,7 @@ warning; this repository's CI runs it.
 |---|---|
 | `unknown-option` | `--option <key>=` names a key that is not in the plugin's `userConfig`. |
 | `retired-name` | A name from `config/retired.tsv` (a script, hook or option the CHANGELOG retired). The row says what replaced it. |
-| `dead-ref` | A backticked `templates/`, `docs/`, `scripts/`, `hooks/` or `.claude/rules/` path that is not on disk. |
+| `dead-ref` | A reference that is not on disk, outside fenced lines: a backticked path under `templates/`, `docs/`, `scripts/`, `hooks/`, `.claude/rules/` or another top-level directory git tracks, a backticked script name no tracked file has, or a Markdown link target. |
 | `over-200-lines` | An always-loaded rule file past 200 lines. A `docs/` file may be longer. |
 | `duplicate-subject`, `stale-model`, `open-conflict` | The same rule under two headings, a pinned model id, an "OPEN conflict" marker. |
 | `memory-over-limit`, `dead-index`, `orphan-memory`, `superseded-memory` | The memory folder's `MEMORY.md` is too long, links a missing file, or leaves a memory unindexed or superseded. |

@@ -51,6 +51,16 @@ r=0; pcr '' "$T/batch.md" >/dev/null 2>"$T/ic-err" || r=$?; out+=" skipfull=$r"
 check "the issue-text check refuses a plan or Skip batch that drops a case an issue names, or whose issue cannot be read (issue 444)" \
   "cases101=Fix 1 first fix|Fix 2 second fix|Done 1 A paragraph done.| cases102=Fix 1 One paragraph fix.|Done 1 d one| cases104=Fix 1 preserve tenant isolation|Fix 2 reject missing tenant IDs|Done 1 one|Done 2 two| unknown=2:1 full=0 dropped=2:1 badpath=2:1 badtest=2:1 ghfail=2:1 none=00 skip=2:1 skipfull=0" "$out"
 
+# Pass 3 (class markdown-fence-drift): the plan's rows, Steps and Acceptance test are read by fence.sh's one rule. A row
+# quoted as an example in an indented or tilde fence, or behind a shorter delimiter inside a longer fence, is not a row,
+# so the case it names is still dropped and refused.
+out=""
+for ex in $'  ```\n- #101 Fix 2 -- src/x.ts -- t-one\n  ```' $'~~~\n- #101 Fix 2 -- src/x.ts -- t-one\n~~~' $'````\n```\n- #101 Fix 2 -- src/x.ts -- t-one\n````'; do
+  r=$(icp 'Closes: #101 #102' "$(grep -v '#101 Fix 2' <<<"$all")"$'\n\n'"$ex"); out+="$r:$(grep -c '#101 Fix 2: second fix' "$T/ic-err") "
+done
+r=$(icp 'Closes: #101 #102' "$all" $'- modify src/x.ts -- the change\n````\n```\n- modify src/q.ts -- quoted\n````'); out+="kept=$r"
+check "a fenced issue case row is an example, not a row: the dropped case is still refused" "2:1 2:1 2:1 kept=0" "$out"
+
 # A prose line opening with an issue ref is text under Fix, and a table row, a quote and such a line are text in a body
 # with no Fix section; a marker rule widened to them would refuse every issue that quotes or tabulates its text.
 printf '## Fix\n\n#12 covers the rest\n- first\n- second\n' > "$T/gh/106"

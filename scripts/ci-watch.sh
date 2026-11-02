@@ -12,6 +12,8 @@ SHA=${1:-}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 1
 mkdir -p "$PP_SCRATCH" || exit 1
 [ -n "${COMMANDECK_FOREGROUND:-}" ] || { pp_detach "$PP_SCRATCH/ci-watch-$SHA.log" "ci-watch.sh $SHA" bash "$0" "$@"; exit; }
+# The relay hears the outcome from here, once: ok when every run is green, fail on any other end.
+trap 'rc=$?; pp_relay_event "$SHA" ci "$([ "$rc" = 0 ] && echo ok || echo fail)" "exit $rc${LINE:+: ${LINE%; }}"' EXIT
 REC=$PP_SCRATCH/ci-watch-reruns
 # Every page: gh run list stops at 20 runs, and a run past them would go unwatched.
 RUNS=$(timeout 60 gh api --paginate "repos/{owner}/{repo}/actions/runs?head_sha=$SHA&per_page=100" \

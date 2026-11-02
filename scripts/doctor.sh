@@ -105,7 +105,11 @@ TRACKED=() TEMPLATES="':(exclude).claude/briefs/_*'"
 for p in "${IL_STATE[@]}"; do [ -z "$(git -C "$PP_MAIN" ls-files -- "$p" ':(exclude).claude/briefs/_*' | head -1)" ] || TRACKED+=("$p"); done
 [ ${#TRACKED[@]} = 0 ] || warn "running state: git tracks ${TRACKED[*]}, which the plugin writes as it runs; untrack and keep the files: git -C $(printf '%q' "$PP_MAIN") rm -r --cached -- ${TRACKED[*]} $TEMPLATES"
 
-if orca-ide worktree ps --json 2>/dev/null | jq -e . >/dev/null 2>&1 && orca-ide terminal list --json 2>/dev/null | jq -e . >/dev/null 2>&1; then ok "orca: worktree ps and terminal list answer"
+# #537: macOS malloc stack logging (MallocStackLogging) writes a stack-logs file that grows without bound.
+BIGF=$(find "$PP_SCRATCH" -type f -size +100M 2>/dev/null | head -1)
+[ -z "$BIGF" ] || warn "scratch: $BIGF is over 100 MB; likely allocator logging (MallocStackLogging) in a plugin shell; delete the file and unset MallocStackLogging in the environment that starts main-watch"
+
+if orca-ide worktree ps --json 2>/dev/null | jq -e .>/dev/null 2>&1 && orca-ide terminal list --json 2>/dev/null | jq -e . >/dev/null 2>&1; then ok "orca: worktree ps and terminal list answer"
 else bad "orca: orca-ide does not answer 'worktree ps --json' and 'terminal list --json'; start Orca"; fi
 
 if [ -n "$PROFILE" ]; then

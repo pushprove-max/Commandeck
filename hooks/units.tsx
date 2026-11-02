@@ -11,6 +11,8 @@ import { setStatus } from './status-line'
 // atoms (what the views draw) and in-memory caches.
 const state = atom({ plugin: 'commandeck', key: 'unitsState' } as const, null)
 const view = atom({ plugin: 'commandeck', key: 'unitsView' } as const, { band: false, pane: false, status: false })
+// The working mark's turn: only the motion clock writes it, never the poll, so a poll keeps the turn.
+const frame = atom({ plugin: 'commandeck', key: 'unitsFrame' } as const, 0)
 
 type Paths = { main: string; scratch: string; workspaces: string; home: string; gitDir: string; project: string }
 type Views = 'band' | 'pane' | 'status'
@@ -25,6 +27,8 @@ const PANE = 'units'
 
 let paths: Paths | undefined
 let stopPoll: (() => void) | undefined
+let spin: { cancel: () => void } | undefined
+let motion = false
 let seatName: 'main' | 'chiefOfStaff' | 'worker' = 'worker'
 let overrides: Partial<Record<Views, boolean>> = {}
 let lastJson = ''
@@ -241,7 +245,24 @@ async function poll($: EngineInterface) {
     await update($, state, () => st)
   }
   await showPane($, wanted('pane') && !isIdle(st))
-  setStatus($, 'units', wanted('status') ? summaryLine(st) : undefined)
+  // The motion clock runs only while `motion` is on and a unit is working; stopped, the mark stands still at once.
+  const turning = motion && st.snap.rows.some(r => r.working)
+  if (turning && !spin) spin = $.clock.every(1000, () => void turn($).catch(() => undefined))
+  if (!turning && spin) {
+    spin.cancel()
+    spin = undefined
+    await update($, frame, () => 0)
+  }
+  sendStatus($, st, await read($, frame))
+}
+
+const sendStatus = ($: EngineInterface, st: State, f: number) => setStatus($, 'units', wanted('status') ? summaryLine(st, f) : undefined)
+
+async function turn($: EngineInterface) {
+  const f = ((await read($, frame)) + 1) % 4
+  await update($, frame, () => f)
+  const st = (await read($, state)) as State | null
+  if (st) sendStatus($, st, f)
 }
 
 // The pane is open only while it is wanted and has something to show: with no live units every view draws nothing
@@ -285,6 +306,10 @@ export async function startUnits($: EngineInterface): Promise<void> {
       return
     }
     stopPoll?.()
+    spin?.cancel()
+    spin = undefined
+    // A stopped clock leaves the still mark: a turn kept from before this start would draw a turned mark with motion off.
+    await update($, frame, () => 0)
     stopPoll = $.clock.every(POLL_MS, () => void tick($).catch(() => undefined))
     await tick($).catch(() => undefined)
   } catch {
@@ -294,6 +319,8 @@ export async function startUnits($: EngineInterface): Promise<void> {
 
 export function registerUnits(on: Parameters<Register>[0], options: Parameters<Register>[1]): void {
   option = { band: String(options.unitsBand ?? 'auto'), pane: String(options.unitsPane ?? 'auto'), status: String(options.unitsStatus ?? 'auto') }
+  // A changed option reloads the plugin and runs this again, so `motion` is read once here.
+  motion = options.motion === true
 
   on('command.run', { command: 'units' }, async ($, e, next) => {
     if (!paths) return next(e)
@@ -305,7 +332,7 @@ export function registerUnits(on: Parameters<Register>[0], options: Parameters<R
       return { text: `units ${which}: ${overrides[which] ? 'on' : 'off'} for this session` }
     }
     await tick($)
-    return { text: tableText(await read($, state) as State | null ?? emptyState()) }
+    return { text: tableText(await read($, state) as State | null ?? emptyState(), Math.max(40, Number(e.presentation?.columns) || 56)) }
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -314,7 +341,12 @@ export function registerUnits(on: Parameters<Register>[0], options: Parameters<R
     const s = (await read($, state)) as State | null
     if (!v.band || !s || isIdle(s)) return next(e)
     const { Box, Text } = $.ui.resolve(e)
-    return <Box flexDirection="row">{draw(Text, bandModel(s), 'b')}</Box>
+    const f = await read($, frame)
+    return (
+      <Box flexDirection="column">
+        {bandModel(s, Number(e.props.bodyColumns) || 120, f).map((l, i) => <Box key={`b${i}`} flexDirection="row">{draw(Text, l, `b${i}`)}</Box>)}
+      </Box>
+    )
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
@@ -322,9 +354,10 @@ export function registerUnits(on: Parameters<Register>[0], options: Parameters<R
     const { Box, Text } = $.ui.resolve(e)
     if (!s || isIdle(s)) return <Text dimColor>No live units.</Text>
     const w = Math.max(40, Math.min(72, Number(e.props.bodyColumns) || 56))
+    const f = await read($, frame)
     return (
       <Box flexDirection="column">
-        {paneModel(s, w).map((l, i) => <Box key={`p${i}`} flexDirection="row">{l.length ? draw(Text, l, `p${i}`) : <Text> </Text>}</Box>)}
+        {paneModel(s, w, f).map((l, i) => <Box key={`p${i}`} flexDirection="row">{l.length ? draw(Text, l, `p${i}`) : <Text> </Text>}</Box>)}
       </Box>
     )
   }).catch(($, e, next) => next(e))

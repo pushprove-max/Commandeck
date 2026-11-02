@@ -33,6 +33,10 @@ case "$1 $2" in
   "worktree ps") echo '{"result":{"worktrees":[]}}' ;;
   "terminal list") echo '{"result":{"terminals":[]}}' ;;
   "worktree list") echo '{"result":{"worktrees":[]}}' ;;
+  "orchestration run-current") cat "${CALLS%/*}/run-current" 2>/dev/null || echo '{"ok":true}' ;;
+  # short-run-list: the 1.4.246 default answer, with no coordinator_handle unless --full is passed.
+  "orchestration run-list") f="${CALLS%/*}/run-list"; [ -f "$f" ] || exit 1
+    if [ -e "${CALLS%/*}/short-run-list" ] && [[ " $* " != *" --full "* ]]; then jq -c '.result.runs[]? |= del(.coordinator_handle)' "$f"; else cat "$f"; fi ;;
   *) echo '{"ok":true}' ;;
 esac
 STUB
@@ -119,7 +123,7 @@ cat > "$BOX/base.md" <<'MD'
 ## Queue (in order)
 1. unit-gamma, blocked on the alpha merge
 
-## Todo list (the owner's on-screen checklist; the resumed main rebuilds it first)
+## Waiting on
 - [x] finished step one
 - [>] rebase delta onto main
 - [ ] push after certification
@@ -216,7 +220,7 @@ chmod 644 "$CPD/sid.md"
 
 # Issue 281: three restarts, each rewording two inherited items, keep the count flat: no item copied twice, one
 # unresolved Queue heading. A genuinely dropped item is still listed, and copied under that same heading.
-printf '## Queue (in order)\n- alpha export\n- beta cache\n- gamma docs\n- delta notes\n\n## Todo list\n- [ ] beta cache follow-up\n' > "$BOX/r0.md"
+printf '## Queue (in order)\n- alpha export\n- beta cache\n- gamma docs\n- delta notes\n\n## Waiting on\n- [ ] beta cache follow-up\n' > "$BOX/r0.md"
 PREV=$BOX/r0.md
 for n in 1 2 3; do
   sed -E "s/^- alpha export.*/- alpha export -- still open: round $n/; s/^- beta cache\$|^- beta cache = .*/- beta cache = todo #1/" "$PREV" > "$BOX/r$n.md"
@@ -421,6 +425,70 @@ check "a permission flag inside an option's value grants nothing on restart (iss
 mkdir -p "$BOX/bare"
 check "a clean home prints no error (issue 464)" "" \
   "$(echo '{}' | env -i PATH="$BOX/bin" HOME="$BOX/bare" bash "$HOOK" 2>&1)"
+
+# #532: the main checkout holds more than main -- an Orca automation or a second Claude session at the repo root shares
+# its git dir -- and only the run's coordinator pane is main. A second session must not be restarted as main, consume
+# main's /handoff request, or be told to checkpoint. Here this pane is old-pane and the run is run_a.
+rm -f "$BOX/run-current"
+mp_list() { printf '{"result":{"runs":[{"id":"run_a","coordinator_handle":%s}]}}\n' "$1" > "$BOX/run-list"; }
+mp_stop() { # <handoff|line> -- one Stop of old-pane on run_a; the hook's stderr lands in mp.err
+  rm -f "$CPD"/sid.* "$BOX/launched"; : > "$BOX/calls"; cp "$BOX/base.md" "$CPD/sid.md"
+  if [ "$1" = line ]; then printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}' > "$BOX/transcript.jsonl"
+  else echo '{}' > "$BOX/transcript.jsonl"; touch "$CPD/sid.handoff"; fi
+  (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","stop_hook_active":false}' "$BOX/transcript.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" CALLS="$BOX/calls" ORCA_TERMINAL_HANDLE=old-pane ${MPRUN:+COMMANDECK_RUN=$MPRUN} \
+        COMMANDECK_CLEAR_LINE="$([ "$1" = line ] && echo 10 || echo 999999999)" COMMANDECK_RESTART_HELPER="$BOX/stub-helper.sh" \
+        bash "$HOOK" > "$BOX/mp.out" 2> "$BOX/mp.err"); }
+launched() { [ -e "$BOX/launched" ] && echo yes || echo no; }
+mp_prompt() { # context-line.sh in old-pane past the line (the skeleton exists, so no snapshot runs)
+  rm -f "$CPD"/sid.*; echo '# cp' > "$CPD/sid.md"; printf '%s\n' '{"message":{"usage":{"cache_read_input_tokens":500,"input_tokens":1}}}' > "$BOX/transcript.jsonl"
+  (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","prompt":"hi"}' "$BOX/transcript.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" CALLS="$BOX/calls" ORCA_TERMINAL_HANDLE=old-pane ${MPRUN:+COMMANDECK_RUN=$MPRUN} \
+        COMMANDECK_CLEAR_LINE=10 bash "$ROOT/hooks/context-line.sh" 2>&1); }
+
+MPRUN=run_a
+mp_list '"other-pane"'; mp_stop handoff; sleep 1
+check "a second session in the main checkout is not restarted as main" "no:yes" "$(launched):$([ -e "$CPD/sid.handoff" ] && echo yes || echo no)"
+mp_list '"old-pane"'; mp_stop handoff; wait_for '[ -e "$BOX/launched" ]'
+check "the run's coordinator past the line is still restarted" yes "$(launched)"
+mp_list '"old-pane"'; mp_stop line; wait_for '[ -e "$BOX/launched" ]'
+check "the run's coordinator on the clear line itself is restarted too" yes "$(launched)"
+mp_list '"other-pane"'; mp_stop line; sleep 1
+check "a second session past the line is not restarted either" no "$(launched)"
+check "a second session past the line is told nothing" "" "$(cat "$BOX/mp.err")$(cat "$BOX/mp.out")"
+mp_list '"other-pane"'
+check "a second session at its prompt past the line is told nothing" "" "$(mp_prompt)"
+mp_list '"old-pane"'
+check "the coordinator at its prompt past the line is told to checkpoint" yes "$([ -n "$(mp_prompt)" ] && echo yes)"
+MPRUN=
+rm -f "$BOX/run-list"
+mp_stop line; wait_for '[ -e "$BOX/launched" ]'
+check "main with no Orca run past the line is still restarted" yes "$(launched)"
+# A run main knows but Orca cannot read, or a listed run with no coordinator: nobody proves this pane is main.
+MPRUN=run_a; rm -f "$BOX/run-list"
+mp_stop line; sleep 1
+check "an unknown coordinator restarts nothing and says so" "no:1" "$(launched):$(grep -c 'unknown' "$BOX/mp.err")"
+mp_list '""'; mp_stop line; sleep 1
+check "a listed run with no coordinator restarts nothing and says so" "no:1" "$(launched):$(grep -c 'coordinator' "$BOX/mp.err")"
+rm -f "$BOX/run-list"; OUT=$(mp_prompt)
+check "an unknown coordinator at the prompt says so in one line and asks for no checkpoint" "1:0" \
+  "$(grep -c 'unknown' <<<"$OUT"):$(grep -c 'checkpoint' <<<"$OUT")"
+MPRUN=; rm -f "$BOX/run-list" "$CPD"/sid.*
+
+# Orca 1.4.246 drops coordinator_handle from run-list unless it is asked in full (A29): with short-run-list the stub
+# answers as it does, so a read without --full finds no coordinator and main would never be main.
+touch "$BOX/short-run-list"; MPRUN=run_a; mp_list '"old-pane"'; mp_stop line; wait_for '[ -e "$BOX/launched" ]'
+check "main is main when run-list is read with --full" yes "$(launched)"
+rm -f "$BOX/short-run-list" "$BOX/run-list"; MPRUN=
+
+# #541: a Builder past the line is told the four lines the hand-off needs, so the fresh round knows its unit, cut,
+# tests and findings, and the brief and the evidence file to read.
+OUT=$(builder_line 190000)
+check "the Builder line names the unit, cut, test state and open findings lines" "1:1:1:1:1:1" \
+  "$(grep -c 'Unit:' <<<"$OUT"):$(grep -c 'Cut:' <<<"$OUT"):$(grep -c 'Tests:' <<<"$OUT"):$(grep -c 'Open findings:' <<<"$OUT"):$(grep -c 'unit-a\.md' <<<"$OUT"):$(grep -c 'unit-a-evidence\.md' <<<"$OUT")"
+rm -f "$BOX/ws/unit-a/.claude/briefs/unit-a-handoff.md"
+check "a Builder under the line is told nothing and leaves no hand-off" ":no" \
+  "$(builder_line 170000):$([ -e "$BOX/ws/unit-a/.claude/briefs/unit-a-handoff.md" ] && echo yes || echo no)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

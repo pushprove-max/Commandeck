@@ -67,7 +67,7 @@ echo '{"builder": {"clearLine": "160000"}}' > "$MAIN/.claude/commandeck.json"
 SCR=$(cd "$MAIN" && env -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$MAIN" bash -c '. "$0" && echo "$PP_SCRATCH"' "$SOURCE/scripts/paths.sh"); mkdir -p "$SCR"
 mkdir -p "$T/profile"; echo "$T/profile" > "$SCR/claude-config-dir"
 dash
-check "issue 291: the collector reads the config folder main recorded" "not-measured no main session task list under $T/profile/tasks" \
+check "issue 291: the collector reads the config folder main recorded" "null null" \
   "$(jq -r 'first(.[]).sources.todos | "\(.status) \(.error)"' "$T/out/run/project.json" 2>&1)"
 rm -f "$SCR/claude-config-dir"
 
@@ -106,6 +106,10 @@ check "a listed name shows as a seat (issue 460)" '["seat"]' \
 # first live row over this one.
 check "the snapshot carries its own mark (issue 466)" true \
   "$(jq -c 'first(.[]) | .units.seen | (.gen | type) == "number" and (.seq | type) == "number"' "$T/out/run/project.json" 2>&1)"
+
+# #553: main keeps no task list, so the snapshot has no todos source (and the page no card for it).
+check "the dashboard snapshot carries no todos source" "object false" \
+  "$(jq -r 'first(.[]).sources | "\(type) \(has("todos"))"' "$T/out/run/project.json" 2>&1)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

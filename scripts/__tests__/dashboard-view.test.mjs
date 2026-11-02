@@ -716,7 +716,7 @@ test('issue 211: More lists every other panel not hidden, shows the one picked a
   tabBtn(w, 'more').click();
   assert.equal(sheet.hidden, false);
   assert.ok(sheet.contains(w.document.activeElement), 'the sheet takes focus');
-  assert.deepEqual(tiles().map((b) => b.dataset.card), ['merge-line', 'next-push', 'limit', 'todos', 'host', 'cost-role', 'cost-unit', 'review', 'guard-blocks',
+  assert.deepEqual(tiles().map((b) => b.dataset.card), ['merge-line', 'next-push', 'limit', 'host', 'cost-role', 'cost-unit', 'review', 'guard-blocks',
     'chief-of-staff', 'main-seat', 'agents'], 'every panel on no tab, less the one the owner hid and the relay seat this project has not');
   assert.equal(tiles()[0].textContent, 'Merge line', 'a tile is its panel\'s title');
   w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -919,6 +919,29 @@ test('issue 240: a reopened decision is answerable again in the same tab; an ope
   show(w, { needsOwner: { decisions: [{ ...d, answeredAt: iso(NOW), answer: 'yes' }] } });
   assert.match(text(w.document.getElementById('decisions')), /ship-1999-01-01.*main's picker for it was open: pick or press Esc in main's pane/,
     'and the list keeps naming it after the answered row is gone');
+});
+
+// Issue 569 (D75): the host's reply says whether the answer reached the asking Builder; the Answered line shows queued,
+// unknown and not delivered beside the answer, and a delivered one, or a reply from an older host with no word, reads as before.
+// Each Answered line is read for one delivery word the host's reply carries (issue 569, D75).
+const answeredLine = async (delivery) => {
+  const d = { id: 'u1-msg_1', question: 'Which lock?', proposedDefault: 'none', options: ['flock', 'lockf'], source: 'u1 asks',
+    askedAt: iso(NOW - 60000), answeredAt: null, answer: null };
+  const w = fresh();
+  w.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ruling: 'r-19990101-000000-d-abcdef', unsent: 0, picker: false, ...(delivery === undefined ? {} : { delivery }) }) });
+  show(w, { needsOwner: { decisions: [d] } });
+  w.document.querySelector('#decisions .answer button').click();
+  await settled(w);
+  return text(w.document.querySelector('#decisions .answer'));
+};
+test('an answer the host could not deliver reads not delivered on the page', async () => {
+  assert.match(await answeredLine('not delivered: u1-msg_1 to u1: answer-worker: pane gone'), /^Answered: flock \(ruling r-19990101-000000-d-abcdef\); not delivered: u1-msg_1 to u1/);
+  assert.equal(await answeredLine('delivered: u1-msg_1 to u1'), 'Answered: flock (ruling r-19990101-000000-d-abcdef)', 'a delivered answer reads as before');
+  assert.equal(await answeredLine(undefined), 'Answered: flock (ruling r-19990101-000000-d-abcdef)', 'an older host sends no delivery key');
+});
+test('a queued or unknown delivery reads queued or unknown on the page', async () => {
+  assert.match(await answeredLine('queued: u1-msg_1 to u1'), /; queued: the Builder is not running; the answer waits and is shown first when it starts/);
+  assert.match(await answeredLine('unknown: the dashboard host stopped before or during the send'), /; delivery unknown: the dashboard stopped mid-send/);
 });
 
 // The reply is lost when only a later refresh delivers the answer, and on a reload: the host keeps the word, and the

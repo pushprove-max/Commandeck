@@ -159,6 +159,14 @@ check "a session started in a subdirectory still screens the file" "2 1" \
 check "a session in another checkout screens the file by the file's checkout" 2 \
   "$(run_in "$W2" "$(t_edit "$W1/web/src/X.tsx" "$COPY")")"
 
+# D12: a doc or a spec names a local address as prose or a fixture; app code still blocks.
+check "a doc edit naming a local address passes" "0 0 0 0 0" \
+  "$(run_hook "$(t_edit "$ROOT/docs/setup.md" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/README.mdx" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/notes.txt" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/docs/setup.ts" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/docs/guide/axios.tsx" "$BAD_AXIOS")")"
+check "a spec edit naming a local address passes" "0 0 0 0" \
+  "$(run_hook "$(t_edit "$ROOT/src/api.spec.ts" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/test/api.ts" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/tests/api.ts" "$BAD_LOOPBACK")") $(run_hook "$(t_edit "$ROOT/src/api.spec.tsx" "$BAD_AXIOS")")"
+check "app code naming a local address still blocks" "2 2 2" \
+  "$(run_hook "$(t_edit "$ROOT/src/api.ts" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/src/spec.ts" "$BAD_FETCH")") $(run_hook "$(t_edit "$ROOT/src/latest/api.ts" "$BAD_LOOPBACK")")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -147,20 +147,19 @@ LOOKUP_TOTAL_S = 30  # all lookups of one carry together: the Stop hook waits on
 
 
 def section_kind(line):
-    """open | todo | closed for a level-2 heading the gate reads, else None."""
+    """open | closed for a level-2 heading the gate reads, else None."""
     if not line.startswith("## "):
         return None
     h = line[3:].strip().lower()
-    return ("closed" if h.startswith("closed since last checkpoint") else "todo" if h.startswith("todo list")
-            else "open" if h.startswith(OPEN) else None)
+    return "closed" if h.startswith("closed since last checkpoint") else "open" if h.startswith(OPEN) else None
 
 
 def located(lines):
-    """(section kind, line numbers, raw text, identity, todo status) per item."""
+    """(section kind, line numbers, raw text, identity, checkbox status) per item."""
     out, kind, cur = [], None, None
     for n, line in enumerate(lines):
         # Only level-2 headings start a section; a deeper one is body text, so
-        # a nested "### Todo list" under Gotchas carries nothing.
+        # a nested "### Queue" under Gotchas carries nothing.
         if REF.match(line):
             cur = None
         elif line.startswith("## "):
@@ -187,7 +186,7 @@ def located(lines):
 
 
 def items(text):
-    """(section kind, raw text, identity, todo status) per item."""
+    """(section kind, raw text, identity, checkbox status) per item."""
     return [(k, raw, ident, st) for k, _, raw, ident, st in located(text.splitlines())]
 
 
@@ -252,27 +251,25 @@ def refs(path, text):
 
 
 def own(text):
-    """(open (raw, identity) pairs, closure identities, Todo (identity, status) in order) of one checkpoint.
+    """(open (raw, identity) pairs, closure identities) of one checkpoint.
     A CLOSED: or [x] line outside the Closed section is a closure too (issue 281)."""
-    opened, closures, todos = [], [], []
+    opened, closures = [], []
     for kind, raw, ident, status in items(text):
-        if kind == "todo":
-            todos.append((ident, status))
         if kind == "closed" or status == "x" or ident.startswith("closed:"):
             closures.append(re.sub(r"^closed:\s*", "", ident))
         else:
             opened.append((raw, ident))
-    return opened, closures, todos
+    return opened, closures
 
 
 def load(path):
     """(open (raw, identity) pairs, closure identities, references) of one checkpoint of the chain."""
     text = read(path)
     # No open section and no reference is an empty or truncated file, never "nothing to carry".
-    if not any(section_kind(l) in ("open", "todo") or REF.match(l) for l in text.splitlines()):
-        raise OSError(f"the checkpoint {path} has no Waiting on, unsaved rulings, Queue or Todo list section "
+    if not any(section_kind(l) == "open" or REF.match(l) for l in text.splitlines()):
+        raise OSError(f"the checkpoint {path} has no Waiting on, unsaved rulings or Queue section "
                       "and no 'Carries open items of:' line; it is empty or truncated")
-    opened, closures, _ = own(text)
+    opened, closures = own(text)
     return opened, closures, refs(path, text)
 
 
@@ -410,17 +407,6 @@ def effective(path, depth=MAX_DEPTH, errs=None):
     return [(*items.pairs[j], g) for j, g in sorted(gen.items(), key=lambda t: (t[1], t[0]))]
 
 
-def pointed(k, ident, todos):
-    """An item that says "= todo #N" is carried by the new checkpoint's open todo #N when that todo names the
-    item's whole subject: its Q-key as its own key, or every word of the subject in order."""
-    m = re.search(r" = todo #(\d+)", ident)
-    n = int(m.group(1)) if m else 0
-    if not 0 < n <= len(todos) or todos[n - 1][1] == "x":
-        return False
-    todo = todos[n - 1][0]
-    return key(todo) == k or (not QKEY.fullmatch(k) and bool(occurs(k, todo)))
-
-
 def run(argv, cwd, until=None):
     left = LOOKUP_S if until is None else min(LOOKUP_S, until - time.monotonic())
     if left <= 0:
@@ -497,7 +483,7 @@ def carry(base, new):
         new_text = read(new)
         # Issue 252: only the new file's own text keeps an item; its reference line is for recovery, and counting
         # the referenced file's items as kept passed every restart that reworded or dropped one.
-        still_open, closures, todos = own(new_text)
+        still_open, closures = own(new_text)
     except OSError as e:
         print(f"{e}; an unreadable checkpoint in the carry chain cannot show what this session inherited")
         return 2
@@ -520,7 +506,7 @@ def carry(base, new):
     missing, seen, until = {}, {}, time.monotonic() + LOOKUP_TOTAL_S
     for raw, ident in inherited:
         k = key(ident)
-        if ident in placeholders or k in missing or k in ended or k in kept or pointed(k, ident, todos):
+        if ident in placeholders or k in missing or k in ended or k in kept:
             continue
         evidence = done(raw, main, seen, until)
         if evidence:
@@ -535,15 +521,23 @@ def carry(base, new):
 def dedupe(path):
     """Flatten the file's whole carry chain into it, one line per subject, behind a backup (issue 283)."""
     bak = path + ".bak"
-    if os.path.exists(bak):
+    # The backup is created exclusively before anything is read: of two dedupes of one file, one takes it and the
+    # other refuses, so neither overwrites the other's backup or writes from a read the other has replaced (pass 4).
+    try:
+        open(bak, "x").close()
+    except FileExistsError:
         print(f"dedupe: {bak} exists from an earlier dedupe; compare and remove it before another run", file=sys.stderr)
         return 1
+    except OSError as e:
+        print(f"dedupe: {e}", file=sys.stderr)
+        return 2
     try:
         text = read(path)
         # The whole chain, not the carry walk's ten generations: the references are cut below, so an item past
         # the tenth would be lost. A file of it that cannot be read refuses the dedupe.
         chain = effective(path, sys.maxsize)
     except OSError as e:
+        os.remove(bak)
         print(f"dedupe: {e}", file=sys.stderr)
         return 2
     lines = text.splitlines()
@@ -555,7 +549,7 @@ def dedupe(path):
         if on and not REF.match(line):
             drop.add(n)
     for kind, at, raw, ident, status in located(lines):
-        if kind in ("open", "todo") and status != "x" and at[0] not in drop:
+        if kind == "open" and status != "x" and at[0] not in drop:
             if key(ident) in kept:
                 drop.update(at)
             kept.add(key(ident))

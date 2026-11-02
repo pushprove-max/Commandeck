@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Drift guard: a hook whose job is to refuse must not let the action
-# through when it crashes or times out. Every PreToolUse hook whose script can
-# refuse (`exit 2`, or a permissionDecision deny) carries `"onFailure":
-# "block"` with a timeout that load cannot hit, unless OPEN below names it.
-# Claude Code ignores onFailure on Stop-type events, so it must not appear there.
+# Drift guard (the owner's guard list, G9): a hook that times out or crashes
+# lets the call through, so no hook carries `"onFailure": "block"`. A slow hook
+# under load must not stop a call it would have passed. The refusal detector
+# still counts the PreToolUse hooks that can refuse, so the guard is not vacuous.
 # Run: bash hooks/__tests__/hook-on-failure.guard.test.sh
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -18,8 +17,6 @@ check_settings() {
   python3 - "$1" "$ROOT" <<'PY'
 import json, os, re, sys
 settings, root = sys.argv[1:]
-# Refusing scripts deliberately left open, one reason each.
-OPEN = {"read-range-guard.sh": "a cost guard: a crash must not stop a Builder reading"}
 IGNORED = {"Stop", "SubagentStop", "TaskCompleted", "TeammateIdle"}
 MIN_TIMEOUT = 30
 REFUSES = re.compile(r'\bexit 2\b|permissionDecision[^\n]*deny')
@@ -45,8 +42,8 @@ for event, groups in json.load(open(settings)).get("hooks", {}).items():
             if not REFUSES.search(code):
                 continue
             refusing += 1
-            if not block and os.path.basename(path) not in OPEN:
-                problems.append(f"{name}: can refuse but lets the action through when it fails; add \"onFailure\": \"block\"")
+            if block:
+                problems.append(f"{name}: can refuse and fails closed; remove \"onFailure\": \"block\" so a timed-out hook lets the call through")
 print(f"refusing {refusing} blocked {blocked}")
 print("\n".join(problems))
 sys.exit(1 if problems else 0)
@@ -60,12 +57,14 @@ OUT=$(check_settings "$ROOT/hooks/hooks.json"); rc=$?
 [ "$rc" = 0 ] && ok "the real settings pass" || bad "the real settings: $OUT"
 N=$(echo "$OUT" | sed -n 's/^refusing \([0-9]*\) .*/\1/p')
 [ "${N:-0}" -ge 15 ] && ok "the refusal detector is not vacuous ($N refusing hooks)" || bad "only ${N:-0} refusing hooks found"
+# The shipped file itself: a refusing hook that fails closed stops every call while it times out under load.
+echo "$OUT" | grep -q 'can refuse and fails closed' && bad "no refusing hook fails closed" || ok "no refusing hook fails closed"
 
 GUARD='(.hooks.PreToolUse[].hooks[] | select(.command | test("bash-guardrails")))'
-OUT=$(check_settings "$(mutate "del($GUARD.onFailure)")") \
-  && bad "a refusing hook stripped of block passed" \
-  || { echo "$OUT" | grep -q 'bash-guardrails.sh: can refuse' && ok "a refusing hook stripped of block fails" || bad "wrong failure: $OUT"; }
-OUT=$(check_settings "$(mutate "$GUARD.timeout = 5")") \
+OUT=$(check_settings "$(mutate "$GUARD += {onFailure:\"block\", timeout:30}")") \
+  && bad "a refusing hook given block is caught: it passed" \
+  || { echo "$OUT" | grep -q 'bash-guardrails.sh: can refuse and fails closed' && ok "a refusing hook given block is caught" || bad "wrong failure: $OUT"; }
+OUT=$(check_settings "$(mutate "$GUARD += {onFailure:\"block\", timeout:5}")") \
   && bad "a block hook with a 5 s timeout passed" \
   || { echo "$OUT" | grep -q 'timeout 5' && ok "a block hook with a 5 s timeout fails" || bad "wrong failure: $OUT"; }
 OUT=$(check_settings "$(mutate '.hooks.Stop[0].hooks[0] += {onFailure:"block", timeout:30}')") \

@@ -19,7 +19,9 @@ Kinds:
   unknown-option     `--option <key>=` in an instruction file, template, brief, doc or hook with a key that is
                      not a userConfig key of .claude-plugin/plugin.json
   retired-name       a name listed in config/retired.tsv, with what replaced it
-  dead-ref           a backticked templates/, docs/, scripts/, hooks/ or .claude/rules/ path that is not on disk
+  dead-ref           a gone reference, outside fenced lines: a backticked path under templates/, docs/, scripts/,
+                     hooks/, .claude/rules/ or another top-level directory git tracks, a backticked script name no tracked
+                     file has, or a Markdown link target that is not on disk
 
 Every row ends with `rule: <file>#<heading>`, where the rule is written down.
 
@@ -43,6 +45,8 @@ MODEL_ID = re.compile(r"\b(claude-(?:opus|sonnet|haiku|fable)-\d+(?:-\d+)*|gpt-\
 BOLD_LEAD = re.compile(r"^\s*(?:[-*]\s+|\d+\.\s+)?\*\*(.+?)\*\*")
 HEADING = re.compile(r"^#{2,4}\s+(.+)")
 OPEN_CONFLICT = re.compile(r"\bOPEN conflict\b", re.IGNORECASE)
+# The fence rule of fence.sh: backticks or tildes, indented or not, closed by the same character at least as long.
+FENCE = re.compile(r"\s*(`{3,}|~{3,})(.*)")
 INDEX_LINK = re.compile(r"\]\(([^)\s]+\.md)\)")
 MD_NAME = re.compile(r"[\w.-]+\.md")
 PATHS = re.compile(r"^paths:", re.MULTILINE)
@@ -55,7 +59,10 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 RULE = "docs/commands.md#rules-audit"
 # shortcut: only the --option form; a bare backticked key (`wakeKinds`) is not told from any other code word. Upgrade when an old key slips through.
 OPTION_USE = re.compile(r"--option[ =]([A-Za-z]\w*)=")
-REF = re.compile(r"`((?:templates|docs|scripts|hooks|\.claude/rules)/[^`\s]+)`")
+KNOWN_TOPS = {"templates", "docs", "scripts", "hooks"}
+BACKTICK = re.compile(r"`([^`]+)`")
+MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
+SCRIPT_NAME = re.compile(r"[\w.-]+\.(?:sh|py)")
 NOT_A_PATH = re.compile(r"[<>*{}$\[\]|]|\.\.\.")
 
 
@@ -138,6 +145,36 @@ def active_index(memory_dir):
             path.unlink()
 
 
+def git_files(repo):
+    ls = subprocess.run(["git", "-C", str(repo), "ls-files"], capture_output=True, text=True)
+    return ls.stdout.splitlines() if ls.returncode == 0 else []
+
+
+def dead_refs(repo, path, line, tracked):
+    """The gone references on one line: a backticked path under a known top-level directory, a Markdown link target, and
+    a backticked script name no tracked file has. With no tracked files only the fixed prefixes are read."""
+    tops = KNOWN_TOPS | {t.split("/")[0] for t in tracked if "/" in t} - {".claude"}
+    names = {t.rsplit("/", 1)[-1] for t in tracked}
+    gone = []
+    for span in BACKTICK.findall(line):
+        token = span.split()[0] if span.split() else ""
+        target = re.sub(r"(?::\d+)?(?:#.*)?$", "", token.rstrip(".,;:)"))
+        if not target or NOT_A_PATH.search(target) or "://" in target:
+            continue
+        if "/" in target:
+            # Untracked build output is real in a built checkout and absent in a clean one. A doc names the
+            # project's own .claude/ files (runtime state, setup output) as often as its own: only .claude/rules/ is read.
+            if (target.split("/")[0] in tops or (target.startswith(".claude/rules/") and target != ".claude/rules/")) and not {"node_modules", "dist"} & set(target.split("/")) and not (repo / target).exists():
+                gone.append(target)
+        elif tracked and SCRIPT_NAME.fullmatch(target) and not target.startswith(".") and target not in names:
+            gone.append(target)
+    for link in MD_LINK.findall(line if tracked else ""):
+        target = link.split("#")[0]
+        if target and not NOT_A_PATH.search(target) and "://" not in target and not link.startswith(("mailto:", "/")) and not (path.parent / target).exists():
+            gone.append(target)
+    return list(dict.fromkeys(gone))
+
+
 def lint(repo, memory_dir, global_file):
     rows = []
     instruction = [(p, str(p.relative_to(repo))) for p in repo_files(repo)]
@@ -198,8 +235,10 @@ def lint(repo, memory_dir, global_file):
     # Rules and commands live in more files than the always-loaded ones: these three kinds read them all.
     known = set(json.loads((PLUGIN_ROOT / ".claude-plugin/plugin.json").read_text()).get("userConfig", {}))
     names = retired()
+    tracked = git_files(repo)
     seen = {p for p, _ in instruction}
     for path, shown in instruction + [(p, str(p.relative_to(repo))) for p in text_files(repo) if p not in seen]:
+        fence = ""
         for n, line in enumerate(path.read_text().splitlines(), 1):
             for m in OPTION_USE.finditer(line):
                 if m.group(1) not in known:
@@ -207,10 +246,14 @@ def lint(repo, memory_dir, global_file):
             for name, replacement in names:
                 if name in line:
                     rows.append(f"{shown}:{n} retired-name {name}" + (f", now: {replacement}" if replacement else ""))
-            for ref in REF.findall(line):
-                ref = re.sub(r"(?::\d+)?(?:#.*)?$", "", ref.rstrip(".,;:)"))
-                if not NOT_A_PATH.search(ref) and not (repo / ref).exists():
-                    rows.append(f"{shown}:{n} dead-ref {ref}")
+            run = FENCE.match(line)
+            if fence:
+                if run and run.group(1)[0] == fence[0] and len(run.group(1)) >= len(fence) and not run.group(2).strip():
+                    fence = ""
+            elif run:
+                fence = run.group(1)
+            else:
+                rows.extend(f"{shown}:{n} dead-ref {ref}" for ref in dead_refs(repo, path, line, tracked))
     return [f"{row} rule: {RULE}" for row in rows]
 
 

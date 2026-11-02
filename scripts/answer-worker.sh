@@ -62,18 +62,19 @@ close_asks() {
   # The ledger keeps <unit>-msg_<id> (orca-wait.sh): a bare msg_<id> names the same question.
   case $q in msg_*) q=$u-$q ;; esac
   ids=$(bash "$HERE/decision.sh" list 2>/dev/null | jq -r --arg s "$u asks" --arg q "$q" \
-    '.[] | select(.answeredAt == null and .waitsOn == "main" and .source == $s and ($q == "" or .id == $q)) | .id')
+    '.[] | select(.answeredAt == null and (.waitsOn == "main" or $q != "") and .source == $s and ($q == "" or .id == $q)) | .id')
   if [ -z "$ids" ]; then [ -z "$q" ] || echo "answer-worker: no open question $q from $u in the ledger; nothing closed" >&2; return 0; fi
   if [ "$(wc -l <<<"$ids")" -gt 1 ]; then
     echo "answer-worker: $u has questions $(paste -sd' ' - <<<"$ids") open; none closed. Close the one this answered: bash $HERE/decision.sh answer <id> '<answer>'" >&2
     return 0
   fi
-  bash "$HERE/decision.sh" answer "$ids" "$TEXT" >/dev/null || echo "answer-worker: decision $ids stays open in the ledger" >&2
+  # The close sends nothing: this call is the send (issue 569). With an id it also closes an owner-bound row, waiting on no one.
+  COMMANDECK_NO_DELIVER=1 bash "$HERE/decision.sh" answer "$ids" "$TEXT" >/dev/null || echo "answer-worker: decision $ids stays open in the ledger" >&2
 }
 if [ -d "$PP_WORKSPACES/$H" ]; then
   U=$H; H=$(pp_seat_pane "unit-$U" "$PP_WORKSPACES/$U")
   [ -n "$H" ] || { bash "$HERE/to-main.sh" --unit "$U" status "answer from main" "$TEXT" 2>/dev/null
-    [ $? = 3 ] && { close_asks; echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2; } \
+    [ $? = 3 ] && { close_asks; echo "queued: ${Q:-no id} to $U" >&2; echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2; } \
       || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }
 fi
 # --interrupt takes only a pane blocked in ask-main.sh's wait at the moment of the send, so it never cuts the work the

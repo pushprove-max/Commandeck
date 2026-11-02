@@ -35,6 +35,7 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero advises across 90 days of real rows from a project that installs the plugin
 # Strict tier: off unless the project turned it on (lib/project.sh). A planner seat (seat.sh exports
 # COMMANDECK_SEAT=<role>) hears it either way: it is almost all reads, and it never ran under the default tier.
 # So does a Builder (COMMANDECK_BUILDER=1), from its second lone look: it pays for every one across a whole build.
@@ -70,10 +71,17 @@ THRESHOLD=${BATCH_STREAK_THRESHOLD:-3}
 NOW=$(date +%s%3N 2>/dev/null) || exit 0
 case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
 
-PREV=0; STREAK=0; NAGGED=0; LABELS=''
-# Line 1 is `NOW STREAK NAGGED`; the labels of the streak follow. A file from before the labels has line 1 only.
-[ -f "$STATE" ] && { read -r PREV STREAK NAGGED; LABELS=$(cat); } < "$STATE" 2>/dev/null
-case "${PREV:-x}${STREAK:-x}${NAGGED:-0}" in *[!0-9]*) PREV=0; STREAK=0; NAGGED=0; LABELS='' ;; esac
+PREV=0; STREAK=0; NAGGED=0; REFUSED=0; LABELS=''
+# Line 1 is `NOW STREAK NAGGED [REFUSED]`; the labels of the streak follow. A file from before the labels has line 1
+# only, one from before the refusal has three fields. REFUSED is set by a PreToolUse refusal (issue 539) and cleared
+# by the next call.
+[ -f "$STATE" ] && { read -r PREV STREAK NAGGED REFUSED; LABELS=$(cat); } < "$STATE" 2>/dev/null
+case "${PREV:-x}${STREAK:-x}${NAGGED:-0}${REFUSED:-0}" in *[!0-9]*) PREV=0; STREAK=0; NAGGED=0; REFUSED=0; LABELS='' ;; esac
+save_state() { { printf '%s %s %s%s\n' "$PREV" "$STREAK" "${NAGGED:-0}" "${1:+ $1}"; [ -z "$LABELS" ] || printf '%s\n' "$LABELS"; } > "$STATE" 2>/dev/null; }
+
+# A new prompt starts the count over; the advice stays said (issue 539).
+EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
+if [ "$EVENT" = UserPromptSubmit ]; then STREAK=0; LABELS=''; save_state; exit 0; fi
 
 # THE TRUE COUNT, WHENEVER THE TRANSCRIPT IS THERE. Every tool call of
 # one turn belongs to one assistant message, so that message's `tool_use` blocks
@@ -141,6 +149,33 @@ read_only() {
   done < <(printf '%s\n' "$CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/[;|&]/\n/g')
   return 0
 }
+
+# BEFORE THE CALL RUNS (issue 539): a second lone look in a row is refused, and only on proof. The proof is the call's own
+# transcript line holding a message-complete mark (message.stop_reason set; a message's lines are written together once
+# it completes, so a batched call's hook can run before any of them land) and its message holding one call. A line with no mark may still have siblings on the way, so it is advice only (the PostToolUse arm
+# below), never a refusal; the same for a call with no transcript. The refusal sets REFUSED and the next call clears it,
+# so repeating the call passes.
+own_marked() { # the stop_reason of the call's own line is non-null
+  [ -r "$TRANSCRIPT" ] && [ -n "$TUID" ] || return 1
+  tail -n 400 "$TRANSCRIPT" | grep -F '"type":"assistant"' | jq -es --arg u "$TUID" '
+    map(select(any((.message.content // [])[]; .type == "tool_use" and .id == $u))) | last | (.message.stop_reason // null) != null' 2>/dev/null | grep -qx true
+}
+if [ "$EVENT" = PreToolUse ]; then
+  if [ "${REFUSED:-0}" = 1 ]; then save_state; exit 0; fi
+  [ "$STREAK" -ge 1 ] && read_only && [ -n "$TRANSCRIPT" ] || exit 0
+  for ((W = 0; ; W += 250)); do
+    own_marked && break
+    [ $((W + 250)) -lt "$SIBLING_MS" ] || exit 0
+    sleep 0.25
+  done
+  [ "$(count_calls)" -eq 1 ] || exit 0
+  save_state 1
+  SEEN=$(printf '%s\n' "$LABELS" | cut -f1 | paste -sd';' - | sed 's/;/; /g')
+  ADVICE="BATCHING: this is a second single read-only look in a row (after: $SEEN). Send it together with the other looks you already know you need, as one turn of parallel tool calls, then repeat. To go ahead as it is, repeat this call: a repeat passes."
+  HOOK_FIRE_REASON=lone-look HOOK_FIRE_BLOCK=1
+  jq -cn --arg m "$ADVICE" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $m}}'
+  exit 0
+fi
 
 GAP=$((NOW - PREV))
 if [ "$CALLS" -ge 2 ] \

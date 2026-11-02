@@ -18,19 +18,20 @@ export const ROOT = decodeURIComponent(new URL('..', import.meta.url).pathname).
 export const SESSION = { surface: 'terminal', isInteractive: true } as const
 export const SEATS = { main: [GIT, MAIN], cos: [`${GIT}/worktrees/c`, `${WS}/Chief-of-Staff`], worker: [`${GIT}/worktrees/u`, `${WS}/u`] }
 
-export type World = { files: Map<string, { text: string; at: number }>; runs: string[][]; status: (string | undefined)[]; toasts: string[]; registered: string[]; opened: string[]; live: Set<number>; clock: ReturnType<typeof mock.clock>; beforeRead?: (path: string) => Promise<void> | void }
+export type World = { files: Map<string, { text: string; at: number }>; runs: string[][]; writes: string[]; status: (string | undefined)[]; toasts: string[]; registered: string[]; opened: string[]; live: Set<number>; clock: ReturnType<typeof mock.clock>; beforeRead?: (path: string) => Promise<void> | void }
 
 export const unit = (name: string, extra: object = {}, builder: object | null = {}) => ({
   unit: name, stage: 'building', agents: 'claude:working', ageSec: 0, round: null,
   builder: builder && { verdict: null, verdictRound: null, findings: null, cost: { stages: [{ usd: 1 }] }, ...builder }, ...extra,
 })
 // The dashboard's envelope: this project's units sit under projects.<name>.units.
-export const snap = (inFlight: object[], units: object = {}) =>
-  `window.DASH = ${JSON.stringify({ updatedAt: '2026-10-25T15:04:30Z', home: 'p', projects: { p: { path: '/repo', units: { inFlight, mergedSincePush: [], ...units } } } })};`
+// The project carries the fields the views read: finished builds and the owner's open decisions (none by default).
+export const snap = (inFlight: object[], units: object = {}, project: object = {}) =>
+  `window.DASH = ${JSON.stringify({ updatedAt: '2026-10-25T15:04:30Z', home: 'p', projects: { p: { path: '/repo', units: { inFlight, mergedSincePush: [], finishedBuilds: [], ...units }, needsOwner: { decisions: [] }, ...project } } })};`
 
 export const world = (on: On, seat: keyof typeof SEATS, files: Record<string, string> = {}, installed = true): World => {
   const clock = mock.clock(on, { now: NOW })
-  const w: World = { files: new Map(), runs: [], status: [], toasts: [], registered: [], opened: [], live: new Set(), clock }
+  const w: World = { files: new Map(), runs: [], writes: [], status: [], toasts: [], registered: [], opened: [], live: new Set(), clock }
   for (const [p, text] of Object.entries(files)) w.files.set(p, { text, at: NOW - 1000 })
   if (installed) w.files.set(`${MAIN}/.claude/commandeck.json`, { text: '{"version": 1}', at: 0 })
   const [gitDir, top] = SEATS[seat]
@@ -68,6 +69,7 @@ export const world = (on: On, seat: keyof typeof SEATS, files: Record<string, st
     if (!f) throw new Error(`ENOENT ${e.path}`)
     return { value: { kind: 'file', size: f.text.length, mtimeMs: f.at, isLink: false } }
   })
+  on('fs.write', (_, e) => (w.writes.push(e.path), { value: undefined }))
   on('ui.status', (_, e) => (w.status.push(e.text), { value: undefined }))
   on('ui.toast', (_, e) => (w.toasts.push(e.text), { value: undefined }))
   on('ui.open', (_, e) => (w.opened.push(e.id), { value: { isPlaced: true } }))

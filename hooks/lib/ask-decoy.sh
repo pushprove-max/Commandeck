@@ -14,3 +14,13 @@ ASK_DECOY="— don't pick: ask me again —"
 ask_decoy_first() {
   jq -e --arg d "$ASK_DECOY" 'all(.tool_input.questions[]?; .options[0].label == $d)' <<<"$1" >/dev/null 2>&1
 }
+
+# ask_decoy_apply <hook input> -- prints the picker's tool_input with the decoy put first on each question lacking it,
+# exit 0; nothing and exit 1 when a question lacking it has no room (4 options) or no options array. The one reading of
+# a picker for worker-ask-guard.sh (which rewrites by it) and ask-records-decision.sh (which records what it rewrites).
+ask_decoy_apply() {
+  jq -ce --arg d "$ASK_DECOY" 'if all(.tool_input.questions[]?; .options[0].label == $d
+      or ((.options | type) == "array" and (.options | length) >= 1 and (.options | length) < 4))
+    then .tool_input | .questions |= map(if .options[0].label == $d then . else .options = [{label: $d,
+      description: "Stray keypress guard, never pick this"}] + .options end) else empty end' <<<"$1" 2>/dev/null || return 1
+}

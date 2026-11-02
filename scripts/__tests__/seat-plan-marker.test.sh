@@ -238,5 +238,17 @@ check "the author prompt names the one owner section and the caps (issues 476, 4
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'every question for the owner in the one `## Question for the owner` section.*more than 1000 changed lines or more than 5 Closes issues needs a `Split override: <reason>` line')"
 check "the judge checks mixed-version safety (issue 481)" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pu-plan-judge-sol.txt.prompt 2>/dev/null | grep -c 'A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding')"
+# #566: an unmarked worktree is a Builder's, never taken for planning -- unless that Builder's seat is live there, when a
+# plan seat of the unit (a judge checking a plan the Builder runs on) opens beside it. Record only: a stale one is no seat.
+BSCR=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1)
+printf 'handle=h7\ntask=task_b\nrole=builder\nunit=pv\n' > "$BSCR/seat-pv-builder.txt"
+rm -f "$T/pane-up"; : > "$T/creates"; echo "{\"handle\":\"h7\",\"agentIdentity\":\"claude\",\"worktreePath\":\"$UWT\"}" > "$T/extra"
+srun launch plan-judge-sol pv "$T/plan-spec.md" >"$T/out" 2>&1
+check "an unmarked worktree with a live Builder seat is not refused" "0:1" \
+  "$(grep -c "REFUSED: $UWT is not pv's planning worktree" "$T/out"):$(grep -c . "$T/creates")"
+rm -f "$T/pane-up" "$T/extra" "$BSCR/seat-pv-plan-judge-sol.txt"*; : > "$T/creates"
+srun launch plan-judge-sol pv "$T/plan-spec.md" >"$T/out" 2>&1
+check "an unmarked worktree with no live Builder seat is still refused" "2:1:0" \
+  "$?:$(grep -c "REFUSED: $UWT is not pv's planning worktree" "$T/out"):$(grep -c . "$T/creates")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

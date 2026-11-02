@@ -20,6 +20,7 @@
 #  - The second Stop on a red tree passes (stop_hook_active), so a turn cannot loop.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: no project lists a command in .claude/stop-checks across 90 days of rows
 . "${BASH_SOURCE[0]%/*}/lib/project.sh"
 [ "$(jq -r '.stop_hook_active // false' <<<"$INPUT" 2>/dev/null)" = true ] && exit 0
 

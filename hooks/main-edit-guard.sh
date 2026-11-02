@@ -12,6 +12,7 @@
 # Self-test: bash hooks/__tests__/main-edit-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of rows from a project that installs the plugin
 source "$(dirname "${BASH_SOURCE[0]}")/lib/edit-payload.sh" 2>/dev/null
 # A guard that cannot read the payload must NOT pass the write: see the load
 # sentinel at the bottom of lib/edit-payload.sh.

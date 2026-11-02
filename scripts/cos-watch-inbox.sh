@@ -48,8 +48,8 @@
 # shortcut: a main turn that ends and a next one that starts inside one poll (20 s)
 # are judged as one, so a send in the first covers the second; a poll per turn
 # end would need main's own hook.
-# The pane's Stop hook (cos-inbox-waiter-stop.sh) matches this script by its
-# file name: do not rename it.
+# The pane's Stop hooks (cos-inbox-arm-stop.sh, which starts it, and
+# cos-inbox-waiter-stop.sh) match this script by its file name: do not rename it.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
@@ -93,7 +93,7 @@ poll_n() { # rows to ask for
   run=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   # No answer is not "no orchestrator": a note judged without the run's record
   # would be passed over and marked read, so the poll tries again instead.
-  coord=$(orca-ide orchestration run-list --json 2>/dev/null \
+  coord=$(orca-ide orchestration run-list --full --json 2>/dev/null \
     | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || { poll_failed "run-list gave no answer"; return 1; }
   orca-ide orchestration inbox --limit "$1" --json 2>/dev/null | python3 -c '
 import datetime, fcntl, json, os, re, subprocess, sys, time
@@ -146,6 +146,7 @@ mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle
              or (run and m.get("run_id") == run
                  and m.get("type") != "worker_done"  # worker reports go to main
                  and (re.search(want, m.get("subject") or "", re.I)
+                      or (m.get("subject") or "").startswith("FYI event: ")  # an event from pp_relay_event, from any pane in the run
                       or (coord and m.get("from_handle") == coord and (m.get("to_handle") or "") in ("", "run:" + run, me)))
                  and not re.match(r"(main-watch|heads-up|main:|answer from main|seat \S+ \S+: )", m.get("subject") or "", re.I)))]
 def at(m):
@@ -154,7 +155,8 @@ def at(m):
     except ValueError:
         return int(time.time())
 # main-watch.sh posts its note to the relay under the handle of main: it wakes the relay, and it is no reply from main.
-sent = [at(m) for m in mine if coord and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)]
+sent = [at(m) for m in mine if coord and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)
+        and not (m.get("subject") or "").startswith("FYI event: ")]
 def num(path):
     try:
         with open(path) as f:

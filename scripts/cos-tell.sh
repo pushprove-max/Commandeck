@@ -23,7 +23,8 @@ if [ "${1:-}" = --note ]; then
   pp_wake_log cos-tell "run:$RUN" "note: ${2:0:60}" sent
   # The owner's message to main has its reply (to-main.sh), when main sent this: a worker's note is not one,
   # and neither is this note to a message marked while it was being sent.
-  [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef "$PP_MAIN" ] && pp_owed_clear "$SENT"
+  # An event note (pp_relay_event's) is no reply either: the owed mark stays.
+  [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef "$PP_MAIN" ] && [[ $2 != "FYI event: "* ]] && pp_owed_clear "$SENT"
   echo "cos-tell: note stored in run:$RUN for the Chief of Staff"; exit 0
 fi
 HANDLE=$(pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")

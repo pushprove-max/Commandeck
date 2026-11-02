@@ -139,5 +139,12 @@ RC=$(merge $u)
 check "class_sites_files_do_not_hold_cleanup: a unit whose passes wrote class-sites files merges and its worktree is removed by cleanup" "0 gone 0" \
   "$RC $(gone $u && echo kept || echo gone) $(grep -c 'cleanup HELD' "$TMP/out" || true)"
 
+# #570: a dry run and a cleanup merge nothing, so they tell the relay nothing, refused or not.
+echo run_1 > "$TMP/scratch/current-run"
+n=$((n + 1)); u=ev$n; mk $u; : > "$TMP/orca-calls"
+R1=$(merge $u --dry-run); R2=$(merge $u --cleanup)
+rm -f "$TMP/scratch/current-run"
+check "a dry run and a cleanup send the relay no event" "1:1:0" "$R1:$R2:$(grep -c 'FYI event' "$TMP/orca-calls")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

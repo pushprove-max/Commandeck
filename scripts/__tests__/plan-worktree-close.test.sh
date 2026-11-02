@@ -232,5 +232,14 @@ S1=$(snap); run bash "$REAL/scripts/worktree-setup.sh" "$WT" --print-settings > 
 check "--print-settings leaves the worktree and info/exclude byte-identical, and prints the settings it would write" "1:1" \
   "$([ "$S1" = "$S2" ] && echo 1 || echo 0):$(jq -e '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW' "$T/printed" >/dev/null 2>&1 && echo 1 || echo 0)"
 
+# --- #564: a __pycache__ of only compiled files is a tool cache; one holding anything else, or a link, is not ---
+echo '__pycache__/' >> "$(git -C "$P" rev-parse --absolute-git-dir)/info/exclude"
+fresh; mkdir -p "$WT/.claude/plans/__pycache__"; echo c > "$WT/.claude/plans/__pycache__/a.cpython-312.pyc"; echo c > "$WT/.claude/plans/__pycache__/b.pyo"; close --adopt
+check "--adopt forgives a __pycache__ of only .pyc files" "0:adopted $WT" "$RC:$(cat "$T/out")"
+fresh; mkdir -p "$WT/.claude/plans/__pycache__"; echo c > "$WT/.claude/plans/__pycache__/a.pyc"; echo n > "$WT/.claude/plans/__pycache__/notes.txt"; close --adopt
+check "--adopt keeps a worktree whose __pycache__ holds another file" "1:1" "$RC:$(grep -c '^kept: .* holds \.claude/plans/__pycache__/ (ignored)' "$T/err")"
+fresh; mkdir -p "$WT/.claude/plans/__pycache__"; echo c > "$T/real.pyc"; ln -s "$T/real.pyc" "$WT/.claude/plans/__pycache__/a.pyc"; close --adopt
+check "--adopt keeps a worktree whose __pycache__ holds a link named .pyc" "1:1" "$RC:$(grep -c '^kept: .* holds \.claude/plans/__pycache__/ (ignored)' "$T/err")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -15,6 +15,7 @@
 INPUT=$(cat)
 HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 . "$HERE/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT" Stop
+# Retire when: Orca delivers worker-turn-end wakes itself, shown by 90 days where main wakes with zero fires here
 if [ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then exit 0; fi
 # The project's own run file, never Orca's machine-wide one (lib/project.sh).
 RUN_FILE=$(. "$HERE/lib/project.sh" && pp_run_file) || exit 0

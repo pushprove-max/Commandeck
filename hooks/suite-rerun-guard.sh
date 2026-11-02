@@ -32,6 +32,7 @@ case "${1:-}" in --record-complete) MODE=complete ;; esac
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks and advises across 90 days of real rows from a project that installs the plugin
 # Strict tier: off unless the project turned it on (lib/project.sh).
 { . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || exit 0
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')

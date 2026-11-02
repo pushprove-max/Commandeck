@@ -125,12 +125,17 @@ release() {
   rm -f "${MERGE_UNIT_LOCAL_QUEUE:-}" "$STATE.$$"
   [ "$(sed -n 's/^pid=//p' "$STATE" 2>/dev/null)" != "$$" ] || rm -f "$STATE"
 }
-trap release EXIT
+# #570: the relay hears each merge's outcome once, from here: merge_relay <ok|fail> <detail>. A dry run and a --cleanup
+# merge nothing and tell nothing. A refusal before the lock is taken (above) sends none; the traps below send fail.
+merge_relay() { [ "$DRY_RUN$CLEANUP" = 00 ] || return 0; pp_relay_event "$UNIT" merge "$1" "$2"; }
+trap 'rc=$?; [ "$rc" = 0 ] || merge_relay fail "exit $rc, log $PP_SCRATCH/merge-$UNIT.log"; release' EXIT
 . "$HERE/../hooks/lib/project.sh"; pp_project "$ROOT"
 . "$HERE/../hooks/lib/screen-code.sh"
 pp_unit_name "$UNIT" || fail "step 1 preconditions" "the unit's name (above)"
 WT=$PP_WORKSPACES/$UNIT
 BRIEF=$WT/.claude/briefs/$UNIT.md
+# Main's copy of the brief, written at every launch (builder-launch.sh): the deletion check reads it, never $BRIEF, which the Builder edits.
+LAUNCHED=$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md
 WTID="path:$WT"
 [ -d "$WT" ] || fail "step 1 preconditions" "worktree does not exist: $WT"
 # Step 5 removes this folder: a checkout of its own (a .git folder, not a linked worktree's .git file) never gets there.
@@ -150,7 +155,9 @@ hold() { CLEANUP_HELD="$WT kept, $1; close the unit's panes and commit or move w
 cleanup_step() {
   # Issue 396: the Builder's task closes first, while pp_task_close can still read its pane; the merge has landed, so a
   # refusal is its printed line, never this script's exit code.
-  bash "$HERE/unit-close.sh" "$UNIT" merged || true
+  # #545: with a cut left the unit is not finished, so its Builder's task stays open (unit-close.sh --sweep --apply).
+  if [ -n "${CUT_NEXT:-}" ]; then echo "STEP 5 task kept open: Cut $CUT_NEXT of the plan is left"
+  else bash "$HERE/unit-close.sh" "$UNIT" merged || true; fi
   echo "STEP 5 cleanup: close the unit's panes by handle (logged in pane-closes.log), stop its Codex helpers, archive its briefs, then orca-ide worktree remove --worktree $WTID --force"
   state cleanup
   # The listing is read and checked first: a failed, empty or malformed one lists no pane, and no pane listed is not
@@ -463,6 +470,8 @@ merged_end() {
   fi
   [ "$rc" != 0 ] || [ -z "$POST_FAILED" ] || { echo "MERGED, but a post-merge line was refused or its step failed (step 4 post-merge, above); the merge stands" >&2; rc=5; }
   [ "$rc" != 0 ] || [ -z "$CLEANUP_HELD" ] || { echo "MERGED, but the worktree was kept (step 5 cleanup, above); the merge stands" >&2; rc=5; }
+  if [ "$rc" = 0 ]; then merge_relay ok "merged as $(git rev-parse --short=8 HEAD)"
+  else merge_relay fail "exit $rc, merged as $(git rev-parse --short=8 HEAD): a step after the merge failed or was held; log $PP_SCRATCH/merge-$UNIT.log"; fi
   exit "$rc"
 }
 
@@ -501,6 +510,88 @@ LISTED=$(jq -r '.[] | numbers | "#\(.)"' "$ISSUES" 2>/dev/null || true)
 PROGRESS=$(COMMANDECK_MAIN=$ROOT bash "$HERE/dashboard.sh" --progress "$WT" "$UNIT") \
   || fail "step 1 preconditions" "the evidence's Issue/Status table could not be read (dashboard.sh --progress $WT $UNIT)"
 PARTIAL=$(jq -r '.partial | arrays | .[] | numbers | "#\(.)"' <<<"$PROGRESS")
+# #545: a plan with two or more `- C<n>` cuts under `## Cuts` is built a cut at a time. The cuts the evidence marks
+# `C<n>: built` get ` -- done` on the plan's bullet; a cut left keeps its issues open (Refs, joined to PARTIAL) and the
+# Builder's task open, and the DONE line names it. A `- C<a>-C<b>` bullet is each cut a to b. Fenced lines (fence.sh's
+# one rule, in the evidence and the plan) count nowhere.
+# cut_scan <plan> <out> -- writes the plan with the built cuts' bullets marked to <out>; sets CUT_COUNT, CUT_NEXT (the
+# lowest cut left) and CUT_ISSUES (the numbers the open cuts' bullets name).
+cut_scan() {
+  local built out
+  built=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^C[0-9]+: built[ \t]*$/ { sub(/^C/, ""); sub(/:.*/, ""); printf "%s ", $0 }' \
+    "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+  out=$(awk -v built=" $built" -v out="$2" "$PP_AWK_FENCE"'
+    { fz = fence($0) || flen }
+    !fz && /^## / { insec = ($0 ~ /^## Cuts[ \t]*$/) }
+    { L[NR] = $0 }
+    !fz && insec && match($0, /^- C[0-9]+(-C[0-9]+)?/) && substr($0, RLENGTH + 1, 1) !~ /[0-9A-Za-z]/ {
+      head = substr($0, 3, RLENGTH - 2); np = split(head, p, "-"); a = substr(p[1], 2) + 0; b = np > 1 ? substr(p[2], 2) + 0 : a
+      if (a > b) { t = a; a = b; b = t }
+      if (b - a > 999) next
+      nb++; B[nb] = NR; lo[nb] = a; hi[nb] = b; dn[nb] = ($0 ~ / -- done[ \t]*$/)
+    }
+    END {
+      for (k = 1; k <= nb; k++) for (n = lo[k]; n <= hi[k]; n++) { seen[n] = 1; if (dn[k] || index(built, " " n " ")) ok[n] = 1 }
+      for (n in seen) { count++; if (!(n in ok) && (nx == "" || n + 0 < nx + 0)) nx = n }
+      for (k = 1; k <= nb; k++) {
+        all = 1; for (n = lo[k]; n <= hi[k]; n++) if (!(n in ok)) { all = 0; open = 1 }
+        if (all && !dn[k]) L[B[k]] = L[B[k]] " -- done"
+        if (!all) { s = L[B[k]]; while (match(s, /#[0-9]+/)) { iss = iss " " substr(s, RSTART + 1, RLENGTH - 1); s = substr(s, RSTART + RLENGTH) } }
+      }
+      for (i = 1; i <= NR; i++) print L[i] > out
+      print count + 0 "|" nx "|" iss
+    }' "$1") || return 1
+  IFS='|' read -r CUT_COUNT CUT_NEXT CUT_ISSUES <<<"$out"
+  [ "${CUT_COUNT:-0}" -ge 2 ] || { CUT_NEXT= CUT_ISSUES=; }
+}
+# cut_plan -- (one optional argument, a checkout) sets CUT_PLAN to the first plan the brief names (pp_brief_plans, as the
+# deletion check below finds them) that is in that checkout and holds two cuts or more; scans it into CUT_TMP. The
+# worktree's brief is read here, as before. With no argument it is the read before the squash: the open cuts come from
+# the plan the merge brings in (the worktree's, clean of tracked edits by step 1, so its tip) and from main's, which may
+# hold cuts the branch's fork predates, and an issue either names on an open cut stays open; CUT_PLAN is main's.
+cut_plan() {
+  local p refs in_next in_issues
+  if [ $# = 0 ]; then
+    cut_plan "$WT"; in_next=$CUT_NEXT in_issues=$CUT_ISSUES
+    cut_plan "$ROOT"; CUT_NEXT=${in_next:-$CUT_NEXT} CUT_ISSUES=$in_issues$CUT_ISSUES
+    return 0
+  fi
+  CUT_PLAN= CUT_COUNT=0 CUT_NEXT= CUT_ISSUES=
+  refs=$(pp_brief_plans "$BRIEF")
+  [ -n "${CUT_TMP:-}" ] || CUT_TMP=$(mktemp "${TMPDIR:-/tmp}/cuts-$UNIT.XXXXXX") || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ -f "$1/$p" ] || continue
+    cut_scan "$1/$p" "$CUT_TMP" || continue
+    [ "${CUT_COUNT:-0}" -ge 2 ] && { CUT_PLAN=$p; return 0; }
+  done <<<"$refs"
+  return 0
+}
+CUT_TMP="" CUT_NOTE="" CUT_PLAN="" CUT_NEXT="" CUT_ISSUES="" CUT_COUNT=0
+cut_plan
+rm -f "$CUT_TMP"
+for n in $CUT_ISSUES; do PARTIAL+=$'\n'"#$n"; done
+# cut_step -- after a merge: read the plan again as main now holds it, commit the marks, task the next cut and word the
+# DONE note. A plan with uncommitted edits on main is not touched.
+cut_step() {
+  local spec err run ptitle
+  cut_plan "$ROOT"
+  if [ -z "$CUT_PLAN" ]; then rm -f "$CUT_TMP"; return 0; fi
+  if ! cmp -s "$CUT_TMP" "$ROOT/$CUT_PLAN"; then
+    if [ -n "$(git -C "$ROOT" status --porcelain -- "$CUT_PLAN")" ]; then CUT_NOTE+="; plan $CUT_PLAN NOT marked: it has uncommitted edits on main"
+    elif cat "$CUT_TMP" > "$ROOT/$CUT_PLAN" && git -C "$ROOT" add -- "$CUT_PLAN" \
+         && git -C "$ROOT" commit -q --only -m "chore(plan): mark the cuts $UNIT built" -- "$CUT_PLAN"; then PLAN_SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD)
+    else CUT_NOTE+="; plan $CUT_PLAN NOT marked: the commit failed"; fi
+  fi
+  rm -f "$CUT_TMP"
+  [ -n "$CUT_NEXT" ] || return 0
+  CUT_NOTE="; unit open: next Cut $CUT_NEXT${PLAN_SHA:+; plan commit $PLAN_SHA}$CUT_NOTE"
+  spec="next cut: $(basename "$CUT_PLAN" .md) Cut $CUT_NEXT, plan $CUT_PLAN; complete this task when that cut's Builder launches"
+  run=${COMMANDECK_RUN:-$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)}
+  err=$("$HERE/orca-task-create.sh" --spec "$spec" ${run:+--run "$run"} 2>&1 >/dev/null) \
+    || CUT_NOTE+="; next-cut task NOT created: $(tr '\n' ' ' <<<"${err:-no reason given}" | sed 's/ *$//')"
+  return 0
+}
+PLAN_SHA=""
 # The squash message carries "Closes #n" for each work item the merge closes below and "Refs #n" for each it leaves
 # open: GitHub closes the first kind on push, never the second.
 CLOSE_BODY=$(printf '%s\n' $LISTED | awk -v p="$(tr '\n' ' ' <<<"$PARTIAL")" \
@@ -514,9 +605,9 @@ CLOSE_BODY=$(printf '%s\n' $LISTED | awk -v p="$(tr '\n' ' ' <<<"$PARTIAL")" \
 BASE=$(git merge-base main "$BRANCH")
 echo "STEP 4 size: $(git diff --shortstat "$BASE" "$BRANCH" | sed 's/^ *//')"
 CUT_LIST=$(awk '/^#+[[:space:]]*Files deleted/ { on = 1; next } /^#/ { on = 0 } on' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
-# in_brief <path> -- the brief's prose names <path> whole: a space, quote, backtick or parenthesis before it,
-# and after it the same, or sentence punctuation that ends it ("x.ts."). A longer path that holds it
-# (old/x.ts.bak, x.ts~) names another file.
+# in_brief <path> [file] -- the text of <file> (main's copy of the brief by default) names <path> whole: a space, quote,
+# backtick or parenthesis before it, and after it the same, or sentence punctuation that ends it ("x.ts."). A longer
+# path that holds it (old/x.ts.bak, x.ts~) names another file.
 in_brief() {
   P=$1 PRE=$' \t`"\'(<' POST=$' \t`"\')>' awk '
     function edge(c, set) { return c == "" || index(set, c) > 0 }
@@ -525,24 +616,38 @@ in_brief() {
         at = from + i - 1; b = at > 1 ? substr($0, at - 1, 1) : ""; a = substr($0, at + n, 1)
         if (edge(b, ENVIRON["PRE"]) && (edge(a, ENVIRON["POST"]) || (index(".,;:!?", a) && edge(substr($0, at + n + 1, 1), ENVIRON["POST"])))) { found = 1; exit }
         from = at + 1 } }
-    END { exit !found }' "$BRIEF"
+    END { exit !found }' "${2:-$LAUNCHED}"
 }
 # Each entry of the evidence's list is one whole path: "- <path>" or "- `<path>`", nothing else on the line.
 CUT_PATHS=$(sed -E 's/^[[:space:]]*[-*+][[:space:]]+//; s/[[:space:]]+$//; s/^`([^`]+)`$/\1/' <<<"$CUT_LIST")
-# Issue 326: a directory named in backticks with its trailing slash (`dir/`), in the brief or in a plan the brief names,
-# lists every file under it. The plan is read as committed at the fork point, so a unit cannot authorise its own
-# deletion by editing it.
-PLAN_TEXT=$(grep -ohE '`\.claude/plans/[A-Za-z0-9._-]+\.md`' "$BRIEF" 2>/dev/null | tr -d '`' | sort -u \
-  | while IFS= read -r plan; do git show "$BASE:$plan" 2>/dev/null; done || true)
-NAMED_DIRS=$({ cat "$BRIEF"; printf '%s\n' "$PLAN_TEXT"; } | grep -ohE '`[^` ]+/`' | tr -d '`' | sort -u || true)
+# Issues 326 and 557: a directory named in backticks with its trailing slash (`dir/`), in main's copy of the brief or in a
+# plan it names, lists every file under it; so does a backticked glob that starts with a literal folder (D74). The brief
+# is main's copy, written at launch, which the Builder cannot edit; the plan is read as committed at the fork point, so a
+# unit cannot authorise its own deletion by editing either. The plans are the ones pp_brief_plans finds, as the launcher does.
+PLAN_TEXT=$(while IFS= read -r plan; do [ -z "$plan" ] || git show "$BASE:$plan" 2>/dev/null; done < <(pp_brief_plans "$LAUNCHED") || true)
+NAMED_DIRS=$({ cat "$LAUNCHED" 2>/dev/null; printf '%s\n' "$PLAN_TEXT"; } | grep -ohE '`[^` ]+/`' | tr -d '`' | sort -u || true)
+# NAMED_GLOBS: the backticked words that hold `*`, `?` or `[` and whose text before the first of those holds a `/`
+# (`assets/*.js`; never `*`, `*.ts` or `*/x`). A deleted path passes when it matches one; `*` crosses `/`.
+NAMED_GLOBS=$({ cat "$LAUNCHED" 2>/dev/null; printf '%s\n' "$PLAN_TEXT"; } | grep -ohE '`[^` ]*[*?[][^` ]*`' | tr -d '`' | sort -u \
+  | while IFS= read -r g; do [[ ${g%%[*?[]*} == */* ]] && printf '%s\n' "$g"; done || true)
+glob_names() { # <path> -- <path> matches one of NAMED_GLOBS
+  local g
+  while IFS= read -r g; do if [ -n "$g" ] && [[ $1 == $g ]]; then return 0; fi; done <<<"$NAMED_GLOBS"
+  return 1
+}
+DELETED=$(git diff --no-relative --diff-filter=D --name-only "$BASE" "$BRANCH") || fail "step 4 merge" "git diff could not list the files the squash deletes"
+[ -z "$DELETED" ] || [ -f "$LAUNCHED" ] \
+  || fail "step 4 merge" "the squash deletes files and main has no copy of the brief to name them ($LAUNCHED); write it with: cp $BRIEF $LAUNCHED"
 while IFS= read -r deleted; do
   [ -n "$deleted" ] || continue
-  if in_brief "$deleted"; then echo "step 4 deletion: $deleted (named in the brief)"
-  elif awk -v p="$deleted" 'length($0) > 1 && index(p, $0) == 1 { f = 1 } END { exit !f }' <<<"$NAMED_DIRS"; then echo "step 4 deletion: $deleted (under a directory the brief or a plan it names lists)"
-  elif grep -qxF -- "$deleted" <<<"$CUT_PATHS"; then echo "step 4 deletion: $deleted (named in the evidence's Files deleted list)"
-  else fail "step 4 merge" "the squash deletes $deleted, which the brief never names; the rebase probably replayed stale content"
+  if in_brief "$deleted"; then echo "step 4 deletion: $deleted (named in main's copy of the brief)"
+  elif awk -v p="$deleted" 'length($0) > 1 && index(p, $0) == 1 { f = 1 } END { exit !f }' <<<"$NAMED_DIRS"; then echo "step 4 deletion: $deleted (under a directory main's brief copy or a plan it names lists)"
+  elif glob_names "$deleted"; then echo "step 4 deletion: $deleted (matched by a glob main's brief copy or a plan it names lists)"
+  elif grep -qxF -- "$deleted" <<<"$CUT_PATHS" && in_brief "$deleted" /dev/stdin <<<"$PLAN_TEXT"; then echo "step 4 deletion: $deleted (named in the evidence's Files deleted list and in a plan main's brief copy names)"
+  elif grep -qxF -- "$deleted" <<<"$CUT_PATHS"; then fail "step 4 merge" "the squash deletes $deleted, which only the evidence's Files deleted list names; that list approves nothing on its own (main's copy of the brief, $LAUNCHED, or a plan it names must name it); the rebase probably replayed stale content"
+  else fail "step 4 merge" "the squash deletes $deleted, which the brief never names: main's copy ($LAUNCHED) did not name it; the rebase probably replayed stale content"
   fi
-done < <(git diff --no-relative --diff-filter=D --name-only "$BASE" "$BRANCH")
+done <<<"$DELETED"
 # The message is the one text of the unit no file check reads (issue 221): a home path, this machine's name or a
 # word of the project's own leak list refuses the merge before anything is merged.
 MSG=$(mktemp) || fail "step 4 message" "could not write the message to a file"
@@ -611,7 +716,7 @@ if [ "$DRY_RUN" = 0 ]; then
   SQUASH_ADDED=(${NEW[@]+"${NEW[@]}"})
   mapfile -t SQUASH_PATHS < <(git -C "$ROOT" diff --name-only --no-renames HEAD "$BRANCH")
   state merge
-  trap 'undo_squash; release' EXIT
+  trap 'rc=$?; undo_squash; [ "$rc" = 0 ] || merge_relay fail "exit $rc, log $PP_SCRATCH/merge-$UNIT.log"; release' EXIT
   UNDO_ON_FAIL=undo_squash
   git merge --squash "$BRANCH" >/dev/null || fail "step 4 merge" "squash merge conflicted; resolve in the unit worktree by rebasing onto main"
   TREE=$(git write-tree)
@@ -800,13 +905,15 @@ if [ "$DRY_RUN" = 0 ]; then
     UNIT_LEDGER_ROUNDS=${#REPORTS[@]} UNIT_LEDGER_GO_ROUNDS=$GO_ROUNDS UNIT_LEDGER_NO_GO_ROUNDS=$NO_GO_ROUNDS \
     UNIT_LEDGER_MERGE_RULE=$RULE bash "$HERE/unit-ledger.sh" "$UNIT" local --append \
     || echo "no unit ledger row written for $UNIT (ignored)" >&2
+  cut_step
   cleanup_step
 fi
+[ "$DRY_RUN" = 0 ] || [ -z "$CUT_NEXT" ] || CUT_NOTE="; unit open: next Cut $CUT_NEXT (dry run: no plan mark, no task)"
 [ "$DRY_RUN" = 1 ] || pp_unit_event "$UNIT" merge || true
 
 [ "$DRY_RUN" = 0 ] || echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
 # A close GitHub refused ends the run with code 3 (merged_end), and an exit 3 prints no total.
 if [ -n "$NOT_CLOSED" ]; then merge_time_close; else merge_time_close total; fi
-echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 HEAD); $CHECKED; nothing was pushed${CLEANUP_HELD:+; cleanup HELD: $CLEANUP_HELD}"
+echo "DONE unit=$UNIT merged=local sha=$(git rev-parse --short=8 "${MERGE_SHA:-HEAD}"); $CHECKED; nothing was pushed${CLEANUP_HELD:+; cleanup HELD: $CLEANUP_HELD}${CUT_NOTE}"
 # The unit's seats are done with: main-watch's item tasks about them are handled by this merge.
 [ "$DRY_RUN" = 1 ] || pp_close_items $(sed -n 's/^handle=//p' "$PP_SCRATCH"/seat-"$UNIT"-*.txt 2>/dev/null || true)

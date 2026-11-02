@@ -83,20 +83,6 @@ PP_BUILDER_RULES_OFF="orchestration agents planning adversarial-reviews worktree
 # Issue 397: the standing helper line a plan-author prompt and a fix-round hand-off carry; the Builder brief template holds it word for word.
 PP_HELPER_LINE="Use helper subagents wherever the work allows: general-purpose (runs on the configured Sonnet model) for independent build cuts, research and test writing, Explore (runs on the configured Haiku model) for search and proof; this pane keeps only cut ordering, cross-cut contracts and final integration. For a search, a trace or a second opinion you may also ask Codex, read-only: bash <plugin scripts>/codex-ask.sh '<question>' (it cannot edit; writing stays with Sonnet helpers)."
 
-# A part brief's `Review base:` sha is rewritten by any rebase, and
-# review-round.sh refuses a base that is not an ancestor of HEAD. Count before
-# the rebase, restore after: the base keeps its distance below the tip.
-# ponytail: a commit the rebase drops as already upstream shifts it by one;
-# review-round.sh still refuses loudly.
-pp_review_base_count() {  # <worktree> <brief file>; prints nothing without a base
-  local b; b=$(sed -n 's/^Review base: `\{0,1\}\([0-9a-f]\{7,40\}\)`\{0,1\}.*/\1/p' "$2" 2>/dev/null | head -1)
-  [ -z "$b" ] || git -C "$1" rev-list --count "$b..HEAD"
-}
-pp_review_base_restore() {  # <worktree> <brief file> <count from pp_review_base_count>
-  [ -n "${3:-}" ] || return 0
-  sed -i.bak "s/^Review base: .*/Review base: \`$(git -C "$1" rev-parse --short=8 "HEAD~$3")\`/" "$2" && rm -f "$2.bak"
-}
-
 # pp_session_log <worktree> -- the worktree's newest Claude session record, or nothing.
 # pp_session_log_at <worktree> -- the epoch that record was last written, or null: a seat in one long model
 # turn writes it while its event log shows nothing, so the dashboard and main-watch.sh both read it.
@@ -381,6 +367,18 @@ pp_wake_log() {
     '{at: $at, from: $from, to: $to, reason: $reason, result: $result, error: $error}' >> "$f" 2>/dev/null || true
   return 0
 }
+# pp_relay_event <unit> <event> <ok|fail> <detail> -- tells the relay one outcome as a held note, `FYI event: <unit> <event>
+# <ok|fail>` (cos-tell.sh --note, which the relay's poller holds and never counts as main's reply). Sent once per outcome by
+# the script that ended it, so main writes none. Nothing without a recorded run. A send that fails or hangs (30 s) goes to
+# $PP_SCRATCH/relay-events.log and is swallowed: an event never changes its caller's exit code.
+pp_relay_event() {
+  local out
+  [ -s "$PP_RUN_FILE" ] || return 0
+  out=$(timeout 30 bash "$PP_SCRIPTS/cos-tell.sh" --note "FYI event: $1 $2 $3" "$4" 2>&1 </dev/null) && return 0
+  mkdir -p "$PP_SCRATCH" 2>/dev/null \
+    && printf '%s %s %s %s: %s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$(head -c 200 <<<"$out" | tr '\n' ' ')" >> "$PP_SCRATCH/relay-events.log" 2>/dev/null
+  return 0
+}
 # pp_worker_done_since <handle> <epoch> -- did pane <handle> report to main after <epoch>? Reads `orchestration inbox
 # --json` on stdin: a worker_done from that handle. Orca files a worker_done only once it accepts it, so a refused send,
 # another message type or another pane's report proves nothing. An unreadable inbox answers no. Orca stamps whole
@@ -430,7 +428,7 @@ pp_seat_inbox() {
 }
 # pp_run_coord <run> -- the run's coordinator handle (empty when the run has none); fails when the run list does not answer.
 pp_run_coord() {
-  orca-ide orchestration run-list --json 2>/dev/null | jq -er --arg r "$1" \
+  orca-ide orchestration run-list --full --json 2>/dev/null | jq -er --arg r "$1" \
     '.result.runs | if type == "array" then (first(.[] | select(.id == $r) | .coordinator_handle) // "") else error end' 2>/dev/null
 }
 # pp_sender [handle...] -- the --from a send needs (Orca refuses one it cannot attribute): the first non-empty argument,
@@ -627,6 +625,11 @@ pp_task_close() { # task status [result-json]
   if grep -q run_required <<<"$out" && h=$("$PP_SCRIPTS/run-bound.sh"); then
     export ORCA_TERMINAL_HANDLE=$h
     out=$(orca-ide orchestration task-update "${args[@]}" 2>&1 || true)
+    jq -e '.ok' <<<"$out" >/dev/null 2>&1 && return 0
+  fi
+  # Issue 567: Orca cannot attribute an update from a pane it does not know; retry once as the sender pp_sender names.
+  if grep -q no_active_sender_terminal <<<"$out" && h=$(pp_sender) && [ -n "$h" ]; then
+    out=$(orca-ide orchestration task-update "${args[@]}" --from "$h" 2>&1 || true)
     jq -e '.ok' <<<"$out" >/dev/null 2>&1 && return 0
   fi
   if grep -q task_not_startable <<<"$out"; then
@@ -1155,6 +1158,7 @@ pp_option() {
     fullSuiteBeforeFinal) p=.fullSuiteBeforeFinal d=false ;;
     autoDecideSeats) p=.autoDecideSeats d=chiefOfStaff ;;
     unitsBand) p=.units.band d=auto ;; unitsPane) p=.units.pane d=auto ;; unitsStatus) p=.units.status d=auto ;;
+    motion) p=.units.motion d=false ;;
     trustAllHooks) p=.trustAllHooks d=false ;;
     mainPromptCacheTtl) p=.mainCacheTtl ;; workerPromptCacheTtl) p=.workerCacheTtl ;; relayPromptCacheTtl) p=.chiefOfStaff.cacheTtl ;;
     dashboardBind) p=.dashboard.bind f=$HOME/.commandeck/install/_machine.json ;;
@@ -1175,6 +1179,8 @@ pp_option() {
     autoDecideSeats) case $v in chiefOfStaff|chiefOfStaff,main|off) ;; *) src=default v=$d ;; esac ;;
     # Issue 349: the units mod's three views; the doctor shows them, no shell script reads them.
     unitsBand|unitsPane|unitsStatus) case $v in auto|on|off) ;; *) src=default v=$d ;; esac ;;
+    # Issue 555: the units mod's working-mark motion; the doctor shows it, no shell script reads it.
+    motion) case $v in true|false) ;; *) src=default v=$d ;; esac ;;
   esac
   pp_option_out "${2:-}"
 }
@@ -1330,6 +1336,33 @@ pp_gh_read() {
   else reason="gh read failed" fix="run it by hand to see why: gh repo view --json nameWithOwner"; fi
   echo "$reason: $err. Fix: $fix"
   return 1
+}
+# pp_plan_section_paths <file> -- the plan paths a brief or batch names under its Plan section (a heading `Plan`, any level,
+# up to the next heading), one per line, once each, in order. Backticks are optional: the path is found wherever it stands
+# on a line of the section. Fenced lines (fence.sh's rule) are examples. The launcher reads its plan with this.
+pp_plan_section_paths() {
+  [ -f "$1" ] || return 0
+  awk "$PP_AWK_FENCE"'
+    fence($0) || flen { next }
+    /^#+[[:space:]]/ { on = ($0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/) }
+    on { s = $0
+      while (match(s, /\.claude\/plans\/[A-Za-z0-9._-]+\.md/)) {
+        p = substr(s, RSTART, RLENGTH); if (!seen[p]++) print p
+        s = substr(s, RSTART + RLENGTH) } }' "$1"
+}
+# pp_brief_plans <file> -- every plan a brief names: pp_plan_section_paths, plus every backticked
+# `.claude/plans/<name>.md` anywhere (fenced lines are examples), once each, sorted. A plan named only in prose outside a
+# Plan section authorises nothing: it is not read and it is not refused. The merge's deletion check and open-cut finder
+# read plans with this.
+pp_brief_plans() {
+  [ -f "$1" ] || return 0
+  {
+    pp_plan_section_paths "$1"
+    awk "$PP_AWK_FENCE"'
+      fence($0) || flen { next }
+      { s = $0
+        while (match(s, /`\.claude\/plans\/[A-Za-z0-9._-]+\.md`/)) { print substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH) } }' "$1"
+  } | sort -u
 }
 # pp_review_workflow <brief file> -- the unit's review workflow: `default` or `per-issue #a #b`, from the one `Review workflow:`
 # line main writes in the batch, so in main's <unit>-builder-brief.md; no line, or no file, is default. An allowlist: a
@@ -1531,4 +1564,19 @@ pp_fix_stated() {
     cases=$(bash "$PP_SCRIPTS/plan-check.sh" --issue-cases "$n" 2>/dev/null) || return 1
     grep -q '^Fix ' <<<"$cases" || return 1
   done
+}
+# pp_plan_stale <main sha the judge saw> <rev> <plan file> <plan path> -- the files the plan's ## Steps name (a glob is a
+# pathspec; one `{a,b}` group is each path, as plan-check.sh's issue check reads it; backticks are dropped) that changed
+# between the two commits of main, one per line; the plan's own path is left out, as the install commits it alone. A plan
+# with no step path prints nothing, never every file. Sections follow plan-check.sh's Steps count: only a `## ` heading
+# outside a fence (fence.sh's one rule) changes section; fenced lines and `<!--` comment lines are skipped. Caller: builder-launch.sh (#538).
+pp_plan_stale() {
+  local -a steps=(); local p
+  while IFS= read -r p; do steps+=("$p"); done < <(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^##[ \t]/ { s = ($0 ~ /^##[ \t]+Steps[ \t]*$/); next }
+    c || /^[ \t]*<!--/ { c = ($0 !~ /-->/); next } /^#+[ \t]/ { next }
+    s && /^- (new|modify|delete) / { p = $3; gsub(/`/, "", p)
+      if (match(p, /\{[^{},]*(,[^{},]*)+\}/)) { n = split(substr(p, RSTART + 1, RLENGTH - 2), a, ","); for (i = 1; i <= n; i++) print substr(p, 1, RSTART - 1) a[i] substr(p, RSTART + RLENGTH) }
+      else print p }' "$3")
+  [ "${#steps[@]}" -gt 0 ] || return 0
+  git -C "$PP_MAIN" diff --name-only "$1" "$2" -- "${steps[@]}" ":(exclude)$4"
 }

@@ -45,6 +45,7 @@ CACHE=$OUT/cache
 # The project's live rows (issue 466): the home project's here, a registered project's under live/, one writer each.
 LIVE=${DASH_LIVE:-$OUT/live.json}
 REG=$OUT/projects
+CYCLE_LIMIT=900  # seconds; the page calls a cycle past 15 minutes stuck (app.js), and one hung read must not freeze data.js
 TTL=300  # slow reads: a 60 s collection would otherwise repeat them every cycle
 METRICS=$PP_MAIN/.claude/metrics
 # Claude Code's own folder (transcripts, task lists) is the config folder main last started under, as
@@ -897,28 +898,13 @@ PY
   esac
 }
 
-# Main's TaskCreate/TaskUpdate checklist, one <id>.json per item. Every session
-# on the host, worker panes included, has a task directory, so only one whose
-# transcript sits under the main checkout's project directory counts (Claude
-# Code names it after the path, every non-alphanumeric a '-'); the newest wins.
-todos() {
-  local proj=$CLAUDE_DIR/projects/${PP_MAIN//[^a-zA-Z0-9]/-} d dir='' out files
-  while IFS= read -r d; do
-    [ -e "$proj/$(basename "$d").jsonl" ] && { dir=$d; break; }
-  done < <(ls -td "$CLAUDE_DIR"/tasks/*/ 2>/dev/null)
-  [ -n "$dir" ] || { nm todos "no main session task list under $CLAUDE_DIR/tasks"; echo null; return 0; }
-  # Every item deleted leaves no file: a measured empty list, not a failed read.
-  files=("$dir"*.json); [ -e "${files[0]}" ] || files=()
-  if out=$(jq -cs --arg s "$(basename "$dir")" \
-      '{sessionId: $s, items: (sort_by(.id | tonumber) | map({id, subject, status, activeForm}))}' "${files[@]}" < /dev/null 2>/dev/null); then
-    ok todos; echo "$out"
-  else nm todos "a task file in $dir did not parse"; echo null; fi
-}
-
 # Main's in-harness background subagents. Each session's <scratch>/<session>/tasks/
 # holds one <agentId>.output symlink per agent, to its transcript; the meta file
 # beside the transcript records description and model when the launch named them.
-# Same main-session rule as todos(). Running: the last assistant turn still has
+# Every session on the host, worker panes included, has a task directory, so only one whose
+# transcript sits under the main checkout's project directory counts (Claude
+# Code names it after the path, every non-alphanumeric a '-'); the newest wins.
+# Running: the last assistant turn still has
 # a tool call pending, or a tool result came after it. Only the ten newest
 # links (a link's own mtime is its launch) are read.
 bg_agents() {
@@ -1167,7 +1153,7 @@ project() {
   part guardBlocks guard_blocks & pg=$!
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part githubProposed github_proposed && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role && part reviewLoop review_loop && part escapes escapes \
-    && part todos todos && part agents bg_agents \
+    && part agents bg_agents \
     && part chiefOfStaff chief_of_staff && part seats seats && part mainEvents main_events && part tests tests_panel || rc=1
   wait "$pm" || rc=1
   wait "$pg" || rc=1
@@ -1219,14 +1205,14 @@ render() {
   NOW=$(date +%s)
   claude_dir
   mkdir -p "$CACHE" || return 1
-  RUN=$(mktemp -d "$OUT/.run.XXXXXX") || return 1
+  RUN=$(mktemp -d "$OUT/.run.${DASH_CYCLE_TAG:-}XXXXXX") || return 1
   # What every project's collect and the limit card share this collect (issue 299): see project().
   export DASH_CYCLE=$NOW.$$ DASH_TERMS=$RUN/terminals.json DASH_CLAUDE_DIR=$CLAUDE_DIR
   mkdir -p "$RUN/src" "$RUN/parts"
   part projects projects && part host host && part limit limit && part alerts alerts \
     && part alertsResolved alerts_resolved || return 1
   jq -cs '{sources: add}' "$RUN"/src/*.json > "$RUN/parts/sources.json" || return 1
-  PUB=$(mktemp "$OUT/.data.js.XXXXXX") || return 1
+  PUB=$(mktemp "$OUT/.data.js.${DASH_CYCLE_TAG:-}XXXXXX") || return 1
   { printf 'window.DASH = '
     jq -cs --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg name "${COMMANDECK_DASHBOARD_NAME:-}" --arg home "$PP_PROJECT" \
       'add + {updatedAt: $at, home: $home, name: ($name | if . == "" then null else . end)}' "$RUN"/parts/*.json
@@ -1465,9 +1451,11 @@ view_refresh() {
 # when `view`, the checksum of the installed view files, changes under it.
 alive() {
   view_refresh
-  printf 'window.DASH_ALIVE = {"at":"%s","view":"%s",%s};\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  local mt age=null  # snapshotAgeSec: seconds since data.js was written, null before the first snapshot
+  mt=$(stat -c %Y "$OUT/data.js" 2>/dev/null) && age=$(( $(date +%s) - mt ))
+  printf 'window.DASH_ALIVE = {"at":"%s","view":"%s",%s,"snapshotAgeSec":%s};\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "$(cat "${VIEW[@]/#/$OUT/}" 2>/dev/null | cksum | cut -d' ' -f1)" \
-    "$(cat "$OUT/.cycle" 2>/dev/null || echo '"cycleStartedAt":null,"lastCycleSec":null')" > "$OUT/.alive.js.$BASHPID" \
+    "$(cat "$OUT/.cycle" 2>/dev/null || echo '"cycleStartedAt":null,"lastCycleSec":null')" "$age" > "$OUT/.alive.js.$BASHPID" \
     && mv -f "$OUT/.alive.js.$BASHPID" "$OUT/alive.js"
 }
 # cycle <start-epoch> <seconds|null> -- stamp the cycle for alive.js; written whole, so alive never reads half.
@@ -1653,7 +1641,13 @@ case "${1:-}" in
               || { python3 "$HERE/dashboard_serve.py" "$PORT" "$BIND" "$OUT" >/dev/null 2>&1 & SRV=$!; }
             follow_projects
             t0=$(date +%s); cycle "$t0" "$last"
-            render || echo "dashboard: collection FAILED; data.js keeps the last snapshot" >&2; pp_rm_rf "${RUN:-}" "${PUB:-}"
+            # Its own run under a limit: one hung read must not freeze data.js. timeout kills the run's process group, so a
+            # hung child dies with it; the killed run's tagged temp names are removed here, as its own EXIT trap may not have run.
+            rc=0; DASH_CYCLE_TAG=cycle.$$. timeout -k 10 "$CYCLE_LIMIT" "$BASH" "$HERE/$NAME.sh" || rc=$?
+            if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+              echo "dashboard: cycle killed after $CYCLE_LIMIT s; data.js keeps the last snapshot" >&2
+              pp_rm_rf "$OUT"/.run.cycle.$$.* "$OUT"/.data.js.cycle.$$.*
+            fi
             last=$(( $(date +%s) - t0 )); cycle "$t0" "$last"
             [ "$last" -le 60 ] || echo "dashboard: cycle took $last s" >&2
             # COMMANDECK_DASHBOARD_CYCLE_S, for the self-test. A foreground sleep would hold off the TERM trap that stops the server.

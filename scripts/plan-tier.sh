@@ -57,7 +57,7 @@ case ${ONEJ:-$TIER} in
   'No plan') SEATS=() ;;
   'One planner') SEATS=(plan-author) ;;
   one|'Plan + judge') SEATS=(plan-author plan-judge-sol); on plan-judge-sol || SEATS=(plan-author plan-judge-opus) ;;
-  *) SEATS=(plan-author plan-judge-opus plan-judge-sol) ;;
+  *) SEATS=(plan-author plan-judge-sol plan-judge-opus) ;; # Sol first: seat.sh refuses an Opus round ahead of Sol's (#535)
 esac
 # An author that is off is no plan; a judge that is off leaves the other to judge alone, and none leaves the plan unjudged.
 OUT=()

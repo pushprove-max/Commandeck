@@ -81,5 +81,25 @@ printf 'eightchr\neightchr\n' | python3 "$T/plugin/scripts/dashboard_serve.py" s
 OUTP=$(COMMANDECK_DASHBOARD_BIND=0.0.0.0 COMMANDECK_HOST_OS=Darwin COMMANDECK_DASHBOARD_DIR=$T/inst2 bash "$T/plugin/scripts/dashboard.sh" --install 2>&1); RC=$?
 check "issue 263: with a password stored, --install makes the certificate and prints the https address" "0:1:1" \
   "$RC:$([ -s "$HOME/.commandeck/dashboard-tls/cert.pem" ] && echo 1):$(grep -c 'open https://<this host>.local:' <<<"$OUTP")"
+# Issue 579: one hung read froze data.js for hours. Each cycle runs under a limit (CYCLE_LIMIT, 900 s in the script; 2 s in
+# this copy) and a cycle past it is killed, logged, and its temporary files removed. A flag file makes the gh stub hang
+# in its read; a cycle run in this copy ignores TERM, so the cycle ends by the -k KILL and its own EXIT trap never runs; this loop runs after the cases above, which keep the time budget.
+rm -rf "$T/plugin2" "$T/out2"; cp -R "$T/plugin" "$T/plugin2"; sed -i -e 's/^CYCLE_LIMIT=900/CYCLE_LIMIT=2/' -e "s/^trap 'exit 143' TERM/[ -z \"\${DASH_CYCLE_TAG:-}\" ] \&\& trap 'exit 143' TERM || trap '' TERM/" "$T/plugin2/scripts/dashboard.sh"
+mkdir -p "$T/bin2" "$T/out2"; touch "$T/hang"
+printf '#!/usr/bin/env bash\ntrap "" TERM\nif [ -e "%s/hang" ]; then sleep 30 & echo $! >> "%s/sleeps"; wait; fi\nexit 1\n' "$T" "$T" > "$T/bin2/gh"; chmod +x "$T/bin2/gh"
+kill "$LOOP" 2>/dev/null; wait "$LOOP" 2>/dev/null; LOOP=
+(cd "$T/proj" && PATH=$T/bin2:$PATH COMMANDECK_DASHBOARD_DIR=$T/out2 COMMANDECK_DASHBOARD_PORT=$(( COMMANDECK_DASHBOARD_PORT + 1 )) COMMANDECK_DASHBOARD_CYCLE_S=1 exec bash "$T/plugin2/scripts/dashboard.sh" --loop >/dev/null 2>"$T/loop2.err") & LOOP=$!
+killed() { [ "$(grep -c 'cycle killed after 2 s; data.js keeps the last snapshot' "$T/loop2.err")" -ge "${1:-1}" ]; }
+wait_for 30 killed; check "a cycle that outruns its limit is killed and logged" 0 $?
+check "the heartbeat reports no snapshot age before the first snapshot" 1 "$(grep -c '"snapshotAgeSec":null' "$T/out2/alive.js")"
+check "a killed cycle leaves no temporary files and no data.js" "0 0" "$(ls -A "$T/out2" | grep -c '^\.run\.\|^\.data\.js\.') $([ -e "$T/out2/data.js" ] && echo 1 || echo 0)"
+# The first hung stub's sleep 30 (its pid is in $T/sleeps): the later cycles' sleeps are alive, so not pgrep -f 'sleep 30'.
+check "a killed cycle's hung child is gone (A22)" "gone" "$(kill -0 "$(head -1 "$T/sleeps")" 2>/dev/null && echo alive || echo gone)"
+rm -f "$T/hang"
+wait_for 20 test -s "$T/out2/data.js"; check "the cycle after a killed one writes a fresh snapshot" 0 $?
+N=$(grep -c 'cycle killed' "$T/loop2.err"); touch "$T/hang"; wait_for 30 killed $((N + 1))
+touch -d "@$(( $(date +%s) - 100 ))" "$T/out2/data.js"
+age_ok() { grep -o '"snapshotAgeSec":[0-9]*' "$T/out2/alive.js" | awk -F: '{exit !($2 >= 100 && $2 < 130)}'; }
+wait_for 5 age_ok; check "the heartbeat reports the snapshot's age in seconds" 0 $?
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

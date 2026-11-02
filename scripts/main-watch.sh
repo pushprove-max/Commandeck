@@ -45,6 +45,8 @@
 # Test seams: COMMANDECK_NOW (epoch), COMMANDECK_MAIN_WATCH_TICK_S, --once.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
+# #537: macOS malloc stack logging writes a stack-logs file for every child shell and filled a disk.
+unset MallocStackLogging MallocStackLoggingNoCompact
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/paths.sh" || exit 1
 . "$HERE/host-services.sh"
@@ -540,8 +542,12 @@ arm_diag() {
 resolve_main() {
   COORD=$(pp_run_coord "$RUN") || COORD='?'
   COORD_LIVE=$(jq -r --arg c "$COORD" '[(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $c)] | length' <<<"$2" 2>/dev/null)
-  MAIN_H=$(jq -r --arg m "$MAIN_AT" --arg c "$COORD" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
-    | select((.worktreePath | pnorm) == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), .[] | .handle) // empty' <<<"$2" 2>/dev/null)
+  # #532: only a proven main -- the coordinator, else the pane board.sh recorded while that pane held the run. Any other
+  # claude pane in the main checkout may be an Orca automation, so it is never typed into or rebound to.
+  local rec
+  rec=$(sed -n 's/^handle=//p' "$SCRATCH/main-pane.txt" 2>/dev/null | head -1)
+  MAIN_H=$(jq -r --arg m "$MAIN_AT" --arg c "$COORD" --arg r "$rec" "$PP_PNORM"'($m | pnorm) as $m | [(.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select((.worktreePath | pnorm) == $m and .agentIdentity == "claude")] | first((.[] | select(.handle == $c)), (.[] | select($r != "" and .handle == $r))) | .handle // empty' <<<"$2" 2>/dev/null)
   MAIN_STATE=$(jq -rn --argjson ps "$1" --argjson ts "$2" --arg h "$MAIN_H" '
     ([$ps.result.worktrees[]?.agents[]?] | map({(.paneKey // ""): .state}) | add // {}) as $a
     | first(($ts.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h)
@@ -885,6 +891,17 @@ reap_brokers() {
     | sort -rn | head -3 | awk '{ printf "%s%s %s", s, $2, $1; s = ", " }')
 }
 
+# sweep_orphans -- TERM to each pid `codex-helpers.sh orphans` lists (issue 577, F17): a broker or TypeScript language
+# server whose folder is gone has nothing to serve, so it need not wait for reap_brokers' hour rule. Only pids are
+# signalled; an `orphans` that fails or lists nothing stops nothing. env: the external kill, as in reap_brokers.
+sweep_orphans() {
+  local p
+  for p in $(bash "$HERE/codex-helpers.sh" orphans 2>/dev/null); do
+    [[ $p =~ ^[0-9]+$ ]] || continue
+    env kill -TERM "$p" 2>/dev/null && echo "main-watch: stopped orphaned helper pid=$p"
+  done
+}
+
 # proc_warn -- past 2,000 of this user's processes, one item per episode: at
 # kern.maxprocperuid nothing new can start, which is how the Mac crashed.
 proc_warn() {
@@ -977,7 +994,7 @@ report_wake() {
     case "$ck" in
       superseded) next="superseded by pass $NR_N; act on that report" ;;
       "kind not recorded:"*) next="pass kind not recorded" ;;
-      final:GO) next="merge: $HERE/merge-unit-local.sh $2" ;;
+      final:GO) next="main-watch merges it by itself once the Builder is done; nothing for main to do" ;;
       review:GO) next="narrowed -- needs a final pass: builder-codex-pass.sh $2 $((n + 1)) final" ;;
       design:GO)
         next="design only, merges nothing -- the Builder writes the code, then builder-codex-pass.sh $2 $((n + 1)) final"
@@ -1103,7 +1120,8 @@ merge_collect() {
     elif grep -qE '^(posted=.|handled$)' "$ST/item-merge-$u-$tip" 2>/dev/null; then
       echo told >> "$r"
     else
-      grep -qx digested "$r" || { digest "$u merged into local main at ${tip:0:8}; log $log"; echo digested >> "$r"; }
+      # The push question (issue 573) waits on this mark; a mark that cannot be written asks nothing, as before.
+      grep -qx digested "$r" || { digest "$u merged into local main at ${tip:0:8}; log $log"; echo digested >> "$r"; { : > "$ST/push-pending"; } 2>/dev/null || true; }
       post "merge-$u-$tip" "" "main-watch: $u merged into local main at ${tip:0:8}" "merge-queue: $u merged; $landed; log $log" once
     fi
   done
@@ -1121,6 +1139,16 @@ merge_start() {
   # set -m: the job is its own process group (id = its pid, inherited by merge-queue): .pid names that group.
   (cd "$PP_MAIN" || exit; set -m; COMMANDECK_FOREGROUND=1 nohup bash -c '"$@" > "$0" 2>&1; echo $? > "${0%.log}.rc"' "$log" \
     bash "$HERE/merge-queue.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & echo $! > "${log%.log}.pid")
+}
+
+# push_ask -- the owner's one push question (issue 573, D51), once a batch has landed: while merge_collect's push-pending
+# mark exists and no unit passed the gate this tick and no merge job lives, so a landing held behind a live merge is asked
+# about once that merge ends, landed or not. push-ask only writes the question and never pushes; its refusals (nothing to
+# push, a check not green, the question already open) are swallowed, and the mark goes either way.
+push_ask() {
+  [ -e "$ST/push-pending" ] && [ "${#MERGE[@]}" = 0 ] && ! merge_live || return 0
+  COMMANDECK_MAIN=$PP_MAIN bash "$HERE/decision.sh" push-ask >/dev/null 2>&1 || true
+  rm -f "$ST/push-pending"
 }
 
 # mark_handled <key> -- "handled" from a path that found main needs nothing more. A task post minted (the key does
@@ -1632,6 +1660,7 @@ tick() {
   claude_dir
   # Before the run lookup: a leak is reaped whether or not main can be told.
   reap_brokers
+  sweep_orphans
   heads_up_capture
   RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
@@ -1692,6 +1721,7 @@ tick() {
   merge_collect
   report_send
   merge_start
+  push_ask
   flush
   arm_diag
   mail_wake

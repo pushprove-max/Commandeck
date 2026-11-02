@@ -105,7 +105,7 @@ case $LAUNCH in
   *) echo "REFUSED: $BATCH's Launch line names ${LAUNCH#new unit }, not $UNIT ('$LAUNCH'); nothing was opened" >&2; exit 2 ;;
 esac
 # The plan is read where the worktree is cut from, local main (pp_worktree_new): a nonempty regular file there.
-PLANS=$(awk '/^#+[[:space:]]/ { on = $0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/ } on' "$BATCH" | grep -oE '\.claude/plans/[A-Za-z0-9._-]+\.md' | awk '!seen[$0]++' | paste -sd' ' -) || PLANS=
+PLANS=$(pp_plan_section_paths "$BATCH" | paste -sd' ' -) || PLANS=
 PLAN=${PLANS%% *}
 plan_ok() {
   # A --from-plan dry run checked the plan against the judge above and installs nothing.
@@ -215,6 +215,26 @@ if [ "$FROM" = 1 ]; then
   fi
   [ -n "$WANT" ] && [ "$(sha256sum < "$FROZEN" | cut -d' ' -f1)" = "$WANT" ] \
     || nope "$WP is not the plan the judge read ($(rv "$J" verdict) in $J), nor the plan author's revision collected PLAN-DONE (or PLAN-WRITTEN, PLAN-REVISED) after a NO-GO${A:+ ($(rv "$A" verdict) in $A)}; judge this plan again"
+  # #538: the files the plan's Steps name must be as the judges saw them (each judge record's mainsha=). Checked here on
+  # main's tip and again at the sha the Builder's worktree resets to. A judge record with no sha is refused, never read as fresh.
+  JMS=
+  for r in "$PP_SCRATCH/seat-$UNIT-plan-judge-"*.txt; do
+    [ "$(rv "$r" plan)" = "$WP" ] && [ -n "$(rv "$r" verdict)" ] || continue
+    m=$(rv "$r" mainsha)
+    [[ $m =~ ^[0-9a-f]{40}$ ]] \
+      || nope "--from-plan: $r records no main sha (${m:-none}), so the plan cannot be checked against main: update the plan worktree to main, then judge it again"
+    JMS+=" $m"
+  done
+  stale_since() { # <rev> -- the Steps files changed on main since each judge's sha; 2 when a sha cannot be compared
+    local m f all=
+    for m in $JMS; do
+      f=$(pp_plan_stale "$m" "$1" "$FROZEN" "$PLAN") || { echo "REFUSED: --from-plan: cannot compare main $m with $1: update the plan worktree to main, then judge it again" >&2; return 2; }
+      all+=$f$'\n'
+    done
+    printf '%s' "$all" | sed '/^$/d' | sort -u
+  }
+  STALE=$(stale_since "$(git -C "$PP_MAIN" rev-parse refs/heads/main)") || exit 2
+  [ -z "$STALE" ] || nope "--from-plan: main changed a file $PLAN's Steps name since the judges read it: $(paste -sd' ' - <<<"$STALE"); update the plan worktree to main, then judge it again"
   plan_checks "$(cat "$FROZEN")"
   if [ "$DRY" = 0 ]; then
     pp_sync_main "$PP_MAIN" || exit 1
@@ -280,7 +300,9 @@ open_builder() {
   # clears the mark, so a hand launch posts every report as before.
   mkdir -p "$PP_SCRATCH"
   if [ "${COMMANDECK_DRIVER:-0}" = 1 ]; then date +%s > "$PP_SCRATCH/drive-$UNIT.launched"; else rm -f "$PP_SCRATCH/drive-$UNIT.launched"; fi
-  bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} || exit $?
+  bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} \
+    || { rc=$?; pp_relay_event "$UNIT" launch fail "seat.sh launch exit $rc"; exit "$rc"; }
+  pp_relay_event "$UNIT" launch ok "Builder opened in $WT"
   # The plan is on main and the Builder runs: a unit planned before 0.18.0, in <unit>-plan, has that worktree closed.
   # A refusal is printed and never fails the launch.
   [ ! -d "$WT-plan" ] || bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
@@ -362,6 +384,12 @@ if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" 
 pp_sync_main "$PP_MAIN" || exit 1
 # Fast-forwarding main from origin may have removed the plan the worktree is about to be cut without.
 plan_ok
+# #538: main can move between the first check and here (the sync above, the plan's own commit); the base is the sha checked.
+HEAD_MAIN=$(git -C "$PP_MAIN" rev-parse refs/heads/main)
+if [ "$FROM" = 1 ] && [ -n "${JMS:-}" ]; then
+  STALE=$(stale_since "$HEAD_MAIN") || exit 2
+  [ -z "$STALE" ] || { echo "REFUSED: --from-plan: main moved while this launch ran and changed a file $PLAN's Steps name: $(paste -sd' ' - <<<"$STALE"); $WT left as it is, no Builder started; update the plan worktree to main, then judge it again" >&2; exit 2; }
+fi
 if [ "$ADOPT" = 1 ]; then
   # After every other check, so a launch refused earlier leaves the planner and its mark as they were. Adoption
   # proved nothing in it differs from local main, so the reset to main, as pp_worktree_new bases a new one, loses nothing.
@@ -389,7 +417,7 @@ if [ "$ADOPT" = 1 ]; then
   # a retry of a failed launch, the same command, reads it there.
   [ -e "$BATCH" ] || { mkdir -p "$(dirname "$BATCH")" && printf '%s' "$BT" > "$BATCH"; } \
     || { echo "could not put the batch back at $BATCH after adoption; the Builder was not launched" >&2; exit 1; }
-  git -C "$WT" reset --hard "$(git -C "$PP_MAIN" rev-parse refs/heads/main)" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
+  git -C "$WT" reset --hard "$HEAD_MAIN" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
 else
   pp_worktree_new "$UNIT" || exit 1
 fi

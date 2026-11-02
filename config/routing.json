@@ -41,7 +41,7 @@
         "tools": ["Write", "Edit", "NotebookEdit", "Agent"],
         "unboxed": true
       },
-      "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round, no judging loop. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
+      "note": "Judge of the Plan + judge and Panel answers: reads the plan and prints its findings; the planner revises once with them. One round outside unit-drive.sh, a round per plan version under it. planJudgeSolAgent=claude (the Claude-only profile sets it) runs it as the read-only Claude pane in claude; off, the other judge judges alone."
     },
     "plan-judge-opus": {
       "agent": "claude",

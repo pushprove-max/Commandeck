@@ -24,7 +24,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh" 2>&1 || true
 2. Write `~/.claude/checkpoints/<session id>.md` in ONE Write from the fixed
    template `${CLAUDE_PLUGIN_ROOT}/templates/checkpoint.md`: every field filled or "none",
    live units with pane handles and task ids, what each waits on and the exact
-   next command, rulings not yet in memory, the queue, the Todo list, gotchas,
+   next command, rulings not yet in memory, the queue, gotchas,
    what was ruled out, how to verify, and what closed since the last checkpoint.
    Older open items are carried by a `Carries open items of: <file>` line,
    never copied. Under 5KB.

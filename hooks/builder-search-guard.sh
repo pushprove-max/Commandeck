@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Builder search guard: a Builder's main session may run LIMIT searches
-# in a row; the next one, or any whole-repo search, is refused toward an Explore
-# subagent. An Edit, Write or Agent call restarts the count. Subagents (non-empty
+# in a row; the next one, or any whole-repo search, runs with a hint toward an Explore
+# subagent (it never blocks). An Edit, Write or Agent call restarts the count. Subagents (non-empty
 # agent_id) are never counted or refused. Registered only in a Builder worktree's
-# settings.local.json by worktree-setup.sh --builder. Refusals are appended to
+# settings.local.json by worktree-setup.sh --builder. Each hint is appended as a search-hinted event to
 # <worktree>/.claude/builder-events.jsonl.
 # Only a search that ran counts: the count is taken after the call
 # (PostToolUse, PostToolUseFailure), which never comes for a call another guard
 # refused. Before the call the guard only reads the count.
-# LIMIT is a starting value, not measured: tune it from the search-refused and
+# LIMIT is a starting value, not measured: tune it from the search-hinted and
 # subagent-start rows. Reads are deliberately not counted: the hook cannot know
 # which file is about to be edited.
 # A search more than GAP seconds after the last counted one starts the count
@@ -18,13 +18,14 @@
 # Reads sent together in one turn are ONE lookup: allowed, and counted once. The searches
 # of a turn are the tool_use blocks sharing one message id in the transcript that this guard
 # counts as searches and lets through, each distinct one once; other calls beside one search make no batch.
-# A whole-repo search is refused whatever the turn carries.
+# A whole-repo search gets the hint whatever the turn carries.
 # Self-test: bash hooks/__tests__/builder-search-guard.test.sh
 LIMIT=3
 GAP=600
 SIB=${COMMANDECK_SEARCH_SIBLING_MS:-1500}
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: hints fall to zero across 90 days after the LIMIT is tuned, or Builders stop searching in a row
 {
   IFS=$'\001' read -r AID SID TOOL PTH EVT TUID TXP PAT
   CMD=$(cat)
@@ -163,18 +164,20 @@ fi
 
 ROOT=${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}
 if [ -n "$ROOT" ] && mkdir -p "$ROOT/.claude"; then
-  # use: a refused call never runs, so no tool-end follows its tool-start; dashboard_builders.jq closes it by this id.
+  # use: the hinted call runs and ends by its own tool-end row; dashboard_builders.jq still reads search-refused as an end marker for older logs.
   jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg t "$TOOL" --arg r "$REASON" --arg u "$(jq -r '.tool_use_id // empty' <<<"$INPUT")" \
-    '{ts: $ts, event: "search-refused", tool: $t, reason: $r, use: (if $u == "" then null else $u end)}' >> "$ROOT/.claude/builder-events.jsonl"
+    '{ts: $ts, event: "search-hinted", tool: $t, reason: $r, use: (if $u == "" then null else $u end)}' >> "$ROOT/.claude/builder-events.jsonl"
 fi
-echo "$MSG" >&2
-# Try line: the refused search over a folder of the checkout (the first one, as bash-guardrails.sh names it), or a
+# Never a block: the search runs and carries the refusal text as a hint (the shape of allow()). The PostToolUse
+# that follows counts it, so the streak keeps growing.
+# Try line: the search over a folder of the checkout (the first one, as bash-guardrails.sh names it), or a
 # plain grep of the file a streak search named. No pattern found (an -e pattern, a find) gets no line.
 if [ -n "$PAT" ]; then
   if [ "$REASON" = whole-repo ]; then
     TRYDIR=$(cd "${ROOT:-.}" 2>/dev/null && ls -d */ 2>/dev/null | head -1); TRYDIR=${TRYDIR%/}
-    echo "Try: rg -n -e '${PAT//\'/\'\\\'\'}' ${TRYDIR:-src}" >&2
-  elif [ -f "$PTH" ]; then echo "Try: grep -n -e '${PAT//\'/\'\\\'\'}' '${PTH//\'/\'\\\'\'}'" >&2; fi
+    MSG+=$'\n'"Try: rg -n -e '${PAT//\'/\'\\\'\'}' ${TRYDIR:-src}"
+  elif [ -f "$PTH" ]; then MSG+=$'\n'"Try: grep -n -e '${PAT//\'/\'\\\'\'}' '${PTH//\'/\'\\\'\'}'"; fi
 fi
-HOOK_FIRE_REASON=search-first
-exit 2
+HOOK_FIRE_ADVISE=1 HOOK_FIRE_REASON=search-first
+jq -cn --arg m "$MSG" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
+exit 0

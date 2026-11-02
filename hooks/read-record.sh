@@ -9,6 +9,7 @@
 # Self-test: bash hooks/__tests__/companion-read-guard.test.sh
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: companion-read-guard.sh is retired
 IFS=$'\001' read -r SID TOOL CWD FILE CMD EVENT ERR SHOWN < <(jq -r '[.session_id // "", .tool_name // "", .cwd // "",
   .tool_input.file_path // "", (.tool_input.command // "" | gsub("[\u0001\n]"; " ")), .hook_event_name // "",
   (if (.tool_response | type) == "object" then (.tool_response.is_error // (.tool_response.error | if . then true else false end) // false) else false end | tostring),

@@ -384,5 +384,36 @@ alert limit-claude-1793000800; A3=$(alertwatch)
 check "an alert wakes the relay once, under any stamp (issue 461)" "1:0:0" \
   "$(grep -c 'limit-claude-1793000200' <<<"$A1"):$(grep -c . <<<"$A2"):$(grep -c . <<<"$A3")"
 
+# #570: the scripts send the relay one `FYI event: <unit> <event> <ok|fail>` note per outcome. It is held, it is never
+# main's reply to the owner, and a seat pane's event is held too; a send that fails is logged and fails nothing.
+watch >/dev/null; turn 0   # main is mid-turn, so the poll's silent-main flag does not clear the mark itself
+# An event leaves the owner's owed mark where it is; a plain note from main clears it (the control).
+mark() { printf '1\tthe owner asked\n' > "$T/scratch/cos-owed"; }
+mark; note "FYI event: u1 merge ok" "d" >/dev/null; EV=$([ -e "$T/scratch/cos-owed" ] && echo marked || echo cleared)
+note "unit u1 merged" "u1 is on main" >/dev/null; PL=$([ -e "$T/scratch/cos-owed" ] && echo marked || echo cleared)
+check "an event note leaves the owner's owed reply marked" "marked:cleared" "$EV:$PL"
+# The relay's poll: an event row from main is held, and no reply from main (its sent time would clear the mark).
+watch >/dev/null; mark
+row term_main run:run_1 status "FYI event: u2 merge ok"
+OUT1=$(watch); mark2=$([ -e "$T/scratch/cos-owed" ] && echo marked || echo cleared)
+row term_main run:run_1 status "cos: wakes with the held event"
+OUT2=$(watch)
+check "an event note is held and never counts as main's reply" "marked:0:1" \
+  "$mark2:$(grep -c 'FYI event' <<<"$OUT1"):$(grep -c 'FYI event: u2 merge ok' <<<"$OUT2")"
+rm -f "$T/scratch/cos-owed"
+# A failing send (the stand-in does not confirm a stored message) is logged in relay-events.log and returns 0.
+touch "$T/live-only"; rm -f "$T/scratch/relay-events.log"
+RC=$(cd "$T/p" && "${E[@]}" bash -c '. "$1/scripts/paths.sh"; pp_relay_event u3 merge fail "a \"quoted\" detail"; echo $?' _ "$REAL")
+check "a failing relay send is logged and changes no exit code" "0:1" "$RC:$(grep -c 'u3 merge fail' "$T/scratch/relay-events.log" 2>/dev/null)"
+rm -f "$T/live-only"
+# A seat pane in the run (not the coordinator) sends an event: the poller admits its subject though it names no relay or owner.
+watch >/dev/null
+row term_u4 run:run_1 status "FYI event: u4 seat-plan-judge-sol ok"
+OUT1=$(watch)
+row term_main run:run_1 status "cos: wakes with the seat's event"
+OUT2=$(watch)
+check "an event note from a non-coordinator pane in the run is held for the relay" "0:1" \
+  "$(grep -c 'FYI event: u4' <<<"$OUT1"):$(grep -c 'FYI event: u4 seat-plan-judge-sol ok' <<<"$OUT2")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

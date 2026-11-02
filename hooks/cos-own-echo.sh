@@ -17,6 +17,7 @@ set -uo pipefail
 
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero fires across 90 days from a project that installs the plugin, with Orca nudges present
 # The cheap test first: this runs on every prompt in every pane.
 [[ $INPUT == *"orchestration message"* || $INPUT == *"main-watch: "* ]] || exit 0
 P=$(jq -r '.prompt // empty' <<<"$INPUT" 2>/dev/null)

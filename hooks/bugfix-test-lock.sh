@@ -14,6 +14,7 @@
 # Unlock is process: the Builder writes the lock and empties it once the fix is verified. Nothing here checks when.
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: zero blocks across 90 days of real rows from a project that lists files in .claude/bugfix-lock
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -n "$ROOT" ] || exit 0

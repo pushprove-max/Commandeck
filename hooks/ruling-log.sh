@@ -17,6 +17,7 @@
 LOG="${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}"
 INPUT=$(cat)
 . "${BASH_SOURCE[0]%/*}/lib/hook-fire-log.sh" 2>/dev/null && hook_fire_log_arm "$INPUT"
+# Retire when: ruling-cite-gate.sh is retired, or zero fires across 90 days with AskUserQuestion answers logged
 # A failed mkdir falls through: the append then fails and says so.
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 # A row can be hundreds of KB and an append that size is not one write, so two hooks at once interleaved into one
@@ -85,7 +86,7 @@ answer_decisions() {
     id=$(jq -r '.[0]' <<<"$row")
     if [ "$(jq -r '.[2]' <<<"$row")" != true ]; then
       printf '%s no open decision %s asking this question\n' "$UTC" "$id" >> "$dlog" 2>/dev/null
-    elif ! err=$(bash "$DECIDE" answer "$id" "$(jq -r '.[1]' <<<"$row")" --asked-at "$(jq -r --arg id "$id" '.[] | select(.id == $id) | .askedAt' <<<"$OPEN_ROWS")" 2>&1 >/dev/null); then
+    elif ! err=$(COMMANDECK_NO_DELIVER=1 bash "$DECIDE" answer "$id" "$(jq -r '.[1]' <<<"$row")" --asked-at "$(jq -r --arg id "$id" '.[] | select(.id == $id) | .askedAt' <<<"$OPEN_ROWS")" 2>&1 >/dev/null); then
       printf '%s %s\n' "$UTC" "$err" >> "$dlog" 2>/dev/null
     fi
   done

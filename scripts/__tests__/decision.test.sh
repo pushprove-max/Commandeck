@@ -108,5 +108,88 @@ D add hy-aa-q1 'Rename the staging bucket?' none main >/dev/null
 D add xhy 'Rotate the signing certificate?' none main >/dev/null
 check "holds ignores a sibling's review stop" "|2" "$(D holds hy)|$(D holds hy-b | grep -c .)"
 
+# D13: a push question lists every unit it carries; it must not hold a unit's closing pass or merge.
+# Catches: a push question freezing a closing pass. An id match and a question from another source still hold.
+# The push row the push-ask cases above wrote lists u1 in its question; u1-msg_q1 (source "u1 asks") names u1 as well.
+check "holds ignores an open push question listing the unit" "1 0" \
+  "$(D list | jq '[.[] | select(.source == "decision.sh push-ask" and (.question | contains(" u1 (check")) and .answeredAt == null)] | length') $(D holds u1 | grep -c 'Push main to origin')"
+check "holds still lists a unit question from another source" 1 "$(D holds u1 | grep -c 'Open question to the owner u1-msg_q1')"
+
+# Issue 569: decision.sh answer sends the answer to the asking pane after the row closes, and names the result on stderr. The
+# stub answer-worker records its arguments and exits as $T/aw-* say; a unit's Builder is its workspace folder.
+mkdir -p "$T/ws/u1"
+cat > "$T/aw" <<EOF
+#!/usr/bin/env bash
+printf '%s|' "\$@" >> "$T/aw.log"; echo >> "$T/aw.log"
+echo "stdout noise from the worker"
+[ ! -e "$T/aw-queued" ] || { echo "queued: \$3 to \$1" >&2; exit 1; }
+[ ! -e "$T/aw-fail" ] || { echo "answer-worker: pane gone" >&2; exit 1; }
+EOF
+chmod +x "$T/aw"
+DW() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_RULING_LOG="$T/rulings.jsonl" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_ANSWER_WORKER="$T/aw" "$@" 2>"$T/err"); }
+DA() { DW bash "$REAL/scripts/decision.sh" "$@"; }
+: > "$T/aw.log"
+D add u1-msg_s1 'question (u1): which lock?' none 'u1 asks' >/dev/null
+OUT=$(DA answer u1-msg_s1 'use flock'); RC=$?
+check "an answer to a unit's ask is sent to that unit once" "0 1 u1|use flock|u1-msg_s1| delivered: u1-msg_s1 to u1 1" \
+  "$RC $(grep -c . "$T/aw.log") $(head -1 "$T/aw.log") $(cat "$T/err") $(jq -s 'length' <<<"$OUT")"
+D add h1 'which one?' none 'ask via term_ab12cd' >/dev/null
+DA answer h1 'second' >/dev/null
+check "an answer to a row naming a terminal handle is sent to that handle" "term_ab12cd|second|h1|" "$(tail -1 "$T/aw.log")"
+touch "$T/aw-fail"; D add u1-msg_s2 'Rotate the signing keys?' none 'u1 asks' >/dev/null
+DA answer u1-msg_s2 'x' >/dev/null; RC=$?
+check "an answer that cannot be delivered is named on stderr and stays recorded" "0 1 x" \
+  "$RC $(grep -c '^not delivered: u1-msg_s2' "$T/err") $(D list | jq -r '.[] | select(.id == "u1-msg_s2") | .answer')"
+rm -f "$T/aw-fail"; : > "$T/aw.log"
+D add nowhere 'Archive the old logs?' none 'somebody else' >/dev/null; D add mine 'Upgrade the database?' none main >/dev/null
+DA answer nowhere 'a' >/dev/null; N1=$(grep -c '^not delivered: nowhere' "$T/err")
+DA answer mine 'a' >/dev/null; N2=$(grep -c . "$T/err")
+check "an answer to a row whose source names no unit or handle is named not delivered, and one to main's own row is not" "1 0 0" "$N1 $N2 $(grep -c . "$T/aw.log")"
+D add u1-msg_s3 'Mirror the vendored tarballs offsite?' none 'u1 asks' >/dev/null
+DW env COMMANDECK_NO_DELIVER=1 bash "$REAL/scripts/decision.sh" answer u1-msg_s3 'closed by worker' >/dev/null
+check "an answer closed by answer-worker is not sent again" "0 0" "$(grep -c . "$T/aw.log") $(grep -c . "$T/err")"
+touch "$T/aw-queued"; D add u1-msg_s4 'Enable the nightly backup?' none 'u1 asks' >/dev/null
+DA answer u1-msg_s4 'later' >/dev/null; RC=$?
+check "an answer to a unit whose Builder is not running is named queued, not undelivered" "0 queued: u1-msg_s4 to u1" "$RC $(cat "$T/err")"
+rm -f "$T/aw-queued"
+D add u1-msg_s5 'Prune the stale branches?' none 'u1 asks' >/dev/null
+DW env COMMANDECK_NO_DELIVER=1 bash "$REAL/scripts/decision.sh" answer u1-msg_s5 'x' >/dev/null; : > "$T/aw.log"
+DA deliver u1-msg_s5 'x (ruling r)' >/dev/null
+check "deliver sends the text of an answered row" "u1|x (ruling r)|u1-msg_s5| delivered: u1-msg_s5 to u1" "$(head -1 "$T/aw.log") $(cat "$T/err")"
+# (pass 9, the owner's answer) Catches: a send cut at its deadline named not delivered, which main resends,
+# though the worker may have sent it already. The stub timeout runs the worker, then exits 124 as a deadline does.
+mkdir -p "$T/tbin"; printf '#!/usr/bin/env bash\nshift; "$@"; exit 124\n' > "$T/tbin/timeout"; chmod +x "$T/tbin/timeout"; cp "$T/tbin/timeout" "$T/tbin/gtimeout"
+D add u1-msg_s6 'Rebuild the search index?' none 'u1 asks' >/dev/null; : > "$T/aw.log"
+DW env PATH="$T/tbin:$PATH" bash "$REAL/scripts/decision.sh" answer u1-msg_s6 'yes' >/dev/null; RC=$?
+check "a send cut at its deadline reads unknown, check the pane before resending, never not delivered" \
+  "0 1 unknown: u1-msg_s6 to u1 timed out; check the unit's pane before resending" "$RC $(grep -c . "$T/aw.log") $(cat "$T/err")"
+# (pass 9) Catches: answer-worker's own acknowledgement deadline (no timeout on PATH, so decision.sh waits it out) read as
+# not delivered, though the answer sits unread in the unit's inbox.
+printf '#!/usr/bin/env bash\necho "answer-worker: NOT acknowledged: the answer (tag t1) is still unread in $1'"'"'s inbox after 600s" >&2; exit 1\n' > "$T/aw2"; chmod +x "$T/aw2"
+D add u1-msg_s7 'Vacuum the database tonight?' none 'u1 asks' >/dev/null
+DW env COMMANDECK_ANSWER_WORKER="$T/aw2" bash "$REAL/scripts/decision.sh" answer u1-msg_s7 'yes' >/dev/null; RC=$?
+check "an answer the unit has not acknowledged reads unknown, check the pane before resending, never not delivered" \
+  "0 unknown: u1-msg_s7 to u1 not acknowledged; check the unit's pane before resending" "$RC $(cat "$T/err")"
+
+# Issue 574: test-edit writes main's approval line once, for a logged ruling id.
+RID=r-19991017-111111-p-d4e5f6
+printf '%s\n' '{"id":"'$RID'","source":"prompt","answer":"yes"}' '{"id":"r-19991017-121212-p-0a0b0c","void":true,"source":"prompt"}' > "$T/rulings.jsonl"
+F=$T/p/.claude/briefs/u1-main-rulings.md
+D test-edit u1 scripts/__tests__/x.test.sh 'a case' $RID >/dev/null; RC=$?
+check "a recorded approval writes the Test edit line the pass accepts" "0 Test edit: scripts/__tests__/x.test.sh test:a case ruling:$RID" "$RC $(cat "$F")"
+check "an approved edit finds its ruling in the ruling log and in main's rulings" "0 0" \
+  "$(. "$REAL/hooks/lib/ruling-id.sh"; ruling_id_state $RID "$T/rulings.jsonl"; echo $?) $(grep -qF -- "$RID" "$F"; echo $?)"
+D test-edit u1 scripts/__tests__/x.test.sh 'a case' $RID >/dev/null
+check "a second record of the same approval writes no second line" 1 "$(grep -c . "$F")"
+D test-edit u1 scripts/__tests__/x.test.sh 'other' r-19991017-121212-p-0a0b0c >/dev/null 2>&1; R1=$?
+D test-edit u1 scripts/__tests__/x.test.sh 'other' r-19991017-999999-p-ffffff >/dev/null 2>&1; R2=$?
+check "an id the ruling log lacks or voids writes nothing" "1 1 1" "$R1 $R2 $(grep -c . "$F")"
+D test-edit ../u scripts/a.sh lbl $RID >/dev/null 2>&1; B1=$?
+D test-edit u1 '' lbl $RID >/dev/null 2>&1; B2=$?
+D test-edit u1 scripts/a.sh '' $RID >/dev/null 2>&1; B3=$?
+D test-edit u1 scripts/a.sh $'a\nb' $RID >/dev/null 2>&1; B4=$?
+D test-edit u1 scripts/a.sh 'a ruling:b' $RID >/dev/null 2>&1; B5=$?
+check "a bad unit, an empty path or name, or a name holding a newline or ruling: writes nothing" "1 1 1 1 1 1" "$B1 $B2 $B3 $B4 $B5 $(grep -c . "$F")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

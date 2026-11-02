@@ -57,4 +57,27 @@ for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/pro
 tick $((H + 60)); tick $((H + 120)); unset COMMANDECK_MAIN_PANE_DIR
 grep -q -- '--terminal term_coord' "$T/typed" || fail "main in another checkout, named by COMMANDECK_MAIN_PANE_DIR, was not woken ($(tail -n 3 "$T/stderr"))"
 
+# #532: another claude pane in main's checkout (an Orca automation) is not main. With the run's coordinator gone it was
+# typed into as main and handed the run's wakes; only the pane board.sh recorded in main-pane.txt is woken then.
+awk '$1 != "term_main"' "$F/agents" > "$F/agents.new"; mv "$F/agents.new" "$F/agents"; state term_main_auto idle
+echo term_gone > "$F/coord"; I=90000; drained; rm -f "$S/main-watch/item-"* "$S/main-watch/wake" "$S/main-pane.txt"; : > "$T/typed"
+for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/procs"; tick $I
+tick $((I + 60)); tick $((I + 120))
+! grep -q -- '--terminal term_main_auto' "$T/typed" || fail "an automation in the main checkout, the coordinator gone and no main-pane.txt, was typed into as main"
+J=95000; printf 'handle=term_main_auto\n' > "$S/main-pane.txt"; drained; rm -f "$S/main-watch/item-"* "$S/main-watch/wake"
+tick $J; tick $((J + 60)); tick $((J + 120)); rm -f "$F/procs"
+grep -q -- '--terminal term_main_auto' "$T/typed" || fail "the pane main-pane.txt names, in the main checkout, was not woken ($(tail -n 3 "$T/stderr"))"
+
+# Orca 1.4.246 lists a run without its coordinator_handle unless run-list is asked --full (A29). The stand-in answers so; the
+# coordinator is a live pane in main's checkout, and only a read with --full names it, so it is woken.
+mv "$T/bin/orca-ide" "$T/bin/orca-ide.full"
+printf '#!/usr/bin/env bash\n[ "$1 $2" != "orchestration run-list" ] || [[ " $* " == *" --full "* ]] || { echo '"'"'{"result":{"runs":[{"id":"run_test"}]}}'"'"'; exit 0; }\nexec "%s" "$@"\n' "$T/bin/orca-ide.full" > "$T/bin/orca-ide"
+chmod +x "$T/bin/orca-ide"
+K=97000; echo term_main > "$F/coord"; state term_main idle; drained; rm -f "$S/main-watch/item-"* "$S/main-watch/wake" "$S/main-pane.txt"; : > "$T/typed"
+for i in $(seq 1 2001); do echo "$(id -u) $i 1 00:01 /bin/sleep"; done > "$F/procs"; tick $K
+tick $((K + 60)); tick $((K + 120)); rm -f "$F/procs"
+# The plan's label as a `FAIL <label> (` record, the shape break-run reads (the fixture's fail prints `FAIL: `).
+grep -q -- '--terminal term_main ' "$T/typed" || { echo "FAIL main-watch wakes the coordinator run-list names with --full (the coordinator term_main was not woken: $(tail -n 3 "$T/stderr"))" >&2; exit 1; }
+mv "$T/bin/orca-ide.full" "$T/bin/orca-ide"
+
 echo "PASS main-watch-wake-sources.test.sh"

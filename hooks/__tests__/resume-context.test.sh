@@ -17,8 +17,8 @@ resume() {
     | env -u CLAUDE_PROJECT_DIR HOME="$H" PATH="${RPATH:-$PATH}" COMMANDECK_BOARD_CMD=true COMMANDECK_SCRATCH="$T" bash "$REAL/hooks/resume-context.sh" 2>&1)
   rm -f "$CPD/new-sid.resumed-from"
 }
-# ckpt <output> -- the checkpoint part: from its heading to the to-do rule that follows it.
-ckpt() { awk '/^## checkpoint /{p=1} /^TODO LIST:/{p=0} p' <<<"$1"; }
+# ckpt <output> -- the checkpoint part: from its heading to the owner's prompts that follow it.
+ckpt() { awk '/^## checkpoint /{p=1} /^## The owner.s prompts/{p=0} p' <<<"$1"; }
 { printf '## Goal\n'; for i in $(seq 1 400); do printf -- '- goal line %s of a long checkpoint body\n' "$i"; done; } > "$CPD/big.md"
 OUT=$(resume "$CPD/big.md")
 check "a 10 KB checkpoint is injected as at most 3,000 bytes, ending with the line naming the full file" "yes $CPD/big.md" \
@@ -27,9 +27,6 @@ printf '## Goal\n- one short goal\n\n## Queue (in order)\n- one item\n' > "$CPD/
 OUT=$(resume "$CPD/small.md")
 check "a short checkpoint is injected whole" "1 1 0" \
   "$(grep -c 'one short goal' <<<"$OUT") $(grep -c 'one item' <<<"$OUT") $(grep -c 'checkpoint cut to fit' <<<"$OUT")"
-# A done item is deleted, never marked completed: the list the owner reads shows open items only.
-check "the resumed TODO line says a done task is deleted, not completed" 1 \
-  "$(grep -c '^TODO LIST: .*A task done is deleted (TaskUpdate status deleted), never marked completed; the checkpoint.s Closed section keeps it\.' <<<"$OUT")"
 # #381: a seat run the checkpoint names that is not running and left no result is posted as one GONE line.
 mkdir -p "$T/ps-live" "$T/ps-fail" "$T/ps-none"; printf "#!/bin/sh\nexit 0\n" > "$T/ps-none/ps"; chmod +x "$T/ps-none/ps"
 printf '#!/bin/sh\necho "bash /x/scripts/seat.sh run builder gz /x/spec.md --marker DONE"\n' > "$T/ps-live/ps"
@@ -70,5 +67,9 @@ tokresume >/dev/null 2>&1
 check "a printed resume writes the receipt: the token, then the session" "tokA new-sid" "$(paste -sd' ' "$CPD/small.md.delivered" 2>/dev/null)"
 tokresume >&- 2>/dev/null
 check "a resume whose print failed writes no receipt" no "$([ -e "$CPD/small.md.delivered" ] && echo yes || echo no)"
+# #553: main keeps no on-screen checklist, so the resumed context carries no rule to rebuild one.
+OUT=$(resume "$CPD/small.md")
+check "the resumed context carries no todo rule" "yes 0" \
+  "$(grep -q 'one short goal' <<<"$OUT" && echo yes) $(grep -cE 'TODO LIST|TaskCreate|TaskUpdate|TaskList' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
