@@ -802,9 +802,10 @@ collect)
   [ -n "$V" ] || { echo "no VERDICT yet on $H (pane kept open)"; exit 3; }
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac
   # SETTLE BEFORE ANYTHING ENDS THE SEAT (host issue 2998): the seat's task and every task answer-worker.sh made to carry
-  # main's answers close first. A refusal (pane still working, an open question, a check that could not be read) is
-  # retried for COMMANDECK_SEAT_SETTLE_RETRY_S, since a pane that just printed its verdict is often still ending its
-  # turn; still refused, the pane stays open, no verdict= is written and collect exits 4. A rerun is the retry: the
+  # main's answers close first. The verdict is read, so the pane's live state does not hold the settle (issue 631: a
+  # finished seat's pane can still read working, and refusing it stopped unit-drive.sh). A refusal (an open question, a
+  # check that could not be read) is retried for COMMANDECK_SEAT_SETTLE_RETRY_S; still refused, the pane stays open, no
+  # verdict= is written and collect exits 4. A rerun is the retry: the
   # report is on disk and the delivery receipt keeps it from waking main twice. settled= keeps a rerun from closing a
   # task twice.
   settle_seat() {
@@ -812,7 +813,7 @@ collect)
     for t in "$T" $(sed -n 's/^answer_task=//p' "$REC"); do
       ! grep -qxF "settled=$t" "$REC" || continue
       if [ "$t" = "$T" ]; then res="{\"verdict\":\"${V#VERDICT: }\"}"; else res='{"done":"answer carried"}'; fi
-      pp_task_close "$t" completed "$res" || return 1
+      PP_VERDICT_READ=1 pp_task_close "$t" completed "$res" || return 1
       echo "settled=$t" >> "$REC"
     done
   }

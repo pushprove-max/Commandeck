@@ -661,10 +661,11 @@ pp_task_close() { # task status [result-json]
   # idle (pane_is_busy 1) and no open question since the seat's launch (pp_open_ask 1) from ANY id the record holds:
   # its pane, earlier panes (prior_pane=), every task, and each task's dispatch. Working, an open question and any
   # check that could not be read (pane state, a dispatch, the inbox) all refuse. A task with no record takes the path
-  # below as before.
+  # below as before. PP_VERDICT_READ=1 (issue 631: seat.sh collect, whose report holds the seat's verdict) skips the
+  # pane state: a finished seat's pane can still read working. The open-question check still holds.
   read -r h rec < <(awk -F= -v t="$1" 'FNR==1{h=""} /^handle=/{h=$2} /^(answer_)?task=/ && h && $2==t {print h, FILENAME; exit}' "$PP_SCRATCH"/seat-*.txt 2>/dev/null) || true
   if [ -n "$h" ]; then
-    busy=0; ( . "$PP_SCRIPTS/codex-helpers.sh" && pane_is_busy "$h" ) || busy=$?
+    busy=0; if [ "${PP_VERDICT_READ:-0}" = 1 ]; then busy=1; else ( . "$PP_SCRIPTS/codex-helpers.sh" && pane_is_busy "$h" ) || busy=$?; fi
     if [ "$busy" = 1 ]; then ask=0; pp_seat_open_ask "$h" "$rec" || ask=$?; fi
     if [ "$ask" = 0 ]; then
       echo "task $1: its pane $h has open question $PP_OPEN_ASK_ID; answer it with bash $PP_SCRIPTS/answer-worker.sh $h \"<text>\" $PP_OPEN_ASK_ID (or reply in its thread); not settled" >&2
