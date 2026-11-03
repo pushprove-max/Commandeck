@@ -4,25 +4,25 @@
 
 ### Guards
 
-- Main's lone `gh run watch` becomes a wake-on-exit job and its `npm test` runs become long jobs (strict tier, under Orca); without Orca, a note. A `tail -f` into grep and a compound `gh run watch` get a wait note; an until-grep loop on a test log gets a hint in every pane.
-- Main's slow foreground calls, its merge and seat runs and a foreground wait on a long job run in the background (strict tier).
-- Stop is refused while the project's phase queue has an open box (strict tier).
-- After a compact or `/clear`, the checkpoint is printed again, cut at 9,000 bytes; it stands down when a user-level readback is registered.
-- Main's session start fast-forwards local main from origin (and `COMMANDECK_PEER_REPO` if set), never during a merge, and shows a card of main's script usage lines.
-- A Bash write to a path a project rule's glob names shows that rule once per session and project.
-- A brief that cites a missing path, or a heavy fixture with no `Timed checks:` line, gets a warning.
-- A strict Write of a Python test calling `model.fit(` is allowed.
-- `.githooks`: commit-msg strips Claude trailers and refuses home paths and `.local` hosts; pre-commit and pre-push refuse linked-worktree commits and pushes (Fast lane and `COMMANDECK_ALLOW_AGENT_GIT=1` aside) and git under headless `claude -p`. Wire them by absolute path.
+- When the main session watches a CI run or starts a test run, the work now runs in the background and wakes the session when it ends. Waiting loops on a log get a gentler hint.
+- The main session's slow calls, merges and review runs move to the background, so it stays free to answer questions.
+- The main session cannot stop while the project's queue still has open work.
+- After the conversation is cleared or compacted, the saved checkpoint is shown again.
+- At session start, the main session catches up its local copy with the shared copy, never during a merge, and shows a short card of its main commands.
+- Writing to a file covered by a project rule shows that rule once per session.
+- A brief that points at a missing file, or a slow test with no time budget, gets a warning.
+- Writing a machine-learning training test is no longer blocked.
+- Commit and push checks now remove assistant credit lines, refuse private paths and local machine names, and block commits and pushes from agent worktrees and background agents.
 
 ### Scripts
 
-- New scripts: long job, wake on exit, token ledger, poll agents, await agents, watch agents, commit hook edits, baseline-raise check and repeat report. Each prints its header on `--help`.
-- The local unit merge refuses a unit that raises the file-size guard's CAP unless run with `--baseline-raise "<reason>"`; the reason goes into the squash message.
-- The new-test counter counts Python tests, nested JS/TS tests and `t.test` subtests, an `.each` table once, and a moved or renamed test as new; a `test.skip(cond, 'why')` gate is not a test.
+- New helpers for long jobs, waking on exit, token tracking, and watching other agents. Each explains itself when asked for help.
+- A unit merge that raises the file-size limit is refused unless a reason is given; the reason is kept in the merge record.
+- The new-test counter now counts Python tests, nested tests and subtests, counts a table of cases once, and treats a moved or renamed test as new. A conditional skip is not counted as a test.
 
 ### Rules
 
-- Root agent instruction files for Claude and other agents; five token rules and two pointers in the global rules; token-efficiency and tests-and-comments details; a `file-issue` skill.
+- Instruction files for Claude and other agents, five token-saving rules, more detail on tests and comments, and a skill for filing issues.
 
 ## 0.68.0 -- 2026-11-02
 
