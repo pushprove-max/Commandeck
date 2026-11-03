@@ -18,9 +18,12 @@ if SELF_TOP=$(git -C "${SELF%/*}" rev-parse --show-toplevel 2>/dev/null) \
 # rebases onto the first one's merge. Re-exec before arg parsing so every flag
 # survives.
 usage() { cat <<'EOF'
-usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] [--filed '<class>=#<n>' ...] | <unit> --cleanup
+usage: merge-unit-local.sh <unit> [--dry-run] [--auto <sha>] [--filed '<class>=#<n>' ...] [--baseline-raise "<reason>"] | <unit> --cleanup
 Squash-merge a Builder's branch onto local main; run from the main checkout on main.
   --dry-run        run the checks and print the plan; merge and clean up nothing
+  --baseline-raise "<reason>"
+                   merge a unit that loosens the file-size cap in hooks/file-size-cop.sh (baseline-raise-check.sh);
+                   the reason goes into the squash commit message
   --auto <sha>     merge only while the branch tip is still <sha>, the commit main-watch's gate passed
   --filed '<class>=#<n>'
                    the OPEN issue that tracks one class of the findings the review left open at its stop
@@ -68,12 +71,13 @@ if [ -z "${MERGE_UNIT_LOCAL_LOCK:-}" ]; then
     "$(git rev-parse --path-format=absolute --git-common-dir)/merge-unit-local.lock" "$SELF" "$@"
 fi
 UNIT=$1; shift
-DRY_RUN=0 AUTO="" CLEANUP=0 FILED=()
+DRY_RUN=0 AUTO="" CLEANUP=0 BASELINE_RAISE="" FILED=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --auto) AUTO=${2:-}; [[ $AUTO =~ ^[0-9a-f]{7,40}$ ]] || { usage >&2; exit 2; }; shift 2 ;;
     --filed) [[ ${2:-} =~ ^[^=[:space:]]+=#[0-9]+$ ]] || { usage >&2; exit 2; }; FILED+=("$2"); shift 2 ;;
+    --baseline-raise) BASELINE_RAISE=${2:-}; [ -n "$BASELINE_RAISE" ] || { usage >&2; exit 2; }; shift 2 ;;
     --cleanup) CLEANUP=1; shift ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -232,6 +236,18 @@ fi
 BRANCH=$(git -C "$WT" branch --show-current)
 [ -n "$BRANCH" ] && [ "$BRANCH" != main ] || fail "step 1 preconditions" "worktree $WT is on '${BRANCH:-no branch}', not on a branch of its own"
 git -C "$WT" diff --quiet && git -C "$WT" diff --cached --quiet || fail "step 1 preconditions" "unit worktree has tracked changes"
+# A cap raised beside the code that needed the room stops ratcheting, so a unit loosening it merges only with a stated
+# reason the squash carries.
+check_baseline_raise() {
+  local out rc=0
+  out=$(bash "$HERE/baseline-raise-check.sh" "$(git merge-base main "$BRANCH")" "$BRANCH" 2>&1) || rc=$?
+  [ "$rc" != 0 ] || return 0
+  [ "$rc" = 1 ] || fail "step 1 preconditions" "baseline-raise-check.sh failed (exit $rc): $out"
+  printf '%s\n' "$out" >&2
+  [ -n "$BASELINE_RAISE" ] || fail "step 1 preconditions" "the unit loosens the file-size cap (above); merge with --baseline-raise \"<reason>\" once that is approved"
+  echo "STEP 1 baseline raise: $BASELINE_RAISE"
+}
+check_baseline_raise
 # The tip before the rebase: --auto's gate passed on it, and the closing pass's suite ran on it (issue 307).
 PRE_TIP=$(git -C "$WT" rev-parse HEAD)
 STARTED=$(date +%s); state preconditions; rm -f "${MERGE_UNIT_LOCAL_QUEUE:-}"
@@ -501,6 +517,7 @@ REFS=$(git -C "$WT" log --reverse --format=%s main..HEAD | grep -oE '#[0-9]+' \
 # Issue 465: the Builder's proof counts the class stops of the build (a redesign or a question to main); the squash keeps them.
 CLASS_STOPS=$(grep -m1 '^Class stops: ' <<<"${BUILDER_PROOF:-}" || true)
 [ -z "$CLASS_STOPS" ] || TITLE=$(printf '%s\n\n%s' "$TITLE" "$CLASS_STOPS")
+[ -z "$BASELINE_RAISE" ] || TITLE=$(printf '%s\n\nBaseline-raise: %s' "$TITLE" "$BASELINE_RAISE")
 # The unit's work items are the list builder-launch.sh wrote to main's checkout at launch, never a parse of the brief:
 # the Builder edits its brief, and a quoted list or directive in it adds nothing.
 ISSUES=$PP_MAIN/.claude/briefs/$UNIT-issues.json

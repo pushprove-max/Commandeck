@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Repo pre-commit guard: headless Claude workers and linked-checkout workers must not commit.
+# It runs at the git layer, so a git command nested inside a script is judged like any other.
+# Installed via: git config core.hooksPath "$(pwd -P)/.githooks"
+# Self-test: bash hooks/__tests__/githooks-pre-commit.test.sh
+set -euo pipefail
+
+# See lib-agent-guard.sh for the incidents and the deliberate override.
+# shellcheck source=lib-agent-guard.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-agent-guard.sh"
+agent_ancestry_guard
+[ "${COMMANDECK_ALLOW_AGENT_GIT:-}" = "1" ] || agent_fast_lane_commit || agent_worktree_topology_guard
+exit 0

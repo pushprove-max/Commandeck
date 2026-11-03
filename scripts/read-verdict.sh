@@ -233,6 +233,8 @@ given_spec() {
 worker_state() {
   local wt="" agent="" task="" launched=0 marker="" spec="" current="" f created best="" best_at="" matches=0 json
   while [ $# -gt 0 ]; do
+    # A valued flag given last: `shift 2` would fail and shift nothing, looping forever.
+    case "$1" in --worktree|--agent|--task|--launched|--marker|--spec) [ $# -ge 2 ] || { echo "read-verdict: $1 needs a value" >&2; exit 2; } ;; esac
     case "$1" in
       --worktree) wt=${2:-}; shift 2 ;;
       --agent) agent=${2:-}; shift 2 ;;

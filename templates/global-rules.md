@@ -54,6 +54,23 @@
   raise and its reason in the brief. Main does not switch its own effort; it
   asks the owner.
 - Send independent tool calls together in one turn, not one after another.
+- If you must wait, wait once, blocking. Never poll: each poll is a full round
+  trip that returns "still running".
+- One question over many files is a SCRIPT, not a sweep of reads: compute the
+  answer and keep only the answer.
+- Evidence is never filtered to save tokens. On a red result, a truncated
+  output or any doubt, read the raw output. Re-read a file after a change,
+  after another writer touched it, or whenever you are unsure. Savings come
+  from avoiding repetition, never from looking less carefully. (The re-read is
+  for a file another writer touched or one you are unsure of, never to confirm
+  your own edit.)
+- Tag each claim [verified] (you ran or read it), [likely] (inferred, not run)
+  or [uncertain]; "I did not check X" is useful.
+- With strict hooks on: when the owner says to work through all phases, write
+  .claude/phase-queue.md first, one "- [ ]" box per item, and tick each "[x]"
+  as it lands green; Stop is refused while a box is open.
+- Details, ~/.commandeck/plugin/templates/rules-details.md, Token efficiency.
+- Details, ~/.commandeck/plugin/templates/rules-details.md, Tests and comments.
 - Don't pay twice for the same information: reuse what is already in context,
   and don't re-read a file you just edited.
 - Keep context small: read line ranges, not whole files, and send a long

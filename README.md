@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.68.0-111111?style=flat-square" alt="Version 0.68.0">
+  <img src="https://img.shields.io/badge/version-0.69.0-111111?style=flat-square" alt="Version 0.69.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -517,6 +517,13 @@ their result is the run's.
   tests do not run again on the Mac. The run keeps going on the peer; collect
   its result once with `bash scripts/peer-offload.sh --fetch <id>`, the id the
   failure message names.
+
+**Git hooks.** Wire the repository's hooks once per checkout, by absolute
+path, so an older linked worktree still runs main's guards:
+`git config core.hooksPath "$(pwd -P)/.githooks"`. They refuse a commit in a
+linked worktree (the Fast lane and the plugin's own scripts aside), a push from
+one, git run under a headless `claude -p`, and a message with a home path or a
+`.local` host; they strip Claude trailers from commit messages.
 
 More: [docs/tests.md](docs/tests.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

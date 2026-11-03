@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.69.0 -- 2026-11-03
+
+### Guards
+
+- Main's lone `gh run watch` becomes a wake-on-exit job and its `npm test` runs become long jobs (strict tier, under Orca); without Orca, a note. A `tail -f` into grep and a compound `gh run watch` get a wait note; an until-grep loop on a test log gets a hint in every pane.
+- Main's slow foreground calls, its merge and seat runs and a foreground wait on a long job run in the background (strict tier).
+- Stop is refused while the project's phase queue has an open box (strict tier).
+- After a compact or `/clear`, the checkpoint is printed again, cut at 9,000 bytes; it stands down when a user-level readback is registered.
+- Main's session start fast-forwards local main from origin (and `COMMANDECK_PEER_REPO` if set), never during a merge, and shows a card of main's script usage lines.
+- A Bash write to a path a project rule's glob names shows that rule once per session and project.
+- A brief that cites a missing path, or a heavy fixture with no `Timed checks:` line, gets a warning.
+- A strict Write of a Python test calling `model.fit(` is allowed.
+- `.githooks`: commit-msg strips Claude trailers and refuses home paths and `.local` hosts; pre-commit and pre-push refuse linked-worktree commits and pushes (Fast lane and `COMMANDECK_ALLOW_AGENT_GIT=1` aside) and git under headless `claude -p`. Wire them by absolute path.
+
+### Scripts
+
+- New scripts: long job, wake on exit, token ledger, poll agents, await agents, watch agents, commit hook edits, baseline-raise check and repeat report. Each prints its header on `--help`.
+- The local unit merge refuses a unit that raises the file-size guard's CAP unless run with `--baseline-raise "<reason>"`; the reason goes into the squash message.
+- The new-test counter counts Python tests, nested JS/TS tests and `t.test` subtests, an `.each` table once, and a moved or renamed test as new; a `test.skip(cond, 'why')` gate is not a test.
+
+### Rules
+
+- Root agent instruction files for Claude and other agents; five token rules and two pointers in the global rules; token-efficiency and tests-and-comments details; a `file-issue` skill.
+
 ## 0.68.0 -- 2026-11-02
 
 ### Guards

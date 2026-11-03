@@ -445,7 +445,7 @@ printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 # so a relaunch with the same brief adds no commit. An untracked or ignored brief stays out of every commit.
 if git -C "$WT" ls-files --error-unmatch -- ".claude/briefs/$UNIT.md" >/dev/null 2>&1 \
   && ! git -C "$WT" diff --quiet HEAD -- ".claude/briefs/$UNIT.md"; then
-  git -C "$WT" commit -q -m "chore($UNIT): install the Builder brief" -- ".claude/briefs/$UNIT.md" \
+  COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "chore($UNIT): install the Builder brief" -- ".claude/briefs/$UNIT.md" \
     || { echo "could not commit the Builder brief .claude/briefs/$UNIT.md in $WT; the Builder was not launched" >&2; exit 1; }
 fi
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"

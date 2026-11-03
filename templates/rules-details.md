@@ -71,3 +71,100 @@ named.
 The drift guard named under Planning and evidence has a runnable example, `templates/drift-guard-example.sh`. It takes
 two files, each with a `Retry limit:` line, and fails naming both files when the two lines differ. Copy it, change the
 fact it reads, and name the copy for the two places it guards.
+
+## Token efficiency
+
+Every tool call re-sends the whole accumulated context to the model. A turn
+with one tool call and a turn with six cost about the same in input tokens;
+six *sequential* turns cost six full context replays. Most rules below follow
+from that. None of them mean verifying less -- they mean not paying for the
+same information twice. Hook-enforced specifics stay beside their hooks.
+
+- Before the first tool call, plan the minimal read -> change -> verify route.
+- Issue demonstrably independent inspections **in one turn**, using the
+  native parallel interface of your agent. Do not emulate missing parallel
+  support with shell chains or throwaway scripts.
+- Put an operation in a batch only when all its inputs are known up front and
+  it does not depend on another member of that batch. A batch built on a
+  guessed input gets discarded and redone, which costs more than running it
+  sequentially.
+- Keep sequential: dependencies, waits, approvals, interdependent edits,
+  anything irreversible, and adaptive investigation where each result changes
+  the next question.
+- Inspect every result and every error. Batching is about issuing calls
+  together, not about reading them less carefully.
+- **Before any test run, name what it will prove.** Run the smallest set of
+  tests that would fail if your change were wrong. Do not re-run a test whose
+  inputs have not changed since it passed. Run the full suite only when
+  product code changed since the last full pass, or when a push or merge guard
+  requires it. A fix to tooling tests, a scanner allow-list, or a timeout
+  re-runs only those tests.
+- Never repeat an expensive run without a material difference in what is
+  being run.
+- Check whether something already exists before building it. A short search
+  costs far less than generated code that is later deleted.
+- Check what has already been decided before proposing or reopening work.
+  Re-deriving a settled conclusion is the most expensive form of duplicate
+  work.
+- Before an edit, pick the cheapest decisive test. A wrong speculative edit
+  costs the edit, the verification and the revert.
+- Put raw output in files; keep only status, errors, warnings, the decisive
+  lines and the source path in the reply. Large logs then never enter the
+  context window at all.
+- No broad scans "just to be safe". Stay inside the current scope and the
+  active hypothesis.
+- Startup files (`AGENT_STARTUP.md`, `CLAUDE.md`, `.claude/rules/*`) change
+  only between batches: open panes read them once at launch, and a mid-run
+  edit in main moves the tree under a running check chain.
+- One topic per task. Start a new task on real objective drift instead of
+  letting unrelated threads accumulate -- old context is a tax on every
+  remaining call in the session.
+- Answer wording and documentation questions directly; do not open the
+  repository unless the answer depends on it.
+- Do not idle-wait when there is safe reserve work toward the same goal. Do
+  not invent work to look busy when there is none -- waiting is then the
+  correct action.
+
+## Tests and comments
+
+- Never assert on wall-clock timing. Mock timers, and restore them in a teardown hook.
+- A process-wide mock retains call args: restore it in a teardown hook, and never push into an unbounded array from inside a mock.
+- Not run: the run of every touched test together before review; a rerun of
+  unchanged code that already gave a result, pass or fail; timing runs, unless
+  the issue itself asks for a measurement.
+- A test result the Builder reads goes into its evidence file with the
+  machine's load beside it (`hs_stamp` in `scripts/host-services.sh`),
+  so a slow run reads as load, not as the code.
+- Load a route/service graph EXACTLY ONCE per test file. Never
+  `delete require.cache[...]` and re-require in-process; a fresh instance
+  belongs in a separate test file.
+- Test behaviour through public interfaces: the exported function, the route,
+  the component as a user drives it. Never implementation details or private
+  helpers.
+- One test per distinct behaviour or failure mode. Cases in the same
+  equivalence class are one parametrized (table-driven) test, not several.
+- Do not test trivial getters and setters, framework or library behaviour,
+  guarantees the type system already gives, or inputs the system cannot
+  receive.
+- No test whose only assertion is that a mock was called.
+
+### A comment earns its place only by stating what the code cannot
+
+- WHY: the constraint or decision behind non-obvious code, in one line.
+- Ceilings: a deliberate shortcut names its limit and upgrade path, in a plain
+  comment with no tag.
+- Cross-file contracts: sibling paths that must stay in parity, SSOT
+  pointers, "every caller assumes X" invariants.
+- Warnings: what not to do here and what breaks if you do.
+
+### Editorial guidance — keep cleanup within the changed lines or a requested sweep
+
+- Narration: restating what the next line does.
+- Prefer constraints and contracts to change history. Preserve history that
+  explains a current constraint.
+- Attribution and credits: reviewer names, P-levels, model or tool credits
+  ("Claude", "Codex", "Generated with ...", Co-Authored-By lines).
+  Hook-enforced: hooks/edit-content-tripwires.sh.
+- Commented-out code. Git keeps it; delete it.
+- A TODO with no owner: new TODOs carry a GitHub issue ref
+  (`TODO(#123): ...`).

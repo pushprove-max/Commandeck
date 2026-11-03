@@ -154,5 +154,9 @@ check "a Claude run from a versioned binary path is still found as the pane's se
   "$(env -u CLAUDE_CONFIG_DIR HOME="$T/home" bash "$REAL/scripts/read-verdict.sh" --session term_v$$ 2>/dev/null)"
 kill "$VP" 2>/dev/null
 
+# A valued --state flag given last made `shift 2` fail and shift nothing: the argument loop spun forever.
+check "a trailing --state flag with no value exits 2" "2 2 2 2 2 2" "$(for o in --worktree --agent --task --launched --marker --spec; do
+  timeout 5 bash "$REAL/scripts/read-verdict.sh" --state "$o" >/dev/null 2>&1; printf '%s ' $?; done | sed 's/ $//')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

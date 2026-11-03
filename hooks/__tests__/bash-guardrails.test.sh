@@ -418,6 +418,69 @@ sel "a terminal read with no handle, a variable or a pipe still blocks" && \
   check "a terminal read with no handle, a variable or a pipe still blocks" "2 2 2" "$(run_hook "$(json 'orca-ide terminal read')") \
 $(run_hook "$(json 'orca-ide terminal read --terminal "$T"')") $(run_hook "$(json 'orca-ide terminal read --terminal term_abc | head -5')")"
 
+# Wait notes, long-job and wake-on-exit rewrites. They act in main's own checkout and pane only (an orca-ide stub names
+# term-main as the run's coordinator), and the rewrites need Orca (a handle) and the strict tier.
+WBOX=$READ_TMP/wait; mkdir -p "$WBOX/bin"
+cat > "$WBOX/bin/orca-ide" <<'STUB'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "orchestration run-list") echo '{"result":{"runs":[{"id":"run-t","coordinator_handle":"term-main"}]}}' ;;
+  *) echo '{"ok":true}' ;;
+esac
+STUB
+chmod +x "$WBOX/bin/orca-ide"
+LINKED=$READ_TMP/linked
+git -C "$MAIN_TMP" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$MAIN_TMP" worktree add -q "$LINKED" -b wait-linked 2>/dev/null
+# <dir> <handle or -> <tier> <command> [bg]: the hook's reply for a call made from <dir> in that pane.
+wait_out() {
+  local dir=$1 h=$2 tier=$3 bg=${5:-false}
+  ( cd "$dir" && export PATH="$WBOX/bin:$PATH" COMMANDECK_RUN=run-t COMMANDECK_HOOK_TIER=$tier
+    if [ "$h" = - ]; then unset ORCA_TERMINAL_HANDLE; else export ORCA_TERMINAL_HANDLE=$h; fi
+    jq -cn --arg c "$4" --arg d "$dir" --argjson b "$bg" '{cwd:$d, tool_input:{command:$c, run_in_background:$b}}' | "$HOOK" 2>/dev/null )
+}
+# "<1 when the reply carries a note holding $1> <1 when it rewrites the call>"
+wait_state() { local o; o=$(cat); echo "$([[ $o == *additionalContext*"$1"* ]] && echo 1 || echo 0) $([[ $o == *updatedInput* ]] && echo 1 || echo 0)"; }
+# A tail -f piped into a consumer that leaves at the match hangs forever: it gets a note, never a rewrite (D3).
+sel "tail -f into grep gets a note" && check "tail -f into grep gets a note" "1 0" "$(wait_out "$MAIN_TMP" term-main strict 'tail -n 0 -f x.log | grep -q -m1 DONE' | wait_state 'never exits')"
+# The default tier gets notes but never a rewrite: a lone gh run watch is noted, not changed.
+sel "the default tier gets only the note" && check "the default tier gets only the note" "1 0" "$(wait_out "$MAIN_TMP" term-main default 'gh run watch 123' | wait_state 'gh run watch')"
+# A lone gh run watch blocks the turn with no wake: strict plus Orca runs it through wake-on-exit.sh.
+sel "a lone gh run watch is rewritten" && check "a lone gh run watch is rewritten" "true" \
+  "$(wait_out "$MAIN_TMP" term-main strict 'gh run watch 123' | jq -r '.hookSpecificOutput.updatedInput.command | test("wake-on-exit.sh.* deploy-watch -- gh .*run watch .*123.* --exit-status")')"
+# A suite run in a linked worktree is a worker's own command: no note and no rewrite.
+sel "a linked suite run is not rewritten" && check "a linked suite run is not rewritten" "" "$(wait_out "$LINKED" term-main strict 'npm test')"
+# A quoted tail -f, an empty command and junk after a command are no job: nothing is said.
+sel "quoted, empty and junk commands pass" && check "quoted, empty and junk commands pass" "" \
+  "$(wait_out "$MAIN_TMP" term-main strict 'echo "tail -f x.log | grep y; npm test"')$(wait_out "$MAIN_TMP" term-main strict '')$(wait_out "$MAIN_TMP" term-main strict 'npm tested -- foo ;; )')"
+# A full suite in main's pane dies when main restarts: strict plus Orca runs it through long-job.sh start.
+sel "a main suite run is rewritten" && check "a main suite run is rewritten" "true" \
+  "$(wait_out "$MAIN_TMP" term-main strict 'npm test' | jq -r '.hookSpecificOutput.updatedInput.command | test("long-job.sh.* start suite -- bash -c .npm test.$")')"
+# An npm option that takes a value, given last with none, hung the hook until its timeout: a failed `shift 2`
+# shifts nothing, so the option scanner looped on it. Each must end at once, rc 0 and no rewrite (not a suite).
+npm_bare() { # <option> -- "<rc> <1 when rewritten>" for `npm <option>` in main's pane, killed after 5 s
+  local o; o=$( cd "$MAIN_TMP" && export PATH="$WBOX/bin:$PATH" COMMANDECK_RUN=run-t COMMANDECK_HOOK_TIER=strict ORCA_TERMINAL_HANDLE=term-main
+    jq -cn --arg c "npm $1" --arg d "$MAIN_TMP" '{cwd:$d, tool_input:{command:$c, run_in_background:false}}' | timeout 5 "$HOOK" 2>/dev/null; echo "rc=$?" )
+  echo "${o##*rc=} $([[ $o == *updatedInput* ]] && echo 1 || echo 0)"
+}
+sel "an npm option with no value ends" && check "an npm option with no value ends" "0 0|0 0|0 0|0 0" \
+  "$(npm_bare --prefix)|$(npm_bare -C)|$(npm_bare --workspace)|$(npm_bare -w)"
+# A foreground long-job.sh wait holds the turn for up to 240 s: it is rewritten to run in the background.
+sel "a foreground wait is backgrounded" && check "a foreground wait is backgrounded" "true" \
+  "$(wait_out "$MAIN_TMP" term-main strict 'bash scripts/long-job.sh wait suite' | jq -r '.hookSpecificOutput.updatedInput.run_in_background')"
+# Merge and seat runs are not long-job arms here (D38): they pass untouched.
+sel "merge and seat runs pass" && check "merge and seat runs pass" "" \
+  "$(wait_out "$MAIN_TMP" term-main strict 'bash scripts/merge-unit-local.sh')$(wait_out "$MAIN_TMP" term-main strict 'bash scripts/seat.sh run a b c')"
+# A worker pane waits on its own command: it gets no wait note and no rewrite.
+sel "a worker pane gets no wait note" && check "a worker pane gets no wait note" "" \
+  "$(wait_out "$MAIN_TMP" term-worker strict 'gh run watch 123')$(wait_out "$MAIN_TMP" term-worker strict 'tail -f x.log | grep -q DONE')"
+# Without Orca neither long-job.sh nor wake-on-exit.sh can run: the call is not rewritten and the note stands.
+sel "a main with no Orca gets the note" && check "a main with no Orca gets the note" "1 0 1 0" \
+  "$(wait_out "$MAIN_TMP" - strict 'gh run watch 123' | wait_state 'gh run watch') $(wait_out "$MAIN_TMP" - strict 'npm test' | wait_state 'long-job.sh')"
+# The until-grep hint is for every pane and every install, a worker's too.
+sel "a worker pane gets the hint" && check "a worker pane gets the hint" "1 0" \
+  "$(wait_out "$MAIN_TMP" term-worker default 'until grep -q DONE "$HOME/.commandeck/scratch/x.log"; do sleep 1; done' | wait_state 'wait-test-run.sh')"
+
 if [ -z "${BASH_GUARDRAILS_TEST_CASE+x}" ]; then
   sel "a case filter counts only the case it names" && check "a case filter counts only the case it names" "1 passed, 0 failed" \
     "$(BASH_GUARDRAILS_TEST_CASE='bare-pid kill passes' bash "$0" | tail -1)"

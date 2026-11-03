@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Strip AI attribution trailers (no Claude co-author on GitHub). A temp-file write, not GNU `sed -i`: macOS sed differs.
+tmp=$(mktemp) || exit 1
+sed -E '/^(Co-Authored-By: Claude|Claude-Session: )/Id' "$1" > "$tmp" && cat "$tmp" > "$1"
+rm -f "$tmp"
+
+# Refuse a home path or a .local hostname in the message: the push-time
+# grep finds them only after the commit exists. Every line is scanned, # lines
+# and anything below a scissors line too: git cleans up after this hook runs and
+# never tells it the cleanup mode, so any cut here is text a user can type and
+# git then keeps. Cost: a `git commit -v` diff naming a home path is refused.
+# Both patterns are boundary-anchored so a repo path through
+# a directory named home, settings.local.json and .env.local pass. No bypass besides --no-verify.
+msg=$'\n'$(<"$1")
+hits=$(printf '%s\n' "$msg" | grep -E \
+  -e '(^|[^A-Za-z0-9._~-])/(Users|home)/[A-Za-z0-9._-]+' \
+  -e '(^|[^A-Za-z0-9._-])[A-Za-z0-9-]+\.local($|[^A-Za-z0-9._-]|\.($|[^A-Za-z0-9]))')
+if [ -n "$hits" ]; then
+  printf 'BLOCKED: this commit message names a home path or a .local host:\n\n%s\n\nWrite ~/... or <peer> instead, then re-run the commit (commit without -v: its diff is scanned too).\n' "$hits" >&2
+  exit 1
+fi
+exit 0

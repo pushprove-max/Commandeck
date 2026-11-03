@@ -92,89 +92,11 @@ fi
 # allow_json [<jq object>] -- the reply for a call let through: the object (default {}) with the inline-write note
 # and SEARCH_NOTE, when set, joined as its additionalContext; prints nothing when there is neither object nor note.
 allow_json() {
-  local m=$IW_NOTE${IW_NOTE:+${SEARCH_NOTE:+$'\n\n'}}$SEARCH_NOTE o=${1-}
+  local m="" n o=${1-}
+  for n in "$IW_NOTE" "$SEARCH_NOTE" "${WAIT_NOTE-}" "${WAIT_HINT-}"; do [ -z "$n" ] || m+=${m:+$'\n\n'}$n; done
   [ -n "$m" ] || [ -n "$o" ] || return 0
   jq -cn --arg m "$m" --argjson o "${o:-null}" '{hookSpecificOutput: ({hookEventName: "PreToolUse"} + ($o // {}) + (if $m == "" then {} else {additionalContext: $m} end))}'
 }
-# Strict tier: off unless the project turned it on (lib/project.sh).
-{ . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null || { allow_json; exit 0; }
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-[ -z "$CMD" ] && { allow_json; exit 0; }
-
-# A here-document's end word is one plain word (letters, digits, _ . -): bare,
-# in one pair of quotes, or after one backslash. Every other `<<` is refused
-# here, above every other rule and exit, so no rule in this or any other hook
-# has to read an odd end word; each misread one hid the command after the note.
-# A `<<<` here-string has no body and passes. Only a `<<` bash reads as an
-# operator is judged: strip_quoted reports each one outside quotes, comments
-# and earlier bodies (strip_odd_end). git-safety.sh asks the same question for
-# itself: this hook is off in a project that did not turn the strict tier on.
-. "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
-# Without the helper no end word is checked and every bare node --test would pass.
-type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
-# The one fence for a rewrite that replaces the call's text (a worker's search): the replacement must run exactly what
-# the call would. Any `$`, backtick, backslash, newline or process substitution in the RAW text, quoted or not,
-# refuses it (each can run or reshape something the replacement drops). The rest is read only through strip_quoted,
-# which tracks quotes left to right; callers add their own shape checks on RW_TEXT.
-rewrite_safe() { # <raw command>: sets RW_TEXT to the quote-stripped text
-  case "$1" in *['$`\']*|*$'\n'*|*'<('*|*'>('*) return 1 ;; esac
-  RW_TEXT=$(strip_quoted "$1")
-}
-ODD=$(strip_odd_end "$CMD")
-[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; HOOK_FIRE_REASON=odd-heredoc-end; exit 2; }
-
-# Block node's test runner without the 4 GB heap cap.
-# Root cause of four WSL crashes on 2026-08-24: one uncapped
-# `node --test` child grew at 1.45 GB/s to 29 GB and took the workstation.
-# `npm run test:*` carries the cap in the script itself, so it never matches
-# here -- only a bare `node`/`npx tsx` invocation does.
-#
-# `--test` must be followed by whitespace or end-of-command: `--test-concurrency`
-# and `--test-reporter` are companion flags, not the runner switch, and matching
-# them would fire on capped commands that spell the cap correctly.
-#
-# The check is PER SEGMENT, not per command line. A command-wide cap search
-# passed `node --max-old-space-size=4096 --test a.ts && node --test b.ts`: the
-# first invocation's flag vouched for the second, uncapped one.
-# Quoted text is data, not a command: `rg 'node --test src/x.ts' .claude` is a
-# search, and blocking it made the hook fire on ordinary work -- including on
-# the report that described it. Quoted spans and heredoc bodies come out BEFORE
-# the split, in one pass over the whole command: a per-line sed left a
-# multi-line commit message whole. A `;` or `&&` inside a string cannot
-# manufacture a segment either. A heredoc fed to a shell (`bash <<EOF`) is
-# read as data too; that is an accepted gap.
-# The strip walks the command a character at a time; only a `--test` can match
-# (quote and backslash characters dropped first, so `--te''st` is still seen).
-# A quoted span that is one word stays the word node gets (`node "--test"`,
-# a quoted heap flag); a span holding a space is prose and reads as QUOTED, so
-# a cap inside a multi-word quoted NODE_OPTIONS value is not seen and blocks.
-HQ=$'\x01'
-HEAP_CMD=""; P=${CMD//[\'\"\\]/}; case "$P" in *--test*) HEAP_CMD=$(strip_quoted "$CMD" "$HQ" | sed -E "s/${HQ}([;&|()[:space:]]|\$)/QUOTED\1/g; s/${HQ}//g") ;; esac
-
-while IFS= read -r SEG; do
-  # An `npm` segment carries the cap inside the script it runs, and its
-  # arguments may legitimately spell out a node invocation
-  # (`npm run test:unit -- node --test x.ts`). Leading `VAR=value` assignments
-  # and `env` are prefixes, not the command: `CI=1 npm run test:unit` is npm.
-  SEG_HEAD=$(echo "$SEG" | sed -E ':a; s/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env)[[:space:]]+//; ta')
-  [ "$(echo "$SEG_HEAD" | awk '{print $1}')" = "npm" ] && continue
-
-  echo "$SEG" | grep -qE '(^|[[:space:]])(node|npx[[:space:]]+tsx)([[:space:]]+[^[:space:]]+)*[[:space:]]+--test([[:space:]]|$)' || continue
-
-  # Allow only an explicit cap of 4096 or lower, IN THIS SEGMENT. A LARGER
-  # number is still a block: the point of the cap is that a runaway dies in
-  # seconds. EVERY heap flag in the segment is read, in either spelling (node
-  # takes `-` and `_` alike, and `=N` or a space) and wherever it sits:
-  # node honours the last one, so `--max-old-space-size=4096
-  # --max_old_space_size=8192` ran at 8 GB behind a guard that read one spelling.
-  HEAPS=$(echo "$SEG" | grep -oE -- '--max[-_]old[-_]space[-_]size(=|[[:space:]]+)[0-9]+' | grep -oE '[0-9]+$')
-  if [ -z "$HEAPS" ] || [ -n "$(awk '$1 > 4096' <<<"$HEAPS")" ]; then
-    echo "BLOCKED: bare node --test without --max-old-space-size=4096, or with a larger heap flag beside it. Add the flag (\`node --max-old-space-size=4096 --test\`) and drop any larger one, or run the project's own test script when it carries the cap." >&2
-    HOOK_FIRE_REASON=node-test-heap
-    exit 2
-  fi
-done < <(printf '%s\n' "$HEAP_CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/&/\n/g' -e 's/|/\n/g' -e 's/;/\n/g')
-
 # Split a command line into segments at `;`, `&`, `|` and newlines, one per
 # line, each prefixed 1 when it reads a pipe, 2 when it is the `||` alternative
 # of the segment before, and 0 otherwise. Quotes count only
@@ -309,6 +231,314 @@ load_segments() { # $1 = a command text, $2 = the prefix of the four arrays to f
     L_PIPE+=("${LINE:0:1}"); L_TEXT+=("$TEXT")
   done < <(split_search_segments "$1")
 }
+
+# An `env` or `VAR=value` prefix hides the real command from a check that reads the first word. `tail -f x.log |
+# env LC_ALL=C grep -q DONE` is the exact hang the wait note below exists for, and the first word of its consumer
+# is `env`. Stripping repeats, because `env -i env -u LC_ALL cmd` is one prefix written twice.
+strip_prefix() { # reduces WORDS to the real command word and its arguments
+  while [ ${#WORDS[@]} -gt 0 ]; do
+    case "${WORDS[0]}" in
+      env|*/env)
+        WORDS=("${WORDS[@]:1}")
+        while [ ${#WORDS[@]} -gt 0 ]; do
+          case "${WORDS[0]}" in
+            # `-u NAME` and `-C DIR` take the word after them; `-S` carries the
+            # whole command line inside one word, so it is split back out.
+            -u|-C|--unset|--chdir) WORDS=("${WORDS[@]:2}") ;;
+            -S|--split-string) WORDS=(${WORDS[1]-} "${WORDS[@]:2}") ;;
+            -S?*) WORDS=(${WORDS[0]#-S} "${WORDS[@]:1}") ;;
+            --split-string=*) WORDS=(${WORDS[0]#*=} "${WORDS[@]:1}") ;;
+            -*) WORDS=("${WORDS[@]:1}") ;;
+            *) break ;;
+          esac
+        done ;;
+      bash|sh) WORDS=("${WORDS[@]:1}") ;;
+      *=*)
+        case "${WORDS[0]}" in */*) break ;; esac
+        WORDS=("${WORDS[@]:1}") ;;
+      *) break ;;
+    esac
+  done
+}
+seg_head() { # $1 = segment index; sets WORDS to the command and its arguments
+  load_words "${SEG_TEXT[$1]}"; strip_prefix
+}
+
+# Wait notes (2026-09-20): main started a long command and sat idle. Each note names its replacement, because the
+# note is the only thing that teaches the next session which launcher to use. They ride as additionalContext in every
+# install (A6); only main's checkout and pane gets them (D10), a worker waits on its own command. The rewrites that
+# act on them sit at the end of the file, under the strict tier and only with Orca (D30).
+WAIT_NOTE='' WAIT_HINT='' WAIT_MAIN=0 LJ_REWRITE='' WAIT_GH='' WAIT_BG=0
+WAIT_SCRIPTS="${BASH_SOURCE[0]%/*}/../scripts"
+main_checkout() { # 0 when the call runs in main's own checkout and pane
+  local cwd gd cd
+  cwd=$(jq -r '.cwd // empty' <<<"$INPUT"); cwd=${cwd:-$PWD}
+  gd=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  cd=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ "$gd" = "$cd" ] || return 1
+  type pp_is_main_pane >/dev/null 2>&1 && pp_is_main_pane
+}
+wait_note() { WAIT_NOTE=${WAIT_NOTE:-$1}; }
+# Long jobs never run in main's pane: a restart of main kills a coverage run or a full suite started there.
+# Recurses into `bash -c` text; `eval` is not followed. The first suite found is the one named.
+long_job_npm() { # <words after npm> -- 0 when npm starts a full suite or a coverage run, root or web
+  # A valued option given last has no value: `shift 2` would fail and shift nothing, looping forever. No suite.
+  while [ $# -gt 0 ]; do case "$1" in --prefix|-C|--workspace|-w) [ $# -ge 2 ] || return 1; shift 2 ;; -*) shift ;; *) break ;; esac; done
+  case "${1-}" in test|t|tst) return 0 ;; run|run-script) shift ;; *) return 1 ;; esac
+  while [[ ${1-} == -* ]]; do shift; done
+  case "${1-}" in test|test:unit|test:coverage) return 0 ;; esac
+  return 1
+}
+# The Try: line is the suite's own segment and nothing else: long-job.sh records the exit code of exactly what it
+# runs and refuses a compound command. Only a plain segment is handed back as a command (long_job_seg).
+long_job_segs() { # <command text> <1 when a cd or an enclosing bash -c went before> -- long_job_seg on each segment
+  local L D=$2 LS
+  mapfile -d '' -t LS < <(split_search_segments "$1" '\0')
+  for L in "${LS[@]}"; do
+    L=${L:1}
+    long_job_seg "$L" "$D"
+    load_words "$L"
+    case "${WORDS[0]-}" in cd|pushd|popd) D=1 ;; esac
+  done
+}
+long_job_seg() { # <segment> <1 when a cd or an enclosing bash -c went before> -- sets LJ_* when it starts a long job
+  local N S=$1 D=$2 O C TRY="" TRY_OK CWD ROOT_NOW WHOLE WR
+  load_words "$1"; strip_prefix
+  WORDS=("${WORDS[@]%[)\}]}")
+  while [ ${#WORDS[@]} -gt 0 ]; do
+    case "${WORDS[0]}" in
+      exec|nohup|*/nohup|command|nice|*/nice|timeout|*/timeout)
+        WR=${WORDS[0]##*/}; WORDS=("${WORDS[@]:1}")
+        # An option that takes a value consumes it: `timeout -s TERM 240` read TERM as the duration and 240 as the command.
+        while [[ ${WORDS[0]-} == -?* ]]; do
+          case "$WR ${WORDS[0]}" in
+            "exec -a"|"nice -n"|"nice --adjustment"|"timeout -s"|"timeout --signal"|"timeout -k"|"timeout --kill-after")
+              WORDS=("${WORDS[@]:2}") ;;
+            *) WORDS=("${WORDS[@]:1}") ;;
+          esac
+        done
+        if [ "$WR" = timeout ]; then WORDS=("${WORDS[@]:1}"); fi ;;
+      zsh|*/bash|*/sh|*/zsh) WORDS=("${WORDS[@]:1}") ;;
+      -*c) long_job_segs "${WORDS[1]-}" 1; return 0 ;;
+      -*) WORDS=("${WORDS[@]:1}") ;;
+      *) break ;;
+    esac
+    strip_prefix
+  done
+  set -- "${WORDS[@]}"
+  case "${1##*/}" in
+    npm) long_job_npm "${@:2}" || return 0; N=suite
+      case " ${*:2} " in *coverage*) N=coverage ;; esac ;;
+    # Noted here, not parsed again: the wait check rides this same wrapper and bash -c unwrapping.
+    long-job.sh) [ "${2-}" = wait ] && LJ_WAITING=1; return 0 ;;
+    *) return 0 ;;
+  esac
+  [ -z "$LJ_NAME" ] || return 0
+  LJ_NAME=$N
+  # The segment as typed (an env prefix kept), minus the keywords, `(` and unmatched `)` around it.
+  while :; do
+    S=${S#"${S%%[![:space:]({]*}"}
+    case "$S" in
+      do[[:space:]]*|then[[:space:]]*|else[[:space:]]*|elif[[:space:]]*|if[[:space:]]*|while[[:space:]]*|until[[:space:]]*|'!'[[:space:]]*|time[[:space:]]*)
+        S=${S#*[[:space:]]} ;;
+      *) break ;;
+    esac
+  done
+  O=${S//[!(]/}; C=${S//[!)]/}
+  while S=${S%"${S##*[![:space:]]}"}; [ ${#C} -gt ${#O} ] && [ "${S: -1}" = ')' ]; do S=${S%)}; C=${C%)}; done
+  # A concrete command only for a plain segment: no cd or bash -c before it, no quote, variable, glob or escape, no
+  # assignment or env, no npm directory option. Anything else gets the usage form, never a rewrite of its text.
+  if [ -z "$D" ] && [[ $S =~ ^[A-Za-z0-9_./:=@%+,\>\&[:space:]-]+$ && ! " $S " =~ [[:space:]][A-Za-z_][A-Za-z0-9_]*= ]] \
+    && [[ ! $S =~ ^(env|[^[:space:]]*/env)[[:space:]] ]] \
+    && { [ "${1##*/}" != npm ] || [[ ! " $S " =~ [[:space:]](--prefix|-C|-w|--workspace)[=[:space:]] ]]; }; then
+    TRY="bash $(shq "$WAIT_SCRIPTS/long-job.sh") start $N -- bash -c $(shq "$S")"
+  fi
+  LJ_TRY=$TRY
+  # The rewrite runs only when the whole command is that one plain segment and the tool input's cwd IS the checkout
+  # root; a wrapper (exec, nohup, command, nice, timeout, sh, zsh) in front is more than the plain segment.
+  WHOLE=${CMD#"${CMD%%[![:space:]]*}"}; WHOLE=${WHOLE%"${WHOLE##*[![:space:]]}"}
+  case "${S%%[[:space:]]*}" in exec|nohup|command|nice|*/nice|timeout|*/timeout|zsh|sh|*/sh|*/zsh) TRY_OK=0 ;; *) TRY_OK=1 ;; esac
+  if [ -n "$TRY" ] && [ "$TRY_OK" = 1 ] && [ "$WHOLE" = "$S" ]; then
+    CWD=$(jq -r '.cwd // empty' <<<"$INPUT")
+    ROOT_NOW=$(git -C "${CWD:-/nonexistent}" rev-parse --show-toplevel 2>/dev/null) || ROOT_NOW=""
+    if [ -n "$CWD" ] && [ -n "$ROOT_NOW" ] && [ "$(cd "$CWD" && pwd -P)" = "$(cd "$ROOT_NOW" && pwd -P)" ]; then
+      LJ_REWRITE=$TRY
+    fi
+  fi
+}
+# Reads an Orca/gh subcommand past the options before and between its words (see the raw pane read check below).
+cli_subcommand() {
+  local VALUED=" $1 " W; shift
+  GLOBALS=(); SUBCMD=""; REST=("$@")
+  while [ ${#REST[@]} -gt 0 ] && [[ $SUBCMD != *' '* ]]; do
+    W=${REST[0]}; REST=("${REST[@]:1}")
+    if [[ $W != -* ]]; then SUBCMD+=${SUBCMD:+ }$W; continue; fi
+    GLOBALS+=("$W")
+    if [[ $VALUED == *" $W "* ]] && [ ${#REST[@]} -gt 0 ]; then GLOBALS+=("${REST[0]}"); REST=("${REST[@]:1}"); fi
+  done
+}
+wait_scan() { # sets WAIT_NOTE, and the data the rewrites at the end of the file act on
+  local i W LJ_NAME="" LJ_TRY="" LJ_WAITING="" WAKE_GH WAKE_WRAP
+  LJ="$WAIT_SCRIPTS/long-job.sh"
+  load_segments "$CMD" SEG
+  long_job_segs "$CMD" ""
+  if [ -n "$LJ_NAME" ]; then
+    wait_note "a $LJ_NAME run in main's own pane dies when main restarts. Run it on its own with $LJ start <name> -- <command> (it records the exit code of exactly what it runs, so nothing may run beside it), then wait with $LJ wait <name> in the background; a restarted main finds it on $LJ list.${LJ_TRY:+
+Try: $LJ_TRY}"
+  fi
+  # `long-job.sh wait` holds the turn for up to 240 s: it is its own call with run_in_background.
+  if [ -n "$LJ_WAITING" ] && [ "$(jq -r '.tool_input.run_in_background // false' <<<"$INPUT")" != true ]; then
+    WAIT_BG=1
+    wait_note "a foreground long-job.sh wait holds the turn for up to 240 s; run it with run_in_background: true, its exit wakes you."
+  fi
+  WAKE_WRAP="bash $(shq "$WAIT_SCRIPTS/wake-on-exit.sh") watch -- bash -c $(shq "${CMD%"${CMD##*[![:space:]&]}"}")"
+  for i in "${!SEG_TEXT[@]}"; do
+    seg_head "$i"; set -- "${WORDS[@]}"
+    [ -n "${1-}" ] || continue
+    case "${1##*/}" in
+      tail)
+        shift
+        # Only a FOLLOW feeding a consumer that leaves early hangs. `tail --retry` without -f/-F is finite.
+        printf '%s\n' "$@" | grep -qE '^-[a-zA-Z0-9]*[fF]|^--follow' || continue
+        [ "${SEG_PIPE[i+1]-0}" = 1 ] || continue
+        # The CONSUMER is what leaves early, so it needs the same prefix resolution the head got.
+        load_words "${SEG_TEXT[i+1]}"; strip_prefix
+        case "${WORDS[0]-}" in
+          grep|egrep|fgrep|rg|head)
+            wait_note "\`tail -f\` piped into \`${WORDS[0]}\` never exits. ${WORDS[0]} leaves at the match, tail -f never writes again so it never takes SIGPIPE, and bash waits for every pipeline member: the call hangs forever and main is never notified. Use $WAIT_SCRIPTS/wake-on-exit.sh <label> -- <command>, which sends main one inbox wake when it exits.
+Try: $WAKE_WRAP" ;;
+        esac ;;
+      gh)
+        shift; cli_subcommand "-R --repo" "$@"
+        [ "$SUBCMD" = "run watch" ] || continue
+        # Only the watch itself, with --exit-status: without it gh exits 0 on a failed run. The options the call
+        # carried ahead of `watch` go first, so the wrapper watches the same repository.
+        WAKE_GH="bash $(shq "$WAIT_SCRIPTS/wake-on-exit.sh") deploy-watch -- gh"
+        for W in "${GLOBALS[@]}"; do WAKE_GH="$WAKE_GH $(shq "$W")"; done
+        WAKE_GH="$WAKE_GH run watch"
+        for W in "${REST[@]}"; do WAKE_GH="$WAKE_GH $(shq "$W")"; done
+        case " ${GLOBALS[*]} ${REST[*]} " in *" --exit-status "*) ;; *) WAKE_GH="$WAKE_GH --exit-status" ;; esac
+        WAIT_GH=$WAKE_GH
+        wait_note "\`gh run watch\` blocks the call until the run ends, so main sits idle with no wake. Use $WAIT_SCRIPTS/wake-on-exit.sh <label> -- <command>: it sends main exactly one inbox wake when it exits.
+Try: $WAKE_GH" ;;
+    esac
+  done
+}
+# A hand-rolled `until grep ... <scratch log>` wait has no limit and never notices a runner that died. A hint in
+# every pane, every install; the loop runs.
+wait_hint() {
+  local UNTIL_RE='(^|[[:space:];&|(])until[[:space:]]'
+  if [[ $CMD =~ $UNTIL_RE && $CMD == */.commandeck/scratch/* ]]; then
+    WAIT_HINT="To wait on a background test run, use $WAIT_SCRIPTS/wait-test-run.sh <runner-pid> <output-file>: it ends when the runner exits, caps the wait, and says when the runner died with no result. The loop ran."
+  fi
+}
+
+# Strict tier: off unless the project turned it on (lib/project.sh). The notes and the hint ride in every install (A6);
+# the checks and rewrites below stay strict only.
+{ . "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_strict; } 2>/dev/null && STRICT=1 || STRICT=0
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+[ -z "$CMD" ] && { allow_json; exit 0; }
+wait_hint
+case "$CMD" in *tail*|*watch*|*npm*|*long-job*) main_checkout && { WAIT_MAIN=1; wait_scan; } ;; esac
+[ -z "$WAIT_NOTE$WAIT_HINT" ] || HOOK_FIRE_REASON=${HOOK_FIRE_REASON:-wait-note}
+[ "$STRICT" = 1 ] || { allow_json; exit 0; }
+
+# A here-document's end word is one plain word (letters, digits, _ . -): bare,
+# in one pair of quotes, or after one backslash. Every other `<<` is refused
+# here, above every other rule and exit, so no rule in this or any other hook
+# has to read an odd end word; each misread one hid the command after the note.
+# A `<<<` here-string has no body and passes. Only a `<<` bash reads as an
+# operator is judged: strip_quoted reports each one outside quotes, comments
+# and earlier bodies (strip_odd_end). git-safety.sh asks the same question for
+# itself: this hook is off in a project that did not turn the strict tier on.
+. "${BASH_SOURCE[0]%/*}/lib/strip-quoted.sh" 2>/dev/null
+# Without the helper no end word is checked and every bare node --test would pass.
+type strip_quoted >/dev/null 2>&1 || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/strip-quoted.sh, so it cannot screen this command. Restore it (git checkout hooks/lib/strip-quoted.sh) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }
+# The one fence for a rewrite that replaces the call's text (a worker's search): the replacement must run exactly what
+# the call would. Any `$`, backtick, backslash, newline or process substitution in the RAW text, quoted or not,
+# refuses it (each can run or reshape something the replacement drops). The rest is read only through strip_quoted,
+# which tracks quotes left to right; callers add their own shape checks on RW_TEXT.
+rewrite_safe() { # <raw command>: sets RW_TEXT to the quote-stripped text
+  case "$1" in *['$`\']*|*$'\n'*|*'<('*|*'>('*) return 1 ;; esac
+  RW_TEXT=$(strip_quoted "$1")
+}
+# True when the whole call is ONE plain simple command whose own first word (path dropped) is one of $1 (`a|b`):
+# no env or wrapper prefix, no pipe, list, redirect, background or substitution. A rewrite replaces the whole call,
+# so only such a call may be rewritten; a compound one keeps its note.
+lone_call() { # <first-word glob>
+  local first alt
+  rewrite_safe "$CMD" || return 1
+  case "$RW_TEXT" in *['|;&<>()']*) return 1 ;; esac
+  read -r first _ <<<"$RW_TEXT"
+  for alt in ${1//|/ }; do [ "${first##*/}" = "$alt" ] && return 0; done
+  return 1
+}
+rewrite_json() { # <jq object merged into the tool input> <reason>: answers with the changed tool input, then exits 0
+  local o
+  WAIT_NOTE="" # the rewrite acts on the note
+  o=$(jq -cn --argjson u "$1" --arg r "$2" --argjson ti "$(jq -c '.tool_input' <<<"$INPUT")" \
+    '{permissionDecisionReason: $r, updatedInput: ($ti + $u)}')
+  allow_json "$o"
+  exit 0
+}
+rewrite_call() { # <replacement command> <reason>: answers with the call's whole tool input and a new command, then exits 0
+  rewrite_json "$(jq -cn --arg c "$1" '{command: $c}')" "$2"
+}
+ODD=$(strip_odd_end "$CMD")
+[ -z "$ODD" ] || { echo "BLOCKED: a here-document's end word is not plain: $ODD -- use one plain word such as EOF, as in \`cat <<'EOF'\` (letters, digits, _ . -), bare or in one pair of quotes." >&2; HOOK_FIRE_REASON=odd-heredoc-end; exit 2; }
+
+# Block node's test runner without the 4 GB heap cap.
+# Root cause of four WSL crashes on 2026-08-24: one uncapped
+# `node --test` child grew at 1.45 GB/s to 29 GB and took the workstation.
+# `npm run test:*` carries the cap in the script itself, so it never matches
+# here -- only a bare `node`/`npx tsx` invocation does.
+#
+# `--test` must be followed by whitespace or end-of-command: `--test-concurrency`
+# and `--test-reporter` are companion flags, not the runner switch, and matching
+# them would fire on capped commands that spell the cap correctly.
+#
+# The check is PER SEGMENT, not per command line. A command-wide cap search
+# passed `node --max-old-space-size=4096 --test a.ts && node --test b.ts`: the
+# first invocation's flag vouched for the second, uncapped one.
+# Quoted text is data, not a command: `rg 'node --test src/x.ts' .claude` is a
+# search, and blocking it made the hook fire on ordinary work -- including on
+# the report that described it. Quoted spans and heredoc bodies come out BEFORE
+# the split, in one pass over the whole command: a per-line sed left a
+# multi-line commit message whole. A `;` or `&&` inside a string cannot
+# manufacture a segment either. A heredoc fed to a shell (`bash <<EOF`) is
+# read as data too; that is an accepted gap.
+# The strip walks the command a character at a time; only a `--test` can match
+# (quote and backslash characters dropped first, so `--te''st` is still seen).
+# A quoted span that is one word stays the word node gets (`node "--test"`,
+# a quoted heap flag); a span holding a space is prose and reads as QUOTED, so
+# a cap inside a multi-word quoted NODE_OPTIONS value is not seen and blocks.
+HQ=$'\x01'
+HEAP_CMD=""; P=${CMD//[\'\"\\]/}; case "$P" in *--test*) HEAP_CMD=$(strip_quoted "$CMD" "$HQ" | sed -E "s/${HQ}([;&|()[:space:]]|\$)/QUOTED\1/g; s/${HQ}//g") ;; esac
+
+while IFS= read -r SEG; do
+  # An `npm` segment carries the cap inside the script it runs, and its
+  # arguments may legitimately spell out a node invocation
+  # (`npm run test:unit -- node --test x.ts`). Leading `VAR=value` assignments
+  # and `env` are prefixes, not the command: `CI=1 npm run test:unit` is npm.
+  SEG_HEAD=$(echo "$SEG" | sed -E ':a; s/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env)[[:space:]]+//; ta')
+  [ "$(echo "$SEG_HEAD" | awk '{print $1}')" = "npm" ] && continue
+
+  echo "$SEG" | grep -qE '(^|[[:space:]])(node|npx[[:space:]]+tsx)([[:space:]]+[^[:space:]]+)*[[:space:]]+--test([[:space:]]|$)' || continue
+
+  # Allow only an explicit cap of 4096 or lower, IN THIS SEGMENT. A LARGER
+  # number is still a block: the point of the cap is that a runaway dies in
+  # seconds. EVERY heap flag in the segment is read, in either spelling (node
+  # takes `-` and `_` alike, and `=N` or a space) and wherever it sits:
+  # node honours the last one, so `--max-old-space-size=4096
+  # --max_old_space_size=8192` ran at 8 GB behind a guard that read one spelling.
+  HEAPS=$(echo "$SEG" | grep -oE -- '--max[-_]old[-_]space[-_]size(=|[[:space:]]+)[0-9]+' | grep -oE '[0-9]+$')
+  if [ -z "$HEAPS" ] || [ -n "$(awk '$1 > 4096' <<<"$HEAPS")" ]; then
+    echo "BLOCKED: bare node --test without --max-old-space-size=4096, or with a larger heap flag beside it. Add the flag (\`node --max-old-space-size=4096 --test\`) and drop any larger one, or run the project's own test script when it carries the cap." >&2
+    HOOK_FIRE_REASON=node-test-heap
+    exit 2
+  fi
+done < <(printf '%s\n' "$HEAP_CMD" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/&/\n/g' -e 's/|/\n/g' -e 's/;/\n/g')
+
 
 # Block a repo-wide text search:
 # every path an `rg`, or a `grep` with a recursive flag, names must be bounded,
@@ -793,16 +1023,6 @@ done < <(split_search_segments "$CMD")
 # screened commands themselves take. One missing from here hides the
 # subcommand behind its value, so a new one is added here, not at a call site.
 ORCA_VALUED="--pairing-code --environment --terminal --worktree --repo --cursor --limit --run --timeout-ms"
-cli_subcommand() {
-  local VALUED=" $1 " W; shift
-  GLOBALS=(); SUBCMD=""; REST=("$@")
-  while [ ${#REST[@]} -gt 0 ] && [[ $SUBCMD != *' '* ]]; do
-    W=${REST[0]}; REST=("${REST[@]:1}")
-    if [[ $W != -* ]]; then SUBCMD+=${SUBCMD:+ }$W; continue; fi
-    GLOBALS+=("$W")
-    if [[ $VALUED == *" $W "* ]] && [ ${#REST[@]} -gt 0 ]; then GLOBALS+=("${REST[0]}"); REST=("${REST[@]:1}"); fi
-  done
-}
 while IFS= read -r LINE; do
   set -f; set -- $(printf '%s' "${LINE:1}" | tr -d "'\""); set +f
   while [ $# -gt 0 ] && [[ ${1-} == *=* && ${1-} != */* ]]; do shift; done
@@ -839,5 +1059,14 @@ while IFS= read -r LINE; do
   HOOK_FIRE_REASON=raw-pane-read
   exit 2
 done < <(split_search_segments "$CMD")
+# The rewrites for the wait notes: strict tier, main's own pane (D10). The long-job and wake-on-exit forms need Orca
+# (D30); without it the note stands and the command runs. One rewrite per call.
+if [ "$WAIT_MAIN" = 1 ]; then
+  if [ -n "${ORCA_TERMINAL_HANDLE-}" ]; then
+    [ -z "$LJ_REWRITE" ] || rewrite_call "$LJ_REWRITE" "ran as long-job.sh start; wait with long-job.sh wait <name> in the background (a long job in main's pane dies when main restarts)"
+    [ -z "$WAIT_GH" ] || ! lone_call gh || rewrite_call "$WAIT_GH" "\`gh run watch\` blocks the call with no wake; ran it through wake-on-exit.sh, which wakes main when the run ends"
+  fi
+  [ "$WAIT_BG" != 1 ] || rewrite_json '{"run_in_background":true}' "a foreground long-job.sh wait holds the turn for up to 240 s; ran it with run_in_background: true, its exit wakes you"
+fi
 allow_json
 exit 0

@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
-# pre-push -- run the shell tests on the commit being pushed to refs/heads/main, and refuse the push if they fail
-# (issue 497). Wire it once per checkout: git config core.hooksPath .githooks
+# pre-push -- 1. refuse a push from a linked worker checkout or under a headless `claude -p` process (see
+# lib-agent-guard.sh for the incidents and the overrides). 2. Run the shell tests on the commit being pushed to
+# refs/heads/main, and refuse the push if they fail (issue 497).
+# Wire it once per checkout: git config core.hooksPath "$(pwd -P)/.githooks"
+# Use the absolute path: a relative hooksPath resolves per worktree, so a linked worktree on an older base would run its
+# own stale hook copy. Where your checkout still holds a relative value, rerun the command once.
 # stdin is githooks(5)'s `<local ref> <local sha> <remote ref> <remote sha>`, one line per ref. Other refs and deletes
-# (an all-zero local sha) pass. Shell tests only: CI runs the rest.
+# (an all-zero local sha) pass the tests. Shell tests only: CI runs the rest.
+# Worktree sessions return their diff and STOP; the main session reviews, merges and pushes. A linked worktree is
+# detected by git-dir != common-dir; the main checkout compares equal. Known limit: this identifies the CHECKOUT, not
+# the session -- a worktree session running `git -C <main-checkout> push` is indistinguishable from the main session.
+# Override (owner-authorized): COMMANDECK_ALLOW_WORKTREE_PUSH=1 git push ...
+# shellcheck source=lib-agent-guard.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-agent-guard.sh"
+agent_ancestry_guard || exit 1
+[ "${COMMANDECK_ALLOW_WORKTREE_PUSH:-}" = "1" ] || agent_worktree_topology_guard || exit 1
+
 WT=
 cleanup() { [ -z "$WT" ] || { git worktree remove --force "$WT/w" 2>/dev/null; rm -rf "$WT"; WT=; }; }
 trap cleanup EXIT

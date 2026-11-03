@@ -1,0 +1,52 @@
+{
+  "_about": "Orca 1.4.246 CLI JSON for orchestration check, one probe message cut to two views by jq, values untouched. concise = the command with --json; full = with --full --json.",
+  "check": {
+    "command": "orchestration check --peek (a status probe with a payload, sent to this pane)",
+    "concise": {
+      "ok": true,
+      "result": {
+        "messages": [
+          {
+            "id": "msg_50993830432e",
+            "type": "status",
+            "from": "term_958d792f-dfbf-4fba-b361-8b272f8709b8",
+            "subject": "probe",
+            "payload": {
+              "taskId": "task_probe"
+            }
+          }
+        ]
+      }
+    },
+    "full": {
+      "id": "d5f2ae34-d13c-4780-819f-38a7b536b125",
+      "ok": true,
+      "result": {
+        "runId": "run_2c581adeb4e7",
+        "dispatchId": "ctx_cbc2f91691be",
+        "messages": [
+          {
+            "id": "msg_50993830432e",
+            "run_id": "run_2c581adeb4e7",
+            "delivery_contract": "current_delivery",
+            "from_handle": "term_958d792f-dfbf-4fba-b361-8b272f8709b8",
+            "to_handle": "dispatch:ctx_cbc2f91691be",
+            "subject": "probe",
+            "body": "",
+            "type": "status",
+            "priority": "normal",
+            "thread_id": null,
+            "payload": "{\"taskId\":\"task_probe\"}",
+            "created_at": "2026-11-02T17:01:40Z",
+            "delivered_at": null
+          }
+        ],
+        "count": 1,
+        "acknowledged": null
+      },
+      "_meta": {
+        "runtimeId": "a71e5c8a-0787-4649-ab21-983ba86b8cf8"
+      }
+    }
+  }
+}

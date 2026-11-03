@@ -28,6 +28,8 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 # src/hooks) holds real tests, and `*/hooks/*` let `it.only` through in them.
 case "$FILE_PATH" in
   */hooks/__tests__/*.sh|hooks/__tests__/*.sh) exit 0 ;;
+# A Python test file holds no JS runner: the patterns below read `model.fit(X, y)` as the Jasmine `fit(` focus call.
+  *.py) exit 0 ;;
 esac
 . "${BASH_SOURCE[0]%/*}/lib/test-path.sh" 2>/dev/null && declare -F is_test_path >/dev/null \
   || { echo "BLOCKED: ${BASH_SOURCE[0]##*/} could not load hooks/lib/test-path.sh, so it cannot screen this write. Reinstall the plugin (\`claude plugin install commandeck@commandeck\`) and retry." >&2; HOOK_FIRE_REASON=helper-missing; exit 2; }

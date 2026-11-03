@@ -140,6 +140,12 @@ done <<'EOF'
 EOF
 check "a skip-ok reason holding an apostrophe or quote passes, and a marker inside a string still blocks (issue 441)" "" "$MARK_BAD"
 
+# Catches a Python test holding `model.fit(X, y)` refused as the Jasmine fit( focus call, on a name only the Python arm of
+# is_test_path admits (test_*.py) and on one the JS arm already admits (rows.test.py).
+FITCODE="$(printf 'def test_fit():\n    model.fit(X, y)\n')"
+check "a model.fit( test passes" "0 0" \
+  "$(run "$(write "$D/tests/test_model.py" "$FITCODE")") $(run "$(write "$D/tests/rows.test.py" "$FITCODE")")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

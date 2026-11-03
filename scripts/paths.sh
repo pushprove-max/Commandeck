@@ -389,6 +389,62 @@ pp_worker_done_since() {
       ((.created_at // "" | sub("\\.[0-9]+"; "") | fromdateiso8601?) // 0) > $s
       and .type == "worker_done" and .from_handle == $h)' >/dev/null 2>&1
 }
+
+# pp_orca_full <view> [<terminal>] -- Orca 1.4.246 prints a concise view unless --full is given, and its rows
+# drop keys our parsers read, so a reader answered "none" without a word. Reads one reply on stdin. An ok:true reply
+# whose every row holds every key its view's readers read, each of a type its contract allows, is printed byte for byte
+# (0). One that lacks a key prints `ORCA CONCISE VIEW: ...` on stderr and nothing on stdout (3); "lacks" means missing
+# or of the wrong type, and the first failing key in contract order is named (callers parse
+# `lacks <key>;`). Only Orca's refusal (ok:false with an error object), an empty or a non-JSON reply is printed
+# untouched (0), so each site's own Orca-failure path still runs; any other envelope (no ok, a non-boolean ok, ok:false
+# without an error object, not an object) lacks `ok` (3): a run-list with no ok read as "no coordinator". An unknown view is 2. An ok reply passes only in the
+# shape its view knows (a result object holding the view's list of objects; run: `run` null, or an object with a string
+# id): a missing or null list read as "no rows" sent a reader to run-use against main's live run, so every other
+# shape is refused (3). Only the keys and types the readers rely on are checked: batch's result.deliveryId is not, as a
+# reply without it is only redelivered unacked, which fails safe.
+# Views, each holding only the keys its readers read (every reader is listed so a new one adds its key here):
+#   messages: inbox rows (main-watch.sh, pp_worker_done_since, pp_open_ask)
+#   check:    a peek check's rows, which carry no read or sequence even in full
+#   batch:    a consuming check (orca-wait.sh drain, poll-agents.sh). Orca has
+#             already marked those rows handled, so a refusal also prints them and the inbox command that reads them
+#             again; <terminal> names that inbox (default: the first row's `to`).
+#   tasks:    task-list rows (spec, display_name, task_title); runs: run-list rows; run: run-current.
+pp_orca_full() { # <view> [<terminal>]
+  local c in miss rc s='["string"]' sn='["string","null"]' n='["number"]'
+  # Contract: key -> the types its readers accept, in the order a failure is named (the concise view's missing key first).
+  case $1 in
+    messages) c="{\"from_handle\":$s,\"created_at\":$s,\"read\":$n,\"sequence\":$n,\"to_handle\":$s,\"thread_id\":$sn,
+      \"payload\":$sn,\"id\":$s,\"type\":$s,\"subject\":$s,\"body\":$s}" ;;
+    check|batch) c="{\"from_handle\":$s,\"created_at\":$s,\"to_handle\":$s,\"thread_id\":$sn,\"payload\":$sn,\"id\":$s,
+      \"type\":$s,\"subject\":$s,\"body\":$s}" ;;
+    tasks) c="{\"spec\":$s,\"display_name\":$sn,\"task_title\":$sn,\"id\":$s,\"status\":$s}" ;;
+    runs) c="{\"coordinator_handle\":$sn,\"id\":$s}" ;;
+    run) c='{}' ;;
+    *) echo "pp_orca_full: unknown view '$1' (messages, check, batch, tasks, runs, run)" >&2; return 2 ;;
+  esac
+  in=$(cat; printf .); in=${in%.}
+  miss=$(printf '%s' "$in" | jq -r --arg v "$1" --argjson c "$c" '
+    def list: if $v == "tasks" then "tasks" elif $v == "runs" then "runs" else "messages" end;
+    if type == "object" and .ok == false and (.error | type) == "object" then empty
+    elif type != "object" or .ok != true then "ok"
+    elif (.result | type) != "object" then "result"
+    elif $v == "run" then (if (.result | has("run") | not) then "run" elif .result.run == null then empty
+      elif (.result.run | type) != "object" then "run" elif (.result.run.id | type) != "string" then "id" else empty end)
+    elif (.result[list] | type) != "array" then "result.\(list)"
+    else first(.result[list][] | . as $row | $c | to_entries[]
+      | select(($row | type) != "object" or (.key as $k | ($row | has($k)) | not)
+        or (.key as $k | ($row[$k] | type) as $t | .value | index([$t]) == null))
+      | .key) // empty end' 2>/dev/null)
+  rc=$?
+  if [ "$rc" != 0 ] || [ -z "$miss" ]; then printf '%s' "$in"; return 0; fi
+  echo "ORCA CONCISE VIEW: this $1 read lacks ${miss%%$'\n'*}; it needs --full" >&2
+  if [ "$1" = batch ]; then
+    printf '%s' "$in" | jq -r '.result.messages[]? | "consumed: \(.id) \(.type) from \(.from // .from_handle // "?"): \(.subject // "")"
+      + (if (.body // "") != "" then " -- \(.body)" else "" end)' >&2 2>/dev/null
+    echo "CONSUMED: Orca marked this batch handled; read it again: orca-ide orchestration inbox --terminal ${2:-$(printf '%s' "$in" | jq -r '[.result.messages[]?.to // empty][0] // "<your handle>"' 2>/dev/null)} --limit 50 --full" >&2
+  fi
+  return 3
+}
 # pp_seat_log <worktree> <session> -- the seat's session log, when it exists: a Claude session id is looked up in the
 # config folder's projects/<worktree slug>/, a path (a Codex log seat.sh bound) is the log itself. Empty for none.
 # main-watch.sh grew_at and seat.sh collect both name the log through this, so their delivery receipts agree.

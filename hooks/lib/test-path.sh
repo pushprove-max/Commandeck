@@ -6,7 +6,7 @@
 # Usage: is_test_path <path>   -- exit 0 for a test file, 1 otherwise.
 is_test_path() {
   case "$1" in
-    *.test.*|*.spec.*|*__tests__*|*/e2e/*) return 0 ;;
+    *.test.*|*.spec.*|*__tests__*|*/e2e/*|test_*.py|*/test_*.py|*_test.py) return 0 ;;
   esac
   return 1
 }

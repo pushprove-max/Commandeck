@@ -185,7 +185,7 @@ DET=$REAL/templates/rules-details.md
 STUBS=$(cat "$REAL/templates/AGENT_STARTUP.md" "$REAL/templates/global-rules.md" | tr '\n' ' ' | sed -E 's/ +/ /g' \
   | grep -oE 'Details, `?[^ ,`]*rules-details\.md`?, [A-Z][A-Za-z ]*[a-z]' | sed 's/^.*md`\{0,1\}, //')
 N=0 R=0; while IFS= read -r T1; do [ -n "$T1" ] || continue; N=$((N+1)); grep -qxF -- "## $T1" "$DET" && R=$((R+1)); done <<<"$STUBS"
-check "every Details stub names a section that exists in rules-details.md" "3 3" "$N $R"
+check "every Details stub names a section that exists in rules-details.md" "5 5" "$N $R"
 # The seven unpinned planning bullets and the two main-only steps moved verbatim: found under the section their stub names,
 # and in no always-on file. 0.62.0 reworded the size-caps bullet in place (2434c9d1 to c17bc95e).
 SEC() { awk -v s="## $1" '$0 == s {p = 1; next} /^## / {p = 0} p' "$DET" 2>/dev/null; }

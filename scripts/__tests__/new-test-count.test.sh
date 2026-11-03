@@ -22,7 +22,7 @@ check "a shell test file's added check lines count as new tests (issue 433)" "2 
 
 repo moved; printf '# a header\n' > "$R/scripts/__tests__/b.test.sh"; : > "$R/scripts/__tests__/a.test.sh"
 printf 'check "the old case" 0 0\n' >> "$R/scripts/__tests__/b.test.sh"
-check "a check moved with the same label is not new (issue 433)" 0 "$(count)"
+check "a moved test counts as new" 1 "$(count)"
 
 repo ts; printf "it('adds a row', () => {});\ntest(\"keeps a row\", () => {});\nconst x = fit;\n" > "$R/src/a.test.ts"
 check "an it( or test( case added to a .test.ts file counts (issue 433)" 2 "$(count)"
@@ -47,6 +47,25 @@ check "edited_lists_lost_lines: a rewritten check and a renamed test each list t
 # Catches the gate counting a new case as an edit, which would stop every Builder that adds a test to an existing file.
 repo appended; printf 'check "more" 0 0\n' >> "$R/scripts/__tests__/a.test.sh"; git -C "$R" commit -qam more
 check "added_lines_not_edits: a case appended to an existing test lists nothing" "" "$(ed main HEAD)"
+
+# A line-1 count and exit code of the counter in the current repo, with no typescript on the module path.
+run() { (cd "$R" && env -u NODE_PATH bash "$REAL/scripts/new-test-count.sh" main); }
+# Catches a project without typescript failing or counting nothing, which lets any JS/TS change past the cap.
+repo nots; printf "it('adds a row', () => {});\ntest.skip(isMac, 'mac only');\ntest.skip('a skipped case', () => {});\nconst x = it;\n" > "$R/src/a.test.ts"
+check "no typescript: label regex" "2 adds a row a skipped case" "$(run | paste -sd' ' -)"
+
+# Catches an .each table counted per row, or per line of a multi-line table, which spends the cap on one test.
+repo each; printf "it.each([[1], [2], [3]])('row %%s', (n) => {});\ntest.each([\n  [4],\n  [5],\n])('multi %%s', (n) => {});\n" > "$R/src/a.test.ts"
+check ".each counted once" "2 row %s multi %s" "$(run | paste -sd' ' -)"
+
+# Catches the Python test-file names missing from is_test_path, so a pytest change reads as adding no test.
+repo py; mkdir -p "$R/tests"; printf 'def test_one():\n    assert 1\n\nasync def test_two():\n    assert 2\n\ndef helper():\n    pass\n' > "$R/tests/test_a.py"
+printf 'def test_three():\n    assert 3\n' > "$R/tests/b_test.py"
+check "a test_*.py file is counted" "3 test_three test_one test_two" "$(run | paste -sd' ' -)"
+
+# Catches an empty diff failing or printing nothing, which the pass script reads as a count error.
+repo empty; OUT=$(run); RC=$?
+check "an empty diff prints 0" "0 0" "$(head -1 <<<"$OUT") $RC"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
