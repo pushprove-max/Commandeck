@@ -42,7 +42,8 @@ export GIT_INDEX_FILE=$IDX
 git add -A && git reset -q -- .claude/briefs 2>/dev/null || { echo "new-test-count: cannot stage the change in a copy of the index" >&2; exit 2; }
 FILES=$(git diff --cached --name-only --no-renames "$FROM") || { echo "new-test-count: git diff $FROM failed" >&2; exit 2; }
 TESTS=$(while IFS= read -r f; do [ -n "$f" ] && is_test_path "$f" && echo "$f"; done <<<"$FILES")
-NTC_JS=$(cat <<'JS'
+# read, not $(cat <<'JS'): Bash 3.2 mis-parses a quoted here-document inside a command substitution.
+IFS= read -r -d '' NTC_JS <<'JS' || true
 // Reads direct JS/TS test calls with the TypeScript parser. stdin: [{path, src}]; stdout: [[name, ...], ...], or under
 // NTC_SPANS=1 [[[name, first line, last line], ...], ...].
 // The parser, not a text scan, so a string, comment, regex or template literal is never misread as code.
@@ -122,7 +123,6 @@ process.stdin.on('end', () => {
   process.stdout.write(JSON.stringify(JSON.parse(input).map(({ path, src }) => parse(path, src))));
 });
 JS
-)
 # The reader loads typescript from the project (NTC_ROOT), not the plugin: a project without one is read by a label regex.
 NTC_ROOT=$(git rev-parse --show-toplevel)
 export NTC_JS NTC_ROOT

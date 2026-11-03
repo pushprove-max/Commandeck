@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.69.1 -- 2026-11-03
+
+### Scripts
+
+- The new-test counter runs again on a Mac with only the built-in older Bash.
+
 ## 0.69.0 -- 2026-11-03
 
 ### Guards
