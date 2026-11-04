@@ -71,6 +71,15 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
   COMMANDECK_SCRATCH="$T/sc" COMMANDECK_HOST_OS=Linux ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
 check "a driven unit's turn complete: QUESTION echo is shown, its verdict echo hidden" "1 0" \
   "$(grep -c 'Which branch should I use' <<<"$OUT") $(grep -c '| VERDICT: GO' <<<"$OUT")"
+# Issue 642 (D23): the drain's own hides still run after the one wake rule, on rows it wakes now; a batch row is shown
+# held. A hide applied before the class (or to batch rows) lost an OK status; none after it re-showed the driven echo.
+{ msg q2 term_w question "claude turn complete: VERDICT: GO (wt-q)" "VERDICT: GO"
+  msg s2 term_w status "tests (wt-q): exit 0" "ok run"; } | jq -sc '{ok: true, result: {deliveryId: "dq", messages: .}}' > "$T/batch.json"
+rm -rf "$T/sc"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" COMMANDECK_HOST_OS=Linux ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
+check "driven verdict echo hidden, ok status held" "0 1 1" "$(grep -c '| VERDICT: GO' <<<"$OUT") $(sed -n '/^held notes/,$p' <<<"$OUT" \
+  | grep -c '| ok run') $(grep -c '"q2"' "$T/sc/main-watch/messages/hidden.jsonl" 2>/dev/null)"
 rm -f "$T/bin/systemctl"
 # A batch too big for one argument (twelve 100,000-character questions, ~1.2 MB) must still show and be acknowledged:
 # passing it to jq as an argument failed E2BIG, so the drain exited unacked and every retry hit the same batch.

@@ -206,16 +206,21 @@ kill -KILL "$LAUNCHER" 2>/dev/null; touch "$TMP/go"
 check "a job whose launching shell is killed still finishes and wait returns its rc and output" "0 1 1" \
   "$(lj wait surv 20) $(grep -c 'rc=0' "$TMP/out") $(grep -cx 'SURVIVED' "$TMP/out")"
 
-# a finished job messages main itself, with a `question` (orca-wait.sh hides `status`), so main need not sit in a
-# wait. The runner is run here as the pane runs it, so the send is over when it returns. A seat job is reported by
+# a finished job messages main itself, so main need not sit in a wait: an rc 0 as a `status`, which reaches main
+# with its next batch (issue 642). The owner allows a test edit that keeps its claim (2026-10-30): it still asserts
+# the message reaches main. The runner is run here as the pane runs it, so the send is over when it returns. A seat job is reported by
 # seat.sh collect, so it sends none. The result is marked read only when Orca took the message: a refused one stays
 # unread for wait and list.
 echo "$TMP/main" > "$FAKE_MAINPANE"; : > "$TMP/calls"
 for j in ok2 ok3; do (cd "$TMP/main" && bash "$JOB" _run "$j" -- bash -c 'echo hello' >/dev/null 2>&1) & done; wait
 check "a finished job messages main once with its rc and marks its result read" "1 1 1 1" \
-  "$(grep -c -- "--type question --subject long-job ok2 done rc=0 " "$TMP/calls") $(grep -c -- "--type question --subject long-job ok3 done rc=0 " "$TMP/calls") $([ -e "$JOBS/ok2.read" ] && echo 1) $([ -e "$JOBS/ok3.read" ] && echo 1)"
+  "$(grep -c -- "--type status --subject long-job ok2 done rc=0 " "$TMP/calls") $(grep -c -- "--type status --subject long-job ok3 done rc=0 " "$TMP/calls") $([ -e "$JOBS/ok2.read" ] && echo 1) $([ -e "$JOBS/ok3.read" ] && echo 1)"
 check "and the message carries the log path and the job's output" "1 1" \
   "$(grep -c -- "--to term_main .*$JOBS/ok2.log" "$TMP/calls") $(grep -A2 -- 'long-job ok2 done' "$TMP/calls" | grep -c '^hello')"
+# Issue 642: an OK job waits for main's batch, a failed one wakes main now: the type decides which.
+: > "$TMP/calls"; (cd "$TMP/main" && bash "$JOB" _run bad1 -- false >/dev/null 2>&1)
+check "ok job is status, failed is question" "1 0" \
+  "$(grep -c -- "--type question --subject long-job bad1 done rc=1 " "$TMP/calls") $(grep -c -- "--type status --subject long-job bad1 " "$TMP/calls")"
 : > "$TMP/calls"
 (cd "$TMP/main" && bash "$JOB" _run seat-u-builder -- true >/dev/null 2>&1)
 check "a seat job sends no done message" "0 1" "$(grep -c -- 'orchestration send' "$TMP/calls") $([ -f "$JOBS/seat-u-builder.rc" ] && echo 1)"

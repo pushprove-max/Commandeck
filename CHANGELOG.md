@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.71.0 -- 2026-11-04
+
+### Scripts
+
+- One wake rule decides for main, the relay and a Builder. A question, decision gate, worker report or escalation wakes main at once, whatever `wakeKinds` says. An OK long job, test run, CI watch or event note waits, and arrives with the others in one batch at most every 30 minutes.
+- A push, deploy, merge or seat result still wakes main at once, OK or not.
+- The same message twice within 10 minutes wakes nobody the second time. Main's drain logs it in its hidden-messages file.
+- A heartbeat no longer wakes a Builder, and a repeat stays unread for its next check.
+- The await and watch helpers only look at the inbox: they no longer mark messages read, so main's drain still shows them. The watch helper shows each message once.
+- The relay wakes only on mail addressed to it: main's note to the relay, which now carries a recipient tag, or a message to its own handle. The scripts' seat, launch, merge and CI events go to main only.
+- The relay no longer wakes when main ends a turn having sent it nothing; only when main has not answered a message the relay passed it.
+- Held FYI notes wake the relay on their own after 30 minutes.
+
+### Hooks
+
+- An Orca nudge in the relay's pane is dropped unless it brings a message for the relay, and nothing is marked read. The short nudge form, which names no run, is handled in both panes.
+- The relay's reply to the owner that is only verdicts, still-running lines or progress counts, with nothing asked, is held once with the reason.
+
 ## 0.70.0 -- 2026-11-04
 
 ### Scripts

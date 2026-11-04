@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.70.0-111111?style=flat-square" alt="Version 0.70.0">
+  <img src="https://img.shields.io/badge/version-0.71.0-111111?style=flat-square" alt="Version 0.71.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -406,7 +406,7 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 
 | Option | Values | What it sets |
 |---|---|---|
-| `wakeKinds` | comma-separated Orca message types | The messages that wake main (default `worker_done,escalation,question,decision_gate,merge_ready`); others wait for the next wake |
+| `wakeKinds` | comma-separated Orca message types | The messages that wake main at once (default `worker_done,escalation,question,decision_gate,merge_ready`). A question, decision gate, worker_done or escalation always does; others wait for main's 30-minute batch |
 | `wakeWindowSeconds` | a number (default 60) | Messages within this many seconds wake main once; 0 wakes at once |
 | `autoDecideSeats` | `chiefOfStaff` (default), `chiefOfStaff,main`, `off` | The seats that have `/autodecide` |
 | `mainPromptCacheTtl` | `1h` (default), `5m`, `leave` | Main's prompt cache, for a main started with `claude --settings .claude/main-session.settings.json`; `leave` writes nothing |

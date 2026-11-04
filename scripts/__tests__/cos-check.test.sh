@@ -88,6 +88,9 @@ printf '#!/usr/bin/env bash\n[ "$1" = +%%s ] && [ -e "%s/same-second" ] && { ech
 { echo '9 enc'; for i in $(seq 1 100); do echo "2026 [from main] \"FYI note $i\" | \"x\""; done; } > "$KEY.inbox-seq"
 F=$(cc | tail -1 | sed -n 's/.*whole text: \([^)]*\)).*/\1/p'); cc >/dev/null; rm "$T/same-second"
 check "a second check in the same second keeps the first check's archive whole" 100 "$(grep -c 'FYI note' "$F" 2>/dev/null)"
+# Issue 643: the relay's batch clock (since=) sits in the place line; clearing the notes it times clears it too.
+printf '9 since=1700000000 enc\n2026 [from main] "FYI two" | "x"\n' > "$KEY.inbox-seq"; cc >/dev/null
+check "clearing notes resets clock" "9 enc" "$(cat "$KEY.inbox-seq")"
 printf '9 pending\nsome batch\n' > "$KEY.inbox-seq"; cc >/dev/null
 check "a batch saved for the pane and not yet shown is the inbox watcher's, never cleared here" "9 pending some batch" "$(paste -sd' ' - < "$KEY.inbox-seq")"
 # Pass r2: workspaces set to main's parent excluded main itself as a worker checkout, so the owner read as quiet.

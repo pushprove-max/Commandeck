@@ -24,6 +24,7 @@ cat > "$T/bin/orca-ide" <<EOF
 case "\$*" in
   *"orchestration check"*"--ack"*) echo '{"ok":true,"result":{"messages":[]}}' ;;
   *"orchestration check"*) cat "$T/batch.json" ;;
+  *"orchestration inbox"*) cat "$T/page.json" 2>/dev/null || echo '{"ok":true}' ;;
   *"orchestration task-list"*) cat "$T/tasks.json" ;;
   *"orchestration task-update"*) echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
   *) echo '{"ok":true}' ;;
@@ -42,5 +43,24 @@ check "a Builder dispatch task never closes on the wake" "t_dispatch t_empty" \
   "$(grep -c 'task t_dispatch' <<<"$OUT" | sed 's/1/t_dispatch/') $(grep -c 'task t_empty' <<<"$OUT" | sed 's/1/t_empty/')"
 : > "$T/updates"; echo '{"ok":false}' > "$T/tasks.json"; OUT=$(wake --full)
 check "an absent or junk task-list closes nothing" "0" "$(grep -c . "$T/updates")"
+# Issue 642: the drain classes each row by the one wake rule against the inbox page (read rows included). An OK status
+# is shown under held notes and starts main's 30-minute batch clock; the same question again within 10 minutes, even
+# one main read and acked a delivery ago, is a repeat: kept in hidden.jsonl, never printed or woken for again.
+N0=1800000000
+# m <id> <type> <subject> <at> [read] -- the one inbox row builder for these cases.
+m() { jq -nc --arg id "$1" --arg t "$2" --arg s "$3" --argjson at "$4" --argjson rd "${5:-0}" '{id: $id, from_handle: "term_w", to_handle: "run:r",
+  type: $t, subject: $s, body: "b", read: $rd, created_at: ($at | todate)}'; }
+batch() { jq -sc '{ok: true, result: {deliveryId: "d2", messages: .}}' > "$T/batch.json"; }
+page() { jq -sc '{ok: true, result: {messages: .}}' > "$T/page.json"; }
+{ m a1 question 'which file?' "$N0"; m s1 status 'tests: exit 0' "$N0"; } | batch; { m a1 question 'which file?' "$N0"; m s1 status 'tests: exit 0' "$N0"; } | page
+OUT=$(COMMANDECK_NOW=$N0 wake)
+check "drain sets batch clock" "$N0" "$(cat "$T/sc/main-watch/batch-at" 2>/dev/null)"
+check "drain shows batch held" "1 1" "$(sed '/^held notes/,$d' <<<"$OUT" | grep -c '| which file?') $(sed -n '/^held notes/,$p' <<<"$OUT" | grep -c '| tests: exit 0')"
+HID=$T/sc/main-watch/messages/hidden.jsonl; : > "$HID"
+{ m a2 question 'which file?' $((N0 + 300)); m b1 question 'merge u7?' $((N0 + 300)); } | batch
+{ m a1 question 'which file?' "$N0" 1; m s1 status 'tests: exit 0' "$N0" 1; m a2 question 'which file?' $((N0 + 300)); m b1 question 'merge u7?' $((N0 + 300)); } | page
+OUT=$(COMMANDECK_NOW=$((N0 + 300)) wake)
+# The clock stays at the first drain's time: a drain with no held note sets none.
+check "acked question repeat dropped later" "0 1 a2 $N0" "$(grep -c '| which file?' <<<"$OUT") $(grep -c '| merge u7?' <<<"$OUT") $(jq -r .id "$HID" 2>/dev/null | paste -sd' ' -) $(cat "$T/sc/main-watch/batch-at" 2>/dev/null)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

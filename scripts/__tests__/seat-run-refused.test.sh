@@ -54,12 +54,14 @@ PID=$(sed -n 's/.*running detached, pid \([0-9]*\);.*/\1/p' <<<"$OUT"); LOGF=$(s
 check "in main's own foreground run returns at once, and its log ends on the one line" "1:1" \
   "$(grep -c 'running detached' <<<"$OUT"):$(grep -c '^seat=plan-judge-sol unit=pu VERDICT: GO report=' "$LOGF" 2>/dev/null)"
 
-# #570: a refused seat run sends the relay one fail event; a relay send that fails is logged and the run keeps its exit code.
+# #570: a refused seat run sends one fail event; a send that fails is logged and the run keeps its exit code. Issue 643:
+# to main (sent, or queued with no main pane: $T/wakes plus $SQ), never to the run's mailbox the relay reads.
 SD=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1); echo run_1 > "${SD}current-run"; rm -f "${SD}relay-events.log"
-OUT=$(rrun codex-reviewer seat-unit "$T/spec.md" 2>&1); RC1=$?; E1=$(grep -c -- 'FYI event: seat-unit seat-codex-reviewer fail' "$T/wakes")
-touch "$T/send-refuses"; OUT=$(rrun codex-reviewer seat-unit "$T/spec.md" 2>&1); RC2=$?; E2=$(grep -c -- 'FYI event: seat-unit seat-codex-reviewer fail' "$T/wakes")
+ev() { cat "$T/wakes" "$SQ" 2>/dev/null | grep -c -- 'FYI event: seat-unit seat-codex-reviewer fail'; }
+OUT=$(rrun codex-reviewer seat-unit "$T/spec.md" 2>&1); RC1=$?; E1=$(ev):$(grep -c -- '--to run:.*FYI event' "$T/wakes")
+touch "$T/send-refuses"; OUT=$(rrun codex-reviewer seat-unit "$T/spec.md" 2>&1); RC2=$?; E2=$(ev)
 rm -f "$T/send-refuses" "${SD}current-run"
-check "a refused seat run sends the relay one fail event, and a relay that fails changes no exit code" "2:1:2:1:yes" \
+check "a refused seat run sends main one fail event, and a send that fails changes no exit code" "2:1:0:2:1:yes" \
   "$RC1:$E1:$RC2:$E2:$([ -s "${SD}relay-events.log" ] && echo yes)"
 
 echo "$PASS passed, $FAIL failed"

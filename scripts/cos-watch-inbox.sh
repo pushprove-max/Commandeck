@@ -5,26 +5,26 @@
 # Why a poll and not `orchestration check --wait`: every send is addressed to
 # main's run, main's own loop reads it within seconds, and `check --terminal
 # <me>` then returns nothing.
-# "Meant for the Chief of Staff" = not sent by this pane, not a worker report,
-# and either the subject starts with "cos:" or names the Chief of Staff, its
-# configured name (chiefOfStaff.name) or the owner, or the orchestrator itself
-# wrote it to its run or to this pane: a plain report or question from main
-# names nobody, and one main put to the owner as a `question` with a plain
-# subject was dropped. "Wrote it" = any type from the run's coordinator pane in
-# Orca's run list, asked at every poll because main's handle changes when its
-# context is cleared; when Orca names none, the subject rule alone decides.
-# Main's messages to another pane (a worker's answer, work added) are not the
-# relay's. The scripts that send under main's handle to its run are main's own
-# traffic, told apart by subject: main-watch, heads-up and main: lines,
-# seat.sh's "seat <role> <unit>: <verdict>" and answer-worker.sh's "answer from main".
-# Only messages in this project's run count: the inbox is the whole machine's,
-# and with no run recorded nothing is relayed.
-# A message to this pane's own handle always counts, and always wakes it.
-# A message whose subject starts "FYI" does not wake the pane: each wake
-# replays the pane's whole context. It is held and printed, then cleared,
-# with the next message that does wake the pane.
+# "Meant for the Chief of Staff" (issue 643) = not sent by this pane, and
+# addressed to it: to this pane's own handle (any run, type or subject), or in
+# this project's run with the recipient tag (`to` chief-of-staff in the payload,
+# or thread id commandeck:to=chief-of-staff) that cos-tell.sh --note and
+# main-watch's note send. No subject admits a message: the scripts' events go to
+# main, and main's own mail is main's. The cutover (D21): until the new
+# main-watch first ticks and writes $PP_SCRATCH/main-watch/tags-relay (its
+# epoch), an older one still sends untagged, so main's untagged statuses to the
+# run count when created before that epoch, or with none written yet. Main is
+# the run's coordinator pane in Orca's run list, asked at every poll because
+# main's handle changes when its context is cleared.
+# What an admitted message does is the one wake rule (wake_class, paths.sh,
+# class "relay"): a heartbeat or a repeat within 10 minutes is dropped, a
+# non-required message whose subject starts "FYI" is held (each wake replays the
+# pane's whole context), any other wakes the pane. One to this pane's own handle
+# is never held. Held notes print with the next message that wakes the pane, or
+# alone once they have waited 30 minutes (the batch clock).
 # One state file, $COS_KEY.inbox-seq: its first line is the highest sequence
-# read, the lines after it are the held notes. One file because the two must
+# read, then the batch clock (since=<epoch>, while notes are held), and the lines
+# after it are the held notes. One file because the two must
 # move together: a poll writes it whole beside itself and swaps it in, so the
 # notes are saved and the batch marked read in one step, or neither is. A
 # batch for the pane is saved first as "<sequence> pending" with its text,
@@ -33,21 +33,14 @@
 # that the kernel drops when its holder dies.
 # Each handled message's id is appended to $COS_KEY.inbox-seen-ids: cos-check.sh counts one never handled as missed.
 # A poll that reads the inbox and finds nothing new (exit 4) also asks whether
-# main went silent: main's turn ended and main sent nothing here since its turn
-# before, so its reply or its own report (a build done, a check failed) is left
-# on its own screen. That is flagged once per turn, with main's last words from
-# its session log. A poll that could not read Orca knows nothing of what main
-# sent, so it asks nothing. The
-# owner's message the relay passed to main (to-main.sh marks it owed in
-# $PP_SCRATCH/cos-owed) is named in the flag; a message from main relayed here
-# counts as sent ($COS_KEY.main-sent, its newest send time) and clears that
-# mark when sent after it: one sent before, read late, is no reply. The flag
-# clears it only when main's turn ended after it.
-# $COS_KEY.main-turn holds the end of main's last turn already judged; with
-# none yet, main's earlier turns are history and only an owed message is flagged.
-# shortcut: a main turn that ends and a next one that starts inside one poll (20 s)
-# are judged as one, so a send in the first covers the second; a poll per turn
-# end would need main's own hook.
+# main owes the owner a reply (D13, D17): the owner's message the relay passed
+# to main (to-main.sh marks it owed in $PP_SCRATCH/cos-owed) and main's turn
+# ended after it, so its reply is left on its own screen. That is flagged once
+# per mark, with main's last words from its session log, and the flag clears the
+# mark. A message from main relayed here clears the mark when sent after it: one
+# sent before, read late, is no reply; neither is main-watch's note or an event,
+# though both go out under main's handle. A poll that could not read Orca knows
+# nothing of what main sent, so it asks nothing.
 # The pane's Stop hooks (cos-inbox-arm-stop.sh, which starts it, and
 # cos-inbox-waiter-stop.sh) match this script by its file name: do not rename it.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
@@ -65,41 +58,52 @@ poll() {
   [ "$rc" = 4 ] && main_silent || return "$rc"
 }
 main_silent() {
-  local at subj st idle last sent what owed= locked
+  local at subj st idle locked
   st=$(bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$PP_MAIN" --current)
   idle=$(sed -n 's/^idle_since=//p' <<<"$st")
   [[ $idle =~ ^[0-9]+$ ]] || return 1
-  last=$(cat "$COS_KEY.main-turn" 2>/dev/null); sent=$(cat "$COS_KEY.main-sent" 2>/dev/null)
-  echo "$idle" > "$COS_KEY.main-turn"
   # Under the lock to-main.sh writes the mark under, from the read to the removal: a mark written between them, even in
   # the same second, is a newer message and stays owed. With the lock not had in time the flag is shown, the mark kept.
   mkdir -p "$PP_SCRATCH"
   {
     flock -w 10 9; locked=$?
-    if IFS=$'\t' read -r at subj 2>/dev/null < "$PP_SCRATCH/cos-owed" && [ "$idle" -gt "${at:-0}" ]; then what="a reply to \"$subj\"" owed=1
-    elif [[ $last =~ ^[0-9]+$ ]] && [ "$idle" -gt "$last" ] && [ "${sent:-0}" -lt "$last" ] 2>/dev/null; then what=anything
-    else return 1; fi
-    printf 'main ended a turn without sending you %s; its last words: %s\n(all of its reply: bash %s/read-verdict.sh <main'"'"'s pane handle>)\n' \
-      "$what" "$(sed -n 's/^last_message=//p' <<<"$st")" "$PP_SCRIPTS"
+    IFS=$'\t' read -r at subj 2>/dev/null < "$PP_SCRATCH/cos-owed" && [ "$idle" -gt "${at:-0}" ] || return 1
+    printf 'main ended a turn without sending you a reply to "%s"; its last words: %s\n(all of its reply: bash %s/read-verdict.sh <main'"'"'s pane handle>)\n' \
+      "$subj" "$(sed -n 's/^last_message=//p' <<<"$st")" "$PP_SCRIPTS"
     # Only the message this flag names is cleared: one marked after main's turn ended is still owed.
-    [ -z "$owed" ] || [ "$locked" != 0 ] || rm -f "$PP_SCRATCH/cos-owed"
+    [ "$locked" != 0 ] || rm -f "$PP_SCRATCH/cos-owed"
   } 9>>"$PP_SCRATCH/cos-owed.lock"
   return 0
 }
 # poll_failed -- Orca gave no inbox or run: the wake log says so once per outage (a poll is every 20 s), and not again until a poll reads.
 poll_failed() { [ -e "$COS_KEY.poll-failing" ] || { pp_wake_log cos-watch-inbox chief-of-staff "inbox poll" refused "$1"; : > "$COS_KEY.poll-failing"; }; }
 poll_n() { # rows to ask for
-  local run coord rc
+  local run coord cut rc
   run=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   # No answer is not "no orchestrator": a note judged without the run's record
   # would be passed over and marked read, so the poll tries again instead.
   coord=$(orca-ide orchestration run-list --full --json 2>/dev/null \
     | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || { poll_failed "run-list gave no answer"; return 1; }
-  orca-ide orchestration inbox --limit "$1" --full --json 2>/dev/null | python3 -c '
+  cut=$(cat "$PP_SCRATCH/main-watch/tags-relay" 2>/dev/null); [[ $cut =~ ^[0-9]+$ ]] || cut=
+  # Each row gets _admit (addressed to this pane, or a pre-cutover untagged status from main) and _class (wake_class
+  # for the relay, the page as its repeat history; one to this pane's own handle is never held). Junk reads as busy.
+  orca-ide orchestration inbox --limit "$1" --full --json 2>/dev/null \
+    | jq -c --arg me "$ME" --arg run "$run" --arg coord "$coord" --arg cut "$cut" "$PP_JQ_WAKES"'
+      def admit: .to_handle == $me
+        or ($run != "" and .run_id == $run
+          and (recipient == "chief-of-staff"
+            or (recipient == null and $coord != "" and .from_handle == $coord and .type == "status"
+              and ((.to_handle // "") | . == "" or . == "run:" + $run)
+              and ($cut == "" or (wk_at // 0) < ($cut | tonumber)))));
+      if type == "object" then (.messages // .result.messages // []) as $all | del(.messages)
+        | .result = ((.result | objects) // {}) + {messages: [$all[]? | objects
+          | . + {_admit: admit, _class: (wake_class([]; []; $all; "relay") as $c | if $c == "batch" and .to_handle == $me then "now" else $c end)}]}
+      else . end' 2>/dev/null | python3 -c '
 import datetime, fcntl, json, os, re, subprocess, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
 limit = int(sys.argv[6])
-owedf, sentf, seenf, scripts, workspaces = sys.argv[7:12]
+owedf, seenf, scripts, workspaces = sys.argv[7:11]
+now = int(os.environ.get("COMMANDECK_NOW") or time.time())
 try:
     d = json.load(sys.stdin)
 except ValueError:
@@ -122,9 +126,10 @@ if not os.path.exists(seqf):
     sys.exit(4)
 first, _, held = open(seqf).read().partition("\n")
 # The first line is the place, then "pending" when the rest of the file is a
-# batch saved for the pane and not yet shown to it, then "enc": its text is
-# records this watcher printed.
+# batch saved for the pane and not yet shown to it, "since=<epoch>" when the held
+# notes started waiting (the batch clock), then "enc": its text is records this watcher printed.
 words = first.split()
+since = next((int(w[6:]) for w in words if re.fullmatch(r"since=[0-9]+", w)), None)
 # With no "enc" the file was saved before 0.18.0, its text raw as panes wrote it: no line of it is a record of this
 # watcher, so each prints quoted, one JSON string, under a heading that says so.
 if "enc" not in words and held.strip():
@@ -132,30 +137,32 @@ if "enc" not in words and held.strip():
 owed = held if "pending" in words else ""
 held = "" if owed else held
 last = int(words[0]) if words else 0
-if not ms and not owed:  # a pending batch is owed whatever the inbox holds now
+# Held notes are due once their clock is 30 minutes old (D8); notes with no clock (an older watcher saved them) start it now.
+due = bool(held.strip()) and since is not None and now - since >= 1800
+if not ms and not owed and not due:  # a pending batch is owed whatever the inbox holds now
+    if held.strip() and since is None:  # an empty inbox still starts the clock of notes an older watcher saved
+        try:
+            save(f"{last} since={now}", held)
+        except OSError:
+            pass  # the old file stands: the next poll starts the clock
     sys.exit(4)
 if limit < 3840 and len(ms) >= limit and min(m.get("sequence") or 0 for m in ms) > last + 1:
     sys.exit(3)
-want = r"^cos\b|chief.of.staff|\bowner\b" + ("|" + re.escape(name) if name else "")
-# The Orca inbox holds every project on the machine: this pane relays its own run only.
-# A message to this pane (to_handle == me) is for the relay, whatever its run, type or subject (answer-worker.sh from main).
+# The Orca inbox holds every project on the machine: the jq stage before this marks each row this pane is sent (_admit:
+# its own handle, or the relay tag in its run) and what it does (_class, the one wake rule).
 # Issue 319: a send stamps the name it was given with --from (chiefOfStaff.name) in any case, not the handle: both are this pane own.
 own = {me.lower(), name.lower()} - {""}
-mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle") or "").lower() not in own
-        and (m.get("to_handle") == me
-             or (run and m.get("run_id") == run
-                 and m.get("type") != "worker_done"  # worker reports go to main
-                 and (re.search(want, m.get("subject") or "", re.I)
-                      or (m.get("subject") or "").startswith("FYI event: ")  # an event from pp_relay_event, from any pane in the run
-                      or (coord and m.get("from_handle") == coord and (m.get("to_handle") or "") in ("", "run:" + run, me)))
-                 and not re.match(r"(main-watch|heads-up|main:|answer from main|seat \S+ \S+: )", m.get("subject") or "", re.I)))]
+mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle") or "").lower() not in own and m.get("_admit")]
 def at(m):
     try:
         return int(datetime.datetime.fromisoformat((m.get("created_at") or "").replace("Z", "+00:00")).timestamp())
     except ValueError:
         return int(time.time())
-# main-watch.sh posts its note to the relay under the handle of main: it wakes the relay, and it is no reply from main.
-sent = [at(m) for m in mine if coord and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)
+# main-watch.sh posts its note to the relay under the handle of main: it wakes the relay, and it is no reply from main;
+# nor is an event an older process sent untagged before the cutover. The subject tells those two apart here, for the
+# owed mark only: it admits and wakes nothing. Only a row the wake rule shows (now or batch) is a reply: a repeat it
+# drops is a copy Orca sent again of an older one, which must not clear an owner message marked owed after it.
+sent = [at(m) for m in mine if coord and m.get("_class") in ("now", "batch") and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)
         and not (m.get("subject") or "").startswith("FYI event: ")]
 def num(path):
     try:
@@ -163,10 +170,7 @@ def num(path):
             return int(f.read().split("\t")[0])
     except (OSError, ValueError):
         return None
-if sent:  # main sent the relay something: its turn is not a silent stop, and a message it owed from before is answered
-    newest = max(sent + [num(sentf) or 0])  # read before "w" empties the file
-    with open(sentf, "w") as f:
-        f.write(str(newest))
+if sent:  # main sent the relay something: a message it owed from before is answered
     if os.path.exists(owedf):
         with open(owedf + ".lock", "a") as l:
             fcntl.flock(l, fcntl.LOCK_EX)  # the lock of pp_owed_clear, from the read to the removal: a newer mark stays
@@ -211,17 +215,19 @@ for m in ms:
     except (OSError, ValueError, subprocess.SubprocessError):
         pass  # main drain still records it
 mine.sort(key=lambda m: m["sequence"])
-fyi = [m for m in mine if m.get("to_handle") != me and re.match(r"\s*fyi\b", m.get("subject") or "", re.I)]
-wake = [m for m in mine if m not in fyi]
+fyi = [m for m in mine if m.get("_class") == "batch"]
+wake = [m for m in mine if m.get("_class") == "now"]
 held = held + "".join(line(m) + "\n" for m in fyi)
-out = owed + "".join(line(m) + "\n" for m in wake) + ("HELD FYI NOTES (did not wake you):\n" + cap(held, 1500) + "\n" if held and (wake or owed) else "")
+since = (since if since is not None else now) if held else None  # notes start the clock; no notes, no clock
+due = bool(held) and now - since >= 1800
+out = owed + "".join(line(m) + "\n" for m in wake) + ("HELD FYI NOTES (did not wake you):\n" + cap(held, 1500) + "\n" if held and (wake or owed or due) else "")
 # The one step: the place and the notes are one file, so both move or neither
 # does, and a save that fails leaves them as they were with nothing shown.
 # A batch for the pane is saved as pending before it is shown and cleared
 # after: output that fails loses nothing, the next poll shows the batch. Only
-# a clearing save that fails shows a batch twice.
+# a clearing save that fails shows a batch twice. Shown notes take their clock with them.
 try:
-    save(str(max(top, last)) + (" pending" if out else ""), out or held)
+    save(str(max(top, last)) + (" pending" if out else f" since={since}" if held else ""), out or held)
 except OSError as e:
     sys.exit(f"cos-watch-inbox: inbox state not saved ({e}); the batch is read again")
 # Each handled id, so cos-check.sh can count a message for this pane that no poll ever handled (issue 290).
@@ -241,7 +247,7 @@ try:
 except OSError as e:
     sys.exit(f"cos-watch-inbox: the batch was not shown or not marked shown ({e}); the next poll shows it")
 sys.exit(0)
-' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.main-sent" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES"
+' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES"
   rc=$?
   if [ "$rc" = 1 ]; then poll_failed "the inbox read failed"; else rm -f "$COS_KEY.poll-failing"; fi
   return "$rc"

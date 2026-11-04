@@ -129,13 +129,13 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
 - Announce every worker at dispatch time (agent, model, worktree, task); report what it came back with when it finishes.
-  The scripts send the seat, launch, merge and CI events to the relay as held `FYI event:` notes; do not repeat them.
+  The scripts send you the seat, launch, merge and CI events as `FYI event:` notes (an ok one waits for your 30-minute batch, a failure wakes you); do not repeat them, and do not forward them to the relay.
 - relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`, which stores the note in your run
   (`run:<id>`), the mailbox the relay's inbox poller reads, and exits 1 when Orca does not confirm it. Never `--to
-  <its handle>`: that mailbox is live-only, and notes sent while the pane was busy were lost. The poller prints every
-  note you send yourself (type `status`), except `main-watch`, `heads-up`, `main:` and `answer from main` subjects;
-  from a script or any other pane it prints only a subject that starts `cos:` or names the owner. A subject that
-  starts `FYI` does not wake it: it is held and shown with your next message that does. It asks the owner and relays
+  <its handle>`: that mailbox is live-only, and notes sent while the pane was busy were lost. The note carries the
+  relay's recipient tag: the poller prints only tagged notes and mail to the relay's own handle, whatever the subject,
+  and your other messages to the run never reach it. A subject that starts `FYI` does not wake it: it is held and
+  shown with your next message that does, or after 30 minutes. It asks the owner and relays
   the answer verbatim; check each relayed answer against `~/.claude/rulings/<project>.jsonl` before acting. A message
   titled `auto-decided for the owner on <id>` is the relay's own decision under auto-decide, not an owner ruling:
   there is no ruling to find. Act on it when the ledger row for `<id>` answers `<words> (auto-decided)`, whether or

@@ -11,7 +11,7 @@ Tier: Standard; LOCAL merge; changed-file tests on the PC; no timeout raises.
 Closes: #642 #643 #644
 Base: local main fca058c
 Build order: P1-P3, P5, C1-C4 (C4 on P3's pass, D28)
-New tests: wake-waste-2026-11-04 81
+New tests: wake-waste-2026-11-04 82
 Timed checks: to-main.test.sh:185 (5 s); after it "await-agents ignores a status", "await-agents skips repeat" (1 s), "watch-agents shows gate once, unread", "watch-agents skips repeat" (3 s); "full page keeps question" last
 Merge message: `Closes #N` per built issue; `Refs #N` if partial
 - Planned size: 47 files, 990 changed lines
@@ -32,10 +32,12 @@ Main and the relay spend whole turns on messages that need nothing. Wakes are de
 | Recipient tag `{"to":"chief-of-staff"}` | Orca payload; if P1 shows payload keys dropped, thread id `commandeck:to=chief-of-staff` | cos-tell.sh --note, main-watch.sh tell_relay | one jq def `recipient` (payload.to, else that thread id), used by wake_class, the relay poll and cos-own-echo.sh | never; one per message | a resend carries the same tag |
 | Repeat history | Orca's inbox page (`inbox --limit 500 --full --json`, read rows included) | Orca | wake_class's `$all`, read by pp_inbox_actionable (main-watch, the nudge hook's main branch, await-agents.sh), the nudge hook's relay branch, the relay poll, the drain (once per delivery with a non-heartbeat row) and inbox_wake (its own `inbox --terminal` read) | Orca's own | a page not read is `[]`: no repeat, never a hidden row |
 | Main batch clock `<epoch>` | $PP_SCRATCH/main-watch/batch-at | orca-wait.sh drain, when it prints a batch row | pp_inbox_actionable | each drain that prints a batch row | unreadable or absent reads as no clock (age rule alone) |
-| Relay batch clock `since=<epoch>` | first line of $COS_KEY.inbox-seq, beside `pending`/`enc` | cos-watch-inbox.sh poll, under its lock | cos-watch-inbox.sh | dropped when held notes print, are cleared, or are empty | a failed save leaves the old file: the next poll recomputes |
+| Relay batch clock `since=<epoch>` | first line of $COS_KEY.inbox-seq, beside `pending`/`enc` | cos-watch-inbox.sh poll, under the inbox-seq lock (starts it, an empty inbox too; drops it when the notes print); cos-check.sh, under the same lock, drops it with the notes it clears | cos-watch-inbox.sh | dropped when held notes print, are cleared (cos-check.sh), or are empty | a failed save leaves the old file: the next poll recomputes, the next cos-check.sh clears again |
+| Shown ids `shown` | watch-agents.sh process memory (a shell variable, one Orca message id a line) | watch-agents.sh loop, as it prints a row's ANSWER NEEDED lines | watch-agents.sh loop, before printing: an id in it prints no more | process start: empty, so a restart prints each still-actionable row once more; never pruned while the process lives (one id per row printed) | none needed: it marks nothing read in Orca, so a row it skips stays in main's inbox for the drain |
 | Recipient cutover `<epoch>` | $PP_SCRATCH/main-watch/tags-relay | main-watch.sh, each tick while the file is absent | cos-watch-inbox.sh (D21) | never | a failed write is tried at the next tick; absent reads as no cutover yet |
 | Dropped repeats | $MSGDIR/hidden.jsonl (existing) | orca-wait.sh drain | the owner and main by hand | never (existing) | none |
-- Mixed versions: an old cos-check.sh keeps the first line whole (cos-check.sh:35); an old poller tests header words by membership only (cos-watch-inbox.sh:130-132) and its save drops `since=`, notes kept; an empty-notes header keeps no clock; notes with no clock start it at the next poll. Untagged relay mail: D21.
+- Mixed versions: an old cos-check.sh keeps the first line whole (cos-check.sh:35); an old poller tests header words by membership only (cos-watch-inbox.sh:130-132) and its save drops `since=`, notes kept; an empty-notes header keeps no clock; notes with no clock start it at the next poll, an empty inbox too. Untagged relay mail: D21.
+- Clock clear (cos-check.sh:33-37), under the inbox-seq lock: 1 copy the notes to $ARCH; 2 write line 1 without `since=` to inbox-seq.new; 3 move it over inbox-seq; 4 print the notes or $ARCH's path. Stopped after 1 or 2: the old file stands, notes and clock kept, $ARCH an extra copy; the next cos-check.sh clears them. Stopped after 3: notes and clock gone from inbox-seq; the notes are in $ARCH ($COS_KEY.cos-check-notes-<epoch>-<pid>.txt), the one recovery.
 
 ## Cuts
 
@@ -53,7 +55,7 @@ Main and the relay spend whole turns on messages that need nothing. Wakes are de
 - Test edit (D18): reverse long-job.test.sh:209-216 to expect `status` for an rc 0; it still asserts the message reaches main; the edited lines' comment says the owner allows a test edit that keeps its claim (2026-10-30). to-main.test.sh:186-188 (a detached merge is a question) holds unchanged (D25); orca-wait.test.sh:67-73 holds unchanged (D23); main-watch-inbox-wake.test.sh's `msg` fixture gives each id its own subject (`answer <id>`), so its distinct messages stay distinct under D4 and every claim holds (D24).
 - Test migration (D29), claims kept: wake-on-exit.test.sh:407-424 reads the to-main stub's body (one ok `status`, one fail `question` `FYI event:` line; 2 sends per push job; RELAY_LOG empty; the stub exits $EVENT_RC on an event, for RELAY_RC); ci-watch.test.sh:99-103, builder-launch-resume-launch-line.test.sh:138-141, merge-unit-local.test.sh:337-340 read their orca log plus queue/main.jsonl, counts kept, 0 `--to run:` events; seat-run.test.sh:82, seat-run-refused.test.sh:59-63 count $T/wakes plus $SQ, the log kept; seat-run.test.sh:84 reads main-session.md:132's new sentence.
 - Audited, unchanged: main-watch-wake-sources.test.sh:26-30 (status: batch), main-watch-wake-race.test.sh (questions), agent-startup-context.test.sh:66-112 (C3 adds a line).
-- Wake gates: a now row passes the existing wakeWindowSeconds window and claim (cos-own-echo.sh:43-44, main-watch.sh:671, :704), unchanged: see Stated limits.
+- Wake gates: a now row passes the existing wakeWindowSeconds window and claim (cos-own-echo.sh:43-44, main-watch.sh:671, :704), unchanged: see the limits section.
 - Existing consumers: pp_inbox_actionable callers hooks/cos-own-echo.sh:38, scripts/main-watch.sh:593 and :669, and now await-agents.sh (same contract: an array of actionable rows); pp_seat_inbox (paths.sh:482, finish rows are worker_done or question: unchanged); orca-wait.sh:271, :552 and :571; await-agents.sh and watch-agents.sh have no script caller (main runs them; AWAIT: and ANSWER NEEDED line formats unchanged); inbox_wake's one caller main-watch.sh:1759 (Signal INBOX text and once-per-id history unchanged); pp_detach callers run-shell-tests.sh:76 and ci-watch.sh:14 (status on exit 0), merge-queue.sh:34 and merge-unit-local.sh:62 (labels start `merge-`: question, unchanged); pp_relay_event callers builder-launch.sh:304-305, ci-watch.sh:16, wake-on-exit.sh:165, seat.sh:254, merge-unit-local.sh:134 (same arguments; the note now goes to main; their suites per D29); seat.sh's own result to main (seat.sh:257, question: unchanged).
 
 ### C2 (#643) recipient routing -- est. 275 lines
@@ -159,7 +161,7 @@ Main and the relay spend whole turns on messages that need nothing. Wakes are de
    Test: watch-agents shows gate once, unread
 27. D27 pp_inbox_actionable on a full page returns its actionable rows; it fails, as today, only when it holds none (mail may sit past it).
    Test: full page keeps question
-28. D28 The owner, 2026-11-04 (decision plan-wake-waste-2026-11-04, Q1 yes): build C4 in this unit once every P3 test passes.
+28. D28 The owner, 2026-11-04 (Q1 yes): build C4 in this unit once every P3 test passes. Builder, 2026-11-04: P3 failed (an unbound pane is consumer_fenced on task-create, task-update and check --run; a bound Run cannot be left unbound), so C4 was not built (D11); the evidence file records each failure. Main, 2026-11-04: C4's two Break lines (board.test.sh, context-clear-restart.test.sh) are deleted, since a cut not built has no break run.
    Test: no script binds main
 29. D29 pp_relay_event keeps its run-file guard, subject and body, sends `to-main.sh status` on ok and `question` on fail (each caller already sends main its result), and logs any non-zero exit (3 queued, 1 refused) to relay-events.log; its suites migrate per C1, C2.
    Test: ok event note batched
@@ -259,8 +261,6 @@ Break: hooks/__tests__/cos-own-echo.test.sh -- relay nudge with no mail dropped 
 Break: hooks/__tests__/cos-own-echo.test.sh -- relay nudge leaves main's unread -- cos-own-echo.sh peek
 Break: scripts/__tests__/cos-tell.test.sh -- old event note keeps owed -- cos-tell.sh event guard
 Break: scripts/__tests__/cos-tell.test.sh -- silent turn nothing owed no wake -- cos-watch-inbox.sh owed flag
-Break: scripts/__tests__/board.test.sh -- two panes no record not main -- project.sh recorded pane
-Break: hooks/__tests__/context-clear-restart.test.sh -- restart moves main's record -- context-clear-restart.sh
 
 ## Claims to falsify
 
@@ -372,7 +372,7 @@ Break: hooks/__tests__/context-clear-restart.test.sh -- restart moves main's rec
 - 2026-11-04 judge sol r3 2 (consuming check): D20 has await-agents.sh read through pp_inbox_actionable (inbox page, marks nothing); test "await-agents stops on question, unread".
 - 2026-11-04 judge sol r3 3 (checksum): rebutted with the owner's 2026-11-03 ruling (one job-finished wake an hour, copied exactly): D19 keeps the hour stamp unchanged, so the checksum, its test and the judge sol 5 change go; the stamp is a sender rule, not a watcher's.
 - 2026-11-04 judge sol r3 4 (history): await-agents.sh gets the page through pp_inbox_actionable, the nudge hook's relay branch reads it (D14), Data design lists every reader; tests "await-agents skips repeat", "relay nudge repeat dropped".
-- 2026-11-04 judge sol r3 5 (drain hides): D23 keeps KEEP's noisy/harness hides after wake_class on now rows; orca-wait.test.sh:67-73 unchanged; test "driven verdict echo hidden, ok status held"; Stated limits line.
+- 2026-11-04 judge sol r3 5 (drain hides): D23 keeps KEEP's noisy/harness hides after wake_class on now rows; orca-wait.test.sh:67-73 unchanged; test "driven verdict echo hidden, ok status held"; a line in the limits section.
 - 2026-11-04 judge sol r3 6 (inbox_wake): D24 routes it through wake_class seat (heartbeat drop, else now); two main-watch-inbox-wake tests; Why's claim now holds; accepted failure mode for seat repeats.
 - 2026-11-04 judge sol r3 7 (new test file): await-agents.test.sh dropped; its cases go in to-main.test.sh, whose fake inbox already lists and empties per handle, the smaller arrangement.
 - 2026-11-04 owner's 2026-11-04 ruling found by decision.sh rulings: D25 keeps push, deploy, merge and seat results waking main; the landed-merge POST_OK change and its main-watch-auto-merge test go; to-main.test.sh:186-188 is no longer reversed (D18); D5, User-visible changes, claims and #643 Done follow.
@@ -386,5 +386,8 @@ Break: hooks/__tests__/context-clear-restart.test.sh -- restart moves main's rec
 - 2026-11-04 judge sol r5 2: D27 full page keeps its rows; WCGW "Full page" replaces "Question after a batch wake"; test "full page keeps question".
 - 2026-11-04 judge sol r5 3: cos-tell's `FYI event:` owed guard stays, untagged (D21, D12); test "old event note keeps owed".
 - 2026-11-04 judge sol r5 Q: Q1 to the owner (rulings: no match); D11/D16 hold C4; 950 lines, 81 tests.
-- 2026-11-04 owner's Q1 yes (decision plan-wake-waste-2026-11-04): D28; D11, D16, Build order, Why, C4 build C4 on P3's pass; Question `None: answered as D28`.
+- 2026-11-04 owner's Q1 yes: D28; D11, D16, Build order, Why, C4 build C4 on P3's pass; Question `None: answered as D28`.
 - 2026-11-04 judge sol r6 1 (existing routing tests): accepted; D29 (pp_relay_event guard, subject, log); C1, C2 name each suite's migration and the audited ones; Steps, claim, Facts; D10 says now (was batch); 47 files, 990 lines; no new cases.
+- 2026-11-04 Builder, at main's word: the decision id dropped from D28 and the Q1 log line (public repo); D28 records P3 failed, so C4 is not built (D11). P5: a peek returns no delivery id, so the relay's nudge branch acks nothing (D14's absent branch).
+- 2026-11-04 Builder, pass 1 fix round: Data design gains the `Shown ids` row (watch-agents.sh) and names cos-check.sh as the relay clock's clearing writer, with the Clock clear steps and recovery; the poll starts a legacy notes clock on an empty inbox too (Mixed versions line). No new cases.
+- 2026-11-04 main approved (answer-1793822594-17690): New tests 81 -> 82; the extra case is the red test of the pass-3 P2 finding (a dropped repeat of main's reply cleared a newer owed mark), cos-watch-inbox.test.sh "a dropped repeat of main's reply keeps a newer owed question".

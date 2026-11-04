@@ -92,15 +92,17 @@ rm -f "$T/gh/total" "$T/gh/runs.2" "$T/gh/total.2"
 
 : > "$T/gh.log"
 check "a bad sha is refused before any gh call" "2:0" "$(W 'not a sha' >/dev/null; echo $?):$(wc -l < "$T/gh.log" | tr -d ' ')"
-# #570: a watch sends the relay one `FYI event: <sha> ci <ok|fail>` note, from the script, for its outcome.
+# #570: a watch sends one `FYI event: <sha> ci <ok|fail>` note, from the script, for its outcome. Issue 643: to main
+# (sent, or queued with no main pane), never to the run's mailbox the relay reads.
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/orca.log"\necho "{\\"ok\\":true}"\n' "$T" > "$T/bin/orca-ide"; chmod +x "$T/bin/orca-ide"
 mkdir -p "$T/scratch"; echo run_1 > "$T/scratch/current-run"; : > "$T/orca.log"
+ev() { cat "$T/orca.log" "$T/scratch/queue/main.jsonl" 2>/dev/null | grep -c "$1"; }
 printf '15\tci\t.github/workflows/ci.yml\n' > "$T/gh/runs"; printf '0\n' > "$T/gh/15.rc"
-W abc1234 >/dev/null; G1=$(grep -c 'FYI event: abc1234 ci ok' "$T/orca.log"):$(grep -c 'FYI event: abc1234 ci fail' "$T/orca.log")
-: > "$T/orca.log"; rm -f "$T/gh"/*.att "$T/scratch/ci-watch-reruns"; printf '16\tci\t.github/workflows/ci.yml\n' > "$T/gh/runs"; printf '1\n1\n' > "$T/gh/16.rc"
-W abc1234 >/dev/null; G2=$(grep -c 'FYI event: abc1234 ci fail' "$T/orca.log"):$(grep -c 'FYI event: abc1234 ci ok' "$T/orca.log")
+W abc1234 >/dev/null; G1=$(ev 'FYI event: abc1234 ci ok'):$(ev 'FYI event: abc1234 ci fail'):$(grep -c -- '--to run:.*FYI event' "$T/orca.log")
+: > "$T/orca.log"; rm -f "$T/scratch/queue/main.jsonl" "$T/gh"/*.att "$T/scratch/ci-watch-reruns"; printf '16\tci\t.github/workflows/ci.yml\n' > "$T/gh/runs"; printf '1\n1\n' > "$T/gh/16.rc"
+W abc1234 >/dev/null; G2=$(ev 'FYI event: abc1234 ci fail'):$(ev 'FYI event: abc1234 ci ok'):$(grep -c -- '--to run:.*FYI event' "$T/orca.log")
 rm -f "$T/scratch/current-run"
-check "a CI watch sends the relay one event for its outcome" "1:0 1:0" "$G1 $G2"
+check "a CI watch sends main one event for its outcome, the relay's mailbox none" "1:0:0 1:0:0" "$G1 $G2"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

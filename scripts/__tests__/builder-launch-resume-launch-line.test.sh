@@ -133,12 +133,14 @@ bash "$REAL/scripts/plan-check.sh" "$T/pc-plan.md" '' >"$T/pc.out" 2>"$T/pc.err"
 check "plan-check alone exits 2 on a placeholder context line" "2:1:1:0" \
   "$RC:$(grep -c . "$T/pc.err"):$(grep -c '^REFUSED: .*pc-plan.md line 3 describes placeholder UI' "$T/pc.err"):$(grep -c '^size ' "$T/pc.out")"
 
-# #570: a Builder launch sends the relay one `FYI event: <unit> launch <ok|fail>` note, and a seat launch that fails one fail.
+# #570: a Builder launch sends one `FYI event: <unit> launch <ok|fail>` note, and a seat launch that fails one fail.
+# Issue 643: to main (sent, or queued with no main pane), never to the run's mailbox the relay reads.
 echo run_1 > "$SCR/current-run"
-order evl1 'Launch: new unit evl1'; O1=$RC:$(grep -c 'FYI event: evl1 launch ok' "$T/orca.log"):$(grep -c 'FYI event: evl1 launch fail' "$T/orca.log")
-touch "$T/seat-fails"; order evl2 'Launch: new unit evl2'; O2=$RC:$(grep -c 'FYI event: evl2 launch fail' "$T/orca.log"):$(grep -c 'FYI event: evl2 launch ok' "$T/orca.log")
+ev() { cat "$T/orca.log" "$SCR/queue/main.jsonl" 2>/dev/null | grep -c "$1"; }
+rm -f "$SCR/queue/main.jsonl"; order evl1 'Launch: new unit evl1'; O1=$RC:$(ev 'FYI event: evl1 launch ok'):$(ev 'FYI event: evl1 launch fail'):$(grep -c -- '--to run:.*FYI event' "$T/orca.log")
+rm -f "$SCR/queue/main.jsonl"; touch "$T/seat-fails"; order evl2 'Launch: new unit evl2'; O2=$RC:$(ev 'FYI event: evl2 launch fail'):$(ev 'FYI event: evl2 launch ok'):$(grep -c -- '--to run:.*FYI event' "$T/orca.log")
 rm -f "$T/seat-fails" "$SCR/current-run"
-check "a Builder launch sends the relay one ok event, and a refused seat launch one fail event" "0:1:0 1:1:0" "$O1 $O2"
+check "a Builder launch sends main one ok event, and a refused seat launch one fail event; the relay's mailbox none" "0:1:0:0 1:1:0:0" "$O1 $O2"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

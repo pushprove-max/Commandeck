@@ -31,6 +31,7 @@ STARTED=$(date +%s)
 for bin in orca-ide jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "AWAIT: $bin is not on PATH; cannot watch."; exit 0; }
 done
+. "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || { echo "AWAIT: paths.sh did not load; cannot watch."; exit 0; }
 
 # One line per agent, "<worktree>/<agentType> <paneKey>=<state>", sorted.
 # Same source the agent-awareness hook uses, so the two never disagree.
@@ -62,10 +63,12 @@ while :; do
   # in the queue forever, waking the watcher on the same read message every
   # poll and making it useless exactly when work is running. Read the message,
   # act on it, then set this for the rest of the wave.
+  # Issue 642: only a message the one wake rule calls actionable for main counts (pp_inbox_actionable: now, or a
+  # batch that is due), read off the inbox page, which marks nothing read: a consuming check here took main's mail
+  # from its drain. A failed or junk read is no news.
   msgs=0
   [ "${AWAIT_AGENTS_SKIP_MESSAGES:-0}" = "1" ] || \
-  msgs=$(timeout 20 orca-ide orchestration check --timeout-ms 5000 --json 2>/dev/null \
-    | jq -s -r '[.[].result?.messages[]? | select(.type != "heartbeat")] | length' 2>/dev/null)
+  msgs=$(pp_inbox_actionable "$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")" "${ORCA_TERMINAL_HANDLE:-}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)
   if [ -n "${msgs:-}" ] && [ "${msgs:-0}" -gt 0 ] 2>/dev/null; then
     echo "AWAIT: ${msgs} message(s) waiting -- worker_done, question or escalation."
     echo "Read them: orca-ide orchestration check --timeout-ms 5000 --json"

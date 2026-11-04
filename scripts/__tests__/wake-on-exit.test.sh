@@ -31,6 +31,7 @@ echo SEND >> "$WAKE_TEST_SENDS"
 printf '%s\n' "$*" >> "$WAKE_TEST_BODY"
 pwd -P >> "$WAKE_TEST_CWD"
 [ "${WAKE_TEST_TOMAIN_RC:-0}" != 1 ] || echo consumer_fenced >&2
+case ${2:-} in "FYI event: "*) exit "${EVENT_RC:-0}" ;; esac  # an event's send exits EVENT_RC
 exit "${WAKE_TEST_TOMAIN_RC:-0}"
 EOF
 # Stub cos-tell.sh: the relay's one way in; RELAY_RC is its exit.
@@ -404,23 +405,34 @@ grep -q 'killed: FAILED exit 137' "$SCRATCH/body" && ! grep -q 'lifetime cap' "$
 OUT=$(cd "$R" && SHA=$HAND ci) || fail "no_push_ci_names_dispatch_flag: the watch failed: $OUT"
 case $OUT in *"--ci ${HAND:0:12} --event workflow_dispatch"*) ;; *) fail "no_push_ci_names_dispatch_flag: the no-push line does not name the dispatch flag: $OUT" ;; esac
 
-# push_wake_sends_event. Bug caught: a rejected or accepted push ended in a wake to main only, so the relay
-# heard nothing; the event must come from the job's own exit status and must never change the job's exit code.
-echo run_t > "$SCRATCH/current-run"  # the relay hears events only for a recorded run
+# push_wake_sends_event. Bug caught: a rejected or accepted push ended in a wake to main only, so its event was
+# lost; the event must come from the job's own exit status and must never change the job's exit code. Issue 643:
+# the event goes to main (a status on ok, a question on fail), never to the relay.
+echo run_t > "$SCRATCH/current-run"  # events are sent only for a recorded run
 export RELAY_LOG=$SCRATCH/relay-log
 : > "$RELAY_LOG"; : > "$SCRATCH/sends"; : > "$SCRATCH/body"
 run launch-sync push-abc123def456 -- bash -c 'exit 1' >/dev/null || fail "push_wake_sends_event: the launcher exited non-zero"
-grep -q -- '--note FYI event: proj push fail abc123def456 exit 1' "$RELAY_LOG" && [ "$(wc -l < "$RELAY_LOG" | tr -d ' ')" = 1 ] \
-  || fail "push_wake_sends_event: a refused push did not send exactly one fail event: $(cat "$RELAY_LOG")"
-: > "$RELAY_LOG"
+grep -q -- '^question FYI event: proj push fail abc123def456 exit 1' "$SCRATCH/body" && [ "$(grep -c 'FYI event:' "$SCRATCH/body")" = 1 ] \
+  || fail "push_wake_sends_event: a refused push did not send main exactly one fail event: $(cat "$SCRATCH/body")"
+: > "$SCRATCH/body"
 run launch-sync push-abc123def457 -- true >/dev/null || fail "push_wake_sends_event: the launcher exited non-zero"
-grep -q -- '--note FYI event: proj push ok abc123def457 exit 0' "$RELAY_LOG" \
-  || fail "push_wake_sends_event: an accepted push did not send an ok event: $(cat "$RELAY_LOG")"
-: > "$RELAY_LOG"; : > "$SCRATCH/sends"
-RELAY_RC=1 run launch-sync push-abc123def458 -- true >/dev/null || fail "push_wake_sends_event: a failing relay send changed the launcher's exit"
-[ "$(sends)" = 1 ] || fail "push_wake_sends_event: a failing relay send changed the wake count to $(sends)"
-: > "$RELAY_LOG"
+grep -q -- '^status FYI event: proj push ok abc123def457 exit 0' "$SCRATCH/body" \
+  || fail "push_wake_sends_event: an accepted push did not send main an ok event: $(cat "$SCRATCH/body")"
+: > "$SCRATCH/body"; : > "$SCRATCH/sends"
+EVENT_RC=1 run launch-sync push-abc123def458 -- true >/dev/null || fail "push_wake_sends_event: a failing event send changed the launcher's exit"
+[ "$(sends)" = 2 ] || fail "push_wake_sends_event: a failing event send changed the send count (wake and event) to $(sends)"
+[ ! -s "$RELAY_LOG" ] || fail "push_wake_sends_event: an event reached the relay: $(cat "$RELAY_LOG")"
+: > "$SCRATCH/body"
 run launch-sync plainjob -- true >/dev/null || fail "push_wake_sends_event: the launcher exited non-zero"
-[ ! -s "$RELAY_LOG" ] || fail "push_wake_sends_event: a job that is not a push, CI or deploy sent an event: $(cat "$RELAY_LOG")"
+[ "$(grep -c 'FYI event:' "$SCRATCH/body")" = 0 ] || fail "push_wake_sends_event: a job that is not a push, CI or deploy sent an event: $(cat "$SCRATCH/body")"
 
-echo "ok: wake-on-exit.sh -- 22 cases"
+# ok_ci_status_push_question. Bug caught (issue 642): every OK job woke main at once. An OK CI watch is a status,
+# which waits for main's batch; a push that exits 0 stays a question: the owner keeps push results waking main.
+: > "$SCRATCH/body"
+run launch-sync ci-abc123def459 -- true >/dev/null || fail "ok_ci_status_push_question: the launcher exited non-zero"
+grep -q '^status ci-abc123def459: OK exit 0' "$SCRATCH/body" || fail "ok_ci_status_push_question: an OK ci job is not a status: $(cat "$SCRATCH/body")"
+: > "$SCRATCH/body"
+run launch-sync push-abc123def460 -- true >/dev/null || fail "ok_ci_status_push_question: the launcher exited non-zero"
+grep -q '^question push-abc123def460: OK exit 0' "$SCRATCH/body" || fail "ok_ci_status_push_question: an OK push is not a question: $(cat "$SCRATCH/body")"
+
+echo "ok: wake-on-exit.sh -- 23 cases"

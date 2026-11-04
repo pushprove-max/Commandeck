@@ -257,5 +257,99 @@ check "with no pane folder recorded, the message queues and says main does not s
 check "a queued message to a Builder does not say it" 0 "$(cd "$T/p" && "${E[@]}" bash "$REAL/scripts/to-main.sh" --unit ux status s b 2>&1 | grep -c 'does not see this queue')"
 main_is term_w
 
+# Issue 642: one wake rule, wake_class in PP_JQ_WAKES, judges every inbox message for main: now, batch (wait for the
+# 30-minute batch) or drop. Main spent whole turns on OK statuses and on the same message twice; a question, a gate, a
+# worker's report, a stopped worker and the owner's words must still wake it at once, whatever wakeKinds says.
+JW=$(cd "$T/p" && "${E[@]}" bash -c '. "$0/scripts/paths.sh" && printf %s "$PP_JQ_WAKES"' "$REAL")
+K='["worker_done","escalation","question","decision_gate","merge_ready"]'
+N0=1800000000
+# row <type> <subject> [at: epoch or - for none] [from] [to] [payload] [read] [body] -- the one inbox row builder.
+row() { jq -cn --arg ty "$1" --arg s "$2" --arg at "${3:-$N0}" --arg f "${4:-term_w1}" --arg to "${5:-run:run_x}" --arg p "${6:-}" \
+  --arg rd "${7:-0}" --arg b "${8:-body}" '{id: "m\($s)\($at)\($to)\($rd)", type: $ty, subject: $s, body: $b, from_handle: $f, to_handle: $to,
+  read: ($rd | tonumber), payload: (if $p == "" then null else $p end)} + (if $at == "-" then {} else {created_at: ($at | tonumber | todate)} end)'; }
+# cls <row> [page] [for] -- its class; K2 replaces wakeKinds.
+cls() { jq -r --argjson k "${K2:-$K}" --argjson all "${2:-[]}" --arg for "${3:-main}" "$JW"'wake_class($k; ["term_relay"]; $all; $for)' <<<"$1" 2>&1; }
+check "question wakes now" now "$(cls "$(row question 'which file?')")"
+check "decision gate wakes now" now "$(cls "$(row decision_gate 'pick a scope')")"
+check "push ask wakes now" now "$(cls "$(row question 'push u1: exit 0')")"
+check "deploy ask wakes now" now "$(cls "$(row question 'deploy u1: exit 0')")"
+check "worker_done wakes now" now "$(cls "$(row worker_done 'built u1')")"
+check "failed long job wakes now" now "$(cls "$(row question 'long-job tests: exit 1')")"
+check "failed event note wakes now" now "$(cls "$(row question 'FYI event: u1 merge fail')")"
+check "prompt wait wakes now" now "$(cls "$(row escalation 'Worker is waiting on a prompt' "$N0" term_w1 run:run_x '{"stopReason":"needs-input"}')")"
+# A stopped notice ending in a done marker still asks main to act ("Main merges the branch"): every one wakes now.
+check "done-marker notice with action wakes now" now "$(cls "$(row escalation 'Worker stopped without reporting' "$N0" term_w1 run:run_x \
+  '{"stopReason":"finished"}' 0 $'Last output:\nMain merges the branch.\nU1-DONE\nFull output: x')")"
+check "FYI-subject question wakes now" now "$(cls "$(row question 'FYI something broke')")"
+OW=$(row status 'the owner says yes' "$N0" term_relay)
+check "owner's words wake now, repeats too" now:now "$(cls "$OW"):$(cls "$OW" "[$OW,$(row status 'the owner says yes' $((N0 - 60)) term_relay run:run_x '' 1)]")"
+check "ok event note batched" batch "$(cls "$(row status 'FYI event: u1 merge ok')")"
+check "status note batched" batch "$(cls "$(row status 'tests: exit 0')")"
+check "wakeKinds lacking question wakes" now:batch "$(K2='["status"]' cls "$(row question q)"):$(K2='["worker_done"]' cls "$(row status s)")"
+# A seat (D24) has no batch: its status wakes now (main-watch-inbox-wake drops its heartbeat).
+check "status kind wakes now" now:now "$(K2='["status","question"]' cls "$(row status 'tests: exit 0')"):$(cls "$(row status s)" '[]' seat)"
+# Repeat (D4): same type, sender, to, recipient, subject, body and payload as an earlier row of the page, within 600 s.
+A=$(row question dup) A1=$(row question dup $((N0 - 300)) term_w1 run:run_x '' 1) A2=$(row question dup $((N0 - 700)) term_w1 run:run_x '' 1)
+check "repeat in 10 min dropped" drop:drop "$(cls "$A" "[$A1,$A]"):$(cls "$A" "[$A1,$A]" seat)"
+check "repeat after 10 min kept" now "$(cls "$A" "[$A2,$A]")"
+check "relay and main copies not repeats" now:now "$(cls "$A" "[$(row question dup $((N0 - 60)) term_w1 term_20 '' 1),$A]"):$(cls "$A" \
+  "[$(row question dup $((N0 - 60)) term_w1 run:run_x '{"to":"chief-of-staff"}' 1),$A]")"
+U=$(row question dup -)
+check "untimed row never a repeat" now:now "$(cls "$U" "[$A1,$U]"):$(cls "$A" "[$(row question dup - term_w1 run:run_x '' 1),$A]")"
+# The recipient tag (P1: Orca keeps payload as a JSON string; a thread id is the fallback form).
+check "relay note never wakes main" drop:drop "$(cls "$(row status 'cos: note' "$N0" term_20 run:run_x '{"to":"chief-of-staff"}')"):$(cls \
+  "$(row question 'cos: q' "$N0" term_20 run:run_x '{"to":"chief-of-staff"}')")"
+check "bad payload no tag, quoted tagged" "batch batch batch batch drop" "$(for p in '' 'junk{' '{}' '{"to":"chief-of-staff "}' \
+  '"{\"to\":\"chief-of-staff\"}"'; do cls "$(row status s "$N0" term_w1 run:run_x "$p")"; done | paste -sd' ' -)"
+# pp_inbox_actionable (main-watch, the nudge hook, await-agents): now rows at once; batch rows once 30 min old and the
+# batch clock (the last drain that showed held notes) is absent or 30 min old, so two batch wakes are 30 min apart.
+rm -f "$T"/inbox-* "$T/scratch/main-watch/batch-at"; main_is term_20
+at() { (export COMMANDECK_NOW=$1; shift; act "$@"); }
+row status okjob $((N0 - 1900)) > "$T/inbox-run:run_x"
+check "batch wakes once at 30 min" ":okjob" "$(at $((N0 - 200)) term_20):$(at "$N0" term_20)"
+mkdir -p "$T/scratch/main-watch"; echo $((N0 - 600)) > "$T/scratch/main-watch/batch-at"
+check "no second batch wake in 30 min" ":okjob" "$(at "$N0" term_20):$(at $((N0 + 1200)) term_20)"
+row status untimed - > "$T/inbox-run:run_x"; echo $((N0 - 60)) > "$T/scratch/main-watch/batch-at"
+check "untimed row waits for clock" ":untimed" "$(at "$N0" term_20):$(at $((N0 + 1740)) term_20)"
+rm -f "$T/scratch/main-watch/batch-at"
+# D27: the page is the whole machine's, newest first (500 rows); a full page that still holds main's question wakes it,
+# and one with nothing actionable still fails.
+jq -cn --argjson n "$N0" '{id: "q", type: "question", subject: "old q", body: "b", from_handle: "term_w1", to_handle: "run:run_x", read: 0,
+  created_at: ($n - 3600 | todate)}, (range(499) | {id: "r\(.)", type: "status", subject: "s\(.)", body: "b", from_handle: "term_o",
+  to_handle: "run:run_o", read: 1, created_at: ($n | todate)})' > "$T/inbox-run:run_x"
+FQ=$(at "$N0" term_20)
+jq -c '.read = 1' "$T/inbox-run:run_x" > "$T/full" && mv "$T/full" "$T/inbox-run:run_x"
+check "full page keeps question" "old q:fails" "$FQ:$( (export COMMANDECK_NOW=$N0; cd "$T/p" && "${E[@]}" bash -c \
+  '. "$0/scripts/paths.sh" && pp_inbox_actionable run_x term_20 >/dev/null' "$REAL") && echo passes || echo fails)"
+rm -f "$T"/inbox-*
+# Senders mark an OK result as status (batched) and a failure as a question; a merge's result keeps waking main (D25).
+(cd "$T/p" && "${E[@]}" bash -c '. "$0/scripts/paths.sh" && pp_detach "$1/d/t.log" run-shell-tests true >/dev/null && pp_detach "$1/d/m.log" merge-u2 true >/dev/null && pp_detach "$1/d/f.log" run-shell-tests false >/dev/null' "$REAL" "$T")
+for _ in $(seq 1 50); do [ "$(wc -l < "$T/inbox-term_20" 2>/dev/null)" -ge 3 ] 2>/dev/null && break; sleep 0.1; done
+DT=$(jq -r '"\(.type) \(.subject)"' "$T/inbox-term_20" 2>/dev/null | sort | paste -sd, -)
+# An event note goes to main too: status on ok (batched), question on fail.
+rm -f "$T"/inbox-*; mkdir -p "$T/scratch"; echo run_x > "$T/scratch/current-run"
+(cd "$T/p" && "${E[@]}" bash -c '. "$0/scripts/paths.sh" && pp_relay_event u1 merge ok "landed" && pp_relay_event u1 merge fail "conflict"' "$REAL")
+check "ok test run status, merge question" "question merge-u2: exit 0,question run-shell-tests: exit 1,status run-shell-tests: exit 0;question FYI event: u1 merge fail,status FYI event: u1 merge ok" \
+  "$DT;$(jq -r '"\(.type) \(.subject)"' "$T/inbox-term_20" 2>/dev/null | sort | paste -sd, -)"
+rm -f "$T"/inbox-* "$T/scratch/current-run"
+check "no watcher keeps own wake rule" "1 1 0" "$(cd "$REAL" && rg -c 'def wake_class\(' scripts hooks | wc -l | tr -d ' ') $(rg -c 'def wakes\(\$' \
+  scripts hooks | wc -l | tr -d ' ') $(rg -n 'orchestration check' scripts/await-agents.sh scripts/watch-agents.sh | grep -vc -e '--peek' -e '^[^:]*:[0-9]*:\s*#' -e ':\s*echo ')"
+# await-agents.sh and watch-agents.sh only look (D20, D26): a consuming check took main's mail from its drain. The stub's
+# check empties the inbox, so a file still there is mail left unread.
+echo run_x > "$T/scratch/current-run"
+aw() { (cd "$T/p" && "${E[@]}" ORCA_TERMINAL_HANDLE=term_20 AWAIT_AGENTS_INTERVAL=1 COMMANDECK_NOW=$N0 timeout 8 bash "$REAL/scripts/await-agents.sh" "$1" 2>&1 | grep -c '^AWAIT: .* message'); }
+row status 'tests: exit 0' > "$T/inbox-run:run_x"
+check "await-agents ignores a status" 0 "$(aw 1)"
+row question 'which file?' > "$T/inbox-run:run_x"
+check "await-agents stops on question, unread" "1:1" "$(aw 5):$(grep -c 'which file' "$T/inbox-run:run_x")"
+{ row question dup $((N0 - 300)) term_w1 run:run_x '' 1; row question dup; } > "$T/inbox-run:run_x"
+check "await-agents skips repeat" 0 "$(aw 1)"
+wa() { (cd "$T/p" && "${E[@]}" ORCA_TERMINAL_HANDLE=term_20 COMMANDECK_NOW=$N0 timeout 3 bash "$REAL/scripts/watch-agents.sh" 1 600 2>&1 | grep -c '^ANSWER NEEDED'); }
+row decision_gate 'pick a scope' > "$T/inbox-run:run_x"
+check "watch-agents shows gate once, unread" "1:1" "$(wa):$(grep -c 'pick a scope' "$T/inbox-run:run_x")"
+{ row question dup $((N0 - 300)) term_w1 run:run_x '' 1; row question dup; } > "$T/inbox-run:run_x"
+check "watch-agents skips repeat" 0 "$(wa)"
+rm -f "$T"/inbox-* "$T/scratch/current-run"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

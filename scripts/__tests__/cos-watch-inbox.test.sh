@@ -23,8 +23,9 @@ EOF
 chmod +x "$T/bin/orca-ide"
 E=(env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" PATH="$T/bin:$PATH")
 watch() { (cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-inbox.sh" term_cos 2>&1); }
+# Each row carries the relay's recipient tag, as cos-tell.sh --note sends it (issue 643: the relay admits only those).
 row() { jq -cn --argjson n $(( $(wc -l < "$T/store.jsonl") + 1 )) --arg f "$1" --arg to "$2" --arg t "$3" --arg s "$4" \
-  '{sequence: $n, run_id: "run_1", from_handle: $f, to_handle: $to, subject: $s, body: "b", type: $t, created_at: "2026-10-15T10:00:00Z"}' >> "$T/store.jsonl"; }
+  '{sequence: $n, run_id: "run_1", from_handle: $f, to_handle: $to, subject: $s, body: "b", type: $t, created_at: "2026-10-15T10:00:00Z", payload: "{\"to\":\"chief-of-staff\"}"}' >> "$T/store.jsonl"; }
 WLJ=$T/scratch/wake-log.jsonl
 logged() { jq -rs '[.[] | select(.from == "cos-watch-inbox") | .result] | join(",")' "$WLJ" 2>/dev/null; }
 
@@ -41,6 +42,18 @@ check "an inbox Orca does not answer writes one refused line, however many polls
 rm -f "$T/down"; watch >/dev/null
 touch "$T/down"; watch >/dev/null
 check "and the next outage, after a poll that read, writes its own" "woke,refused,refused" "$(logged)"
+rm -f "$T/down"
+
+# Pass 3: Orca's repeat of main's reply A, dropped by the wake rule, is no new reply from main: the owner's question
+# marked owed after A (to-main.sh's mark) stays owed, so the relay keeps its unanswered-question wake.
+# rowat <sent at> <row's arguments> -- one message, sent at that time.
+rowat() { row "${@:2}"; jq -c --arg at "$1" --argjson n "$(wc -l < "$T/store.jsonl")" 'if .sequence == $n then .created_at = $at else . end' \
+  "$T/store.jsonl" > "$T/store.new" && mv "$T/store.new" "$T/store.jsonl"; }
+rowat 2026-11-04T10:00:00Z term_main run:run_1 status "Answer A"; watch >/dev/null
+printf '%s\tnew question\n' "$(python3 -c 'import datetime; print(int(datetime.datetime(2026, 11, 4, 10, 1, tzinfo=datetime.timezone.utc).timestamp()))')" > "$T/scratch/cos-owed"
+rowat 2026-11-04T10:02:00Z term_main run:run_1 status "Answer A"; OUT=$(watch)
+check "a dropped repeat of main's reply keeps a newer owed question" "0:kept" \
+  "$(grep -c '"Answer A"' <<<"$OUT"):$([ -e "$T/scratch/cos-owed" ] && echo kept || echo gone)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

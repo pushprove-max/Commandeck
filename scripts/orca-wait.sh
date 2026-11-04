@@ -268,8 +268,8 @@ KEEP='
                or ((.subject // "") | test("^(seat [a-z-]+ (on )?|drive )?u([: ]|$)|(^| )unit=u( |$)"));
   def relay: (.subject // "") | startswith("heads-up:");
   def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or ((.from_handle // "") as $f | any($relay[]; . == $f));
-  def held: wakes($wake; $relay) | not;
-  .result.messages[]? | select(.type != "heartbeat") | select(held or relay or owner or ((noisy | not) and (harness | not)))'
+  .result.messages[]? | select(.type != "heartbeat") | wake_class($wake; $relay; $all; "main") as $c
+  | select($c != "drop") | select($c == "batch" or relay or owner or ((noisy | not) and (harness | not)))'
 # A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
 RENDER='if $full == 1 and ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
@@ -501,7 +501,7 @@ state_block() {  # once per wake, never per message -- the board main would othe
 # deaf on 2026-09-19 with the error in /dev/null. That one is repaired: re-bind
 # and ask again. Anything else, or a fence straight after a re-bind, is printed
 # and ends the drain: a drain that cannot read has read nothing.
-ERRF=$(mktemp); trap 'rm -f "$ERRF"' EXIT
+ERRF=$(mktemp); PAGEF=$(mktemp); trap 'rm -f "$ERRF" "$PAGEF"' EXIT
 REBOUND=0
 checked() {  # checked <rc> <stdout> -- 0: use the output; 1: re-bound, ask again; otherwise exits 4
   local code
@@ -542,14 +542,18 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
     # Both lookups once per batch, not once per jq: each is a process, and the
     # print and the count must classify the same batch the same way. A batch of
     # nothing but heartbeats needs neither.
-    dunits='[]'; hunits='{}'; relay='[]'
+    # Issue 642: the inbox page (read rows included) is the repeat history wake_class reads, once per such batch; a page
+    # not read is [] and makes no repeat. It goes in by file: as an argument 500 rows overflow ARG_MAX.
+    dunits='[]'; hunits='{}'; relay='[]'; echo '[]' > "$PAGEF"
     if [ "$(printf '%s' "$out" | jq -r '[.result.messages[]? | select(.type != "heartbeat")] | length' 2>/dev/null)" != 0 ]; then
       dunits=$(driver_units); hunits=$(handle_units); relay=$(pp_relay_handles)
+      timeout 10 orca-ide orchestration inbox --limit 500 --full --json 2>/dev/null \
+        | jq -c '.result.messages | if type == "array" then . else [] end' > "$PAGEF" 2>/dev/null && [ -s "$PAGEF" ] || echo '[]' > "$PAGEF"
     fi
     # One array feeds every output path and the counter.
     # The wake's own lines first, then the held ones (a stable sort keeps Orca's order within each).
     kept=$(printf '%s' "$out" | jq -c --argjson dunits "$dunits" --argjson hunits "$hunits" --argjson wake "$WAKE" --argjson relay "$relay" --arg rid "$RID_RE" \
-      "$PP_JQ_WAKES[$KEEP] | sort_by(wakes(\$wake; \$relay) | not)" 2>/dev/null) || kept='[]'
+      --slurpfile page "$PAGEF" "$PP_JQ_WAKES"'$page[0] as $all | ['"$KEEP"'] | sort_by(wakes($wake; $relay) | not)' 2>/dev/null) || kept='[]'
     # What the rules hid is kept, before the ack as the bodies below are: a hidden owner answer can still be found.
     # Both go in on stdin: as an argument a big batch overflows ARG_MAX (E2BIG) and the drain never acks.
     # shortcut: one append-only file, rotate it per run if it grows past a few MB.
@@ -568,8 +572,10 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
       fi
       local hdr=0
       while IFS= read -r m; do
+        # The first held note also sets main's batch clock (issue 642): the next batch wakes main no sooner than 30
+        # minutes on. A clock that cannot be written reads as none: the 30-minute age rule alone holds.
         [ "$hdr" = 1 ] || ! jq -e --argjson wake "$WAKE" --argjson relay "$relay" "$PP_JQ_WAKES"'wakes($wake; $relay) | not' <<<"$m" >/dev/null \
-          || { echo "held notes (did not wake you):"; hdr=1; }
+          || { echo "held notes (did not wake you):"; hdr=1; echo "${COMMANDECK_NOW:-$(date +%s)}" > "$SCRATCH/main-watch/batch-at" 2>/dev/null; }
         jq -r --arg mdir "$MSGDIR" --argjson full "$FULL" "$RENDER" <<<"$m"
         serve "$m" "$hunits" "$dunits"
       done < <(printf '%s' "$kept" | jq -c '.[]')

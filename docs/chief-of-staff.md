@@ -24,7 +24,7 @@ it found and exits, which wakes the pane:
 
 | Watcher | Wakes the pane when |
 |---|---|
-| `cos-watch-inbox.sh` | the orchestrator sends it a message, or anyone sends to its own handle (checked every 20 s). A subject starting `FYI` is held and shown with the next message that does wake it, unless it was sent to its own handle |
+| `cos-watch-inbox.sh` | a message is addressed to it: a note sent with `cos-tell.sh --note`, which carries the relay's recipient tag, or anything sent to its own handle (checked every 20 s). The scripts' events and main's other messages go to main only. The same message again within 10 minutes is dropped. A subject starting `FYI` is held and shown with the next message that does wake it, or on its own after 30 minutes, unless it was sent to its own handle. It also wakes the pane once when main ended a turn without answering a message you passed to main |
 | `cos-watch-decisions.sh` | a decision in the ledger is open and you have not been asked yet (every 20 s) |
 | `cos-watch-alerts.sh` | the dashboard raises an alert for this project or the machine (every 60 s) |
 | `cos-watch-limit.sh` | the 7-day usage limit reaches the threshold, 90% by default, and again for each whole percent above it |
@@ -32,6 +32,9 @@ it found and exits, which wakes the pane:
 | `cos-check.sh` | 50 minutes pass: it names a watcher that is down, prints held FYI notes, counts messages the inbox watcher missed, and says how long you have been quiet |
 
 A Stop hook keeps the pane from ending a turn unless the decisions, alerts and limit watchers and `cos-check.sh` are alive; a second Stop hook (`cos-inbox-arm-stop.sh`) starts the inbox poller itself and wakes the pane when a message lands.
+The first Stop hook also holds, once, a reply that is only verdicts, still-running lines or progress counts and asks you nothing; its reason tells the pane to say what it needs from you, or to end the turn as is.
+
+Orca also types "You have N orchestration messages" into main's pane and the relay's. A hook (`cos-own-echo.sh`) drops each one that holds nothing that pane must read now, and marks nothing read. The nudges themselves remain: main is its run's coordinator, and Orca refuses the coordinator's commands from a pane that is not bound to the run, so main cannot leave the run to stop them.
 To send text from a terminal, including a dictation shortcut:
 
 ```bash

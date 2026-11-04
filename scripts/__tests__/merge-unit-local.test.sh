@@ -332,12 +332,16 @@ mk ur; go ur
 for f in "$COMMANDECK_WORKSPACES"/ur/.claude/briefs/ur-r[0-9]*-reports.md; do grep -v '^Pass: ' "$f" > "$f.new" && mv "$f.new" "$f"; done
 check "an unread round leaves passes null" "0 true true" \
   "$(merge ur) $(jq -sr 'map(select(.unit == "ur")) | .[0] | has("passes") and .passes == null' "$UL" 2>/dev/null) $(jq -sr 'map(select(.unit == "ur")) | .[0].gaps | index("passes") != null' "$UL" 2>/dev/null)"
-# #570: a merge sends the relay one `FYI event: <unit> merge <ok|fail>` note; a merge refused after it took the lock, one fail.
+# #570: a merge sends one `FYI event: <unit> merge <ok|fail>` note; a merge refused after it took the lock, one fail.
+# Issue 643: to main (sent, or queued with no main pane), never to the run's mailbox the relay reads.
 echo run_1 > "$TMP/scratch/current-run"
-mk ev1; go ev1; : > "$TMP/orca-calls"; R1=$(merge ev1); O1=$(grep -c 'FYI event: ev1 merge ok' "$TMP/orca-calls"):$(grep -c 'FYI event: ev1 merge fail' "$TMP/orca-calls")
-mk ev2; : > "$TMP/orca-calls"; R2=$(merge ev2); O2=$(grep -c 'FYI event: ev2 merge fail' "$TMP/orca-calls"):$(grep -c 'FYI event: ev2 merge ok' "$TMP/orca-calls")
+ev() { cat "$TMP/orca-calls" "$COMMANDECK_SCRATCH/queue/main.jsonl" 2>/dev/null | grep -c "$1"; }
+mk ev1; go ev1; : > "$TMP/orca-calls"; rm -f "$COMMANDECK_SCRATCH/queue/main.jsonl"; R1=$(merge ev1)
+O1=$(ev 'FYI event: ev1 merge ok'):$(ev 'FYI event: ev1 merge fail'):$(grep -c -- '--to run:.*FYI event' "$TMP/orca-calls")
+mk ev2; : > "$TMP/orca-calls"; rm -f "$COMMANDECK_SCRATCH/queue/main.jsonl"; R2=$(merge ev2)
+O2=$(ev 'FYI event: ev2 merge fail'):$(ev 'FYI event: ev2 merge ok'):$(grep -c -- '--to run:.*FYI event' "$TMP/orca-calls")
 rm -f "$TMP/scratch/current-run"
-check "a merge sends the relay one ok event and a refused merge one fail event" "0:1:0 1:1:0" "$R1:$O1 $R2:$O2"
+check "a merge sends main one ok event and a refused merge one fail event; the relay's mailbox none" "0:1:0:0 1:1:0:0" "$R1:$O1 $R2:$O2"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

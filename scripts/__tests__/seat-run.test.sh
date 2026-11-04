@@ -74,14 +74,15 @@ DLOG=$(ls "$HOME/.commandeck/scratch/"*/run-*pe-plan-judge-sol.log 2>/dev/null |
 check "a detached run started from a shell that is then killed (with its process group) still finishes and collects" "1:1" \
   "$(grep -c '^seat=plan-judge-sol unit=pe VERDICT: GO report=' "$DLOG" 2>/dev/null):$(grep -c "run-det.md" "$(ls "$HOME/.commandeck/scratch/"*/seat-pe-plan-judge-sol.txt 2>/dev/null)")"
 
-# #570: a seat run sends the relay one `FYI event: <unit> seat-<role> <ok|fail>` note, from the script, whatever the verdict.
+# #570: a seat run sends one `FYI event: <unit> seat-<role> <ok|fail>` note, from the script, whatever the verdict.
+# Issue 643: to main (sent, or queued with no main pane: $T/wakes plus $SQ), never to the run's mailbox the relay reads.
 plan_unit pf; SD=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1); echo run_1 > "${SD}current-run"
 printf 'Judge the plan, run five.\nPlan: .claude/plans/pf.md\nEnd on a verdict line.\n' > "$T/run-ev.md"; echo 'VERDICT: GO' > "$T/screen"
 OUT=$(rrun plan-judge-sol pf "$T/run-ev.md" 2>/dev/null); RC=$?; rm -f "${SD}current-run"
-check "a seat run sends the relay exactly one event for a verdict" "0:1:0" \
-  "$RC:$(grep -c -- '--subject FYI event: pf seat-plan-judge-sol ok ' "$T/wakes"):$(grep -c -- 'FYI event: pf seat-plan-judge-sol fail' "$T/wakes")"
+check "a seat run sends main exactly one event for a verdict, the relay's mailbox none" "0:1:0:0" \
+  "$RC:$(cat "$T/wakes" "$SQ" 2>/dev/null | grep -cE 'FYI event: pf seat-plan-judge-sol ok( |")'):$(cat "$T/wakes" "$SQ" 2>/dev/null | grep -c 'FYI event: pf seat-plan-judge-sol fail'):$(grep -c -- '--to run:.*FYI event' "$T/wakes")"
 check "main's rules say the scripts send the seat, launch, merge and CI events and main does not repeat them" "1:1" \
-  "$(grep -c 'The scripts send the seat, launch, merge and CI events to the relay' "$REAL/templates/main-session.md"):$(grep -c 'do not repeat them' "$REAL/templates/main-session.md")"
+  "$(grep -c 'The scripts send you the seat, launch, merge and CI events' "$REAL/templates/main-session.md"):$(grep -c 'do not repeat them' "$REAL/templates/main-session.md")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

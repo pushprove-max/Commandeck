@@ -21,6 +21,37 @@ GITDIR=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-dir 2>/dev/n
 COMMON=$(git -C "${ROOT:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 TOP=$(git -C "${ROOT:-.}" rev-parse --show-toplevel 2>/dev/null) || exit 0
 [ "$GITDIR" != "$COMMON" ] && [ "${TOP##*/}" = Chief-of-Staff ] || exit 0
+# The owner reads this pane (issue 644): a reply of only verdicts, still-running lines or counts is held once
+# (stop_hook_active above ends the second try). Any question, ask or news line passes it.
+HOLD=; KINDS=; WORDS=
+MSG=$(jq -r '.last_assistant_message // empty' <<<"$INPUT" 2>/dev/null)
+if [ -n "$MSG" ]; then
+  ASK='(approve|decide|confirm|choose|pick|reply|roll back)([^[:alnum:]]|$)' NL=$'\n'
+  shopt -s nocasematch
+  if [[ $MSG == *\?* || $MSG =~ (^|$NL)[[:space:]]*(QUESTION|BLOCKED): || $MSG =~ your\ call \
+    || $MSG =~ (^|$NL)[[:space:]]*((-|\*|[0-9]+\.)[[:space:]]+)?([>][[:space:]]*)?(\*\*)?(please[[:space:]]+)?$ASK \
+    || $MSG =~ (^|[^[:alnum:]])you[[:space:]]+$ASK ]]; then HOLD=
+  else
+    HOLD=1
+    while IFS= read -r L; do
+      [[ $L =~ [^[:space:]] ]] || continue
+      K=
+      [[ $L == *%* ]] || {
+        shopt -u nocasematch
+        [[ $L =~ (VERDICT:|(^|[^[:alnum:]-])(NO-GO|NARROWED\ GO|GO|PASS|FAIL)([^[:alnum:]-]|$)) ]] && { K=verdict; WORDS+=" ${BASH_REMATCH[3]:-VERDICT:}"; }
+        shopt -s nocasematch
+        [[ $L =~ (still\ running|still\ going|in\ progress|running|waiting\ on) ]] && { K+=" still-running"; WORDS+=" ${BASH_REMATCH[1]}"; }
+        [[ $L =~ ([0-9]+\ of\ [0-9]+|[0-9]+/[0-9]+) ]] && { K+=" count"; WORDS+=" ${BASH_REMATCH[1]}"; }
+      }
+      [ -n "$K" ] && KINDS+=" $K" || { HOLD=; break; }
+    done <<<"$MSG"
+  fi
+  shopt -u nocasematch
+fi
+if [ -n "$HOLD" ]; then
+  KINDS=$(printf '%s\n' $KINDS | sort -u | paste -sd/ -)
+  HOLD="Your reply is only $KINDS lines (matched:$WORDS). The owner reads this pane: if the owner must act, say what you need (a question, an ask or a decision); if nothing is needed from the owner, end the turn as is. "
+fi
 # Without the handle there is no poller to name, and a block could never clear.
 H=${ORCA_TERMINAL_HANDLE:-}
 [ -n "$H" ] || exit 0
@@ -48,10 +79,12 @@ for W in cos-watch-decisions:"open decisions for the owner" cos-watch-alerts:"da
   PID=$(cat "$COS_KEY.$N.pid" 2>/dev/null)
   runs "$(ps -o command= -p "${PID:-0}" 2>/dev/null)" "$N.sh" || MISSING+=("The ${N#cos-watch-} watcher is not running (${W#*:}): bash $S/$N.sh")
 done
-[ ${#MISSING[@]} -gt 0 ] || exit 0
+[ ${#MISSING[@]} -gt 0 ] || [ -n "$HOLD" ] || exit 0
 
 HOOK_FIRE_REASON=watcher-not-running
+R=
+if [ ${#MISSING[@]} -gt 0 ]; then R="Arm each missing watcher in the background (run_in_background) before ending the turn. $(printf '%s. ' "${MISSING[@]}")"; fi
+[ -z "$HOLD" ] || { R+=$HOLD; HOOK_FIRE_REASON=owner-reply-${KINDS//\//-}; [ ${#MISSING[@]} -eq 0 ] || HOOK_FIRE_REASON=watcher-not-running; }
 HOOK_FIRE_BLOCK=1
-jq -n --arg r "Arm each missing watcher in the background (run_in_background) before ending the turn. $(printf '%s. ' "${MISSING[@]}")" \
-  '{decision:"block", reason:$r}'
+jq -n --arg r "$R" '{decision:"block", reason:$r}'
 exit 0

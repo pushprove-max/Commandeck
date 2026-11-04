@@ -315,11 +315,14 @@ inbox_wake() {
     out=$(timeout 10 orca-ide orchestration inbox --terminal "$h" --full --json 2>/dev/null) || continue
     hist=$ST/builder-$u-$h.inbox
     # Its unread messages not yet woken for (a reply that is not an inbox lists none): one line for all of them.
+    # Issue 642: only those the one wake rule wakes a seat for (wake_class seat: no heartbeat, no 10-minute repeat
+    # against this same page); a repeat stays unread for the Builder's next check.
     new=()
     while IFS= read -r id; do
       [ -n "$id" ] || continue
       grep -qxF -- "$id" "$hist" 2>/dev/null || new+=("$id")
-    done < <(jq -r --arg h "$h" '.result.messages[]? | select(.to_handle == $h and (.read // 0) == 0) | .id // empty' <<<"$out" 2>/dev/null)
+    done < <(jq -r --arg h "$h" "$PP_JQ_WAKES"'(.result.messages // []) as $all | $all[]? | select(.to_handle == $h and (.read // 0) == 0)
+      | select(wake_class([]; []; $all; "seat") == "now") | .id // empty' <<<"$out" 2>/dev/null)
     [ "${#new[@]}" -gt 0 ] || continue
     if sent=$(orca-ide terminal send --terminal "$h" --text "Signal INBOX: a message for you is waiting in your Orca inbox. Read it with \`orca orchestration check --wait --timeout-ms 5000\`, act on it, and end your turn." --enter 2>/dev/null) \
       && ! jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$sent"; then
@@ -600,12 +603,13 @@ mail_wake() {
   printf '0\nmail\n%s\n' "$RUN" > "$ST/wake"
 }
 # tell_relay <why> <fix> -- wake() gave up on main (a prompt open in its pane, or no wake proven): the relay hears,
-# once per wake episode (the wake's task list, kept in wake-told), through main's run under main's handle, as
-# flush() sends. Only a send Orca took marks the episode told, so a refused one is tried again next tick.
+# once per wake episode (the wake's task list, kept in wake-told), through main's run under main's handle with the
+# relay's recipient tag, as flush() sends. Only a send Orca took marks the episode told, so a refused one is tried again next tick.
 tell_relay() {
   [ -d "$PP_WORKSPACES/Chief-of-Staff" ] && [ "$(cat "$ST/wake-told" 2>/dev/null)" != "$tasks" ] || return 0
+  # The recipient tag (issue 643): the relay admits it, and main's own wake rule drops it.
   orca_op '.ok == true' orca-ide orchestration send --run "$RUN" --to "run:$RUN" ${FROM:+--from "$FROM"} --type status \
-    --subject "cos: main-watch: main has not read finished work" \
+    --payload '{"to":"chief-of-staff"}' --subject "cos: main-watch: main has not read finished work" \
     --body "$(wc -w <<<"$tasks" | tr -d ' ') item(s) wait unread in main's inbox for run $RUN: $1. Fix: $2." --json \
     && { printf '%s\n' "$tasks" > "$ST/wake-told"; pp_wake_log main-watch "run:$RUN" "tell relay: $1" sent; return 0; }
   pp_wake_log main-watch "run:$RUN" "tell relay: $1" refused "${OP_ERR:-}"
@@ -1719,6 +1723,9 @@ tick() {
   RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
   NOW=${COMMANDECK_NOW:-$(date +%s)}
+  # Issue 643 (D21): from this watcher's first tick its note to the relay is tagged; the relay admits main's untagged
+  # notes only from before it. Written once, whole (a temp file moved in), never moved; a failed write is tried next tick.
+  [ -e "$ST/tags-relay" ] || { echo "$NOW" > "$ST/tags-relay.new" && mv "$ST/tags-relay.new" "$ST/tags-relay"; }
   DIAG= DIAG_KEYS= REBOUND= RELAY=0
   unset INBOX   # reported() reads the run inbox once per tick
   # Read once a tick: every post and the heads-up relay stand down under it (hu_claimed).

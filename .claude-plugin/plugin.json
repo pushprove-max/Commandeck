@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.70.0",
+  "version": "0.71.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -208,7 +208,7 @@
     "wakeKinds": {
       "type": "string",
       "title": "Wake kinds",
-      "description": "Orca message types that wake main, comma-separated. Others are held and shown at the next wake.",
+      "description": "Orca message types that wake main at once, comma-separated. A question, decision gate, worker_done or escalation always does. Others wait for main's 30-minute batch.",
       "default": "worker_done,escalation,question,decision_gate,merge_ready"
     },
     "wakeWindowSeconds": {

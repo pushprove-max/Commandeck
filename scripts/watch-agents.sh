@@ -20,7 +20,9 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 2
 POLL=${1:-60}
 HEARTBEAT=${2:-600}
 POLLER="$HERE/poll-agents.sh"
+. "$HERE/paths.sh" || exit 2
 
+shown=""
 prev=""
 pending=""
 last_beat=0
@@ -29,37 +31,24 @@ fails=0
 while true; do
   now=$(date +%s)
 
-  # Clear KEEPALIVES ONLY. Workers send periodic "alive" pings, and an unacked
-  # queue makes the app announce a waiting message -- so the operator gets
-  # interrupted for something with no content. Ack a delivery only when every
-  # message in it is a heartbeat; anything real (worker_done, question,
-  # escalation) is left untouched for the interactive poll to show in full.
   # A BLOCKED worker is worse than an idle one: it waits on an answer, the ask
   # times out, and the work silently proceeds on a default. That cost a real
   # escalation once -- a worker asking whether to touch an out-of-scope file
   # went unanswered because nothing surfaced questions. Emit those loudly and
   # immediately, before anything else this cycle.
-  peek=$(orca-ide orchestration check --timeout-ms 2000 --full --json 2>/dev/null)
-  printf '%s' "$peek" | python3 -c '
-import json,sys
-try: r=json.load(sys.stdin).get("result",{})
-except Exception: raise SystemExit
-for m in r.get("messages") or []:
-    if m.get("type") in ("question","escalation"):
-        print("ANSWER NEEDED [" + str(m.get("type")) + "] " + str(m.get("subject","")))
-        body=(m.get("body") or "").strip()
-        if body: print("  " + body[:900].replace("\n","\n  "))
-' 2>/dev/null
-
-  ack=$(printf '%s' "$peek" | python3 -c '
-import json,sys
-try: r=json.load(sys.stdin).get("result",{})
-except Exception: raise SystemExit
-msgs=r.get("messages") or []
-if msgs and all(m.get("type")=="heartbeat" for m in msgs):
-    print(r.get("deliveryId") or "")
-' 2>/dev/null)
-  [ -n "$ack" ] && orca-ide orchestration check --ack "$ack" --timeout-ms 2000 --json >/dev/null 2>&1
+  # Issue 642: what wakes main is the one wake rule's (pp_inbox_actionable: now,
+  # or a batch that is due), read off the inbox page, which marks nothing read:
+  # the consuming check here took main's mail from its drain. Each row is shown
+  # once per id. Heartbeats are not acked here: the nudge hook holds those
+  # nudges (cos-own-echo.sh). A failed or junk read is no news.
+  acts=$(pp_inbox_actionable "$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")" "${ORCA_TERMINAL_HANDLE:-}" 2>/dev/null) || acts='[]'
+  while IFS= read -r m; do
+    id=$(jq -r '.id // empty' <<<"$m")
+    [ -n "$id" ] && ! grep -qxF "$id" <<<"$shown" || continue
+    shown+="$id"$'\n'
+    jq -r '"ANSWER NEEDED [\(.type // "")] \(.subject // "")", ((.body // "" | gsub("^\\s+|\\s+$"; "")) as $b
+      | if $b == "" then empty else "  " + ($b[0:900] | gsub("\n"; "\n  ")) end)' <<<"$m"
+  done < <(jq -c 'if type == "array" then .[] else empty end' <<<"$acts" 2>/dev/null)
 
   cur=$(bash "$POLLER" --signature 2>/dev/null)
   rc=$?

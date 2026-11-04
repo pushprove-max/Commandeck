@@ -20,8 +20,8 @@ mkdir -p "$T/bin"
 git init -q -b main "$T/p" && git -C "$T/p" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first
 git -C "$T/p" worktree add -q "$T/ws/Chief-of-Staff" -b cos
 git -C "$T/p" worktree add -q "$T/ws/u1" -b u1
-# Orca: a check answers $T/batch (messages from the handles listed in it, one a line) with delivery dl_1,
-# unless $T/down exists. Every call is logged.
+# Orca: a check answers $T/batch with delivery dl_1, unless $T/down exists: one message a line, "<from> [<to>] [tag]",
+# to the run unless named, tagged for the relay when the third word is "tag" (issue 643). Every call is logged.
 # An inbox read answers $T/inbox, a JSON array of messages.
 cat > "$T/bin/orca-ide" <<EOF
 #!/usr/bin/env bash
@@ -29,8 +29,10 @@ printf '%s\n' "\$*" >> "$T/calls"
 [ ! -e "$T/down" ] || exit 1
 [ "\$2" != inbox ] || [ ! -e "$T/stall" ] || sleep 20
 [ "\$2" != inbox ] || { jq -c '{ok: true, result: {messages: .}}' "$T/inbox"; exit; }
-jq -Rn '{ok: true, result: {deliveryId: "dl_1", messages: [inputs | {from_handle: ., subject: "s", body: "b"}]}}' < "$T/batch"
+jq -Rn '{ok: true, result: {deliveryId: "dl_1", messages: [inputs | split(" ") | {sequence: 10, type: "status", from_handle: .[0], to_handle: (.[1] // "run:run_abc123"),
+  payload: (if .[2] == "tag" then "{\"to\":\"chief-of-staff\"}" else null end), subject: "s", body: "b", created_at: "2026-11-04T10:00:00Z"}]}}' < "$T/batch"
 EOF
+echo '[]' > "$T/inbox"
 chmod +x "$T/bin/orca-ide"
 PROMPT='You have 2 orchestration messages. Run `orca orchestration check --run run_abc123`.'
 # hook <dir> [prompt] -- the hook's output for that prompt in a pane of that checkout, the relay's handle set.
@@ -43,19 +45,39 @@ printf 'term_cos\nterm_cos\n' > "$T/batch"
 OUT=$(hook "$T/ws/Chief-of-Staff")
 check "a batch all of this pane's own is dropped, naming the count" 'block:2' \
   "$(jq -r '.decision' <<<"$OUT" 2>/dev/null):$(jq -r '.reason' <<<"$OUT" 2>/dev/null | grep -o 'own [0-9]*' | cut -d' ' -f2)"
-check "and acknowledged once, by its delivery, in the run the prompt names" 1 "$(calls '--run run_abc123 --ack dl_1 --peek')"
+# Builder check P5: a peek gives no delivery id, so the hook acknowledges nothing (D14). Owner-allowed test edit that
+# keeps its claim (2026-10-30): the ack counts here and below are reversed to 0; the hook reads the run the prompt names.
+check "and acknowledged never, its run read with a peek" "0:1" "$(calls '--ack'):$(calls 'check --run run_abc123 --peek')"
 # Issue 319: the relay's sends carry the name it was given (chiefOfStaff.name), in whatever case, not its handle: a
 # relay sending as "relay" woke itself for each send while its filter held "Relay".
 mkdir -p "$T/p/.claude"; echo '{"chiefOfStaff":{"name":"relay"}}' > "$T/p/.claude/commandeck.json"
 printf 'Relay\nrelay\n' > "$T/batch"
 OUT=$(hook "$T/ws/Chief-of-Staff")
-check "a send from the relay's own name in another case is its own echo" 'block:2 1' \
-  "$(jq -r '.decision' <<<"$OUT" 2>/dev/null):$(jq -r '.reason' <<<"$OUT" 2>/dev/null | grep -o 'own [0-9]*' | cut -d' ' -f2) $(calls '--ack dl_1 --peek')"
-printf 'Relay\nterm_main\n' > "$T/batch"
+check "a send from the relay's own name in another case is its own echo" 'block:2 0' \
+  "$(jq -r '.decision' <<<"$OUT" 2>/dev/null):$(jq -r '.reason' <<<"$OUT" 2>/dev/null | grep -o 'own [0-9]*' | cut -d' ' -f2) $(calls '--ack')"
+# Another pane's message in the batch is tagged for the relay: only mail addressed to it is real for it (issue 643).
+printf 'Relay\nterm_main run:run_abc123 tag\n' > "$T/batch"
 check "a batch with the relay's name and another pane's message passes" ':0' "$(hook "$T/ws/Chief-of-Staff"):$(calls '--ack')"
 rm -f "$T/p/.claude/commandeck.json"
-printf 'term_cos\nterm_main\n' > "$T/batch"
+printf 'term_cos\nterm_main run:run_abc123 tag\n' > "$T/batch"
 check "a batch with one message from another pane passes, unacknowledged" ':0' "$(hook "$T/ws/Chief-of-Staff"):$(calls '--ack')"
+# Issue 643: an Orca nudge in the relay pane with no mail for it, in either form, costs it no turn; it reads with a peek
+# only, so main's rows stay unread; a note for it or to its handle passes; a repeat within 10 minutes is no mail (D14, D22).
+printf 'term_main\nterm_w1 term_main\n' > "$T/batch"
+check "relay nudge with no mail dropped" "block:0" "$(hook "$T/ws/Chief-of-Staff" | jq -r .decision 2>/dev/null):$(calls '--ack')"
+check "relay nudge leaves main's unread" "2:0" "$(calls 'orchestration'):$(grep 'orchestration check' "$T/calls" | grep -vc -- '--peek')"
+printf 'term_main run:run_abc123 tag\n' > "$T/batch"
+check "relay nudge with note passes" ":" "$(hook "$T/ws/Chief-of-Staff"):$(printf 'term_w1 term_cos\n' > "$T/batch"; hook "$T/ws/Chief-of-Staff")"
+BARE='You have 1 orchestration message. Run `orca orchestration check`.'
+printf 'term_main\n' > "$T/batch"
+check "bare relay nudge with no mail dropped" "block:1" \
+  "$(hook "$T/ws/Chief-of-Staff" "$BARE" | jq -r .decision 2>/dev/null):$(grep -c 'orchestration check --peek --full --json' "$T/calls")"
+printf 'term_main run:run_abc123 tag\n' > "$T/batch"
+# The repeat history is a full page of ordinary 7 KB bodies (3.5 MB): past any one-argument limit, it still reads.
+jq -n '[{sequence: 5, type: "status", from_handle: "term_main", to_handle: "run:run_abc123", payload: "{\"to\":\"chief-of-staff\"}", subject: "s", body: "b", created_at: "2026-11-04T09:55:00Z"}]
+  + [range(499) as $i | {sequence: (100 + $i), type: "status", from_handle: "term_x", to_handle: "term_other", read: 1, subject: "filler \($i)", body: ("x" * 7000), created_at: "2026-11-04T09:00:00Z"}]' > "$T/inbox"
+check "relay nudge repeat dropped" block "$(hook "$T/ws/Chief-of-Staff" | jq -r .decision 2>/dev/null)"
+echo '[]' > "$T/inbox"
 printf 'term_cos\n' > "$T/batch"
 check "another prompt passes and asks Orca nothing" ':0' "$(hook "$T/ws/Chief-of-Staff" 'is u1 merged?'):$(calls)"
 check "a prompt that only quotes the notice passes and asks Orca nothing" ':0' \
@@ -119,7 +141,16 @@ check "the orca-ide spelling of the notice is the relay's echo too" block \
 touch "$T/down"
 check "Orca failing passes" "" "$(hook "$T/ws/Chief-of-Staff")"
 rm "$T/down"; : > "$T/batch"
-check "an empty batch passes, unacknowledged" ':0' "$(hook "$T/ws/Chief-of-Staff"):$(calls '--ack')"
+# D14: an empty batch holds no mail for the relay. Owner-allowed test edit that keeps its claim (2026-10-30): was passed.
+check "an empty batch is held, unacknowledged" 'block:0' "$(hook "$T/ws/Chief-of-Staff" | jq -r .decision 2>/dev/null):$(calls '--ack')"
+# Main's checkout (issue 642): a batch just shown (main's batch clock) keeps aged statuses waiting, and a question after
+# it is held inside its window like any; the bare nudge takes the run from the run file (D22).
+mkdir -p "$T/sc/main-watch"; echo 99900 > "$T/sc/main-watch/batch-at"
+{ im b1 status term_x run:run_abc123 90000; im b2 question term_x run:run_abc123 99990; } | inbox
+check "question after batch waits for window" "block:$SILENT" "$(mhook | jq -r .decision 2>/dev/null):$(NOW=100050 mhook)"
+echo run_abc123 > "$T/sc/current-run"; im b3 status term_x run:run_abc123 99000 | inbox
+check "bare nudge with nothing actionable held" block "$(mhook "$BARE" | jq -r .decision 2>/dev/null)"
+rm -f "$T/sc/main-watch/batch-at" "$T/sc/current-run"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

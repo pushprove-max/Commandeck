@@ -17,7 +17,11 @@ if [ "${1:-}" = --note ]; then
   SENT=$(date +%s)
   # A service caller (the dashboard's) has no pane: it sends as main's or the coordinator's (pp_sender, issue 321).
   FROM=$(pp_sender) || FROM=
-  OUT=$(orca-ide orchestration send --run "$RUN" ${FROM:+--from "$FROM"} --to "run:$RUN" --type status --subject "$2" --body "$3" --json 2>&1)
+  # Issue 643: the note is tagged for the relay (payload `to`), the only mail its poller admits and main's wake rule
+  # drops. An `FYI event: ` note comes only from an older process's pp_relay_event: it goes untagged, as before, and
+  # the relay admits it only until the new main-watch's cutover (tags-relay).
+  TAG=(--payload '{"to":"chief-of-staff"}'); [[ $2 != "FYI event: "* ]] || TAG=()
+  OUT=$(orca-ide orchestration send --run "$RUN" ${FROM:+--from "$FROM"} --to "run:$RUN" --type status ${TAG[@]+"${TAG[@]}"} --subject "$2" --body "$3" --json 2>&1)
   jq -e '.ok == true and ([.. | strings | select(test("^msg_"))] | length > 0) and (tostring | test("not durable") | not)' <<<"$OUT" >/dev/null 2>&1 \
     || { pp_wake_log cos-tell "run:$RUN" "note: ${2:0:60}" refused "$(head -c 200 <<<"$OUT")"; echo "cos-tell: NOT sent: Orca did not confirm a stored message to run:$RUN: $(head -c 300 <<<"$OUT")" >&2; exit 1; }
   pp_wake_log cos-tell "run:$RUN" "note: ${2:0:60}" sent

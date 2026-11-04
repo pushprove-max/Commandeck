@@ -129,13 +129,14 @@ case "$VERB" in
       echo "long-job: no memory cage on this host (systemd-run missing); $N did not run" > "$JOBS/$N.log"; rc=2
     fi
     echo "$rc" > "$JOBS/$N.rc.tmp" && mv "$JOBS/$N.rc.tmp" "$JOBS/$N.rc"
-    # Main is told it finished. A question, because orca-wait.sh hides `status`. A seat job is reported by
+    # Main is told it finished: a status on rc 0, which waits for main's 30-minute batch (issue 642), and a
+    # question on a failure, which wakes main at once. A seat job is reported by
     # seat.sh collect. The result counts as read once to-main.sh sent or queued the message (exit 0 or 3); a refused
     # one (1) stays unread for wait.
     if [[ $N != seat-* && ! -e "$JOBS/$N.inline" ]]; then
       MSG="$JOBS/$N.log
 $(tail -20 "$JOBS/$N.log" 2>/dev/null)"
-      timeout 60 bash "$HERE/to-main.sh" question "long-job $N done rc=$rc" "$MSG" >/dev/null 2>&1; case $? in
+      timeout 60 bash "$HERE/to-main.sh" "$([ "$rc" = 0 ] && echo status || echo question)" "long-job $N done rc=$rc" "$MSG" >/dev/null 2>&1; case $? in
         0|3) : > "$JOBS/$N.read" ;;
         *) echo "long-job: the done message to main was refused; the result stays unread for wait" >> "$JOBS/$N.log" ;;
       esac

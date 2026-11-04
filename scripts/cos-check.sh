@@ -32,7 +32,8 @@ MISSED=$(orca-ide orchestration inbox --limit 200 --full --json 2>/dev/null | jq
 ARCH=$COS_KEY.cos-check-notes-$(date +%s)-$$.txt
 NOTES=$({ flock -w 10 9 || exit 0; f=$COS_KEY.inbox-seq; [ -f "$f" ] && IFS= read -r first < "$f" || exit 0
   case " $first " in (*" pending "*) exit 0 ;; esac
-  tail -n +2 "$f" > "$ARCH" && printf '%s\n' "$first" > "$f.new" && mv "$f.new" "$f"; cat "$ARCH"; } 9>>"$COS_KEY.inbox-seq.lock")
+  # The batch clock (since=) times the notes cleared here, so it goes with them (issue 643).
+  tail -n +2 "$f" > "$ARCH" && printf '%s\n' "$(sed 's/ since=[0-9]*//' <<<"$first")" > "$f.new" && mv "$f.new" "$f"; cat "$ARCH"; } 9>>"$COS_KEY.inbox-seq.lock")
 [ -n "$NOTES" ] || rm -f "$ARCH"
 # Every pane logs its prompts there, workers' too (main-watch's Signal WARM to a Builder): the owner types only in
 # main and in the Chief-of-Staff, Fast-lane and Research-lane worktrees, so only rows whose cwd is exactly one of those count. Workers'

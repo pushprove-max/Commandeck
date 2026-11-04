@@ -188,5 +188,32 @@ check "a non-Chief-of-Staff pane passes" "0 none" "$(run "$WT" false)"
 check "the main checkout passes" "0 none" "$(run "$MAIN" false)"
 check "no pane handle passes (nothing to arm)" "0 none" "$(run "$COS" false "")"
 
+# Issue 644: the owner reads this pane, so a reply of only verdicts, still-running lines or counts is held once.
+# say <message> -> hook output JSON, watchers all up so only the reply check decides.
+up decisions alerts limit check
+say() { jq -cn --arg m "$1" '{stop_hook_active:false,last_assistant_message:$m}' \
+  | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H COMMANDECK_REVIEWER= bash "$HOOK" 2>/dev/null; }
+dec() { local o; o=$(say "$1"); if [ -n "$o" ]; then jq -r .decision <<<"$o"; else echo none; fi; }
+check "verdict update held naming why" "block 1 1" \
+  "$(dec "VERDICT: GO") $(say "VERDICT: GO" | jq -r .reason | grep -c verdict) $(say "VERDICT: GO" | jq -r .reason | grep -c 'owner reads this pane')"
+check "still-running held" "block" "$(dec "unit-7: still running
+unit-8: waiting on review")"
+check "progress count held" "block" "$(dec "3 of 5 done
+4/5")"
+# Catches an ask-word match anywhere in a line: `reply` mid-line is no ask.
+check "incidental ask word held" "block" "$(dec "wake-waste: GO, the reply path is fixed")"
+# The second case catches a quote mark read as a regex word edge: a quoted ask line is an ask, and its verdict must
+# not hold it. The third: a held reply names the words it matched.
+check "question passes" "none none 1" "$(dec "VERDICT: GO. Merge now?") $(dec "> Confirm the scope
+VERDICT: GO") $(say "u1: GO
+3 of 5" | jq -r .reason | grep -c 'matched: GO 3 of 5)')"
+check "bold question passes" "none" "$(dec "**Approve the merge**
+VERDICT: GO")"
+check "action line with count passes" "none" "$(dec "Approve 3 of 5 merges")"
+check "limit percent passes" "none" "$(dec "7-day limit: 82%")"
+check "empty or absent reply passes" "none none" "$(dec "") $(run "$COS" false | cut -d' ' -f2)"
+check "verdict with news passes" "none" "$(dec "VERDICT: GO
+The deploy moved to the new host and the old one is off.")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

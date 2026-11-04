@@ -154,7 +154,7 @@ mkdir -p "$(dirname "$LOG")"
 # may carry quotes and the wake body carries a command substitution, and nesting
 # those through systemd-run's quoting is how the hand-written versions kept
 # going wrong. Every word is %q-quoted, so the command runs exactly as given.
-# A push-*, ci-* or deploy job also sends the relay one event line from its exit status; a failed send is
+# A push-*, ci-* or deploy job also sends main one event line from its exit status; a failed send is
 # swallowed by pp_relay_event, so the job's exit code is the command's. main pushes as `push-<sha12> -- git push ...`.
 RELAY= EV=
 case $LABEL in
@@ -162,6 +162,9 @@ case $LABEL in
   ci-*) EV=ci DETAIL=${LABEL#ci-} ;;
   *deploy*) EV=deploy DETAIL=$LABEL ;;
 esac
+# Issue 642: exit 0 is a status, which waits for main's 30-minute batch; a failure is a question. A push or deploy
+# result is a question either way: the owner keeps those waking main at once.
+OKT=status; case $EV in push|deploy) OKT=question ;; esac
 [ -z "$EV" ] || RELAY="( . $(printf '%q' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/paths.sh") && pp_relay_event $(printf '%q' "${PP_MAIN##*/}") $EV \$([ \$STATUS -eq 0 ] && echo ok || echo fail) \"$DETAIL exit \$STATUS\" ) || true"
 cat > "$CMD" <<EOF
 set -o pipefail
@@ -188,7 +191,7 @@ fi
     echo "deduped: same result sent at \$SENT"
   else
     # to-main.sh exits 0 posted, 3 queued (both count as sent), else the send was refused.
-    R=\$(bash $(printf '%q' "$HERE/to-main.sh") question \\
+    R=\$(bash $(printf '%q' "$HERE/to-main.sh") \$([ \$STATUS -eq 0 ] && echo $OKT || echo question) \\
       "$LABEL: \$([ \$STATUS -eq 0 ] && echo OK || echo FAILED) exit \$STATUS" \\
       "$LABEL exited \$STATUS; log $LOG
 \$(tail -5 $(printf '%q' "$LOG") | cut -c1-200)" 2>&1); RC=\$?

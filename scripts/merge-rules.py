@@ -190,6 +190,8 @@ MADE_FROM = {
     "2659eb01": ("60dbe5c3",), "5ea4eaeb": ("5e73f876",), "701575f7": ("918c136f",), "6afb47a7": ("a78ec6d6",),
     # the scripts send the relay's FYI events (issue 570); an answer the ledger delivered is not resent (issue 569)
     "f3139e7b": ("6a82c4ab",), "af80fa89": ("b2a85a66",),
+    # the scripts' events go to main, not the relay (issue 642); the relay's poller reads the recipient tag (issue 643)
+    "4f772079": ("f3139e7b",), "2f94caff": ("af80fa89",),
     # 0.70.0 main-session.md: the Do-not list names the hand-launch log; three procedural lines move under Details
     # word for word, a pointer in their place (issue 611)
     "c34eb141": ("702b08c7",), "75e93e14": ("4f20e61c",), "5ea27f33": ("0dde062f", "702b08c7"),

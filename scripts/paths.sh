@@ -367,14 +367,16 @@ pp_wake_log() {
     '{at: $at, from: $from, to: $to, reason: $reason, result: $result, error: $error}' >> "$f" 2>/dev/null || true
   return 0
 }
-# pp_relay_event <unit> <event> <ok|fail> <detail> -- tells the relay one outcome as a held note, `FYI event: <unit> <event>
-# <ok|fail>` (cos-tell.sh --note, which the relay's poller holds and never counts as main's reply). Sent once per outcome by
-# the script that ended it, so main writes none. Nothing without a recorded run. A send that fails or hangs (30 s) goes to
-# $PP_SCRATCH/relay-events.log and is swallowed: an event never changes its caller's exit code.
+# pp_relay_event <unit> <event> <ok|fail> <detail> -- tells main one outcome, `FYI event: <unit> <event> <ok|fail>`, through
+# to-main.sh: a status on ok (it waits for the 30-minute batch), a question on fail. Issue 643: events go to main only; the
+# relay wakes only on mail addressed to it. Sent once per outcome by the script that ended it. Nothing without a recorded
+# run. A send that does not exit 0 (3 queued, 1 refused) or hangs (30 s) goes to $PP_SCRATCH/relay-events.log and is
+# swallowed: an event never changes its caller's exit code.
 pp_relay_event() {
-  local out
+  local out t=question
   [ -s "$PP_RUN_FILE" ] || return 0
-  out=$(timeout 30 bash "$PP_SCRIPTS/cos-tell.sh" --note "FYI event: $1 $2 $3" "$4" 2>&1 </dev/null) && return 0
+  [ "$3" != ok ] || t=status
+  out=$(timeout 30 bash "$PP_SCRIPTS/to-main.sh" "$t" "FYI event: $1 $2 $3" "$4" 2>&1 </dev/null) && return 0
   mkdir -p "$PP_SCRATCH" 2>/dev/null \
     && printf '%s %s %s %s: %s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$(head -c 200 <<<"$out" | tr '\n' ' ')" >> "$PP_SCRATCH/relay-events.log" 2>/dev/null
   return 0
@@ -500,9 +502,10 @@ pp_sender() {
 
 # pp_main_foreground -- true in main's own foreground: the main checkout, a terminal or a Claude session, and not a
 # child of pp_detach or of run-shell-tests.sh (COMMANDECK_FOREGROUND). pp_detach <log> <label> <cmd>... runs the
-# command detached with its output in <log>, prints the pid and the log, and sends main the result as a question
-# (issue 230): a merge or a full suite takes minutes, and main's turn waited on it. A question, not a status: it is the
-# only word of that result, and a status is held until the next wake (issue 318).
+# command detached with its output in <log>, prints the pid and the log, and sends main the result (issue 230): a
+# merge or a full suite takes minutes, and main's turn waited on it. Issue 642: exit 0 is a status, which waits for the
+# 30-minute batch; a failure is a question, and so is a merge (label `merge-...`) either way: the owner keeps merge
+# results waking main at once.
 pp_main_foreground() {
   [ -z "${COMMANDECK_FOREGROUND:-}" ] && { [ -t 0 ] || [ -n "${CLAUDECODE:-}" ]; } \
     && [ "$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" = "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]
@@ -510,8 +513,9 @@ pp_main_foreground() {
 pp_detach() {
   local log=$1 label=$2; shift 2
   mkdir -p "${log%/*}" || return 1
-  COMMANDECK_FOREGROUND=1 nohup bash -c 'log=$1 label=$2; shift 2; "$@" > "$log" 2>&1; rc=$?
-    bash "$0" question "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
+  COMMANDECK_FOREGROUND=1 nohup bash -c 'log=$1 label=$2; shift 2; "$@" > "$log" 2>&1; rc=$?; t=question
+    [ "$rc" != 0 ] || [[ $label == merge-* ]] || t=status
+    bash "$0" "$t" "$label: exit $rc" "$(tail -n 5 "$log")" >/dev/null 2>&1' "$PP_SCRIPTS/to-main.sh" "$log" "$label" "$@" </dev/null >/dev/null 2>&1 &
   echo "$label: running detached as pid $!; watch $log. Its result comes to main as a message; wait for it, never run it again (issue 317)."
 }
 # Issue 317: the merge's state sits beside its lock in main's git dir. merge-unit-local.state is written while one merge
@@ -542,16 +546,23 @@ pp_merge_active() {
   fi
   return 1
 }
-# pp_inbox_actionable <run> [main's handle] -- issue 318: main's unread messages whose type wakes it (wakeKinds), as one
-# JSON array, oldest first. Both forms that reach main count: the run, and main's terminal handle (to-main.sh's). Any
+# pp_inbox_actionable <run> [main's handle] -- issues 318, 642: main's unread messages that wake it, as one JSON array,
+# oldest first: wake_class now, and batch rows once due (each 1800 s old, a row with no time reads as old, and the
+# batch clock $PP_SCRATCH/main-watch/batch-at, the last drain that showed held notes, absent or 1800 s old). The page
+# is the repeat history. Both forms that reach main count: the run, and main's terminal handle (to-main.sh's). Any
 # sender: main-watch and pp_detach send from main's own handle. Fails when Orca does not answer in 10 s, or the page is
-# full (the inbox is the whole machine's, newest first): the caller then wakes.
+# full (the inbox is the whole machine's, newest first) and holds nothing actionable: the caller then wakes (D27).
+# Test seam: COMMANDECK_NOW (epoch).
 pp_inbox_actionable() {
-  local k; k=$(pp_option wakeKinds) || return 1
+  local k b; k=$(pp_option wakeKinds) || return 1
+  b=$(cat "$PP_SCRATCH/main-watch/batch-at" 2>/dev/null); [[ $b =~ ^[0-9]+$ ]] || b=0
   timeout 10 orca-ide orchestration inbox --limit 500 --full --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" \
-    --argjson relay "$(pp_relay_handles)" "$PP_JQ_WAKES"'($k | split(",")) as $k
-    | .result.messages | if type == "array" and length < 500 then [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h))
-      and wakes($k; $relay))] | sort_by(.created_at // "") else error end' 2>/dev/null
+    --argjson relay "$(pp_relay_handles)" --argjson now "${COMMANDECK_NOW:-$(date +%s)}" --argjson b "$b" "$PP_JQ_WAKES"'($k | split(",")) as $k
+    | .result.messages | if type != "array" then error else . as $all
+    | [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h)))
+      | wake_class($k; $relay; $all; "main") as $c
+      | select($c == "now" or ($c == "batch" and $now - (wk_at // 0) >= 1800 and $now - $b >= 1800))]
+    | sort_by(.created_at // "") | if length == 0 and ($all | length) >= 500 then error else . end end' 2>/dev/null
 }
 # pp_owner_bound -- issue 305: the text of a question on stdin names the owner or is a repeat-class stop-and-ask: it goes on
 # the owner's decision queue, not behind main's read. orca-wait.sh (main's drain) and cos-watch-inbox.sh (the relay's poll) both ask.
@@ -563,10 +574,40 @@ pp_relay_handles() {
   timeout 10 orca-ide terminal list --json 2>/dev/null | jq -c --arg p "$PP_WORKSPACES/Chief-of-Staff" "$PP_PNORM"'($p | pnorm) as $p
     | [(.result | if type == "array" then . else (.terminals // []) end)[]? | select((wtp | pnorm) == $p) | .handle]' 2>/dev/null | grep . || echo '[]'
 }
-# PP_JQ_WAKES -- the one wake test pp_inbox_actionable and orca-wait.sh share: wakes($kinds; $relay) holds for a
-# wakeKinds type, or for a message from a relay pane (pp_relay_handles); never for a heartbeat, which the drain
-# neither prints nor keeps.
-PP_JQ_WAKES='def wakes($k; $relay): (.type // "") as $t | $t != "heartbeat" and (any($k[]; . == $t) or ((.from_handle // "") as $f | any($relay[]; . == $f)));'
+# PP_JQ_WAKES -- the one wake rule (issue 642): wake_class($k; $relay; $all; $for) classes a message now, batch
+# (shown with the next wake, or once 30 minutes old) or drop, for main, the relay or a seat ($for); $all is the inbox
+# page (read rows included), the repeat history: a page not read is [] and makes no repeat. Main, first match wins:
+# a heartbeat drops; mail tagged for the relay drops; the relay's own words wake now (never a repeat); a repeat drops;
+# a question, gate, worker_done or escalation (every Orca stopped notice) wakes now whatever wakeKinds says; another
+# wakeKinds type wakes now; the rest is batch. Relay (rows its poll admits): heartbeat and repeat drop, an FYI subject
+# on a type that is not required is batch, else now. Seat: heartbeat and repeat drop, else now.
+# A repeat is an earlier row of the page (an earlier second, or the same second and a lower sequence) with the same
+# type, sender, to, recipient, subject, body and payload, under 600 s before it; a row with no time is none.
+# recipient: the payload's `to` (Orca keeps payload as a JSON string, once more quoted is read too), else the thread
+# id `commandeck:to=<who>`; null for anything else. wakes($k; $relay) is wake_class now with no history: the drain's
+# held sort. A heartbeat never wakes: the drain neither prints nor keeps it.
+PP_JQ_WAKES='def recipient: ((.payload // null) | if type == "string" then (try fromjson catch null) else . end
+    | if type == "string" then (try fromjson catch null) else . end | if type == "object" then .to else null end
+    | if type == "string" and . != "" then . else null end)
+  // ((.thread_id // "") | if type == "string" and startswith("commandeck:to=") then .[14:] else null end);
+def wk_at: (.created_at // "") | if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
+def wk_key: [.type, .from_handle, .to_handle, recipient, .subject, .body, .payload];
+def wk_required: (.type // "") as $t | any(["question", "decision_gate", "worker_done", "escalation"][]; . == $t);
+def wk_repeat($all; $relay): wk_at as $t | (.sequence // 0) as $q | wk_key as $key
+  | ((.from_handle // "") as $f | any($relay[]; . == $f) | not) and $t != null
+    and any($all[]?; wk_at as $u | $u != null and ($u < $t or ($u == $t and (.sequence // 0) < $q)) and $t - $u < 600 and wk_key == $key);
+def wake_class($k; $relay; $all; $for): (.type // "") as $t
+  | if $t == "heartbeat" then "drop"
+    elif $for == "main" then
+      if recipient == "chief-of-staff" then "drop"
+      elif (.from_handle // "") as $f | any($relay[]; . == $f) then "now"
+      elif wk_repeat($all; $relay) then "drop"
+      elif wk_required or any($k[]; . == $t) then "now"
+      else "batch" end
+    elif wk_repeat($all; $relay) then "drop"
+    elif $for == "relay" and ((.subject // "") | test("^\\s*FYI\\b"; "i")) and (wk_required | not) then "batch"
+    else "now" end;
+def wakes($k; $relay): wake_class($k; $relay; []; "main") == "now";'
 # pp_wake_window_open <pp_inbox_actionable array> <now> -- true while its oldest message is younger than
 # wakeWindowSeconds: what arrives meanwhile wakes main once, when the window closes. A time it cannot read is past.
 pp_wake_window_open() {

@@ -10,8 +10,9 @@ set -euo pipefail
 mkdir -p "$REPO/hooks/lib"; cp "$SOURCE/scripts/decision.sh" "$REPO/scripts/"; cp "$SOURCE/hooks/lib/project.sh" "$REPO/hooks/lib/"
 tick 5000
 wakes() { cat "$T/typed" 2>/dev/null | grep -c -- "--terminal $1 --text Signal INBOX" || true; }
-msg() { # <handle> <id> <read 0|1> [to] -- one message in the pane's inbox
-  jq -nc --arg h "${4:-$1}" --arg id "$2" --argjson r "$3" '{id: $id, to_handle: $h, from_handle: "term_main", type: "message", subject: "answer", read: $r, created_at: "1999-01-01T00:00:00Z"}' >> "$F/inbox-$1.jsonl"
+msg() { # <handle> <id> <read 0|1> [to] [type] [created_at] -- one message in the pane's inbox
+  jq -nc --arg h "${4:-$1}" --arg id "$2" --argjson r "$3" --arg ty "${5:-message}" --arg at "${6:-1999-01-01T00:00:00Z}" \
+    '{id: $id, to_handle: $h, from_handle: "term_main", type: $ty, subject: "answer", read: $r, created_at: $at}' >> "$F/inbox-$1.jsonl"
   jq -sc '{ok: true, result: {messages: .}}' "$F/inbox-$1.jsonl" > "$F/inbox-$1"; }
 
 bseat wt-i1 term_wt-i1 task_wt-i1 9000; state term_wt-i1 working; tick 10000
@@ -62,4 +63,21 @@ for how in fail unaccepted; do
   tick $((n * 1000 + 8180))
   [ "$(wakes term_wt-i$n)" = 1 ] || fail "after the accepted wake ($how), the same message woke the Builder again"
 done
+# Issue 642 (D24): the one wake rule decides for a seat too. A heartbeat is a liveness ping, so typing INBOX for it spent
+# a Builder turn on nothing; a status is real mail and still wakes; the same message again within 10 minutes is a repeat
+# and types nothing (it stays unread for the Builder's next check). These cases fail as `FAIL <label> (<why>)`, the
+# record break-run.sh reads (the fixture's fail() prints `FAIL: ...`).
+failc() { echo "FAIL $1 ($2)" >&2; exit 1; }
+mv "$T/bin/orca-real" "$T/bin/orca-ide"
+bseat wt-i9 term_wt-i9 task_wt-i9 9000; state term_wt-i9 working; tick 20000
+msg term_wt-i9 h9 0 term_wt-i9 heartbeat; state term_wt-i9 idle; tick 20060
+[ "$(wakes term_wt-i9)" = 0 ] || failc "heartbeat to Builder types nothing" "a heartbeat woke the Builder"
+msg term_wt-i9 s9 0 term_wt-i9 status; tick 20120
+[ "$(wakes term_wt-i9)" = 1 ] || failc "status to Builder wakes it" "a status did not wake the Builder"
+msg term_wt-i9 r9 1 term_wt-i9 message 2026-01-01T00:00:00Z; msg term_wt-i9 r10 0 term_wt-i9 message 2026-01-01T00:05:00Z; tick 20180
+[ "$(wakes term_wt-i9)" = 1 ] || failc "Builder repeat types nothing" "a repeat of a read message within 10 minutes woke the Builder"
+# Issue 643 (D21): the first tick of a new main-watch records when the relay's mail became tagged; the relay admits an
+# untagged note only from before that, so a later tick must not move it.
+[ "$(cat "$S/main-watch/tags-relay" 2>/dev/null)" = 5000 ] \
+  || failc "watcher writes relay tag once" "tags-relay holds [$(cat "$S/main-watch/tags-relay" 2>/dev/null)], not the first tick's 5000"
 echo "PASS main-watch-inbox-wake.test.sh"
