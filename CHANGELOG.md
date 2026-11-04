@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.69.2 -- 2026-11-03
+
+### Scripts
+
+- A review or plan seat whose report already holds its verdict is collected, even when its pane still looks busy.
+
 ## 0.69.1 -- 2026-11-03
 
 ### Scripts
