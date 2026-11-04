@@ -91,14 +91,14 @@ The order asks for every open plugin issue in one unit. Triage read all 55 open 
 
 ## Cuts
 
-- C1 verdict line (#626, #597), ~75 lines
+- C1 verdict line (#626, #597), ~75 lines -- done
   - Produces: read-verdict.sh accepts `VERDICT: <word>` followed by `.` `,` `;` `:` or a spaced `-`, `—`, `–` or `(` and a reason (the host's `PP_VERDICT_END`), printing the same canonical `VERDICT: <word>` line; any other trailing text stays no verdict
   - Produces: a verdict line whose reason names a second verdict word (`GO`, `DONE`, `REVISED`, `REQUIRED`, `APPROVED`, `REJECTED`, after any `[A-Z-]` run, so `NO-GO` too) is a choice list and no verdict, in the pane scan (the host's `PP_VERDICT_CHOICE`, a `VERDICT_CHOICE` beside VERDICT_RE) and in both session-log jq regexes (the host's negative lookahead): `VERDICT: GO,NO-GO`, `VERDICT: GO, NO-GO`, `VERDICT: GO (or NO-GO)` read no verdict, never GO
   - Bad input: trailing text is the parse's bad input: a choice list spaced and unspaced, `GO or NO-GO`, `GO means` (four read-verdict.test.sh cases); empty or absent is today's no verdict, unchanged
   - Produces: seat.sh collect's no-verdict message names the bare form when a `VERDICT:` line has other trailing text; the judge spec says the verdict line stands alone
   - Consumes: none
   - Existing consumers: seat.sh collect, main-watch.sh, orca-wait.sh, unit-drive.sh report reads, builder-codex-pass.sh, cos-watch-inbox.sh, board.sh (all read the canonical line, unchanged)
-- C2 seat lifecycle (#598, #604, #612, #630), ~146 lines
+- C2 seat lifecycle (#598, #604, #612, #630), ~146 lines -- done
   - Produces (#598, D16): seat.sh revise of a live pane that does not read idle reads the seat's latest answer with collect's own reader (seat.sh:741-746, moved into one `read_finish` function both call; the marker is the record's `marker=` line); a `VERDICT:` banner or the marker there skips revise's pane-busy refusal and settles the old task with `PP_VERDICT_READ=1 pp_task_close`, main's #631 switch: the open-question check still runs and a refusal exits 1 with the record intact and nothing sent; the live-pane check stays; with no finish read, today's refusal stands, its message adding `no finish in its latest answer`
   - Produces (#598, D16, current revision): when the record's last `revised=` names its current `task=` (a revised seat), the finish counts only once `read-verdict.sh --state --worktree <wt> --task <task> --launched <launched>` prints `session=` (main-watch's revised_ran test, main-watch.sh:1179-1184): before the revised prompt lands, the latest answer is the previous task's; with no proof, today's refusal stands, its message adding `revised prompt not landed`
   - Produces: collect's rerun closes a still-live plan-judge pane (logged by `pp_pane_close`); revise resets the record's `planref=`
@@ -106,44 +106,44 @@ The order asks for every open plugin issue in one unit. Triage read all 55 open 
   - #631: no change; main's 4530f6f fix stands (D12)
   - Consumes: main's `PP_VERDICT_READ` switch in pp_task_close (paths.sh:669, unchanged)
   - Existing consumers: pp_task_close is not changed (no new argument), so answer-worker.sh, main-watch.sh, orca-wait.sh, builder-fresh-round.sh, seat.sh collect, merge-unit-local.sh and unit-close.sh keep today's behaviour; revise's callers are main by hand and its docs (unit-drive.sh reruns through `seat.sh run`, unit-drive.sh:183); pp_plan_committed in seat.sh and claude-worker-notify.sh
-- C3 labels and decisions (#596, #607, #616, #624, #628), ~195 lines
+- C3 labels and decisions (#596, #607, #616, #624, #628), ~195 lines -- done
   - Produces: one unescape rule in all three name readers (test-edit-labels.sh, new-test-count.sh's parser `name()` and its regex `js_regex()`): a backslash before `'`, `"`, a backtick or a backslash is dropped; any other escape stays as written
   - Produces: the reader resolves typescript first (`require.resolve`) and exits 3 when the package is absent, 2 when a found package fails to load or parse (D17); new-test-count.sh falls back to the label regex only on exit 3, printing the reader's line; any other reader failure or unreadable reader output exits 2 naming it
   - Produces: decision.sh test-edit refuses a label the lister does not print for that path in the unit's worktree, printing the exact names; with no worktree it records as today with a warning
   - Produces: decision.sh dup never matches two push asks whose tip suffixes differ; answer sends main one `to-main.sh answer` message when the decision's source is `main` or `decision.sh push-ask` (D5)
   - Consumes: C3's own label fix (the test-edit check runs the fixed lister)
   - Existing consumers: builder-codex-pass.sh (lister, label compare), every decision.sh caller
-- C4 driver and pass (#625, #622, #601, #632), ~130 lines
+- C4 driver and pass (#625, #622, #601, #632), ~130 lines -- done
   - Produces: unit-drive.sh copies `(P0)`-`(P3)` findings into the revise brief; builder-fresh-round.sh types nothing for `<unit>-fix-r<N>.md` when a `<unit>-r<M>-reports.md` with M > N exists; limits_refuse passes a limit line that main's rulings file carries as `Limit: <line> ruling:<id>` with a valid id
   - Produces (#632): the question gate, finding no answer in this project's ledger, reads each other repo `orca-ide repo list --json` names (`.result.repos[].path`) through `COMMANDECK_MAIN=<path> decision.sh list`, with the same id and after-ask filter, and takes another repo's row only when its question or source carries this ask's token `plan <first 8 of the plan hash>` (D15); the ask to main says to keep that token in the decision; a matching row without the token says one line on stderr and is not taken; an unreadable repo list or another repo's failed list says one line on stderr per gate entry and the gate goes on with what it read
   - Consumes: none
   - Existing consumers: the gate's only reader is unit-drive.sh itself; decision.sh list is unchanged
-- C5 merge (#623, #589, #594), ~85 lines
+- C5 merge (#623, #589, #594), ~85 lines -- done
   - Produces: cut_scan counts cut n built when the brief, outside fences, names exactly one cut (`Cut <n>`) and the closing GO already proven at step 1 holds; cleanup names the worktree and Orca's reason when removal fails or the folder is still there
   - Produces: merge-queue.test.sh fails when the real checkout's own git folder changes during the run
   - Consumes: none
-- C6 hooks (#593, #603, #592), ~145 lines
+- C6 hooks (#593, #603, #592), ~145 lines -- done
   - Produces: bash-guardrails.sh, for an assignment in a segment after `&&` or `||`, drops any earlier binding of the name and records none, so `F=scripts; true && F=.; rg x "$F"` reads `$F` as unknown; duplicate-agent-guard.sh lets main open one hand-made pane per valid, unused approval id given as a `COMMANDECK_PROBE_PANE=<id>` command prefix, logged
   - Produces: context-line.sh's over-the-line message (the one below the 40K mark) names how far past the line main is, `<n>K past the <line>K line`; context-clear-stop.test.sh pins it at 181K and 466K and silence at 180K
   - Consumes: none
-- C7 watchers and helpers (#619, #617, #627, #602), ~120 lines
+- C7 watchers and helpers (#619, #617, #627, #602), ~120 lines -- done
   - Produces: both cos watchers treat a missing seen file as empty and recreate it; host-services.sh finds its folder under zsh and, not in bash, sets the sourcing shell's PATH from a bash child that loads requirements.sh alone and prints its repaired PATH (kept only when non-empty, D6); dashboard.sh removes a killed cycle's temp files before it logs the kill; answer-worker.sh falls back to the unit's newest live plan-author seat when no Builder runs
   - Consumes: C2's seat record shape
-- C8 orchestration reads (#588 part), ~70 lines
+- C8 orchestration reads (#588 part), ~70 lines -- done
   - Produces: `--full` on every `orchestration inbox`, `task-list` and `check` read that uses a field only the full view has; a guard test over scripts and hooks
   - Produces (check reads, D23): `orchestration check` gains `--full` at ask-main.sh:25 and :76 (`thread_id`, `body`, `from_handle`), cos-own-echo.sh:54 (`from_handle`), watch-agents.sh:42 (`body`), inbox-drain.sh:68 (`body`; its sender reads `.from_handle // .from`, since the full row has no `from`) and orca-wait.sh:531 and :533 (`from_handle`, `body`); the worker-brief lines at builder-codex-pass.sh:2464 and builder-add-work.sh:66 that name check's `.result.dispatchId` add `--full`; await-agents.sh:67 reads only `.type`, which the concise row has, and is unchanged
   - Builder check before C8: send this pane a status probe and run `orca-ide orchestration check --terminal <own handle> --wait --timeout-ms 2000 --full --json`; if `.result.deliveryId` is present, ask-main.sh's loop is unchanged beyond `--full`; if absent, ask-main.sh:81 breaks only on an empty batch and acks only when a deliveryId was read, so a batch holding the answer is printed, never dropped
   - Produces: the wake's task-list read (orca-wait.sh:466) passes `--full`, so its landed-merge close (473) and task lines (476-477) see `.spec`; the awareness hook's read (agent-awareness.sh:72) swaps `--brief` for `--full`, so its task lines (124) see `.spec`/`.task_title` (Orca 1.4.246's concise and `--brief` rows carry only id, status and title: settled in Assumptions)
   - Consumes: C4 (builder-codex-pass.sh), C7 (dashboard.sh); paths.sh is not touched (main's 991ec40 added its three `--full` reads)
   - Existing consumers: orca-wait.sh's wake text and landed-merge close; agent-awareness.sh's open-task block; ask-main.sh's answer wait and resume; cos-own-echo.sh's echo drop; watch-agents.sh's answer-needed lines; inbox-drain.sh's start-up drain; the Builder and add-work briefs' dispatch-id line; main-watch.sh, claude-worker-notify.sh, cos-check.sh, cos-watch-inbox.sh, dispatch-task.sh, board.sh and dashboard.sh readers (each reads the same keys, now present)
-- C9 hand-launch gate (#595), ~75 lines
+- C9 hand-launch gate (#595), ~75 lines -- done
   - Produces: seat.sh launch refuses a plan-author, plan-judge or plan-revise launch with neither `COMMANDECK_DRIVER=1` nor `COMMANDECK_HAND_LAUNCH=<reason>`, naming `unit-drive.sh start` and the override
   - Produces (D28): `COMMANDECK_DRIVER=1` is read first: a driver launch passes and logs no row and no `HAND LAUNCH:` line whatever `COMMANDECK_HAND_LAUNCH` holds; an empty `COMMANDECK_HAND_LAUNCH` counts as absent
   - Produces (the host's port, D19): the override appends one jsonl row to the hand-launch log and prints `HAND LAUNCH: <role> <unit>: <reason>` on stderr; a failed append refuses with nothing opened; a dashboard_alerts.jq rule raises one warn alert `hand-launch-<unit>-<role>-<at>` per row of the last 24 h, naming the unit and `unit-drive.sh start`
   - Catches: a plan seat opened by hand that nothing chains, so the finished plan sits idle (#595's 9 idle minutes)
   - Consumes: C2 (seat.sh), C4 (unit-drive.sh hints carry the override)
   - Existing consumers: unit-drive.sh (driver, exports COMMANDECK_DRIVER=1), seat.sh relaunch (passes COMMANDECK_DRIVER=1), every seat test via the shared fixture; dashboard.sh alerts() and the alerts list it feeds (one more input file); the two direct `seat.sh run plan-judge-sol` calls at seat-run-refused.test.sh:50-51 and seat-run.test.sh:63-65, which bypass seat_sh and inherit the fixture-wide export (D28)
-- C10 worktree sweep and scratch removal (#591 part, #629), ~251 lines
+- C10 worktree sweep and scratch removal (#591 part, #629), ~251 lines -- done
   - Produces: new scripts/worktree-sweep.sh: removes each git worktree under the checkout's `.claude/worktrees/` (helper) or under `$PP_SCRATCH` (scratch) that is clean (D9a: `git status --porcelain --untracked-files=all` empty and no `git ls-files -v` line tagged lowercase or `S`, as git-safety.sh wt_clean reads it; a failing status or ls-files is not clean), holds no live process's working directory (`lsof -a -d cwd -Fn`; D9b: an lsof that exits non-zero or names no working directory keeps every candidate) and whose index and HEAD log are over 24 hours old, with `git worktree remove` (never `--force`); prints one line per removal
   - Produces (D9): its branch is deleted with `git branch -d` only when the tip is in main (`git merge-base --is-ancestor <tip> refs/heads/main`); an unmerged branch is kept, printed `kept branch <name> <tip>: not in main`; a worktree on a detached HEAD not in main is kept whole and printed
   - Produces: main-watch.sh runs it at most once an hour (the sweep stamp, Data design)
@@ -151,18 +151,18 @@ The order asks for every open plugin issue in one unit. Triage read all 55 open 
   - Catches: stale helper and scratch copies left by a missed removal (#591's about 70 in three days), never unmerged commits
   - Consumes: none
   - Existing consumers: every agent Bash call through git-safety.sh (only a forced remove under the scratch root changes)
-- C11 restart says why (#615 part), ~40 lines
+- C11 restart says why (#615 part), ~40 lines -- done
   - Produces: context-clear-stop.sh, when the context size cannot be read in main's pane, prints one line on stderr and in clear-hook.log instead of exiting silently
   - Consumes: none
-- C12 re-judged unit stage (#621 part), ~45 lines
+- C12 re-judged unit stage (#621 part), ~45 lines -- done
   - Produces: dashboard.sh sets stage `planning`, not `waiting-main`, for a built unit with a plan seat record launched after the Builder's first stage whose last `verdict=`/`revised=` line is not a verdict (none, or a later `revised=`: the seat.sh:801 rule); units-elements.ts already draws planning with Build and Review todo
   - Consumes: C8 (dashboard.sh)
   - Existing consumers: hooks/units-elements.ts stepsOf, the units view and band
-- C13 spec file (#587), ~35 lines
+- C13 spec file (#587), ~35 lines -- done
   - Produces: seat.sh launch and revise write the task text (the typed pointer, unchanged) to a file in `$PP_SCRATCH` and pass `--spec-file` to orca-task-create.sh instead of `--spec`, so Orca's task holds it whole; the typed pointer stays, so verdict lookups by pointer text are unchanged
   - Consumes: C9 (seat.sh)
   - Existing consumers: dispatch-task.sh type_pointer (reads the task spec back, same text), main-watch.sh's own task-create (unchanged)
-- C14 dead seats (#590), ~107 lines
+- C14 dead seats (#590), ~107 lines -- done
   - Produces: seat.sh launch writes `pty=<ptyId>` for its handle from `orca-ide terminal list --json` (Data design)
   - Produces: each main-watch tick reads the tail of Orca's daemon log (D20: `COMMANDECK_ORCA_LOG`, else `$HOME/Library/Application Support/orca/logs/daemon.log` on Darwin, `$HOME/.config/orca/logs/daemon.log` elsewhere), one JSON object per line, taking rows with `event == "session-exited"` whose `sessionId` equals a seat's `pty=` exactly and whose `ts` is at or after its launch, then keeping only the latest such row per sessionId, and only then dropping it when its `cause` is `operator_close` (D11: an `unknown` row followed by an `operator_close` row is an operator close); a non-Builder seat whose current episode has no finish (D21), whose pane is not in the terminal list and whose latest exit row survives gets one main-watch item naming the seat and its unit, posted through the existing `post <key> "" ... once` path with an empty task argument (Data design), no mark file of its own
   - Produces (D21): a seat's current episode has a finish when any holds: its record's last `verdict=`/`revised=` line is a verdict (the seat.sh:801 rule; a revise appends `revised=`, so an old verdict stops counting); main-watch's own state for its current task (`$ST/kind-seat-<handle>-<task>`, the key seat() writes, main-watch.sh:1188; revise replaces `task=`, so the key is new) holds `finished`, never `silent` or any other word (main-watch.sh:1263-1266); the seat-bound report reader finds a finish in its session log: `read-verdict.sh <handle> 5 <worktree> <agent> "" "" "" <launched>` prints a `VERDICT:` or `-DONE` line (has_result's test, main-watch.sh:726-731, bound by the seat's worktree, agent and launch epoch, so the log is read with the pane gone: settled in Assumptions), and for a revised seat (its record's last `revised=` names its current task) only when `revised_ran <worktree> <revised task> <launched>` (main-watch.sh:1182) says the revised prompt landed, since the reader takes the answer after the session's latest prompt, which before that is the old task's; no other reader and no `--state` result counts
@@ -170,15 +170,15 @@ The order asks for every open plugin issue in one unit. Triage read all 55 open 
   - Catches: a seat whose pane died before its verdict, which today main learns of late or never (#590)
   - Consumes: C10 (main-watch.sh), C13 (seat.sh)
   - Existing consumers: every seat record reader (board.sh, dashboard.sh plan_seats, seat.sh, the awk readers) reads named keys, so one more `pty=` line changes none
-- C15 startup trim (#611), ~40 lines
+- C15 startup trim (#611), ~40 lines -- done
   - Produces: templates/main-session.md moves three procedural lines of its injected part (the background-run line, the gone-Builder relaunch line, the plan-question send line) word for word under its Details heading, each leaving a one-line pointer; the injected part drops from 6,198 bytes to about 5,500
   - Consumes: C9 (main-session.md)
-- C16 pre-merge hold (#620), ~40 lines
+- C16 pre-merge hold (#620), ~40 lines -- done
   - Produces: pp_merge_held also holds a unit whose brief names pre-merge on any line, in any shape, until its evidence file has the `Pre-merge: done <n>` line the hold names, n the cksum of the whole brief (Data design, the stamp); the builder brief template describes the hold without the word, since a template line naming it would hold every unit
   - Catches: an auto-merge that lands before a step the brief says must run first (#620)
   - Consumes: none (no earlier cut edits paths.sh)
   - Existing consumers: main-watch.sh merge gate, merge-unit-local.sh --auto
-- C17 push and queue guards (#634, #635), ~40 lines
+- C17 push and queue guards (#634, #635), ~40 lines -- done
   - Produces (#634): .githooks/pre-push, for a push to refs/heads/main whose pushed tree holds ci/version-check.sh, runs it in the pushed tree's worktree (the one the shell tests already use) against the remote's old sha, or origin/main when that sha is all zeros, and refuses the push on any non-zero exit, version-check's own lines on stderr
   - Produces (#635): merge-queue.sh refuses a unit argument that does not start with a letter or digit (`u1 --help`, `--train --help`), exit 2 with its usage, nothing merged; a first `-h`/`--help` keeps its usage exit 0 (merge-queue.sh:16)
   - Bad input: listed in What can go wrong (a later `--help` argument); the remote sha is git's own pre-push stdin, all zeros for a new branch (origin/main then)
