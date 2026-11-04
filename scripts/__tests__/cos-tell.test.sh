@@ -415,5 +415,26 @@ OUT2=$(watch)
 check "an event note from a non-coordinator pane in the run is held for the relay" "0:1" \
   "$(grep -c 'FYI event: u4' <<<"$OUT1"):$(grep -c 'FYI event: u4 seat-plan-judge-sol ok' <<<"$OUT2")"
 
+# Issue 619: a watcher's seen file deleted while it runs (between two polls) reads as empty and is made again, so the
+# next new alert or decision still wakes the relay. The stand-in sleep, at its first call only (decision.sh sleeps
+# too), deletes the file and then lands the new item.
+CS=$T/home/.commandeck/chief-of-staff
+midrun() { # <watcher name> <seen suffix> <command that lands the new item>: the watcher's output, waking at its second poll
+  mkdir -p "$T/delbin"; rm -f "$T/delbin/landed"
+  printf '#!/usr/bin/env bash\n[ -e %q ] || { touch %q; rm -f %q/*.%s; %s; }\nexec /bin/sleep 0.1\n' \
+    "$T/delbin/landed" "$T/delbin/landed" "$CS" "$2" "$3" > "$T/delbin/sleep"; chmod +x "$T/delbin/sleep"
+  (cd "$T/p" && "${E[@]}" PATH="$T/delbin:$T/bin:$PATH" timeout 15 bash "$REAL/scripts/cos-watch-$1.sh" 2>/dev/null); rm -f "$T/delbin/sleep"
+}
+printf 'window.DASH = {"alerts": []};\n' > "$T/home/.commandeck/dashboard/data.js"; clearwakes
+OUT=$(midrun alerts alerts-seen "$(declare -f alert); T=$(printf %q "$T"); alert limit-codex-1792009000")
+check "the alerts watcher still tells a new alert after its seen file is deleted" "1 1" \
+  "$(grep -c 'limit-codex-1792009000' <<<"$OUT") $(cat "$CS"/*.alerts-seen 2>/dev/null | grep -c 'limit-codex-1792009000')"
+# Every open decision is marked seen first, so the first poll is quiet; with the file gone the open ones fire again
+# beside the new one, so the wake file is read (over 600 bytes the output only names it).
+while (cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-decisions.sh" >/dev/null 2>&1); do :; done; clearwakes
+midrun decisions decisions-seen "cd $(printf %q "$T/p") && bash $(printf %q "$REAL/scripts/decision.sh") add d619 'a new decision' none source >/dev/null 2>&1" >/dev/null
+check "the decisions watcher still fires a new decision after its seen file is deleted" "1 1" \
+  "$(grep -c '"d619"' "$(wakefile decisions)" 2>/dev/null) $(cat "$CS"/*.decisions-seen 2>/dev/null | grep -c '^d619@')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

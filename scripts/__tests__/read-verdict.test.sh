@@ -158,5 +158,30 @@ kill "$VP" 2>/dev/null
 check "a trailing --state flag with no value exits 2" "2 2 2 2 2 2" "$(for o in --worktree --agent --task --launched --marker --spec; do
   timeout 5 bash "$REAL/scripts/read-verdict.sh" --state "$o" >/dev/null 2>&1; printf '%s ' $?; done | sed 's/ $//')"
 
+# Issues 626 and 597 (the host's #3681 rules): a reason after sentence punctuation or a spaced dash or bracket is still
+# the verdict, so a judge ending `VERDICT: NO-GO. two blockers` no longer stops the driver as "no verdict". A reason
+# that names a second verdict word is a choice list (a template's `VERDICT: GO, NO-GO`), never GO; other trailing text
+# (an injected spec's sentence) stays no verdict. logv <answer>: the verdict read from term_r's Claude session log.
+LP=$T/prof/projects/$(printf '%s' "$T/p" | tr -c 'A-Za-z0-9' '-')/s1.jsonl
+logv() { { jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type: "user", timestamp: $t, message: {content: "judge it"}}'
+  jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg x "$1" '{type: "assistant", timestamp: $t, message: {content: [{type: "text", text: $x}]}}'; } > "$LP"
+  PROFILE=$T/prof verdict 'Working.\n'; }
+check "a NO-GO verdict with a reason after a full stop reads as NO-GO" "VERDICT: NO-GO VERDICT: NO-GO" \
+  "$(verdict 'Done.\nVERDICT: NO-GO. Both P2 blockers are open.\n') $(logv $'Done.\nVERDICT: NO-GO. Both P2 blockers are open.')"
+check "a GO verdict with a reason after a dash reads as GO" "VERDICT: GO VERDICT: GO" \
+  "$(verdict 'Done.\n**VERDICT: GO** - all three fixed\n') $(logv $'Done.\nVERDICT: GO — all three fixed')"
+check "a spec line VERDICT: GO or NO-GO is still no verdict" "none none" \
+  "$(verdict 'Make it your last line:\nVERDICT: GO or NO-GO\n') $(logv $'Make it your last line:\nVERDICT: GO or NO-GO')"
+check "a spec line VERDICT: GO means is still no verdict" "none none" \
+  "$(verdict 'Read this:\nVERDICT: GO means the plan is ready\n') $(logv $'Read this:\nVERDICT: GO means the plan is ready')"
+# codexv <answer>: the answer codex_report picks from a Codex log holding it, or none.
+codexv() { jq -cn --arg x "$1" '{type: "response_item", payload: {type: "message", role: "user", content: []}},
+  {type: "response_item", payload: {type: "message", role: "assistant", phase: "final", content: [{type: "output_text", text: $x}]}}' > "$T/choice-rollout.jsonl"
+  local r; r=$(eval "$(sed -n '/^codex_report() {$/,/^}$/p' "$REAL/scripts/read-verdict.sh")"; ORDINAL=0 codex_report "$T/choice-rollout.jsonl" | tail -1); echo "${r:-none}"; }
+check "an unspaced choice list VERDICT: GO,NO-GO is no verdict in the pane or the session log" "none none none VERDICT: NO-GO. two blockers" \
+  "$(verdict 'End on one of:\nVERDICT: GO,NO-GO\n') $(logv $'End on one of:\nVERDICT: GO,NO-GO') $(codexv $'End on one of:\nVERDICT: GO,NO-GO') $(codexv 'VERDICT: NO-GO. two blockers')"
+check "a spaced choice list VERDICT: GO, NO-GO is no verdict in the pane or the session log" "none none none none" \
+  "$(verdict 'End on one of:\nVERDICT: GO, NO-GO\n') $(logv $'End on one of:\nVERDICT: GO, NO-GO') $(verdict 'VERDICT: GO (or NO-GO)\n') $(logv 'VERDICT: NO-GO. GO only after C2')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

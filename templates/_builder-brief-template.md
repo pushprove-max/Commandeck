@@ -7,7 +7,10 @@ merges with `merge-unit-local.sh {unit}`.
 main-watch merges the branch itself once you print the done marker on a tip the merge gate passes, unless main
 adds a line `Merge: hold` to this brief. Main lists what runs after the merge under `## Post-merge` at the end, one
 command per line: `dashboard.sh --install`, `main-watch.sh --install` or `run-shell-tests.sh <one test file>`;
-any other line is refused.
+any other line is refused. A step that must run before the merge goes in this brief under a heading with the hold's
+name (scripts/paths.sh pp_merge_held; this template avoids the word, since any line naming it holds the merge). The merge
+then waits until you write, in the evidence file, the done line the hold prints (its number stands for the whole brief,
+so any later edit holds the merge again).
 
 ## The batch (issues and done criteria)
 

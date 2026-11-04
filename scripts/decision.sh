@@ -7,7 +7,9 @@
 # `queued: <id> to <unit>` (the Builder is not running; the answer waits for its next start), `unknown: <id> to <target> timed
 # out; check the unit's pane before resending` (the send was cut at 20 s and may have gone) or `not delivered: <id> ...`; exit
 # stays 0. The target is the unit of a `<unit> asks` source (answer-worker.sh, its stdout dropped), else the first `term_` handle
-# in the source; a source of main, AskUserQuestion or decision.sh sends nothing. COMMANDECK_NO_DELIVER=1 sends nothing (the
+# in the source; a source of main or decision.sh push-ask answered outside the main checkout sends main one to-main.sh
+# message (issue 624), and AskUserQuestion
+# or another decision.sh source sends nothing. COMMANDECK_NO_DELIVER=1 sends nothing (the
 # dashboard, ruling-log.sh and answer-worker.sh close rows that way); `deliver <id> <text>` is the send alone. --correct sends nothing.
 # test-edit (issue 574): appends `Test edit: <path> test:<label> ruling:<id>` to main's .claude/briefs/<unit>-main-rulings.md once,
 # only for a ruling id the ruling log holds unvoided; the line builder-codex-pass.sh's test_edit_refusals accepts.
@@ -33,7 +35,8 @@
 # answer-worker.sh answers it). The row carries waitsOn: "main", so the Needs
 # Owner card lists it as waiting on main, never as the owner's; it is never a
 # repeat of an owner's question, only of its own id.
-# Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG; COMMANDECK_ANSWER_WORKER (the send's script).
+# Test seams: paths.sh's COMMANDECK_MAIN; COMMANDECK_RULING_LOG; COMMANDECK_ANSWER_WORKER (the send's script);
+# COMMANDECK_TO_MAIN (the send to main).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 . "$(dirname "$0")/paths.sh" || exit 1
@@ -76,6 +79,20 @@ deliver_answer() {
   # answer-worker's own deadline: the answer is in the unit's inbox, unread (no timeout on PATH lets decision.sh reach it)
   elif grep -q '^answer-worker: NOT acknowledged: ' <<<"$err"; then echo "unknown: $id to $target not acknowledged; check the unit's pane before resending" >&2; return 1
   else echo "not delivered: $id to $target: $(tail -1 <<<"$err" | tr '\n' ' ')" >&2; return 1; fi
+}
+# tell_main <id> <text> <source> -- issue 624: main's own question and the push ask (source main or decision.sh push-ask)
+# are answered away from main, which may have ended its turn, so answer sends main one to-main.sh message; no line on
+# stderr unless it fails. COMMANDECK_MAIN_TOLD=1: the caller tells main itself (relay-order.sh sends the order); so
+# does a caller in the main checkout.
+tell_main() {
+  local rc=0 err
+  case $3 in main|'decision.sh push-ask') ;; *) return 0 ;; esac
+  [ "${COMMANDECK_MAIN_TOLD:-}" != 1 ] || return 0
+  # An answer given in the main checkout told main already (main's own pane, or the dashboard, which sends its own): main's ruling, 2026-11-04.
+  case "$(pwd -P)/" in "$PP_MAIN_P"/*) return 0 ;; esac
+  # to-main.sh exits 0 sent, 3 queued (main is down and reads it first when it starts).
+  err=$(bash "${COMMANDECK_TO_MAIN:-$(dirname "$0")/to-main.sh}" question "answer $1" "The owner answered $1: $2" 2>&1 >/dev/null) || rc=$?
+  [ $rc = 0 ] || [ $rc = 3 ] || { echo "not delivered: $1 to main: $(tail -1 <<<"$err" | tr '\n' ' ')" >&2; return 1; }
 }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # fresh <askedAt> -- now, for a new snapshot of an id last asked at <askedAt>
@@ -124,9 +141,13 @@ def same_q($new): . as $old | ($new | flat) == ($old | flat) or (
 # dup <cur> <id> <question> -- the newest earlier decision this question
 # repeats, or nothing: still open, or answered in the last 24 hours. Only when
 # none does is the same id asking something else a write failure (exit 1).
+# Two push asks (push-<date>-<tip>) at different tips are two decisions, though their questions differ only by
+# shas (issue 616); the same tip asked again is a repeat.
 dup() {
   local d
-  d=$(jq -c --arg q "$3" "$SAME_Q"'[.[] | select(.waitsOn == null and recent and (.question | same_q($q)))] | last // empty' <<<"$1")
+  d=$(jq -c --arg q "$3" --arg id "$2" "$SAME_Q"'def tip: capture("^push-[0-9]{4}-[0-9]{2}-[0-9]{2}-(?<t>[0-9a-f]+)$").t // null;
+      [.[] | select(.waitsOn == null and recent and (.question | same_q($q))
+        and ((.id | tip) as $a | ($id | tip) as $b | $a == null or $b == null or $a == $b))] | last // empty' <<<"$1")
   [ -n "$d" ] && { printf '%s\n' "$d"; return; }
   ! jq -e --arg id "$2" 'any(.[]; .id == $id)' <<<"$1" >/dev/null || die "decision $2 already exists"
 }
@@ -267,6 +288,7 @@ case "${1:-}" in
     append "$(jq -c --arg a "$3" --arg at "$(now)" '.answeredAt = $at | .answer = $a' <<<"$prev")"
     # The row is closed and the lock released before the send, which can take 20 s.
     exec 9<&-
+    [ "${COMMANDECK_NO_DELIVER:-}" = 1 ] || tell_main "$2" "$3" "$(jq -r .source <<<"$prev")" || true
     [ "${COMMANDECK_NO_DELIVER:-}" = 1 ] || deliver_answer "$2" "$3" "$(jq -r .source <<<"$prev")" || true ;;
   deliver)
     [ $# -eq 3 ] && [ -n "$3" ] || usage
@@ -285,6 +307,23 @@ case "${1:-}" in
     [[ $label != *" ruling:"* ]] || die "a label may not hold ' ruling:'"
     . "$(dirname "$0")/../hooks/lib/ruling-id.sh" || exit 1
     ruling_id_state "$rid" "$RULINGS" || die "ruling $rid is not a logged, unvoided ruling in $RULINGS"
+    # Issue 607: the label must be one the pass's lister prints for this path, read as the closing pass reads it: from
+    # where the unit left main to its change staged (in a copy of the index). With no worktree it is recorded unchecked.
+    wt=${PP_WORKSPACES:-/nonexistent}/$u
+    if [ -d "$wt" ]; then
+      lister=$(cd "$(dirname "$0")" && pwd)/test-edit-labels.sh
+      fork=$(git -C "$wt" merge-base main HEAD) || die "cannot find where $u left main in $wt, so the label cannot be checked"
+      idx=$(mktemp) || die "mktemp failed"
+      cp "$(git -C "$wt" rev-parse --absolute-git-dir)/index" "$idx" 2>/dev/null || : > "$idx"
+      rc=0; names=$(cd "$wt" && GIT_INDEX_FILE=$idx git add -A && GIT_INDEX_FILE=$idx bash "$lister" "$path" "$fork" 2>/dev/null) || rc=$?
+      rm -f "$idx"
+      # The lister exits 2 when some lost line is no named test; its label rows still print.
+      [ "$rc" = 0 ] || [ "$rc" = 2 ] || die "the test lister failed on $path in $wt (exit $rc), so the label cannot be checked"
+      names=$(grep -v $'^(line)\t' <<<"$names" | cut -f1)
+      grep -qxF -- "$label" <<<"$names" || die "test:$label names no test that loses a line in $path in $wt; the exact names:"$'\n'"${names:-(none: no named test of $path loses a line)}"
+    else
+      echo "decision: warning: no worktree for $u at $wt; test:$label is recorded unchecked (the review pass still checks it)" >&2
+    fi
     f=$PP_MAIN/.claude/briefs/$u-main-rulings.md
     line="Test edit: $path test:$label ruling:$rid"
     ! grep -qxF -- "$line" "$f" 2>/dev/null || { echo "$line"; exit 0; }

@@ -148,6 +148,21 @@ check "a force remove of a worktree with an assume-unchanged edit is blocked" 2 
 check "a force remove of a worktree with a skip-worktree edit is blocked" 2 "$(run "git worktree remove --force $CW/wt-skip")"
 rm -rf "$CW"
 
+# Issue 629 (D18): a scratch copy is throwaway, so a forced remove of one strictly under the scratch root passes dirty, in
+# the fixed-list form only. A path that climbs out with .., a symlink out, the root itself, or a dirty tree elsewhere blocks.
+SC=$(cd "$(mktemp -d)" && pwd -P)
+git init -q "$SC/repo" && echo v1 > "$SC/repo/tracked.txt" && git -C "$SC/repo" add tracked.txt && git -C "$SC/repo" commit -q -m init
+mkdir -p "$SC/scratch"; for N in scratch/wt out; do git -C "$SC/repo" worktree add -q "$SC/$N" HEAD; echo dirty > "$SC/$N/new.txt"; done
+ln -s "$SC/out" "$SC/scratch/link"
+sr() { COMMANDECK_SCRATCH="$SC/scratch" run "$1"; }
+check "a forced remove of a dirty worktree outside the scratch root is blocked" 2 "$(sr "git worktree remove --force $SC/out")"
+check "a forced remove whose path climbs out of the scratch root with .. is blocked" 2 "$(sr "git worktree remove --force $SC/scratch/../out")"
+check "a forced remove through a symlink out of the scratch root is blocked" 2 "$(sr "git worktree remove --force $SC/scratch/link")"
+check "a forced remove of the scratch root itself is blocked" 2 "$(sr "git worktree remove --force $SC/scratch")"
+check "a forced remove under the scratch root beside a second command is blocked" 2 "$(sr "git worktree remove --force $SC/scratch/wt; echo")"
+check "a forced remove of a dirty worktree under the scratch root passes" 0 "$(sr "git worktree remove --force $SC/scratch/wt")"
+rm -rf "$SC"
+
 # --- D64: checkout/restore --ours|--theirs passes when every path is unmerged where the call runs ---
 # A merge left f.txt unmerged; other.txt is clean. The paths are the words after `--`, and for restore with no `--` its plain words.
 CF=$(mktemp -d); git init -q -b main "$CF" && printf 'a\n' > "$CF/f.txt" && printf 'o\n' > "$CF/other.txt" && git -C "$CF" add . && git -C "$CF" commit -q -m init

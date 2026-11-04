@@ -72,5 +72,25 @@ push branch :refs/heads/main >/dev/null; rc=$?
 check "branch_push_skips_the_run: a delete of main passes" 0 "$rc"
 check "branch_push_skips_the_run: the runner never ran" none "$([ -e "$T/branch/log" ] && echo ran || echo none)"
 
+# Issue 634: a plugin change with no version bump reached main, and only GitHub's CI went red on it. A pushed tree that
+# holds ci/version-check.sh runs it against the remote's main before the push lands. The fixture's base commit goes up
+# with --no-verify (its remote has no main to compare with yet); the real version-check.sh does the comparing.
+mkver() {
+  local d=$T/$1
+  mkfix "$1"; mkdir -p "$d/w/ci" "$d/w/.claude-plugin"
+  cp "$REAL/ci/version-check.sh" "$d/w/ci/"; echo '{"version":"1.0.0"}' > "$d/w/.claude-plugin/plugin.json"
+  git -C "$d/w" add -A; git -C "$d/w" commit -qm base
+  (cd "$d/w" && git --git-dir="$PWD/.git" push -q --no-verify origin HEAD:refs/heads/main 2>&1) >/dev/null
+  echo 'echo new' > "$d/w/scripts/new.sh"; git -C "$d/w" add -A; git -C "$d/w" commit -qm 'a plugin change'
+}
+mkver nobump
+out=$(push nobump HEAD:refs/heads/main); rc=$?
+check "a push to main of a plugin change with no version bump is refused naming version-check" "1 1 $(git -C "$T/nobump/w" rev-parse HEAD~1)" \
+  "$([ "$rc" -ne 0 ] && echo 1 || echo 0) $(grep -q 'version-check' <<<"$out" && echo 1 || echo 0) $(remote_main nobump)"
+mkver bump
+echo '{"version":"1.0.1"}' > "$T/bump/w/.claude-plugin/plugin.json"; git -C "$T/bump/w" commit -qam 'raise the version'
+push bump HEAD:refs/heads/main >/dev/null; rc=$?
+check "a push to main of a plugin change with a version bump passes" "0 $(git -C "$T/bump/w" rev-parse HEAD)" "$rc $(remote_main bump)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

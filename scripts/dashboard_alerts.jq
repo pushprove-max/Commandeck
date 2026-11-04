@@ -52,6 +52,10 @@ def builder_warmup_input: 3300000;
     ($projects[] | .key as $p | .value as $v
       | (($v.guardBlocks // {} | select(.lastHour != null and .perHour != null and .lastHour >= 30 and .lastHour > 3 * .perHour)
           | a("guard-spike-\($p)"; "warn"; "\($p): \(.lastHour) guard blocks in the last hour, over 3 times the \(.perHour | r) an hour average"; "find the pane looping on a refused command and redirect it")),
+        # Issue 595: a plan seat opened by hand (seat.sh's COMMANDECK_HAND_LAUNCH) is chained by nothing; one alert per launch for 24 h.
+        ($v.handLaunches // [] | .[] | select((.at | numbers) > $now - 86400)
+          | a("hand-launch-\(.unit)-\(.role)"; "warn"; "\($p): the \(.role) seat of \(.unit) was opened by hand (\(.reason)), so nothing chains its next step"; "drive the unit with unit-drive.sh start \(.unit), or carry its next step by hand")
+            + {since: .at}),
         # A unit in one stage past 2 h is red on its card; the stage start is the collector's first sighting.
         ($v.units.inFlight // [] | .[] | select(([.stage] | inside(["planning", "building", "review", "fixing", "waiting-main"]))
             and .stageSince != null and ((.stageSince | ts) as $t | $t != null and $now - $t > 7200))

@@ -73,4 +73,5 @@ if [ "$ctx" -gt "$PAST" ]; then
   echo "CONTEXT $((ctx / 1000))K is $(((ctx - LINE) / 1000))K PAST the $((LINE / 1000))K line: the NEXT tool call writes the checkpoint in ONE call: $STEP; then end the turn; the Stop hook restarts main. Never type /clear. No other look first."
   exit 0
 fi
-echo "CONTEXT $((ctx / 1000))K is over the $((LINE / 1000))K line: finish this step, write the checkpoint in ONE call: $STEP; then end the turn; the Stop hook restarts main ($TPL/main-session.md, Main never compacts)."
+# Issue 592: under the 40K mark too, the line says how far past it main is.
+echo "CONTEXT $((ctx / 1000))K is $(((ctx - LINE) / 1000))K past the $((LINE / 1000))K line: finish this step, write the checkpoint in ONE call: $STEP; then end the turn; the Stop hook restarts main ($TPL/main-session.md, Main never compacts)."

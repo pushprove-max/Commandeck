@@ -38,6 +38,15 @@ rm -f "$T/pane-up"; : > "$T/creates"; touch "$T/no-title"
 COMMANDECK_SEAT_FORCE=1 COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
 check "an Orca without set-pane-title still launches, in one pane" "0:1:phase=dispatched" \
   "$?:$(grep -c . "$T/creates"):$(seat_sh status plan-judge-sol pu | cut -d' ' -f1)"
+# Issue 587: a task text passed with --spec could reach Orca cut short. launch passes it with --spec-file: Orca's task
+# holds the whole text, its seat tag the last sentence, and the file is removed once task-create returns.
+rm -f "$T/pane-up" "$T/task-specs"
+COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1
+TS=$(cat "$T/task-specs" 2>/dev/null)
+check "a task text over 200 characters reaches Orca whole through --spec-file" "1:1:0" \
+  "$([ "${#TS}" -gt 200 ] && echo 1 || echo 0):$(grep -c '^Your task spec.*Seat tag seat-plan-judge-sol-[0-9]*-[0-9]*: it names this pane.s session, nothing to do with it\.' <<<"$TS"):$(ls "$HOME/.commandeck/scratch/"*/task-spec-* 2>/dev/null | grep -c .)"
+# Issue 590: main-watch tells a seat's exit row from another's by Orca's pty id, which launch records.
+check "a launch records the pane's pty id in the seat record" "pty=pty1::$SWT@@a1" "$(grep '^pty=' "$JREC")"
 rm -f "$T/no-title"
 rm -f "$T/pane-up"; touch "$T/no-dispatch" "$T/send-fails"
 COMMANDECK_SEAT_FORCE=1 srun launch plan-judge-sol pu "$T/judge-spec.md" >"$T/out" 2>&1

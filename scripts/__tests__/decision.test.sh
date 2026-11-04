@@ -8,6 +8,9 @@ REAL=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL=$((FAIL + 1)); echo "FAIL $1 (expected [$2], got [$3])"; fi; }
+# The stand-in to-main.sh (issue 624): every message an answer sends main lands in tm.log, never in a live Orca.
+printf '#!/usr/bin/env bash\nprintf "%%s|%%s|%%s\\n" "$1" "$2" "$3" >> "%s/tm.log"\n' "$T" > "$T/tm"; chmod +x "$T/tm"
+export COMMANDECK_TO_MAIN=$T/tm
 git init -q -b main "$T/p"
 D() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_RULING_LOG="$T/rulings.jsonl" bash "$REAL/scripts/decision.sh" "$@"); }
 opts() { D list | jq -c --arg id "$1" '[.[] | select(.id == $id)] | if length == 0 then "none" else .[0].options end'; }
@@ -190,6 +193,49 @@ D test-edit u1 scripts/a.sh '' $RID >/dev/null 2>&1; B3=$?
 D test-edit u1 scripts/a.sh $'a\nb' $RID >/dev/null 2>&1; B4=$?
 D test-edit u1 scripts/a.sh 'a ruling:b' $RID >/dev/null 2>&1; B5=$?
 check "a bad unit, an empty path or name, or a name holding a newline or ruling: writes nothing" "1 1 1 1 1 1" "$B1 $B2 $B3 $B4 $B5 $(grep -c . "$F")"
+
+# Issue 607: a near-miss name was recorded and failed only at the next pass. test-edit asks the pass's own lister, in the
+# unit's worktree from where it left main, with the edit not yet staged; with no worktree it records and says so.
+mkdir -p "$T/p/scripts/__tests__"; printf '%s\n' 'check "a case" 1 1' 'check "another" 2 2' > "$T/p/scripts/__tests__/y.test.sh"
+git -C "$T/p" add scripts/__tests__/y.test.sh && git -C "$T/p" -c user.name=t -c user.email=t@t commit -qm y
+git -C "$T/p" worktree add -q -b u7 "$T/ws/u7"; printf '%s\n' 'check "another" 2 2' > "$T/ws/u7/scripts/__tests__/y.test.sh"
+F7=$T/p/.claude/briefs/u7-main-rulings.md
+DA test-edit u7 scripts/__tests__/y.test.sh 'a cases' $RID >/dev/null; RC=$?
+check "a near-miss test-edit label is refused and the exact names are printed" "1 1 0" "$RC $(grep -cx 'a case' "$T/err") $(grep -c . "$F7" 2>/dev/null || echo 0)"
+DA test-edit u7 scripts/__tests__/y.test.sh 'a case' $RID >/dev/null; RC=$?
+check "the exact test-edit label is recorded" "0 Test edit: scripts/__tests__/y.test.sh test:a case ruling:$RID" "$RC $(cat "$F7")"
+DA test-edit u8 scripts/__tests__/y.test.sh 'any name' $RID >/dev/null; RC=$?
+check "a test-edit for a unit with no worktree records with a warning" "0 1 1" \
+  "$RC $(grep -c 'warning: no worktree for u8' "$T/err") $(grep -c 'test:any name' "$T/p/.claude/briefs/u8-main-rulings.md")"
+
+# Issue 616: two push asks at different tips ask different things though only their shas differ; the same tip twice is
+# still a repeat.
+PQ='Push main to origin? 1 commit(s) since origin/main:'
+D add push-1999-01-02-aaaaaaaa "$PQ aaaaaaaa u3 (check green)" push 'decision.sh push-ask' >/dev/null 2>&1; R1=$?
+D add push-1999-01-02-bbbbbbbb "$PQ bbbbbbbb u3 (check green)" push 'decision.sh push-ask' >/dev/null 2>&1; R2=$?
+check "two push asks at different tips with the same commit count are both written" "0 0 2" \
+  "$R1 $R2 $(D list | jq '[.[] | select(.id | test("^push-1999-01-02-"))] | length')"
+D add push-1999-01-03-aaaaaaaa "$PQ aaaaaaaa u3 (check green)" push 'decision.sh push-ask' >/dev/null 2>&1
+check "the same tip asked twice is refused as a repeat" "3 0" "$? $(D list | jq '[.[] | select(.id == "push-1999-01-03-aaaaaaaa")] | length')"
+
+# Issue 624: main's own question and the push ask (main-watch writes it; no pane asked) are answered on the dashboard or
+# by a relay, so main hears the answer as one message; an AskUserQuestion pick was answered in the pane that asked.
+# Main's ruling (2026-11-04): an answer given in the main checkout (main's own pane, the dashboard) told main already, so
+# nothing is sent; one from elsewhere (the relay's worktree, here $T/ws/u1) is.
+DO() { (cd "$T/ws/u1" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_RULING_LOG="$T/rulings.jsonl" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_ANSWER_WORKER="$T/aw" bash "$REAL/scripts/decision.sh" "$@" 2>"$T/err"); }
+D add mq-1999-01-01 'Rename the cache folder?' none main >/dev/null; : > "$T/tm.log"
+DO answer mq-1999-01-01 'rename it' >/dev/null
+check "answering a decision main opened, outside the main checkout, sends main one message with the answer" "1 question|answer mq-1999-01-01 1" \
+  "$(grep -c . "$T/tm.log") $(cut -d'|' -f1,2 "$T/tm.log") $(grep -c 'rename it' "$T/tm.log")"
+D add mq-1999-01-04 'Keep the old log?' none main >/dev/null; : > "$T/tm.log"
+DA answer mq-1999-01-04 'keep it' >/dev/null
+check "answering a decision main opened, in the main checkout, sends main nothing (main told itself)" "0 0" "$(grep -c . "$T/tm.log") $(grep -c . "$T/err")"
+: > "$T/tm.log"; DO answer push-1999-01-02-bbbbbbbb 'push it' >/dev/null
+check "answering a push ask sends main one message with the answer" "1 question|answer push-1999-01-02-bbbbbbbb 1" \
+  "$(grep -c . "$T/tm.log") $(cut -d'|' -f1,2 "$T/tm.log") $(grep -c 'push it' "$T/tm.log")"
+D add pick-1999-01-01 'Which logo colour?' none AskUserQuestion >/dev/null; : > "$T/tm.log"
+DA answer pick-1999-01-01 'blue' >/dev/null
+check "an answer to an AskUserQuestion decision sends main nothing" "0 0" "$(grep -c . "$T/tm.log") $(grep -c . "$T/err")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

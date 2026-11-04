@@ -11,7 +11,8 @@ mv "$BIN/orca-ide" "$BIN/orca-ide.base"
 cat > "$BIN/orca-ide" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  "orchestration task-create"*) echo "\$*" >> "$T/creates"; echo '{"ok":true,"result":{"task":{"id":"task_2"}}}' ;;
+  "orchestration task-create"*) echo "\$*" >> "$T/creates"; while [ \$# -gt 0 ]; do [ "\$1" != --spec-file ] || { cat "\$2"; echo; } >> "$T/creates"; shift; done
+    echo '{"ok":true,"result":{"task":{"id":"task_2"}}}' ;;
   "orchestration worker-start"*) echo "\$*" >> "$T/starts"; exec "$BIN/orca-ide.base" "\$@" ;;
   *) exec "$BIN/orca-ide.base" "\$@" ;;
 esac
@@ -41,6 +42,28 @@ touch "$T/ps-working"
 S1=$(run status builder seat-builder 2>&1); rm -f "$T/ps-working"; S2=$(run status builder seat-builder 2>&1)
 check "status reads the live state (issue 485)" "1:1:0:1" \
   "$(grep -c ' agent=working ' <<<"$S1"):$(grep -c ' agent=none ' <<<"$S2"):$(grep -c ' state=' <<<"$S1"):$(grep -c 'last: seat=.* record=' <<<"$S1")"
+
+# Issue 612: a revised plan author's turn is finished by its own plan commit, never by the plan it inherited: revise
+# resets planref= to the plan at revise time. committed -- pp_plan_committed on the author's record since its launch.
+UWT=$HOME/orca/workspaces/proj/seat-unit; mkdir -p "$UWT/.claude/plans"
+plan() { echo "$1" > "$UWT/.claude/plans/seat-unit.md"; git -C "$UWT" add .claude/plans/seat-unit.md && git -C "$UWT" -c user.name=t -c user.email=t@t commit -qm "$1"; }
+committed() { (cd "$PROJ" && env -u COMMANDECK_MAIN -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH PATH="$BIN:$PATH" \
+  bash -c '. "$1/scripts/paths.sh" && pp_plan_committed "$2" 1000' _ "$REAL" "$PREC") && echo finished || echo working; }
+plan 'plan A'; sed -i "/^planref=/d" "$PREC"; echo "planref=$(git -C "$UWT" rev-parse HEAD:.claude/plans/seat-unit.md)" >> "$PREC"; plan 'plan B'
+run revise plan-author seat-unit "Change section 3." >"$T/out" 2>&1
+check "a revise seat does not read as finished from the plan it inherited" "0:working" "$?:$(committed)"
+plan 'plan C'
+check "a revise seat that commits a new plan reads as finished" finished "$(committed)"
+
+# Pass 8: the revised worker can commit its plan before dispatch returns. planref= is the plan before the revision is
+# sent, so that commit is its finish. commit-on-start wraps the stand-in: worker-start commits plan E, then answers.
+mv "$BIN/orca-ide" "$BIN/orca-ide.revise"
+printf '#!/usr/bin/env bash\ncase "$*" in "orchestration worker-start"*) [ ! -e %q ] || { echo "plan E" > %q; git -C %q add .claude/plans/seat-unit.md && git -C %q -c user.name=t -c user.email=t@t commit -qm "plan E"; } ;; esac\nexec %q "$@"\n' \
+  "$T/commit-on-start" "$UWT/.claude/plans/seat-unit.md" "$UWT" "$UWT" "$BIN/orca-ide.revise" > "$BIN/orca-ide"; chmod +x "$BIN/orca-ide"
+plan 'plan D'; D=$(git -C "$UWT" rev-parse HEAD:.claude/plans/seat-unit.md); touch "$T/commit-on-start"
+run revise plan-author seat-unit "Change section 4." >"$T/out" 2>&1; RC=$?; rm -f "$T/commit-on-start"
+check "a revise seat that commits its plan before dispatch returns keeps the plan it inherited as planref and reads as finished" "0:$D:finished" \
+  "$RC:$(sed -n 's/^planref=//p' "$PREC"):$(committed)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

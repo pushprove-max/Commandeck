@@ -74,5 +74,14 @@ printf '%s\n' 'check "other" 1 1' > "$R/e.test.sh"
 ALL=$(labels e.test.sh); printf '%s\n' 'check "same" 1 1' 'check "other" 1 1' > "$R/e.test.sh"
 check "two tests of one name differ" "same #1	1,same #2	1|same #2	1" "$ALL|$(labels e.test.sh)"
 
+# Issue 596: the runner names a test by its string's value, so an escaped quote in the label reads as the plain quote and
+# the label runs to the unescaped closing quote (an approval of the runner's name must match).
+printf '%s\n' "it('it\\'s fine', () => { expect(1) });" 'it("x", () => { expect(2) });' > "$R/q.test.js"
+git -C "$R" add -A && git -C "$R" commit -qm q; printf '%s\n' 'it("x", () => { expect(2) });' > "$R/q.test.js"
+check "a single-quoted label with an escaped apostrophe reads with a plain apostrophe" "it's fine	1" "$(labels q.test.js)"
+printf '%s\n' 'it("say \"hi\"", () => { expect(1) });' 'it("x", () => { expect(2) });' > "$R/q.test.js"
+git -C "$R" add -A && git -C "$R" commit -qm q2; printf '%s\n' 'it("x", () => { expect(2) });' > "$R/q.test.js"
+check "a double-quoted label with an escaped quote reads with a plain quote" 'say "hi"	1' "$(labels q.test.js)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

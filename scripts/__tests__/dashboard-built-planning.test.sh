@@ -133,5 +133,28 @@ st = [{"stage": "building", "from": d.iso(p0 + 100), "to": d.iso(p0 + 300)}, {"s
 c = d.unit_costs([{"unit": "u", "worktree": wt, "stages": st, "plan": {"worktree": wt, "from": d.iso(p0), "seats": []}}], now, sys.argv[4], sys.argv[5], sys.argv[6])["u"]
 print(json.dumps([[s["stage"], s["calls"]] for s in c["stages"]] + [c["total"]["calls"]]).replace(" ", ""))' "$OW" "$P0" "$NOW" "$T/one-cache" "$OP" "${OC%/2026/10/17}" 2>&1)"
 
+# Issue 621: a built unit reopened and re-planned showed Waiting on main, Build done, while its plan was re-judged. A
+# plan seat first launched after the Builder's first stage, with no verdict as its record's last verdict=/revised= line
+# (seat.sh's rule), makes it Planning. Each Builder has an idle pane, so without one it waits on main.
+B1=$(iso $((NOW - 3600)))
+for u in pr1 pr2 pr3 pr4; do
+  mkdir -p "$WS/$u/.claude" && touch "$WS/$u/.git"; echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$WS/$u/.claude/settings.local.json"
+  printf '%s\n' "{\"event\":\"tool-start\",\"ts\":\"$B1\",\"tool\":\"Read\",\"kind\":\"tool\",\"use\":\"t1\"}" "{\"event\":\"tool-end\",\"ts\":\"$B1\",\"use\":\"t1\"}" > "$WS/$u/.claude/builder-events.jsonl"
+done
+pseat() { printf 'handle=h-%s\ntask=task_%s\nrole=plan-judge-sol\nunit=%s\nworktree=%s\nlaunched=%s\n%s' "$1" "$1" "$1" "$1" "$2" "$3" > "$SCR/seat-$1-plan-judge-sol.txt"; }
+pseat pr1 $((NOW - 600)) ''                                  # re-judged, no verdict yet
+pseat pr2 $((NOW - 600)) $'verdict=GO\n'                      # re-judged, its verdict in
+pseat pr3 $((NOW - 600)) $'verdict=NO-GO\nrevised=task_r\n'   # re-judged, revised after its verdict
+pseat pr4 $((NOW - 7200)) ''                                 # the Builder's own planning, before its first stage
+PS=$(jq -cn --arg ws "$WS" '{result: {worktrees: [("pr1", "pr2", "pr3", "pr4") | {path: "\($ws)/\(.)", agents: [{agentType: "claude", state: "idle", updatedAt: 0}]}]}}')
+printf '#!/usr/bin/env bash\ncase "$*" in "orchestration task-list"*) echo %s ;; "worktree ps"*) echo %q ;; *) exit 1 ;; esac\n' \
+  "'{\"result\":{\"tasks\":[]}}'" "$PS" > "$BIN/orca-ide"
+dash
+stg() { jq -r --arg u "$1" 'first(.[]) | [.units.inFlight[]? | select(.unit == $u) | .stage] | join(",")' "$T/out/run/project.json" 2>&1; }
+check "a built unit whose plan judge launched after its Builder and has no verdict shows planning" planning "$(stg pr1)"
+check "a built unit whose later plan seat has its verdict still shows waiting on main" waiting-main "$(stg pr2)"
+check "a built unit whose plan seat was revised after an old verdict shows planning" planning "$(stg pr3)"
+check "a Builder's own planning seat, launched before its first stage, leaves it waiting on main" waiting-main "$(stg pr4)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -286,7 +286,49 @@ out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u") build
 answer $u "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "ship it"; waitrc "$SVC"
 check "a question line pauses the loop until plan-<unit> is answered" "paused=yes sol=1 builder=0 released=2 builder=1" \
   "$out released=$(calls "launch plan-judge-sol $u") builder=$(calls "launch --from-plan $u")"
+
+# Issue 632: the owner may answer in another Orca repo's main session, whose ledger is its own. Orca's repo list names
+# this project and $O; $T/repolist-fails makes the list fail. A row there counts only after the ask and with the ask's
+# `plan <hash8>` token; each problem is said once while the gate waits.
+O=$T/other; git init -q -b main "$O"; mkdir -p "$O/.claude/metrics"; : > "$O/.claude/metrics/decisions.jsonl"
+mv "$T/bin/orca-ide" "$T/bin/orca-ide.base"
+cat > "$T/bin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "repo list"*) [ ! -e "$T/repolist-fails" ] || exit 1; jq -cn --arg p "$P" --arg o "$O" '{ok: true, result: {repos: [{path: \$p}, {path: \$o}]}}' ;;
+  *) exec "$T/bin/orca-ide.base" "\$@" ;;
+esac
+EOF
+chmod +x "$T/bin/orca-ide"
+oanswer() { jq -cn --arg id "plan-$1" --arg at "$2" --arg a "$3" --arg q "$4" '{id: $id, question: $q, proposedDefault: "d", source: "main", askedAt: "2000-01-01T00:00:00Z", answeredAt: $at, answer: $a}' >> "$O/.claude/metrics/decisions.jsonl"; }
+h8() { cut -c1-8 "$SCR/drive-$1.asked"; }
+asked() { n0=$(grep -c 'asks the owner' "$T/to-main"); begin "$1"; until_ "[ \$(grep -c 'asks the owner' $T/to-main) -gt $n0 ]"; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+u=qo; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 1
+oanswer $u "$(now)" "answered in the host" "Plan question (plan $(h8 $u))?"; waitrc "$SVC"
+check "an owner answer recorded in another Orca repo's ledger releases the question gate" "token=1 released=1 answer=1" \
+  "token=$(grep -c "keep \`plan $(h8 $u)\`" "$T/to-main") released=$(calls "launch plan-judge-sol $u") answer=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'answered in the host')"
+u=qp; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 1
+oanswer $u 2000-01-01T00:00:00Z "an older answer" "Plan question (plan $(h8 $u))?"; sleep 2
+out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u")"; answer $u "$(now)" "here"; waitrc "$SVC"
+check "an answer in another repo's ledger from before the ask does not release the gate" "paused=yes sol=0 released=1" \
+  "$out released=$(calls "launch plan-judge-sol $u")"
+u=qt; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 1
+oanswer $u "$(now)" "no token" "Plan question?"; sleep 3
+out="paused=$(running && echo yes) sol=$(calls "launch plan-judge-sol $u")"; answer $u "$(now)" "here"; waitrc "$SVC"
+check "another repo's answer that names no plan hash does not release the gate and says one line" "paused=yes sol=0 said=1 released=1" \
+  "$out said=$(slog | grep -c "plan-$u is answered but names no") released=$(calls "launch plan-judge-sol $u")"
+touch "$T/repolist-fails"; u=qr; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 3
+out="paused=$(running && echo yes)"; answer $u "$(now)" "here"; waitrc "$SVC"; rm -f "$T/repolist-fails"
+check "an unreadable Orca repo list keeps the gate on this project's ledger with one line said" "paused=yes said=1 released=1" \
+  "$out said=$(slog | grep -c 'the Orca repo list cannot be read') released=$(calls "launch plan-judge-sol $u")"
 E=("${E[@]:0:${#E[@]}-1}")
+
+# Issue 625: a judge may write a finding as `**F1 (P1):**`; the revise brief carries it as it carries `[P1]`.
+u=lc; mkb $u; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol-1"
+rep $u-plan-judge-sol-1 $'**F1 (P1):** the bold finding gamma\nVERDICT: NO-GO'; drive $u
+check 'a judge finding written as `**F1 (P1):**` reaches the revise brief' "gamma=1 builder=1" \
+  "gamma=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'the bold finding gamma') builder=$(calls "launch --from-plan $u")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

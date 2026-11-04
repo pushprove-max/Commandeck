@@ -35,7 +35,12 @@ alerts = [a for a in d.get('alerts') or [] if a.get('id') and a.get('project') i
 def split(i):
     m = re.search(r'-(\d{9,})$', i)
     return (i[:m.start()], int(m.group(1))) if m else (i, None)
-seen = set(open(seen_path).read().split())
+# Issue 619: a seen file deleted while the watcher runs reads as empty and is made again.
+try:
+    seen = set(open(seen_path).read().split())
+except FileNotFoundError:
+    open(seen_path, 'a').close()
+    seen = set()
 newest = {}
 for k, t in map(split, seen):
     if t is not None:

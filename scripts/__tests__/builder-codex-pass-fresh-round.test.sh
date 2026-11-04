@@ -98,10 +98,13 @@ check "the fix-round hand-off carries the helper line" 1 \
 # A hand-off the pane never took reaches main, with Orca's own answer. The send's output went to /dev/null
 # and the log was the only trace, so main never heard that fix round 2 of commandeck-speedups-0-7-2 had not started.
 rm -f "$TMP/frs-calls"
+# Issue 622: a later pass report makes the round-7 hand-off stale, so the reports of passes 8 on are set aside here.
+mkdir -p "$TMP/later"; for f in "$B/$U"-r*-reports.md; do n=${f##*-r}; [ "${n%-reports.md}" -le 7 ] || mv "$f" "$TMP/later/"; done
 (cd "$W" && env PATH=$FB:$PATH COMMANDECK_MAIN=$REPO COMMANDECK_FRESH_ROUND_SETTLE_SECONDS=0 FRS_CALLS=$TMP/frs-calls FRS_PROJ=$PROJ FRS_SEND_FAILS=1 \
   timeout 30 bash "$REAL/scripts/builder-fresh-round.sh" term_frs "$H7" > "$TMP/frs.out" 2>&1); R=$?
 check "a /clear Orca refuses: exit 1, Orca's answer in the log once per attempt (one retry), and main is told once" "1 2 1" \
   "$R $(grep -c 'typing /clear into term_frs failed (orca: PROBE-REFUSAL)' "$TMP/frs.out") $(cat "$TMP/frs-calls" "$SC/queue/main.jsonl" 2>/dev/null | grep -c "fresh round not started: ${H7##*/}")"
+mv "$TMP/later/"* "$B/" 2>/dev/null; true
 
 # Issue 355: a NO-GO whose hand-off is skipped (the seat record names no pane) says so and tells main (when a Builder
 # seat exists), and writes no fix-r file; without a seat the reason is only printed. A hand-off that cannot be written

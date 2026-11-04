@@ -1411,10 +1411,22 @@ fi
 EV=$WT/.claude/briefs/$UNIT-evidence.md
 plan_rel() { grep -ohE '\.claude/plans/[A-Za-z0-9._-]+\.md' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | head -1 || true; }
 plan_file() { local p; p=$(plan_rel); [ -z "$p" ] || [ ! -f "$WT/$p" ] || echo "$WT/$p"; }
-# section_lines <file> <heading> -- the non-empty lines under each `#+ <heading>` heading (matched without case), up to the next
-# heading. The one heading rule of plan_section and limits_check: a heading a reviewer reads is a heading the check reads.
+# section_lines <file> <heading> [exact] -- the non-empty lines of each section that starts at a column-0 `#` heading
+# beginning with <heading> (matched without case; with exact, only the whole line `## <heading>`, the limits gate's fixed
+# list), up to a line outside a ``` or ~~~ fence of 0-3 spaces, `#` or `##`, then a space or the end. Every line in it is
+# kept, deeper headings and bold lines included: a wrong end or start only adds lines, so a gate refuses more.
 section_lines() {
-  [ ! -f "$1" ] || awk -v h="$(tr '[:upper:]' '[:lower:]' <<<"$2")" 'on && /^#/ { on = 0 } on && NF { print } tolower($0) ~ ("^#+[[:space:]]+" h) { on = 1 }' "$1"
+  [ ! -f "$1" ] || awk -v h="$(tr '[:upper:]' '[:lower:]' <<<"$2")" -v x="${3:-}" '/^ ? ? ?(```|~~~)/ { fence = !fence }
+    on && !fence && /^ ? ? ?##?([ \t]|$)/ { on = 0 }
+    on && NF { print; next }
+    !on { l = tolower($0); if (x ? (l ~ ("^## " h "[ \t]*$")) : (index(l, "#") == 1 && l ~ ("^#+[ \t]+" h))) on = 1 }' "$1"
+}
+# limits_names <file> -- the limits gate's name rule (commandeck-open-2026-11-03 fix round 5): each line, but the two
+# literal heading lines and table rows (never a heading), whose letters (lower case, HTML tags and entities removed, every
+# non-letter dropped) hold a limits heading name, as `line <n>`. No shape is parsed, so none is read as no section.
+limits_names() {
+  [ ! -f "$1" ] || awk '/^\|/ { next } { t = tolower($0); gsub(/<[^>]*>|&[^; ]*;/, "", t); gsub(/[^a-z]/, "", t) }
+    t ~ /statedlimits|acceptedfailuremodes/ && tolower($0) !~ /^## (stated limits|accepted failure modes)[ \t]*$/ { print "line " NR }' "$1"
 }
 # plan_section <heading> -- issue 359: the lines under the plan's heading (matched without case), none for a plan without it.
 plan_section() {
@@ -1660,31 +1672,48 @@ stage_and_check() {
 # limits_added <file> <baseline file> <heading> -- the lines under <heading> in <file> beyond each line's count in the
 # baseline, a missing baseline being empty.
 limits_added() {
-  awk 'FILENAME == ARGV[1] { n[$0]++; next } n[$0] > 0 { n[$0]--; next } { print }' <(section_lines "$2" "$3") <(section_lines "$1" "$3")
+  awk 'FILENAME == ARGV[1] { n[$0]++; next } n[$0] > 0 { n[$0]--; next } { print }' <(section_lines "$2" "$3" exact) <(section_lines "$1" "$3" exact)
 }
-# limits_refuse <repo path> <baseline name> -- one refusal per line on stdin that carries no ruling id every id of which passes ruling_id_ok.
+# limits_refuse <repo path> <baseline name> -- one refusal per line on stdin that carries no ruling id every id of which passes
+# ruling_id_ok, unless main's rulings file carries the line as `Limit: <line> ruling:<id>` with an id that passes (issue 601:
+# a tracked plan cannot hold the id itself).
 limits_refuse() {
-  local line id ok
+  local line id ok l rest f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     ok=0
     for id in $(grep -oE 'ruling:r-[0-9]{8}-[0-9]{6}-[0-9a-z]+-[0-9a-f]{6}' <<<"$line" | cut -d: -f2 || true); do
       ok=1; ruling_id_ok "$id" || { ok=0; break; }
     done
+    if [ "$ok" = 0 ]; then
+      while IFS= read -r l; do
+        rest=${l#"Limit: "}
+        [ "${rest% ruling:*}" = "$line" ] && ruling_id_ok "${rest##* ruling:}" && { ok=1; break; }
+      done < <(grep '^Limit: .* ruling:' "$f" 2>/dev/null)
+    fi
     [ "$ok" = 1 ] || refuse "$1 adds a stated limit after the plan judge's GO (compared with $2) with no ruling id main's rulings for $UNIT carry: $line
-Ask main for the owner's ruling on it, or remove the line. Main logs the ruling and adds its id to $UNIT-main-rulings.md, and the line ends with ruling:<id>.$([ "$1" = ".claude/briefs/$UNIT.md" ] || printf '\nA tracked plan cannot hold a ruling id (the leak test bans ids in tracked files): remove the line from %s and put the limit in .claude/briefs/%s.md with its ruling id.' "$1" "$UNIT")"
+Ask main for the owner's ruling on it, or remove the line. Main logs the ruling and adds its id to $UNIT-main-rulings.md, and the line ends with ruling:<id>, or main adds the line \`Limit: $line ruling:<id>\` there.$([ "$1" = ".claude/briefs/$UNIT.md" ] || printf '\nA tracked plan cannot hold a ruling id (the leak test bans ids in tracked files): remove the line from %s and put the limit in .claude/briefs/%s.md with its ruling id.' "$1" "$UNIT")"
   done
 }
 # limits_check -- #468: a limit the Builder adds after the plan judge's GO is read against a baseline it cannot write: main's
 # copy of the brief and the plan at the merge base. Added lines only; a removed line passes. Process substitution, never a pipe:
 # refuse collects in this shell, and a pipe's subshell would drop every refusal.
 limits_check() {
-  local base p old=$LOCK/plan-at-base h
+  local base p old=$LOCK/plan-at-base h f n bad skip=" "
   base=$(git -C "$WT" merge-base main HEAD) || die "cannot find where $UNIT left main in $WT"
-  limits_refuse ".claude/briefs/$UNIT.md" "main's $UNIT-builder-brief.md" \
-    < <(limits_added "$WT/.claude/briefs/$UNIT.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" 'Stated limits')
   p=$(plan_rel)
-  [ -z "$p" ] || for h in 'Stated limits' 'Accepted failure modes'; do
+  # The name rule first: a file naming a limits heading anywhere but its literal line has none of its limits compared.
+  for f in ".claude/briefs/$UNIT.md" ${p:+"$p"}; do
+    bad=$(limits_names "$WT/$f")
+    [ -n "$bad" ] || continue
+    while IFS= read -r n; do
+      refuse "$f $n: names a limits heading outside its one heading line; write the heading as the literal line, and name it in prose as \"the limits section\""
+    done <<<"$bad"
+    skip+=" $f "
+  done
+  [[ $skip == *" .claude/briefs/$UNIT.md "* ]] || limits_refuse ".claude/briefs/$UNIT.md" "main's $UNIT-builder-brief.md" \
+    < <(limits_added "$WT/.claude/briefs/$UNIT.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" 'Stated limits')
+  [ -z "$p" ] || [[ $skip == *" $p "* ]] || for h in 'Stated limits' 'Accepted failure modes'; do
     git -C "$WT" show "$base:$p" > "$old" 2>/dev/null || : > "$old"
     limits_refuse "$p" "the plan at ${base:0:12}" < <(limits_added "$WT/$p" "$old" "$h")
   done
@@ -2461,7 +2490,7 @@ fi
 TASK=$(sed -n 's/^task=//p' "$SEAT" | head -1)
 where() { # <what the brief is opened for> -- the lines both hand-offs open with
   printf 'You are the Builder of %s. This fix round after pass %s runs in the session that ran the pass while its context is under the Builder clear line, else in a cleared session of the same pane; work from this file and the files it names.\n\n' "$UNIT" "$N"
-  printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$PANE" "${TASK:-not in $SEAT; ask main}" "$PANE"
+  printf -- '- Worktree: %s. Orca handle: %s. Orca task: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --full --json`, which also reads your inbox.\n' "$WT" "$PANE" "${TASK:-not in $SEAT; ask main}" "$PANE"
   printf -- '- The brief still binds you, but do not read it at start: %s: %s\n' "$1" "$WT/.claude/briefs/$UNIT.md"
 }
 if [ "$VERDICT" = "VERDICT: GO" ]; then

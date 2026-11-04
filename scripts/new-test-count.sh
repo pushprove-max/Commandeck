@@ -6,7 +6,8 @@
 # in a test file: `check "<label>"` in a shell file, `def test*` in a Python file, `it(` or `test(` with a label in any
 # other. A test kept in its file under its name (edited in place) is not new; a moved or renamed one is. An `.each`
 # table counts once. `test.skip(cond, 'why')` gates are no test; `test.skip('case', fn)` is. JS/TS is read by the
-# project's own typescript when it has one (nested tests and `t.test()` subtests included), else by a label regex.
+# project's own typescript when it has one (nested tests and `t.test()` subtests included), else by a label regex, said on
+# stderr; a typescript that fails to load or parse exits 2 naming the failure. A name is the string's value (`\'` is `'`).
 # Checks made in a loop or through a helper count as one or none: the count is a review gate on names, not a proof of
 # count. An empty diff prints 0.
 set -uo pipefail
@@ -47,12 +48,21 @@ IFS= read -r -d '' NTC_JS <<'JS' || true
 // Reads direct JS/TS test calls with the TypeScript parser. stdin: [{path, src}]; stdout: [[name, ...], ...], or under
 // NTC_SPANS=1 [[[name, first line, last line], ...], ...].
 // The parser, not a text scan, so a string, comment, regex or template literal is never misread as code.
+// Exit 3: the project has no typescript (the caller reads by its label regex). Exit 2: a typescript that is there fails
+// to load or to parse, which no text count may hide.
 const { createRequire } = require('module');
-let ts;
+const req = createRequire(`${process.env.NTC_ROOT}/package.json`);
+let ts, where;
 try {
-  ts = createRequire(`${process.env.NTC_ROOT}/package.json`)('typescript');
+  where = req.resolve('typescript');
 } catch (e) {
-  process.stderr.write(`new-test-count: cannot load typescript from ${process.env.NTC_ROOT}/node_modules (${e.code || e.message}): run npm ci there; JS/TS tests are never counted by text\n`);
+  process.stderr.write(`new-test-count: no typescript in ${process.env.NTC_ROOT}/node_modules; JS/TS test names are read by a label regex\n`);
+  process.exit(3);
+}
+try {
+  ts = req(where);
+} catch (e) {
+  process.stderr.write(`new-test-count: typescript at ${where} fails to load (${e.message}): run npm ci in ${process.env.NTC_ROOT}\n`);
   process.exit(2);
 }
 const MODS = new Set(['only', 'skip', 'concurrent', 'sequential', 'todo', 'fails', 'failing', 'each']);
@@ -109,18 +119,25 @@ function parse(path, src) {
   walk(sf);
   return out;
 
-  // The first argument's literal text (as written, escapes kept), else its source text.
+  // The first argument's literal text, a backslash before a quote, a backtick or a backslash dropped (the runner's name;
+  // test-edit-labels.sh and js_regex read by the same rule, any other escape kept as written), else its source text.
   function name(n) {
     const a = n.arguments[0];
     const lit = a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a));
-    return !a ? '' : lit ? a.getText(sf).slice(1, -1) : a.getText(sf);
+    return !a ? '' : lit ? a.getText(sf).slice(1, -1).replace(/\\(['"`\\])/g, '$1') : a.getText(sf);
   }
 }
 
 let input = '';
 process.stdin.on('data', (d) => { input += d; });
 process.stdin.on('end', () => {
-  process.stdout.write(JSON.stringify(JSON.parse(input).map(({ path, src }) => parse(path, src))));
+  let at = '';
+  try {
+    process.stdout.write(JSON.stringify(JSON.parse(input).map(({ path, src }) => { at = path; return parse(path, src); })));
+  } catch (e) {
+    process.stderr.write(`new-test-count: the typescript reader failed${at ? ` on ${at}` : ''}: ${e.message}\n`);
+    process.exit(2);
+  }
 });
 JS
 # The reader loads typescript from the project (NTC_ROOT), not the plugin: a project without one is read by a label regex.
@@ -148,19 +165,37 @@ def py_tests(src):
 # or backtick-paren that closes a table written over several lines. A gate has no string first argument, so it never matches.
 STR = r'(?:"((?:[^"\\\n]|\\.)+)"|\'((?:[^\'\\\n]|\\.)+)\'|`((?:[^`\\\n]|\\.)+)`)'
 JS_LABEL = re.compile(r'(?:\b(?:it|test)(?:\.(?!each\b)\w+)*\(|\b(?:it|test)(?:\.\w+)*\.each\b.*\)\(|^\s*(?:\]|`)\)\() *' + STR)
+# The runner's name: a backslash before a quote, a backtick or a backslash dropped, the parser's rule.
+UNESC = re.compile(r'\\([\'"`\\])')
 def js_regex(src):
     out = []
     for l in src.split('\n'):
         h = None if l.lstrip().startswith('//') else JS_LABEL.search(l)
-        if h: out.append(next(g for g in h.groups() if g is not None))
+        if h: out.append(UNESC.sub(r'\1', next(g for g in h.groups() if g is not None)))
     return out
 
+def fail(msg):
+    sys.stderr.write(msg.rstrip('\n') + '\n')
+    sys.exit(2)
+
 def js_tests_all(items):
-    # [(path, src)] -> one list of test names per item, from the TypeScript parser (NTC_JS), else the label regex.
+    # [(path, src)] -> one list of test names per item, from the TypeScript parser (NTC_JS). Only a project with no
+    # typescript (the reader's exit 3, its line passed on) is read by the label regex; any other failure exits 2.
     if not items: return []
     r = subprocess.run(['node', '-e', os.environ['NTC_JS']], input=json.dumps([{'path': p, 'src': s} for p, s in items]),
                        capture_output=True, text=True)
-    return json.loads(r.stdout) if r.returncode == 0 else [js_regex(s) for _, s in items]
+    if r.returncode == 3:
+        sys.stderr.write(r.stderr)
+        return [js_regex(s) for _, s in items]
+    if r.returncode != 0:
+        fail(r.stderr.strip() or f'new-test-count: the typescript reader exited {r.returncode}')
+    try:
+        out = json.loads(r.stdout)
+    except ValueError:
+        out = None
+    if not isinstance(out, list) or len(out) != len(items):
+        fail('new-test-count: the typescript reader printed no list of names, one per file')
+    return out
 
 def read(rev, paths):
     srcs = [(f, show(rev, f)) for f in paths]

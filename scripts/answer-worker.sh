@@ -3,7 +3,8 @@
 # worker's question.
 #
 # A unit name finds its Builder's pane at send time: a restart gives the pane a
-# new handle. With no live pane the answer is queued and shown first when the
+# new handle. With no Builder pane it finds the unit's newest live plan seat's pane.
+# With no live pane the answer is queued and shown first when the
 # Builder starts again (to-main.sh --unit); that still exits 1, as not delivered.
 #
 # A worker that asked main either waits on its inbox (`orchestration check
@@ -71,8 +72,19 @@ close_asks() {
   # The close sends nothing: this call is the send (issue 569). With an id it also closes an owner-bound row, waiting on no one.
   COMMANDECK_NO_DELIVER=1 bash "$HERE/decision.sh" answer "$ids" "$TEXT" >/dev/null || echo "answer-worker: decision $ids stays open in the ledger" >&2
 }
-if [ -d "$PP_WORKSPACES/$H" ]; then
+# plan_seat_pane <unit> -- the live pane of the unit's newest plan seat (seat-<unit>-plan-*.txt, by launched=), for a
+# unit planned with no Builder yet: the driver's plan-revise runs as the plan-author seat (issue 602).
+plan_seat_pane() {
+  local r hs=
+  for r in "$PP_SCRATCH/seat-$1"-plan-*.txt; do [ -f "$r" ] || continue
+    hs+="$(sed -n 's/^launched=//p' "$r" | tail -1) $(sed -n 's/^handle=//p' "$r" | tail -1)"$'\n'; done
+  hs=$(sort -rn <<<"$hs" | awk 'NF == 2 {print $2}'); [ -n "$hs" ] || return 0
+  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg hs "$hs" '[(.result | if type == "array" then . else (.terminals // []) end)[]?
+    | select(.connected != false and .orphaned != true) | .handle] as $live | first($hs | splits("\n") | select(. != "" and IN($live[]))) // empty' 2>/dev/null
+}
+if [ -d "$PP_WORKSPACES/$H" ] || compgen -G "$PP_SCRATCH/seat-$H-plan-*.txt" >/dev/null; then
   U=$H; H=$(pp_seat_pane "unit-$U" "$PP_WORKSPACES/$U")
+  [ -n "$H" ] || H=$(plan_seat_pane "$U")
   [ -n "$H" ] || { bash "$HERE/to-main.sh" --unit "$U" status "answer from main" "$TEXT" 2>/dev/null
     [ $? = 3 ] && { close_asks; echo "queued: ${Q:-no id} to $U" >&2; echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2; } \
       || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }

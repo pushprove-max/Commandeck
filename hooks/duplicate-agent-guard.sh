@@ -170,12 +170,15 @@ def skip_options(ws):
         ws = ws[2:] if '=' not in ws[0] and ws[1:] and not ws[1].startswith('-') and ws[1] not in SUBWORDS else ws[1:]
     return ws
 for words in cmds:
+    head = words
     words = command_words(words)
+    # Issue 603: an owner-approved probe pane is named by a COMMANDECK_PROBE_PANE=<approval id> prefix on the command itself.
+    probe = next((w.split('=', 1)[1] for w in head[:len(head) - len(words)] if w.startswith('COMMANDECK_PROBE_PANE=')), '')
     if not words or not re.search(r'(^|/)orca(-ide)?$', words[0]): continue
     group = skip_options(words[1:])
     sub = ' '.join(group[:1] + skip_options(group[1:])[:1])
     if sub in ('terminal create', 'terminal split') and runs_agent(flag(words, 'command') or ''):
-        print('hand\t')
+        print('hand\t' + probe)
         if sub == 'terminal create': print('create\t' + (flag(words, 'worktree') or ''))
     elif sub == 'worktree create' and flag(words, 'agent'): print('hand\t')
     elif sub == 'terminal send' and '--enter' in words and not re.fullmatch(NUDGE, flag(words, 'text') or '', re.I | re.S):
@@ -202,11 +205,31 @@ ROOT=${CLAUDE_PROJECT_DIR:-$(jq -r '.cwd // "."' <<<"$INPUT")}
 GIT_DIR_OF=$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null)
 MAIN=""
 [ -n "$GIT_DIR_OF" ] && [ "$GIT_DIR_OF" = "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] && MAIN=1
+# Issue 603: probe_pane <approval id> -- main's one hand pane for an id the ruling log holds as standing (ruling-id.sh)
+# whose ruling approved a probe pane, never used before: the use is logged first, so a second pane for the id is refused. Anything else blocks.
+probe_pane() {
+  local log=${COMMANDECK_RULING_LOG:-} plog=$PP_SCRATCH/probe-panes.log
+  . "${BASH_SOURCE[0]%/*}/lib/ruling-id.sh"
+  [ -n "$log" ] || { . "${BASH_SOURCE[0]%/*}/lib/project.sh"; pp_project "$ROOT"; log=$HOME/.claude/rulings/$PP_PROJECT.jsonl; }
+  ruling_id_state "$1" "$log" || block probe-pane-id "COMMANDECK_PROBE_PANE=$1 is not a standing ruling in $log (absent, void or an unconfirmed suspect): a probe pane needs the owner's approval id"
+  # Main's ruling on #603: only a ruling that approved a probe pane opens one. Its own recorded text decides: the row's
+  # question, subject or answer names a probe pane, and its answer is not a refusal.
+  jq -Rne --arg id "$1" '[inputs | fromjson? | select(.id == $id)] | any(.[];
+      ([.question, .subject, .answer] | map(strings) | join(" ") | test("probe[- ]panes?"; "i"))
+      and ((.answer // "") | tostring | test("^\\s*(no|don.?t|do not|reject|refuse|deny)\\b"; "i") | not))' "$log" >/dev/null 2>&1 \
+    || block probe-pane-id "ruling $1 did not approve a probe pane (its question, subject and answer in $log name none, or the answer refused one): COMMANDECK_PROBE_PANE needs the id of the owner's probe-pane approval"
+  ! awk -v id="$1" '$2 == id { f = 1 } END { exit !f }' "$plog" 2>/dev/null \
+    || block probe-pane-reused "approval $1 already opened a probe pane ($plog): one pane per approval id; ask the owner for a new one"
+  mkdir -p "$PP_SCRATCH" && printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(head -n 1 <<<"$CMD" | cut -c1-160)" >> "$plog" \
+    || block probe-pane-log "the probe-pane log $plog cannot be written, so approval $1 could open a second pane"
+}
 
 while IFS=$'\t' read -r kind val; do
   case $kind in
     hand)
-      [ -z "$MAIN" ] || block hand-made-pane-main "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11). To move main itself to a fresh session, run /handoff: its Stop hook opens the new main pane." ;;
+      [ -n "$MAIN" ] || continue
+      [ -z "$val" ] || { probe_pane "$val"; continue; }
+      block hand-made-pane-main "a hand-made agent pane from the main checkout. Open it with scripts/builder-launch.sh <unit> <batch-brief> or scripts/seat.sh launch <role> <unit> <spec> (owner ruling 2026-10-11). To move main itself to a fresh session, run /handoff: its Stop hook opens the new main pane. A probe pane the owner approved opens with the prefix COMMANDECK_PROBE_PANE=<approval id> on the terminal create, where the id is the owner's ruling that approved a probe pane; one pane per id." ;;
     create)
       WT=$val
       [ -n "$WT" ] || WT="path:$(git -C "$(jq -r '.cwd // "."' <<<"$INPUT")" rev-parse --show-toplevel 2>/dev/null)"

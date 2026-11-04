@@ -143,5 +143,22 @@ OUT=$(ask "q" "b"); RC=$?
 check "a waiting call names its pane in <id>.asking at each inbox read and leaves none once it returns" "0:2:1:" \
   "$RC:$(grep -c -- --wait "$T/checks.log"):$(( $(grep -cx 'pane=term_me' "$T/asking.log") == $(wc -l < "$T/checks.log") )):$(ls "$T/scratch/ask-main" | paste -sd' ' -)"
 
+# Issue 588 (D23): Orca 1.4.246's check without --full drops body, thread_id and from_handle from each message (and
+# dispatchId from the result). A stand-in in front of the stub gives that concise view: the answer still reaches the asker.
+mkdir -p "$T/cbin"
+cat > "$T/cbin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" orchestration check "*" --full "*|*" --full "*" orchestration check "*) exec "$T/bin/orca-ide" "\$@" ;;
+  *" orchestration check "*) "$T/bin/orca-ide" "\$@" | jq -c 'del(.result.dispatchId) | .result.messages |= map(del(.body, .thread_id, .from_handle))' ;;
+  *) exec "$T/bin/orca-ide" "\$@" ;;
+esac
+EOF
+chmod +x "$T/cbin/orca-ide"
+reset; batch d1 msg_q1 "Re: q" "the answer only the full view carries"
+OUT=$(cd "$T/p" && "${E[@]}" PATH="$T/cbin:$T/bin:$PATH" bash "$REAL/scripts/ask-main.sh" "q" "b" 2>&1); RC=$?
+check "ask-main prints an answer only Orca's full check view carries (issue 588)" "0:1" \
+  "$RC:$(grep -c '^the answer only the full view carries$' <<<"$OUT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

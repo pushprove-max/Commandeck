@@ -60,6 +60,31 @@ done
 check "main: a plain shell pane is allowed"           0 "$(run_main 'orca-ide terminal create --worktree path:/ws/unit-x --command "tail -f ship.log"')"
 check "main: builder-launch.sh is the scripted path" 0 "$(run_main 'bash scripts/builder-launch.sh unit-x .claude/briefs/unit-x.md')"
 
+# Issue 603: main opens one owner-approved probe pane by hand with a `COMMANDECK_PROBE_PANE=<approval id>` prefix: the id
+# must be a standing ruling, it opens one pane, and the use is logged. The ids use the r-1999... shape (the leak test bans r-20...).
+export COMMANDECK_RULING_LOG=$BOX/rulings.jsonl
+OK1=r-19990101-000001-1-abcdef OK2=r-19990101-000002-1-abcdef VOIDID=r-19990101-000003-1-abcdef
+OTHER=r-19990101-000004-1-abcdef NOID=r-19990101-000005-p-abcdef
+printf '%s\n' '{"id":"'$OK1'","question":"Open a probe pane for the live check?","answer":"yes"}' \
+  '{"id":"'$OK2'","question":null,"answer":"approved: one probe pane for the build"}' \
+  '{"id":"'$VOIDID'","question":"Open a probe pane?","answer":"yes","void":true}' \
+  '{"id":"'$OTHER'","question":"Merge unit-x?","answer":"yes"}' \
+  '{"id":"'$NOID'","question":"Open a probe pane?","answer":"no, use seat.sh"}' > "$COMMANDECK_RULING_LOG"
+PROBE="orca-ide terminal create --worktree path:/ws/unit-x --command 'claude --model m' --json"
+PLOG=$COMMANDECK_SCRATCH/probe-panes.log
+check "main opens a probe pane with a valid approval id and the use is logged" "0 1" \
+  "$(run_main "COMMANDECK_PROBE_PANE=$OK1 $PROBE") $(awk -v id="$OK1" '$2 == id' "$PLOG" 2>/dev/null | grep -c .)"
+check "main with no approval prefix is still blocked" "2 1" "$(run_main "$PROBE") $(grep -c 'COMMANDECK_PROBE_PANE=<approval id>' "$BOX/err")"
+check "a void approval id is blocked" "2 0" "$(run_main "COMMANDECK_PROBE_PANE=$VOIDID $PROBE") $(grep -c "$VOIDID" "$PLOG")"
+check "a reused approval id is blocked" "2 1" "$(run_main "COMMANDECK_PROBE_PANE=$OK1 $PROBE") $(grep -c 'one pane per approval id' "$BOX/err")"
+check "an approval id only inside an echo is blocked" "2 0" "$(run_main "echo \"COMMANDECK_PROBE_PANE=$OK2\"; $PROBE") $(grep -c "$OK2" "$PLOG")"
+# Main's ruling on #603: only a ruling that approved a probe pane opens one, not any standing id.
+check "a standing ruling that approved something else opens no probe pane" "2 1" \
+  "$(run_main "COMMANDECK_PROBE_PANE=$OTHER $PROBE") $(grep -c 'did not approve a probe pane' "$BOX/err")"
+check "a ruling that refused a probe pane opens none" "2 0" "$(run_main "COMMANDECK_PROBE_PANE=$NOID $PROBE") $(grep -c "$NOID" "$PLOG")"
+check "a typed approval naming a probe pane opens one" 0 "$(run_main "COMMANDECK_PROBE_PANE=$OK2 $PROBE")"
+unset COMMANDECK_RULING_LOG
+
 # Issue 447: an order sent by hand to a Builder's inbox, or to a dispatch inbox, is read only by a pane parked in a wait,
 # so it sat unread while the Builder built what the order cancelled. answer-worker.sh reads the pane and picks the way.
 mkdir -p "$BOX/scratch"

@@ -76,6 +76,8 @@ case "\$1 \$2" in
   # coord names the run's coordinator; term_main without it.
   # A task close is recorded and accepted, as Orca accepts one.
   "orchestration task-update") echo "\$*" >> "$T/updates"; echo '{"ok":true}' ;;
+  # A pane close is accepted, as Orca accepts one (seat.sh collect exits 5 on a refused close, pass 7).
+  "terminal close") echo '{"ok":true}' ;;
   # A task with no dispatch reads null (pp_task_close checks it before it settles a seat's task).
   "orchestration dispatch-show") echo '{"ok":true,"result":{"dispatch":null}}' ;;
   "orchestration run-list") jq -nc --arg c "\$(cat "$F/coord" 2>/dev/null || echo term_main)" '{result:{runs:[{id:"run_test",coordinator_handle:\$c}]}}' ;;

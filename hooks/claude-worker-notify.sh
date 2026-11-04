@@ -81,7 +81,7 @@ SINCE=$(jq -R 'fromjson?' "$T" 2>/dev/null | jq -rs '[.[] | select(.type == "use
     or ((.message.content | type) == "array" and any(.message.content[]?; .type == "text"))))] | last
   | .timestamp // "" | sub("\\.[0-9]+"; "") | fromdateiso8601? // empty' 2>/dev/null)
 [ -z "$ASK" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ -n "$SINCE" ] && ( . "$HERE/../scripts/paths.sh" >/dev/null 2>&1 \
-  && orca-ide orchestration inbox --terminal "run:$RUN" --limit 500 --json 2>/dev/null \
+  && orca-ide orchestration inbox --terminal "run:$RUN" --limit 500 --full --json 2>/dev/null \
   | pp_worker_done_since "$ORCA_TERMINAL_HANDLE" "$SINCE" ) && exit 0
 # A unit with a live drive, loop or run driver reports through that driver, and
 # this send would wake main for nothing. Only a positive answer

@@ -63,7 +63,7 @@ else HAND=$WT/.claude/briefs/$UNIT-added-$(date +%Y%m%d-%H%M%S).md; fi
     printf '# %s: work added mid-build\n\n' "$UNIT"
     printf 'You are the Builder of %s, in a fresh session of the same pane: main added work, and the session that built so far was cleared, so this file and the files it names are all you have.\n\n' "$UNIT"
   fi
-  printf -- '- Worktree: %s. Orca handle: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --json`, which also reads your inbox.\n' "$WT" "$H" "$H"
+  printf -- '- Worktree: %s. Orca handle: %s; your dispatch id is .result.dispatchId of `orca-ide orchestration check --terminal %s --full --json`, which also reads your inbox.\n' "$WT" "$H" "$H"
   printf -- '- Read the brief whole, it still binds you: %s\n' "$WT/.claude/briefs/$UNIT.md"
   printf -- '- Read the evidence file whole, it says what is built, verified and left: %s\n' "$WT/.claude/briefs/$UNIT-evidence.md"
   if [ -n "$ANSWER" ]; then

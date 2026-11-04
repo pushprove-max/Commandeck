@@ -10,6 +10,9 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL
 export HOME=$T/home
 # A collect whose task will not settle gives up at once, not after the 60 s retry (host issue 2998).
 export COMMANDECK_SEAT_SETTLE_RETRY_S=0
+# Issue 595: a plan seat launched outside unit-drive.sh needs a reason. Every case here opens seats by hand, so the
+# fixture gives one (D8); a refusal case unsets it in its own subshell, and a driver launch logs nothing whatever it holds.
+export COMMANDECK_HAND_LAUNCH=fixture
 PROJ=$T/proj CFG=$T/proj/.claude/commandeck.json BIN=$T/bin; mkdir -p "$HOME" "$BIN" "$PROJ/.claude"
 # A Codex seat is refused where codex is not installed (CI has none): a stand-in, which a file may replace with its own.
 printf '#!/bin/sh\nexit 0\n' > "$BIN/codex"; chmod +x "$BIN/codex"
@@ -35,7 +38,7 @@ cat > "$BIN/orca-ide" <<EOF
 case "\$*" in
   "terminal create"*) echo "\$*" >> "$T/creates"; touch "$T/pane-up"; [ ! -e "$T/on-create" ] || { cp "$T/on-create" "$T/screen"; touch "$T/grow"; }; echo '{"ok":true,"result":{"terminal":{"handle":"h1"}}}' ;;
   "terminal list"*) [ ! -e "$T/list-fails" ] || exit 1
-    [ -e "$T/pane-up" ] && t='{"handle":"h1","tabId":"t1","leafId":"l1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT"}' || t=''
+    [ -e "$T/pane-up" ] && t='{"handle":"h1","tabId":"t1","leafId":"l1","agentIdentity":"claude","worktreeId":"w1","worktreePath":"$SWT","ptyId":"pty1::$SWT@@a1"}' || t=''
     x=\$(cat "$T/extra" 2>/dev/null); [ -z "\$x" ] || t=\${t:+\$t,}\$x
     echo "{\"ok\":true,\"result\":{\"terminals\":[\$t]}}" ;;
   "terminal read"*) [ ! -e "$T/slow-read" ] || trap '' TERM; while [ -e "$T/slow-read" ]; do sleep 0.1; done; [ ! -e "$T/read-fails" ] || exit 1; [ ! -e "$T/grow" ] || echo . >> "$T/screen"; [ ! -e "$T/screen" ] || { jq -Rsn --rawfile s "$T/screen" '{ok: true, result: {terminal: {tail: (\$s | rtrimstr("\n") | split("\n"))}}}'; exit; }
@@ -46,7 +49,9 @@ case "\$*" in
   "orchestration send"*) echo "\$*" >> "$T/wakes"; [ ! -e "$T/send-refuses" ] || { echo '{"ok":false,"error":{"message":"SEND-REFUSED"}}'; exit 1; }; echo '{"ok":true,"result":{}}' ;;
   "terminal set-pane-title"*) [ ! -e "$T/no-title" ] || { echo "unknown command" >&2; exit 1; }; while [ \$# -gt 0 ]; do [ "\$1" != --title ] || printf '%s\n' "\$2" >> "$T/titles"; shift; done; echo '{"ok":true,"result":{}}' ;;
   "orchestration task-update"*) echo "\$*" >> "$T/updates"; echo '{"ok":true,"result":{}}' ;;
-  "orchestration task-create"*) echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
+  # The text of a --spec-file is what Orca's task holds (issue 587), kept in task-specs, one task per line.
+  "orchestration task-create"*) while [ \$# -gt 0 ]; do [ "\$1" != --spec-file ] || { cat "\$2"; echo; } >> "$T/task-specs"; shift; done
+    echo '{"ok":true,"result":{"task":{"id":"task_1"}}}' ;;
   # A task with no dispatch reads null (pp_task_close checks it before it settles a seat's task).
   "orchestration dispatch-show"*) echo '{"ok":true,"result":{"dispatch":null}}' ;;
   "orchestration worker-start"*) [ -e "$T/no-dispatch" ] && { echo '{"ok":false,"error":{"message":"refused for the test"}}'; exit; }; echo '{"ok":true,"result":{}}' ;;

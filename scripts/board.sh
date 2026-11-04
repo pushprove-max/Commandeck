@@ -186,7 +186,7 @@ done
 echo
 echo "== open tasks"
 if [ -n "$RUN" ]; then
-  orca-ide orchestration task-list --run "$RUN" --json 2>/dev/null \
+  orca-ide orchestration task-list --run "$RUN" --full --json 2>/dev/null \
     | jq -r '.result.tasks[]
              | select(.status != "completed" and .status != "failed")
              | "  \(.id)  \(.status)  \(.display_name[0:64])"' \

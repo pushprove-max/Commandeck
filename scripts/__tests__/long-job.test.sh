@@ -278,5 +278,14 @@ check "repo_list_failure_refused: an Orca that answers not ok, or nothing, opens
 check "repo_flag_refused_from_worktree: a worker may not run a command in another repo's main checkout" "2 1 0" \
   "$(FAKE_REPOS=$(listing "Other=$OTHER") ljw start wtrepo --repo Other -- true) $(grep -c 'run_in_background' "$TMP/out") $(creates wtrepo)"
 
+# Issue 617: the evidence's load stamp is read by sourcing host-services.sh, and an owner's shell may be zsh, which sets
+# no BASH_SOURCE and cannot load paths.sh: from another folder that printed a "no such file" line and missed the PATH repair.
+if Z=$(command -v zsh); then
+  ZERR=$(cd "$TMP" && "$Z" -fc ". ${REAL@Q}/scripts/host-services.sh; print -r -- \$HS_DIR; hs_stamp" 2>&1 >"$TMP/zsh.out")
+  check "sourcing host-services.sh from zsh in another folder prints nothing on stderr" "" "$ZERR"
+  check "sourcing host-services.sh from zsh sets HS_DIR to the scripts folder" "$REAL/scripts" "$(head -n 1 "$TMP/zsh.out")"
+  check "and the load reading works from zsh" 1 "$(grep -c '"load1"' "$TMP/zsh.out")"
+else echo "SKIP the three issue 617 cases: no zsh on this host"; fi
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

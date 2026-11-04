@@ -20,7 +20,7 @@ USAGE="usage: merge-queue.sh [--train] <unit>[@<sha>] ..."
 TRAIN=0; [ "${1:-}" != --train ] || { TRAIN=1; shift; }
 [ $# -gt 0 ] || { echo "$USAGE" >&2; exit 2; }
 for arg in "$@"; do
-  [[ $arg =~ ^[A-Za-z0-9._-]+(@[0-9a-f]{7,40})?$ ]] && { [ "$TRAIN" = 0 ] || [[ $arg == *@* ]]; } \
+  [[ $arg =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(@[0-9a-f]{7,40})?$ ]] && { [ "$TRAIN" = 0 ] || [[ $arg == *@* ]]; } \
     || { echo "merge-queue: not a <unit> or <unit>@<sha> (--train takes each with its sha): $arg" >&2; echo "$USAGE" >&2; exit 2; }
 done
 ROOT=$(git rev-parse --show-toplevel) || exit 1

@@ -22,7 +22,7 @@ if [ "${1:-}" = --resume ]; then
   [ -f "$D/$ID" ] || { echo "ask-main: no waiting question $ID (answered, or never sent from this pane)" >&2; exit 2; }
   # The full inbox view still holds an answer whose batch an earlier read acknowledged without printing it; take it
   # before waiting again (issue 351). Its batch, if never acknowledged, is shown again by the next inbox read.
-  FULL=$(orca-ide orchestration check --terminal "$H" --all --json 2>/dev/null | jq -er --arg id "$ID" \
+  FULL=$(orca-ide orchestration check --terminal "$H" --all --full --json 2>/dev/null | jq -er --arg id "$ID" \
     '[.result.messages[]? | select(.thread_id == $id) | .body // ""] | if length > 0 then join("\n") else empty end' 2>/dev/null) \
     && { printf '%s\n' "$FULL"; echo "note: taken from the full inbox view; your next inbox read may show it again"; rm -f "$D/$ID"; exit 0; }
 else
@@ -73,7 +73,8 @@ while :; do
   WAIT=$(( SLICE_END - $(now) ))
   [ "$WAIT" -gt 0 ] || break
   printf 'pid=%s\npane=%s\n' "$$" "$H" > "$TOK.tmp" && mv -f "$TOK.tmp" "$TOK" || exit 1
-  R=$(orca-ide orchestration check --terminal "$H" --wait --timeout-ms $((WAIT * 1000)) ${ACK:+--ack "$ACK"} --json 2>/dev/null); RC=$?
+  # --full (issue 588): Orca's concise row has no thread_id, body or from_handle, so the answer would never match.
+  R=$(orca-ide orchestration check --terminal "$H" --wait --timeout-ms $((WAIT * 1000)) ${ACK:+--ack "$ACK"} --full --json 2>/dev/null); RC=$?
   unwait
   [ "$RC" = 0 ] && jq -e '.ok' >/dev/null 2>&1 <<<"$R" \
     || { echo "ask-main: the inbox check failed; resume with ask-main.sh --resume $ID" >&2; exit 1; }

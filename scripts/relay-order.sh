@@ -57,8 +57,9 @@ if [ -n "$AUTO" ]; then
       printf -- '- **Why**: %s Trade-off weighed: %s. Would pick differently if: %s.\n' "$(flat "$WHY")" "$(flat "$TRADE")" "$(flat "$WOULD")"
       printf -- '- **Reversible**: %s\n' "$(flat "$REV")"
     } >> "$ALOG" || { echo "relay-order: could not write the log $ALOG; nothing changed" >&2; exit 1; }
-    # decision.sh's stderr is kept apart from the row: its delivery line goes to main's note (issue 569).
-    if ! ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS (auto-decided)" 2>"$ERRF"); then
+    # decision.sh's stderr is kept apart from the row: its delivery line goes to main's note (issue 569). Main hears
+    # the answer from this script below, so decision.sh does not tell it too (COMMANDECK_MAIN_TOLD, issue 624).
+    if ! ROW=$(COMMANDECK_MAIN_TOLD=1 bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS (auto-decided)" 2>"$ERRF"); then
       ROW=$(cat "$ERRF")
       printf -- '- **Ledger**: not recorded (%s)\n' "$(flat "$ROW")" >> "$ALOG"
       echo "relay-order: the entry is in $ALOG but the ledger did not take the answer: $ROW; main was NOT told" >&2; exit 1
@@ -76,7 +77,7 @@ else
   RID=$(tail -1 <<<"$RIDS")
   [ -n "$RID" ] || { echo "relay-order: no ruling in $LOG gives those words to $ID's question since it was asked; nothing changed" >&2; exit 1; }
   if jq -e '.answeredAt == null' <<<"$DEC" >/dev/null; then
-    ROW=$(bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)" 2>"$ERRF") || { cat "$ERRF" >&2; exit 1; }
+    ROW=$(COMMANDECK_MAIN_TOLD=1 bash "$PP_SCRIPTS/decision.sh" answer "$ID" "$WORDS ($RID)" 2>"$ERRF") || { cat "$ERRF" >&2; exit 1; }
     DELIV=$(delivery_line) FRESH=1
   # r1: the owner's order reverses an auto-decision; the auto answer goes to the row's history. Only an auto answer:
   # one the owner gave stays.

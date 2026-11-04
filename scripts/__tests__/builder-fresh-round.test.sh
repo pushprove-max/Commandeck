@@ -202,5 +202,13 @@ rm -f "$T/busy"
 wait
 check "no hand-off of this file is left running" 0 "$(pgrep -f "$T/" | wc -l | tr -d ' ')"
 
+# Issue 622: a fix brief whose round already has a later pass report is stale: typing it restarts a round the pass has
+# moved past. Nothing is typed and the later report is named; with no later report the brief is typed as before.
+BR7=$T/ws/u7/.claude/briefs; mkdir -p "$BR7"; OBR=$BR; BR=$BR7; touch "$T/sends"
+printf 'VERDICT: GO\n' > "$BR7/u7-r3-reports.md"; fr u7-fix-r2.md sonnet medium 2>/dev/null
+check "a fix brief whose round has a later pass report types nothing" "0||1" "$R|$SEQ|$(grep -c 'u7-r3-reports.md' "$T/fr.out")"
+fr u7-fix-r3.md sonnet medium; BR=$OBR
+check "a fix brief with no later report is still typed" "0 1" "$R $(tr ',' '\n' <<<"$SEQ" | grep -c '^Your task spec')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

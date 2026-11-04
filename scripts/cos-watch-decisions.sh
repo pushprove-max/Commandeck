@@ -13,6 +13,8 @@ SEEN=$COS_KEY.decisions-seen
 touch "$SEEN"
 poll() {
   local new
+  # Issue 619: a seen file deleted while the watcher runs is made again before each read (jq cannot read a missing one).
+  touch "$SEEN"
   new=$(bash "$PP_SCRIPTS/decision.sh" list 2>/dev/null \
     | jq -c --rawfile seen "$SEEN" '($seen | split("\n")) as $s | .[] | select(.answeredAt == null and .waitsOn != "main") | .seen = "\(.id)@\(.askedAt)" | select(.seen | IN($s[]) | not)' 2>/dev/null)
   [ -n "$new" ] || return 1

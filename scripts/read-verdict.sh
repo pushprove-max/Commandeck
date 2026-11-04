@@ -493,7 +493,14 @@ fetch() {  # $1 = accumulated | screen
 # minutes reading the log as unfinished; a Claude log has no task_complete, so
 # the exit-5 escape below never fires for one. The end-of-line anchor still
 # does the work that keeps an injected spec from matching.
-VERDICT_RE='^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*([A-Z][A-Z0-9-]*)\*{0,2}[[:space:]]*"?[[:space:]]*$'
+# Issues 626 and 597 (the host's #3681 rule): a reason after the word is still a verdict when sentence punctuation or a
+# spaced dash or bracket separates it ('VERDICT: NO-GO. Both P2 blockers are open.'): reading it as no verdict stopped
+# the driver. A space then a word ("GO or NO-GO", "GO means") is still a template, not a verdict.
+# Parity: VERDICT_CHOICE below and the two session-log regexes in codex_report and claude_report carry the same rules.
+VERDICT_RE='^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*([A-Z][A-Z0-9-]*)\*{0,2}([[:space:]]*"?[[:space:]]*|([.:;,]|[[:space:]]+(-|—|–|[(])).*)$'
+# A verdict line whose reason names another verdict word is a choice list ("VERDICT: GO, NO-GO", "VERDICT: GO (or
+# NO-GO)"), never a verdict: read as its first word, a template's line certified GO (the host's PP_VERDICT_CHOICE).
+VERDICT_CHOICE='^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*[A-Z][A-Z0-9-]*\*{0,2}[^A-Za-z0-9-](.*[^A-Za-z0-9-])?[A-Z-]*(GO|DONE|REVISED|REQUIRED|APPROVED|REJECTED)([^A-Za-z0-9-]|$)'
 KNOWN_VERDICTS='GO NO-GO DONE REVISED'
 # A verdict-shaped line inside a fence is a reviewer test's fixture, never the
 # pane's verdict: a NO-GO report quoting `VERDICT: GO` in a fenced test
@@ -515,7 +522,7 @@ KNOWN_VERDICTS='GO NO-GO DONE REVISED'
 # and any other verdict kept (main's ruling): a false NO-GO costs one more round,
 # a false GO skips one.
 verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict outside a fence
-  printf '%s\n' "$1" | VERDICT_RE=$VERDICT_RE awk -v cropped="${2:-}" "$PP_AWK_FENCE"'
+  printf '%s\n' "$1" | VERDICT_RE=$VERDICT_RE VCHOICE=$VERDICT_CHOICE awk -v cropped="${2:-}" "$PP_AWK_FENCE"'
     { line[NR] = $0 }
     function scan(inside,   i, f, out) {
       flen = 0; out = ""
@@ -526,7 +533,7 @@ verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict o
           inside = 0; continue
         }
         f = fence(line[i])
-        if (!f && !flen && line[i] ~ ENVIRON["VERDICT_RE"]) out = out i ":" line[i] "\n"
+        if (!f && !flen && line[i] ~ ENVIRON["VERDICT_RE"] && line[i] !~ ENVIRON["VCHOICE"]) out = out i ":" line[i] "\n"
       }
       ended_inside = (inside || flen)
       return out
@@ -535,7 +542,7 @@ verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict o
       n = split(s, a, "\n"); r = ""
       for (i = 1; i <= n; i++) {
         if (a[i] == "") continue
-        w = a[i]; sub(/^[0-9]+:[[:space:]]*\*?\*?VERDICT:[[:space:]]*/, "", w); sub(/[[:space:]].*$/, "", w); sub(/"$/, "", w); sub(/\*+$/, "", w)
+        w = a[i]; sub(/^[0-9]+:[[:space:]]*\*?\*?VERDICT:[[:space:]]*/, "", w); w = match(w, /^[A-Z][A-Z0-9-]*/) ? substr(w, 1, RLENGTH) : ""
         if (w != "GO") r = r a[i] "\n"
       }
       return r
@@ -549,7 +556,7 @@ verdict_lines() {  # <text> [cropped]: "<line number>:<line>" for each verdict o
 find_verdict() { verdict_lines "$@" | tail -1 | cut -d: -f1; }
 verdict_word() {  # <text> <its verdict line, from find_verdict>
   printf '%s\n' "$1" | sed -n "${2}p" \
-    | sed -E 's/^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*//; s/[[:space:]].*$//; s/"$//; s/\*+$//'
+    | sed -E 's/^[[:space:]]*\*{0,2}VERDICT:[[:space:]]*([A-Z][A-Z0-9-]*).*$/\1/'
 }
 
 # --round-verdict <round file>: the verdict that stands for a Codex round file, as `VERDICT: <word>`; nothing when none
@@ -646,7 +653,7 @@ codex_report() {
       | .payload.content[]?
       | select(.type == "output_text")
       | .text
-      | select(strip_fences | test("(?m)^[\\t ]*\\*{0,2}VERDICT:[\\t ]*([A-Z][A-Z0-9-]*)\\*{0,2}[\\t ]*$"))]
+      | select(strip_fences | test("(?m)^[\\t ]*\\*{0,2}VERDICT:[\\t ]*([A-Z][A-Z0-9-]*)\\*{0,2}(?![^\\n]*(?<![A-Za-z0-9-])[A-Z-]*(?:GO|DONE|REVISED|REQUIRED|APPROVED|REJECTED)(?![A-Za-z0-9-]))([\\t ]*|([.:;,]|[\\t ]+(-|—|–|\\()).*)$"))]
     | (if $n == 0 then last else .[$n - 1] end) // empty
   ' "$1" 2>/dev/null
 }
@@ -672,7 +679,7 @@ claude_report() {
       | select(.type == "assistant")
       | [.message.content[]? | select(.type == "text") | .text] | join("\n")
       | select(length > 0)] as $all
-    | [$all[] | select(test("(?m)^[\\t ]*\\*{0,2}VERDICT:[\\t ]*([A-Z][A-Z0-9-]*)\\*{0,2}[\\t ]*$"))]
+    | [$all[] | select(test("(?m)^[\\t ]*\\*{0,2}VERDICT:[\\t ]*([A-Z][A-Z0-9-]*)\\*{0,2}(?![^\\n]*(?<![A-Za-z0-9-])[A-Z-]*(?:GO|DONE|REVISED|REQUIRED|APPROVED|REJECTED)(?![A-Za-z0-9-]))([\\t ]*|([.:;,]|[\\t ]+(-|—|–|\\()).*)$"))]
     | if length > 0 then (if $n == 0 then last else .[$n - 1] end)
       elif $n == 0 then $all | last else null end
     | . // empty
@@ -930,8 +937,8 @@ START=$(( VERDICT_LINE - CONTEXT_LINES ))
 # here once instead of teaching each grep about markdown. It sits before the
 # banner so collect's `/^# /,$p` transcription never picks it up, and the raw
 # line still follows inside the slice, so a `tail -1` reader sees the original.
-printf '%s\n' "$TEXT" | sed -n "${VERDICT_LINE}p" \
-  | sed -E 's/^[[:space:]]*\*{0,2}//; s/[[:space:]]*\*{0,2}[[:space:]]*"?[[:space:]]*$//; s/^VERDICT:[[:space:]]*/VERDICT: /'
+# A reason after the word (issue 626) is left to the raw line in the slice: the canonical line is the word alone.
+printf 'VERDICT: %s\n' "$VERDICT_WORD"
 
 echo "=== $HANDLE : findings + verdict ==="
 printf '%s\n' "$TEXT" | sed -n "${START},${VERDICT_LINE}p"

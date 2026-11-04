@@ -47,8 +47,17 @@ OUT=$(LC_ALL=C awk -v kind="$KIND" -v path="$P" '
         while (line[j] ~ /\\$/ && j < n) { j++; if (second(line[j])) label = "" }
       } else if (kind == "js" && match(s, "^[ \t]*(it|test)\\([ \t]*[\"\047`]")) {
         qc = substr(s, RLENGTH, 1)
-        rest = substr(s, RLENGTH + 1); e = index(rest, qc)
-        if (e > 0 && !second(substr(rest, e + 1))) label = substr(rest, 1, e - 1)
+        # The label is the string value the runner names: an escaped character never closes it, and a backslash before a
+        # quote, a backtick or a backslash is dropped (new-test-count.sh reads names by the same rule); any other escape
+        # stays as written.
+        rest = substr(s, RLENGTH + 1); e = 0; v = ""
+        for (k = 1; k <= length(rest); k++) {
+          c = substr(rest, k, 1)
+          if (c == "\\") { d = substr(rest, ++k, 1); v = v (d != "" && index("\"\047`\\", d) ? d : c d); continue }
+          if (c == qc) { e = k; break }
+          v = v c
+        }
+        if (e > 0 && !second(substr(rest, e + 1))) label = v
         if (label != "" && s !~ /\)[;,]?[ \t]*$/) {
           ind = indent(s); j = 0
           for (k = i + 1; k <= n; k++) {

@@ -65,13 +65,13 @@ n=0
 while IFS= read -r h; do
   [ -n "$h" ] || continue
   n=$((n + 1)); [ "$n" -le 4 ] || break
-  out=$(timeout 5 orca-ide orchestration check --terminal "$h" --unread --json 2>/dev/null) && jq -e '.ok' <<<"$out" >/dev/null 2>&1 || { FAILED+=$h$'\n'; continue; }
+  out=$(timeout 5 orca-ide orchestration check --terminal "$h" --unread --full --json 2>/dev/null) && jq -e '.ok' <<<"$out" >/dev/null 2>&1 || { FAILED+=$h$'\n'; continue; }
   { grep -vxF -- "$h" "$U" > "$U.new"; mv "$U.new" "$U"; } 2>/dev/null
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     [ $(( ${#l} + 100 )) -lt "$LEFT" ] || { say "[cut to fit; the rest: orca-ide orchestration check --terminal $h --all]"; break; }
     say "$l"
-  done < <(jq -r --arg h "$h" '.result.messages[]? | "- [\(.type // "message")] \(.subject // "") (to \($h)\(if .from then ", from \(.from)" else "" end)): \(.body // "")"' <<<"$out" 2>/dev/null)
+  done < <(jq -r --arg h "$h" '.result.messages[]? | "- [\(.type // "message")] \(.subject // "") (to \($h)\((if (.from_handle // "") != "" then .from_handle else .from // "" end) as $f | if $f != "" then ", from \($f)" else "" end)): \(.body // "")"' <<<"$out" 2>/dev/null)
 done <<<"$OLD"
 # A failed check goes to the back of the list, so the handles behind it are checked at the next start.
 [ -z "${FAILED:-}" ] || { { grep -vxF -f <(printf '%s' "$FAILED") "$U"; printf '%s' "$FAILED"; } > "$U.new" && mv "$U.new" "$U"; } 2>/dev/null

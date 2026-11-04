@@ -198,6 +198,21 @@ plan_seats() {
     | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\(max_by(.from) | .wt)", from: (map(.first) | min | todate), seats: map(del(.first, .wt))} end'
 }
 
+# replanning <unit> <epoch> -- issue 621: a plan seat of <unit> first launched after <epoch> (the Builder's first stage)
+# whose record's last verdict=/revised= line is no verdict (seat.sh close's rule): the built unit is being re-planned.
+replanning() {
+  local f
+  [ -n "$2" ] || return 1
+  for f in "$PP_SCRATCH/seat-$1-plan-"*.txt; do
+    [ -f "$f" ] && awk -v u="$1" -v a="$2" '{ i = index($0, "="); k = substr($0, 1, i - 1); v = substr($0, i + 1) }
+      k == "unit" { ok = (v == u) }
+      (k == "launched" || k == "first") && v ~ /^[0-9]+$/ && (m == "" || v + 0 < m) { m = v + 0 }
+      k == "verdict" || k == "revised" { done = (k == "verdict" && v != "") }
+      END { exit !(ok && m != "" && m > a + 0 && !done) }' "$f" && return 0
+  done
+  return 1
+}
+
 # launch_roster <unit> <the Builder card's json> -- issue 292: what this unit's current round launched as: the Builder's
 # own seat record (model, effort), then each reviewer pass of its highest round (dashboard_builders.jq passes). A Builder
 # with neither record has [].
@@ -399,6 +414,8 @@ units() {
       # No working agent leaves the Builder waiting on main; an unread agent list keeps the log's stage, and so
       # does a helper, pass or call of its own still out: an idle pane waits on that, not on main (#41).
       [ "$st" = null ] || [ "$ag" = null ] || [[ $ag == *:working* ]] || [ "$(jq '.waiting | length' <<<"$b")" != 0 ] || st='"waiting-main"'
+      # A built unit re-planned waits on its plan seats, not on main (#621).
+      [ "$st" != '"waiting-main"' ] || ! replanning "$u" "$(jq -r '.stageHistory[0].from // empty | fromdateiso8601' <<<"$b" 2>/dev/null)" || st='"planning"'
       f=$(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$' | tr '\n' '\0' | xargs -0 -r ls -t 2>/dev/null | head -1)
       # The verdict keeps its report's round (<unit>-r<N>-reports.md): the card shows it beside that round only.
       if [ -n "$f" ]; then
@@ -762,6 +779,13 @@ measures() {
 # zero blocks, marked not measured. retry reads the session's next call as
 # hook-fire-log-summary.sh does: its first row with another tool_use_id, the same
 # fingerprint being the identical call retried; keep the two in step.
+# hand_launches -- issue 595: the plan seats opened by hand in the last 24 h (seat.sh's log), for the Alerts card. No log is none.
+hand_launches() {
+  [ -s "$PP_SCRATCH/seat-hand-launches.jsonl" ] || { echo '[]'; return 0; }
+  jq -cs --argjson now "$NOW" '[.[] | objects | select((.at | numbers) > $now - 86400)]' "$PP_SCRATCH/seat-hand-launches.jsonl" 2>/dev/null \
+    || { nm hand-launches "seat-hand-launches.jsonl cannot be read"; echo '[]'; }
+}
+
 guard_blocks() {
   # The override is one exact file; the default glob lists the day files in day order.
   local -a files=("${COMMANDECK_HOOK_FIRE_LOG:-}")
@@ -1041,7 +1065,7 @@ chief_of_staff() {
   h=$(jq -r --arg p "$PP_WORKSPACES/Chief-of-Staff" '.result | if type == "array" then . else (.terminals // []) end
     | map(select((.worktreePath // "") == $p)) | .[0].handle // empty' <<<"$ts")
   [ -n "$h" ] || { nm chief-of-staff "no Chief-of-Staff terminal"; echo null; return 0; }
-  if out=$(timeout 8 orca-ide orchestration inbox --terminal "$h" --limit 1000 --json 2>/dev/null \
+  if out=$(timeout 8 orca-ide orchestration inbox --terminal "$h" --limit 1000 --full --json 2>/dev/null \
       | jq -ce --argjson now "$NOW" '.result.messages | arrays | (length >= 1000) as $cap | map(select(.read == 0))
         | {unread: length, oldestUnreadAgeSec: (if length == 0 then null else $now - (map(.created_at | fromdateiso8601) | min) end),
            incomplete: $cap}' 2>/dev/null); then
@@ -1153,7 +1177,7 @@ project() {
   part guardBlocks guard_blocks & pg=$!
   part units units && part needsOwner needs_owner && part githubP1 github_p1 && part githubProposed github_proposed && part github github_panes && part nextPush next_push \
     && part mainChain main_chain && part costPerRole cost_role && part reviewLoop review_loop && part escapes escapes \
-    && part agents bg_agents \
+    && part agents bg_agents && part handLaunches hand_launches \
     && part chiefOfStaff chief_of_staff && part seats seats && part mainEvents main_events && part tests tests_panel || rc=1
   wait "$pm" || rc=1
   wait "$pg" || rc=1
@@ -1645,8 +1669,9 @@ case "${1:-}" in
             # hung child dies with it; the killed run's tagged temp names are removed here, as its own EXIT trap may not have run.
             rc=0; DASH_CYCLE_TAG=cycle.$$. timeout -k 10 "$CYCLE_LIMIT" "$BASH" "$HERE/$NAME.sh" || rc=$?
             if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
-              echo "dashboard: cycle killed after $CYCLE_LIMIT s; data.js keeps the last snapshot" >&2
+              # Issue 627: the temp names go before the line is logged; a reader that waits for the line sees none left.
               pp_rm_rf "$OUT"/.run.cycle.$$.* "$OUT"/.data.js.cycle.$$.*
+              echo "dashboard: cycle killed after $CYCLE_LIMIT s; data.js keeps the last snapshot" >&2
             fi
             last=$(( $(date +%s) - t0 )); cycle "$t0" "$last"
             [ "$last" -le 60 ] || echo "dashboard: cycle took $last s" >&2

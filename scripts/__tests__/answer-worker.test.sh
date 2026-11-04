@@ -361,5 +361,34 @@ check "a failed Escape keeps the reply (issue 478)" "0 1 0 1" \
 kill "$PARKPID" 2>/dev/null; wait "$PARKPID" 2>/dev/null
 cp "$T/log.bak" "$LOG"
 
+# Issue 602: the driver's plan-revise runs as the unit's plan-author seat in <unit>, with no Builder pane. Main's answer
+# reaches that pane by unit name and by handle; the pane's turn is over, so it is typed in and read from its own log.
+W3=$T/ws/u3; P3=$T/home/.claude/projects/$(printf '%s' "$W3" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$W3" "$P3" "$T/bin3"
+printf 'handle=term_r\nrole=plan-author\nunit=u3\nworktree=u3\nlaunched=1760000000\ntag=SEAT-TAG-R\n' > "$T/scratch/seat-u3-plan-author.txt"
+L3=$P3/r.jsonl
+{ jq -nc '{type: "user", message: {role: "user", content: "Seat tag SEAT-TAG-R: revise the plan."}, timestamp: "2025-10-09T09:00:00Z"}'
+  echo '{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"QUESTION: which option?"}]},"timestamp":"2025-10-09T09:01:00Z"}'
+  echo '{"type":"system","subtype":"turn_duration","timestamp":"2025-10-09T09:01:01Z"}'; } > "$L3"
+cat > "$T/bin3/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "terminal list") jq -n '{result: {terminals: [{handle: "term_r", tabId: "t3", leafId: "l1", worktreePath: "$W3"}]}}' ;;
+  "worktree ps") jq -n '{result: {worktrees: [{path: "$W3", agents: [{paneKey: "t3:l1", agentType: "claude", state: "idle"}]}]}}' ;;
+  "terminal send") while [ \$# -gt 0 ]; do case \$1 in --text) t=\$2 ;; esac; shift; done; echo typed >> "$T/typed3"
+    jq -cn --arg t "\$t" '{type: "user", message: {role: "user", content: \$t}, timestamp: "2025-10-09T09:05:00Z"}' >> "$L3"; echo '{"ok":true}' ;;
+  "orchestration inbox") echo '{"result":{"messages":[]}}' ;;
+  *) echo '{"ok":true}' ;;
+esac
+EOF
+chmod +x "$T/bin3/orca-ide"
+answer602() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u CLAUDE_CONFIG_DIR COMMANDECK_FOREGROUND=1 HOME="$T/home" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" ANSWER_WORKER_WAIT=2 ANSWER_WORKER_ACK_WAIT=3 PATH="$T/bin3:$PATH" bash "$REAL/scripts/answer-worker.sh" "$@" 2>&1); }
+: > "$T/typed3"; OUT=$(answer602 u3 "Ruling 19: option two"); RC=$?
+check "an answer by unit name reaches a plan-revise seat's pane when no Builder runs (issue 602)" "0 1 1" \
+  "$RC $(wc -l < "$T/typed3" | tr -d ' ') $(grep -c 'Ruling 19' "$L3")"
+: > "$T/typed3"; OUT=$(answer602 term_r "Ruling 20: option three"); RC=$?
+check "an answer by handle reaches a plan-revise seat's pane (issue 602)" "0 1 1" \
+  "$RC $(wc -l < "$T/typed3" | tr -d ' ') $(grep -c 'Ruling 20' "$L3")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

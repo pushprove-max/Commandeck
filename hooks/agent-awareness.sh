@@ -69,7 +69,7 @@ if command -v orca-ide >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   # as "not checked", never as "nothing is running".
   { timeout 20 orca-ide worktree ps --json >"$OT/wts" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/wts.late"; } &
   { timeout 20 orca-ide terminal list --json >"$OT/live" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/live.late"; } &
-  { timeout 20 orca-ide orchestration task-list --brief --json >"$OT/tasks" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/tasks.late"; } &
+  { timeout 20 orca-ide orchestration task-list --full --json >"$OT/tasks" 2>/dev/null; [ $? -ne 124 ] || : >"$OT/tasks.late"; } &
   wait
   late=""
   for n in wts:worktrees live:panes tasks:tasks; do [ ! -e "$OT/${n%%:*}.late" ] || late+=" ${n#*:}"; done

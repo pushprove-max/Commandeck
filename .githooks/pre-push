@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # pre-push -- 1. refuse a push from a linked worker checkout or under a headless `claude -p` process (see
 # lib-agent-guard.sh for the incidents and the overrides). 2. Run the shell tests on the commit being pushed to
-# refs/heads/main, and refuse the push if they fail (issue 497).
+# refs/heads/main, and refuse the push if they fail (issue 497). Before them, a pushed tree that holds
+# ci/version-check.sh runs it against the remote's main (origin/main for a new main), and a plugin change with no
+# version bump is refused (issue 634).
 # Wire it once per checkout: git config core.hooksPath "$(pwd -P)/.githooks"
 # Use the absolute path: a relative hooksPath resolves per worktree, so a linked worktree on an older base would run its
 # own stale hook copy. Where your checkout still holds a relative value, rerun the command once.
@@ -19,13 +21,19 @@ agent_ancestry_guard || exit 1
 WT=
 cleanup() { [ -z "$WT" ] || { git worktree remove --force "$WT/w" 2>/dev/null; rm -rf "$WT"; WT=; }; }
 trap cleanup EXIT
-while read -r _ lsha rref _; do
+while read -r _ lsha rref rsha; do
   [ "$rref" = refs/heads/main ] || continue
   case $lsha in *[!0]*) ;; *) continue ;; esac
   WT=$(mktemp -d) || { echo "pre-push: no scratch folder; push to main refused" >&2; exit 1; }
   # Before the variables clear: the worktree is added to the repository that is pushing.
   git worktree add -q --detach "$WT/w" "$lsha" || { echo "pre-push: no worktree for $lsha; push to main refused" >&2; exit 1; }
   # githooks(5): Git's variables (GIT_DIR and the rest) point at the pushing repository; clear them to work in another.
+  if [ -e "$WT/w/ci/version-check.sh" ]; then
+    case $rsha in *[!0]*) base=$rsha ;; *) base=origin/main ;; esac
+    ( unset $(git rev-parse --local-env-vars); cd "$WT/w" && bash ci/version-check.sh "$base" ) < /dev/null >&2
+    rc=$?
+    [ "$rc" -eq 0 ] || { echo "pre-push: ci/version-check.sh failed (exit $rc) on $lsha; push to main refused" >&2; exit 1; }
+  fi
   ( unset $(git rev-parse --local-env-vars); cd "$WT/w" && bash scripts/run-shell-tests.sh ) < /dev/null >&2
   rc=$?
   cleanup

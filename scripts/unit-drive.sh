@@ -135,7 +135,8 @@ seat_stage() { # <role> <spec> [marker]: run the seat unless its record holds a 
   [ -z "$(rec "$1" verdict)" ] || return 0
   at "$1"
   bash "$HERE/seat.sh" run "$1" "$UNIT" "$2" ${3:+--marker "$3"} >&2 || rc=$?
-  case $rc in 0|1) ;; *) stop "$1" "seat.sh run $1 ended with no verdict (rc $rc)" "$AGAIN" ;; esac
+  case $rc in 0|1) ;; 5) stop "$1" "seat.sh run $1 recorded its verdict but its pane did not close (rc 5)" "bash $HERE/seat.sh close $1 $UNIT, then $AGAIN" ;;
+    *) stop "$1" "seat.sh run $1 ended with no verdict (rc $rc)" "$AGAIN" ;; esac
 }
 
 at tier
@@ -181,6 +182,7 @@ qopen() {
 revise() { # <spec>: the plan-author seat on the spec; a revision that leaves the plan unchanged stops
   at revise
   local rc=0; COMMANDECK_SEAT_FORCE=1 bash "$HERE/seat.sh" run plan-author "$UNIT" "$1" --marker PLAN-DONE >&2 || rc=$?
+  [ "$rc" != 5 ] || stop revise "the revise run of plan-author recorded PLAN-DONE but its pane did not close (rc 5)" "bash $HERE/seat.sh close plan-author $UNIT, then $AGAIN"
   [ "$rc" = 0 ] || stop revise "the revise run of plan-author ended with rc $rc, not PLAN-DONE" "$AGAIN"
   [ "$(hash_plan || true)" != "$H" ] || stop revise "the revision left the plan unchanged (sha256 $H)" "$AGAIN"
 }
@@ -213,6 +215,7 @@ judge_round() { # <judge>...: launched in turn, waited on together, each collect
       0) at "collect $J" "$(rec "$J" verdict)"; continue ;;
       3) p="no verdict" ;;
       4) p="verdict read, task not settled" ;;
+      5) p="verdict recorded, pane did not close (bash $HERE/seat.sh close $J $UNIT)" ;;
       *) p="collect failed (rc $rc)" ;;
     esac
     at "collect $J" "rc $rc"
@@ -221,13 +224,40 @@ judge_round() { # <judge>...: launched in turn, waited on together, each collect
   # Every launched judge is collected first, so a restart reruns only the one that failed.
   [ -z "$fail" ] || stop judge "$failwhy" "$AGAIN"
 }
+# say_once <key> <line> -- the line on stderr once per question-gate entry (SAID), not once per poll.
+say_once() { case $SAID in *"|$1|"*) return 0 ;; esac; SAID+="|$1|"; echo "$2" >&2; }
+# other_answer <ask epoch> -- issue 632 (D13, D15): the owner may answer in another Orca repo's main session, which records
+# it in that repo's ledger. Each other repo Orca lists that has a ledger is read with this gate's id and after-ask filter, and
+# a row counts only when its question or source carries this ask's token `plan <hash8>`, so a same-named unit's answer
+# there, or one to an older plan, never releases the gate. OANS is the answer taken; each problem is said once.
+other_answer() {
+  local repos r l a tok="plan ${H:0:8}"
+  OANS=
+  repos=$(orca-ide repo list --json 2>/dev/null | jq -r '.result.repos | if type == "array" then .[].path // empty else error("no list") end' 2>/dev/null) \
+    || { say_once repos "unit-drive: $UNIT: the Orca repo list cannot be read; plan-$UNIT is read from this project's ledger only"; return 0; }
+  while IFS= read -r r; do
+    [ -n "$r" ] && [ "$r" != "$PP_MAIN" ] && [ "$r" != "$PP_MAIN_P" ] && [ -e "$r/.claude/metrics/decisions.jsonl" ] || continue
+    a=$(COMMANDECK_MAIN=$r bash "$HERE/decision.sh" list 2>/dev/null | jq -c --arg id "plan-$UNIT" --argjson b "$1" \
+      '[.[] | select(.id == $id and ((.answeredAt // "" | try fromdateiso8601 catch 0) >= $b))] | last // empty' 2>/dev/null) \
+      && l=ok || l=
+    [ -n "$l" ] || { say_once "list $r" "unit-drive: $UNIT: the decisions ledger of $r cannot be read; it is left out"; continue; }
+    [ -n "$a" ] || continue
+    if jq -e --arg t "$tok" '((.question // "") + " " + (.source // "")) | contains($t)' <<<"$a" >/dev/null 2>&1; then
+      OANS=$(jq -r '.answer // empty' <<<"$a"); [ -z "$OANS" ] || return 0
+    else
+      say_once "token $r" "unit-drive: $UNIT: $r's decision plan-$UNIT is answered but names no \`$tok\`, so it is not taken; record the answer there again with \`$tok\` in its question"
+    fi
+  done <<<"$repos"
+  return 0 # set -e: the loop's last test is no failure
+}
 question_gate() { # an open Question section waits for the owner's answer, recorded after this version was asked
   qopen || return 0
   local ah= ae= list ans rc=0 REV
+  SAID=
   read -r ah ae < "$ASKED" 2>/dev/null || true
   if [ "$ah" != "$H" ] || [[ ! $ae =~ ^[0-9]+$ ]]; then
     ae=$(date +%s)
-    bash "$HERE/to-main.sh" question "unit-drive: $UNIT asks the owner (plan ${H:0:8})" "$(qsection)"$'\n\n'"Put it to the owner as decision plan-$UNIT; the driver waits for the answer." >/dev/null 2>&1 || rc=$?
+    bash "$HERE/to-main.sh" question "unit-drive: $UNIT asks the owner (plan ${H:0:8})" "$(qsection)"$'\n\n'"Put it to the owner as decision plan-$UNIT, and keep \`plan ${H:0:8}\` in its question (an answer in another repo's ledger counts only with it); the driver waits for the answer." >/dev/null 2>&1 || rc=$?
     case $rc in 0|3) ;; *) stop question "main could not be sent the question in $PLANF (to-main.sh rc $rc)" "put the plan's Question section to the owner as decision plan-$UNIT, then $AGAIN" ;; esac
     printf '%s %s\n' "$H" "$ae" > "$ASKED"
   fi
@@ -239,6 +269,8 @@ question_gate() { # an open Question section waits for the owner's answer, recor
     ans=$(jq -r --arg id "plan-$UNIT" --argjson b "$ae" \
       '[.[] | select(.id == $id and ((.answeredAt // "" | try fromdateiso8601 catch 0) >= $b))] | last | .answer // empty' <<<"$list") \
       || stop question "the decisions ledger could not be read" "$AGAIN"
+    [ -z "$ans" ] || break
+    other_answer "$ae"; ans=$OANS
     [ -z "$ans" ] || break
     sleep "${COMMANDECK_LOOP_POLL_SECONDS:-30}"
   done
@@ -274,7 +306,7 @@ while :; do
     case $(rec "$J" verdict) in "VERDICT: GO"|"VERDICT: GO "*) ;; *) PASS=0 ;; esac
     # A verdict is read only with its report: a missing report is never read as one with no question.
     RP=$(report_of "$J")
-    [ -s "$RP" ] && [ -r "$RP" ] || stop judge "no report of $J's verdict at $RP" "rerun $J on this version (COMMANDECK_SEAT_FORCE=1 seat.sh run $J $UNIT $JS), then $AGAIN"
+    [ -s "$RP" ] && [ -r "$RP" ] || stop judge "no report of $J's verdict at $RP" "rerun $J on this version (COMMANDECK_SEAT_FORCE=1 COMMANDECK_HAND_LAUNCH=<reason> seat.sh run $J $UNIT $JS), then $AGAIN"
     QS+=$(qlines "$RP") || stop judge "the report $RP cannot be read" "$AGAIN"
   done
   [ "$PASS" = 0 ] || [ -n "$QS" ] || break
@@ -292,7 +324,8 @@ while :; do
     echo
     echo "Their findings:"
     echo
-    for J in $JUDGES; do grep -iE '\[P[0-3]\]|question for the owner:' "$(report_of "$J")" || true; done
+    # `[P1]`, and `**F1 (P1):**` (issue 625): a finding in either form is carried.
+    for J in $JUDGES; do grep -iE '\[P[0-3]\]|\(P[0-3]\)|question for the owner:' "$(report_of "$J")" || true; done
   } > "$REV" || stop revise "could not write the revise spec $REV" "$AGAIN"
   revise "$REV"
 done

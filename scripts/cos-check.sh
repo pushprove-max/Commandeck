@@ -19,7 +19,7 @@ for n in cos-watch-inbox cos-watch-decisions cos-watch-alerts cos-watch-limit; d
   case ${run##*/} in bash|sh|zsh) run=$arg ;; esac
   [[ ${run:-} == */$n.sh ]] || DOWN+=" ${n#cos-watch-}"
 done
-MISSED=$(orca-ide orchestration inbox --limit 200 --json 2>/dev/null | jq -r --arg me "$ME" --argjson since "$(( $(date +%s) - 7200 ))" \
+MISSED=$(orca-ide orchestration inbox --limit 200 --full --json 2>/dev/null | jq -r --arg me "$ME" --argjson since "$(( $(date +%s) - 7200 ))" \
   --rawfile seen <(cat "$COS_KEY.inbox-seen-ids" 2>/dev/null) '($seen | split("\n")) as $s
   | [(.messages // .result.messages // [])[] | select($me != "" and .to_handle == $me and .from_handle != $me
       and ((.created_at // "") | sub("\\.[0-9]+"; "") | (try fromdateiso8601 catch 0)) >= $since and (.id as $i | $s | index([$i]) | not))] | length' 2>/dev/null) \

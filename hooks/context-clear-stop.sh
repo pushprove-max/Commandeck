@@ -26,7 +26,16 @@ LINE=$(pp_clear_line 2>/dev/null) || LINE=
 LINE=${LINE:-${COMMANDECK_CLEAR_LINE:-200000}}   # the helper did not load
 # shellcheck source=lib/context-size.sh
 . "$(dirname "$0")/lib/context-size.sh"
-ctx=$(context_size "$transcript") || ctx=0
+if ! ctx=$(context_size "$transcript"); then
+  ctx=0
+  # Issue 615: a silent stop here looks like "below the line", so main's pane says why in one line. Another session
+  # in main's checkout stays silent.
+  if . "$(dirname "$0")/lib/project.sh" 2>/dev/null && pp_is_main_pane; then
+    why="context-clear: the context size cannot be read from $transcript (no usage row), so the restart line is not checked"
+    echo "$(date +%FT%T) stop-hook: $why" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    echo "$why" >&2
+  fi
+fi
 # /handoff (skills/handoff) leaves this marker to restart below the line.
 handoff="$HOME/.claude/checkpoints/$sid.handoff"
 [ "${ctx:-0}" -gt "$LINE" ] 2>/dev/null || [ -f "$handoff" ] || exit 0

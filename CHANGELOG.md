@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.70.0 -- 2026-11-04
+
+### Scripts
+
+- A judge whose verdict line has a reason after it, such as `VERDICT: NO-GO. reason`, is now read as that verdict. A line that lists choices, such as `VERDICT: GO, NO-GO`, gets a message naming the bare form.
+- A plan seat opened by hand is refused, and the message names the plan driver's start command. To open one anyway, set `COMMANDECK_HAND_LAUNCH=<reason>`: the launch is logged and the dashboard shows a warning for 24 hours.
+- Main can revise a finished seat whose pane still reads as working, and close a finished seat with one new seat command.
+- An answer given in the host project's main session releases the plan driver.
+- A near-miss test name is refused when it is recorded, and the exact names are printed.
+- The new-test count names a failed TypeScript reader instead of falling back in silence.
+- A new push ask is no longer refused as a repeat of an earlier push of other commits.
+- Main is told when its own question, or a push question, gets an answer.
+- A merge cleanup that cannot remove the worktree names it and says why.
+- The host services helper works when loaded from zsh, and repairs the zsh shell's PATH.
+- A seat that is still working is no longer reported as finished.
+- Once an hour the watcher removes each idle helper or scratch worktree: clean, used by no process and untouched for 24 hours. Each removal is one line in the watcher's sweep log. A branch not yet in main is kept and named there.
+- The watcher posts one item when a seat's pane exits before its verdict. The item names the seat and its unit. A pane you closed yourself is not reported.
+- A long task text reaches Orca whole.
+- The dashboard shows a built unit as planning, not waiting on main, while its plan is judged again.
+- A brief's `## Pre-merge` section, its subsections included, holds the automatic merge until the evidence file has
+  the `Pre-merge: done <n>` line the hold names. A step added after that line holds the merge again.
+- The merge queue refuses a unit name that starts with a dash, such as a later `--help`, and merges nothing.
+- A Builder's question to main and the inbox drain read Orca's full message view, so answers and message bodies are no longer missed.
+
+### Guards
+
+- A variable set after `&&` counts as unknown in path checks.
+- The block message for a second agent pane names the `COMMANDECK_PROBE_PANE=<approval id>` prefix for an approved probe pane.
+- A forced removal of a worktree under the scratch folder is allowed.
+- Past the restart line, every warning to main says how far past it is.
+- When main's context size cannot be read, one line says why, so the restart is not skipped in silence.
+- Main's start card is shorter: three procedure lines moved under Details, with a pointer left in each place.
+
+### Development
+
+- A push to main of a plugin change with no version bump is refused before it leaves the machine.
+
 ## 0.69.3 -- 2026-11-03
 
 ### Scripts

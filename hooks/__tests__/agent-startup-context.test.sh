@@ -27,7 +27,7 @@ U=$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' -v m="$M1"
 ID=${U%%$'\t'*} M2=${U#*$'\t'}
 # A rule 0.14.1 reworded and 0.62.0 again (4f20e61c, made from 5c61b810, made from 0.7.1's 34ec1023: merge-rules.py
 # MADE_FROM), by its first line in full: --units cuts a line at 100 characters.
-M3=$(MS | grep -F -- "$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "4f20e61c" { print $2 }')")
+M3=$(MS | grep -F -- "$(python3 "$REAL/scripts/merge-rules.py" <(MS) --units | awk -F'\t' '$1 == "75e93e14" { print $2 }')")
 
 # Issue 228: Claude Code passes a hook print over 10,240 bytes as a 2 KB preview, and a project's long rule file
 # crossed that live. The print stays under it: a part that does not fit is one pointer line naming its file.

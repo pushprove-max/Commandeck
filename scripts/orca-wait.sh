@@ -104,7 +104,7 @@ if [ ${#CLOSE[@]} -gt 0 ]; then
   exit "$rc"
 fi
 
-BASE=(orchestration check)
+BASE=(orchestration check --full)
 [ -n "$RUN" ] && BASE+=(--run "$RUN")
 
 # Everything printed; decides the exit code. A heartbeat is never printed.
@@ -463,7 +463,7 @@ state_block() {  # once per wake, never per message -- the board main would othe
   # alone main re-queried task-list after the wake to learn which ones.
   # The terse wake lists only main-watch items: those are the tasks main closes
   # by id, and every other open task belongs to a driver or a seat.
-  tj=$(orca-ide orchestration task-list --json 2>/dev/null)
+  tj=$(orca-ide orchestration task-list --full --json 2>/dev/null)
   # A landed-merge main-watch item is done when it is posted (main-watch.sh posts it once): close its task and drop it from the
   # listing (issue 571, D72). Anchored on the spec's start, so a spec quoting the text mid-line stays; a failed close stays open.
   while IFS= read -r tid; do

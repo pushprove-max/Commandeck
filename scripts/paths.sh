@@ -1472,11 +1472,19 @@ pp_unit_name() {
   return 1
 }
 # pp_merge_held <unit> <worktree> -- exit 0, printing why, when the unit may not merge on its own (issues 254, 258):
-# `Merge: hold` in its brief, or an owner decision still open on it. Its questions are recorded as <unit>-<message
+# `Merge: hold` in its brief, a brief naming a pre-merge step with no done line for it, or an owner decision still open on it. Its questions are recorded as <unit>-<message
 # id>; one that waits on main is not the owner's. main-watch's gate asks, and merge-unit-local.sh --auto under its lock.
 pp_merge_held() {
-  local j
+  local j k
   grep -qE '^Merge: hold[[:space:]]*$' "$2/.claude/briefs/$1.md" 2>/dev/null && { echo "Merge: hold in its brief"; return 0; }
+  # Issue 620: a stamp, no parser. Any line of the brief that names pre-merge, in any shape, holds until the evidence
+  # file has the whole line `Pre-merge: done <n>`, n the cksum of the whole brief: no section or heading is read, so no
+  # shape drops a step, and any edit to the brief gives another n. Read at every call, never cached.
+  if grep -qiE 'pre[-_ ]?merge' "$2/.claude/briefs/$1.md" 2>/dev/null; then
+    k=$(cksum < "$2/.claude/briefs/$1.md" | cut -d' ' -f1)
+    grep -qxE "Pre-merge: done $k[[:space:]]*" "$2/.claude/briefs/$1-evidence.md" 2>/dev/null \
+      || { echo "its brief names a Pre-merge step, and its evidence has no \`Pre-merge: done $k\` line (the number stands for the whole brief: any edit to it holds again)"; return 0; }
+  fi
   j=$(jq -rRn --arg p "$1-" '[inputs | fromjson? | objects] | group_by(.id) | map(last)
     | map(select((.id | tostring | startswith($p)) and .answer == null and .waitsOn != "main")) | first | .id // empty' \
     "$PP_MAIN/.claude/metrics/decisions.jsonl" 2>/dev/null) && [ -n "$j" ] && { echo "open owner decision $j"; return 0; }

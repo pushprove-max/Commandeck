@@ -99,7 +99,8 @@ allow_json() {
 }
 # Split a command line into segments at `;`, `&`, `|` and newlines, one per
 # line, each prefixed 1 when it reads a pipe, 2 when it is the `||` alternative
-# of the segment before, and 0 otherwise. Quotes count only
+# of the segment before, 3 when it runs only after the one before it succeeds
+# (`&&`), and 0 otherwise. Quotes count only
 # for segment boundaries (`rg 'a|b' src` is one segment). `$2 = \0` ends each
 # segment with NUL instead, for a reader that must keep a multi-line quote whole.
 split_search_segments() {
@@ -120,7 +121,7 @@ split_search_segments() {
         # `2>&1`, `>&2` and `&>` are redirections, not a background `&`: cutting
         # there made `cmd 2>&1 | jq` read as a stray `1` piped into jq.
         if [ "$CHAR" = '&' ] && { [ -n "$OP" ] || [ "$NEXT" = '>' ]; }; then SEG+=$CHAR; OP=""; continue; fi
-        printf "%s%s$END" "$PIPE" "$SEG"; SEG=""; PIPE=0; [ "$NEXT" = '&' ] && I=$((I+1)) ;;
+        printf "%s%s$END" "$PIPE" "$SEG"; SEG=""; PIPE=0; [ "$CHAR$NEXT" = '&&' ] && { PIPE=3; I=$((I+1)); } ;;
       *) SEG+=$CHAR; OP=${CHAR//[!<>]/} ;;
     esac
   done
@@ -212,6 +213,9 @@ load_segments() { # $1 = a command text, $2 = the prefix of the four arrays to f
       NAME=${BASH_REMATCH[1]}; VAL=${BASH_REMATCH[2]}
       VAL=${VAL%"${VAL##*[![:space:]]}"}
       unset "ALIAS[$NAME]" "FORLIST[$NAME]" "READVAR[$NAME]"
+      # Issue 593: an assignment after `&&` or `||` (flag 3 or 2) may never run, so it records no binding and the
+      # one before it is gone too: a search reading the name judges it unresolved.
+      [[ ${LINE:0:1} == [23] && $TEXT =~ $ASSIGN_RE ]] && VAL='$'
       case "$VAL" in
         # A multi-word for-list of literals stays unsubstituted; the search check
         # below judges every word it can take.

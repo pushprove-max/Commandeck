@@ -55,7 +55,7 @@ IFS=$'\t' read -r WTID WTPATH AGENT < <(orca-ide terminal list --json 2>/dev/nul
 type_pointer() {
   local run spec f mark tag
   run=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
-  spec=$(orca-ide orchestration task-list ${run:+--run "$run"} --json 2>/dev/null \
+  spec=$(orca-ide orchestration task-list ${run:+--run "$run"} --full --json 2>/dev/null \
     | jq -r --arg t "$TK" 'first(.result.tasks[]? | select(.id == $t) | .spec) // empty' 2>/dev/null)
   [ -n "$spec" ] || fail "$1; its spec could not be read back from Orca to type instead"
   f=$PP_SCRATCH/dispatch-specs/$TK.md; mark=$f.sent

@@ -7,6 +7,13 @@ set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
+# Issue 594: every case runs in the fixture's own repository, so the real checkout's own git folder (its tip, branch,
+# local config and top-level state files) must read the same after the run. The index and lock files are git's own churn;
+# commandeck-test-* is run-shell-tests.sh's own bookkeeping there (its ledger, its per-file stamps, its live list), which
+# changes as each file of a parallel run starts and ends.
+gitfp() { local d; d=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  { git -C "$1" rev-parse HEAD; git -C "$1" symbolic-ref -q HEAD; git -C "$1" config --local -l; ls -A "$d" | grep -vxE 'index|.*\.lock|FETCH_HEAD|ORIG_HEAD|logs|commandeck-test-.*'; } 2>/dev/null; }
+REAL0=$REAL REALGIT=$(gitfp "$REAL")
 . "$(dirname "$0")/fixtures/merge-queue-setup.sh"
 
 # Main did not move: the closing pass's run stands for the check.
@@ -42,6 +49,13 @@ printf '#!/usr/bin/env bash\necho "$1" >> "%s/queue-log"\n[ "$1" != first ] || e
 OUT=$(cd "$REPO" && bash "$QP/scripts/merge-queue.sh" first second 2>&1); RC=$?
 check "a merge that exits 4 stops the queue, not merged, and the next unit never runs" "1 1 0 0" \
   "$RC $(grep -c 'STOPPED at first (not merged)' <<<"$OUT") $(grep -c 'NOT FILED' <<<"$OUT") $(grep -cx second "$TMP/queue-log")"
+# Issue 635: `merge-queue.sh u1 --help` merged u1, then ran a merge of a unit named --help. A unit starts with a letter
+# or digit: a later dash argument is refused with the usage line before anything merges.
+: > "$TMP/queue-log"
+A=$(cd "$REPO" && bash "$QP/scripts/merge-queue.sh" u1 --help 2>&1; echo "rc=$?")
+B=$(cd "$REPO" && bash "$QP/scripts/merge-queue.sh" --train --help 2>&1; echo "rc=$?")
+check "a unit argument that starts with a dash is refused and nothing merges" "1 1 1 1 0" \
+  "$(grep -cx 'rc=2' <<<"$A") $(grep -c '^usage: merge-queue.sh' <<<"$A") $(grep -cx 'rc=2' <<<"$B") $(grep -c '^usage: merge-queue.sh' <<<"$B") $(grep -c . "$TMP/queue-log")"
 # Issue 349: every attempt opens its output with an ATTEMPT line, so a log the queue appends to can be split by attempt. The
 # first request is refused at step 1 (no worktree yet), the second merges; the second's pid= is the state's while it runs.
 SEEN_STATE=$TMP/seen-state
@@ -62,5 +76,7 @@ git -C "$COMMANDECK_WORKSPACES/pq" add hooks/pq.ts; git -C "$COMMANDECK_WORKSPAC
 closed pq; : > "$TMP/check-calls"; : > "$TMP/claude-calls"
 check "a merge that reuses the closing pass's green suite still runs claude plugin test on a plugin unit" "0 0 1 2" \
   "$(merge pq) $(runs) $(grep -c '^STEP 4 check: reused, not run again' "$TMP/out") $(grep -c . "$TMP/claude-calls")"
+check "the real checkout's git folder is unchanged by the run" same \
+  "$(d=$(diff <(echo "$REALGIT") <(gitfp "$REAL0") | grep '^[<>]' | head -5 | tr '\n' ' '); echo "${d:-same}")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -36,6 +36,9 @@ check "a plan judge's typed prompt asks for the whole-plan re-read statement and
   "$(grep -c 'On a re-judge, re-read the whole plan, state `Re-read: whole plan`, and check every earlier finding' <<<"$P")"
 check "a plan judge's typed prompt asks for later findings visible earlier to be marked missed earlier, with a count" 1 \
   "$(grep -c 'mark it "missed earlier" in its text and end your findings with `Missed earlier: <n>`' <<<"$P")"
+# Issue 597: a judge told the line stands alone writes no reason after the word, which a reader could take for a template.
+check "a plan judge's prompt says the verdict line stands alone" 1 \
+  "$(grep -c 'Your verdict line stands alone: `VERDICT: GO` or `VERDICT: NO-GO`, nothing after the word; any reason goes on the lines above it' <<<"$P")"
 
 # The launch is driven (srun exports COMMANDECK_DRIVER=1): each round reads one plan version in full.
 check "a driven judge's prompt makes each round a full read of one version" 1 "$(grep -c 'Each round is a full read of one plan version\.' <<<"$P")"
@@ -50,6 +53,32 @@ check "a plan-author seat's typed prompt carries none of the judge asks" 0 \
   "$(prompt plan-author | grep -c -e 'First restate each section' -e 'smaller change that fully solves' -e 'Confirm every file, function and test')"
 check "a plan-author seat's typed prompt carries none of the list-everything asks" 0 \
   "$(prompt plan-author | grep -c -e 'List every finding you can defend' -e 'Re-read: whole plan' -e 'Missed earlier')"
+
+# Issue 595: a plan seat opened by hand is chained by nothing, so its finished plan sat idle. A plan seat opens through
+# unit-drive.sh (COMMANDECK_DRIVER=1); a hand launch names its reason (COMMANDECK_HAND_LAUNCH), is logged and said.
+HL() { cat "$HOME/.commandeck/scratch/"*/seat-hand-launches.jsonl 2>/dev/null; }
+rm -f "$HOME/.commandeck/scratch/"*/seat-hand-launches.jsonl # the undriven judge above was a hand launch, with the fixture's reason
+hand() { (unset COMMANDECK_DRIVER; COMMANDECK_RUN=run-1 COMMANDECK_SEAT_SETTLE_SECONDS=0 run launch plan-author pu "$T/judge-spec.md"); }
+fresh; (unset COMMANDECK_HAND_LAUNCH; hand) >"$T/out" 2>&1; RC=$?
+check "a hand launch of a plan seat is refused naming unit-drive.sh (issue 595)" "2:1:0:0" \
+  "$RC:$(grep -c 'REFUSED: .*unit-drive.sh start pu .*COMMANDECK_HAND_LAUNCH=<reason>' "$T/out"):$(grep -c . "$T/creates"):$(HL | grep -c .)"
+fresh; (COMMANDECK_HAND_LAUNCH=; hand) >"$T/out" 2>&1; RC=$?
+check "an empty override counts as none: refused (issue 595)" "2:0" "$RC:$(grep -c . "$T/creates")"
+fresh; (COMMANDECK_HAND_LAUNCH="relaunch after a crash"; hand) >"$T/out" 2>&1; RC=$?
+check "a hand launch with the override opens, logs one row and prints HAND LAUNCH (issue 595)" '0:1:1:{"reason":"relaunch after a crash","role":"plan-author","unit":"pu"}' \
+  "$RC:$(grep -c . "$T/creates"):$(grep -cx 'HAND LAUNCH: plan-author pu: relaunch after a crash' "$T/out"):$(HL | tail -1 | jq -cS 'del(.at)')"
+fresh; (unset COMMANDECK_HAND_LAUNCH; srun launch plan-author pu "$T/judge-spec.md") >"$T/out" 2>&1; RC=$?
+check "a driver launch of a plan seat passes with no override (issue 595)" "0:1:1" "$RC:$(grep -c . "$T/creates"):$(HL | grep -c .)"
+fresh; srun launch plan-author pu "$T/judge-spec.md" >"$T/out" 2>&1; RC=$?
+check "a driver launch with the fixture's override set logs no hand-launch row and prints no HAND LAUNCH (issue 595)" "0:1:0" \
+  "$RC:$(HL | grep -c .):$(grep -c 'HAND LAUNCH' "$T/out")"
+HLF=$(dirname "$(ls "$HOME/.commandeck/scratch/"*/seat-hand-launches.jsonl)")/seat-hand-launches.jsonl
+mv "$HLF" "$T/hl.bak"; mkdir "$HLF"
+fresh; (COMMANDECK_HAND_LAUNCH="log is broken"; hand) >"$T/out" 2>&1; RC=$?
+check "a hand launch whose log row cannot be written is refused with nothing opened (issue 595)" "2:0:1" \
+  "$RC:$(grep -c . "$T/creates"):$(grep -c 'REFUSED: .*could not be logged' "$T/out")"
+rmdir "$HLF"; mv "$T/hl.bak" "$HLF"
+fresh; srun launch plan-author pu "$T/judge-spec.md" >/dev/null 2>&1 # the cap cases below read the plan-author record
 
 # Plan seats stay outside the maxBuilders cap: with the cap full a judge opens, and a Builder is still refused beside it.
 SCR=$(dirname "$(ls "$HOME/.commandeck/scratch/"*/seat-pu-plan-author.txt)")

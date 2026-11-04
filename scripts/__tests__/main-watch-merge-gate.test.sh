@@ -78,4 +78,57 @@ grep -q "hnd@" "$F/mq-calls" && fail "a unit another merge is running was queued
 kill "$HP"; wait "$HP" 2>/dev/null || true; tick $((N + 120)); jobwait hnd
 grep -qx "hnd@$H" "$F/mq-calls" || fail "a stale lock (its pid dead) kept the unit from merging: $(cat "$F/mq-calls")"
 rm -f "$REPO/.git/merge-unit-local.state"; gone hnd
+# Issue 620: a brief that named a step to run before the merge was merged by the gate before the step ran. Any line of
+# the brief that names pre-merge holds the merge until the evidence file has `Pre-merge: done <n>`, n the cksum of the
+# whole brief (a stamp: no section is read, so no heading shape can drop a step). Its own FAIL lines: break-run reads
+# `FAIL <label> (`.
+no() { echo "FAIL $1 ($2)" >&2; exit 1; }
+L1="a brief with a Pre-merge section holds the merge until the evidence says Pre-merge: done"
+L2="a brief that names no pre-merge step does not hold"
+N=$((N + 1000)); unit pm; unit pe
+printf '## Pre-merge\n- run the data migration on the staging copy\n\n## Scope\n- x\n' >> "$T/ws/pm/.claude/briefs/pm.md"
+printf '## Scope\n- merge after the tests pass\n' >> "$T/ws/pe/.claude/briefs/pe.md"
+P=$(tip pm) E=$(tip pe); tick $N; said_done pm; said_done pe; tick $((N + 60)); jobwait pe; tick $((N + 120))
+grep -q "pm@" "$F/mq-calls" && no "$L1" "merged before its step: $(cat "$F/mq-calls")"
+[ "$(posts 'seat builder on pm finished.*Pre-merge')" = 1 ] || no "$L1" "the hold was not posted with its reason"
+grep -q "pe@$E" "$F/mq-calls" || no "$L2" "not merged: $(cat "$F/mq-calls")"
+# Every brief starts from the template: a template line naming pre-merge would hold every unit's merge.
+! grep -qiE 'pre[-_ ]?merge' "$(dirname "$0")/../../templates/_builder-brief-template.md" || no "$L2" "the brief template names pre-merge, so every unit would be held"
+# The done line carries the cksum of the brief, which the hold names: a bare one releases nothing.
+held() { (. "$(dirname "$0")/../paths.sh"; PP_MAIN=$T/none pp_merge_held "$1" "$2"); }
+dl() { held "$1" "$2" | sed -n 's/.*`\(Pre-merge: done [0-9][0-9]*\)`.*/\1/p'; }
+DL=$(dl pm "$T/ws/pm")
+[ -n "$DL" ] || no "$L1" "the hold names no done line to write: $(held pm "$T/ws/pm")"
+echo "Pre-merge: done" >> "$T/ws/pm/.claude/briefs/pm-evidence.md"
+held pm "$T/ws/pm" > /dev/null || no "$L1" "a bare Pre-merge: done line released the steps"
+echo "$DL" >> "$T/ws/pm/.claude/briefs/pm-evidence.md"; tick $((N + 180)); jobwait pm; tick $((N + 240))
+grep -q "pm@$P" "$F/mq-calls" || no "$L1" "not merged once the evidence said $DL: $(cat "$F/mq-calls")"
+# Every ordering the passes found, in order: a step under `###` (r1), a done line older than a step (r1), a heading not
+# `## Pre-merge` (r1), an indented heading (r2), a step in bold only (r3), then the other shapes and a brief edited after
+# the done line. Each holds with no done line; the line the hold names releases it.
+B=$T/pn/.claude/briefs; mkdir -p "$B"
+shape() { printf "$1" > "$B/pn.md"; : > "$B/pn-evidence.md"
+  held pn "$T/pn" | grep -q 'Pre-merge: done [0-9]' || no "$L1" "$2 did not hold naming its done line: $(held pn "$T/pn")"
+  dl pn "$T/pn" > "$B/pn-evidence.md"; held pn "$T/pn" > /dev/null && no "$L1" "$2: the done line the hold names did not release it"; true; }
+shape '## Pre-merge\n\n### Staging\n- run migration\n\n## Scope\n- x\n' "a step under a ### subheading"
+printf '## Pre-merge\n\n### Staging\n- run migration\n- rebuild the index\n\n## Scope\n- x\n' > "$B/pn.md"
+held pn "$T/pn" > /dev/null || no "$L1" "a done line written before a step was added released the new step"
+shape '# pn\n\n## Pre-merge steps\n- run migration\n' "a heading other than ## Pre-merge"
+shape '  ## Pre-merge\n- run migration\n' "an indented heading"
+shape '## Pre-merge\n**Run the staging migration before merging.**\n' "a step in bold only"
+for s in '## Pre-merge ##\n- x\n' 'Pre-merge\n---\n- x\n' '**Pre-merge**\n- x\n' '```\n## Pre-merge\n```\n- x\n' \
+  '<h2>Pre-merge</h2>\n- x\n' '> ## Pre merge\n- x\n' 'Run the PREMERGE check first.\n' '## Pre_merge\n- x\n'; do
+  shape "$s" "the shape $(printf '%q' "$s")"; done
+printf '## Pre-merge\n**Run the staging migration, then reindex.**\n' > "$B/pn.md"
+held pn "$T/pn" > /dev/null || no "$L1" "a brief edited after its done line released the edit"
+# The one retry path is the tick: each piece of kept gate state removed between two ticks leaves the unit held, and the
+# first tick after the done line merges it.
+N=$((N + 1000)); unit pk; printf '**Pre-merge:** run migration\n' >> "$T/ws/pk/.claude/briefs/pk.md"; K=$(tip pk)
+tick $N; said_done pk; tick $((N + 60))
+for k in "gate-pk" "merge-pk" "item-*pk*"; do
+  rm -f "$S/main-watch/"$k; N=$((N + 60)); tick $N
+  grep -q "pk@" "$F/mq-calls" && no "$L1" "removing $k between two ticks released the hold"; done
+dl pk "$T/ws/pk" >> "$T/ws/pk/.claude/briefs/pk-evidence.md"; tick $((N + 60)); jobwait pk; tick $((N + 120))
+grep -q "pk@$K" "$F/mq-calls" || no "$L1" "not merged at the tick after the done line: $(cat "$F/mq-calls")"
+echo "ok   $L1"; echo "ok   $L2"; gone pm; gone pe; gone pk
 echo "PASS main-watch-merge-gate.test.sh"

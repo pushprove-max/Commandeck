@@ -34,6 +34,37 @@ lim ln '- base limit: 3 hosts.'
 echo '- a new limit: 9 hosts.' >> "$WS/ln/.claude/briefs/ln.md"
 NE=$(tpass ln 1 adversarial)
 check "a limit with no id is refused (issue 468)" "2 1" "$NE $(grep -c "$REFUSED" "$TMP/perr")"
+# Pass 1 of commandeck-open-2026-11-03: a `###` heading under `## Stated limits` ended the section, so a limit added
+# beneath it was never compared. A section runs to the next heading of its own level or higher.
+lim lh '- base limit: 3 hosts.'
+printf '%s\n' '### Hosts' '- a new limit: 9 hosts.' >> "$WS/lh/.claude/briefs/lh.md"
+HE="$(tpass lh 1 adversarial) $(grep -c "$REFUSED" "$TMP/perr")"
+# The `###` line itself is an added line too, so the subheading case refuses twice. Every ordering found since (fix
+# rounds 3 to 5), in order: a bold limit and a bare new subheading inside the section
+# (r3), then the limits heading as `<h2>` (r4) and with inline `**` (r5), then setext, bold, indented, quoted and prose
+# shapes. The gate reads only the literal `## ` heading line (a fixed list), and any other line whose letters name a
+# limits heading refuses, naming its line, so no shape lets a limit through unread. A table row naming it is no heading.
+BAD='names a limits heading outside its one heading line'; i=0
+for a in '**No writes to prod.**' '### Hosts'; do
+  i=$((i + 1)); lim lb$i '- base limit: 3 hosts.'; echo "$a" >> "$WS/lb$i/.claude/briefs/lb$i.md"
+  HE="$HE $(tpass lb$i 1 adversarial) $(grep -c "$REFUSED" "$TMP/perr")"; done
+shapes=('<h2>Stated limits</h2>' '## Stated **limits**' $'Stated limits\n---' '**Stated limits**' '  ## Stated limits' \
+  '> ## Stated limits' 'Stated limits bind this unit.' '## Our stated limits (v2)')
+for a in "${shapes[@]}"; do
+  i=$((i + 1)); lim lb$i '- base limit: 3 hosts.'
+  printf '%s\n' '# brief' "$a" '- base limit: 3 hosts.' '- Skip production verification.' > "$WS/lb$i/.claude/briefs/lb$i.md"
+  HE="$HE $(tpass lb$i 1 adversarial) $(grep -c ".claude/briefs/lb$i.md line 2: $BAD" "$TMP/perr")"; done
+# The plan's accepted-failures heading with inline markup is refused the same way, naming the plan's line.
+lim lpa '- base limit: 3 hosts.' '- plan: .claude/plans/lpa.md'; mkdir -p "$WS/lpa/.claude/plans"
+printf '%s\n' '# plan' '## Accepted **failure** modes' '- a plan failure mode.' > "$WS/lpa/.claude/plans/lpa.md"
+HE="$HE $(tpass lpa 1 adversarial) $(grep -c ".claude/plans/lpa.md line 2: $BAD" "$TMP/perr")"
+# Nothing is kept between passes: the lock's plan baseline is gone after each run, and the next round refuses again.
+HE="$HE $(tpass lpa 2 adversarial) $(grep -c ".claude/plans/lpa.md line 2: $BAD" "$TMP/perr")"
+lim ltr '- base limit: 3 hosts.'
+printf '%s\n' '# brief' '| a case | the Stated limits row |' '## Stated limits' '- base limit: 3 hosts.' > "$WS/ltr/.claude/briefs/ltr.md"
+HE="$HE $(tpass ltr 1 adversarial) $(grep -c "$BAD" "$TMP/perr")"
+check "a limit added under a subheading of Stated limits with no id is refused" \
+  "2 2 2 1 2 1 2 1 2 1 2 1 2 1 2 1 2 1 2 1 2 1 2 1 2 1 0 0" "$HE"
 
 lim lc '- base limit: 3 hosts.'
 echo "- a new limit: 9 hosts. ruling:$OKID" >> "$WS/lc/.claude/briefs/lc.md"
@@ -74,6 +105,21 @@ mkdir -p "$WS/lq/.claude/plans"; printf '%s\n' '# plan' '## Stated limits' '- a 
 QE=$(tpass lq 1 adversarial)
 check "a plan limit with no id is refused naming the unit brief" "2 1" \
   "$QE $(grep -c 'put the limit in .claude/briefs/lq.md with its ruling id' "$TMP/perr")"
+
+# Issue 601: a tracked plan cannot hold a ruling id, so main may carry a limit's ruling in its rulings file as
+# `Limit: <the line> ruling:<id>`. The line passes with no inline id only when that id passes as an inline one must:
+# a void id, or a rulings line for another limit, leaves it refused, and the refusal names the line main can add.
+plim() { # <unit> <rulings line>: a plan whose Stated limits gains one limit, and main's rulings file holding the line
+  lim "$1" '- base limit: 3 hosts.' "- plan: .claude/plans/$1.md"; mkdir -p "$WS/$1/.claude/plans"
+  printf '%s\n' '# plan' '## Stated limits' '- a plan limit: 9 hosts.' > "$WS/$1/.claude/plans/$1.md"
+  printf '%s\n' "$2" > "$REPO/.claude/briefs/$1-main-rulings.md"; tpass --ack-rulings "$1" >/dev/null
+}
+plim lr "Limit: - a plan limit: 9 hosts. ruling:$OKID"; RE=$(tpass lr 1 adversarial)
+check "a limit with no inline id passes when main's rulings file carries it with a real id" "0 0" "$RE $(grep -c "$REFUSED" "$TMP/perr")"
+plim lw "Limit: - a plan limit: 9 hosts. ruling:$VOIDID"; WE=$(tpass lw 1 adversarial); WN=$(grep -c "$REFUSED" "$TMP/perr")
+plim lx "Limit: - another limit: 1 host. ruling:$OKID"; XE=$(tpass lx 1 adversarial)
+check "a limit whose rulings id is void or absent is refused" "2 1 2 1 1" \
+  "$WE $WN $XE $(grep -c "$REFUSED" "$TMP/perr") $(grep -cF 'Limit: - a plan limit: 9 hosts. ruling:<id>' "$TMP/perr")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

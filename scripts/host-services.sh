@@ -8,12 +8,17 @@
 # Call sites pass the Linux box size and never branch on the OS themselves.
 # COMMANDECK_HOST_OS overrides `uname -s` so a self-test drives either branch;
 # a self-test whose stubs are systemd's pins it to Linux.
-HS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Issue 617: zsh sets no BASH_SOURCE; a sourced file's own path is its $0 there.
+HS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
 HS_PREFIX=com.commandeck.
 # A real Mac repairs PATH here, at load: callers forward PATH="$PATH" into a
 # launchd job, and a login shell's PATH has /usr/bin ahead of gnubin. A failed
 # repair is not fatal here; hs__mac_start's preflight then refuses the job.
-[ "$(uname -s)" != Darwin ] || . "$HS_DIR/paths.sh" || true
+# Not in bash (D6): paths.sh is bash's alone, so a bash child loads requirements.sh by itself (its PATH repair, no
+# project) and prints PATH, which this shell takes when the print is not empty.
+if [ -n "${BASH_VERSION:-}" ]; then [ "$(uname -s)" != Darwin ] || . "$HS_DIR/paths.sh" || true
+else HS_PATH=$(bash -c '. "$1/requirements.sh" >/dev/null 2>&1; printf %s "$PATH"' _ "$HS_DIR" 2>/dev/null)
+  [ -z "$HS_PATH" ] || export PATH=$HS_PATH; fi
 
 hs_os() { printf '%s' "${COMMANDECK_HOST_OS:-$(uname -s)}"; }
 

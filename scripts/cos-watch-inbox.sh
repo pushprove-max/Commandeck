@@ -95,7 +95,7 @@ poll_n() { # rows to ask for
   # would be passed over and marked read, so the poll tries again instead.
   coord=$(orca-ide orchestration run-list --full --json 2>/dev/null \
     | jq -er --arg r "$run" '.result.runs | arrays | [.[] | select(.id == $r) | .coordinator_handle // empty][0] // ""' 2>/dev/null) || { poll_failed "run-list gave no answer"; return 1; }
-  orca-ide orchestration inbox --limit "$1" --json 2>/dev/null | python3 -c '
+  orca-ide orchestration inbox --limit "$1" --full --json 2>/dev/null | python3 -c '
 import datetime, fcntl, json, os, re, subprocess, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
 limit = int(sys.argv[6])

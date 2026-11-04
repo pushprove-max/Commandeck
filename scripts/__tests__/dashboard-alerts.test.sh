@@ -83,5 +83,13 @@ check "a fresh mcp-down stamp raises one alert; an old one, or none, raises none
 ploop() { units "[{\"unit\": \"u\", \"builder\": {\"verdictRound\": $1, \"verdict\": \"VERDICT: $2\", \"findings\": {\"P0\": 0, \"P1\": 2, \"P2\": 0, \"P3\": 1}}}]" | jq -c '[.alerts[] | select(.id | startswith("pass-loop-")) | .text | sub("[.] Action:.*"; "")]'; }
 check "a pass-4 NO-GO raises pass-loop once and a GO raises none" \
   '["p: u is on review pass 4 and still NO-GO (P1 x2, P3 x1)"] [] []' "$(ploop 4 NO-GO) $(ploop 4 GO) $(ploop 3 NO-GO)"
+# Issue 595: a plan seat opened by hand (seat.sh's hand-launch log) is chained by nothing. One warn alert per launch of the
+# last 24 h, naming the unit and unit-drive.sh start; an older launch raises none.
+handl() { jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$NOW" --arg s7 "$(iso 604800)" --argjson hasSe false \
+  --argjson se '[]' --argjson parts "[{\"projects\": {\"p\": {\"handLaunches\": $1}}}]" --argjson srcs '[]' --argjson preva '[{}]'; }
+OUT=$(handl "[{\"at\": $((NOW - 600)), \"unit\": \"u\", \"role\": \"plan-author\", \"reason\": \"relaunch\"}, {\"at\": $((NOW - 90000)), \"unit\": \"v\", \"role\": \"plan-judge-sol\", \"reason\": \"old\"}]")
+check "a hand launch of the last 24 h raises one warn alert naming the unit and unit-drive.sh start; an older one none (issue 595)" \
+  "[\"hand-launch-u-plan-author-$((NOW - 600)) warn true true\"]" \
+  "$(jq -c '[.alerts[] | select(.id | startswith("hand-launch-")) | "\(.id) \(.severity) \(.text | test("plan-author seat of u was opened by hand")) \(.text | test("unit-drive.sh start u"))"]' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

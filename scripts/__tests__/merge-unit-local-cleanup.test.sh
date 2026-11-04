@@ -27,6 +27,8 @@ if [ "\$1 \$2" = "terminal list" ] && [ -e "$TMP/list-answer" ]; then
   A=$TMP/list-answer; [ ! -s "$TMP/closed" ] || [ ! -e "$TMP/list-after" ] || A=$TMP/list-after
   sed '\$d' "\$A"; exit "\$(tail -1 "\$A")"
 fi
+# Issue 589: while remove-noop exists, a removal answers ok and removes nothing.
+[ "\$1 \$2" != "worktree remove" ] || [ ! -e "$TMP/remove-noop" ] || { echo '{"ok":true}'; exit 0; }
 exec "$TMP/bin/orca-ide" "\$@"
 WRAP
 chmod +x "$TMP/wrap/orca-ide"; PATH=$TMP/wrap:$PATH
@@ -145,6 +147,21 @@ n=$((n + 1)); u=ev$n; mk $u; : > "$TMP/orca-calls"
 R1=$(merge $u --dry-run); R2=$(merge $u --cleanup)
 rm -f "$TMP/scratch/current-run"
 check "a dry run and a cleanup send the relay no event" "1:1:0" "$R1:$R2:$(grep -c 'FYI event' "$TMP/orca-calls")"
+
+# Issue 589: Orca reports whether a removal worked. A removal it refuses, or one it answers ok that leaves the folder,
+# fails the cleanup naming the worktree and Orca's answer (exit 3: merged, a later step failed); a removal that works
+# prints no failure.
+n=$((n + 1)); u=rm$n; mk $u; go $u; touch "$TMP/remove-fails"
+RC=$(merge $u); rm -f "$TMP/remove-fails"
+check "a removal Orca refuses fails the cleanup naming the worktree and the reason" "3 yes 1" \
+  "$RC $(gone $u && echo yes) $(grep -cF "FAILED step 5 cleanup: Orca did not remove the unit worktree $(W $u): orca: the worktree is busy" "$TMP/out")"
+n=$((n + 1)); u=rm$n; mk $u; go $u; touch "$TMP/remove-noop"
+RC=$(merge $u); rm -f "$TMP/remove-noop"
+check "a removal Orca answers ok that leaves the folder fails the cleanup naming the worktree" "3 yes 1" \
+  "$RC $(gone $u && echo yes) $(grep -cF "FAILED step 5 cleanup: Orca answered the removal of $(W $u) but the folder is still there" "$TMP/out")"
+n=$((n + 1)); u=rm$n; mk $u; go $u
+RC=$(merge $u)
+check "a successful removal prints no failure" "0 gone 0" "$RC $(gone $u && echo kept || echo gone) $(grep -c 'FAILED' "$TMP/out")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -62,5 +62,23 @@ check "a second collect on a recorded verdict prints it and exits 0" "0:1" \
 echo "revised=task_9" >> "$REC"; col >"$T/out"; RC=$?
 check "a revised seat's collect with no new verdict still says no VERDICT yet" "3:1" "$RC:$(grep -c 'no VERDICT yet' "$T/out")"
 
+# A plan judge of unit pu, launched as the driver does. jcol collects it; judge <screen> relaunches it on a fresh record.
+PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
+mkdir -p "$PWT/.claude/plans"; echo 'the plan' > "$PWT/.claude/plans/pu.md"; printf 'Judge the plan.\n' > "$T/judge-spec.md"
+JREC=$SC/seat-pu-plan-judge-sol.txt
+jcol() { run collect plan-judge-sol pu 2>&1; }
+judge() { rm -f "$T/pane-up" "$JREC"*; srun launch plan-judge-sol pu "$T/judge-spec.md" >/dev/null 2>&1; printf '%b' "$1" > "$T/screen"; }
+# Issue 626: a judge that puts its reason on the verdict line has finished; reading it as no verdict stopped the driver.
+judge 'Two blockers.\nVERDICT: NO-GO. Both P2 blockers are open.\n'; jcol >"$T/out"; RC=$?
+check "collect records NO-GO from a judge whose verdict line has a reason after it" "0:verdict=VERDICT: NO-GO" "$RC:$(grep '^verdict=' "$JREC" | tail -1)"
+# Issue 597: other trailing text is no verdict, and collect names the form a judge must write.
+judge 'Done.\nVERDICT: GO means the plan is ready\n'; jcol >"$T/out"; RC=$?
+check "a verdict line with other trailing text is refused naming the bare form" "3:1" "$RC:$(grep -c 'end on `VERDICT: GO` or `VERDICT: NO-GO` alone' "$T/out")"
+# Issue 604: a judge pane that outlived its collected verdict (its close failed, or it was reopened) is closed by a rerun.
+judge 'Fine.\nVERDICT: GO\n'; jcol >"$T/out"; touch "$T/pane-up"; printf 'Idle.\n' > "$T/screen"; jcol >"$T/out"; RC=$?
+check "a judge pane left open after its verdict is closed by a rerun of collect" "0:gone" "$RC:$([ -e "$T/pane-up" ] && echo live || echo gone)"
+judge 'Still reading the plan.\n'; jcol >"$T/out"; RC=$?
+check "a judge pane with no verdict yet is not closed" "3:live" "$RC:$([ -e "$T/pane-up" ] && echo live || echo gone)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

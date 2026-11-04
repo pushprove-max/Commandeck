@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.69.3-111111?style=flat-square" alt="Version 0.69.3">
+  <img src="https://img.shields.io/badge/version-0.70.0-111111?style=flat-square" alt="Version 0.70.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -284,7 +284,9 @@ line or option. `/commandeck:revoke undo` takes a choice back.
    start` can carry the unit from there: it runs only the plan seats the tier
    names, revises and judges the plan again until every judge says GO on one
    version, then launches; it stops once, naming the next command, only on an
-   owner question or a seat error. Plan seats never count against the Builder cap. A plan has one goal line, one line per
+   owner question or a seat error. Plan seats never count against the Builder cap. A plan seat opens through
+   `unit-drive.sh start`; a hand `seat.sh launch` of one is refused unless `COMMANDECK_HAND_LAUNCH=<reason>` is set,
+   and that launch is logged and shows a dashboard alert for 24 h. A plan has one goal line, one line per
    step and a list of facts, each naming the file lines it rests on and the
    day they were read; a fact whose lines do not exist is refused before any
    judge reads the plan. A unit over the size limits is split unless main
@@ -523,7 +525,8 @@ path, so an older linked worktree still runs main's guards:
 `git config core.hooksPath "$(pwd -P)/.githooks"`. They refuse a commit in a
 linked worktree (the Fast lane and the plugin's own scripts aside), a push from
 one, git run under a headless `claude -p`, and a message with a home path or a
-`.local` host; they strip Claude trailers from commit messages.
+`.local` host; they strip Claude trailers from commit messages. A push to `main`
+of a plugin change with no version bump is refused, naming `ci/version-check.sh`.
 
 More: [docs/tests.md](docs/tests.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

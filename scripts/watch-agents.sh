@@ -39,7 +39,7 @@ while true; do
   # escalation once -- a worker asking whether to touch an out-of-scope file
   # went unanswered because nothing surfaced questions. Emit those loudly and
   # immediately, before anything else this cycle.
-  peek=$(orca-ide orchestration check --timeout-ms 2000 --json 2>/dev/null)
+  peek=$(orca-ide orchestration check --timeout-ms 2000 --full --json 2>/dev/null)
   printf '%s' "$peek" | python3 -c '
 import json,sys
 try: r=json.load(sys.stdin).get("result",{})

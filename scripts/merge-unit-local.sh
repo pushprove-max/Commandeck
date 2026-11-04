@@ -201,7 +201,10 @@ cleanup_step() {
   fi
   if [ -n "$CLEANUP_HELD" ]; then echo "STEP 5 cleanup HELD: $CLEANUP_HELD"
   else bash "${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh}" stop "$WT" || true
-    orca-ide worktree remove --worktree "$WTID" --force || fail "step 5 cleanup" "could not remove unit worktree"; fi
+    # Issue 589: Orca reports whether the removal worked; its answer is named, and a folder left behind fails too.
+    out=$(orca-ide worktree remove --worktree "$WTID" --force 2>&1) \
+      || fail "step 5 cleanup" "Orca did not remove the unit worktree $WT: $(tail -n 1 <<<"$out")"
+    [ ! -d "$WT" ] || fail "step 5 cleanup" "Orca answered the removal of $WT but the folder is still there: $(tail -n 1 <<<"$out")"; fi
 }
 # main_holds <tip>: main already holds the unit, read from git alone: the tip is in main (a fast-forward, or no commit
 # of its own), or one commit of main since the fork point is the branch's whole diff (the squash, by patch id), or
@@ -537,6 +540,15 @@ cut_scan() {
   local built out
   built=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^C[0-9]+: built[ \t]*$/ { sub(/^C/, ""); sub(/:.*/, ""); printf "%s ", $0 }' \
     "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+  # Issue 623: a brief that names exactly one cut (`Cut <n>`, outside fences; D4) is that cut's, so the closing GO step 1
+  # proved builds it though the evidence has no `C<n>: built` line. A proof that ended NO-GO at the cap adds nothing.
+  if [[ ${BUILDER_PROOF:-} == *" ended GO in "* ]]; then
+    built+=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next }
+      { s = $0; while (match(s, /(^|[^0-9A-Za-z])Cut [0-9]+/)) { t = substr(s, RSTART, RLENGTH); sub(/^[^C]*Cut /, "", t)
+          if (substr(s, RSTART + RLENGTH, 1) !~ /[0-9A-Za-z]/ && !((t + 0) in c)) { c[t + 0]; n++; one = t + 0 }
+          s = substr(s, RSTART + RLENGTH) } }
+      END { if (n == 1) printf "%s ", one }' "${BRIEF:-/dev/null}" 2>/dev/null || true)
+  fi
   out=$(awk -v built=" $built" -v out="$2" "$PP_AWK_FENCE"'
     { fz = fence($0) || flen }
     !fz && /^## / { insec = ($0 ~ /^## Cuts[ \t]*$/) }

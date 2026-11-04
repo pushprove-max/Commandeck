@@ -232,6 +232,16 @@ wt_path() { # <words after the subcommand>: the first plain word, past the optio
   done
   return 1
 }
+# wt_scratch <words after remove> -- issue 629 (D18): a fixed-list remove of a path strictly under the scratch root, dirty
+# or not (a scratch copy is throwaway). The canonical path decides, so `..` and a symlink out stay blocked. This hook
+# loads no paths.sh, so the root is paths.sh's default.
+wt_scratch() {
+  local raw c root; [ "$WT_REM" = 1 ] || return 1
+  raw=$(wt_path "$@") || return 1
+  c=$(wt_canon "$raw") || return 1
+  root=$(cd -P "${COMMANDECK_SCRATCH:-$HOME/.commandeck/scratch}" 2>/dev/null && pwd -P) || return 1
+  case $c in "$root"/?*) ;; *) return 1 ;; esac
+}
 wt_clean() { # <words after remove>: a fixed-list remove of a worktree whose status reads empty; a git failure or a missing path is not clean
   local raw c o; [ "$WT_REM" = 1 ] || return 1
   raw=$(wt_path "$@") || return 1
@@ -326,7 +336,7 @@ while IFS= read -r CALL; do
         && WHY="git branch -D deletes a branch whatever it still holds. Use \`git branch -d\`, which refuses an unmerged branch." ;;
     worktree)
       case "${ARGS[0]-}" in
-        remove) arg_is "$(abbr --force)|-f+" && ! wt_clean "${ARGS[@]:1}" \
+        remove) arg_is "$(abbr --force)|-f+" && ! wt_clean "${ARGS[@]:1}" && ! wt_scratch "${ARGS[@]:1}" \
           && WHY="git worktree remove --force deletes a worktree with its uncommitted changes. Remove it without --force: \`git worktree remove <path>\`, which git refuses only while the worktree holds changes. (A forced remove passes only a worktree whose status reads clean, a single plain \`git [-C <dir>] worktree remove\` naming its absolute path, including one this session added.)" ;;
       esac ;;
     reflog)

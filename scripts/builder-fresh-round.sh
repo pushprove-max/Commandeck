@@ -5,7 +5,8 @@
 # seat record, the new session's id is appended as its last session= line, which main-watch.sh reads, so main
 # watches the new log and not the cleared one. A fix round (<unit>-fix-r<N>.md) skips the /clear, and types no
 # /model or /effort, when the pane's one live session is under the Builder clear line on this round's model and
-# effort (issue 445); the reason for a fresh round is logged.
+# effort (issue 445); the reason for a fresh round is logged. A fix round whose unit already has a later
+# <unit>-r<M>-reports.md is stale: nothing is typed, exit 0 (issue 622).
 # builder-codex-pass.sh runs it after a NO-GO pass, and builder-add-work.sh when main adds work, each as a plain
 # background child. It waits while the pane is busy (saying so, and for how long), until the pane is gone, Orca fails
 # 5 tries in a row, or MAXW seconds (COMMANDECK_FRESH_ROUND_MAX_SECONDS, 1800) pass, when main is told; one hand-off
@@ -120,6 +121,17 @@ elif [[ ${HAND##*/} =~ ^(.+)-handoff\.md$ ]]; then
     n=${f##*/$UN-r}; n=${n%-reports.md}; [[ $n =~ ^[0-9]+$ ]] && [ $((10#$n)) -gt "$LAST" ] && LAST=$((10#$n)) && LASTF=$f
   done
   [ "$LAST" = 0 ] || [ "$(tail -n 1 "$LASTF")" != "VERDICT: NO-GO" ] || ROUND=$LAST
+fi
+# Issue 622: a fix hand-off whose round already has a later pass report is stale (the pass moved past it while this waited):
+# typing it would restart that round, so nothing is typed. Read after the idle wait, which can run for minutes.
+if [[ ${HAND##*/} =~ ^(.+)-fix-r[0-9]+\.md$ ]]; then
+  UN=${BASH_REMATCH[1]}
+  for f in "${HAND%/*}/$UN"-r*-reports.md; do
+    n=${f##*/$UN-r}; n=${n%-reports.md}
+    [[ $n =~ ^[0-9]+$ ]] && [ $((10#$n)) -gt "$ROUND" ] || continue
+    echo "builder-fresh-round: $f is a later pass report than round $ROUND of ${HAND##*/}; the hand-off is stale, nothing typed" >&2
+    exit 0
+  done
 fi
 # pair -- this round's model and effort (WM, WE, RULE) and the pane's now (CM, CE). A /plugin config key the fixer role
 # does not take is left in PAIRERR, not told: the warm decision below reads it before /clear, and the hand-off stops with it

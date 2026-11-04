@@ -4,11 +4,11 @@
 
 - **Do not -> instead** (what the guards block):
   - re-read what a wake printed -> act on its lines; `orca-wait.sh --full` or `board.sh --full` when one says cut
-  - a test run in main's foreground, whatever its length, or any other command that can run in the background (a directory-size scan, any wait on external state) -> `run_in_background` and `wait-test-run.sh <pid> <file>`, or its own pane; only quick reads stay in the foreground; `answer-worker.sh`, `seat.sh run` and the merge already return at once
-  - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects
+  - a foreground test run or other command that can run in the background -> `run_in_background` (Details, Large reads)
+  - a raw pane read -> `read-verdict.sh <handle> [lines]`, or `seat.sh collect`; `seat.sh run` launches, waits and collects; a plan seat opens through `unit-drive.sh start` (by hand only with `COMMANDECK_HAND_LAUNCH=<reason>`, logged)
   - a follow-up to a seat that reported done -> `seat.sh revise <role> <unit> "<text>"`, never a hand send; a Builder takes `answer-worker.sh`
   - a large code change in main -> a batch brief, then `builder-launch.sh <unit> <brief>`
-  - a Builder whose pane is gone (`seat.sh status builder <unit>` shows `pane=gone`) -> `bash scripts/orca-wait.sh --close <its task id>`, then `bash scripts/seat.sh launch builder <unit> <its newest hand-off or the brief>`; the launch writes the new pane's handle into the seat record, and the next fix round goes there
+  - a Builder whose pane is gone -> `orca-wait.sh --close`, relaunch (Details)
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every implementation and review runs as a visible
   CLI in its own Orca worktree. Main writes only intents, briefs, findings and config; reads worker_done payloads
@@ -20,8 +20,7 @@
   what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
   owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one, nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
 - **A unit's scope is the owner's words (issue 360)**: with no relay pane running, main turns the owner's request into the order and keeps the relay's five rules. What main adds goes under `## Chief of Staff additions -- NOT ordered` in an order file from `templates/cos-order.md` (`## The owner's words` first), written only when main adds something and checked with `cos-order-check.sh <file>`; the additions go to the owner in one multi-select question, the decoy first. No bundle approvals: a yes covers only the items it names. At a pass-loop alert for pass 4 or more, or a class stop, main tells the owner which part of the scope produces the findings and whether the owner's words asked for it.
-- **Every question for the owner goes to the relay pane** (the worktree ending in `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09); record each ask with `decision.sh add` in the same turn.
-  A plan's questions sit in its one `## Question for the owner` section (plan-check.sh refuses a `> Owner:` line elsewhere): send the section as one ask, id `plan-<unit>`. A plan judge's new question is a `Question for the owner:` finding; add it with `decision.sh add plan-<unit> ... --reask`.
+- **Every question for the owner goes to the relay pane** (the worktree ending in `/Chief-of-Staff`), never a picker in main (owner ruling 2026-10-09); record each ask with `decision.sh add` in the same turn. A plan's questions go as one ask (Details, Re-asks).
 - **A reply the duplicate-agent guard blocks is never dropped**: retry it after that seat's turn ends, or send it as
   an orchestration reply, even when the seat's default already matches.
 - **Denied a self-modification step** (your own settings or hooks, a `## Main-only (deferred)` item at merge
@@ -49,6 +48,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   once). A fresh start's first call is `scripts/board.sh`.
 - **A Builder's state is its newest report, not its pane**: the wake and `board.sh` name its newest `<unit>-r<N>-reports.md`,
   verdict and pass kind. A `review` GO merges nothing; only a `final` GO finishes it. No report yet: `read-verdict.sh`.
+  - a Builder whose pane is gone (`seat.sh status builder <unit>` shows `pane=gone`) -> `bash scripts/orca-wait.sh --close <its task id>`, then `bash scripts/seat.sh launch builder <unit> <its newest hand-off or the brief>`; the launch writes the new pane's handle into the seat record, and the next fix round goes there
 - Worker panes run without auto memory. Copy into the brief every memory fact the unit depends on: the ruling with
   its id, configured values, known traps. A brief never cites a memory by file name alone. A worker and a Builder
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
@@ -123,6 +123,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   their pick (it passes by itself), and new facts, asked in plain chat and
   recorded with
   `bash scripts/decision.sh add <id> <question> <default> <source> --reask "<what is new>"`.
+  A plan's questions sit in its one `## Question for the owner` section (plan-check.sh refuses a `> Owner:` line elsewhere): send the section as one ask, id `plan-<unit>`. A plan judge's new question is a `Question for the owner:` finding; add it with `decision.sh add plan-<unit> ... --reask`.
 - `heads-up:` items: main-watch relays every Claude session's "you should know"
   note in full. Verify it against the code or live state first, then fix it,
   route it to a unit, or file an issue with type and priority labels; or
@@ -156,6 +157,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   the file path, and the answer comes back as a few lines with file:line. Example prompt: "In <log path>, which test
   failed first and why? Answer in at most 5 lines with file:line, and a NOT FOUND: line for anything absent." Main
   reads the text itself when it must act on exact words: a commit, an edit, a ruling quote.
+  - a test run in main's foreground, whatever its length, or any other command that can run in the background (a directory-size scan, any wait on external state) -> `run_in_background` and `wait-test-run.sh <pid> <file>`, or its own pane; only quick reads stay in the foreground; `answer-worker.sh`, `seat.sh run` and the merge already return at once
 - Effort (owner rulings 2026-10-09): an override beats the routing.json pin and
   the global medium default, critical seats included. Log it in that unit's
   brief or dispatch spec. routing.json stays the starting point; the same

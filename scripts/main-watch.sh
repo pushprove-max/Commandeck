@@ -25,7 +25,8 @@
 #   Each stall episode is its own item with its own task.
 # Machine safety, every tick: leaked Codex plugin brokers are killed (see
 #   reap_brokers), a user process count past 2,000 is an item, and finished or
-#   orphaned panes are closed (close-done-panes.sh --close).
+#   orphaned panes are closed (close-done-panes.sh --close). Once an hour, idle clean helper and scratch worktrees
+#   are removed (worktree-sweep.sh, its lines in main-watch/sweep.log).
 # Heads-up: every Claude session's "you should know" offer, full text, posted
 #   to main's inbox and never typed into a pane (heads_up_capture).
 # A live claim in $PP_SCRATCH/heads-up-owner names a project's own watcher
@@ -311,7 +312,7 @@ inbox_wake() {
     [ -n "$u" ] && [ -n "$h" ] || continue
     state=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' <<<"$STATES")
     case $state in idle|done) ;; *) continue ;; esac
-    out=$(timeout 10 orca-ide orchestration inbox --terminal "$h" --json 2>/dev/null) || continue
+    out=$(timeout 10 orca-ide orchestration inbox --terminal "$h" --full --json 2>/dev/null) || continue
     hist=$ST/builder-$u-$h.inbox
     # Its unread messages not yet woken for (a reply that is not an inbox lists none): one line for all of them.
     new=()
@@ -619,7 +620,7 @@ relay_picker() {
     | select((wtp | pnorm) == $p) | .handle) // empty' <<<"$1" 2>/dev/null)
   if [ -n "$h" ] && screen=$(orca-ide terminal read --terminal "$h" --screen --json 2>/dev/null | jq -r '.result.terminal.tail | if type == "array" then .[] else error end' 2>/dev/null) \
      && grep -qiE "$PROMPT_BLOCKED" <<<"$screen" \
-     && n=$(orca-ide orchestration inbox --terminal "$h" --limit 500 --json 2>/dev/null | jq -er --arg h "$h" \
+     && n=$(orca-ide orchestration inbox --terminal "$h" --limit 500 --full --json 2>/dev/null | jq -er --arg h "$h" \
        '.result.messages | if type == "array" then [.[] | select(.read == 0 and (.to_handle // $h) == $h)] | length else error end' 2>/dev/null) \
      && [ "$n" -gt 0 ]; then
     local since; since=$(jq -r '.since // empty' "$f" 2>/dev/null); [[ $since =~ ^[0-9]+$ ]] || since=$NOW
@@ -1170,7 +1171,7 @@ mark_handled() {
 reported() {
   local since=$2 asked; [[ $since =~ ^[0-9]+$ ]] || since=0
   [ $((NOW - 1800)) -le "$since" ] || since=$((NOW - 1800))
-  [ -n "${INBOX+x}" ] || INBOX=$(orca-ide orchestration inbox --terminal "run:$RUN" --limit 500 --json 2>/dev/null)
+  [ -n "${INBOX+x}" ] || INBOX=$(orca-ide orchestration inbox --terminal "run:$RUN" --limit 500 --full --json 2>/dev/null)
   pp_worker_done_since "$1" "$since" <<<"$INBOX" || return 1
   asked=$(timeout 20 bash "$HERE/read-verdict.sh" "$1" 5 "" "" "" "" prompt "$3" 2>/dev/null) && [[ $asked =~ ^[0-9]+$ ]] || return 1
   [ "$asked" -le "$since" ] || pp_worker_done_since "$1" "$asked" <<<"$INBOX"
@@ -1655,12 +1656,65 @@ trim_log() {
   rm -f "$f.cut"
 }
 
+# worktree_sweep -- issue 591: at most once an hour, worktree-sweep.sh removes idle clean helper and scratch worktrees.
+# Its lines go to sweep.log, rewritten each run; the stamp is written after it whatever its exit, so a failure retries
+# the next hour.
+worktree_sweep() {
+  [ -z "$(find "$ST/sweep-stamp" -mmin -60 2>/dev/null)" ] || return 0
+  timeout 60 bash "$HERE/worktree-sweep.sh" > "$ST/sweep.log" 2>&1
+  touch "$ST/sweep-stamp"
+}
+# dead_seats -- issue 590: a non-Builder seat whose pane exited before its finish gets one item naming it and its unit.
+# The exit rows are Orca's daemon log (COMMANDECK_ORCA_LOG, else the host's default), one JSON object per line. A seat
+# owns a row only by its record's exact pty= (Orca's sessionId) and only since its launch; its latest row decides, so
+# an operator_close there is a close, never a death. A finish is the record's last verdict=/revised= line being a
+# verdict, main-watch's own `finished` for its current task, or a VERDICT: or -DONE line in its session log's latest
+# answer (the seat-bound reader, which reads a gone pane's log), which counts for a revised seat only once its revised
+# prompt landed. A record with no pty (an older launch, or a terminal list seat.sh could not read) is never reported.
+dead_seats() {
+  local log rows h task u role launched pty wt revised last agent cause w
+  [ "$LISTED" = 1 ] || return 0
+  log=${COMMANDECK_ORCA_LOG:-$HOME/.config/orca/logs/daemon.log}
+  [ -n "${COMMANDECK_ORCA_LOG:-}" ] || [ "$(hs_os)" != Darwin ] || log="$HOME/Library/Application Support/orca/logs/daemon.log"
+  if [ ! -r "$log" ]; then
+    [ -n "${DEAD_NOTED:-}" ] || { DEAD_NOTED=1; echo "main-watch: no Orca daemon log at $log; a seat pane that exits before its verdict is not reported" >&2; }
+    return 0
+  fi
+  rows=$(tail -n 20000 "$log" | jq -cR 'fromjson? | objects | select(.event == "session-exited" and (.sessionId | type) == "string" and .sessionId != "")
+    | {s: .sessionId, t: (.ts | strings | sub("\\.[0-9]+"; "") | fromdateiso8601? // empty), c: (.cause // "")}' 2>/dev/null)
+  [ -n "$rows" ] || return 0
+  while IFS=$'\x1f' read -r h task u role launched pty wt revised last agent; do
+    [ -n "$pty" ] && [ -n "$h" ] && [ -n "$u" ] && [ "$role" != builder ] || continue
+    # Its pane is still listed: alive.
+    ! awk -F'\t' -v h="$h" '$1 == h { f = 1 } END { exit !f }' <<<"$STATES" || continue
+    cause=$(jq -sr --arg p "$pty" --argjson l "${launched:-0}" '[.[] | select(.s == $p and .t >= $l)] | max_by(.t) | .c // empty' <<<"$rows" 2>/dev/null)
+    [ -n "$cause" ] && [ "$cause" != operator_close ] || continue
+    [[ $last != verdict=?* ]] || continue
+    [ "$(cat "$ST/kind-seat-$h-$task" 2>/dev/null)" != finished ] || continue
+    w=$WS/${wt:-$u}
+    if timeout 20 bash "$HERE/read-verdict.sh" "$h" 5 "$w" "$agent" "" "" "" "${launched:-0}" 2>/dev/null | grep -qE '^VERDICT: |-DONE$'; then
+      [ "$revised" = "$task" ] || continue
+      ! revised_ran "$w" "$task" "${launched:-0}" || continue
+    fi
+    # The task argument is empty: post mints the item's own task, so a seat task already failed or closed hides nothing.
+    post "dead-$u-$role-$launched" "" "main-watch: seat $role on $u exited before its verdict ($h)" \
+      "Seat $role ($h) on $u: Orca reports its pane exited ($cause) with no verdict or finish. Relaunch it (seat.sh launch $role $u <spec>) or carry its step by hand." once
+  done < <(awk -v OFS=$'\x1f' '
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["pty"], v["worktree"], rv, last, (v["cmd"] ~ /(^|[ ;])codex( |$)/ ? "codex" : "claude") }
+    FNR == 1 { if (NR > 1) out(); split("", v); rv = ""; last = "" }
+    /^(verdict|revised)=/ { last = $0 }
+    /^revised=/ { rv = substr($0, 9) }
+    { i = index($0, "="); k = substr($0, 1, i - 1) }
+    i && k ~ /^(handle|task|unit|role|launched|pty|worktree|cmd|origin)$/ && !(k in v) { v[k] = substr($0, i + 1) }
+    END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
+}
 tick() {
   trim_log
   claude_dir
   # Before the run lookup: a leak is reaped whether or not main can be told.
   reap_brokers
   sweep_orphans
+  worktree_sweep
   heads_up_capture
   RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")
   [ -n "$RUN" ] || { echo "main-watch: no current run; nothing to post to" >&2; return 0; }
@@ -1718,6 +1772,7 @@ tick() {
     /^(handle|task|unit|role|launched|origin|tag|worktree|revised)=/ { if (!($1 in v)) v[$1] = substr($0, length($1) + 2); next }
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
+  dead_seats
   merge_collect
   report_send
   merge_start

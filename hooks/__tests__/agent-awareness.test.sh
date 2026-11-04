@@ -23,6 +23,12 @@ cat <<'J'
 J
 EOF
 chmod +x "$T/bin/orca-ide"
+# The hook also reads the host: processes (workers, Codex orphans) and the service list. A sibling test's process
+# that starts or ends between two runs here changed the hash and reprinted the block (codex-helpers.test.sh's
+# servers in removed folders, in a parallel run), so both read a quiet host: no processes, no services.
+printf '#!/bin/sh\n' >"$T/bin/ps"
+printf '#!/bin/sh\ncase "$*" in *is-active*) echo inactive; exit 3 ;; esac\n' >"$T/bin/systemctl"
+cp "$T/bin/ps" "$T/bin/launchctl"; chmod +x "$T/bin/ps" "$T/bin/systemctl" "$T/bin/launchctl"
 export PATH="$T/bin:$PATH" CLAUDE_PROJECT_DIR="$T/proj" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_HOOK_FIRE_LOG=/dev/null
 
 OUT=$(cd "$T/proj" && echo '{}' | COMMANDECK_AWARENESS_DIR="$T/aw" bash "$HERE/hooks/agent-awareness.sh")

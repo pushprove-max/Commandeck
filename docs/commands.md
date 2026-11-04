@@ -74,8 +74,27 @@ left out. A plan author runs it before it writes a question to the owner. No mat
 
 `bash scripts/seat.sh revise <role> <unit> "<text>"` sends a follow-up to a seat that reported done: it settles the old
 task and gives the same pane a new one, so the next finish wakes main. It refuses a Builder (use `answer-worker.sh`), a
-seat with no record, and a pane that is gone or busy. The finish comes as main-watch's wake, not from `seat.sh wait`,
-which still counts the first prompt's marker. `seat.sh status` shows the pane's live state as `agent=<state>`.
+seat with no record, and a pane that is gone. A pane that reads working is revised when the seat's latest answer holds
+its finish (a `VERDICT:` line or its marker); after an earlier revise, that answer counts only once the revised prompt
+has landed. Otherwise it is refused, with `no finish in its latest answer` or `revised prompt not landed`. A question
+the seat asked and main has not answered still refuses it, and nothing is sent. Revise before you collect: collect
+ends the seat and closes its pane. The finish comes as main-watch's wake, not from `seat.sh wait`, which still counts
+the first prompt's marker. `seat.sh status` shows the pane's live state as `agent=<state>`.
+
+## seat close
+
+`bash scripts/seat.sh close <role> <unit>` ends a collected seat whose pane stayed open. It needs a recorded verdict:
+it settles each task of the seat that is not settled yet, closes the pane if it is live, and prints
+`closed seat=<role> unit=<unit> <verdict>`. A seat with no recorded verdict is left as it is: it exits 3 and names
+`seat.sh collect <role> <unit>`. A seat with no record exits 2.
+
+## seat launch of a plan seat
+
+A plan seat (plan-author, a plan judge, a plan revise) opens through `bash scripts/unit-drive.sh start`, which chains
+each next step. `seat.sh launch` or `seat.sh run` of a plan seat by hand is refused with exit 2 and names that command,
+unless `COMMANDECK_HAND_LAUNCH=<reason>` is set. Such a launch prints `HAND LAUNCH: <role> <unit>: <reason>`, adds a row
+to `seat-hand-launches.jsonl` in the scratch folder, and shows a dashboard alert for 24 h. If the row cannot be written,
+nothing opens.
 
 ## peek
 

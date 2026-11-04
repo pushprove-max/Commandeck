@@ -12,12 +12,19 @@
 #     started on the same pane (dispatch-task.sh, the path launch uses), and the record's one task= line is replaced by it; revised=<new
 #     task id> goes with it, and main-watch.sh wakes main for the revised turn only once a prompt in the seat's session holds that id.
 #     Exit 2 for a Builder (answer-worker.sh), no record, a pane that is not live or not idle; 1 when the old task will not settle (the
-#     record is untouched). A dispatch Orca refuses types the text with " Task id <new>." and prints NO-WAKE.
+#     record is untouched). A dispatch Orca refuses types the text with " Task id <new>." and prints NO-WAKE. A pane that
+#     reads working is revised when its latest answer holds its finish (a VERDICT banner or the record's marker=), and for
+#     a revised seat only once the revised prompt is in its session (issue 598); an open question still refuses.
+# seat.sh close <role> <unit> -- a seat whose record's last verdict=/revised= line is a verdict: each task= and
+#     answer_task= with no settled= line is settled (an open question still refuses, exit 1) and a live pane closed;
+#     prints closed seat=<role> unit=<unit> <verdict>. Exit 3 with no recorded verdict (collect it first), 2 with no record,
+#     5 when Orca refuses the pane's close or its terminal list cannot be read (Orca's answer on stderr; rerun close).
 # seat.sh collect <role> <unit> [--report <path>] [--marker <text>] [--on-go <cmd>] [--on-nogo <cmd>]
 #     -- read the pane's verdict and findings (read-verdict.sh), write them to
 #     --report when the pane could not (a read-only Codex sandbox cannot), or with
 #     none to $SCRATCH/reports/<unit>-<role>-<launched>.md (read-verdict.sh --seat), close
-#     the task and the pane (a task that will not settle keeps the pane open and exits 4: rerun collect), print the findings and the VERDICT line, then run
+#     the task and the pane (a task that will not settle keeps the pane open and exits 4: rerun collect; a pane Orca will
+#     not close records the verdict, runs no command and exits 5: seat.sh close), print the findings and the VERDICT line, then run
 #     the --on-go or --on-nogo command (from the repo root, via eval) that the
 #     verdict selects, so a GO launches the next seat or loop in the same call.
 #     --marker: a seat that ends on a marker line (plan-author's PLAN-DONE) and
@@ -32,7 +39,8 @@
 # seat.sh run <role> <unit> <spec-file> [--marker <text>] [launch options] -- launch, wait on the marker (default VERDICT: GO; any
 #     VERDICT line ends the wait too), collect, and print one line: seat=<role> unit=<unit> <verdict> report=<path>.
 #     Exit 0 on GO, 1 on NO-GO, 3 with no verdict, 4 when the verdict is read but its task would not settle (the pane
-#     stays open; rerun collect), the launch's own code when it is refused. Never a Builder. In
+#     stays open; rerun collect), 5 when the verdict is recorded but its pane did not close (seat.sh close), the launch's
+#     own code when it is refused. Never a Builder. In
 #     main's own foreground it restarts itself detached and prints its pid and log. Each outcome is one wake for
 #     main: collect's verdict wake, or this script's own line when there is no verdict.
 #
@@ -50,7 +58,8 @@ usage: seat.sh launch <role> <unit> <spec-file>   (COMMANDECK_SEAT_FORCE=1 rerun
        seat.sh status  <role> <unit>   (a launch's phase: launching, dispatched or failed; its pane: live, gone or unknown)
        seat.sh run     <role> <unit> <spec-file> [--marker <text>] [launch options]   (launch, wait, collect; one line back; not for a Builder)
        seat.sh effort  <role> <unit> <handle> <level>
-       seat.sh revise  <role> <unit> <text>   (a revision for an idle seat's pane: a new task on the same pane; never a Builder)
+       seat.sh revise  <role> <unit> <text>   (a revision for a finished seat's pane: a new task on the same pane; never a Builder)
+       seat.sh close   <role> <unit>   (a seat with a recorded verdict: settle its open tasks and close its pane; exit 3 with none, 5 when the pane did not close)
 Open one routing.json seat in the unit's worktree, collect its verdict, or wait for its marker.
 effort sends /effort <level> to the pane only while it is an idle Claude pane, and
 never below routing's effort-stages.reviewer-floor to a read-only role.
@@ -63,7 +72,7 @@ never below routing's effort-stages.reviewer-floor to a read-only role.
 example: scripts/seat.sh collect certifier my-unit --report /tmp/commandeck/my-unit-r1.md
 EOF
 }
-case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status|run|revise) ;; *) usage >&2; exit 2 ;; esac
+case "${1:-}" in --help|-h) usage; exit 0 ;; launch|collect|wait|effort|status|run|revise|close) ;; *) usage >&2; exit 2 ;; esac
 [ $# -ge 3 ] || { usage >&2; exit 2; }
 CMDNAME=$1; shift
 ROLE=$1; UNIT=$2; shift 2
@@ -82,6 +91,16 @@ SCRATCH=$PP_SCRATCH
 # with "." this repo's unit "ops.foo" and repo "ops" unit "foo" shared a record.
 case $UNIT in *@*) echo "a unit name cannot hold @: $UNIT" >&2; exit 2 ;; esac
 REC=$SCRATCH/seat-${SEAT_REPO:+$SEAT_REPO@}$UNIT-$ROLE.txt
+# task_create <text> [<task-create args>] -- orca-task-create.sh with the text in a --spec-file, so Orca's task holds it
+# whole (issue 587: a --spec text could reach it cut short); the file goes once task-create returns, ok or not.
+task_create() {
+  local f rc
+  f=$SCRATCH/task-spec-$UNIT-$ROLE-$(date +%s)-$$.txt
+  mkdir -p "$SCRATCH" && printf '%s' "$1" > "$f" || { rm -f "$f"; return 1; }
+  shift
+  "$PP_SCRIPTS/orca-task-create.sh" --spec-file "$f" "$@"; rc=$?
+  rm -f "$f"; return "$rc"
+}
 # A unit is planned and built in one worktree, <unit>: a plan seat's first launch cuts it from local main (below) and
 # marks it, and the Builder's launch adopts it (plan-worktree-close.sh --adopt). A launched seat is read in the
 # worktree its record names (worktree=): <unit>-plan for a unit planned before 0.18.0, and <unit> when it names none.
@@ -155,6 +174,18 @@ pane_agent() {
     | first($ps.result.worktrees[]?.agents[]? | select(.paneKey == $k) | .state) // "none"' 2>/dev/null) || r=
   echo "${r:-unknown}"
 }
+# end_pane <cause> -- returns once the record's pane is gone, closing it while live; when Orca refuses the close (it can
+# answer ok:false with exit 0) or its list cannot be read, says so with Orca's answer and exits 5 (pass 7: a seat is
+# never reported closed while its pane may be open). seat.sh close is the retry.
+end_pane() {
+  case $(pane_state) in
+    gone) return 0 ;;
+    live) ! pp_pane_close "$H" "$1" || return 0
+      echo "seat $ROLE $UNIT: pane $H did not close ($(printf %s "$PP_CLOSE_RES" | tr '\n' ' ' | cut -c1-200)); close it: bash $PP_SCRIPTS_Q/seat.sh close $ROLE $UNIT" >&2 ;;
+    *) echo "seat $ROLE $UNIT: Orca's terminal list cannot be read, so pane $H is not known closed; close it: bash $PP_SCRIPTS_Q/seat.sh close $ROLE $UNIT" >&2 ;;
+  esac
+  exit 5
+}
 seat_status() { printf 'phase=%s handle=%s task=%s pane=%s agent=%s last: %s\n' "$(rec phase)" "$(rec handle)" "$(rec task)" "$(pane_state)" "$(pane_agent)" \
   "$(grep . "$REC.log" 2>/dev/null | tail -1 | sed 's/ state=.* record=/ record=/')"; }
 # settled -- wait out a launch's background part; fails when it ended phase=failed.
@@ -190,6 +221,16 @@ unfenced() {
       for (i = 1; i <= NR; i++) print out[i]
     }'
 }
+# read_finish -- the seat's latest answer (read-verdict.sh on the record's handle) into OUT, and its finish into V: the
+# canonical VERDICT line read-verdict.sh prints ahead of its banner, else DONE_MARKER alone on an unfenced line; V is
+# empty with no finish. read-verdict.sh prints one canonical verdict line ahead of the report slice; a bare VERDICT line
+# inside the slice can be a fenced sample. With no banner there is no verdict: the "NO VERDICT YET" tail it prints
+# instead can hold one. collect and revise (issue 598) read a finish this one way.
+read_finish() {
+  OUT=$(bash "$PP_SCRIPTS/read-verdict.sh" "$H" 400 "" "" "" "" "" "${LAUNCHED:-0}" 2>/dev/null || true)
+  V=$(printf '%s\n' "$OUT" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
+  if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(unfenced <<<"$OUT" | sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//')"; then V=$DONE_MARKER; fi
+}
 
 case "$CMDNAME" in
 run)
@@ -223,6 +264,8 @@ run)
   V=$(sed -n 's/^verdict=//p' "$REC" | tail -1); RP=$(sed -n 's/^report=//p' "$REC" | tail -1)
   # Collect read a verdict and woke main with it, but the task would not settle: not "no verdict", so no second wake.
   [ "$rc" != 4 ] || { echo "seat=$ROLE unit=$UNIT verdict read, task not settled; pane kept open; rerun: bash $PP_SCRIPTS_Q/seat.sh collect $ROLE $UNIT report=${RP:-none}"; exit 4; }
+  # Pass 7: the verdict is recorded and main was woken with it, but the pane did not close: no clean finish either.
+  [ "$rc" != 5 ] || { echo "seat=$ROLE unit=$UNIT $V report=${RP:-none}; pane not closed: bash $PP_SCRIPTS_Q/seat.sh close $ROLE $UNIT"; exit 5; }
   if [ "$rc" != 0 ] || [ -z "$V" ]; then
     none "no verdict (exit 3)" "$(seat_status)"; echo "seat=$ROLE unit=$UNIT no verdict report=${RP:-none}"; exit 3
   fi
@@ -232,6 +275,21 @@ run)
 status)
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
   seat_status
+  ;;
+close)
+  # Issue 630: a collected seat whose pane stayed open ends in one command. Only a recorded verdict (collect's rule above:
+  # the record's last verdict=/revised= line), so a revised seat at work is never closed.
+  [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
+  LASTV=$(grep -E '^(verdict|revised)=' "$REC" | tail -1 || true)
+  case $LASTV in verdict=?*) ;; *) echo "seat $ROLE $UNIT has no recorded verdict; nothing was closed. Collect it: bash $PP_SCRIPTS_Q/seat.sh collect $ROLE $UNIT" >&2; exit 3 ;; esac
+  H=$(rec handle)
+  for t in $(sed -n 's/^task=//p; s/^answer_task=//p' "$REC" | awk '!s[$0]++'); do
+    ! grep -qxF "settled=$t" "$REC" || continue
+    PP_VERDICT_READ=1 pp_task_close "$t" completed '{"done":"seat closed"}' || exit 1
+    echo "settled=$t" >> "$REC"
+  done
+  end_pane "seat.sh close"
+  echo "closed seat=$ROLE unit=$UNIT ${LASTV#verdict=}"
   ;;
 revise)
   # Issue 485: Orca's reopen needs a settled dispatch, and a hand send to an idle seat is no new task. A revision is a new
@@ -243,10 +301,25 @@ revise)
   [ "$(pane_state)" = live ] || { echo "REFUSED: pane ${H:-?} of $ROLE $UNIT is not live; nothing was sent" >&2; exit 2; }
   . "$PP_SCRIPTS/codex-helpers.sh"
   rc=0; pane_is_busy "$H" || rc=$?
-  [ "$rc" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read; nothing was sent" >&2; exit 2; }
+  # Issue 598: a finished seat's pane can still read working. A finish in its latest answer, read as collect reads one,
+  # stands for the idle pane, and the old task settles on it (PP_VERDICT_READ=1, issue 631's switch: the open-question
+  # check still runs). A revised seat's latest answer is the previous task's until the revised prompt lands in its
+  # session, so its finish counts only after that (main-watch.sh revised_ran's test).
+  VREAD=0
+  if [ "$rc" != 1 ]; then
+    DONE_MARKER=$(rec marker); WHY="no finish in its latest answer"
+    if [ -n "$OLD" ] && [ "$(rec revised)" = "$OLD" ] && ! timeout 20 bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WT" --task "$OLD" \
+        --launched "${LAUNCHED:-0}" 2>/dev/null | grep -q '^session=.'; then WHY="revised prompt not landed"
+    else read_finish; [ -z "$V" ] || VREAD=1; fi
+    [ "$VREAD" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read ($WHY); nothing was sent" >&2; exit 2; }
+  fi
   # A refusal or an open question stops here, the record intact.
-  pp_task_close "$OLD" completed || exit 1
-  NEW=$("$PP_SCRIPTS/orca-task-create.sh" --spec "$TEXT When you have done this, send worker_done and end on the line your brief names.") \
+  if [ "$VREAD" = 1 ]; then PP_VERDICT_READ=1 pp_task_close "$OLD" completed || exit 1; else pp_task_close "$OLD" completed || exit 1; fi
+  # planref= is the plan at revise time (issue 612): the plan the seat inherited is no finish of the revised turn
+  # (pp_plan_committed). Read before the revision is sent (pass 8): a worker that commits before dispatch returns would
+  # otherwise make its own revision the baseline.
+  PLANREF=$(git -C "$WT" rev-parse -q --verify "HEAD:.claude/plans/$UNIT.md" 2>/dev/null || true)
+  NEW=$(task_create "$TEXT When you have done this, send worker_done and end on the line your brief names.") \
     || { echo "task-create failed for the revision of $ROLE $UNIT; nothing was sent" >&2; exit 1; }
   if ! "$PP_SCRIPTS/dispatch-task.sh" "$NEW" "terminal:$H" --keep-task; then
     echo "NO-WAKE: task $NEW was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
@@ -254,7 +327,8 @@ revise)
       || { echo "send failed to $H" >&2; exit 1; }
   fi
   # One task= line, replaced: seat.sh, board.sh and the awk readers take one.
-  awk -v t="$NEW" '/^task=/ { if (!d) print "task=" t; d = 1; next } /^revised=/ { next } { print } END { print "revised=" t }' "$REC" > "$REC.new" && mv "$REC.new" "$REC"
+  awk -v t="$NEW" -v p="$PLANREF" '/^task=/ { if (!d) print "task=" t; d = 1; next } /^(revised|planref)=/ { next } { print }
+    END { print "planref=" p; print "revised=" t }' "$REC" > "$REC.new" && mv "$REC.new" "$REC"
   echo "seat=$ROLE unit=$UNIT handle=$H task=$NEW revised=$NEW record=$REC"
   ;;
 effort)
@@ -334,6 +408,16 @@ launch)
     echo "REFUSED: $ROLE already finished this exact spec for $UNIT ($PREV_VERDICT; $REC)." >&2
     echo "Change the spec, or rerun it on purpose with COMMANDECK_SEAT_FORCE=1." >&2
     exit 2
+  fi
+  # Issue 595: a plan seat opens through unit-drive.sh (COMMANDECK_DRIVER=1, read first), which chains the next step; one
+  # opened by hand is chained by nothing. A hand launch names its reason: it is logged (the dashboard shows it for 24 h)
+  # and said. A row that cannot be written opens nothing.
+  if [[ $ROLE == plan-* && ${COMMANDECK_DRIVER:-0} != 1 ]]; then
+    [ -n "${COMMANDECK_HAND_LAUNCH:-}" ] || { echo "REFUSED: a $ROLE seat opens through the driver: bash $PP_SCRIPTS/unit-drive.sh start $UNIT <author-spec> <judge-spec>. To open it by hand, set COMMANDECK_HAND_LAUNCH=<reason>. Nothing was opened." >&2; exit 2; }
+    mkdir -p "$SCRATCH" && jq -nc --argjson at "$(date +%s)" --arg u "$UNIT" --arg r "$ROLE" --arg why "$COMMANDECK_HAND_LAUNCH" \
+      '{at: $at, unit: $u, role: $r, reason: $why}' >> "$SCRATCH/seat-hand-launches.jsonl" 2>/dev/null \
+      || { echo "REFUSED: the hand launch could not be logged in $SCRATCH/seat-hand-launches.jsonl; nothing was opened" >&2; exit 2; }
+    echo "HAND LAUNCH: $ROLE $UNIT: $COMMANDECK_HAND_LAUNCH" >&2
   fi
   # #535: Opus judges a plan beside Sol, never ahead of it. A round of Opus waits until the Sol seat's rounds (one per
   # collected launch tag, so a launch collected twice is one) reach Opus's own; the Sol seat must exist. No cap on rounds.
@@ -485,7 +569,7 @@ launch)
     SNAP=$SCRATCH/seat-$UNIT-$ROLE-$LAUNCH_EPOCH-$$-plan.md PTR=$SCRATCH/seat-$UNIT-$ROLE-$LAUNCH_EPOCH-$$-spec.md
     { cp "$WT/.claude/plans/$UNIT.md" "$SNAP" && chmod 444 "$SNAP" \
       && sed "s#^Plan: \.claude/plans/$UNIT\.md\$#Plan: $SNAP (a read-only copy of .claude/plans/$UNIT.md taken at launch: judge this file, never the live one)#" "$SPEC" > "$PTR"; } \
-      || { echo "cannot copy the plan for $ROLE $UNIT to $SCRATCH; closing pane $H" >&2; pp_pane_close "$H" "launch: plan copy failed" || true; exit 1; }
+      || { echo "cannot copy the plan for $ROLE $UNIT to $SCRATCH; closing pane $H" >&2; pp_pane_close "$H" "launch: plan copy failed" || echo "pane $H did not close either: $PP_CLOSE_RES" >&2; exit 1; }
     PLAN_REC=$(printf 'plan=%s\nplanhash=%s' "$WT/.claude/plans/$UNIT.md" "$(sha256sum < "$SNAP" | cut -d' ' -f1)")
     # #538: the main commit the plan worktree sits on, i.e. the files the judge could read; builder-launch.sh --from-plan
     # refuses a record without it, and a Steps file changed on main since.
@@ -532,6 +616,8 @@ launch)
   # Issue 481: stored data meets two versions of the code during a release.
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Check that every requirement in the plan traces to its \`Owner's words:\` line or to an addition the owner approved by name (the order's NOT-ordered section, with the owner's yes for it): an untraced requirement is a finding."
+  # Issue 597: a reason after the word with no punctuation before it reads as a template line, not a verdict.
+  [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" Your verdict line stands alone: \`VERDICT: GO\` or \`VERDICT: NO-GO\`, nothing after the word; any reason goes on the lines above it."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" plan-check.sh has passed this plan (seat.sh runs it before every judge launch), so report none of its checks: the sections, the size line, the \`Test:\` lines, the \`Mockup:\` lines, the budget and that each Facts citation resolves."
   # Host rule drift: the plan judge's reading. Under unit-drive.sh (COMMANDECK_DRIVER=1) a plan is judged once per version.
   JROUND='On a revised plan, re-read the whole plan and recheck every earlier finding and what its Plan change log names; a revised plan is not judged again.'
@@ -563,14 +649,18 @@ launch)
   # The prompt receipt's turn_started stage is Orca's proof of submission.
   submitted() { jq -e '[.. | objects | .stages? // empty | .[]?] | index("turn_started") != null' >/dev/null 2>&1; }
   send_pointer() { orca-ide terminal send --terminal "$H" --text "$SPEC_TEXT" --enter --wait-submit 10 "$@" --json 2>/dev/null; }
-  T=$("$PP_SCRIPTS/orca-task-create.sh" --spec "$SPEC_TEXT" ${LAUNCH_RUN:+--run "$LAUNCH_RUN"}) \
-    || { echo "task-create failed for $ROLE $UNIT; closing pane $H" >&2; pp_pane_close "$H" "launch: task-create failed" || true; exit 1; }
+  T=$(task_create "$SPEC_TEXT" ${LAUNCH_RUN:+--run "$LAUNCH_RUN"}) \
+    || { echo "task-create failed for $ROLE $UNIT; closing pane $H" >&2; pp_pane_close "$H" "launch: task-create failed" || echo "pane $H did not close either: $PP_CLOSE_RES" >&2; exit 1; }
   # The record is rewritten, but keeps the seat's first launch in this worktree: a relaunched planner's
   # planning still starts there (dashboard.sh plan_seats).
   FIRST=; [ "$(sed -n 's/^worktree=//p' "$REC" 2>/dev/null | tail -1)" != "$WTN" ] || FIRST=$(sed -n 's/^first=//p; s/^launched=//p' "$REC" | sort -n | head -1)
   # planref: the plan committed at launch, so only this seat's own plan commit counts as its finish (pp_plan_committed).
   PLANREF=$(git -C "$WT" rev-parse -q --verify "HEAD:.claude/plans/$UNIT.md" 2>/dev/null || true)
-  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\nplanref=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" "$PLANREF" > "$REC"
+  # pty: Orca's id for the pane's session, which its exit row in Orca's daemon log names (main-watch.sh dead_seats, #590).
+  PTY=$(orca-ide terminal list --json 2>/dev/null | jq -er --arg h "$H" '.result | (if type == "array" then . else .terminals end)
+    | first(.[] | select(.handle == $h) | .ptyId | strings) // ""' 2>/dev/null) \
+    || { PTY=; echo "seat: the terminal list could not be read, so $ROLE $UNIT records no pty and its pane's exit is not reported" >&2; }
+  printf 'handle=%s\ntask=%s\nrole=%s\nunit=%s\nworktree=%s\nlaunched=%s\nfirst=%s\nspec=%s\nspechash=%s\ntag=%s\ncmd=%s\nplanref=%s\npty=%s\n' "$H" "$T" "$ROLE" "$UNIT" "$WTN" "$LAUNCH_EPOCH" "${FIRST:-$LAUNCH_EPOCH}" "$SPEC_ABS" "$SPEC_HASH" "$TAG" "$CMD" "$PLANREF" "$PTY" > "$REC"
   echo "phase=launching" >> "$REC"
   pp_unit_event "$UNIT" seat-launch
   [ -z "$PLAN_REC" ] || echo "$PLAN_REC" >> "$REC"
@@ -738,12 +828,7 @@ collect)
   # The session log and its size BEFORE the read: the delivery receipt below is this pre-read pair, so a turn that
   # lands during the send is not counted as delivered.
   RLOG=$(pp_seat_log "$WT" "$(rec session)"); RSZ=""; [ -z "$RLOG" ] || RSZ=$(stat -c %s "$RLOG" 2>/dev/null || true)
-  OUT=$(bash "$PP_SCRIPTS/read-verdict.sh" "$H" 400 "" "" "" "" "" "${LAUNCHED:-0}" 2>/dev/null || true)
-  # read-verdict.sh prints its one canonical verdict line ahead of the report
-  # slice; a bare VERDICT line inside the slice can be a fenced sample. With no
-  # banner there is no verdict: the "NO VERDICT YET" tail it prints instead can hold one.
-  V=$(printf '%s\n' "$OUT" | awk '/^=== .* : findings \+ verdict ===$/ { print v; exit } /^VERDICT:/ { v = $0 }')
-  if [ -z "$V" ] && [ -n "$DONE_MARKER" ] && grep -qxF "$DONE_MARKER" <<<"$(unfenced <<<"$OUT" | sed -E 's/^[[:space:]*`]+//; s/[[:space:]*`"]+$//')"; then V=$DONE_MARKER; fi
+  read_finish
   SD=$(reported "$DONE_MARKER" || true); [ -n "$V" ] || [ -z "$SD" ] || V=PLAN-DONE
   # A read-only seat cannot have written the report itself, so a file already
   # sitting at that path is a PREVIOUS round's and the pane is the only source
@@ -798,8 +883,18 @@ collect)
     [ -z "$DFD" ] || exec {DFD}>&-
   fi
   # Issue 561: a record whose last verdict=/revised= line is a verdict already holds it (a revise appends revised=, so a revised seat has none).
-  if [ -z "$V" ]; then LASTV=$(grep -E '^(verdict|revised)=' "$REC" | tail -1 || true); case $LASTV in verdict=?*) echo "closed seat=$ROLE unit=$UNIT ${LASTV#verdict=}"; exit 0 ;; esac; fi
-  [ -n "$V" ] || { echo "no VERDICT yet on $H (pane kept open)"; exit 3; }
+  # Issue 604: a seat's pane still live after its verdict was collected (its close failed) is closed by the rerun; pass 7:
+  # a refused close is exit 5, never the closed line (end_pane).
+  if [ -z "$V" ]; then LASTV=$(grep -E '^(verdict|revised)=' "$REC" | tail -1 || true); case $LASTV in verdict=?*)
+    end_pane "verdict collected, closed on collect's rerun"
+    echo "closed seat=$ROLE unit=$UNIT ${LASTV#verdict=}"; exit 0 ;; esac; fi
+  # Issue 597: a VERDICT: line with other text after the word is no verdict; say the form that is one.
+  if [ -z "$V" ]; then
+    if unfenced <<<"$OUT" | grep -qE '^[[:space:]]*\*{0,2}VERDICT:'; then
+      echo "no VERDICT yet on $H (pane kept open): its VERDICT: line has other text after the word; end on \`VERDICT: GO\` or \`VERDICT: NO-GO\` alone"
+    else echo "no VERDICT yet on $H (pane kept open)"; fi
+    exit 3
+  fi
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac
   # SETTLE BEFORE ANYTHING ENDS THE SEAT (host issue 2998): the seat's task and every task answer-worker.sh made to carry
   # main's answers close first. The verdict is read, so the pane's live state does not hold the settle (issue 631: a
@@ -831,13 +926,16 @@ collect)
   SEAT_EVENT_WORKTREE=$WT SEAT_EVENT_AGENT=$(seat_agent) SEAT_EVENT_STOP=done SEAT_EVENT_SPEC=$(sed -n 's/^tag=//p' "$REC" | tail -1) \
     "$(dirname "$0")/seat-event.sh" "$UNIT" "$ROLE" "$T" "$LAUNCHED" || echo "seat: no seat event recorded for $ROLE $UNIT" >&2
   pp_close_items "$H"
-  pp_pane_close "$H" "verdict collected" || true
+  # A refused close still records the verdict (it is read and settled); end_pane below retries it and exits 5 before the
+  # closed line and the on-go/on-nogo command.
+  PANE_OPEN=; pp_pane_close "$H" "verdict collected" || PANE_OPEN=1
   echo "verdict=$V" >> "$REC"
   # #535: one line per judge round, keyed by the launch tag so a launch collected twice counts once; the Opus gate reads it.
   [[ $ROLE != plan-judge-* ]] || echo "$(sed -n 's/^tag=//p' "$REC" | tail -1) $V" >> "$REC.rounds"
   pp_unit_event "$UNIT" seat-verdict
   echo "collected=$(date +%s)" >> "$REC"
   [[ $ROLE != plan-author* ]] || plan_lines >> "$REC"
+  [ -z "$PANE_OPEN" ] || end_pane "verdict collected, close retried"
   echo "closed seat=$ROLE unit=$UNIT $V"
   case "$V" in
     "VERDICT: GO"*)    [ -z "$ON_GO" ]   || { echo "on-go: $ON_GO";     (cd "$ROOT" && eval "$ON_GO"); } ;;

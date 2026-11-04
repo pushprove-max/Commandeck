@@ -161,5 +161,17 @@ printf -- '- C2 second cut #102\n' >> "$w/.claude/plans/cm.md"; git -C "$w" comm
 check "a cut the incoming plan adds keeps its issue open, reads Refs, and is tasked next" "0|1|0|1|1" \
   "$rc|$(grep -c '^issue close 101 ' "$TMP/gh-calls")|$(grep -c '^issue close 102 ' "$TMP/gh-calls")|$(git -C "$REPO" log -1 --format=%b HEAD~1 | grep -c '^Refs #102$')|$(done_line | grep -c 'unit open: next Cut 2')"
 
+# Issue 623: a Builder brief for one cut may leave the `C<n>: built` line out of its evidence. A closing GO on the tip and a
+# brief that names exactly one cut (`Cut <n>`, outside fences) count that cut built, so no stray task opens for it. A brief
+# naming two cuts adds neither (D4), and a fenced `Cut <n>` is an example.
+reset; cutunit cn $'- C1 first cut #101 -- done\n- C2 second cut #102\n- C3 third cut #103' '102' '' $'Build Cut 2 of `.claude/plans/cn.md`.'
+rc=$(merge cn)
+check "a cut the brief alone names counts built on a closing GO" "0|1|1|0|1" \
+  "$rc|$(plan cn | grep -c '^- C2 second cut #102 -- done$')|$(done_line | grep -c 'unit open: next Cut 3')|$(grep -c 'Cut 2' "$TMP/task-calls")|$(grep -c '^issue close 102 ' "$TMP/gh-calls")"
+reset; cutunit co $'- C1 first cut #101\n- C2 second cut #102\n- C3 third cut #103' '102' '' $'Build Cut 2 and Cut 3 of `.claude/plans/co.md`.\n\n```\nCut 1\n```'
+rc=$(merge co)
+check "a brief naming two cuts, or one in a fence, counts no cut built" "0|0|1" \
+  "$rc|$(plan co | grep -c ' -- done$')|$(done_line | grep -c 'unit open: next Cut 1')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
