@@ -470,7 +470,7 @@ pp_seat_inbox() {
   run=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE")}
   [ $# -gt 0 ] || set -- "$(pp_run_coord "$run")"
   k=$(pp_option wakeKinds) || k=
-  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -r --arg h "$h" --argjson s "$since" --arg k "$k" --arg fre "$PP_FAIL_RE" \
+  timeout 10 orca-ide orchestration inbox --limit 500 --full --json 2>/dev/null | jq -r --arg h "$h" --argjson s "$since" --arg k "$k" --arg fre "$PP_FAIL_RE" \
     --argjson to "$(printf '%s\n' "${run:+run:$run}" "$(pp_seat_pane main "$PP_MAIN")" "$@" | jq -Rsc 'split("\n") | map(select(. != "" and . != "?"))')" \
     --argjson done "$(jq -nc --arg u "${u^^}-DONE" '["PLAN-DONE", $u]')" "$PP_JQ_WAKES"'
     def at: (.created_at // "") | sub("\\.[0-9]+"; "") | fromdateiso8601? // 0;
@@ -548,7 +548,7 @@ pp_merge_active() {
 # full (the inbox is the whole machine's, newest first): the caller then wakes.
 pp_inbox_actionable() {
   local k; k=$(pp_option wakeKinds) || return 1
-  timeout 10 orca-ide orchestration inbox --limit 500 --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" \
+  timeout 10 orca-ide orchestration inbox --limit 500 --full --json 2>/dev/null | jq -ec --arg r "run:$1" --arg h "${2:-}" --arg k "$k" \
     --argjson relay "$(pp_relay_handles)" "$PP_JQ_WAKES"'($k | split(",")) as $k
     | .result.messages | if type == "array" and length < 500 then [.[] | select(.read == 0 and (.to_handle == $r or ($h != "" and .to_handle == $h))
       and wakes($k; $relay))] | sort_by(.created_at // "") else error end' 2>/dev/null
@@ -617,7 +617,8 @@ pp_close_items() {
 # not a chosen one, and no transcript is read: a question answered another way keeps its task unsettled, loudly.
 pp_open_ask() {
   local in
-  in=$(orca-ide orchestration inbox --limit 5000 --json 2>/dev/null) || return 2
+  # --full: Orca 1.4.246's concise view drops created_at, from_handle, thread_id and payload, so every read "cannot tell".
+  in=$(orca-ide orchestration inbox --limit 5000 --full --json 2>/dev/null) || return 2
   PP_OPEN_ASK_ID=$(jq -er --arg ids "$1 $2 ${4:-}" --argjson s "${3:-0}" '
     def ep: .created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     def pl: ((.payload // "{}") | fromjson? // {});

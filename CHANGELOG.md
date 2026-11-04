@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.69.3 -- 2026-11-03
+
+### Scripts
+
+- Finished review and plan seats are collected again with the newer Orca, which shortened its message list unless asked for the whole record.
+
 ## 0.69.2 -- 2026-11-03
 
 ### Scripts
