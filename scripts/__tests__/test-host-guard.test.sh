@@ -13,9 +13,11 @@ PASS=0 FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 BOX=$(mktemp -d); trap 'rm -rf "$BOX"' EXIT
 # A Commandeck checkout (its __tests__ beside scripts/run-shell-tests.sh, the hook's rule) and another project's tests.
-CD=$BOX/cd OTHER=$BOX/other
-mkdir -p "$CD/scripts/__tests__" "$OTHER/scripts/__tests__"; : > "$CD/scripts/run-shell-tests.sh"
-for f in "$CD/scripts/__tests__/inner.test.sh" "$OTHER/scripts/__tests__/health.test.sh" "$BOX/helper.sh"; do
+CD=$BOX/cd OTHER=$BOX/other HOSTCL=$BOX/host/.claude
+mkdir -p "$CD/scripts/__tests__" "$OTHER/scripts/__tests__" "$HOSTCL/scripts/__tests__"
+: > "$CD/scripts/run-shell-tests.sh"; : > "$HOSTCL/scripts/run-shell-tests.sh"
+for f in "$CD/scripts/__tests__/inner.test.sh" "$OTHER/scripts/__tests__/health.test.sh" \
+  "$HOSTCL/scripts/__tests__/own.test.sh" "$BOX/helper.sh"; do
   printf '#!/usr/bin/env bash\nset -u\necho RAN\n' > "$f"
 done
 # The script that starts a test file, as red-proof or break-run does: a bare `bash <file>`, nested inside another script.
@@ -40,9 +42,11 @@ for n in inner.test.sh ./inner.test.sh; do
   GOT+=" | $(cd "$CD/scripts/__tests__" && env -u COMMANDECK_TEST_RUNNER COMMANDECK_HOST_OS=Darwin BASH_ENV="$GUARD" bash "$n" >/dev/null 2>&1; echo "rc=$?")"
 done
 GOT+=" | $(run Darwin "" "$OTHER/scripts/__tests__/health.test.sh")"
+# Catches issue 668: a host project whose .claude folder holds its own scripts/run-shell-tests.sh read as a checkout.
+GOT+=" | $(run Darwin "" "$HOSTCL/scripts/__tests__/own.test.sh")"
 GOT+=" | $(grep -c 'COMMANDECK_TEST_RUNNER=1 .*timeout "\$lim" bash "\$2"' "$ROOT/scripts/run-shell-tests.sh")"
 check "a test file a script starts on the Mac is refused unless the runner started it" \
-  "2 0 named | 0 1 | 0 1 | 0 1 | rc=2 | rc=2 | 0 1 | 1" "$GOT"
+  "2 0 named | 0 1 | 0 1 | 0 1 | rc=2 | rc=2 | 0 1 | 0 1 | 1" "$GOT"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

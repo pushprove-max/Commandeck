@@ -18,8 +18,10 @@ case ${COMMANDECK_HOST_OS:-${OSTYPE:-}} in
       */__tests__/*.test.sh)
         # A Commandeck test only, by the hook's rule (bash-guardrails.sh:489): its __tests__ folder is in a checkout
         # holding scripts/run-shell-tests.sh. The settings give every project this BASH_ENV; other projects' tests run.
+        # A host project's .claude folder can hold its own scripts/run-shell-tests.sh, so it is never a checkout (issue 668).
         __commandeck_t=${__commandeck_t%/*}
-        if [ "${__commandeck_t##*/}" = __tests__ ] && [ -f "${__commandeck_t%/*/*}/scripts/run-shell-tests.sh" ] \
+        if [ "${__commandeck_t##*/}" = __tests__ ] && [[ ${__commandeck_t%/*/*} != */.claude ]] \
+          && [ -f "${__commandeck_t%/*/*}/scripts/run-shell-tests.sh" ] \
           && [ -z "${COMMANDECK_TEST_RUNNER:-}" ]; then
           printf '%s\n' "BLOCKED: Commandeck tests never run on the Mac (issue 665): $0 was started without the shell test runner. Run it as \`bash scripts/run-shell-tests.sh <the file>\`, which hands it to the PC." >&2
           exit 2
