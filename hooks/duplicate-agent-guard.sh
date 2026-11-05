@@ -180,6 +180,10 @@ for words in cmds:
     if sub in ('terminal create', 'terminal split') and runs_agent(flag(words, 'command') or ''):
         print('hand\t' + probe)
         if sub == 'terminal create': print('create\t' + (flag(words, 'worktree') or ''))
+        else:
+            # Issue 633: a split opens the agent beside the pane --terminal names; COMMANDECK_REPLACE_PANE=<handle> names the live one to replace.
+            rep = next((w.split('=', 1)[1] for w in head[:len(head) - len(words)] if w.startswith('COMMANDECK_REPLACE_PANE=')), '')
+            print('split\t' + (flag(words, 'terminal') or '-') + '\t' + (rep or '-'))
     elif sub == 'worktree create' and flag(words, 'agent'): print('hand\t')
     elif sub == 'terminal send' and '--enter' in words and not re.fullmatch(NUDGE, flag(words, 'text') or '', re.I | re.S):
         print('job\t' + (flag(words, 'terminal') or ''))
@@ -224,8 +228,24 @@ probe_pane() {
     || block probe-pane-log "the probe-pane log $plog cannot be written, so approval $1 could open a second pane"
 }
 
-while IFS=$'\t' read -r kind val; do
+while IFS=$'\t' read -r kind val rest; do
   case $kind in
+    split)
+      TGT=${val#terminal:}; REP=${rest#terminal:}
+      [ "$TGT" != - ] || block split-target-unnamed "a split agent with no --terminal: the live-agent check reads the worktree of the pane it splits. Name it, or use $SCRIPTED."
+      case $TGT in *'$'*) block split-target-unknown "a split of a pane given as a variable ($TGT): the live-agent check cannot read it. Spell the handle out; \`orca-ide terminal list --json\` prints them." ;; esac
+      out=$(orca-ide terminal list --json 2>/dev/null) && jq -e 'has("result")' <<<"$out" >/dev/null 2>&1 \
+        || block pane-list-unreadable "a split agent beside $TGT: Orca's pane list cannot be read, and an unknown state is not an absent agent. Retry once \`orca-ide terminal list --json\` answers."
+      wt=$(jq -r --arg h "$TGT" 'first((.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h) | .worktreePath // empty) // empty' <<<"$out")
+      [ -n "$wt" ] || block split-target-unknown "a split of $TGT, which \`orca-ide terminal list --json\` does not list with a worktree: the live-agent check cannot read it."
+      LIVE='.result | if type == "array" then . else (.terminals // []) end | .[] | select(.worktreePath == $wt and .connected != false and .orphaned != true and .agentIdentity != null)'
+      live=$(jq -r --arg wt "$wt" "[$LIVE | \"\(.handle) (\(.agentIdentity), \(.title))\"] | join(\", \")" <<<"$out")
+      [ -n "$live" ] || continue
+      if [ "$REP" != - ] && jq -e --arg wt "$wt" --arg h "$REP" "any($LIVE; .handle == \$h)" <<<"$out" >/dev/null 2>&1; then
+        rc=0; pane_is_busy "$REP" || rc=$?
+        [ "$rc" != 1 ] || continue
+      fi
+      block second-agent "a second agent split in $wt, which already has a live agent pane: $live. Read or reuse that pane; $SCRIPTED. To replace an idle one, name it with the prefix COMMANDECK_REPLACE_PANE=<handle> on the split, then close it yourself." ;;
     hand)
       [ -n "$MAIN" ] || continue
       [ -z "$val" ] || { probe_pane "$val"; continue; }

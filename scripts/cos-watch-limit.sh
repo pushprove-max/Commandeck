@@ -27,8 +27,9 @@ try: last = int(open(told).read())
 except (OSError, ValueError): last = -1
 if int(used) <= last:
     sys.exit(1)
+# Printed before the told mark (issue 655): a kill between them leaves the line in the wake file, never a mark alone.
+print(f"7-day limit at {used:.0f}% (threshold {sys.argv[2]}%)", flush=True)
 open(told, 'w').write(str(int(used)))
-print(f"7-day limit at {used:.0f}% (threshold {sys.argv[2]}%)")
 EOF
 }
 cos_wait 60 poll

@@ -183,5 +183,20 @@ check "an unspaced choice list VERDICT: GO,NO-GO is no verdict in the pane or th
 check "a spaced choice list VERDICT: GO, NO-GO is no verdict in the pane or the session log" "none none none none" \
   "$(verdict 'End on one of:\nVERDICT: GO, NO-GO\n') $(logv $'End on one of:\nVERDICT: GO, NO-GO') $(verdict 'VERDICT: GO (or NO-GO)\n') $(logv 'VERDICT: NO-GO. GO only after C2')"
 
+# Issue 660: one lone UTF-16 surrogate escape (`\ud83d` with no low half) in a session log made jq refuse the whole
+# log, so a judge's finished report read as "no verdict". The cleaner turns a lone one into U+FFFD and keeps the rest.
+NT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+{ printf '%s\n' '{"type":"user","timestamp":"'"$NT"'","message":{"content":"judge it"}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"'"$NT"'","message":{"content":[{"type":"text","text":"Cut emoji \ud83d here.\nVERDICT: GO"}]}}'; } > "$LP"
+check "verdict read through a lone surrogate" "VERDICT: GO" "$(PROFILE=$T/prof verdict 'Working.\n')"
+# A cleaner that eats a valid pair (an emoji) or an escaped backslash before `u` changes report text it must keep.
+check "pair and escaped backslash are kept" "x😀y \\ud83d z�w" \
+  "$(printf '%s' '{"a":"x😀y \\ud83d z\udc00w"}' | bash -c '. "$1/scripts/json-clean.sh" && pp_json_clean' _ "$REAL" | jq -r .a)"
+# The --state read (unit-drive's turn end) on the same kind of log: one bad row pinned the state at unknown.
+{ printf '%s\n' '{"type":"user","timestamp":"1970-01-01T00:16:40Z","message":{"content":"build it"}}'
+  printf '%s\n' '{"type":"assistant","timestamp":"1970-01-01T00:16:50Z","message":{"id":"m1","content":[{"type":"text","text":"Built \ud83d.\nU-DONE"}]}}'
+  printf '%s\n' '{"type":"system","subtype":"turn_duration","timestamp":"1970-01-01T00:17:00Z"}'; } > "$LM/s1.jsonl"
+check "state reads a finished turn past a lone surrogate" "marker=1" "$(mark)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

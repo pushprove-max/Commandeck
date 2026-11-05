@@ -26,5 +26,8 @@ build pr1
 check "the launcher and the merge read the same plan paths" "0 .claude/plans/toy.md .claude/plans/toy.md" \
   "$RC $(. "$T/plug/scripts/paths.sh" >/dev/null 2>&1; pp_plan_section_paths "$T/batch.md" | paste -sd' ' -) $(. "$T/plug/scripts/paths.sh" >/dev/null 2>&1; pp_brief_plans "$P/.claude/briefs/pr1-builder-brief.md" | paste -sd' ' -)"
 
+# Issue 640: a Plan heading indented up to three spaces is still the Plan section; missed, the launcher finds no plan.
+printf '# b\n\n  ## Plan\n\n.claude/plans/pind.md\n' > "$T/pind.md"
+check "Plan heading indented is read" ".claude/plans/pind.md" "$(. "$T/plug/scripts/paths.sh" >/dev/null 2>&1; pp_plan_section_paths "$T/pind.md" | paste -sd' ' -)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

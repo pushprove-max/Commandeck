@@ -126,6 +126,8 @@ map(select(type == "object" and (.event | type) == "string")) as $r
                (if $x.b != null and ($nx == null or $x.b < $nx) then {stage: "fixing", from: $x.b, to: $nx} else empty end)]
         | map(.from |= todate | .to |= (if . == null then null else todate end))
       end),
+    # The last 3 calls begun, newest last; running = no end row for the call's use (the $endedSet rule above) (#555).
+    tools: [$starts[-3:][] | {tool, ts, running: (.use | tostring | in($endedSet) | not)}],
     startedAt: ([$r[].ts | select(ep != null)] | first // null),
     reviewSec: (if $last == null then null else [$cx[] | (.c.ts | ep) as $a
         | (if .e == null then $now else .e.ts | ep end) as $b

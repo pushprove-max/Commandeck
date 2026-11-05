@@ -20,6 +20,9 @@ export const SEATS = { main: [GIT, MAIN], cos: [`${GIT}/worktrees/c`, `${WS}/Chi
 
 export type World = { files: Map<string, { text: string; at: number }>; runs: string[][]; writes: string[]; status: (string | undefined)[]; toasts: string[]; registered: string[]; opened: string[]; live: Set<number>; clock: ReturnType<typeof mock.clock>; beforeRead?: (path: string) => Promise<void> | void }
 
+// #645: whether the engine draws an opened pane (false: a window under 110 columns leaves it undrawn).
+export const PLACED = { on: true }
+
 export const unit = (name: string, extra: object = {}, builder: object | null = {}) => ({
   unit: name, stage: 'building', agents: 'claude:working', ageSec: 0, round: null,
   builder: builder && { verdict: null, verdictRound: null, findings: null, cost: { stages: [{ usd: 1 }] }, ...builder }, ...extra,
@@ -73,6 +76,7 @@ export const world = (on: On, seat: keyof typeof SEATS, files: Record<string, st
   on('ui.status', (_, e) => (w.status.push(e.text), { value: undefined }))
   on('ui.toast', (_, e) => (w.toasts.push(e.text), { value: undefined }))
   on('ui.open', (_, e) => (w.opened.push(e.id), { value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [...new Set(w.opened)].map(id => ({ id, isPlaced: PLACED.on })) }))
   on('ui.close', (_, e) => (w.opened.splice(w.opened.indexOf(e.id), 1), { value: undefined }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => (w.registered.push(e.name), { value: { command: e.name } }))

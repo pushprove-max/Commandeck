@@ -81,6 +81,15 @@ OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" 
 check "driven verdict echo hidden, ok status held" "0 1 1" "$(grep -c '| VERDICT: GO' <<<"$OUT") $(sed -n '/^held notes/,$p' <<<"$OUT" \
   | grep -c '| ok run') $(grep -c '"q2"' "$T/sc/main-watch/messages/hidden.jsonl" 2>/dev/null)"
 rm -f "$T/bin/systemctl"
+# Issue 659: the unit driver's stop line names its route after `next: `, not `next=`; the wake still names the route.
+printf '#!/usr/bin/env bash\necho "drive-wt-r-5.service loaded failed failed drive"\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
+rm -rf "$T/sc"; mkdir -p "$T/sc/scratchpad"
+printf 'unit-drive: STOP wt-r at launch: x\nSTOP unit=wt-r stage=launch: the pane opened; next: bash dispatch-task.sh task_r terminal:term_r\n' > "$T/sc/scratchpad/wt-r-drive-5.log"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" COMMANDECK_HOST_OS=Linux ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
+check "issue 659: a driver stop line's next: route reaches the wake" 1 \
+  "$(grep -c 'NEEDS-MAIN: wt-r stopped with a route; run: bash dispatch-task.sh task_r terminal:term_r$' <<<"$OUT")"
+rm -f "$T/bin/systemctl"
 # A batch too big for one argument (twelve 100,000-character questions, ~1.2 MB) must still show and be acknowledged:
 # passing it to jq as an argument failed E2BIG, so the drain exited unacked and every retry hit the same batch.
 BIG=$(head -c 100000 /dev/zero | tr '\0' x)
@@ -258,5 +267,18 @@ check "state_line_keeps_pass_line: a plain GO round still shows its pass and GO"
 # Issue 507. Catches: a reviewer quoting a Pass: line in its report replacing the pass kind on the state line.
 OUT=$(rwake $'Pass: final\n[P3] the round quotes\n~~~text\nPass: review\n~~~\nVERDICT: GO')
 check "a quoted Pass line keeps the kind" 1 "$(grep -c 'last Codex round r5 (final) VERDICT: GO$' <<<"$OUT")"
+# Issue 647: a seat that writes its findings as bold headings (`**F1 (P2):**`) shows them under its marker like the
+# bracket form; a (P2) in the middle of a sentence is not a heading and is not shown.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "**F1 (P2):** a bold finding" "- **F2 (P3):** another" "A note on the (P2) above." "VERDICT: NO-GO"\n' > "$PL/scripts/read-verdict.sh"
+msg b1 term_bold status "u-DONE" "u-DONE: VERDICT: NO-GO" | jq -sc '{ok: true, result: {deliveryId: "d9", messages: .}}' > "$T/batch.json"
+OUT=$(drain --full)
+check "wake summary shows bold P2 finding" "1 1 0" \
+  "$(grep -cxF '  term_bold: **F1 (P2):** a bold finding' <<<"$OUT") $(grep -cxF '  term_bold: - **F2 (P3):** another' <<<"$OUT") $(grep -c 'A note on the' <<<"$OUT")"
+# Issue 660: a drained batch holding a lone surrogate escape (`\ud83d`, no low half) made every jq on it fail, so the
+# wake printed nothing of the batch. The batch is cleaned first: the message prints, its other text intact.
+printf '%s\n' '{"ok":true,"result":{"deliveryId":"d660","messages":[{"id":"s660","from_handle":"term_cos","type":"question","subject":"turn complete","body":"cut \ud83d emoji, owner says ship"}]}}' > "$T/batch.json"
+OUT=$(cd "$T/p" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin:$PATH" COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$WS" \
+  COMMANDECK_SCRATCH="$T/sc" ORCA_TERMINAL_HANDLE=term_cos timeout 30 bash "$REAL/scripts/orca-wait.sh" 2>&1)
+check "wake drain survives a lone surrogate" 1 "$(grep -c '| cut .* emoji, owner says ship' <<<"$OUT")"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

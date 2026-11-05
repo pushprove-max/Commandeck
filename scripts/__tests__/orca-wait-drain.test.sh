@@ -62,5 +62,21 @@ HID=$T/sc/main-watch/messages/hidden.jsonl; : > "$HID"
 OUT=$(COMMANDECK_NOW=$((N0 + 300)) wake)
 # The clock stays at the first drain's time: a drain with no held note sets none.
 check "acked question repeat dropped later" "0 1 a2 $N0" "$(grep -c '| which file?' <<<"$OUT") $(grep -c '| merge u7?' <<<"$OUT") $(jq -r .id "$HID" 2>/dev/null | paste -sd' ' -) $(cat "$T/sc/main-watch/batch-at" 2>/dev/null)"
+# Issue 641: a Builder's reply whose body starts QUESTION (type reply, subject "Re: answer from main") asks main
+# something: it wakes main at once whatever its type or subject, and the drain never files it in hidden.jsonl, not even
+# from a pane the harness rule hides. A plain answer echo in the same thread asks nothing and stays a held note.
+# q <id> <body> [from] -- a reply row in the answer's thread.
+q() { jq -nc --arg id "$1" --arg b "$2" --arg f "${3:-term_w}" --argjson at $((N0 + 4000)) '{id: $id, from_handle: $f, to_handle: "run:r",
+  type: "reply", subject: "Re: answer from main", body: $b, read: 0, created_at: ($at | todate)}'; }
+rows641() { q c1 'QUESTION: x'; q c2 'ok, using the second option'; q c3 'QUESTION which path?' term_3d8255b5
+  q c4 '  QUESTION: indented'; q c5 'QUESTIONS remain open'; q c6 'a QUESTION later in the text'; }
+rows641 | batch; rows641 | page; : > "$HID"
+OUT=$(COMMANDECK_NOW=$((N0 + 4000)) wake)
+woke() { sed '/^held notes/,$d' <<<"$OUT" | grep -cF "| $1 |"; }
+held() { sed -n '/^held notes/,$p' <<<"$OUT" | grep -cF "| $1 |"; }
+check "reply with QUESTION body wakes main" "1 0" "$(woke 'QUESTION: x') $(held 'QUESTION: x')"
+check "reply with QUESTION body is not hidden" "1 0" "$(woke 'QUESTION which path?') $(grep -c '"c3"' "$HID")"
+check "plain answer echo stays held" "0 1" "$(woke 'ok, using the second option') $(held 'ok, using the second option')"
+check "question body forms" "1 0 0" "$(woke '  QUESTION: indented') $(woke 'QUESTIONS remain open') $(woke 'a QUESTION later in the text')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

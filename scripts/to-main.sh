@@ -45,9 +45,10 @@ sent() { jq -e '.ok' >/dev/null 2>&1 <<<"$OUT"; }
 # Orca's code for a pane that closed after the lookup.
 gone() { [ "$(jq -r '.error.code // empty' 2>/dev/null <<<"$OUT")" = terminal_not_found ]; }
 send "$@"
-# Look once more and retry on a different live pane; none left means queued, not lost.
+# Look once more and retry on a different live pane; none left means queued, not lost. The look reads Orca, not the
+# stored pane map (issue 576): the map may still list the pane that closed.
 if ! sent && gone; then
-  H2=$(pp_seat_pane "$KEY" "$WT")
+  H2=$(PP_PANE_MAP_FRESH=1 pp_seat_pane "$KEY" "$WT")
   if [ -n "$H2" ] && [ "$H2" != "$H" ]; then H=$H2; send "$@"; fi
   if ! sent && gone; then queue "$@"; fi
 fi

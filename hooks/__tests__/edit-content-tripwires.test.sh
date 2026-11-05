@@ -134,6 +134,9 @@ msg_in()  { (cd "$1" && printf '%s' "$2" | "$HOOK" 2>&1 >/dev/null); }
 W1=$SP/ws/u1 W2=$SP/ws/u2 W3=$SP/ws/u3
 check "placeholder copy in screen code is refused, naming the file and the line" "2 1" \
   "$(run_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")") $(msg_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")" | grep -cF "placeholder copy in $W1/web/src/X.tsx: \"$COPY\"")"
+# #653: the template no longer spells out the Placeholder line, so the block must print its form with the file filled in.
+check "placeholder block shows the plan line form" 1 \
+  "$(msg_in "$W1" "$(t_edit "$W1/web/src/X.tsx" "$COPY")" | grep -cF 'Placeholder: web/src/X.tsx | <complete source line> | <why>')"
 check "the same copy is allowed when the plan names its complete line on a Placeholder line" 0 \
   "$(run_in "$W2" "$(t_edit "$W2/web/src/X.tsx" "$COPY")")"
 check "copy named only by a substring of its line is refused" 2 \

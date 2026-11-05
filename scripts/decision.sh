@@ -53,7 +53,7 @@ lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || di
 # whole read: a corrupt ledger is never an empty one.
 fold() {
   jq -cs 'if all(.[]; type == "object"
-                 and (keys - ["history", "waitsOn", "options"] == ["answer","answeredAt","askedAt","id","proposedDefault","question","source"])
+                 and (["answer","answeredAt","askedAt","id","proposedDefault","question","source"] - keys == [])
                  and (.id | type == "string" and length > 0))
           then [to_entries[] | .value + {_i: .key}] | group_by(.id) | map(last + {_i: first._i}) | sort_by(._i) | map(del(._i))
           else error("malformed record") end' "$L" 2>/dev/null || die "malformed ledger $L"
@@ -93,6 +93,33 @@ tell_main() {
   # to-main.sh exits 0 sent, 3 queued (main is down and reads it first when it starts).
   err=$(bash "${COMMANDECK_TO_MAIN:-$(dirname "$0")/to-main.sh}" question "answer $1" "The owner answered $1: $2" 2>&1 >/dev/null) || rc=$?
   [ $rc = 0 ] || [ $rc = 3 ] || { echo "not delivered: $1 to main: $(tail -1 <<<"$err" | tr '\n' ' ')" >&2; return 1; }
+}
+# auto_push_answer <id> -- issues 610 and 656: answer the push ask just written yes, only when the auto-answer mode is on
+# (autodecide.on names a log), every listed commit has a merged row with closingGo true and checkRun green, the newest
+# row is main's tip, and no subject names prod, production or deploy. Any other case changes nothing: the ask stays open
+# for the owner. Needs LOG and B from push-ask. It never pushes; main hears the yes from one to-main.sh message.
+auto_push_answer() {
+  local id=$1 alog tip ans rc=0 err
+  alog=$(cat "$PP_MAIN/.claude/metrics/autodecide.on" 2>/dev/null); [ -n "$alog" ] || return 0
+  tip=$(git -C "$PP_MAIN" rev-parse refs/heads/main) || return 0
+  jq -ne --arg log "$LOG" --arg tip "$tip" --arg main "$(cd "$PP_MAIN" && pwd -P)" --slurpfile rows <(cat "$B" 2>/dev/null) '
+    [$rows[] | select(.main == $main and .how == "merged")] as $r
+    | [$log | split("\n")[] | select(length > 0) | {s: .[:40], t: .[41:]}] as $c
+    | ($c | length > 0) and ($c[-1].s == $tip)
+      and ($c | all(.t | test("(^|[^A-Za-z0-9])(prod|production|deploy)($|[^A-Za-z0-9])"; "i") | not))
+      and ($c | all(. as $x | ([$r[] | select(.sha == $x.s)] | last) as $m | $m != null and $m.closingGo == true and $m.checkRun == "green"))' >/dev/null || return 0
+  ans="yes: closing GO and green checks on ${tip:0:8} (auto-decided)"
+  COMMANDECK_MAIN_TOLD=1 bash "$0" answer "$id" "$ans" >/dev/null || return 0
+  {
+    printf '\n### %s: %s, push main to origin (auto-decided)\n' "$(date +%H:%M)" "$id"
+    printf -- '- **Question**: Push main to origin at %s?\n' "${tip:0:8}"
+    printf -- '- **Picked**: %s\n' "$ans"
+    printf -- '- **Why**: every listed commit has a closing GO and green fast checks, and the newest is main'"'"'s tip.\n'
+    printf -- '- **Reversible**: the owner'"'"'s no replaces the answer before main pushes; after the push, only a revert.\n'
+  } >> "$alog" 2>/dev/null || echo "could not write the autodecide log $alog" >&2
+  err=$(bash "${COMMANDECK_TO_MAIN:-$(dirname "$0")/to-main.sh}" question "answer $id" "Auto-answered $id: $ans" 2>&1 >/dev/null) || rc=$?
+  [ $rc = 0 ] || [ $rc = 3 ] || echo "not delivered: $id to main: $(tail -1 <<<"$err" | tr '\n' ' ')" >&2
+  return 0
 }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # fresh <askedAt> -- now, for a new snapshot of an id last asked at <askedAt>
@@ -360,8 +387,11 @@ case "${1:-}" in
       || die "could not read the finished-builds rows in $B"
     ! grep -E ' \(check ' <<<"$LIST" | grep -qv ' (check green)$' || die "a listed merge's check is not green, no push request written:"$'\n'"$LIST"
     N=$(grep -c . <<<"$LIST")
-    exec bash "$0" add "push-$(date -u +%Y-%m-%d)-$(git -C "$PP_MAIN" rev-parse --short=8 refs/heads/main)" \
-      "Push main to origin? $N commit(s) since origin/main: $(paste -sd';' - <<<"$LIST" | sed 's/;/; /g')" push "decision.sh push-ask" ;;
+    PID="push-$(date -u +%Y-%m-%d)-$(git -C "$PP_MAIN" rev-parse --short=8 refs/heads/main)"
+    rc=0; bash "$0" add "$PID" \
+      "Push main to origin? $N commit(s) since origin/main: $(paste -sd';' - <<<"$LIST" | sed 's/;/; /g')" push "decision.sh push-ask" || rc=$?
+    [ $rc = 0 ] || exit $rc
+    auto_push_answer "$PID" ;;
   list)
     [ $# -eq 1 ] || usage
     lock -s

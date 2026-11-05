@@ -445,6 +445,54 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 wait_hint
 case "$CMD" in *tail*|*watch*|*npm*|*long-job*) main_checkout && { WAIT_MAIN=1; wait_scan; } ;; esac
 [ -z "$WAIT_NOTE$WAIT_HINT" ] || HOOK_FIRE_REASON=${HOOK_FIRE_REASON:-wait-note}
+# Issue 665 (owner's order 2026-11-05), every tier: Commandeck tests never run on the Mac. A segment naming a test file
+# of a Commandeck checkout (its __tests__ beside scripts/run-shell-tests.sh) is refused there, wherever the name sits (a
+# wrapper such as timeout, nohup or env, a `bash -c` string, a short path after an earlier `cd`), unless the segment is
+# one of the two shapes read as not running it: the runner (run-shell-tests.sh, after the same wrappers), which hands it
+# to the PC, or a command in MT_READERS, which reads or moves the file without running it. Any other shape is refused.
+# The PC (any other host), CI and the runner's own runs are untouched. Known gaps: a path held in a variable; a
+# heredoc body line that names a test file reads as a command and is refused (a false refusal, never a missed run).
+MT_READERS=' grep egrep fgrep rg cat head tail less more sed awk wc ls stat file readlink realpath basename dirname diff cmp jq git sort uniq nl cut tr echo printf test [ cp mv rm ln chmod touch mkdir shellcheck shasum md5 '
+# mt_unwrap: strip_prefix, then the wrappers that run the rest of the line as a command, until neither is left.
+mt_unwrap() {
+  local n
+  while n=${#WORDS[@]}; strip_prefix; [ ${#WORDS[@]} -gt 0 ]; do
+    case ${WORDS[0]} in
+      timeout|gtimeout) WORDS=("${WORDS[@]:1}")
+        while [[ ${WORDS[0]-} == -* ]]; do case ${WORDS[0]} in -s|-k) WORDS=("${WORDS[@]:2}") ;; *) WORDS=("${WORDS[@]:1}") ;; esac; done
+        WORDS=("${WORDS[@]:1}") ;;
+      nice) WORDS=("${WORDS[@]:1}"); [ "${WORDS[0]-}" != -n ] || WORDS=("${WORDS[@]:2}") ;;
+      nohup|command|exec|time) WORDS=("${WORDS[@]:1}") ;;
+      *) [ ${#WORDS[@]} != "$n" ] || break ;;
+    esac
+  done
+}
+if [ "${COMMANDECK_HOST_OS:-$(uname -s)}" = Darwin ] && [[ $CMD == *.test.sh* ]]; then
+  MT_CWD=$(jq -r '.cwd // empty' <<<"$INPUT"); MT_CWD=${MT_CWD:-$PWD}
+  while IFS= read -r LINE; do
+    load_words "${LINE:1}"
+    # A `cd` moves where a later short path is read from; one to an unknown place (`cd -`, `cd ~user`) keeps the last.
+    case ${WORDS[0]-} in
+      cd|pushd) case ${WORDS[1]-} in ''|'~') MT_CWD=$HOME ;; '~/'*) MT_CWD=$HOME/${WORDS[1]#'~/'} ;; /*) MT_CWD=${WORDS[1]} ;;
+        -*|'~'*) ;; *) MT_CWD=$MT_CWD/${WORDS[1]} ;; esac; continue ;;
+    esac
+    mt_unwrap
+    case ${WORDS[0]-} in run-shell-tests.sh|*/run-shell-tests.sh) continue ;; esac
+    [[ $MT_READERS != *" ${WORDS[0]-} "* ]] || continue
+    for MW in "${WORDS[@]}"; do
+      read -ra MPARTS <<<"$MW"
+      for MT in "${MPARTS[@]}"; do
+        [[ $MT == *.test.sh && ! $MT =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue  # an assignment names a file, runs none
+        MN=$MT; [[ $MT == /* ]] || MT=$MT_CWD/$MT
+        while [[ $MT == */./* || $MT == *//* ]]; do MT=${MT//\/.\//\/}; MT=${MT//\/\//\/}; done  # `./x`, `a//b`
+        MT_D=${MT%/*}
+        [ "${MT_D##*/}" = __tests__ ] && [ -f "${MT_D%/*/*}/scripts/run-shell-tests.sh" ] || continue
+        echo "BLOCKED: Commandeck tests never run on the Mac (issue 665). Run it as \`bash scripts/run-shell-tests.sh $MN\` from its checkout, which hands it to the PC." >&2
+        HOOK_FIRE_REASON=mac-direct-test; exit 2
+      done
+    done
+  done < <(split_search_segments "$CMD")
+fi
 [ "$STRICT" = 1 ] || { allow_json; exit 0; }
 
 # A here-document's end word is one plain word (letters, digits, _ . -): bare,

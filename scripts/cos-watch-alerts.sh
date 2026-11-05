@@ -76,6 +76,11 @@ def wakes(i):
 new = [a for a in alerts if wakes(a['id']) and is_new(a['id'])]
 if not new:
     sys.exit(1)
+# Printed before the told and seen marks (issue 655): a kill between them leaves the rows in the wake file.
+for a in new:
+    row = json.dumps(a)  # issue 290: cut at 1,500 characters, with a pointer
+    print(row if len(row) <= 1500 else row[:1500] + ' ...[cut; full row: the dashboard data.js alerts]')
+sys.stdout.flush()
 try:
     with open(told_path, 'a') as f:
         f.write(''.join(f"{split(a['id'])[0]} {now}\n" for a in new))
@@ -87,9 +92,6 @@ try:
         f.write(''.join(a['id'] + '\n' for a in new))
 except OSError:
     pass  # the owner is told all the same; the told record keeps the next poll quiet for 24 h
-for a in new:
-    row = json.dumps(a)  # issue 290: cut at 1,500 characters, with a pointer
-    print(row if len(row) <= 1500 else row[:1500] + ' ...[cut; full row: the dashboard data.js alerts]')
 EOF
 }
 if [ "${1-}" = --seed ]; then poll --seed || { echo "cos-watch-alerts: cannot read $COS_DATA; nothing seeded" >&2; exit 1; }; exit 0; fi

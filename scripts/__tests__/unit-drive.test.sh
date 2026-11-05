@@ -34,7 +34,10 @@ run) # the plan author: the first run writes the plan; a forced run is a revisio
   if [ ! -f "\$plan" ]; then
     mkdir -p "\$(dirname "\$plan")"; printf 'plan of %s\n%s\n' "\$unit" "$PSZ" > "\$plan"
     [ ! -e "$T/plan-question-\$unit" ] || printf '\n## Question for the owner\n\nShould the thing be done?\n' >> "\$plan"
+    [ ! -e "$T/plan-qtext-\$unit" ] || { printf '\n## Question for the owner\n\n' >> "\$plan"; cat "$T/plan-qtext-\$unit" >> "\$plan"; }
+    [ ! -e "$T/plan-raw-\$unit" ] || cat "$T/plan-raw-\$unit" >> "\$plan"
   elif [ "\${COMMANDECK_SEAT_FORCE:-0}" = 1 ] && [ ! -e "$T/norevise-\$unit" ]; then
+    [ ! -e "$T/plan-raw-\$unit" ] || { rm -f "$T/plan-raw-\$unit"; printf 'plan of %s\n%s\n' "\$unit" "$PSZ" > "\$plan"; }
     if [ -e "$T/revise-opens-question-\$unit" ]; then rm -f "$T/revise-opens-question-\$unit"; printf '\n## Question for the owner\n\nShould the thing be done?\n' >> "\$plan"
     elif grep -q '^## Question for the owner' "\$plan"; then
       sed '/^## Question for the owner/,\$d' "\$plan" > "\$plan.t" && mv "\$plan.t" "\$plan"; printf '## Question for the owner\n\nNone: answered as D9\n' >> "\$plan"
@@ -48,6 +51,7 @@ EOF
 cat > "$T/plug/scripts/builder-launch.sh" <<EOF
 #!/usr/bin/env bash
 echo "launch \$* DRIVER=\${COMMANDECK_DRIVER:-unset} BATCH=\${COMMANDECK_BATCH:-unset}" >> "$CALLS"
+[ ! -e "$T/brec-\$2" ] || { cp "$T/brec-\$2" "$SCR/seat-\$2-builder.txt"; [ ! -e "$T/blog-\$2" ] || cp "$T/blog-\$2" "$SCR/seat-\$2-builder.txt.log"; }
 [ ! -e "$T/refuse-launch" ] || { echo "REFUSED: 3 Builders are running and the cap is 3" >&2; exit 2; }
 [ ! -e "$T/real-launch" ] || exec bash "\$(dirname "\$0")/builder-launch.real.sh" "\$@"
 EOF
@@ -322,6 +326,96 @@ touch "$T/repolist-fails"; u=qr; mkb $u; touch "$T/plan-question-$u"; asked $u; 
 out="paused=$(running && echo yes)"; answer $u "$(now)" "here"; waitrc "$SVC"; rm -f "$T/repolist-fails"
 check "an unreadable Orca repo list keeps the gate on this project's ledger with one line said" "paused=yes said=1 released=1" \
   "$out said=$(slog | grep -c 'the Orca repo list cannot be read') released=$(calls "launch plan-judge-sol $u")"
+
+# Issue 662: the host's main writes its ledger rows with a `unit` key; a tagged answer there still releases the gate.
+u=qu; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 1
+jq -cn --arg id "plan-$u" --arg at "$(now)" --arg q "Plan question (plan $(h8 $u))?" '{id: $id, question: $q, proposedDefault: "d",
+  source: "main", askedAt: "2000-01-01T00:00:00Z", answeredAt: $at, answer: "host answer", unit: "host"}' >> "$O/.claude/metrics/decisions.jsonl"
+waitrc "$SVC"
+check "issue 662: host row with unit field and tag releases" "released=1 answer=1" \
+  "released=$(calls "launch plan-judge-sol $u") answer=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'host answer')"
+
+# Issue 657: a section of only a none form (list marker optional, one trailing period) asks nothing, so the plan goes to its
+# judges; a quoted none or one with trailing words stays open, so a misread costs a revision, never a skipped question.
+qtext() { mkb "$1"; printf '%s\n' "$2" > "$T/plan-qtext-$1"; }
+out=; i=0
+for f in '- none' 'None.' '* NONE' ''; do i=$((i + 1)); u=qn$i; qtext $u "$f"; drive $u; out+="$(calls "launch plan-judge-sol $u")$(calls "launch --from-plan $u")"; done
+check "issue 657: qopen list none closed" "11111111" "$out"
+out=
+for f in '"none"' 'none yet'; do i=$((i + 1)); u=qn$i; qtext $u "$f"; asked $u; sleep 1
+  out+="$(running && echo paused):$(calls "launch plan-judge-sol $u") "; answer $u "$(now)" "go"; waitrc "$SVC"; done
+check "issue 657: quoted or trailing none stays open" "paused:0 paused:0 " "$out"
+# A question main was sent but never recorded as plan-<unit> is sent once more with a NEEDS-MAIN line, said once.
+u=qm; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 4
+out="resent=$(grep -c "NEEDS-MAIN: $u asked main plan-$u at" "$T/to-main") said=$(slog | grep -c "NEEDS-MAIN: $u asked main plan-$u at")"
+answer $u "$(now)" "go"; waitrc "$SVC"
+check "issue 657: unasked question raises NEEDS-MAIN once" "resent=1 said=1 released=1" "$out released=$(calls "launch plan-judge-sol $u")"
+# A queued send (to-main.sh exit 3: main is down) says the NEEDS-MAIN line at once; the queue holds the question, so
+# it is not queued twice.
+TM=$T/plug/scripts/to-main.sh; cp "$TM" "$T/to-main.keep"; printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 3\n' "$T/to-main" > "$TM"
+u=qk; mkb $u; touch "$T/plan-question-$u"; asked $u; sleep 3
+out="said=$(slog | grep -c "NEEDS-MAIN: $u asked main plan-$u at") resent=$(grep -c "NEEDS-MAIN: $u asked main" "$T/to-main")"; cp "$T/to-main.keep" "$TM"
+answer $u "$(now)" "go"; waitrc "$SVC"
+check "issue 657: a queued question says NEEDS-MAIN at once" "said=1 resent=0 released=1" "$out released=$(calls "launch plan-judge-sol $u")"
+
+# Issue 640: the Question section is read by fence.sh's heading(), so a question under a setext, multi-line setext or
+# post-HTML-block heading holds the gate (else the Builder launches over an open question), and a setext heading after
+# a closed `None:` section does not reopen it (its title lines are not section lines).
+out=; i=0
+for f in '\nQuestion for the owner\n----------------------\n\nShould the thing be done?\n' \
+  '\nQuestion for\nthe owner\n---------\n\nShould the thing be done?\n' \
+  '\n<div>\n~~~\n\n## Question for the owner\n\nShould the thing be done?\n' \
+  '\n```a`b```\n\n## Question for the owner\n\nShould the thing be done?\n'; do
+  i=$((i + 1)); u=qh$i; mkb $u; printf '%b' "$f" > "$T/plan-raw-$u"; asked $u; sleep 1
+  out+="$(running && echo paused):$(calls "launch plan-judge-sol $u") "; answer $u "$(now)" "go"; waitrc "$SVC"; done
+set -- $out
+check "setext Question heading opens the gate" "paused:0" "$1"
+check "multiline setext Question heading opens the gate" "paused:0" "$2"
+check "Question heading after an HTML block tilde line holds the gate" "paused:0" "$3"
+check "Question heading after a backtick span line holds the gate" "paused:0" "$4"
+u=qh5; mkb $u; printf '\n## Question for the owner\n\nNone: answered.\n\nSteps\n-----\n\n- one\n' > "$T/plan-raw-$u"; drive $u
+check "setext heading after a closed Question section keeps it closed" "11" "$(calls "launch plan-judge-sol $u")$(calls "launch --from-plan $u")"
+# Pass 5 (class-miss): a heading that names the owner question in a form the reader does not take (markup, case,
+# punctuation) would read as "no question" and launch over it, so the gate refuses, naming the line; no judge runs.
+out=; i=0
+for f in '\n## **Question for the owner**\n\nShould we delete the old records?\n' '\n### question for the owner:\n\nShould we?\n'; do
+  i=$((i + 1)); u=qr$i; mkb $u; printf '%b' "$f" > "$T/plan-raw-$u"; drive $u
+  n=$(grep -n -i 'question for the owner' "$T/ws/$u/.claude/plans/$u.md" | cut -d: -f1)
+  out+="$(stopped $u question ".*/$u.md:$n: the heading .*Question for the owner")$(calls "launch plan-judge-sol $u")"; done
+check "an unsupported Question heading refuses with its line" "1010" "$out"
+# A batch whose Plan heading is indented and closed already has its Plan section: none is appended.
+u=qh6; mkb $u $'  ## Plan ##\n\n.claude/plans/qh6.md'; drive $u
+check "Plan heading closed form is seen" "1" "$(grep -c 'Plan' "$T/b/$u-batch.md")"
+
+# Issue 648: a unit name a worktree of another Orca repo already uses is refused at start, before the owner file or any
+# seat; an unreadable repo list warns once and the start goes on.
+git -C "$O" -c user.name=t -c user.email=t@t commit -q --allow-empty -m other
+u=ln4; mkb $u; git -C "$O" worktree add -q "$T/oth/$u"; drive $u
+check "issue 648: same name in another project refuses" "rc=2 said=1 owner=0 author=0" \
+  "rc=$(cat "$T/start-$u.rc") said=$(grep -c "REFUSED: $u: .*/oth/$u in another project already uses this name; pick another unit name" "$T/start-$u.err") owner=$(ls "$SCR/drive-$u.owner" 2>/dev/null | grep -c .) author=$(calls "run plan-author $u")"
+touch "$T/repolist-fails"; u=ln5; mkb $u; drive $u; rm -f "$T/repolist-fails"
+check "issue 648: repo list unreadable starts with warning" "rc=0 warn=1 builder=1" \
+  "rc=$(cat "$T/start-$u.rc") warn=$(grep -c 'the Orca repo list cannot be read' "$T/start-$u.err") builder=$(calls "launch --from-plan $u")"
+
+# Issue 659: the driver logs to <unit>-drive-<epoch>.log, the name board.sh and orca-wait.sh read, ends DONE on a Builder
+# whose turn started, flags one with no started turn 60 s after its launch, and stops at launch with the dispatch command
+# when the seat's launch failed or never proved its turn: it never dispatches again itself.
+E+=(COMMANDECK_LAUNCH_POLL_SECONDS=1)
+brec() { printf 'role=builder\nhandle=term_x%s\ntask=task_%s\nlaunched=%s\nphase=%s\npid=%s\n' "$1" "$1" "$2" "$3" "${4:-}" > "$T/brec-$1"; }
+dlog() { cat "$(ls -t "$SCR/scratchpad/$1"-drive-*.log 2>/dev/null | head -1)" 2>/dev/null; }
+u=ln3; mkb $u; drive $u
+check "issue 659: driver log ends with DONE" "DONE unit=$u stage=launch: Builder launched" "$(dlog $u | tail -1)"
+u=ln1; mkb $u; brec $u "$(date +%s)" dispatched
+echo "UNPROVEN SUBMISSION: no turn start seen for builder on term_x$u (task task_$u)." > "$T/blog-$u"; drive $u
+check "issue 659: unproven Builder launch stops at launch" "stop=1 next=1 log=1" \
+  "stop=$(stopped $u launch "the Builder pane term_x$u opened but no turn started (task task_$u)") next=$(done_of $u | grep -c "next: bash .*dispatch-task.sh task_$u terminal:term_x$u, then read the pane") log=$(dlog $u | grep -c "^STOP unit=$u stage=launch")"
+# The launch's pid lives until the flag is sent, then ends with the phase still launching.
+u=ln2; mkb $u; ( sleep 120 ) & SP=$!; brec $u "$(($(date +%s) - 61))" launching $SP
+( for _ in $(seq 300); do grep -q "FLAG: $u" "$T/to-main" 2>/dev/null && break; sleep 0.2; done; kill $SP ) & KP=$!
+drive $u; wait $KP
+check "issue 659: unstarted Builder is flagged within a minute" "flag=1 said=1 stop=1" \
+  "flag=$(grep -c "FLAG: $u Builder pane term_x$u has no started turn 60 s after launch (task task_$u, phase launching)" "$T/to-main") said=$(dlog $u | grep -c "^FLAG: $u Builder pane") stop=$(stopped $u launch "the Builder pane term_x$u opened but no turn started")"
+E=("${E[@]:0:${#E[@]}-1}")
 E=("${E[@]:0:${#E[@]}-1}")
 
 # Issue 625: a judge may write a finding as `**F1 (P1):**`; the revise brief carries it as it carries `[P1]`.
@@ -329,6 +423,16 @@ u=lc; mkb $u; echo 'VERDICT: NO-GO' > "$T/verdict-$u-plan-judge-sol-1"
 rep $u-plan-judge-sol-1 $'**F1 (P1):** the bold finding gamma\nVERDICT: NO-GO'; drive $u
 check 'a judge finding written as `**F1 (P1):**` reaches the revise brief' "gamma=1 builder=1" \
   "gamma=$(cat "$P"/.claude/briefs/_$u-plan-revise-*.md | grep -c 'the bold finding gamma') builder=$(calls "launch --from-plan $u")"
+
+# test: issue 663 R4: a driver that dies leaves no owner file, so start writes drive-<unit>.args (author spec, judge
+# spec, batch, service name) before the service starts; recover-stalls.sh restarts a dead driver from it.
+u=uargs; mkb $u; rm -f "$T/in-start"; touch "$T/hold-start"
+before=$(($(wc -l < "$T/started")))
+( ud start $(args $u) > "$T/start-$u.out" 2> "$T/start-$u.err" ) &
+for _ in $(seq 150); do [ -e "$T/in-start" ] && break; sleep 0.2; done
+AF=$(paste -sd'|' - < "$SCR/drive-$u.args" 2>/dev/null | sed -E 's/-[0-9]+$/-N/')
+rm -f "$T/hold-start"; wait; waitrc "$(tail -1 "$T/started")"
+check "issue 663: start writes the args file before the service" "$T/b/author-$u.md|$T/b/judge.md|$T/b/$u-batch.md|drive-$u-N" "$AF"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

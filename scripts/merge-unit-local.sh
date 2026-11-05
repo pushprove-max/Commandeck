@@ -107,6 +107,13 @@ merge_time_close() {
 }
 # UNDO_ON_FAIL runs before the FAILED line, so the undo's own line cannot end the log.
 fail() { merge_time_close; ${UNDO_ON_FAIL:-:} || true; echo "FAILED $1: $2" >&2; exit 1; }
+# gate_stop <rc> <step> -- <rc> is a pp_gate_act's status: 2 with a refusing stamp ends the merge here, said; else returns.
+gate_stop() {
+  [ "$1" = 2 ] || return 0
+  pp_gate_check 2>/dev/null && return 0
+  pp_gate_check || true
+  fail "$2" "a gate read refused this run (the stamp lines above); the act was not made"
+}
 ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a git checkout"
 [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ] \
   || fail "step 1 preconditions" "run from the main checkout, not a linked worktree"
@@ -114,6 +121,9 @@ ROOT=$(git rev-parse --show-toplevel) || fail "step 1 preconditions" "not in a g
 HERE=${SELF%/*}
 # The project is the checkout the merge runs in, not the one the plugin lives in.
 COMMANDECK_MAIN=$ROOT . "$HERE/paths.sh"
+# This run's gate refusal stamp (fence.sh): every gate read below writes its refusals there, and each act that cannot
+# be taken back runs through pp_gate_act, which refuses while the stamp holds a line. Removed at the normal end.
+pp_gate_init || exit 1
 # Issue 317: while this merge holds main it writes its state beside the lock (pp_merge_active reads it, so does the
 # main-merge-guard hook and the orchestrator's rules), and removes it, and its place in the queue, on every way out:
 # the traps below end with release. A killed merge leaves a file whose pid is dead, which blocks nothing.
@@ -157,6 +167,8 @@ hold() { CLEANUP_HELD="$WT kept, $1; close the unit's panes and commit or move w
 # `terminal close --worktree --all` reports terminal_close_incomplete for a finished reviewer pane; closing by
 # handle succeeds every time. Reads ARCHIVE, KEPT and MAIN_FILES (step 4's, or --cleanup's own).
 cleanup_step() {
+  # A refused gate read: no cleanup, said, exit 5 (the held path); --cleanup, run again, reads afresh.
+  pp_gate_act : || { hold "a gate read refused this run (above), so nothing was closed or removed"; return 0; }
   # Issue 396: the Builder's task closes first, while pp_task_close can still read its pane; the merge has landed, so a
   # refusal is its printed line, never this script's exit code.
   # #545: with a cut left the unit is not finished, so its Builder's task stays open (unit-close.sh --sweep --apply).
@@ -182,7 +194,9 @@ cleanup_step() {
   else
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
+      tar_rc=0; pp_gate_act tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || tar_rc=$?
+      gate_stop "$tar_rc" "step 4 briefs"
+      [ "$tar_rc" = 0 ] || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
       KEPT=$((KEPT + 1))
     done < <(pp_unit_briefs "$WT/.claude/briefs" "$UNIT")
     [ "${#MAIN_FILES[@]}" = 0 ] || rm -- "${MAIN_FILES[@]}" || fail "step 4 briefs" "could not remove the archived main brief files"
@@ -202,7 +216,7 @@ cleanup_step() {
   if [ -n "$CLEANUP_HELD" ]; then echo "STEP 5 cleanup HELD: $CLEANUP_HELD"
   else bash "${COMMANDECK_SERENA_SHARED:-$(dirname "${BASH_SOURCE[0]}")/serena-shared.sh}" stop "$WT" || true
     # Issue 589: Orca reports whether the removal worked; its answer is named, and a folder left behind fails too.
-    out=$(orca-ide worktree remove --worktree "$WTID" --force 2>&1) \
+    out=$(pp_gate_act orca-ide worktree remove --worktree "$WTID" --force 2>&1) \
       || fail "step 5 cleanup" "Orca did not remove the unit worktree $WT: $(tail -n 1 <<<"$out")"
     [ ! -d "$WT" ] || fail "step 5 cleanup" "Orca answered the removal of $WT but the folder is still there: $(tail -n 1 <<<"$out")"; fi
 }
@@ -232,6 +246,7 @@ if [ "$CLEANUP" = 1 ]; then
   cleanup_step
   merge_time_close total
   echo "DONE unit=$UNIT cleanup=$([ -z "$CLEANUP_HELD" ] && echo removed || echo "HELD: $CLEANUP_HELD")"
+  pp_gate_done
   [ -z "$CLEANUP_HELD" ] || exit 5
   exit 0
 fi
@@ -317,14 +332,15 @@ check_screens() {
       screenshot) [ -z "$a" ] || { files+=("$a"); n=$((n + 1)); } ;;
       none) [ -z "$a" ] || reason=$a ;;
     esac
-  done < <(awk '/^##? /{ on = ($0 ~ /^## Screenshots[[:space:]]*$/); next } on' "$WT/$EVIDENCE" 2>/dev/null | awk '
+  done < <(pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen { if (on) print; next }
+    heading($0) && (hlvl <= 2 || htxt == "Screenshots") { on = (htxt == "Screenshots"); next } on' "$WT/$EVIDENCE" 2>/dev/null | awk '
     function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
     sub(/^- side-by-side: /, "") { i = index($0, "|"); a = trim(substr($0, 1, i - 1)); b = trim(substr($0, i + 1))
       if (i && a != "" && b != "") print "side-by-side\t" a "\t" b; next }
     sub(/^- screenshot: /, "") { print "screenshot\t" trim($0); next }
     sub(/^- none: no visual change:/, "") { print "none\t" trim($0) }')
   [ "$n" -gt 0 ] || [ -n "$reason" ] \
-    || fail "step 1 preconditions" "screen code changed ($first) and $EVIDENCE has no ## Screenshots side-by-side list, screenshot or no-visual-change row"
+    || fail "step 1 preconditions" "screen code changed ($first) and $EVIDENCE has no ## Screenshots side-by-side list, screenshot or no-visual-change row. Add one row under that heading: '- side-by-side: <mockup> | <screenshot>', '- screenshot: <path>' or '- none: no visual change: <reason>'; put screenshots at absolute paths outside the worktree (an untracked image inside it is refused as untracked code)"
   for p in ${files[@]+"${files[@]}"}; do
     case $p in /*) a=$p ;; *) a=$WT/$p ;; esac
     [ -s "$a" ] || fail "step 1 preconditions" "$EVIDENCE names $p, which does not exist"
@@ -368,6 +384,15 @@ check_placeholders() {
 no_holds "step 1 preconditions"
 check_screens
 check_placeholders
+# The brief's two lists the merge acts on are read here, before the squash (never first at step 4): the Closes: lines and
+# the `## Close as shipped` section ($CLOSE_SHIPPED), and the `## Post-merge` section ($POST_LIST). hgate accepts the
+# heading as written, refuses a near miss; a fenced line opens and feeds neither. A fenced example's own Close as shipped
+# list is printed `QUOTED <line>`: its issues are named NOT CLOSED and never closed. A refusal stops the merge here.
+CLOSE_SHIPPED=$({ grep -E '^Closes:' "$BRIEF" || true; pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen {
+    if (/^#+[[:space:]].*[Cc]lose as shipped/) q = 1; else if (/^#/) q = 0; else if (q) print "QUOTED " $0; next }
+  { q = 0 } heading($0) { on = (hgate("^close as shipped$", "closeasshipped", "i has") == 1); next } on' "$BRIEF" || true; })
+POST_LIST=$(pp_gate_awk "$PP_AWK_FENCE"'{ f = fence($0) } f || /^[[:space:]]*(```|~~~)/ { next } !flen && heading($0) { on = (hgate("^Post-merge$", "postmerge", "start") == 1); next } on' "$BRIEF" || true)
+pp_gate_check || fail "step 1 preconditions" "a gate read refused (the stamp lines above); write the heading in the accepted form and merge again"
 echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
 # Builder proof: a Builder runs its own review passes, so its last round file
@@ -453,22 +478,26 @@ check_filed "step 3 filing"
 # list, $ISSUES) is built, as the units mod counts it, and is closed. One the evidence's Issue/Status table marks not
 # built ($PARTIAL) stays open and is named. Any other issue the commit message (#N), a brief's "Closes:" line or its
 # "Close as shipped" heading names, and with no launch list every one, is never closed here: it is named and joins
-# NOT CLOSED, as a close GitHub refuses does, printed last with its command; the script ends with code 3.
+# NOT CLOSED, as a close GitHub refuses does, printed last with its command; the script ends with code 3. The heading's
+# list is read in step 1 ($CLOSE_SHIPPED, fence.sh's hgate: `## Close as shipped` in any case; a fenced line adds none).
+# Each close runs through pp_gate_act: a refused gate read closes nothing and the issue joins NOT CLOSED.
 NOT_CLOSED="" POST_FAILED=""
 close_issues() { # [--dry-run]
-  local listed shipped named n ver c left="" off=""
+  local listed shipped quoted named n ver c left="" off=""
   listed=$(tr -d '#' <<<"$LISTED")
-  shipped=$({ grep -E '^Closes:' "$BRIEF"; awk '/^#+[[:space:]].*[Cc]lose as shipped/ { on = 1; next } /^#/ { on = 0 } on' "$BRIEF"; } | grep -oE '#[0-9]+' | tr -d '#' || true)
+  shipped=$(grep -v '^QUOTED ' <<<"$CLOSE_SHIPPED" | grep -oE '#[0-9]+' | tr -d '#' || true)
+  quoted=$(grep '^QUOTED ' <<<"$CLOSE_SHIPPED" | grep -oE '#[0-9]+' | tr -d '#' || true)
   named=$(grep -oE '#[0-9]+' <<<"$TITLE" | tr -d '#' || true)
   ver=$(jq -r '.version // empty' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null || jq -r '.version // empty' "$ROOT/package.json" 2>/dev/null || true)
   c="Fixed in $(git rev-parse --short=8 HEAD)${ver:+ ($ver)}; ships with the next push."
   [ -r "$ISSUES" ] || echo "step 4 issues: no work-item list at $ISSUES (builder-launch.sh writes it at launch), so the merge closes no issue itself"
-  for n in $(printf '%s\n' $listed $shipped $([ -r "$ISSUES" ] || echo $named) | awk 'NF && !s[$0]++'); do
+  for n in $(printf '%s\n' $listed $shipped $quoted $([ -r "$ISSUES" ] || echo $named) | awk 'NF && !s[$0]++'); do
     if ! printf '%s\n' $listed | grep -x -- "$n" >/dev/null; then off+=" #$n"; NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'
     elif printf '%s\n' $PARTIAL | grep -x -- "#$n" >/dev/null; then left+=" #$n"
     elif [ "${1:-}" = --dry-run ]; then echo "step 4 issues: would close #$n"
-    elif (cd "$ROOT" && gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
-    else NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
+    elif (cd "$ROOT" && pp_gate_act gh issue close "$n" --comment "$c" >/dev/null 2>&1); then echo "step 4 issues: closed #$n"
+    else pp_gate_check || true # a refused gate read is said here
+      NOT_CLOSED+="NOT CLOSED: gh issue close $n --comment $(printf '%q' "$c")"$'\n'; fi
   done
   [ -z "$left" ] || echo "step 4 issues: left open:$left (work items the evidence marks not fully built)"
   [ -z "$off" ] || echo "step 4 issues: not closed:$off (named to close, but not on the launch list of work items; close by hand if shipped)"
@@ -549,9 +578,9 @@ cut_scan() {
           s = substr(s, RSTART + RLENGTH) } }
       END { if (n == 1) printf "%s ", one }' "${BRIEF:-/dev/null}" 2>/dev/null || true)
   fi
-  out=$(awk -v built=" $built" -v out="$2" "$PP_AWK_FENCE"'
+  out=$(pp_gate_awk -v built=" $built" -v out="$2" "$PP_AWK_FENCE"'
     { fz = fence($0) || flen }
-    !fz && /^## / { insec = ($0 ~ /^## Cuts[ \t]*$/) }
+    !fz && heading($0) && hlvl <= 2 { g = hgate("^Cuts$", "cuts", "eq"); if (g == 2) { bad = NR ": " $0; exit 2 } insec = (g == 1) }
     { L[NR] = $0 }
     !fz && insec && match($0, /^- C[0-9]+(-C[0-9]+)?/) && substr($0, RLENGTH + 1, 1) !~ /[0-9A-Za-z]/ {
       head = substr($0, 3, RLENGTH - 2); np = split(head, p, "-"); a = substr(p[1], 2) + 0; b = np > 1 ? substr(p[2], 2) + 0 : a
@@ -560,6 +589,7 @@ cut_scan() {
       nb++; B[nb] = NR; lo[nb] = a; hi[nb] = b; dn[nb] = ($0 ~ / -- done[ \t]*$/)
     }
     END {
+      if (bad != "") { print "REFUSE|" bad; exit 2 }
       for (k = 1; k <= nb; k++) for (n = lo[k]; n <= hi[k]; n++) { seen[n] = 1; if (dn[k] || index(built, " " n " ")) ok[n] = 1 }
       for (n in seen) { count++; if (!(n in ok) && (nx == "" || n + 0 < nx + 0)) nx = n }
       for (k = 1; k <= nb; k++) {
@@ -569,7 +599,7 @@ cut_scan() {
       }
       for (i = 1; i <= NR; i++) print L[i] > out
       print count + 0 "|" nx "|" iss
-    }' "$1") || return 1
+    }' "$1") || { [ "${out%%|*}" != REFUSE ] || fail "step 1 preconditions" "$1:${out#REFUSE|}: a Cuts heading the merge does not read (its cuts would count as none); write it \`## Cuts\`"; return 1; }
   IFS='|' read -r CUT_COUNT CUT_NEXT CUT_ISSUES <<<"$out"
   [ "${CUT_COUNT:-0}" -ge 2 ] || { CUT_NEXT= CUT_ISSUES=; }
 }
@@ -607,8 +637,9 @@ cut_step() {
   if [ -z "$CUT_PLAN" ]; then rm -f "$CUT_TMP"; return 0; fi
   if ! cmp -s "$CUT_TMP" "$ROOT/$CUT_PLAN"; then
     if [ -n "$(git -C "$ROOT" status --porcelain -- "$CUT_PLAN")" ]; then CUT_NOTE+="; plan $CUT_PLAN NOT marked: it has uncommitted edits on main"
+    elif ! pp_gate_check; then CUT_NOTE+="; plan $CUT_PLAN NOT marked: a gate read refused this run (above)"; POST_FAILED=1
     elif cat "$CUT_TMP" > "$ROOT/$CUT_PLAN" && git -C "$ROOT" add -- "$CUT_PLAN" \
-         && git -C "$ROOT" commit -q --only -m "chore(plan): mark the cuts $UNIT built" -- "$CUT_PLAN"; then PLAN_SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD)
+         && pp_gate_act git -C "$ROOT" commit -q --only -m "chore(plan): mark the cuts $UNIT built" -- "$CUT_PLAN"; then PLAN_SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD)
     else CUT_NOTE+="; plan $CUT_PLAN NOT marked: the commit failed"; fi
   fi
   rm -f "$CUT_TMP"
@@ -616,8 +647,8 @@ cut_step() {
   CUT_NOTE="; unit open: next Cut $CUT_NEXT${PLAN_SHA:+; plan commit $PLAN_SHA}$CUT_NOTE"
   spec="next cut: $(basename "$CUT_PLAN" .md) Cut $CUT_NEXT, plan $CUT_PLAN; complete this task when that cut's Builder launches"
   run=${COMMANDECK_RUN:-$(tr -d '[:space:]' < "$PP_RUN_FILE" 2>/dev/null || true)}
-  err=$("$HERE/orca-task-create.sh" --spec "$spec" ${run:+--run "$run"} 2>&1 >/dev/null) \
-    || CUT_NOTE+="; next-cut task NOT created: $(tr '\n' ' ' <<<"${err:-no reason given}" | sed 's/ *$//')"
+  err=$(pp_gate_act "$HERE/orca-task-create.sh" --spec "$spec" ${run:+--run "$run"} 2>&1 >/dev/null) \
+    || { CUT_NOTE+="; next-cut task NOT created: $(tr '\n' ' ' <<<"${err:-no reason given}" | sed 's/ *$//')"; pp_gate_check 2>/dev/null || POST_FAILED=1; }
   return 0
 }
 PLAN_SHA=""
@@ -633,7 +664,7 @@ CLOSE_BODY=$(printf '%s\n' $LISTED | awk -v p="$(tr '\n' ' ' <<<"$PARTIAL")" \
 # main gained since the fork would read as a deletion.
 BASE=$(git merge-base main "$BRANCH")
 echo "STEP 4 size: $(git diff --shortstat "$BASE" "$BRANCH" | sed 's/^ *//')"
-CUT_LIST=$(awk '/^#+[[:space:]]*Files deleted/ { on = 1; next } /^#/ { on = 0 } on' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+CUT_LIST=$(pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen { if (on) print; next } heading($0) { on = (htxt ~ /^Files deleted/); next } on' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # in_brief <path> [file] -- the text of <file> (main's copy of the brief by default) names <path> whole: a space, quote,
 # backtick or parenthesis before it, and after it the same, or sentence punctuation that ends it ("x.ts."). A longer
 # path that holds it (old/x.ts.bak, x.ts~) names another file.
@@ -747,7 +778,9 @@ if [ "$DRY_RUN" = 0 ]; then
   state merge
   trap 'rc=$?; undo_squash; [ "$rc" = 0 ] || merge_relay fail "exit $rc, log $PP_SCRATCH/merge-$UNIT.log"; release' EXIT
   UNDO_ON_FAIL=undo_squash
-  git merge --squash "$BRANCH" >/dev/null || fail "step 4 merge" "squash merge conflicted; resolve in the unit worktree by rebasing onto main"
+  gate_rc=0; pp_gate_act git merge --squash "$BRANCH" >/dev/null || gate_rc=$?
+  gate_stop "$gate_rc" "step 4 merge"
+  [ "$gate_rc" = 0 ] || fail "step 4 merge" "squash merge conflicted; resolve in the unit worktree by rebasing onto main"
   TREE=$(git write-tree)
   # The project's check runs once, on the merged tree, before the commit exists:
   # a red check leaves main where it was and the worktree in place for the fix.
@@ -822,7 +855,9 @@ if [ "$DRY_RUN" = 0 ]; then
     [ ! -e "$WT/.claude/briefs/${f##*/}" ] || cmp -s -- "$f" "$WT/.claude/briefs/${f##*/}" || continue
     # A staged later-cut brief belongs to the next cut, not this merge.
     case "$(basename "$f")" in "$UNIT"-cut[0-9]*) continue ;; esac
-    tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
+    gate_rc=0; pp_gate_act tar -C "$(dirname "$f")" -rf "$ARCHIVE" -- "$(basename "$f")" || gate_rc=$?
+    gate_stop "$gate_rc" "step 4 merge"
+    [ "$gate_rc" = 0 ] || fail "step 4 briefs" "could not append $(basename "$f") to $ARCHIVE"
     KEPT=$((KEPT + 1))
     MAIN_FILES+=("$f")
   done < <(pp_unit_briefs "$ROOT/.claude/briefs" "$UNIT")
@@ -836,7 +871,9 @@ if [ "$DRY_RUN" = 0 ]; then
   no_holds "step 4 merge"
   # --auto's gate holds too, read again under the same lock: a hold or question added during the check counts.
   [ -z "$AUTO" ] || ! HELD=$(pp_merge_held "$UNIT" "$WT") || fail "step 4 merge" "--auto: held since the gate passed: $HELD"
-  if ! git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} ${FILED_MSG:+-m "$FILED_MSG"} {LEDGER_FD}<&-; then
+  gate_rc=0; pp_gate_act git commit -q -m "$TITLE" ${CLOSE_BODY:+-m "$CLOSE_BODY"} ${FILED_MSG:+-m "$FILED_MSG"} {LEDGER_FD}<&- || gate_rc=$?
+  gate_stop "$gate_rc" "step 4 merge"
+  if [ "$gate_rc" != 0 ]; then
     git diff --no-relative --cached --quiet && fail "step 4 merge" "nothing to commit: is $BRANCH already merged, or was main's index emptied during the run?"
     fail "step 4 merge" "git commit refused the squash; the cause is git's or the hook's output above"
   fi
@@ -863,7 +900,10 @@ if [ "$DRY_RUN" = 0 ]; then
   # the list run; any other line is refused with exit 5. A refused or failed step undoes nothing and ends the
   # script with 5. Each step's exit goes into the finished-builds row below.
   POST_LOG=$PP_SCRATCH/post-merge-$UNIT POST_STEPS=() POST_PIDS=() POST_RCS=()
+  POST_OK='allowed: dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>'
   mkdir -p "$PP_SCRATCH"
+  # The list is $POST_LIST, read in step 1: a Post-merge heading in a form the reader does not take stopped the merge there.
+  # Each step starts through pp_gate_act: a refused gate read starts none (the step exits 2, POST_FAILED, exit 5).
   while IFS= read -r line; do
     line=$(sed -E 's/^[[:space:]]*[-*][[:space:]]+//; s/^`(.*)`$/\1/; s/[[:space:]]+$//' <<<"$line")
     [ -n "$line" ] || continue
@@ -871,8 +911,8 @@ if [ "$DRY_RUN" = 0 ]; then
     case $line in
       "dashboard.sh --install"|"main-watch.sh --install") ;;
       "run-shell-tests.sh "*) [[ ${line#* } =~ ^(hooks|scripts)/__tests__/[A-Za-z0-9._-]+\.test\.sh$ ]] \
-        || { echo "step 4 post-merge: not on the post-merge list (exit 5): $line" >&2; continue; } ;;
-      *) echo "step 4 post-merge: not on the post-merge list (exit 5): $line" >&2; continue ;;
+        || { echo "step 4 post-merge: not on the post-merge list (exit 5): $line; $POST_OK" >&2; continue; } ;;
+      *) echo "step 4 post-merge: not on the post-merge list (exit 5): $line; $POST_OK" >&2; continue ;;
     esac
     # Question 4: a dashboard behind a login (issue 263) starts only once its password is set. A dashboard.sh
     # with a login answers --login-check (0: login off or password set); one without has nothing to check.
@@ -881,9 +921,9 @@ if [ "$DRY_RUN" = 0 ]; then
       echo "step 4 post-merge: refused (exit 5): $line: $(tail -n 1 "$POST_LOG-$i.log")" >&2; continue
     fi
     # shellcheck disable=SC2086 # the line's one argument, split on purpose
-    (cd "$ROOT" && bash "$HERE/${line%% *}" ${line#* }) > "$POST_LOG-$i.log" 2>&1 &
+    (cd "$ROOT" && pp_gate_act bash "$HERE/${line%% *}" ${line#* }) > "$POST_LOG-$i.log" 2>&1 &
     POST_PIDS[i]=$!
-  done < <(awk '/^#+[[:space:]]*Post-merge[[:space:]]*$/ { on = 1; next } /^#/ { on = 0 } on && !/^[[:space:]]*(```|~~~)/' "$BRIEF")
+  done <<<"$POST_LIST"
   for i in "${!POST_STEPS[@]}"; do
     [ -z "${POST_PIDS[i]}" ] || { wait "${POST_PIDS[i]}" && POST_RCS[i]=0 || POST_RCS[i]=$?; }
   done
@@ -896,10 +936,15 @@ if [ "$DRY_RUN" = 0 ]; then
   # folder, because uninstall removes the builds folder and a lock on that would not outlive it. A line that
   # cannot be written (the lock held 5 s) costs the list one build, never the merge. The line names this checkout by its real path: the
   # file is named by the folder's name alone, which another checkout elsewhere may share.
+  # Issues 610 and 656: checkRun (green when a test command ran or its result was reused, else none) and closingGo (the
+  # proof's rule is closing GO) are what decision.sh push-ask reads to answer a push ask. Not named check: push-ask
+  # refuses any check but green, so a merge with no testCommand would turn from a manual ask into a refusal.
+  CHECK_RUN=none; case $CHECKED in "check green"*|"check reused"*) CHECK_RUN=green ;; esac
+  CLOSING_GO=false; [ "$(sed -n 's/^Builder proof: .*; rule: //p' <<<"$BUILDER_PROOF" | head -1)" = "closing GO" ] && CLOSING_GO=true
   BUILDS=$HOME/.commandeck/builds/$PP_PROJECT.jsonl
   ( exec 8<"$HOME" && flock -w 5 8 && mkdir -p "${BUILDS%/*}" && jq -cn --arg main "$(cd "$ROOT" && pwd -P)" --arg unit "$UNIT" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$MERGE_SHA" \
-      --argjson post "$POST_JSON" \
-      '{$main, $unit, how: "merged", $at, $sha} + (if $post == [] then {} else {$post} end)' >> "$BUILDS" ) \
+      --argjson post "$POST_JSON" --arg checkRun "$CHECK_RUN" --argjson closingGo "$CLOSING_GO" \
+      '{$main, $unit, how: "merged", $at, $sha, $checkRun, $closingGo} + (if $post == [] then {} else {$post} end)' >> "$BUILDS" ) \
     || echo "finished-builds record not written to $BUILDS: the dashboard will not list $UNIT (ignored)" >&2
   # The token ledger: a Builder's seat is never collected, it ends with this merge, so its row is written here,
   # from the record its launch left, while the worktree's session log can still be found. Never blocks a merge.
@@ -940,6 +985,7 @@ fi
 [ "$DRY_RUN" = 0 ] || [ -z "$CUT_NEXT" ] || CUT_NOTE="; unit open: next Cut $CUT_NEXT (dry run: no plan mark, no task)"
 [ "$DRY_RUN" = 1 ] || pp_unit_event "$UNIT" merge || true
 
+pp_gate_done
 [ "$DRY_RUN" = 0 ] || echo "STEP 5 cleanup: orca-ide terminal close --worktree $WTID --all; orca-ide worktree remove --worktree $WTID --force"
 # A close GitHub refused ends the run with code 3 (merged_end), and an exit 3 prints no total.
 if [ -n "$NOT_CLOSED" ]; then merge_time_close; else merge_time_close total; fi

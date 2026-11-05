@@ -4,6 +4,8 @@
 # What this pins: a plan seat opens only in its unit's planning worktree, and collect with no --marker closes on the
 # last wait's marker, after a silent seat's relaunch too.
 set -uo pipefail
+# Issue 638 (CD1): Orca's pane list is stored for 20 s; these cases change the list between calls, so each reads it anew.
+export PP_PANE_MAP_FRESH=1
 . "$(dirname "$0")/fixtures/seat-setup.sh"
 
 # A plan seat's driver waits on one marker after another and then collects with no --marker: the STOP hints print
@@ -44,6 +46,9 @@ check "a plan-author's prompt names the size line, the Test: line, the Break: li
 # Issue 360: a plan grew the owner's request into requirements nobody ordered; the plan carries the owner's words.
 check "a plan-author's prompt asks for the Owner's words line from the order, every requirement traced to it" 1 \
   "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -c 'The plan opens with an `Owner.s words:` line copied word for word from the order.*every requirement it plans traces to those words or to an addition the owner approved by name')"
+# Issue 657: a plan author that wrote `- none` held the driver for ever; the prompt names the one no-question form.
+check "plan-author spec names None form" 1 \
+  "$(cat "$HOME"/.commandeck/scratch/*/seat-pn-plan-author.txt.prompt 2>/dev/null | grep -cF 'With no question, the section is one line: None: <reason>.')"
 # The planning worktree as a first plan launch leaves it (made and marked): the Orca stand-in makes no worktree.
 PWT=$HOME/orca/workspaces/proj/pu; git -C "$PROJ" worktree add -q "$PWT" && echo pu > "$(git -C "$PWT" rev-parse --absolute-git-dir)/commandeck-plan-of"
 srun launch plan-author pu "$T/plan-spec.md" >"$T/out" 2>&1; check "a plan seat launches in its planning worktree" 0 $?

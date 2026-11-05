@@ -169,6 +169,14 @@ check "the reversal again tells main with the ruling id, marks it seen and corre
 printf '%s\n' '{"id":"r-x-no","utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"ask","question":"Ship x now?","answer":"no"}' >> "$COMMANDECK_RULING_LOG"
 OUT=$(order ship-x no); RC=$?
 check "a new ruling does not replace an answer the owner gave: only an auto-decided one" "1 yes, ship it (r-19991017-111111-p-d4e5f6)" "$RC $(ans ship-x)"
+# Issues 610 and 656: the push answer decision.sh push-ask writes in auto mode ends " (auto-decided)", so the owner's no reverses it.
+QP="Push main to origin? 1 commit(s) since origin/main: aaaaaaaa a1 (check green)"
+dec add push-1999-09-09-aaaaaaaa "$QP" push 'decision.sh push-ask' >/dev/null
+COMMANDECK_MAIN_TOLD=1 dec answer push-1999-09-09-aaaaaaaa 'yes: closing GO and green checks on aaaaaaaa (auto-decided)' >/dev/null 2>&1
+jq -cn --arg q "$QP" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: "r-push-no", utc: $at, source: "ask", question: $q, answer: "no"}' >> "$COMMANDECK_RULING_LOG"
+OUT=$(order push-1999-09-09-aaaaaaaa no); RC=$?
+check "owner no reverses an auto-answered push" "0 no (r-push-no) yes: closing GO and green checks on aaaaaaaa (auto-decided)" \
+  "$RC $(ans push-1999-09-09-aaaaaaaa) $(dec list | jq -r '.[] | select(.id == "push-1999-09-09-aaaaaaaa") | (.history // []) | map(.answer) | join(",")')"
 # Issue 569: an owner's answer to a Builder's question reaches the unit once, through the ledger in decision.sh answer; the
 # note's body ends `Delivery: <line>`, a resumed order repeats the recorded line, and a reversal says the ledger sent nothing.
 DELS=${SEEN%.decisions-seen}.deliveries

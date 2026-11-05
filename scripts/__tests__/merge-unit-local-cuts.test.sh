@@ -108,6 +108,17 @@ for ex in $'  ```\n- C3 example #103\n  ```' $'````\n```\n- C3 example #103\n```
 done
 got+="$(scan $'C1: built\nC2: built' $'- C1 first #101\n- C2 second #102\n````\n```\n- C9 x #109\n````\n- C3 third #103')"; want+="3|3|103|2"
 check "a fenced example in the evidence or the plan builds or adds no cut, in every fence form; a cut after the fence counts" "$want" "$got"
+# Issue 640: a plan whose Cuts heading is written in setext form (`Cuts` over `----`) was read as having no cuts, so a
+# merge with a cut left closed every issue as built and named no next cut.
+d=$(mktemp -d "$TMP/scan.XXXXXX"); mkdir -p "$d/.claude/briefs"; echo 'C1: built' > "$d/.claude/briefs/u-evidence.md"
+printf '# plan\n\nCuts\n----\n\n- C1 first #101\n- C2 second #102\n' > "$d/plan.md"
+got=$( (. "$REAL/scripts/fence.sh"; eval "$SCAN"; WT=$d UNIT=u; cut_scan "$d/plan.md" "$d/out.md" || exit 1; echo "$CUT_COUNT|$CUT_NEXT|${CUT_ISSUES# }") )
+check "Cuts heading in setext form is read" "2|2|102" "$got"
+# Pass 5 (class-miss): `## **Cuts**` (markup, another case, a colon) was read as no Cuts section, so the open cut's
+# issue closed as built; the merge refuses, naming the line.
+printf '# plan\n\n## **Cuts**\n\n- C1 first #101\n- C2 second #102\n' > "$d/plan.md"
+got=$( (. "$REAL/scripts/fence.sh"; eval "$SCAN"; fail() { echo "FAILED $1: $2"; exit 1; }; WT=$d UNIT=u; cut_scan "$d/plan.md" "$d/out.md"; echo "rc=$?") )
+check "an unsupported Cuts heading refuses with its line" "1" "$(grep -c "^FAILED step 1 preconditions: $d/plan.md:3: ## \*\*Cuts\*\*: a Cuts heading" <<<"$got")"
 
 # Pass 4 (class plan-reference-format): a launched brief names its plan as a plain path on its own line under `#### Plan`,
 # not in backticks. The one reader of plan references is paths.sh's pp_brief_plans: the paths under a Plan section

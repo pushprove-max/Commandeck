@@ -14,6 +14,8 @@ mkdir -p "$REPO/scripts" "$T/bin" "$S" "$F" "$T/home" "$T/ws"
 git -C "$REPO" init -q
 cp "$SOURCE/scripts/main-watch.sh" "$SOURCE/scripts/paths.sh" "$SOURCE/scripts/project-main.sh" "$SOURCE/scripts/requirements.sh" \
    "$SOURCE/scripts/host-services.sh" "$SOURCE/scripts/orca-task-create.sh" "$SOURCE/scripts/dashboard_builders.jq" "$REPO/scripts/"
+# paths.sh sources these two (issues 640 and 660).
+cp "$SOURCE/scripts/fence.sh" "$SOURCE/scripts/json-clean.sh" "$REPO/scripts/"
 mkdir -p "$REPO/config"; cp "$SOURCE/config/routing.json" "$REPO/config/"
 # --state (the latest message's marker) answers from `state-<unit>`; nothing there is no marker.
 cat > "$REPO/scripts/read-verdict.sh" <<RV

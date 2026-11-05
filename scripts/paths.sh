@@ -55,6 +55,8 @@ if [ "$REQ_UNAME" = Darwin ] && ! req_check all; then
 fi
 
 . "$(dirname "${BASH_SOURCE[0]}")/project-main.sh"
+# pp_orca_run_id and pp_run_id_of (issue 588) for every run-current reader; definitions only, no name shared with this file.
+. "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/project.sh"
 pp_main_resolve || { echo "paths.sh: no project here: no git checkout found (tried: $PP_TRIED); run it in the project, or set COMMANDECK_MAIN" >&2
   return 1; }
 PP_MAIN_SLUG=$(pp_slug "$PP_MAIN")
@@ -592,7 +594,8 @@ PP_JQ_WAKES='def recipient: ((.payload // null) | if type == "string" then (try 
   // ((.thread_id // "") | if type == "string" and startswith("commandeck:to=") then .[14:] else null end);
 def wk_at: (.created_at // "") | if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
 def wk_key: [.type, .from_handle, .to_handle, recipient, .subject, .body, .payload];
-def wk_required: (.type // "") as $t | any(["question", "decision_gate", "worker_done", "escalation"][]; . == $t);
+def wk_question: (.body // "") | type == "string" and test("^\\s*QUESTION\\b");
+def wk_required: ((.type // "") as $t | any(["question", "decision_gate", "worker_done", "escalation"][]; . == $t)) or wk_question;
 def wk_repeat($all; $relay): wk_at as $t | (.sequence // 0) as $q | wk_key as $key
   | ((.from_handle // "") as $f | any($relay[]; . == $f) | not) and $t != null
     and any($all[]?; wk_at as $u | $u != null and ($u < $t or ($u == $t and (.sequence // 0) < $q)) and $t - $u < 600 and wk_key == $key);
@@ -660,13 +663,17 @@ pp_open_ask() {
   local in
   # --full: Orca 1.4.246's concise view drops created_at, from_handle, thread_id and payload, so every read "cannot tell".
   in=$(orca-ide orchestration inbox --limit 5000 --full --json 2>/dev/null) || return 2
+  in=$(pp_json_clean <<<"$in")  # issue 660: one lone surrogate made the whole inbox "cannot tell"
   PP_OPEN_ASK_ID=$(jq -er --arg ids "$1 $2 ${4:-}" --argjson s "${3:-0}" '
     def ep: .created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     def pl: ((.payload // "{}") | fromjson? // {});
     [$ids | splits("\\s+") | select(. != "") | ., "dispatch:" + .] as $ids
     | .result.messages as $m | if ($m | type) != "array" then error else
+    # Issue 637: a "turn complete" note (a seat'"'"'s final text, posted as a question) asks nothing unless it reads
+    # QUESTION or BLOCKED, the rule orca-wait.sh'"'"'s noisy applies.
     [$m[] | select(.type == "question" and (.thread_id // .id) == .id and ep >= $s
-        and any(.from_handle, pl.taskId, pl.dispatchId; IN($ids[])))
+        and any(.from_handle, pl.taskId, pl.dispatchId; IN($ids[]))
+        and ((.subject // "") | test("turn complete") and (test("turn complete: (QUESTION|BLOCKED)") | not) | not))
       | . as $q | select(any($m[]; .id != $q.id and .thread_id == $q.id) | not)] as $open
     | if $open != [] then ($open | min_by(ep) | .id)
       elif ($m | length) >= 5000 and ([$m[] | ep] | min) >= $s then error
@@ -712,8 +719,12 @@ pp_task_close() { # task status [result-json]
     if [ "$ask" = 0 ]; then
       echo "task $1: its pane $h has open question $PP_OPEN_ASK_ID; answer it with bash $PP_SCRIPTS/answer-worker.sh $h \"<text>\" $PP_OPEN_ASK_ID (or reply in its thread); not settled" >&2
       return 1
-    elif [ "$busy" != 1 ] || [ "$ask" != 1 ]; then
-      echo "task $1: its pane $h is working or could not be read (pane state, a dispatch or inbox); not settled" >&2
+    elif [ "$busy" != 1 ]; then
+      # Issue 636: the pane and the open-question check are named apart, so the refusal says which one to wait on.
+      echo "task $1: its pane $h is working, or its state could not be read; not settled. Rerun once the pane is idle" >&2
+      return 1
+    elif [ "$ask" != 1 ]; then
+      echo "task $1: the open-question check for pane $h could not be read (a dispatch or the Orca message list); not settled. Rerun when Orca answers" >&2
       return 1
     fi
   fi
@@ -762,6 +773,73 @@ pp_worktree_panes() {
   local out; out=$(timeout 10 orca-ide terminal list --json 2>/dev/null) \
     && jq -e . <<<"$out" >/dev/null 2>&1 && jq -r --arg wt "$1" "$PP_PNORM"'($wt | pnorm) as $wt | (.result | if type == "array" then . elif (.terminals | type) == "array" then .terminals else error("not a terminal list") end)[]
       | select((wtp | pnorm) == $wt) | .handle' <<<"$out" 2>/dev/null
+}
+# pp_cut_output <name> -- issue 608 (DF10): a filter in board.sh's form for a dump a coordinator pane's top 10 names.
+# stdin is saved to $PP_SCRATCH/<name>-<pid>.txt; lines print while under 2,800 bytes, then one line names the whole
+# file, which is kept only when the output was cut. COMMANDECK_UNCUT=1 passes everything.
+pp_cut_output() {
+  [ -z "${COMMANDECK_UNCUT:-}" ] || { cat; return 0; }
+  local f=$PP_SCRATCH/$1-$$.txt
+  mkdir -p "$PP_SCRATCH" && cat > "$f" || return 1
+  awk -v f="$f" -v nm="$1" '!cut && n + length($0) < 2800 { print; n += length($0) + 1; next } { cut = 1 }
+    END { if (cut) print nm ": cut at 3,000 bytes (whole: " f ")"; exit !cut }' "$f" || rm -f "$f"
+}
+# pp_send_form <agent> -- issue 585 (DG7): the follow-up address form (handle or dispatch) the send trial recorded for
+# <agent> on this host (uname -s) with an exact pass; nothing and 1 otherwise. A pass on another host proves nothing
+# here: Orca binds Codex on the PC, never on the Mac.
+pp_send_form() {
+  jq -er --arg a "$1" --arg h "$(uname -s)" '.send[$a][$h] | select(.result == "pass") | .form | select(. == "handle" or . == "dispatch")' \
+    "${ONT_RECORD:-$PP_SCRIPTS/../docs/orca-native-trial.json}" 2>/dev/null
+}
+# pp_follow_up <handle> <subject> <text> [--check] -- issue 585: an order to a finished worker by `orchestration send
+# --type dispatch`, the route the send trial proved starts a turn, in the recorded form; Orca's exit code. A pane Orca
+# no longer lists (DG8) is reached by its seat record's task dispatch when this host's closed send passed: the one pane
+# new in the record's worktree after the send is the reopened one; the record gets prior_pane=<old> and its handle,
+# PP_FOLLOW_UP_HANDLE names it. 3, sending nothing (or, closed, finding no single new pane): no pass for the pane's
+# agent, or no route; the caller keeps its typed path or refusal. --check: the gate only, nothing sent.
+pp_follow_up() {
+  local h=$1 ts ps rec agent form d f ws wtn before after new i
+  ts=$(timeout 10 orca-ide terminal list --json 2>/dev/null) || return 3
+  rec=$(grep -lx "handle=$h" "$PP_SCRATCH"/seat-*.txt 2>/dev/null | head -1)
+  pp_fu_dispatch() {
+    d=$(timeout 10 orca-ide orchestration dispatch-show --task "$(sed -n 's/^task=//p' "$rec" 2>/dev/null | tail -1)" --json 2>/dev/null \
+      | jq -r '.result.dispatch.id // empty' 2>/dev/null)
+    [[ $d =~ ^[A-Za-z0-9_-]+$ ]] || { echo "pp_follow_up: no dispatch for the task of $h" >&2; return 1; }
+  }
+  if jq -e --arg h "$h" '(.result | if type == "array" then . else (.terminals // []) end) | any(.[]; .handle == $h)' <<<"$ts" >/dev/null 2>&1; then
+    ps=$(timeout 10 orca-ide worktree ps --json 2>/dev/null) || return 3
+    agent=$(. "$PP_SCRIPTS/codex-helpers.sh"; pane_kind_of "$ts" "$ps" "$h")
+    form=$(pp_send_form "$agent") || return 3
+    [ "${4:-}" != --check ] || return 0
+    if [ "$form" = dispatch ]; then pp_fu_dispatch || return 3; h=dispatch:$d; fi
+    timeout 20 orca-ide orchestration send --to "$h" --type dispatch --subject "$2" --body "$3" --json >/dev/null
+    return
+  fi
+  [ -n "$rec" ] || { echo "pp_follow_up: $h is not listed and no seat record names it" >&2; return 3; }
+  agent=$(sed -n 's/^cmd=//p' "$rec" | tail -1 | grep -owE 'claude|codex' | head -1)
+  [ -n "$agent" ] && { [ -n "${PP_FOLLOW_UP_TRIAL:-}" ] || [ "$(jq -r --arg a "$agent" --arg o "$(uname -s)" 'try .send[$a][$o].closed.result catch ""' \
+    "${ONT_RECORD:-$PP_SCRIPTS/../docs/orca-native-trial.json}" 2>/dev/null)" = pass ]; } \
+    || { echo "pp_follow_up: no closed-pane send pass for ${agent:-an unknown agent} on this host; $h stays closed" >&2; return 3; }
+  [ "${4:-}" != --check ] || return 0
+  pp_fu_dispatch || return 3
+  # The record's worktree, resolved as seat.sh does: another repo's record (seat-<repo>@...) is in that repo's workspace.
+  f=${rec##*/seat-}; ws=$PP_WORKSPACES
+  case $f in *@*) [ -n "${PP_WORKSPACES_GIVEN:-}" ] || ws=$HOME/orca/workspaces/${f%%@*} ;; esac
+  wtn=$(sed -n 's/^worktree=//p' "$rec" | tail -1); [ -n "$wtn" ] || wtn=$(sed -n 's/^unit=//p' "$rec" | tail -1)
+  case $wtn in ''|*/*) echo "pp_follow_up: the record of $h names no bare worktree" >&2; return 3 ;; esac
+  before=$(pp_worktree_panes "$ws/$wtn") || return 3
+  timeout 20 orca-ide orchestration send --to "dispatch:$d" --type dispatch --subject "$2" --body "$3" --json >/dev/null \
+    || { echo "pp_follow_up: Orca refused the send to dispatch:$d" >&2; return 3; }
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    after=$(pp_worktree_panes "$ws/$wtn") && new=$(grep -vxF -f <(printf '%s\n' "$before") <<<"$after" | grep .)
+    [ "$(grep -c . <<<"${new:-}")" != 1 ] || break
+    new=; sleep 1
+  done
+  [ -n "$new" ] || { echo "pp_follow_up: sent to dispatch:$d, but no single new pane is in $ws/$wtn" >&2; return 3; }
+  printf 'prior_pane=%s\n' "$h" >> "$rec"
+  awk -v n="$new" '/^handle=/ { print "handle=" n; next } { print }' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  echo "pp_follow_up: $h reopened as $new" >&2
+  PP_FOLLOW_UP_HANDLE=$new
 }
 
 # A pane waiting on a person: Claude's and Codex's permission and approval
@@ -1053,13 +1131,32 @@ pp_registered() {
   while IFS= read -r q; do [ "$(pp_norm "$q")" != "$m" ] || return 0; done < "$f"
   return 1
 }
+# pp_pane_map -- Orca's pane list (terminal list --json), kept in $PP_SCRATCH/pane-map.json and printed from there while
+# it is under 20 s old (issue 576): the pane lookups below read it, not Orca, each time. An older or unreadable file is
+# read again from Orca and replaced by temp file and rename. PP_PANE_MAP_FRESH=1 reads Orca anyway (to-main.sh's retry
+# after a send to a closed pane). A failed read prints nothing, exits 1 and removes the file: a stale map is never served.
+pp_pane_map() {
+  local f=$PP_SCRATCH/pane-map.json m
+  if [ "${PP_PANE_MAP_FRESH:-}" != 1 ] && m=$(date -r "$f" +%s 2>/dev/null) && [ $(( $(date +%s) - m )) -lt 20 ] \
+    && jq -e 'has("result")' "$f" >/dev/null 2>&1; then cat "$f"; return 0; fi
+  m=$(timeout 10 orca-ide terminal list --json 2>/dev/null) && jq -e 'has("result")' <<<"$m" >/dev/null 2>&1 \
+    || { rm -f "$f"; return 1; }
+  mkdir -p "$PP_SCRATCH" && printf '%s\n' "$m" > "$f.$$" && mv -f "$f.$$" "$f" || rm -f "$f.$$"
+  printf '%s\n' "$m"
+}
 # pp_pane_of <worktree path> -- the live Claude pane in that worktree, found at
 # the moment of asking: a pane's handle changes each time its session restarts,
 # so a handle saved earlier may name a pane that is gone. Nothing when none is live.
 # Live as live_pane_with_title has it: connected and not orphaned.
 # shortcut: a review pane is told from the seat by its launch title; one that retitled itself is not, when a pane is a reviewer by more than its title, match that.
+# A miss on the stored map (issue 576) reads Orca once more: a pane opened since the map was read is found.
 pp_pane_of() {
-  timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$1" \
+  local h; h=$(pp_pane_of_map "$1")
+  [ -n "$h" ] || [ "${PP_PANE_MAP_FRESH:-}" = 1 ] || h=$(PP_PANE_MAP_FRESH=1 pp_pane_of_map "$1")
+  [ -z "$h" ] || printf '%s\n' "$h"
+}
+pp_pane_of_map() {
+  pp_pane_map | jq -r --arg wt "$1" \
     "$PP_PNORM"'($wt | pnorm) as $wt | first((.result | if type == "array" then . else (.terminals // []) end)[]?
       | select((wtp | pnorm) == $wt and .agentIdentity == "claude" and .connected != false and .orphaned != true)
       | select((.title // "") | test("^(Reviewer|Claude reviewer|Codex reviewer|Luna reviewer|Refuter|Certifier|Judge)\\b") | not) | .handle) // empty' 2>/dev/null
@@ -1073,15 +1170,21 @@ pp_pane_of() {
 # alone in its checkout, falls back to pp_pane_of in main's pane folder
 # (COMMANDECK_MAIN_PANE_DIR, else the worktree), for a session that began before
 # the record or whose recorded pane has closed (a handoff the new pane's own start
-# has not yet recorded).
+# has not yet recorded). Last, for main only (issue 638): the live coordinator of the run in $PP_RUN_FILE, the pane
+# main-watch wakes (resolve_main), for a main that runs in another checkout (a host project's).
 pp_seat_pane() {
-  local hs h=; hs=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
+  local hs h= run; hs=$(tail -1 "$PP_SCRATCH/handles/$1" 2>/dev/null)
   [ "$1" = main ] || hs="$hs $(sed -n 's/^handle=//p' "$PP_SCRATCH/seat-${1#unit-}-builder.txt" 2>/dev/null | tail -1)"
-  [ -z "${hs// /}" ] || h=$(timeout 10 orca-ide terminal list --json 2>/dev/null | jq -r --arg wt "$2" --arg hs "$hs" \
+  [ -z "${hs// /}" ] || h=$(pp_pane_map | jq -r --arg wt "$2" --arg hs "$hs" \
     "$PP_PNORM"'($wt | pnorm) as $wt | [(.result | if type == "array" then . else (.terminals // []) end)[]?
       | select((wtp | pnorm) == $wt and .connected != false and .orphaned != true) | .handle] as $live
       | first($hs | splits(" +") | select(. != "" and IN($live[]))) // empty' 2>/dev/null)
   [ -n "$h" ] || [ "$1" != main ] || h=$(pp_pane_of "${COMMANDECK_MAIN_PANE_DIR:-$2}")
+  [ -n "$h" ] || [ "$1" != main ] || { run=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE"); [ -z "$run" ]; } \
+    || { h=$(pp_run_coord "$run") && [ -n "$h" ] && h=$(pp_pane_map | jq -r --arg c "$h" 'first((.result | if type == "array" then . else (.terminals // []) end)[]?
+      | select(.handle == $c and .connected != false and .orphaned != true) | .handle) // empty' 2>/dev/null) || h=; }
+  # A miss on the stored map (issue 576) reads Orca once more before it answers none.
+  [ -n "$h" ] || [ "${PP_PANE_MAP_FRESH:-}" = 1 ] || h=$(PP_PANE_MAP_FRESH=1 pp_seat_pane "$1" "$2")
   [ -z "$h" ] || printf '%s\n' "$h"
 }
 # pp_handle_record <key> <handle> -- the pane that now answers to <key> (main, unit-<unit>), newest last; the 4 before
@@ -1439,11 +1542,13 @@ pp_gh_read() {
 # pp_plan_section_paths <file> -- the plan paths a brief or batch names under its Plan section (a heading `Plan`, any level,
 # up to the next heading), one per line, once each, in order. Backticks are optional: the path is found wherever it stands
 # on a line of the section. Fenced lines (fence.sh's rule) are examples. The launcher reads its plan with this.
+# The Plan heading is a gate (hgate): a marked-up near-miss is refused, closes the section and is on the refusal stamp;
+# the status is pp_gate_awk's (2 on a refusal).
 pp_plan_section_paths() {
   [ -f "$1" ] || return 0
-  awk "$PP_AWK_FENCE"'
+  pp_gate_awk "$PP_AWK_FENCE"'
     fence($0) || flen { next }
-    /^#+[[:space:]]/ { on = ($0 ~ /^#+[[:space:]]+Plan([[:space:]:]|$)/) }
+    heading($0) { on = (hgate("^Plan([[:space:]:]|$)", "plan", "eq") == 1) }
     on { s = $0
       while (match(s, /\.claude\/plans\/[A-Za-z0-9._-]+\.md/)) {
         p = substr(s, RSTART, RLENGTH); if (!seen[p]++) print p
@@ -1452,7 +1557,8 @@ pp_plan_section_paths() {
 # pp_brief_plans <file> -- every plan a brief names: pp_plan_section_paths, plus every backticked
 # `.claude/plans/<name>.md` anywhere (fenced lines are examples), once each, sorted. A plan named only in prose outside a
 # Plan section authorises nothing: it is not read and it is not refused. The merge's deletion check and open-cut finder
-# read plans with this.
+# read plans with this. A refused Plan heading is on the refusal stamp, so the masking pipe below drops no refusal: the
+# entry point's pp_gate_act stops at its next act. Its own backtick awk is not a heading gate.
 pp_brief_plans() {
   [ -f "$1" ] || return 0
   {
@@ -1561,6 +1667,8 @@ pp_argv() { # <headless role> [effort] -- its command, one argv word per line
 #
 # The one fence rule for every reader of a report or plan (PP_AWK_FENCE) lives in fence.sh.
 . "$(dirname "${BASH_SOURCE[0]}")/fence.sh"
+# pp_json_clean (issue 660): a lone surrogate escape cleaned before jq parses Orca or session-log JSON.
+. "$(dirname "${BASH_SOURCE[0]}")/json-clean.sh"
 # pp_ask_lines <reply text> -- every `QUESTION:` or `BLOCKED:` line outside a fence (decoration stripped), in order, by the
 # one fence rule above: a closed fence quotes an example, a blockquote line never starts with the word, and a fence that
 # never closes quotes nothing (a missed question costs more than a spare one). Both Stop hooks read their asks with it.
@@ -1677,13 +1785,15 @@ pp_fix_stated() {
 # between the two commits of main, one per line; the plan's own path is left out, as the install commits it alone. A plan
 # with no step path prints nothing, never every file. Sections follow plan-check.sh's Steps count: only a `## ` heading
 # outside a fence (fence.sh's one rule) changes section; fenced lines and `<!--` comment lines are skipped. Caller: builder-launch.sh (#538).
+# The `## Steps` heading is a gate (hgate): a marked-up near-miss is refused (stamp line) and this returns 2, not 0.
 pp_plan_stale() {
-  local -a steps=(); local p
-  while IFS= read -r p; do steps+=("$p"); done < <(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^##[ \t]/ { s = ($0 ~ /^##[ \t]+Steps[ \t]*$/); next }
-    c || /^[ \t]*<!--/ { c = ($0 !~ /-->/); next } /^#+[ \t]/ { next }
+  local -a steps=(); local p out
+  out=$(pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen { next } heading($0) { if (hlvl <= 2) s = (hlvl == 2 && hgate("^Steps$", "steps", "eq") == 1); next }
+    c || /^[ \t]*<!--/ { c = ($0 !~ /-->/); next }
     s && /^- (new|modify|delete) / { p = $3; gsub(/`/, "", p)
       if (match(p, /\{[^{},]*(,[^{},]*)+\}/)) { n = split(substr(p, RSTART + 1, RLENGTH - 2), a, ","); for (i = 1; i <= n; i++) print substr(p, 1, RSTART - 1) a[i] substr(p, RSTART + RLENGTH) }
-      else print p }' "$3")
+      else print p }' "$3") || return 2
+  while IFS= read -r p; do [ -z "$p" ] || steps+=("$p"); done <<<"$out"
   [ "${#steps[@]}" -gt 0 ] || return 0
   git -C "$PP_MAIN" diff --name-only "$1" "$2" -- "${steps[@]}" ":(exclude)$4"
 }

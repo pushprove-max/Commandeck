@@ -19,7 +19,7 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 RUN=${COMMANDECK_RUN:-}
 . "$(dirname "${BASH_SOURCE[0]}")/paths.sh" || exit 2
 [ -n "$RUN" ] || RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)
-[ -n "$RUN" ] || RUN=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty')
+[ -n "$RUN" ] || RUN=$(pp_orca_run_id)
 [ -n "$RUN" ] || { echo "NO RUN BOUND: orca-ide orchestration run-use --id <run_id> before launching (run-list shows the ids)" >&2; exit 2; }
 ME=${ORCA_TERMINAL_HANDLE:-}
 # Closed only on Orca's own answer, the one its CLI uses for the same question:

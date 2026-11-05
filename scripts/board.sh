@@ -61,7 +61,7 @@ fi
 if [ "$IS_MAIN" = 1 ] && [ "$MP" = 0 ]; then
   [ -z "${ORCA_TERMINAL_HANDLE:-}" ] || [ "$PP_MAIN_COORD" != "$ORCA_TERMINAL_HANDLE" ] \
     || { mkdir -p "$SCRATCH" && printf 'handle=%s\n' "$ORCA_TERMINAL_HANDLE" > "$SCRATCH/main-pane.txt"; }
-  CUR=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty')
+  CUR=$(pp_orca_run_id)
   if [ -n "$CUR" ] && [ "$CUR" != "$RUN" ] && mkdir -p "$SCRATCH" && printf '%s\n' "$CUR" > "$PP_RUN_FILE.$$" && mv "$PP_RUN_FILE.$$" "$PP_RUN_FILE"; then RUN=$CUR; fi
 fi
 
@@ -176,7 +176,7 @@ for wt in "$WS"/*/; do
     [[ $n =~ ^[0-9]+$ ]] && [ $((10#$n)) -ge "$rn" ] && { rn=$((10#$n)); rf=$b; }
   done < <(pp_unit_briefs "$wt/.claude/briefs" "$u" | grep -- '-reports\.md$')
   if [ -n "$rf" ]; then
-    counts=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$rf" | grep -oE 'P[0-3]' | sort | uniq -c | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }')
+    counts=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]|^[[:space:]]*([-*] )?\*\*[A-Za-z0-9.-]+ \(P[0-3]\)' "$rf" | grep -oE 'P[0-3]' | sort | uniq -c | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }')
     echo "      pass r$rn $(sed -n 's/^Pass: //p' "$rf" | head -1): $(grep -v '^[[:space:]]*$' "$rf" | tail -1)${counts:+ ($counts)}"
   fi
 done
@@ -278,6 +278,14 @@ for r in ${SEATS[@]+"${SEATS[@]}"}; do
           "$([ "$un" -le "$rn" ] || echo "; r$un is not finished")" > "$STOPPED/$u-$role"
         exit 0
       fi
+    fi
+    # Issue 658: a Builder that asked main and ended its turn can read `working` in Orca, so it was listed nowhere.
+    # Working, an open question and a session idle 5 minutes or more: it is listed here, with the question to answer.
+    if [ "$role" = builder ] && [ "$st" = working ] && pp_seat_open_ask "$h" "$r"; then
+      idle=$(bash "$PP_SCRIPTS/read-verdict.sh" --state --worktree "$WS/$u" --agent claude --launched "${launched:-0}" 2>/dev/null \
+        | sed -n 's/^idle_seconds=//p')
+      [[ $idle =~ ^[0-9]+$ ]] && [ "$idle" -ge 300 ] && {
+        echo "  $u builder: idle $((idle / 60))m on open question $PP_OPEN_ASK_ID" > "$STOPPED/$u-$role"; exit 0; }
     fi
     [ $rc -eq 5 ] || exit 0
     # tail -n +4 drops read-verdict's own three-line heading; what is left is

@@ -1,0 +1,14 @@
+{
+  "id": "req_1",
+  "ok": true,
+  "result": {
+    "run": {
+      "id": "run_1",
+      "coordinator_handle": "term_main",
+      "status": "active"
+    }
+  },
+  "_meta": {
+    "runtimeId": "rt_1"
+  }
+}

@@ -256,6 +256,9 @@ check "a dashboard step with a login and no password, and an off-list line: the 
   "$(merge pa) $(git -C "$REPO" log --format=%s | grep -c '^feat(pa)')"
 check "the refused dashboard step never ran --install, and the off-list line is named" "0 1" \
   "$(grep -c -- 'dashboard.sh --install' "$TMP/post-calls") $(grep -c 'not on the post-merge list (exit 5): rm -rf ~/x' "$TMP/out")"
+# #653: the template no longer lists the allowed lines, so the refusal must name them or main cannot fix the line.
+check "post-merge refusal lists the allowed lines" 1 \
+  "$(grep 'not on the post-merge list (exit 5): rm -rf ~/x' "$TMP/out" | grep -cF 'allowed: dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>')"
 check "the finished-builds row holds each step's exit" '[{"step":"dashboard.sh --install","exit":5},{"step":"rm -rf ~/x","exit":5}]' "$(row pa)"
 mk pb; post pb $'~~~\ndashboard.sh --install\n  ```\nmain-watch.sh --install\n  ```\n~~~'; go pb; : > "$TMP/post-calls"; : > "$TMP/password-set"
 check "with a password set both steps run (fence lines of either kind are no step), the merge ends 0 and the row shows exit 0 for each" \
@@ -342,6 +345,31 @@ mk ev2; : > "$TMP/orca-calls"; rm -f "$COMMANDECK_SCRATCH/queue/main.jsonl"; R2=
 O2=$(ev 'FYI event: ev2 merge fail'):$(ev 'FYI event: ev2 merge ok'):$(grep -c -- '--to run:.*FYI event' "$TMP/orca-calls")
 rm -f "$TMP/scratch/current-run"
 check "a merge sends main one ok event and a refused merge one fail event; the relay's mailbox none" "0:1:0:0 1:1:0:0" "$R1:$O1 $R2:$O2"
+
+# Issues 610 and 656: the merged row records closingGo (the proof's rule is closing GO) and checkRun (green when a test
+# command ran), the two facts decision.sh push-ask reads to answer a push ask yes. Not named check: push-ask refuses any
+# check but green, so a merge with no testCommand must not write check none.
+mrow() { jq -c --arg u "$1" 'select(.unit == $u and .how == "merged") | {closingGo, checkRun}' "$HOME"/.commandeck/builds/*.jsonl | tail -1; }
+check "no testCommand row records check none, and a closing GO is recorded true" '{"closingGo":true,"checkRun":"none"}' "$(mrow cg)"
+jq -n '.testCommand = "true"' > "$REPO/.claude/commandeck.json"
+mk mg; go mg; STUB_REPLY='VERDICT: GO' pass mg 2 final; merge mg >/dev/null
+check "merged row records closing GO and green check" '{"closingGo":true,"checkRun":"green"}' "$(mrow mg)"
+rm -f "$REPO/.claude/commandeck.json"
+mk fp; go fp; merge fp >/dev/null
+check "closingGo is false on a first-pass GO" '{"closingGo":false,"checkRun":"none"}' "$(mrow fp)"
+
+# Issue 640: the brief's sections are read by fence.sh's heading(): an indented Close as shipped heading still closes its
+# work item, and a closed `## Post-merge ##` heading still runs its line (missed, the step never runs after the merge).
+mk ci; printf '# ci\n\n## The issues\n\n1. #8: one\n\n   ## Close as shipped\n\n- #8\n' > "$COMMANDECK_WORKSPACES/ci/.claude/briefs/ci.md"
+issues ci '[8]'; go ci; : > "$TMP/gh-calls"; merge ci >/dev/null
+check "close as shipped heading indented is read" 1 "$(grep -c '^issue close 8 ' "$TMP/gh-calls")"
+mk pz; printf '# pz\n\n## Post-merge ##\n\n- `main-watch.sh --install`\n' > "$COMMANDECK_WORKSPACES/pz/.claude/briefs/pz.md"; go pz; : > "$TMP/post-calls"; merge pz >/dev/null
+check "Post-merge heading closed is read" 1 "$(grep -c 'main-watch.sh --install' "$TMP/post-calls")"
+# Pass 5 (class-miss): a Post-merge heading in markup or another case ran no step and said nothing. Pass 9: the list is
+# read in step 1, so the refusal, with its line, stops the merge before the squash; no step runs.
+mk pq; printf '# pq\n\n## **Post-merge**\n\n- `main-watch.sh --install`\n' > "$COMMANDECK_WORKSPACES/pq/.claude/briefs/pq.md"; go pq; : > "$TMP/post-calls"
+check "an unsupported Post-merge heading refuses with its line" "1 1 0" \
+  "$(merge pq) $(grep -m1 -c 'pq.md:3: the heading `## \*\*Post-merge\*\*`' "$TMP/out") $(grep -c 'main-watch' "$TMP/post-calls")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -84,5 +84,29 @@ chmod +x "$B2/orca-ide"
 (cd "$PROJ" && COMMANDECK_SCRATCH=$T/scratch PATH="$B2:$PATH" bash "$REAL/scripts/dispatch-task.sh" task_1 terminal:h1 --keep-task </dev/null >"$T/out" 2>&1)
 check "a pointer dispatch-task.sh types to a Codex pane carries the spec's seat tag" 'Seat tag seat-judge-7-8' "$(grep -o 'Seat tag seat-judge-7-8' "$T/typed" 2>&1)"
 
+# Issue 585 (CG3, DG8): a seat whose pane was closed was refused a revision ("not live"), so main relaunched it and lost
+# its context. With this host's closed send passed (the trial record, $T/rec5.json), the revision goes to the old task's
+# dispatch, Orca reopens the pane, and the record follows the new handle (prior_pane= keeps the old one for the
+# open-question check). Orca here: h_old is gone; a send to dispatch:ctx_o lists h_new in the seat's worktree.
+SC5=$(ls -d "$HOME/.commandeck/scratch/"*/ | head -1); WT5=$HOME/orca/workspaces/proj/seat-unit
+printf 'handle=h_old\ntask=task_o\nrole=plan-judge-sol\nunit=seat-unit\nworktree=seat-unit\ncmd=claude --model x\nlaunched=1\n' > "${SC5}seat-seat-unit-plan-judge-sol.txt"
+jq -n --arg h "$(uname -s)" '{send: {claude: {($h): {result: "pass", form: "handle", closed: {result: "pass"}}}}}' > "$T/rec5.json"
+mv "$BIN/orca-ide" "$BIN/orca-fix"; : > "$T/list5"; : > "$T/sends5"; : > "$T/sent"
+cat > "$BIN/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "terminal list"*) jq -Rn '{ok: true, result: {terminals: [inputs | split(" ") | {handle: .[0], tabId: "t5", leafId: "l1", agentIdentity: "claude", worktreePath: .[1]}]}}' < "$T/list5" ;;
+  "orchestration dispatch-show"*) echo '{"ok":true,"result":{"dispatch":{"id":"ctx_o"}}}' ;;
+  "orchestration send"*) echo "\$*" >> "$T/sends5"; [[ " \$* " != *" --to dispatch:ctx_o "* ]] || echo "h_new $WT5" >> "$T/list5"; echo '{"ok":true,"result":{}}' ;;
+  *) exec "$BIN/orca-fix" "\$@" ;;
+esac
+EOF
+chmod +x "$BIN/orca-ide"
+OUT=$(export ONT_RECORD=$T/rec5.json; run revise plan-judge-sol seat-unit "Fix F1." 2>&1); RC=$?
+R5=${SC5}seat-seat-unit-plan-judge-sol.txt
+check "revise of a closed seat reopens it by dispatch" "0:1:h_new:h_old:task_1:0" \
+  "$RC:$(grep -c -- '--to dispatch:ctx_o .*Fix F1. Task id task_1' "$T/sends5"):$(sed -n 's/^handle=//p' "$R5"):$(sed -n 's/^prior_pane=//p' "$R5"):$(sed -n 's/^task=//p' "$R5"):$(grep -c 'Fix F1' "$T/sent")"
+mv "$BIN/orca-fix" "$BIN/orca-ide"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

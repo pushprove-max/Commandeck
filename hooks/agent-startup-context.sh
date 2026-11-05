@@ -136,12 +136,13 @@ elif [ "$COS" = 1 ]; then
   # it has something, which wakes the pane.
   RULINGS=$(. "${BASH_SOURCE[0]%/*}/lib/project.sh" && pp_project && printf '%s' "${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}")
   cat <<EOF
-# Wake-ups: run each in the background (run_in_background) and start it again when it exits. A turn may not end without all five running.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-inbox.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: main's messages for you or the owner.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner its question word for word with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/relay-order.sh <id> '<the owner's words verbatim>'\`: it answers the decision, tells main with the ruling id and marks it seen.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-alerts.sh\` and \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-limit.sh\`: dashboard alerts and the 7-day limit. Tell the owner, then append the alert id to ${COS_STATE%.md}.alerts-seen
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-watch-units.sh\`: a unit idle after its last commit with no closing GO. Tell the owner; it marks the unit seen itself.
-- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-check.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: every 50 minutes, one line: watchers down (start each again), messages missed (read them in the Orca inbox), held FYI notes, how long the owner has been quiet. A line that says "nothing for the owner": start cos-check.sh again, then end the turn with no text.
+# Wake-ups: run each in the background (run_in_background) and start it again only when it exits. A turn may not end without both running.
+- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-supervise.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: runs every watcher, restarts one that dies, and types each find into this pane itself; it exits only for a watcher that keeps dying or a find it could not type, with one line. Each kind of line:
+  - From \`scripts/cos-watch-inbox.sh\`: main's messages for you or the owner.
+  - From \`scripts/cos-watch-decisions.sh\`: open decisions. Ask the owner its question word for word with the question picker, then run \`bash $(printf '%q' "$PLUGIN")/scripts/relay-order.sh <id> '<the owner's words verbatim>'\`: it answers the decision, tells main with the ruling id and marks it seen.
+  - From \`scripts/cos-watch-alerts.sh\` and \`scripts/cos-watch-limit.sh\`: dashboard alerts and the 7-day limit. Tell the owner, then append the alert id to ${COS_STATE%.md}.alerts-seen
+  - From \`scripts/cos-watch-units.sh\`: a unit idle after its last commit with no closing GO. Tell the owner; it marks the unit seen itself.
+- \`bash $(printf '%q' "$PLUGIN")/scripts/cos-check.sh${ORCA_TERMINAL_HANDLE:+ $ORCA_TERMINAL_HANDLE}\`: every 50 minutes; it prints one line only when something needs you: watchers down (start the supervisor again, or the one named), messages missed (read them in the Orca inbox), held FYI notes, how long the owner has been quiet.
 # Tell the owner only what needs the owner (a question, an ask, a decision). A reply that is only verdicts, still-running lines or progress counts is held once by the Stop hook.
 # Read at most the last 600 characters of a watcher's output: a longer wake is one line naming the file that holds it. A task that would read more than about 10 KB you will not need again goes to a subagent that answers in at most 40 lines.
 # A build order is the owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one, nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.

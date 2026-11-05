@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.72.0-111111?style=flat-square" alt="Version 0.72.0">
+  <img src="https://img.shields.io/badge/version-0.73.0-111111?style=flat-square" alt="Version 0.73.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -32,6 +32,7 @@ It splits the work into roles:
 - **Fast lane and Research lane.** Two standing worktrees setup makes beside the
   relay: the Fast lane does small work and has it reviewed before main lands
   that exact commit; the Research lane answers questions and never builds.
+  Each lane pane watches its own inbox, so a message to an idle lane starts a turn.
 
 You choose the work, answer decisions and push the finished commits. The
 merge is local; Commandeck never pushes.
@@ -262,7 +263,7 @@ and offers a small demo build. Every question in detail:
 | `/commandeck:revoke` | Take out one of setup's settings in an Orca profile, or keep your own value |
 | `/test-audit <folder>... [basic\|full\|prune] [N agents]` | A report of tests that are redundant, slow or missing; it changes no test. `prune` proposes only removals and merges, each naming the test that still covers it |
 | `/autodecide on\|off\|status` | Let the relay pane decide for you while you are away |
-| `/units` | Print the live units, merges and test runs; `/units band\|pane\|status on\|off` turns a view on or off for the session |
+| `/units` | Print the live units, merges and test runs; `/units band\|pane\|status on\|off` turns a view on or off for the session. In the pane, `1`-`9` expand a unit to show its last tool calls, and `d`, `t`, `l` move decisions, the timeline or the unit log first; press again to undo |
 
 Setup adds `/test-audit` as a project workflow. `/autodecide` is in the seats
 `autoDecideSeats` names; it shows a band and a status-line count while it is

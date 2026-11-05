@@ -237,5 +237,42 @@ D add pick-1999-01-01 'Which logo colour?' none AskUserQuestion >/dev/null; : > 
 DA answer pick-1999-01-01 'blue' >/dev/null
 check "an answer to an AskUserQuestion decision sends main nothing" "0 0" "$(grep -c . "$T/tm.log") $(grep -c . "$T/err")"
 
+# Issue 662: the host project's main writes ledger rows with a `unit` key; a row with keys beyond the seven reads, so a
+# plan answer recorded there releases the driver's gate. A row missing one of the seven still makes the ledger malformed.
+LG=$T/p/.claude/metrics/decisions.jsonl; cp "$LG" "$T/ledger.bak"
+row() { jq -cn --arg id "$1" '{id: $id, question: "q (plan 0123abcd)", proposedDefault: "d", source: "main", askedAt: "2000-01-01T00:00:00Z", answeredAt: "2000-01-02T00:00:00Z", answer: "yes"}' | jq -c "$2"; }
+row plan-host '. + {unit: "host"}' >> "$LG"
+check "issue 662: extra field row reads" "0 yes" "$(D list > "$T/out" 2>/dev/null; echo $?) $(jq -r '.[] | select(.id == "plan-host") | .answer' "$T/out")"
+row plan-bad 'del(.answer)' >> "$LG"
+check "issue 662: missing field still refuses" "1 1" "$(D list >/dev/null 2>"$T/err"; echo $?) $(grep -c 'malformed ledger' "$T/err")"
+cp "$T/ledger.bak" "$LG"
+
+# Issues 610 and 656: with the auto-answer mode on, a push ask is answered yes by script only when every listed commit's
+# merged row records a closing GO and a green check run and the newest row is main's tip; any other ask stays open for the
+# owner. The script never pushes: origin stays where it was.
+AUTO=$T/p/.claude/metrics/autodecide.on; ALOG=$T/autolog.md; : > "$ALOG"; echo "$ALOG" > "$AUTO"
+G() { git -C "$T/p" -c user.name=t -c user.email=t@t "$@"; }
+mrow() { jq -cn --arg m "$T/p" --arg s "$(G rev-parse HEAD)" --arg u "$1" --argjson x "$2" '{main: $m, unit: $u, how: "merged", at: "1999-01-01T00:00:00Z", sha: $s} + $x' >> "$B"; }
+pstate() { D list | jq -r --arg id "push-$(date -u +%Y-%m-%d)-$(G rev-parse --short=8 HEAD)" '[.[] | select(.id == $id)] | if length == 0 then "none" else (.[0].answer // "open") end'; }
+G push -q origin main; ORIGIN=$(git -C "$T/origin.git" rev-parse main)
+G commit -q --allow-empty -m 'feat(a1): auto'; SA=$(G rev-parse --short=8 HEAD); mrow a1 '{"closingGo": true, "checkRun": "green"}'
+D push-ask >/dev/null 2>&1
+check "push ask with GO and green is answered yes" "yes: closing GO and green checks on $SA (auto-decided) 1 $ORIGIN" \
+  "$(pstate) $(grep -c '^### ' "$ALOG") $(git -C "$T/origin.git" rev-parse main)"
+G push -q origin main
+G commit -q --allow-empty -m 'feat(a2): no go'; mrow a2 '{"closingGo": false, "checkRun": "green"}'
+D push-ask >/dev/null 2>&1
+check "push ask without closing GO stays open" "open" "$(pstate)"
+G push -q origin main
+G commit -q --allow-empty -m 'feat(a3): no check'; mrow a3 '{"closingGo": true}'
+D push-ask >/dev/null 2>&1; R1=$(pstate)
+G push -q origin main
+G commit -q --allow-empty -m 'feat(a4): checkRun none'; mrow a4 '{"closingGo": true, "checkRun": "none"}'
+D push-ask >/dev/null 2>&1; R2=$(pstate)
+G push -q origin main
+G commit -q --allow-empty -m 'feat(a5): red'; mrow a5 '{"closingGo": true, "checkRun": "green", "check": "red"}'
+D push-ask >/dev/null 2>&1
+check "push ask with red or absent check stays open" "open open 1 none" "$R1 $R2 $? $(pstate)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

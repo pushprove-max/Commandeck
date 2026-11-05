@@ -26,6 +26,8 @@
 # remains incomplete.
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
+# pp_json_clean (issue 660), read before the --state dispatch: paths.sh is sourced only after it.
+. "$(dirname "${BASH_SOURCE[0]}")/json-clean.sh" || exit 1
 
 HANDLE="${1:-}"
 CONTEXT_LINES="${2:-120}"
@@ -168,7 +170,8 @@ reduce (inputs | select(startswith("{\"type\":\"api-request") | not) | (fromjson
 session_state() { # provider file task marker -- one JSON object
   local prog=$STATE_JQ_CLAUDE
   [ "$1" = codex ] && prog=$STATE_JQ_CODEX
-  jq -ncR --arg task "$3" --arg marker "$4" "$STATE_JQ_DEFS $prog" 2>/dev/null < "$2" \
+  # Issue 660: a row holding a lone surrogate escape would set .bad and pin the state at unknown.
+  pp_json_clean "$2" 2>/dev/null | jq -ncR --arg task "$3" --arg marker "$4" "$STATE_JQ_DEFS $prog" 2>/dev/null \
     || echo '{"state":"unknown","reason":"unreadable log"}'
 }
 
@@ -466,7 +469,7 @@ fetch() {  # $1 = accumulated | screen
     orca-ide terminal read --terminal "$HANDLE" --screen --json 2>/dev/null
   else
     orca-ide terminal read --terminal "$HANDLE" --cursor 0 --limit 300000 --json 2>/dev/null
-  fi | jq -r '.result.terminal.tail // empty' | clean
+  fi | pp_json_clean | jq -r '.result.terminal.tail // empty' | clean
 }
 
 # DONE is for a read-only pane that reports rather than judges -- a batch of the
@@ -667,7 +670,7 @@ CLAUDE_PROMPT='def prompt: .type == "user" and .isMeta != true
            | any(.[]; sub("^(\\s*<(?<t>task-notification|system-reminder|local-command-[a-z]+)>[\\s\\S]*?</\\k<t>>)+"; "") | test("\\S")));'
 claude_report() {
   # Claude Code 2.1.300's api-request rows hold no report: dropped before jq slurps the log.
-  grep -v '^{"type":"api-request' "$1" 2>/dev/null | jq -rs --argjson n "$ORDINAL" '
+  pp_json_clean "$1" 2>/dev/null | grep -v '^{"type":"api-request' | jq -rs --argjson n "$ORDINAL" '
     # As in codex_report: the latest answer (ordinal 0) follows the last prompt.
     # A prompt is a user row with typed text; a tool result is not one, nor is
     # a row holding only notices the harness writes. Text after a notice in the
@@ -742,7 +745,7 @@ if [ -n "$WTP" ] && { [ "$AGENT" = codex ] || [ -z "$AGENT" ]; }; then
   # Newest first, so a relaunched seat (same spec) is read from its latest session.
   if [ "${#CODEX_LOGS[@]}" -gt 0 ]; then
     f=${CODEX_LOGS[0]}
-    LOG_FOUND=1; SOURCE="codex-log $f"; TEXT=$(codex_report "$f"); VERDICT_LINE=$(find_verdict "$TEXT")
+    LOG_FOUND=1; SOURCE="codex-log $f"; TEXT=$(codex_report <(pp_json_clean "$f")); VERDICT_LINE=$(find_verdict "$TEXT")
   fi
 fi
 if [ -n "$WTP" ] && { [ "$AGENT" = claude ] || [ -z "$AGENT" ]; } && [ "$LOG_FOUND" -eq 0 ]; then

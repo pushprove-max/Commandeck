@@ -45,6 +45,30 @@ check "a reply in the thread lets the working pane's verdict settle: exit 0, the
 check "the record says the task is settled" "1" "$(grep -c '^settled=task_1$' "$REC")"
 col
 check "a rerun closes no task a second time" "1" "$(closes)"
+# Issue 647: a finding written as `**F2 (P2):**` reaches collect's summary, as `[P2]` does.
+printf '**F2 (P2):** cite the bold line\nVERDICT: GO\n' > "$T/screen"; col
+check "collect summary shows bold P2 finding" 1 "$(grep -c 'F2 (P2):\*\* cite the bold line' "$T/out")"
+printf 'Done.\nVERDICT: GO\n' > "$T/screen"
+# Issues 637 and 636, on pp_task_close itself: a seat record for task_cb on pane h1, launched before the inbox's rows.
+ptc() { touch "$T/pane-up"; (cd "$PROJ" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u COMMANDECK_WORKSPACES -u COMMANDECK_SCRATCH PATH="$BIN:$PATH" \
+  bash -c '. "$1/scripts/paths.sh" && pp_task_close task_cb completed' _ "$REAL" 2>"$T/ptc.err"); echo $?; }
+printf 'handle=h1\ntask=task_cb\nrole=builder\nunit=cb\nlaunched=%s\n' "$(( $(date +%s) - 120 ))" > "${REC%/*}/seat-cb-builder.txt"
+tc() { jq -nc --arg at "$NOW" --arg s "$1" '{messages: [{id: "msg_t1", type: "question", from_handle: "h1", thread_id: null, created_at: $at, subject: $s}]}' | inbox; }
+rm -f "$T/ps-working"; tc "claude turn complete (cb)"
+check "issue 637: turn-complete question settles a finished seat" 0 "$(ptc)"
+tc "claude turn complete: QUESTION (cb)"
+check "issue 637: a turn-complete QUESTION note still holds the settle" "1 1" "$(ptc) $(grep -c 'open question msg_t1' "$T/ptc.err")"
+# Issue 660: a row whose text holds a lone surrogate escape made jq refuse the whole inbox, so every settle read
+# "cannot tell" and refused a finished seat. The row is cleaned, not dropped: the turn-complete note still reads.
+printf '%s\n' '{"ok":true,"result":{"messages":[{"id":"msg_t1","type":"question","from_handle":"h1","thread_id":null,"created_at":"'"$NOW"'","subject":"claude turn complete (cb)","body":"done \ud83d cut"}]}}' > "$T/inbox.json"
+check "settle reads an inbox with lone surrogate" 0 "$(ptc)"
+echo '{"ok":true,"result":{"messages":[]}}' > "$T/inbox.json"; touch "$T/ps-working"
+check "issue 636: working pane refusal names the pane" "1 1 0" \
+  "$(ptc) $(grep -c 'its pane h1 is working, or its state could not be read' "$T/ptc.err") $(grep -c 'inbox' "$T/ptc.err")"
+rm -f "$T/ps-working"; echo 'not json' > "$T/inbox.json"
+check "issue 636: an unreadable open-question check is named apart from the pane" "1 1 0" \
+  "$(ptc) $(grep -c 'the open-question check for pane h1 could not be read' "$T/ptc.err") $(grep -c 'is working' "$T/ptc.err")"
+echo '{"ok":true,"result":{"messages":[]}}' > "$T/inbox.json"; touch "$T/ps-working"; rm -f "${REC%/*}/seat-cb-builder.txt"
 
 # Issue 598: main revises a plan author whose pane still reads working once its latest answer holds its finish. The
 # author's record is on the same pane; the Builder's record is gone, so every read is the author's own.

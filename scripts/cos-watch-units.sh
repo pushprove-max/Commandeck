@@ -42,9 +42,10 @@ poll() {
     f=$PP_SCRATCH/merge-$u.log
     [ ! -e "$f" ] || [ $((now - $(mtime "$f"))) -ge $quiet ] || continue
     [ -z "$(find "$wt" \( -name .git -o -name node_modules \) -prune -o -type f ! -path "$wt/.claude/builder-events.jsonl" -mmin -12 -print -quit 2>/dev/null)" ] || continue
-    echo "$u $sha" >> "$SEEN"
     why="no round file yet"; [ -z "$top" ] || why="newest round r$top is not a GO at or after it"
+    # Printed before the seen mark (issue 655): a kill between them leaves the line in the wake file, never a mark alone.
     echo "IDLE $u: last commit $sha $(( (now - ct) / 60 )) min ago; $why; nothing changed for 12 min"
+    echo "$u $sha" >> "$SEEN"
     found=1
   done
   [ "$found" = 1 ]

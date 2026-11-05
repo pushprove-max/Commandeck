@@ -156,5 +156,15 @@ check "a built unit whose later plan seat has its verdict still shows waiting on
 check "a built unit whose plan seat was revised after an old verdict shows planning" planning "$(stg pr3)"
 check "a Builder's own planning seat, launched before its first stage, leaves it waiting on main" waiting-main "$(stg pr4)"
 
+# Issue 621, DH8: a judge's NO-GO not yet revised is a plan being re-judged by the next author, so the built unit is Planning.
+mkdir -p "$WS/pr5/.claude" && touch "$WS/pr5/.git"; echo '{"env":{"COMMANDECK_BUILDER":"1"}}' > "$WS/pr5/.claude/settings.local.json"
+printf '%s\n' "{\"event\":\"tool-start\",\"ts\":\"$B1\",\"tool\":\"Read\",\"kind\":\"tool\",\"use\":\"t1\"}" "{\"event\":\"tool-end\",\"ts\":\"$B1\",\"use\":\"t1\"}" > "$WS/pr5/.claude/builder-events.jsonl"
+pseat pr5 $((NOW - 600)) $'verdict=VERDICT: NO-GO\n'
+PS=$(jq -cn --arg ws "$WS" '{result: {worktrees: [{path: "\($ws)/pr5", agents: [{agentType: "claude", state: "idle", updatedAt: 0}]}]}}')
+printf '#!/usr/bin/env bash\ncase "$*" in "orchestration task-list"*) echo %s ;; "worktree ps"*) echo %q ;; *) exit 1 ;; esac\n' \
+  "'{\"result\":{\"tasks\":[]}}'" "$PS" > "$BIN/orca-ide"
+dash
+check "a built unit whose plan judge said NO-GO shows planning" planning "$(stg pr5)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

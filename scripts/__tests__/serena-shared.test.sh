@@ -214,6 +214,8 @@ PY
   check "the bridge answers a broken reply with an error, ends its session, and never hangs a seat (issue 470)" "" "$MISS"; MISS=
 else
   echo "NOT RUN: the serena-bridge.py cases need the Python behind an installed serena (none on this host)"
+  SKIPPED="SKIPPED (no Serena python): the server's broken answer reaches the caller as an error; and the bridge stays up for the next call; a seat that leaves gets its answer and exits clean; and ends its session on the server; a seat that leaves after a broken answer still ends the bridge within seconds of an unanswered goodbye; the bridge refuses to start with no address"
+  echo "$SKIPPED"
 fi
 
 # D26 (#540): the pane-budget gate skips its server check for Serena's read-only tools and the Codex wrapper enables only
@@ -224,6 +226,100 @@ CODEX_NAMES=$(grep -o 'enabled_tools=\[[^]]*\]' "$REAL/scripts/codex-no-helpers/
 check "the Codex wrapper lists the same six read-only Serena tools as the gate" \
   "find_declaration,find_implementations,find_referencing_symbols,find_symbol,get_diagnostics_for_file,get_symbols_overview:$CODEX_NAMES" "$GATE_NAMES:$CODEX_NAMES"
 
+# CC2 (#649): Serena keys its project registry by folder name, so /a/app and /b/app in two repositories collide in one
+# home. The stub records the SERENA_HOME it was started with. The user's own ~/.serena is the source of each home.
+unset SERENA_HOME
+SH=$HOME/.serena; mkdir -p "$SH/language_servers" "$TMP/r1/app" "$TMP/r2/app" "$TMP/bin2"
+echo ls-binary > "$SH/language_servers/pyright.txt"
+printf 'language_backend: LSP\nproject_serena_folder_location: "%s/meta/$projectFolderName/.serena"\n' "$TMP" > "$SH/serena_config.yml"
+git init -q "$TMP/r1/app"; git init -q "$TMP/r2/app"
+printf '#!/bin/bash\necho "${SERENA_HOME-}" >> "$STARTS.home"\n%s\n' "$(sed 1d <<<"$LISTEN")" > "$TMP/bin2/serena"; chmod +x "$TMP/bin2/serena"
+: > "$STARTS.home"
+PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" >/dev/null 2>&1; PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r2/app" >/dev/null 2>&1
+H1=$(sed -n 1p "$STARTS.home") H2=$(sed -n 2p "$STARTS.home")
+sub "each server is started with a home of its own" 2 "$(grep -c . "$STARTS.home")"
+sub "the two homes differ" 1 "$([ -n "$H1" ] && [ "$H1" != "$H2" ] && echo 1 || echo 0)"
+P1=$(sed -n 's/^project_serena_folder_location: "\(.*\)"$/\1/p' "$H1/serena_config.yml" 2>/dev/null)
+P2=$(sed -n 's/^project_serena_folder_location: "\(.*\)"$/\1/p' "$H2/serena_config.yml" 2>/dev/null)
+sub "each home pins a project folder of its own repository" "1 1 1" \
+  "$([[ $P1 == "$TMP/meta/"*-app/.serena ]] && echo 1) $([[ $P2 == "$TMP/meta/"*-app/.serena ]] && echo 1) $([ "$P1" != "$P2" ] && echo 1)"
+check "same-named folders in two repos get distinct homes" "" "$MISS"; MISS=
+bash "$S" stop "$TMP/r1/app"; bash "$S" stop "$TMP/r2/app"
+
+# pass 1 (DC7): the folder Serena used before the per-unit home keeps its settings and memories. A path-keyed template
+# (no $projectFolderName) is kept as it is, so Serena finds the same folder; a $projectFolderName template's old folder
+# is copied once into the repository's own folder.
+cp "$SH/serena_config.yml" "$TMP/cfg.keep"
+printf 'project_serena_folder_location: "%s/pm$projectDir/.serena"\n' "$TMP" > "$SH/serena_config.yml"
+mkdir -p "$TMP/pm$TMP/r1/app/.serena/memories"; echo 'languages: [python]' > "$TMP/pm$TMP/r1/app/.serena/project.yml"
+: > "$STARTS.home"; PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" >/dev/null 2>&1; HP=$(sed -n 1p "$STARTS.home")
+sub "a path-keyed template is kept as it is" 1 "$(grep -cxF "project_serena_folder_location: \"$TMP/pm\$projectDir/.serena\"" "$HP/serena_config.yml" 2>/dev/null)"
+bash "$S" stop "$TMP/r1/app"
+cp "$TMP/cfg.keep" "$SH/serena_config.yml"; rm -rf "$TMP/meta"
+mkdir -p "$TMP/meta/app/.serena/memories"; echo 'languages: [go]' > "$TMP/meta/app/.serena/project.yml"; echo note > "$TMP/meta/app/.serena/memories/m.md"
+: > "$STARTS.home"; PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" >/dev/null 2>&1; HC=$(sed -n 1p "$STARTS.home")
+PC=$(sed -n 's/^project_serena_folder_location: "\(.*\)"$/\1/p' "$HC/serena_config.yml" 2>/dev/null)
+sub "the shared-by-name folder is copied into the repository's own" "languages: [go] note" "$(cat "$PC/project.yml" 2>/dev/null) $(cat "$PC/memories/m.md" 2>/dev/null)"
+echo 'languages: [rust]' > "$PC/project.yml"; bash "$S" stop "$TMP/r1/app"
+PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" >/dev/null 2>&1
+sub "and is copied once, so later edits stay" "languages: [rust]" "$(cat "$PC/project.yml" 2>/dev/null)"
+# pass 16 (config-scalar-parsing): a valid single-quoted value with a trailing comment once kept the quote and the
+# comment in the path, so Serena opened an empty folder; an escaped value the reader does not parse refuses the start.
+bash "$S" stop "$TMP/r1/app"
+printf "project_serena_folder_location: '%s/meta/\$projectFolderName/.serena' # keep configs together\n" "$TMP" > "$SH/serena_config.yml"
+PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" >/dev/null 2>&1
+sub "a commented single-quoted value reads as the same folder" "$PC" "$(sed -n 's/^project_serena_folder_location: "\(.*\)"$/\1/p' "$HC/serena_config.yml" 2>/dev/null)"
+bash "$S" stop "$TMP/r1/app"
+printf 'project_serena_folder_location: "%s/a\\"b/$projectFolderName"\n' "$TMP" > "$SH/serena_config.yml"
+: > "$STARTS.home"; ERR=$(PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app" 2>&1 >/dev/null); RC=$?
+sub "an escaped value refuses the start, naming the line, and starts no server" "1 1 0" \
+  "$([ "$RC" -ne 0 ] && echo 1 || echo 0) $([[ $ERR == *'BLOCKED: unsupported value'*'a\"b'* ]] && echo 1 || echo 0) $(grep -c . "$STARTS.home")"
+cp "$TMP/cfg.keep" "$SH/serena_config.yml"
+check "existing project settings carry into the new home" "" "$MISS"; MISS=
+bash "$S" stop "$TMP/r1/app"; bash "$S" stop "$TMP/r2/app"
+
+# CC2 (#652): a home of its own must not cost the downloaded language servers or the user's other settings: one repo,
+# one worktree, the same servers as before.
+git -C "$TMP/r1/app" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i && git -C "$TMP/r1/app" worktree add -q "$TMP/r1/app-wt"
+: > "$STARTS.home"
+PATH=$TMP/bin2:$PATH bash "$S" start "$TMP/r1/app-wt" >/dev/null 2>&1
+HW=$(sed -n 1p "$STARTS.home")
+sub "the language servers are reached through the home" ls-binary "$(cat "$HW/language_servers/pyright.txt" 2>/dev/null)"
+sub "and the user's other settings carry over" 1 "$(grep -c '^language_backend: LSP$' "$HW/serena_config.yml" 2>/dev/null)"
+check "single-repo worktree keeps its language servers" "" "$MISS"; MISS=
+bash "$S" stop "$TMP/r1/app-wt"
+
+# CC2 (#650): a language server that grows past 2 GB takes the machine down. The sweep reads ps; a stub ps reports the
+# sizes (a real 2 GB child would take the test machine down too) and passes every other call to the real one.
+mkdir "$TMP/psbin"; REALPS=$(command -v ps)
+printf '#!/bin/bash\n[ "${1-}" != -axo ] || exec cat %q\nexec %q "$@"\n' "$TMP/fakeps.txt" "$REALPS" > "$TMP/psbin/ps"; chmod +x "$TMP/psbin/ps"
+bash "$S" start "$TMP/wt" >/dev/null 2>&1; read -r _ SP < "$REC"
+sleep 5 & BIG=$!; sleep 5 & SMALL=$!
+printf '%s 1 1000 serena start-mcp-server\n%s %s 3000000 sleep 5 big\n%s %s 100000 sleep 5 small\n' "$SP" "$BIG" "$SP" "$SMALL" "$SP" > "$TMP/fakeps.txt"
+PATH=$TMP/psbin:$PATH timeout 20 bash "$S" sweep "$TMP/wt" >/dev/null 2>&1
+kill -0 "$SMALL" 2>/dev/null; sub "the child under the cap is left alone" 0 $?
+wait "$BIG" 2>/dev/null; sub "the child above the cap is stopped" 143 $?
+sub "the stop is logged with pid, size and cap" 1 "$(grep -c " killed pid=$BIG .*worktree=$TMP/wt rss_mb=2929 cap_mb=2048\$" "${REC%.txt}.watch.log" 2>/dev/null)"
+kill "$SMALL" 2>/dev/null; wait "$SMALL" 2>/dev/null
+check "child above cap is stopped and logged" "" "$MISS"; MISS=
+bash "$S" stop "$TMP/wt"
+
+# CC2 (#652): with no Serena python the bridge cases are skipped; the skip must name them on screen and again after the
+# totals, or a green run reads as a pass of cases that never ran. SERENA_TEST_NESTED keeps the inner run from nesting again.
+if [ -z "${SERENA_TEST_NESTED:-}" ]; then
+  # A `serena` file whose first line names no Python that has `mcp`: the inner run finds no Serena python and skips the bridge cases.
+  mkdir "$TMP/noserena"; printf '#!/bin/false\n' > "$TMP/noserena/serena"; chmod +x "$TMP/noserena/serena"
+  SERENA_TEST_NESTED=1 PATH=$TMP/noserena:$PATH timeout 180 bash "$REAL/scripts/__tests__/serena-shared.test.sh" > "$TMP/nested.out" 2>&1; NRC=$?
+  sub "a machine without Serena still passes" 0 "$NRC$([ "$NRC" = 0 ] || echo " $(grep -E '^(FAIL|[a-z].*: command not found)' "$TMP/nested.out" | head -3)")"
+  sub "the skip is said on screen and after the totals" 2 "$(grep -c '^SKIPPED (no Serena python): ' "$TMP/nested.out")"
+  sub "the last line is the skip" 1 "$(tail -n 1 "$TMP/nested.out" | grep -c '^SKIPPED (no Serena python): ')"
+  for L in "the server's broken answer reaches the caller as an error" "and the bridge stays up for the next call" "a seat that leaves gets its answer and exits clean" \
+    "and ends its session on the server" "a seat that leaves after a broken answer still ends the bridge within seconds of an unanswered goodbye" "the bridge refuses to start with no address"; do
+    sub "both skip lines name '$L'" 2 "$(grep '^SKIPPED (no Serena python): ' "$TMP/nested.out" | grep -cF -- "$L")"; done
+  check "skipped cases are named without Serena" "" "$MISS"; MISS=
+fi
+
 echo
 echo "$PASS passed, $FAIL failed"
+[ -z "${SKIPPED:-}" ] || echo "$SKIPPED"
 [ "$FAIL" -eq 0 ]

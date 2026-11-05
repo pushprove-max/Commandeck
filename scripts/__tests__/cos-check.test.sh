@@ -45,6 +45,8 @@ printf 'm1\n' > "$KEY.inbox-seen-ids"
 # decisions and limit live; inbox and alerts down (alerts' pid now runs something else).
 echo 11 > "$KEY.cos-watch-decisions.pid"; echo 12 > "$KEY.cos-watch-limit.pid"; echo 13 > "$KEY.cos-watch-alerts.pid"
 printf '11 bash /x/scripts/cos-watch-decisions.sh\n12 /x/scripts/cos-watch-limit.sh\n13 vim /x/scripts/cos-watch-alerts.sh\n' > "$T/pids"
+# Issue 655: the units watcher and the supervisor are scanned too; up here, so these cases name only what they test.
+echo 16 > "$KEY.cos-watch-units.pid"; echo 17 > "$KEY.cos-supervise.pid"; printf '16 bash /x/scripts/cos-watch-units.sh\n17 bash /x/scripts/cos-supervise.sh\n' >> "$T/pids"
 printf '9 enc\n2026 [from main] "FYI one" | "x"\n\n' > "$KEY.inbox-seq"
 # The rulings log is shared with every worker pane: a worker's prompt (main-watch's Signal WARM to a Builder) is not
 # the owner, who types only in main and in the Chief-of-Staff worktree. It read "owner quiet 0 min" here.
@@ -134,7 +136,38 @@ check "owner quiet reads a ruling logged under /private/tmp spelling" "owner qui
 # end the turn silently, so the relay does not spend a reply on a clean check.
 printf '11 bash /x/scripts/cos-watch-decisions.sh\n12 /x/scripts/cos-watch-limit.sh\n13 /x/scripts/cos-watch-alerts.sh\n14 /x/scripts/cos-watch-inbox.sh\n' > "$T/pids"
 echo 14 > "$KEY.cos-watch-inbox.pid"
+printf '16 bash /x/scripts/cos-watch-units.sh\n17 bash /x/scripts/cos-supervise.sh\n' >> "$T/pids"
 printf 'm1\nm2\n' > "$KEY.inbox-seen-ids"; printf '9 enc\n' > "$KEY.inbox-seq"
-check "nothing down, missed or held: prints the end-silently line only" "cos-check: nothing for the owner: end silently; re-arm" "$(cc)"
+: > "$KEY.cos-check.log"; OUT=$(cd "$T/p" && timeout 3 "${E[@]}" bash "$REAL/scripts/cos-check.sh" term_cos 2>&1)
+check "nothing down, missed or held: prints the end-silently line only" ":1" "$OUT:$(grep -m1 -c 'cos-check: nothing for the owner: end silently; re-arm$' "$KEY.cos-check.log")"
+# Issue 614: a lane with a live pane and no running lane poller is named in the watchers line (`fast-lane-inbox`); a lane
+# with no pane is the owner's normal state and is not.
+mkdir -p "$T/lbin"
+cat > "$T/lbin/orca-ide" <<EOF
+#!/usr/bin/env bash
+[ "\$1 \$2" = "terminal list" ] && { cat "$T/terminals.json"; exit; }
+exec "$T/bin/orca-ide" "\$@"
+EOF
+chmod +x "$T/lbin/orca-ide"
+lc() { (cd "$T/p" && timeout 3 "${E[@]}" PP_PANE_MAP_FRESH=1 PATH="$T/lbin:$T/bin:$PATH" COMMANDECK_WORKSPACES="$T/ws" bash "$REAL/scripts/cos-check.sh" term_cos 2>&1 | tail -1 | grep -o 'watchers down: [^|]*'); }
+echo '{"ok":true,"result":{"terminals":[]}}' > "$T/terminals.json"
+check "a lane with no pane is not named" "" "$(lc)"
+jq -nc --arg w "$T/ws/Fast-lane" '{ok:true,result:{terminals:[{handle:"term_lane",title:"Fast lane",worktreePath:$w,agentIdentity:"claude",connected:true,orphaned:false}]}}' > "$T/terminals.json"
+check "lane pane with dead poller is named" "watchers down: fast-lane-inbox " "$(lc)"
+echo 15 > "$KEY.lane-fast-lane.cos-watch-inbox.pid"; echo '15 bash /x/scripts/cos-watch-inbox.sh' >> "$T/pids"
+check "and not once its poller runs" "" "$(lc)"
+
+# Issue 655: the supervisor runs outside cos-check, so a dead supervisor is named (`supervise`), as is the units
+# watcher (armed at startup but never scanned before). A clean check is logged, not printed: it never wakes the relay.
+dc() { (cd "$T/p" && timeout "${2:-10}" "${E[@]}" PATH="$T/lbin:$T/bin:$PATH" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_COS_CHECK_SLEEP="${1:-0}" bash "$REAL/scripts/cos-check.sh" term_cos 2>&1); }
+rm -f "$KEY.cos-watch-units.pid"; echo '17 vim /x/scripts/cos-supervise.sh' > "$T/pids.17"; grep -v '^17 ' "$T/pids" > "$T/pids.new"; cat "$T/pids.17" >> "$T/pids.new"; mv "$T/pids.new" "$T/pids"
+DOWN=$(dc | tail -1 | grep -o 'watchers down: [^|]*')
+check "units watcher down is named" 1 "$(grep -cw units <<<"$DOWN")"
+check "dead supervisor is reported down" 1 "$(grep -cw supervise <<<"$DOWN")"
+echo 16 > "$KEY.cos-watch-units.pid"; grep -v '^17 ' "$T/pids" > "$T/pids.new"; printf '16 bash /x/scripts/cos-watch-units.sh\n17 bash /x/scripts/cos-supervise.sh\n' >> "$T/pids.new"; mv "$T/pids.new" "$T/pids"
+printf '9 enc\n' > "$KEY.inbox-seq"; N=$(grep -c 'nothing for the owner' "$KEY.cos-check.log")
+OUT=$(dc 1 3); RC=$?
+check "clean check line does not wake" "124::yes" "$RC:$OUT:$([ "$(grep -c 'nothing for the owner' "$KEY.cos-check.log")" -gt "$N" ] && echo yes)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

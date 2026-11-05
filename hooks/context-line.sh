@@ -49,7 +49,8 @@ pp_is_main_pane; mp=$?
 [ "$mp" = 1 ] && exit 0
 if [ "$mp" != 0 ]; then
   HOOK_FIRE_ADVISE=1
-  echo "context-line: run $PP_MAIN_RUN has $([ "$mp" = 3 ] && echo "no coordinator" || echo "an unknown coordinator (Orca's run list did not answer)"), so this pane is not asked to clear"
+  if [ -z "$PP_MAIN_RUN" ]; then echo "context-line: Orca's run-current answer could not be read, so this pane is not asked to clear"
+  else echo "context-line: run $PP_MAIN_RUN has $([ "$mp" = 3 ] && echo "no coordinator" || echo "an unknown coordinator (Orca's run list did not answer)"), so this pane is not asked to clear"; fi
   exit 0
 fi
 HOOK_FIRE_ADVISE=1

@@ -67,7 +67,9 @@ OPEN_TASKS=$(orca-ide orchestration task-list --brief --json 2>/dev/null \
 try: d=json.load(sys.stdin)
 except Exception: print(""); raise SystemExit
 r=d.get("result",d); ts=r.get("tasks",r) if isinstance(r,dict) else r
-print(" ".join(t["id"] for t in ts if isinstance(t,dict) and t.get("status") in ("dispatched","ready","in_progress")))' 2>/dev/null)
+if any(not isinstance(t,dict) or "id" not in t or "status" not in t for t in ts):
+    print("poll-agents: the task list has a row without id or status; no task is kept open", file=sys.stderr); print(""); raise SystemExit
+print(" ".join(t["id"] for t in ts if isinstance(t,dict) and t.get("status") in ("dispatched","ready","in_progress")))')
 
 MSG_FILE=$(mktemp); export MSG_FILE; trap 'rm -f "$MSG_FILE"' EXIT
 delivery=""

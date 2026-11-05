@@ -5,12 +5,12 @@ whole batch below, review it with {reviewer}, and hand back a branch that main
 merges with `merge-unit-local.sh {unit}`.
 
 main-watch merges the branch itself once you print the done marker on a tip the merge gate passes, unless main
-adds a line `Merge: hold` to this brief. Main lists what runs after the merge under `## Post-merge` at the end, one
-command per line: `dashboard.sh --install`, `main-watch.sh --install` or `run-shell-tests.sh <one test file>`;
-any other line is refused. A step that must run before the merge goes in this brief under a heading with the hold's
+adds a line `Merge: hold` to this brief. A step that must run before the merge goes in this brief under a heading with the hold's
 name (scripts/paths.sh pp_merge_held; this template avoids the word, since any line naming it holds the merge). The merge
 then waits until you write, in the evidence file, the done line the hold prints (its number stands for the whole brief,
 so any later edit holds the merge again).
+
+- Post-merge lines: `merge-unit-local.sh` runs only the allowed lines and its refusal lists them.
 
 ## The batch (issues and done criteria)
 
@@ -22,8 +22,7 @@ The batch's Data design section above binds. Before the first edit copy it into 
 `## Data design`, and keep it true: a change to where a piece of state lives, who writes or reads it, when it
 resets or what a retry runs updates that section first, then the code. The first review pass reads it before the
 diff. When it is not `none`, the evidence file also carries `## Failure table`, one row per save:
-`| Save | Steps | Left behind if it stops after each step | The one recovery |`. The first pass refuses without a row,
-and a fix that touches a save updates that save's row in the same commit.
+the first pass refuses without a row and prints the row form. A fix that touches a save updates that save's row in the same commit.
 
 ## How to work
 
@@ -33,13 +32,8 @@ and a fix that touches a save updates that save's row in the same commit.
 - The batch's Prior art section binds: build on the standard and the library
   or service it names, as the project's `.claude/paved-road.md` lists them for
   the area. A deviation states its reason in the evidence file.
-- Issue 392: a unit that changes screen code (the project's `screenPaths`) writes `## Screenshots` in its evidence file
-  before the closing pass, one row each: `- side-by-side: <mockup> | <screenshot>`, `- screenshot: <path>`, or
-  `- none: no visual change: <reason>`. Put screenshots at absolute paths outside the worktree: an untracked image
-  inside it is refused at step 1 as untracked code.
-- Issue 398: build only what the plan asks for. Never add a disabled, stub or "coming soon" control or message to match
-  a mockup; a mockup element the plan does not build is left out, and you send main the question. A placeholder the
-  plan wants is named on a `Placeholder: <file> | <exact text> | <why>` line.
+- Screenshots: `merge-unit-local.sh` refuses a screen change without its rows and prints the forms.
+- Placeholder copy: `edit-content-tripwires.sh` blocks it and prints the `Placeholder:` line form.
 - Issue 359: before the first edit, write one table of the cut pairs that share a file or a symbol, so no cut is built
   on a contract another cut still changes. A finding whose root cause is the plan amends the plan first (one
   `## Plan change log` line), then the code.
@@ -65,9 +59,8 @@ and a fix that touches a save updates that save's row in the same commit.
   its hand-off alone, and opens this brief and the evidence file only when a finding needs them.
 - The What can go wrong list of the batch or its plan binds: each case has its named test, and a case a pass finds
   that the list lacks is added to the plan's list, with its test, in the commit of its fix.
-- Find a line with `grep -n <pattern> <file>` first, then Read that range (`offset` and `limit`), never a whole source
-  file over 400 lines; look a symbol
-  up by name (a symbol tool such as `find_symbol`) before a grep and a read. Edit a tracked file with Edit,
+- Find a line first: `read-range-guard.sh` blocks a whole read of a long file and prints the range form.
+- Look a symbol up by name (a symbol tool such as `find_symbol`) before a grep and a read. Edit a tracked file with Edit,
   never with an inline `python3 -c` or `perl -e` write.
 - An exception, allowlist or exemption entry in a guard or its test stands only when the same test proves the
   alternative it claims, or the entry cites an owner ruling id. A comment is not proof.
@@ -92,8 +85,10 @@ and a fix that touches a save updates that save's row in the same commit.
 - Map the code before the first edit: send 3-4 read-only `Explore` helpers in
   one turn, one per area the change touches (callers, siblings, tests), unless
   the brief already carries the map. A helper that must edit works in its own
-  child worktree (the Agent tool's worktree isolation); apply its diff here with
-  `git apply` and remove that worktree. In an isolated worktree a helper runs plain
+  child worktree (the Agent tool's worktree isolation); apply its diff here and
+  remove that worktree: run `scripts/helper-apply.sh <child worktree>`. A copy
+  you make by hand to show a test red, or to compare with the base, goes with
+  `git worktree remove` after the comparison. In an isolated worktree a helper runs plain
   single commands from its root: no pipes, `cd &&` or heredocs.
   A helper that writes code quotes its failing run, the red lines before its fix,
   in its report; read that run before you take its diff, and send back a diff
@@ -126,22 +121,13 @@ and a fix that touches a save updates that save's row in the same commit.
 - When the plan has two or more `- C<n>` cuts under `## Cuts`, write one `C<n>: built` line in the evidence file
   as each cut finishes. The merge marks those cuts ` -- done`; a cut with no such line stays open, its issues
   stay open, and main gets a task for it.
-- A closing reply over 3,000 characters goes in a file; the reply names the path and sums it up in a few lines.
-  A Stop hook sends a longer reply naming no file back once.
+- A long closing reply: `long-reply-stop.sh` sends it back to go in a file.
 - The moment an item's test turns green, add its section to the evidence
   file: `## #<issue> <title>`, then the guarding test name and file on the
   next line.
-- Each new test names the bug it catches. A test past that is an extra: list
-  it under `## Extra tests` in the evidence file. A pass refuses a change that
-  adds more new tests than the cap (`reviewLoop.newTestCap`, 40 by default),
-  or than the number on the plan's `New tests: <unit> <n>` line when it has one.
-- Ask main before you edit an existing test. A test file that exists at the fork
-  point and loses a line stops the pass and the merge until main's
-  `<unit>-main-rulings.md` holds `Test edit: <path> test:<label> ruling:<id>`
-  for each test that loses a line (`(file)` for a line of a data file), and
-  `Test edit: <path> line:<exact old text> ruling:<id>` for each other code line,
-  one per line; the refusal prints the lines to add. Adding a new case is free. After
-  main adds the lines, run `--ack-rulings` again.
+- Each new test names the bug it catches.
+- The new-test cap: `builder-codex-pass.sh` refuses a change over it.
+- Editing an existing test: `builder-codex-pass.sh` refuses the pass and prints the `Test edit:` lines main must add.
 - Arrange test data with one shared builder per domain object (a fixture
   function in shell tests), one or two lines per test. When a test needs a new
   field, extend the builder; never hand-build the object in the test:
@@ -152,12 +138,9 @@ and a fix that touches a save updates that save's row in the same commit.
 - A build that changes a setting (a config key, an environment variable, a
   file format) keeps reading the format already deployed from its first
   commit, and has a test that the release accepts the deployed format.
-- Never hand-write a loop that polls test output (`until grep ...; do sleep`):
-  start the run with `run_in_background`, which tells you when it exits. To
-  block on it, wait only with `bash {scripts}/wait-test-run.sh <runner-pid>
-  <output-file>`: it checks the runner is still alive when the wait ends, and
-  a runner that died with no result means rerun the needed file alone, never a
-  second wait. Never find the runner by name with `pgrep`. It knows a `<n> passed, <n> failed` last line and node:test's
+- A poll loop on test output: `no-poll-loops.sh` blocks it and prints the `wait-test-run.sh <runner-pid> <output-file>` form.
+  A runner that died with no result means rerun the needed file alone, never a
+  second wait. Never find the runner by name with `pgrep`. `wait-test-run.sh` knows a `<n> passed, <n> failed` last line and node:test's
   summary. Start such a run as `<test command> > <output-file> 2>&1 & echo $!;
   wait`: its first output line is the runner pid. `bash {scripts}/ask-main.sh`
   waits 240 s at most per call, and is resumed with the message id it prints.
@@ -231,8 +214,8 @@ and a fix that touches a save updates that save's row in the same commit.
   minutes in all (one wait over 270 s is refused by the cache-budget hook); a question that cannot change the fix never holds it.
   A question that blocks the merge goes to main the turn you name it: the closing pass refuses while an owner
   question on the unit is open.
-- Never commit by hand, never push. The pass script below commits exactly what
-  {reviewer} reviews; main merges.
+- Never push; main merges.
+- A hand commit: `git-safety.sh` refuses it; the pass script commits.
 
 ## {reviewer} passes ({reviewer} {review-model})
 
@@ -255,12 +238,8 @@ listed issue is done.
 1. Once: `bash {scripts}/{pass-script} {unit} 1 adversarial`. It is
    the first pass and one pass: three reviewers at once, or one when the build
    is under {small-build} changed lines and main did not launch it with `--risky` (the
-   pass prints which); fix everything it finds together. Before it, each `Break:` line of the plan
-   (`<test file> -- <check label> -- <site>`) needs a recorded break run: run
-   `bash {scripts}/break-run.sh <plan> <k> <file> <line> [<replacement>]` for the k-th `Break:` line; it breaks that
-   line, runs the test, and puts the file back byte for byte (it needs that check itself to fail, not another),
-   then write the row it prints, `- <test file> -- <check label> -- red: <the command that ran it>`, under
-   `## Break runs` in the evidence file. The pass refuses until every `Break:` line has one.
+   pass prints which); fix everything it finds together.
+   - Break runs: `builder-codex-pass.sh` refuses pass 1 until each `Break:` line has one and prints the `break-run.sh` command.
 2. Then `bash {scripts}/{pass-script} {unit} <N> review` with the next
    N: it reads only your changes since the last pass, or the whole branch
    when main changed this brief or its rulings since the last pass. A review finding blocks the merge only
@@ -294,14 +273,9 @@ N the number of the pass that will read it. When you do not take the fix a
 reviewer named, write `Different fix r<N>: <why>` before you ask for pass N.
 Pass N shows both lines to its reviewer, and reads only a line that starts
 with those words: no bullet, no backticks.
-After a pass that ends NO-GO, search the repo for the same pattern as each finding before the next pass, and write
-`## Sites checked (pass <N>)` in the evidence file: a `Search: <command>` line for each search, then one line per
-site it found, `- <path>:<line> fixed, <how>` or `- <path>:<line> not affected, <why>`. The next pass refuses to start
-without it, and its reviewers treat a missing or wrongly cleared site as a finding. Every hit of the reviewers' own
-`Class search:` lines, which the pass runs and lists in your fix brief, must be among those sites. It also needs
-`## New code checked (pass <N>)`: every read, write or check the fix added, checked against the plan's Data design,
-What can go wrong and failure table, `- <path>:<line> meets <plan line>` or `- <path>:<line> no plan rule, <why>`
-(`- none, <why>` when it added none). A class redesign goes into the plan first and is reviewed alone, to GO, before
+- Sites checked and New code checked: after a NO-GO, `builder-codex-pass.sh` refuses the next pass without them and prints their line forms.
+
+A class redesign goes into the plan first and is reviewed alone, to GO, before
 its code; the code after that pass owes the same check.
 A finding only main can fix (a settings file entry, a file only main edits)
 goes as one line under `## Main-only (deferred)` in the evidence file: every
@@ -326,7 +300,7 @@ A fix adds a test only if it guards a real regression. Write no test that only
 shows a file, function or setting exists. A shell test file over its time budget
 is a red you trim or split, never a raised limit.
 Ask main and wait only when the class fix would change something the brief names as a stated limit.
-Add no stated limit to the brief or the plan yourself: a pass refuses a limit added after the plan judge's GO unless its line ends with `ruling:<id>` and main's rulings carry that id.
+- A stated limit you add: `builder-codex-pass.sh` refuses it without main's ruling.
 
 A pass that ends NO-GO writes `.claude/briefs/{unit}-fix-r<N>.md` and prints `FIX ROUND <N>: end your turn
 now`: end your turn without fixing anything. The script points this session at that file while its context is

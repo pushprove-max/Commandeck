@@ -20,5 +20,7 @@ stale() { printf '%s\n' "$@" > "$T/plan.md"
 check "a fenced step is fixture text in every fence form; a real step after a nested fence is read" \
   "b.txt|b.txt|b.txt d.txt|b.txt e.txt" \
   "$(stale '## Steps' '  ```' '- modify a.txt' '  ```' '- modify b.txt')|$(stale '## Steps' '~~~' '- modify a.txt' '~~~' '- modify b.txt')|$(stale '## Steps' '- modify b.txt' '````' '```' '- modify c.txt' '````' '- modify d.txt')|$(stale '## Steps' '- modify b.txt' '  ```' '## Other' '  ```' '- modify e.txt')"
+# Issue 640: a Steps heading written closed (`## Steps ##`) is the same section; missed, its steps never stale a verdict.
+check "Steps heading closed is read" "$(stale '## Steps' '- modify a.txt')" "$(stale '## Steps ##' '- modify a.txt')"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

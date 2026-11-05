@@ -73,7 +73,7 @@ fi
 # this pane is bound to is asked for, because the printed-id record below is
 # keyed by run and a read with no run has no record.
 [ -n "$RUN" ] || RUN=$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)
-[ -n "$RUN" ] || RUN=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty' 2>/dev/null)
+[ -n "$RUN" ] || RUN=$(pp_orca_run_id)
 # BIND EVERY TIME. The pointer file names a run; the RUN names a coordinator
 # TERMINAL, and that is what a check reads. Main's pane changes -- a restart, a
 # new window -- and the new pane is bound to no run while the pointer file still
@@ -182,7 +182,7 @@ enrich() {  # <Orca check JSON> -- print, under each marker, what main would oth
     launched=0
     [ -n "$rec" ] && launched=$(sed -n 's/.*launched=\([0-9][0-9]*\).*/\1/p' "$rec" | head -1)
     bash "$PP_SCRIPTS/read-verdict.sh" "$handle" 400 "" "" "" "" "" "${launched:-0}" 2>/dev/null \
-      | grep -E '^\[P[0-3]\]|^- \[P[0-3]\]|^VERDICT|DONE$' | cut -c1-240 | sed "s/^/  $handle: /"
+      | grep -E '^\[P[0-3]\]|^- \[P[0-3]\]|^(- )?(\*\*)?[A-Za-z0-9.-]+ \(P[0-3]\)|^VERDICT|DONE$' | cut -c1-240 | sed "s/^/  $handle: /"
     wt=$(printf '%s' "$terms" | jq -r --arg h "$handle" '(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.handle == $h) | .worktreePath // empty' 2>/dev/null | head -1)
     [ -n "$wt" ] || continue
     unit=$(basename "$wt")
@@ -269,7 +269,7 @@ KEEP='
   def relay: (.subject // "") | startswith("heads-up:");
   def owner: (((.subject // "") + "\n" + (.body // "")) | test($rid)) or ((.from_handle // "") as $f | any($relay[]; . == $f));
   .result.messages[]? | select(.type != "heartbeat") | wake_class($wake; $relay; $all; "main") as $c
-  | select($c != "drop") | select($c == "batch" or relay or owner or ((noisy | not) and (harness | not)))'
+  | select($c != "drop") | select($c == "batch" or relay or owner or wk_question or ((noisy | not) and (harness | not)))'
 # A heads-up relay (main-watch.sh) is printed whole under --full, newlines kept: its
 # text is the note main must verify, and words in it are claims, not signals.
 RENDER='if $full == 1 and ((.subject // "") | startswith("heads-up:")) then "\(.from_handle // .from // "?") | \(.subject)\n\(.body // "")"
@@ -443,7 +443,8 @@ state_block() {  # once per wake, never per message -- the board main would othe
           printf '%s %s | log %s\n' "$n" "$st" "$log"
           tail -3 "$log" | cut -c1-200 | sed 's/^/     /'
         fi
-        next=$(grep -o 'STOP .*next=.*' "$log" | tail -1 | sed 's/.*next=//')
+        # A loop's stop says `next=`, the unit driver's `next: ` (issue 659): either names the route.
+        next=$(grep -oE 'STOP .*next(=|: ).*' "$log" | tail -1 | sed -E 's/.*next(=|: )//')
         # On the Mac a clean finish stays listed as inactive until the next
         # launch boots it out; its DONE line needs nothing from main.
         # A feat(<unit>) commit on main newer than the log means the stop was
@@ -532,6 +533,8 @@ drain() {  # print and acknowledge one FIFO chain of deliveries
     else
       out=$(orca-ide "${BASE[@]}" --timeout-ms 2000 --json 2>"$ERRF")
     fi
+    # Issue 660: a lone surrogate escape in one message made every jq below fail on the batch.
+    out=$(rc=$?; pp_json_clean <<<"$out"; exit $rc)
     # A re-bind fences the old delivery, so the next ask is a plain check.
     checked $? "$out" || { delivery=""; continue; }
     [ -n "$out" ] || break

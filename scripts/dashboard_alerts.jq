@@ -98,6 +98,10 @@ def builder_warmup_input: 3300000;
             ((.restartFailures // [])[] | select($rs == null or (.at | ts) >= $rs)
               | a("main-restart-failed-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's automatic restart failed (Orca did not accept the typed resume prompt and the relaunch did not resume), so main waits past its clear line"; "restart main by hand: claude 'resume from the checkpoint \(.cp)'")
                 + {since: (.at | ts)}),
+            # Issue 615: the hook held the restart and logged why; the hold stands until a new pane resumes from its checkpoint.
+            ((.restartHeld // [])[]
+              | a("main-restart-held-\($p)-\(.session)"; "warn"; "\($p): main restart held: \(.why)"; "act on the reason; the next stop restarts main")
+                + {since: (.at | ts)}),
             ((.carryFailed // [])[] | select(($rs == null or (.at | ts) > $rs) and $now - (.at | ts) > 120)
               | a("carry-failed-\($p)-\(.cp | split("/")[-1] | rtrimstr(".md"))"; "crit"; "\($p): main's checkpoint \(.cp | split("/")[-1]) failed the carry-over check and the hook did not carry its items"; "restate the dropped items in the checkpoint, then restart main")
                 + {since: (.at | ts)}),

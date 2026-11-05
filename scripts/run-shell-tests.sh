@@ -330,12 +330,13 @@ run_one() {
   live start "${REL[$1]}" "$start"
   # This test's own start stamp, ticked past, so fence "$1" judges the test on its own run (D10).
   [ -z "$STAMP" ] || { touch "$STAMP.t$1" && tick "$STAMP.t$1"; } || rm -f "$STAMP.t$1"
+  # COMMANDECK_TEST_RUNNER is the marker test-host-guard.sh (BASH_ENV, issue 665) takes for a run the runner started.
   # review-round.sh's default self-review is a REAL Codex review: every test
   # sets its own stub, and one that does not runs this poison and fails below.
   # Past its cap on a busy machine a file passes only on its CPU seconds: bash's `times` in a subshell around the run
   # counts the file's reaped processes (`0m1.690s 0m0.089s`, user and system).
   ( COMMANDECK_RUNNING_TEST="$2" COMMANDECK_SELF_REVIEW_CMD="touch '$RES/$1.companion'; exit 97" \
-      timeout "$lim" bash "$2" > "$RES/$1.out" 2>&1; rc=$?; times > "$RES/$1.cpu"; exit "$rc" ); rc=$?
+      COMMANDECK_TEST_RUNNER=1 timeout "$lim" bash "$2" > "$RES/$1.out" 2>&1; rc=$?; times > "$RES/$1.cpu"; exit "$rc" ); rc=$?
   secs=$(( $(date +%s) - start ))
   sed -n 2p "$RES/$1.cpu" | awk '{ t = 0; for (i = 1; i <= 2; i++) { split($i, a, /[ms]/); t += a[1] * 60 + a[2] } printf "%.2f\n", t }' > "$RES/$1.cpu.tmp" \
     && mv "$RES/$1.cpu.tmp" "$RES/$1.cpu" || rm -f "$RES/$1.cpu"

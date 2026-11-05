@@ -18,7 +18,6 @@ check "a red hang test sets its own short timeout" "A red test that shows a hang
 check "each evidence heading is written the moment its item turns green (#90)" "The moment an item's test turns green, add its section to the evidence file: \`## #<issue> <title>\`, then the guarding test name and file on the next line."
 check "the evidence file opens with an Issue | Status table, each row set to built as its cut lands (#383)" "The evidence file opens with an \`Issue | Status\` table, one \`| #<n> | not built |\` row per issue of the batch, each set to \`built\` in the same edit that adds the section of the cut that finishes it."
 check "a changed setting keeps reading the deployed format" "keeps reading the format already deployed from its first commit, and has a test that the release accepts the deployed format"
-check "a poll on test output goes to run_in_background, a blocking wait to wait-test-run.sh only (#84)" "start the run with \`run_in_background\`, which tells you when it exits. To block on it, wait only with \`bash {scripts}/wait-test-run.sh <runner-pid> <output-file>\`"
 check "the post-fix checks have one home, the runner that starts them at once and reports each code" "\`bash {scripts}/post-fix-checks.sh <the touched test files>\` runs them and, in a plugin checkout, \`claude plugin validate .\` and \`claude plugin test .\`, all at once, and reports each exit code; any red fails the round."
 check "a refused merge or main's word lifts the no-change rule (#93)" "The rule is lifted when the merge refuses the branch or main tells you to change something"
 check "an answer after the done marker is still read (#93)" "An answer from main that arrives after it is still yours: read it and act on it."
@@ -55,8 +54,7 @@ check "the class rule says fix the design on the second return: one fence or sta
 check "the class rule says send main nothing on the second return, and one ask-main.sh question on the third" "Write in the evidence file what the class is, and send main nothing for it: the review loop goes on. When the class returns a THIRD time, the fix-round hand-off says so: fix the other findings first, then ask main one question with \`ask-main.sh\` naming the class and the redesign you propose, and build what main answers."
 # Issue 341: the Builder brief carries the Data design and failure table rules, and the redesign order on a class's first repeat.
 check "the Builder brief has a Data design section the Builder copies into the evidence file and keeps true" "The batch's Data design section above binds. Before the first edit copy it into the evidence file as \`## Data design\`, and keep it true"
-check "the evidence file carries a failure table with one row per save, and a fix that touches a save updates its row" "the evidence file also carries \`## Failure table\`, one row per save:"
-check "and the row's four columns are named" "| Save | Steps | Left behind if it stops after each step | The one recovery |"
+check "the evidence file carries a failure table with one row per save, and a fix that touches a save updates its row" "A fix that touches a save updates that save's row in the same commit."
 check "a class's redesign goes data design and failure table first, then the code, then a whole-branch pass" "The redesign goes in this order: update the Data design and the failure table in the evidence file first, then the code, then take a whole-branch pass"
 if grep -qF '## Data design' "${T%/*}/_batch-brief-template.md" && grep -qF 'builder-launch.sh refuses a batch without it. For each piece of state' "${T%/*}/_batch-brief-template.md"; then PASS=$((PASS+1)); echo "ok   the batch brief template has the required Data design section"; else FAIL=$((FAIL+1)); echo "FAIL the batch brief template has no required Data design section"; fi
 # Issue 344 (host issue 3171): the closing pass rebases first and runs the tests that cover what moved.
@@ -126,7 +124,8 @@ BODY=$(cat "${T%/*}/main-rulings.md")
 check "the rulings template has the heading the pass reads limits from" "## Stated limits"
 # Main writes a "leave as is" ruling under the heading its rules name; a ruling under any other is raised again as a blocker.
 H=$(sed -n 's/.*stays as it is goes under `\(#[^`]*\)`.*/\1/p' "${T%/*}/main-session.md")
-LIMITS_AWK=$(grep -o "awk '[^']*Stated limits[^']*'" "${T%/templates/*}/scripts/builder-codex-pass.sh")
+. "${T%/templates/*}/scripts/fence.sh"
+LIMITS_AWK=$(grep -o "awk \"\$PP_AWK_FENCE\"'[^']*Stated limits[^']*'" "${T%/templates/*}/scripts/builder-codex-pass.sh")
 BODY=$(printf '# Rulings\n%s\n- the retry stays as it is.\n## Later\n- not a limit\n' "$H" | eval "$LIMITS_AWK")
 [ "$BODY" = "- the retry stays as it is." ] && BODY="limits read: exactly the ruling"
 check "a 'leave as is' ruling under the heading main's rules name is the limit the pass reads, and nothing else is" "limits read: exactly the ruling"
@@ -181,9 +180,41 @@ check "the plan judge is asked for the established practice, and a flow step wit
 BODY=$SAVED
 # Issues 433 and 434: a Builder added tests with no bug named and hand-built the same test data in every case.
 BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "$T" | sed -E 's/ +/ /g')
-check "the Builder template asks each new test to name its bug and lists extras (issue 433)" "Each new test names the bug it catches. A test past that is an extra: list it under \`## Extra tests\` in the evidence file."
 check "the Builder template makes a shared builder the default for test data, with an example (issue 434)" "Arrange test data with one shared builder per domain object (a fixture function in shell tests), one or two lines per test. When a test needs a new field, extend the builder; never hand-build the object in the test: \`\`\`sh unit() {"
 # Catches (#529): a helper's diff taken as tested on the helper's word, with no failing run shown before its fix.
 check "a helper report shows its red run" "A helper that writes code quotes its failing run, the red lines before its fix, in its report; read that run before you take its diff, and send back a diff whose report shows none."
+# #654: a Builder brief, the review-loop doc or the pass scripts that name a pass cap contradict the one rule the
+# pass runs (passes run until clean; STOP (threshold) and REVIEW STOP end the loop).
+CAPHIT=$(cd "$R" && grep -n -i -E 'cap stop|STOP \(cap|pass cap' templates/_builder-brief-template.md docs/review-loop.md scripts/builder-codex-pass.sh scripts/main-watch.sh)
+CLEAN=$(cd "$R" && for f in templates/_builder-brief-template.md docs/review-loop.md; do JOIN "$f" | grep -c 'until clean'; done | paste -sd' ' -)
+if [ -z "$CAPHIT" ] && [ "$CLEAN" = "1 1" ]; then PASS=$((PASS+1)); echo "ok   template docs and script state one pass rule"
+else FAIL=$((FAIL+1)); echo "FAIL template docs and script state one pass rule (cap hits: ${CAPHIT:-none}; until clean in template and doc: $CLEAN)"; fi
+# #653: a cut section leaves one pointer line naming the script that refuses the wrong step, and that script's refusal
+# still prints the right form; a cut whose refusal lost the form leaves the Builder with no instruction at all.
+PTR_MISS=""
+while IFS='|' read -r ptr script refusal; do
+  grep -qF -- "$ptr" <<<"$BODY" || PTR_MISS+=" [pointer: $ptr]"
+  grep -qF -- "$refusal" "$R/$script" || PTR_MISS+=" [$script lacks: $refusal]"
+done <<'ROWS'
+- Screenshots: `merge-unit-local.sh` refuses a screen change without its rows and prints the forms.|scripts/merge-unit-local.sh|put screenshots at absolute paths outside the worktree
+- Placeholder copy: `edit-content-tripwires.sh` blocks it and prints the `Placeholder:` line form.|hooks/edit-content-tripwires.sh|name the complete line: Placeholder: $_rel | <complete source line> | <why>
+- Editing an existing test: `builder-codex-pass.sh` refuses the pass and prints the `Test edit:` lines main must add.|scripts/builder-codex-pass.sh|Lines main must add:
+- A long closing reply: `long-reply-stop.sh` sends it back to go in a file.|hooks/long-reply-stop.sh|Write the full reply to a file
+- Find a line first: `read-range-guard.sh` blocks a whole read of a long file and prints the range form.|hooks/read-range-guard.sh|Find the line first with \`grep -n <pattern>
+- A hand commit: `git-safety.sh` refuses it; the pass script commits.|hooks/git-safety.sh|a Builder never commits by hand
+- The new-test cap: `builder-codex-pass.sh` refuses a change over it.|scripts/builder-codex-pass.sh|over the new-test cap of
+- Sites checked and New code checked: after a NO-GO, `builder-codex-pass.sh` refuses the next pass without them and prints their line forms.|scripts/builder-codex-pass.sh|has no usable '## Sites checked (pass $SM)' section
+- Sites checked and New code checked: after a NO-GO, `builder-codex-pass.sh` refuses the next pass without them and prints their line forms.|scripts/builder-codex-pass.sh|has no usable '## New code checked (pass $1)' section
+- A stated limit you add: `builder-codex-pass.sh` refuses it without main's ruling.|scripts/builder-codex-pass.sh|Ask main for the owner's ruling on it, or remove the line.
+- Break runs: `builder-codex-pass.sh` refuses pass 1 until each `Break:` line has one and prints the `break-run.sh` command.|scripts/builder-codex-pass.sh|break-run.sh <plan> <k> <file> <line> [<replacement>]
+- Post-merge lines: `merge-unit-local.sh` runs only the allowed lines and its refusal lists them.|scripts/merge-unit-local.sh|allowed: dashboard.sh --install, main-watch.sh --install, run-shell-tests.sh <one test file>
+- A poll loop on test output: `no-poll-loops.sh` blocks it and prints the `wait-test-run.sh <runner-pid> <output-file>` form.|hooks/no-poll-loops.sh|wait-test-run.sh <runner-pid> <output-file>
+the first pass refuses without a row and prints the row form.|scripts/builder-codex-pass.sh|has no '## Failure table' with a row under its header. Under that heading write one row per save:
+ROWS
+if [ -z "$PTR_MISS" ]; then PASS=$((PASS+1)); echo "ok   cut sections leave a pointer naming the refusing script"
+else FAIL=$((FAIL+1)); echo "FAIL cut sections leave a pointer naming the refusing script:$PTR_MISS"; fi
+# The naming rule has no refusal behind it (the cap refusal runs only past the cap), so the cut must not take it.
+if grep -qxF -- '- Each new test names the bug it catches.' "$T"; then PASS=$((PASS+1)); echo "ok   template keeps the new-test naming rule"
+else FAIL=$((FAIL+1)); echo "FAIL template keeps the new-test naming rule (no line '- Each new test names the bug it catches.')"; fi
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

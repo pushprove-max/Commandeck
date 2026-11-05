@@ -309,3 +309,29 @@ test('the views write no file', { options: { unitsBand: 'on', unitsPane: 'on', u
   expect(w.runs.filter(r => !['git', 'bash', 'kill', 'ps'].includes(r[0]))).toEqual([])
   expect([...w.files].map(([p, f]) => [p, f.text])).toEqual(before)
 })
+
+// #621: a built unit reopened by a plan revision sits at waiting-main in the 5-minute-old snapshot while its plan seat runs.
+test('re-planned unit shows planning', async ($, on) => {
+  world(on, 'main', {
+    [DATA]: snap([unit('u', { stage: 'waiting-main' }, { startedAt: new Date(NOW - 3_600_000).toISOString() })]),
+    [`${SCR}/seat-u-plan-judge-sol.txt`]: 'unit=u\nrole=plan-judge-sol\nlaunched=1\n',
+  })
+  await start($, 'main')
+  const text = await units($)
+  expect(text).toContain('Planning')
+  expect(text).not.toContain('Waiting on main')
+})
+
+import { PLACED } from './units-world'
+// #645: session start opens the pane unasked and the engine leaves it undrawn on a narrow window; the person's ask must reach the engine.
+test('pane on reopens an unplaced pane', async ($, on) => {
+  const w = world(on, 'main', { [DATA]: snap([unit('u')]) })
+  PLACED.on = false
+  await start($, 'main')
+  expect(w.opened).toEqual(['units'])
+  const reply = await units($, 'pane on')
+  expect(w.opened).toEqual(['units', 'units'])
+  expect(reply).toContain('waiting undrawn')
+  PLACED.on = true
+  expect(await units($, 'pane on')).toBe('units pane: on for this session')
+})

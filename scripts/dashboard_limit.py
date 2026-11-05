@@ -1610,6 +1610,10 @@ def main_events(now, proj, log):
     hook carried automatically ({cp, at, items, restartedAt}: the first restart after it, else null): a rejected
     checkpoint whose main was never restarted. restartFailures lists each checkpoint whose restart helper gave up
     ({cp, at}, the `restart: AUTO RESTART FAILED for <cp>:` line): no stop retries it, so main waits for the owner.
+    restartHeld lists each current `restart: HELD: cp=<cp|none> session=<sid> cwd=<dir>: <why>` hold ({cp, session, at,
+    why}): one per session, until a later `restart: new pane ... resumed from <cp>.md` names its cp or a later hold of
+    the session replaces it; a cp=none hold expires after 30 min. Ours by `ours(cp)`, a cp=none hold by its session's
+    transcript under `proj`.
     resumedAt, main's last restart, is the newer of the newest <session id>.resumed-from record of such a session and
     the newest main prompt opening RESUME: a restart by hand carries no resume token, so only its prompt proves it.
     An unreadable file raises OSError.
@@ -1640,19 +1644,25 @@ def main_events(now, proj, log):
                 elif r.get("type") == "user" and str((r.get("message") or {}).get("content")).startswith(RESUME):
                     prompts.append(at)
     ours = lambda cp: os.path.exists(os.path.join(proj, os.path.basename(cp)[:-3] + ".jsonl"))
-    failed, healed, carried, gave_up = {}, set(), {}, {}
+    failed, healed, carried, gave_up, held = {}, set(), {}, {}, {}
     try:
         with open(log, errors="replace") as f:
             for line in f:
                 m = re.match(r"(\S+) stop-hook: (?:carry-over check failed for (\S+) against |could not copy \d+ missing items into (\S+?);|(\d+) items carried automatically into the checkpoint (\S+))", line)
                 g = None if m else re.match(r"(\S+) restart: AUTO RESTART FAILED for (\S+?): ", line)
+                h = None if m or g else re.match(r"(\S+) restart: (?:HELD: cp=(\S+) session=(\S*) cwd=.*?: (.*)|new pane \S+ resumed from (\S+?\.md))", line)
                 try:
-                    at = datetime.fromisoformat((m or g)[1]).timestamp() if m or g else None
+                    at = datetime.fromisoformat((m or g or h)[1]).timestamp() if m or g or h else None
                 except ValueError:
                     at = None
                 if at is None or at < since:
                     continue
-                if g:
+                if h and h[5]:
+                    held = {k: v for k, v in held.items() if k[1] != os.path.basename(h[5])}
+                elif h:
+                    held = {k: v for k, v in held.items() if k[0] != h[3]}
+                    held[(h[3], h[2])] = (at, h[4])
+                elif g:
                     gave_up[g[2]] = at
                 elif m[5]:
                     healed.add(m[5])
@@ -1673,6 +1683,8 @@ def main_events(now, proj, log):
                         for cp, (at, n) in sorted(carried.items(), key=lambda x: x[1][0]) if ours(cp)],
             "carryFailed": [{"at": iso(at), "cp": cp} for cp, at in sorted(failed.items(), key=lambda x: x[1]) if cp not in healed and ours(cp)],
             "restartFailures": [{"at": iso(at), "cp": cp} for cp, at in sorted(gave_up.items(), key=lambda x: x[1]) if ours(cp)],
+            "restartHeld": [{"cp": cp, "session": sid, "at": iso(at), "why": why} for (sid, cp), (at, why) in sorted(held.items(), key=lambda x: x[1][0])
+                            if (ours(cp) if cp != "none" else (now - at < 1800 and os.path.exists(os.path.join(proj, sid + ".jsonl"))))],
             "resumedAt": iso(restarts_at[-1]) if restarts_at else None}
 
 

@@ -210,6 +210,104 @@ def dropped(i, drop, keep):
     return i not in keep and (i in drop or (i in MADE_FROM and all(dropped(o, drop, keep) for o in MADE_FROM[i])))
 
 
+HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|"
+         "dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|"
+         "li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|"
+         "th|thead|title|tr|track|ul")
+
+
+def fence_opens(line, run, st):
+    """fence.sh's fence() open rule: 0-3 spaces, not in an HTML block (DE10), no backtick after a backtick run (DE11)."""
+    if not run or st.get("hblk") or not re.match(r" {0,3}(`{3}|~{3})", line):
+        return False
+    if run.group(1)[0] == "`" and "`" in run.group(2):
+        return False
+    st.update(pk=0, ptxt="", pn=0)
+    return True
+
+
+def heading_level(line, prev):
+    """fence.sh's heading() (issue 640) for one line outside a fence: (level, title), level 0 for none. prev is the
+    reader's state across lines: hblk (an open HTML block's end marker, "blank", or ""), pk (0 no paragraph, 1 plain,
+    2 list, quote or table), ptxt and pn (the plain paragraph's text and line count; pn stays set on a setext heading,
+    whose title lines precede it)."""
+    hb, pk = prev.get("hblk", ""), prev.get("pk", 0)
+    if hb:
+        if (hb == "blank" and not line.strip()) or (hb != "blank" and hb in line.lower()):
+            prev["hblk"] = ""
+        prev.update(pk=0, ptxt="", pn=0)
+        return 0, ""
+    if not line.strip():
+        prev.update(pk=0, ptxt="", pn=0)
+        return 0, ""
+    ind = len(line) - len(line.lstrip(" "))
+    if line[ind:ind + 1] == "\t":
+        ind = 4
+    s, t = line[ind:], " ".join(line.split())
+    if ind >= 4:
+        if pk == 1:
+            prev.update(ptxt=prev["ptxt"] + " " + t, pn=prev["pn"] + 1)
+        return 0, ""
+    if pk == 1 and re.fullmatch(r"(=+|-+)[ \t]*", s):
+        title = prev["ptxt"]
+        prev.update(pk=0, ptxt="")
+        return (1 if s[0] == "=" else 2), title
+    if re.fullmatch(r"\*{3,}|-{3,}|_{3,}", re.sub(r"[ \t]", "", s)):
+        prev.update(pk=0, ptxt="", pn=0)
+        return 0, ""
+    m = re.match(r"(#{1,6})([ \t]|$)", s)
+    if m:
+        title = s[len(m.group(1)):].strip()
+        title = "" if re.fullmatch(r"#+", title) else re.sub(r"[ \t]+#+$", "", title)
+        prev.update(pk=0, ptxt="", pn=0)
+        return len(m.group(1)), title
+    low, end = s.lower(), ""
+    m = re.match(r"<(script|pre|style|textarea)([ \t>]|$)", low)
+    if m:
+        end = "</" + m.group(1) + ">"
+    elif low.startswith("<!--"):
+        end = "-->"
+    elif low.startswith("<?"):
+        end = "?>"
+    elif low.startswith("<![cdata["):
+        end = "]]>"
+    elif re.match(r"<![a-z]", low):
+        end = ">"
+    elif re.match(r"</?(" + HTML6 + r")([ \t>]|/>|$)", low) or (
+            not pk and re.fullmatch(r"</?[a-z][a-z0-9-]*([ \t][^<>]*)?/?>[ \t]*", low)):
+        end = "blank"
+    if end:
+        prev.update(hblk="" if end != "blank" and end in low[2:] else end, pk=0, ptxt="", pn=0)
+        return 0, ""
+    if re.match(r"([-*+]|[0-9]+[.)])([ \t]|$)", s) or s[:1] in (">", "|"):
+        prev.update(pk=2, ptxt="", pn=0)
+    elif pk == 1:
+        prev.update(ptxt=prev["ptxt"] + " " + t, pn=prev["pn"] + 1)
+    elif not pk:
+        prev.update(pk=1, ptxt=t, pn=1)
+    return 0, ""
+
+
+def details_cut(text):
+    """main-session.md above its first level-2 `Details (not injected)` heading outside a fence, in any form; a setext
+    heading's title lines go with it."""
+    lines, st, fence = text.splitlines(True), {}, ""
+    for i, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        run = FENCE.match(line)
+        if fence:
+            if run and run.group(1)[0] == fence[0] and len(run.group(1)) >= len(fence) and not run.group(2).strip():
+                fence = ""
+            continue
+        if fence_opens(line, run, st):
+            fence = run.group(1)
+            continue
+        level, title = heading_level(line, st)
+        if level == 2 and title == "Details (not injected)":
+            return "".join(lines[:i - (st.get("pn", 0) if not line.lstrip().startswith("#") else 0)])
+    return text
+
+
 def parse(text):
     """[(kind, lines)]: kind is h (heading), u (a rule) or b (a blank line)."""
     out, cur, fence = [], None, ""
@@ -220,7 +318,9 @@ def parse(text):
             out.append(("u", cur))
         cur = None
 
-    # The fence rule of fence.sh: backticks or tildes, indented or not, closed by the same character at least as long.
+    # The fence rule of fence.sh: backticks or tildes at 0-3 spaces, closed by the same character at least as long; no
+    # fence opens in an HTML block or on a backtick span line (fence_opens). heading_level keeps the HTML block state.
+    st = {}
     for line in text.split("\n"):
         run = FENCE.match(line)
         if fence:
@@ -229,10 +329,12 @@ def parse(text):
                 fence = ""
                 flush()
             continue
-        if run:
+        if fence_opens(line, run, st):
             flush()
             cur, fence = [line], run.group(1)
-        elif not line.strip():
+            continue
+        heading_level(line, st)
+        if not line.strip():
             flush()
             out.append(("b", [line]))
         elif line.startswith("#"):
@@ -286,7 +388,7 @@ def main(argv):
             print(f)
             continue
         if f.endswith("main-session.md"):
-            text = re.split(r"^## Details \(not injected\)", text, maxsplit=1, flags=re.M)[0]
+            text = details_cut(text)
         for kind, lines in parse(BLOCK.sub("", text)):
             if kind == "u":
                 theirs.setdefault(norm(lines), f)

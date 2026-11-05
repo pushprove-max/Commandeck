@@ -2,9 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import {
   bandModel, closesOf, emptySnap, isIdle, newestAttempt, paneModel, parseMergeLog, parseSnapshot, parseTestLive, seatFromGit, seenOf,
-  summaryLine, tableText, toasts,
+  summaryLine, tableText, toasts, dotOf,
 } from './units-sources'
-import type { Line, MergeView, Row, Seen, SeatState, Snap, State, TestView } from './units-sources'
+import type { Dot, Line, MergeView, Row, Seen, SeatState, Snap, State, TestView, UnitEvent } from './units-sources'
+import { shortName } from './units-elements'
 import { setStatus } from './status-line'
 
 // Live units, merges and test runs, read from files the scripts already write. The mod writes nothing: its only state is
@@ -13,6 +14,9 @@ const state = atom({ plugin: 'commandeck', key: 'unitsState' } as const, null)
 const view = atom({ plugin: 'commandeck', key: 'unitsView' } as const, { band: false, pane: false, status: false })
 // The working mark's turn: only the motion clock writes it, never the poll, so a poll keeps the turn.
 const frame = atom({ plugin: 'commandeck', key: 'unitsFrame' } as const, 0)
+// The pane's keys: the unit shown with its last tool calls, and the section moved first. In memory only (DH7).
+const expanded = atom({ plugin: 'commandeck', key: 'unitsExpanded' } as const, null)
+const focus = atom({ plugin: 'commandeck', key: 'unitsFocus' } as const, null)
 
 type Paths = { main: string; scratch: string; workspaces: string; home: string; gitDir: string; project: string }
 type Views = 'band' | 'pane' | 'status'
@@ -40,13 +44,14 @@ let option: Record<Views, string> = { band: 'auto', pane: 'auto', status: 'auto'
 const wanted = (v: Views) => overrides[v] ?? (option[v] === 'on' ? true : option[v] === 'off' ? false : seatName !== 'worker')
 
 // A log is parsed again only when its size or mtime moved; one over the cap shows a placeholder instead of being read.
-async function parsed<T>($: EngineInterface, path: string, size: number, mtimeMs: number, parse: (text: string) => T): Promise<T | { big: number }> {
+// `tag` keeps two parses of one file (a different `parse`) apart in the cache.
+async function parsed<T>($: EngineInterface, path: string, size: number, mtimeMs: number, parse: (text: string) => T, tag = ''): Promise<T | { big: number }> {
   if (size > MAX_LOG) return { big: Math.round(size / 1e6) }
   const key = `${size}:${mtimeMs}`
-  const hit = cache.get(path)
+  const hit = cache.get(path + tag)
   if (hit?.key === key) return hit.value as T
   const value = parse((await $.fs.read(path)) as string)
-  cache.set(path, { key, value })
+  cache.set(path + tag, { key, value })
   return value
 }
 const isBig = (v: unknown): v is { big: number } => typeof v === 'object' && v !== null && 'big' in v
@@ -81,29 +86,76 @@ async function readSnapshot($: EngineInterface, p: Paths, now: number): Promise<
 // A planning seat leaves `$PP_SCRATCH/seat-<unit>-<role>.txt`. A record with a `verdict=` line is done; without one it
 // runs until its last `phase=` is `failed`, and a seat whose launch failed says nothing. A seat whose pane died before
 // collect reads running (its record keeps no live pid). Running wins over done.
-async function seatState($: EngineInterface, p: Paths, scr: Dir, prefix: string): Promise<SeatState> {
+// `since` skips the records older than it (a built unit's own earlier planning). seatScan's `nogo` says the newest record
+// ends in a NO-GO verdict= with no revised= after it.
+async function seatState($: EngineInterface, p: Paths, scr: Dir, prefix: string, since = 0): Promise<SeatState> {
+  return (await seatScan($, p, scr, prefix, since)).state
+}
+
+async function seatScan($: EngineInterface, p: Paths, scr: Dir, prefix: string, since: number): Promise<{ state: SeatState; nogo: boolean }> {
   let found: SeatState = null
-  for (const e of scr.filter(x => x.name.startsWith(prefix) && x.name.endsWith('.txt'))) {
-    const rec = await parsed($, `${p.scratch}/${e.name}`, e.size, e.mtimeMs, text => ({ done: /^verdict=/m.test(text), failed: [...text.matchAll(/^phase=(.*)$/gm)].at(-1)?.[1] === 'failed' })).catch(() => undefined)
+  let newest = -1
+  let nogo = false
+  for (const e of scr.filter(x => x.name.startsWith(prefix) && x.name.endsWith('.txt') && x.mtimeMs >= since)) {
+    const rec = await parsed($, `${p.scratch}/${e.name}`, e.size, e.mtimeMs, text => {
+      const last = [...text.matchAll(/^(verdict|revised)=(.*)$/gm)].at(-1)
+      return { done: /^verdict=/m.test(text), failed: [...text.matchAll(/^phase=(.*)$/gm)].at(-1)?.[1] === 'failed', nogo: last?.[1] === 'verdict' && /NO-GO/.test(last[2]) }
+    }).catch(() => undefined)
     if (!rec || isBig(rec)) continue
+    if (e.mtimeMs > newest) { newest = e.mtimeMs; nogo = rec.nogo }
     if (rec.done) found = found ?? 'done'
-    else if (!rec.failed) return 'running'
+    else if (!rec.failed && found !== 'running') found = 'running'
   }
-  return found
+  return { state: found, nogo }
 }
 
 // What the snapshot does not carry for a unit still planning: when its worktree was made (Orca writes `.git` then), the
 // issues its plan closes and its seats. Each stays unset when its file is absent, so nothing unknown is drawn.
 async function enrich($: EngineInterface, p: Paths, r: Row, scr: Dir): Promise<Row> {
   const wt = `${p.workspaces}/${r.unit}`
-  const planning = r.stage === 'planning'
-  const plan = planning ? await seatState($, p, scr, `seat-${r.unit}-plan-author`) : null
-  const judges = planning ? await seatState($, p, scr, `seat-${r.unit}-plan-judge`) : null
   const startedAt = r.startedAt ?? (await $.fs.stat(`${wt}/.git`).then(st => st.mtimeMs, () => null))
+  let stage = r.stage
+  const planning = stage === 'planning'
+  let plan = planning ? await seatState($, p, scr, `seat-${r.unit}-plan-author`) : null
+  let judges = planning ? await seatState($, p, scr, `seat-${r.unit}-plan-judge`) : null
+  // A built unit re-planned reads waiting-main in a snapshot up to 5 minutes old (#621): its plan seats since the Builder started say otherwise.
+  if (stage === 'waiting-main' && startedAt !== null) {
+    const author = await seatState($, p, scr, `seat-${r.unit}-plan-author`, startedAt)
+    const judge = await seatScan($, p, scr, `seat-${r.unit}-plan-judge`, startedAt)
+    if (author === 'running' || judge.state === 'running' || judge.nogo) {
+      stage = 'planning'
+      plan = author
+      judges = judge.state
+    }
+  }
   const planFile = `${wt}/.claude/plans/${r.unit}.md`
   const st = await $.fs.stat(planFile).catch(() => undefined)
   const closes = st ? await parsed($, planFile, st.size, st.mtimeMs, closesOf).catch(() => []) : []
-  return { ...r, startedAt, closes: isBig(closes) ? [] : closes, plan, judges }
+  return { ...r, stage, startedAt, closes: isBig(closes) ? [] : closes, plan, judges, judgeRounds: await judgeRoundsOf($, p, scr, r.unit) }
+}
+
+// The plan-judge records' verdict= lines, oldest record first, one dot each.
+async function judgeRoundsOf($: EngineInterface, p: Paths, scr: Dir, unit: string): Promise<Dot[]> {
+  const out: Dot[] = []
+  for (const e of scr.filter(x => x.name.startsWith(`seat-${unit}-plan-judge`) && x.name.endsWith('.txt')).sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    const dots = await parsed($, `${p.scratch}/${e.name}`, e.size, e.mtimeMs, text => [...text.matchAll(/^verdict=(.*)$/gm)].map(m => dotOf(m[1])), '#judge').catch(() => undefined)
+    if (dots && !isBig(dots)) out.push(...dots)
+  }
+  return out
+}
+
+// The last 40 whole lines of unit-events.jsonl ({at, unit, event}); null when the file is absent, too big or unreadable.
+async function readEvents($: EngineInterface, p: Paths, scr: Dir): Promise<UnitEvent[] | null> {
+  const e = scr.find(x => x.name === 'unit-events.jsonl')
+  if (!e || e.size > MAX_LOG) return null
+  const rows = await parsed($, `${p.scratch}/${e.name}`, e.size, e.mtimeMs, text => {
+    const lines = text.split('\n')
+    if (!text.endsWith('\n')) lines.pop()
+    return lines.filter(Boolean).slice(-40).flatMap((l): UnitEvent[] => {
+      try { const j = JSON.parse(l); const at = Date.parse(j.at); return Number.isFinite(at) && typeof j.unit === 'string' && typeof j.event === 'string' ? [{ at, unit: j.unit, event: j.event }] : [] } catch { return [] }
+    })
+  }, '#events').catch(() => null)
+  return rows && !isBig(rows) ? rows : null
 }
 
 type Found<T> = { views: T[]; notes: string[] }
@@ -219,7 +271,7 @@ async function collect($: EngineInterface, p: Paths): Promise<State> {
   const snap = { ...raw, rows: await Promise.all(raw.rows.map(r => enrich($, p, r, scr))) }
   const m = await readMerges($, p, now).catch(() => ({ views: [], notes: [], ended: [], units: new Set<string>() }))
   const t = await readTests($, p, now, m.units).catch((): Found<TestView> => ({ views: [], notes: [] }))
-  const st: State = { now, snap, merges: m.views, tests: t.views, notes: { merges: m.notes, tests: t.notes } }
+  const st: State = { now, snap, merges: m.views, tests: t.views, notes: { merges: m.notes, tests: t.notes }, events: await readEvents($, p, scr) }
   if (!snap.note) {
     const cur = seenOf(snap, m.ended)
     if (wanted('status')) for (const text of toasts(prevSeen, cur)) $.ui.toast(text)
@@ -329,7 +381,15 @@ export function registerUnits(on: Parameters<Register>[0], options: Parameters<R
       overrides[which] = flip !== 'off'
       await setViews($)
       await tick($)
-      return { text: `units ${which}: ${overrides[which] ? 'on' : 'off'} for this session` }
+      let note = ''
+      if (which === 'pane' && overrides.pane) {
+        // The person's explicit ask reaches the engine every time, which places it at any width (#645); polls keep the paneUp guard.
+        paneUp = true
+        await $.ui.open({ id: PANE, title: 'Units' })
+        const placed = (await $.ui.panes().catch(() => [])).find(x => x.id === PANE)?.isPlaced
+        if (placed === false) note = ', waiting undrawn (the window is under 110 columns wide; widen it or run /units pane on again)'
+      }
+      return { text: `units ${which}: ${overrides[which] ? 'on' : 'off'} for this session${note}` }
     }
     await tick($)
     return { text: tableText(await read($, state) as State | null ?? emptyState(), Math.max(40, Number(e.presentation?.columns) || 56)) }
@@ -351,13 +411,21 @@ export function registerUnits(on: Parameters<Register>[0], options: Parameters<R
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const s = (await read($, state)) as State | null
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     if (!s || isIdle(s)) return <Text dimColor>No live units.</Text>
-    const w = Math.max(40, Math.min(72, Number(e.props.bodyColumns) || 56))
+    const w = Math.max(40, Math.min(120, Number(e.props.bodyColumns) || 56))
     const f = await read($, frame)
+    const ex = await read($, expanded)
+    const fo = await read($, focus)
+    // Keys 1-9 expand a unit; d, t and l move decisions, timeline or the log first. A second press undoes it.
+    const keys = [
+      ...s.snap.rows.slice(0, 9).map((r, i) => ({ key: `unit-${i + 1}`, hotkey: String(i + 1), label: `[${i + 1}] ${shortName(r.unit)}`, run: () => update($, expanded, c => (c === r.unit ? null : r.unit)) })),
+      ...([['d', 'decisions'], ['t', 'timeline'], ['l', 'log']] as const).map(([k, name]) => ({ key: `focus-${k}`, hotkey: k, label: `[${k}]`, run: () => update($, focus, c => (c === name ? null : name)) })),
+    ]
     return (
       <Box flexDirection="column">
-        {paneModel(s, w, f).map((l, i) => <Box key={`p${i}`} flexDirection="row">{l.length ? draw(Text, l, `p${i}`) : <Text> </Text>}</Box>)}
+        <Box flexDirection="row">{keys.map(k => <Button key={k.key} hotkey={k.hotkey} plain onPress={() => void k.run()}>{`${k.label} `}</Button>)}</Box>
+        {paneModel(s, w, f, { expanded: ex, focus: fo }).map((l, i) => <Box key={`p${i}`} flexDirection="row">{l.length ? draw(Text, l, `p${i}`) : <Text> </Text>}</Box>)}
       </Box>
     )
   }).catch(($, e, next) => next(e))

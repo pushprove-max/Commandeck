@@ -47,6 +47,10 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 ME=${1:-${ORCA_TERMINAL_HANDLE:-$(bash "$PP_SCRIPTS/cos-tell.sh" --handle 2>/dev/null)}}
+# Issue 614: `--lane <name>` after the handle makes this a Fast-lane or Research-lane poller: its own state files, mail to
+# its own handle only, routine FYI notes held, and none of the relay's main-reply checks.
+LANE=; [ "${2-}" != --lane ] || LANE=${3-}
+[ -z "$LANE" ] || COS_KEY=$COS_KEY.lane-$LANE
 NAME=$(jq -r '.chiefOfStaff.name // empty' "$PP_MAIN/.claude/commandeck.json" 2>/dev/null)
 # Orca returns the newest rows of the whole machine's inbox. When a full page
 # starts past the last row read, there may be unread rows behind it: the poll
@@ -55,7 +59,7 @@ NAME=$(jq -r '.chiefOfStaff.name // empty' "$PP_MAIN/.claude/commandeck.json" 2>
 poll() {
   local n=60 rc
   while :; do poll_n "$n"; rc=$?; [ "$rc" = 3 ] || break; n=$((n * 4)); done
-  [ "$rc" = 4 ] && main_silent || return "$rc"
+  [ "$rc" = 4 ] && [ -z "$LANE" ] && main_silent || return "$rc"
 }
 main_silent() {
   local at subj st idle locked
@@ -88,21 +92,21 @@ poll_n() { # rows to ask for
   # Each row gets _admit (addressed to this pane, or a pre-cutover untagged status from main) and _class (wake_class
   # for the relay, the page as its repeat history; one to this pane's own handle is never held). Junk reads as busy.
   orca-ide orchestration inbox --limit "$1" --full --json 2>/dev/null \
-    | jq -c --arg me "$ME" --arg run "$run" --arg coord "$coord" --arg cut "$cut" "$PP_JQ_WAKES"'
+    | jq -c --arg me "$ME" --arg run "$run" --arg coord "$coord" --arg cut "$cut" --arg lane "$LANE" "$PP_JQ_WAKES"'
       def admit: .to_handle == $me
-        or ($run != "" and .run_id == $run
+        or ($lane == "" and $run != "" and .run_id == $run
           and (recipient == "chief-of-staff"
             or (recipient == null and $coord != "" and .from_handle == $coord and .type == "status"
               and ((.to_handle // "") | . == "" or . == "run:" + $run)
               and ($cut == "" or (wk_at // 0) < ($cut | tonumber)))));
       if type == "object" then (.messages // .result.messages // []) as $all | del(.messages)
         | .result = ((.result | objects) // {}) + {messages: [$all[]? | objects
-          | . + {_admit: admit, _class: (wake_class([]; []; $all; "relay") as $c | if $c == "batch" and .to_handle == $me then "now" else $c end)}]}
+          | . + {_admit: admit, _class: (wake_class([]; []; $all; "relay") as $c | if $c == "batch" and .to_handle == $me and $lane == "" then "now" else $c end)}]}
       else . end' 2>/dev/null | python3 -c '
 import datetime, fcntl, json, os, re, subprocess, sys, time
 me, seqf, name, run, coord = sys.argv[1:6]
 limit = int(sys.argv[6])
-owedf, seenf, scripts, workspaces = sys.argv[7:11]
+owedf, seenf, scripts, workspaces, lane = sys.argv[7:12]
 now = int(os.environ.get("COMMANDECK_NOW") or time.time())
 try:
     d = json.load(sys.stdin)
@@ -119,11 +123,16 @@ def save(seq, held):
     with open(seqf + ".new", "w") as f:  # closed here, so a write the disk refuses late is caught too
         f.write(f"{seq} enc\n{held}")
     os.replace(seqf + ".new", seqf)
-# A missing file starts from the newest message instead of replaying old ones.
+# A missing file starts from the newest message instead of replaying old ones. A lane (issue 614) is a new pane whose
+# first poll can come after its first order: it starts just before its oldest unread row sent to its own handle, so
+# that order is delivered now, not passed over for good.
 if not os.path.exists(seqf):
-    if ms:
-        save(top, "")
-    sys.exit(4)
+    unread = [m.get("sequence") or 0 for m in ms if lane and m.get("_admit") and not m.get("read")]
+    if not unread:
+        if ms:
+            save(top, "")
+        sys.exit(4)
+    save(min(unread) - 1, "")
 first, _, held = open(seqf).read().partition("\n")
 # The first line is the place, then "pending" when the rest of the file is a
 # batch saved for the pane and not yet shown to it, "since=<epoch>" when the held
@@ -152,7 +161,10 @@ if limit < 3840 and len(ms) >= limit and min(m.get("sequence") or 0 for m in ms)
 # its own handle, or the relay tag in its run) and what it does (_class, the one wake rule).
 # Issue 319: a send stamps the name it was given with --from (chiefOfStaff.name) in any case, not the handle: both are this pane own.
 own = {me.lower(), name.lower()} - {""}
-mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle") or "").lower() not in own and m.get("_admit")]
+# A lane (issue 614) takes only rows Orca has not marked read, on every poll: a read order was handled, and replaying it
+# repeats the work (pass 3). The relay keeps read rows: the loop of main reads the run mail before the relay polls.
+mine = [m for m in ms if (m.get("sequence") or 0) > last and (m.get("from_handle") or "").lower() not in own and m.get("_admit")
+        and not (lane and m.get("read"))]
 def at(m):
     try:
         return int(datetime.datetime.fromisoformat((m.get("created_at") or "").replace("Z", "+00:00")).timestamp())
@@ -162,7 +174,7 @@ def at(m):
 # nor is an event an older process sent untagged before the cutover. The subject tells those two apart here, for the
 # owed mark only: it admits and wakes nothing. Only a row the wake rule shows (now or batch) is a reply: a repeat it
 # drops is a copy Orca sent again of an older one, which must not clear an owner message marked owed after it.
-sent = [at(m) for m in mine if coord and m.get("_class") in ("now", "batch") and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)
+sent = [at(m) for m in mine if coord and not lane and m.get("_class") in ("now", "batch") and m.get("from_handle") == coord and not re.match(r"cos: main-watch\b", m.get("subject") or "", re.I)
         and not (m.get("subject") or "").startswith("FYI event: ")]
 def num(path):
     try:
@@ -247,7 +259,7 @@ try:
 except OSError as e:
     sys.exit(f"cos-watch-inbox: the batch was not shown or not marked shown ({e}); the next poll shows it")
 sys.exit(0)
-' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES"
+' "$ME" "$COS_KEY.inbox-seq" "$NAME" "$run" "$coord" "$1" "$PP_SCRATCH/cos-owed" "$COS_KEY.inbox-seen-ids" "$PP_SCRIPTS" "$PP_WORKSPACES" "$LANE"
   rc=$?
   if [ "$rc" = 1 ]; then poll_failed "the inbox read failed"; else rm -f "$COS_KEY.poll-failing"; fi
   return "$rc"

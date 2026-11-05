@@ -298,9 +298,15 @@ revise)
   [ "$ROLE" != builder ] || { echo "REFUSED: a Builder is revised through answer-worker.sh, not seat.sh revise" >&2; exit 2; }
   [ -f "$REC" ] || { echo "no seat record at $REC" >&2; exit 2; }
   H=$(rec handle); OLD=$(rec task)
-  [ "$(pane_state)" = live ] || { echo "REFUSED: pane ${H:-?} of $ROLE $UNIT is not live; nothing was sent" >&2; exit 2; }
+  # Issue 585 (DG8): a closed pane is revised by its task's dispatch when this host's closed send passed (Orca reopens it);
+  # without that pass (pp_follow_up 3) the refusal stands. A closed pane is not mid-turn: the busy read is skipped.
+  CLOSED=
+  if [ "$(pane_state)" != live ]; then
+    pp_follow_up "$H" "revision" "" --check || { echo "REFUSED: pane ${H:-?} of $ROLE $UNIT is not live; nothing was sent" >&2; exit 2; }
+    CLOSED=1
+  fi
   . "$PP_SCRIPTS/codex-helpers.sh"
-  rc=0; pane_is_busy "$H" || rc=$?
+  rc=0; if [ -n "$CLOSED" ]; then rc=1; else pane_is_busy "$H" || rc=$?; fi
   # Issue 598: a finished seat's pane can still read working. A finish in its latest answer, read as collect reads one,
   # stands for the idle pane, and the old task settles on it (PP_VERDICT_READ=1, issue 631's switch: the open-question
   # check still runs). A revised seat's latest answer is the previous task's until the revised prompt lands in its
@@ -314,6 +320,7 @@ revise)
     [ "$VREAD" = 1 ] || { echo "REFUSED: $H is mid-turn or its agent state cannot be read ($WHY); nothing was sent" >&2; exit 2; }
   fi
   # A refusal or an open question stops here, the record intact.
+  [ -z "$CLOSED" ] || VREAD=1
   if [ "$VREAD" = 1 ]; then PP_VERDICT_READ=1 pp_task_close "$OLD" completed || exit 1; else pp_task_close "$OLD" completed || exit 1; fi
   # planref= is the plan at revise time (issue 612): the plan the seat inherited is no finish of the revised turn
   # (pp_plan_committed). Read before the revision is sent (pass 8): a worker that commits before dispatch returns would
@@ -321,10 +328,20 @@ revise)
   PLANREF=$(git -C "$WT" rev-parse -q --verify "HEAD:.claude/plans/$UNIT.md" 2>/dev/null || true)
   NEW=$(task_create "$TEXT When you have done this, send worker_done and end on the line your brief names.") \
     || { echo "task-create failed for the revision of $ROLE $UNIT; nothing was sent" >&2; exit 1; }
-  if ! "$PP_SCRIPTS/dispatch-task.sh" "$NEW" "terminal:$H" --keep-task; then
-    echo "NO-WAKE: task $NEW was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
-    orca-ide terminal send --terminal "$H" --text "$TEXT Task id $NEW." --enter --wait-submit 10 --json >/dev/null 2>&1 \
-      || { echo "send failed to $H" >&2; exit 1; }
+  # A closed pane has no terminal to start a worker in: the revision goes by its dispatch, and Orca's reopened pane is the
+  # record's handle from here on. A live pane whose dispatch failed gets it by `orchestration send` when its agent passed
+  # the send trial on this host; otherwise (pp_follow_up 3) it is typed, and Orca sends no worker_done for it.
+  if [ -n "$CLOSED" ]; then
+    pp_follow_up "$H" "revision" "$TEXT Task id $NEW." \
+      || { echo "REFUSED: closed pane $H of $ROLE $UNIT was not reopened; task $NEW is created but reached no pane" >&2; exit 1; }
+    H=$(rec handle)
+  elif ! "$PP_SCRIPTS/dispatch-task.sh" "$NEW" "terminal:$H" --keep-task; then
+    FU=0; pp_follow_up "$H" "revision" "$TEXT Task id $NEW." || FU=$?
+    if [ "$FU" = 3 ]; then
+      echo "NO-WAKE: task $NEW was typed into $H, not dispatched; Orca sends no worker_done for it" >&2
+      orca-ide terminal send --terminal "$H" --text "$TEXT Task id $NEW." --enter --wait-submit 10 --json >/dev/null 2>&1 \
+        || { echo "send failed to $H" >&2; exit 1; }
+    elif [ "$FU" != 0 ]; then echo "orchestration send failed to $H (exit $FU)" >&2; exit 1; fi
   fi
   # One task= line, replaced: seat.sh, board.sh and the awk readers take one.
   awk -v t="$NEW" -v p="$PLANREF" '/^task=/ { if (!d) print "task=" t; d = 1; next } /^(revised|planref)=/ { next } { print }
@@ -611,7 +628,7 @@ launch)
   # Issue 456: plan-check.sh refuses a Done line that names a component; the author is told the shape first.
   [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Under \`## Done\` write one \`- #<n> Done: <user action> -- <what the user sees>\` line per issue the unit closes: what a user does and what the user sees, never a component. Good: \`- #39 Done: a user retries an import from the dashboard after a lost response -- no duplicate import appears\`. Bad: \`- #39 Done: retry key handling (API)\`. Where the issue names only a component, write the user path with every hop, or name the missing hop as a stated limit."
   # Issues 476, 480: one owner section, and the size caps plan-check.sh enforces.
-  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Put every question for the owner in the one \`## Question for the owner\` section, never in a \`> Owner:\` line elsewhere or a second section: main sends the section as one ask. A plan of more than 1000 changed lines or more than 5 Closes issues needs a \`Split override: <reason>\` line (a bare \`Split override:\` is no override), or the unit is split."
+  [[ $ROLE != plan-author* ]] || SPEC_TEXT+=" Put every question for the owner in the one \`## Question for the owner\` section, never in a \`> Owner:\` line elsewhere or a second section: main sends the section as one ask. With no question, the section is one line: None: <reason>. A plan of more than 1000 changed lines or more than 5 Closes issues needs a \`Split override: <reason>\` line (a bare \`Split override:\` is no override), or the unit is split."
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A new question for the owner is a finding that starts \`Question for the owner:\`; do not add it to the plan. Main asks it with \`bash $PP_SCRIPTS_Q/decision.sh add plan-<unit> ... --reask\`."
   # Issue 481: stored data meets two versions of the code during a release.
   [[ $ROLE != plan-judge-* ]] || SPEC_TEXT+=" A plan that changes a shared table, a uniqueness rule or a stored shape and does not say how the previous version still works against it is a finding."
@@ -841,13 +858,15 @@ collect)
   if [ -n "$REPORT" ] && { [ "$RO" = 1 ] || [ ! -s "$REPORT" ] || grep -qxF "report=$REPORT" "$REC"; } && { [ -n "$V" ] || [ ! -s "$REPORT" ]; } && [ -n "$OUT" ]; then
     # A report with no `# ` heading would transcribe as an empty file and the pane
     # is closed right after, so fall back to the whole pane text.
-    BODY=$(printf '%s\n' "$OUT" | sed -n '/^# /,$p'); [ -n "$BODY" ] || BODY=$OUT
+    # The body starts at the first level-1 heading outside a fence (fence.sh's heading(), issue 640).
+    BODY=$(printf '%s\n' "$OUT" | awk "$PP_AWK_FENCE"'{ f = fence($0) } !on && !f && !flen && heading($0) == 1 { on = 1 } on'); [ -n "$BODY" ] || BODY=$OUT
     printf '%s\n' "$BODY" > "$REPORT"; echo "report: $REPORT ($(wc -l < "$REPORT" | tr -d ' ') lines)"
     echo "report=$REPORT" >> "$REC"
   fi
   # The 240-char bound keeps a pane's findings out of main's context.
   # grep finds nothing on a marker-only seat; under pipefail that ended collect silently.
-  printf '%s\n' "$OUT" | { grep -E '^\[P[0-3]\]|^- \[P[0-3]\]|^VERDICT|DONE$' || true; } | awk '{ print substr($0, 1, 240) }'
+  # Issue 647: a finding written `**F2 (P2):**` counts as `[P2]` does.
+  printf '%s\n' "$OUT" | { grep -E '^\[P[0-3]\]|^- \[P[0-3]\]|^(- )?(\*\*)?[A-Za-z0-9.-]+ \(P[0-3]\)|^VERDICT|DONE$' || true; } | awk '{ print substr($0, 1, 240) }'
   # MAIN HEARS NOTHING BETWEEN DISPATCH AND THE DRIVER'S EXIT without this. The
   # loop never messages main at all and unit-drive.sh wakes it only on a failure
   # or the final merge, so three brief reviews finished on 2026-09-13 and main
@@ -898,7 +917,7 @@ collect)
   case ${LAUNCHED:-} in ''|*[!0-9]*) echo "invalid launch epoch in $REC" >&2; exit 1 ;; esac
   # SETTLE BEFORE ANYTHING ENDS THE SEAT (host issue 2998): the seat's task and every task answer-worker.sh made to carry
   # main's answers close first. The verdict is read, so the pane's live state does not hold the settle (issue 631: a
-  # finished seat's pane can still read working, and refusing it stopped unit-drive.sh). A refusal (an open question, a
+  # finished seat's pane can still read working, and refusing it stopped unit-drive.sh; issue 636 keeps it that way). A refusal (an open question, a
   # check that could not be read) is retried for COMMANDECK_SEAT_SETTLE_RETRY_S; still refused, the pane stays open, no
   # verdict= is written and collect exits 4. A rerun is the retry: the
   # report is on disk and the delivery receipt keeps it from waking main twice. settled= keeps a rerun from closing a

@@ -93,55 +93,59 @@ arm() {
   echo "$rc $err" | tr '\n' ' ' | sed 's/ *$//'
 }
 started() { [ -e "$BOX/started" ] && wc -l <"$BOX/started" | tr -d ' ' || echo 0; }
-fresh() { rm -f "$BOX/started" "$BOX/poller.msg" "$BOX/poller.hang" "$KEY.inbox-woke"; }
+fresh() { rm -f "$BOX/started" "$BOX/poller.msg" "$BOX/poller.hang" "$KEY.inbox-woke" "$LK.inbox-woke"; }
+# Issue 584: the relay's poller runs under scripts/cos-supervise.sh, so the arm hook now runs only in a lane pane
+# (issue 614); its cases run in a Fast-lane worktree, whose state key is the relay's with the lane named.
+LANE=$BOX/wt/Fast-lane LK=$KEY.lane-fast-lane
+git -C "$MAIN" worktree add -q "$LANE" -b fastlane
 
 P=/x/plugin/scripts/cos-watch-inbox.sh
 procs ""
 check "Chief-of-Staff with no poller and every other watcher up is not blocked" "0 none" "$(run "$COS" false)"
 fresh
-check "a stop with no inbox poller starts one for this pane and does not block" "0 1 $H" \
-  "$(arm "$COS" false | cut -d' ' -f1) $(started) $(cut -d' ' -f2- "$BOX/started")"
+check "a stop with no inbox poller starts one for this pane and does not block" "0 1 $H --lane fast-lane" \
+  "$(arm "$LANE" false | cut -d' ' -f1) $(started) $(cut -d' ' -f2- "$BOX/started")"
 
 fresh; echo "main: build done" >"$BOX/poller.msg"
-OUT=$(arm "$COS" false)
+OUT=$(arm "$LANE" false)
 check "the poller's message comes back on stderr with exit 2" "2 1" \
   "${OUT%% *} $(case $OUT in *"main: build done"*) echo 1;; *) echo 0;; esac)"
-check "and the wake leaves the mark" "yes" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
+check "and the wake leaves the mark" "yes" "$([ -e "$LK.inbox-woke" ] && echo yes || echo no)"
 
 fresh
-check "a poller that ends with no message wakes nobody" "0 1" "$(arm "$COS" false | cut -d' ' -f1) $(started)"
-check "and leaves no mark" "no" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
+check "a poller that ends with no message wakes nobody" "0 1" "$(arm "$LANE" false | cut -d' ' -f1) $(started)"
+check "and leaves no mark" "no" "$([ -e "$LK.inbox-woke" ] && echo yes || echo no)"
 
 fresh; procs "bash $P $H"
-check "a stop with this pane's poller already running starts no second one" "0 0" "$(arm "$COS" false | cut -d' ' -f1) $(started)"
+check "a stop with this pane's poller already running starts no second one" "0 0" "$(arm "$LANE" false | cut -d' ' -f1) $(started)"
 procs "$P $H"; fresh
-arm "$COS" false >/dev/null
+arm "$LANE" false >/dev/null
 check "a poller run directly counts" "0" "$(started)"
 
 fresh; procs "bash $P term_other-2222" "bash $P ${H}2"
-arm "$COS" false >/dev/null
+arm "$LANE" false >/dev/null
 check "a poller for another pane does not count" 1 "$(started)"
 fresh; procs "cat $P" "vim $P $H" "/bin/zsh -c tail -f /tmp/log # $P" "/bin/bash $P" \
   "orca-ide orchestration check --terminal $H --wait --types worker_done,question --json"
-arm "$COS" false >/dev/null
+arm "$LANE" false >/dev/null
 check "a command that only mentions the script, or a poller with no handle, does not count" 1 "$(started)"
 
-fresh; procs ""; : >"$KEY.inbox-woke"
-check "the stop after a wake starts the next poller" "0 1" "$(arm "$COS" true | cut -d' ' -f1) $(started)"
-check "and clears the mark" "no" "$([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
-check "a second stop of the same chain, with no wake before it, starts none" "0 1" "$(arm "$COS" true | cut -d' ' -f1) $(started)"
+fresh; procs ""; : >"$LK.inbox-woke"
+check "the stop after a wake starts the next poller" "0 1" "$(arm "$LANE" true | cut -d' ' -f1) $(started)"
+check "and clears the mark" "no" "$([ -e "$LK.inbox-woke" ] && echo yes || echo no)"
+check "a second stop of the same chain, with no wake before it, starts none" "0 1" "$(arm "$LANE" true | cut -d' ' -f1) $(started)"
 fresh
 for A in '"true"' 1 '"yes"' null; do
-  arm "$COS" "$A" >/dev/null
+  arm "$LANE" "$A" >/dev/null
 done
 check "a stop_hook_active that is not JSON true reads as not active" 4 "$(started)"
-fresh; : >"$KEY.inbox-woke"; printf 'junk{' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+fresh; : >"$LK.inbox-woke"; printf 'junk{' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$LANE ORCA_TERMINAL_HANDLE=$H \
   bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1
 check "junk input reads as not active" 1 "$(started)"
 
 # The hook ends the poller it started when the harness stops it.
 fresh; : >"$BOX/poller.hang"
-printf '{"stop_hook_active":false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+printf '{"stop_hook_active":false}' | HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$LANE ORCA_TERMINAL_HANDLE=$H \
   bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1 &
 HPID=$!
 for _ in $(seq 50); do [ "$(started)" = 1 ] && break; sleep 0.1; done
@@ -151,10 +155,10 @@ check "stopping the hook ends the poller it started" "gone" "$(kill -0 "${PPID_:
 fresh
 
 for who in "AGENT_KIND=codex" "COMMANDECK_REVIEWER=1"; do
-  printf '{"stop_hook_active":false}' | env "$who" HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$COS ORCA_TERMINAL_HANDLE=$H \
+  printf '{"stop_hook_active":false}' | env "$who" HOME=$BOX/home PATH=$BOX/bin:$PATH CLAUDE_PROJECT_DIR=$LANE ORCA_TERMINAL_HANDLE=$H \
     bash "$PLG/hooks/cos-inbox-arm-stop.sh" >/dev/null 2>&1
 done
-arm "$WT" false >/dev/null; arm "$MAIN" false >/dev/null; arm "$COS" false "" >/dev/null
+arm "$WT" false >/dev/null; arm "$MAIN" false >/dev/null; arm "$LANE" false "" >/dev/null
 check "a non-relay pane, a reviewer, Codex and a pane with no handle start none" 0 "$(started)"
 fresh
 
@@ -214,6 +218,25 @@ check "limit percent passes" "none" "$(dec "7-day limit: 82%")"
 check "empty or absent reply passes" "none none" "$(dec "") $(run "$COS" false | cut -d' ' -f2)"
 check "verdict with news passes" "none" "$(dec "VERDICT: GO
 The deploy moved to the new host and the old one is off.")"
+
+# Issue 614: a lane pane (Fast-lane, Research-lane) wakes on mail only while its own poller runs. Its stop arms one named
+# for the lane, on a state key of its own, so the lane's wake mark never serves the relay's chain and the relay's never the lane's.
+fresh; procs ""; echo "main: new order" >"$BOX/poller.msg"
+arm "$LANE" false >/dev/null
+check "and the lane's wake mark is its own, not the relay's" "yes no" \
+  "$([ -e "$KEY.lane-fast-lane.inbox-woke" ] && echo yes || echo no) $([ -e "$KEY.inbox-woke" ] && echo yes || echo no)"
+fresh; rm -f "$KEY.lane-fast-lane.inbox-woke"
+# Issue 576: a lane's wake stop arms the next poller itself, so two messages in a row wake the lane twice with no
+# re-arm turn between them (moved from the relay pane, whose poller now runs under cos-supervise.sh).
+echo "main: one more" >"$BOX/poller.msg"
+check "two wakes in a row re-arm the poller without a turn" "2 2 2" \
+  "$(arm "$LANE" false | cut -d' ' -f1) $(arm "$LANE" true | cut -d' ' -f1) $(started)"
+fresh; rm -f "$KEY.lane-fast-lane.inbox-woke"
+# Issue 584: the relay's poller runs under its supervisor (scripts/cos-supervise.sh); a relay Stop starting one too
+# would run a second poller beside it, so the relay pane's Stop starts none, active chain or not.
+procs ""; : >"$KEY.inbox-woke"
+check "relay stop starts no poller" "0 0 0" "$(arm "$COS" false | cut -d' ' -f1) $(arm "$COS" true | cut -d' ' -f1) $(started)"
+fresh
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

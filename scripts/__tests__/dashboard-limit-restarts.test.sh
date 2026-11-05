@@ -49,5 +49,22 @@ check "--since and --until keep the restarts between them" '1 {"2026-10-21":1}' 
 # A carried checkpoint of 8192 bytes, not the 4096 it was first written at: 8192 / 4 / 40000 is 5.12%, not 2.56%.
 rm -f "$CP"/s[234].resumed-from
 check "a checkpoint carried from 4096 to 8192 bytes shows the 8192 share, 5.12%" 512 "$(report | jq '.medianSharePct * 100 | round')"
+# Issue 615: a restart the hook holds says why on the board until a new pane resumes from that checkpoint. main-events
+# reads the hook log's `restart: HELD:` lines; dashboard_alerts.jq turns each current hold into "main restart held: <why>".
+HNOW=1760000000; HPD=$T/held-proj; mkdir -p "$HPD"; : > "$HPD/ha.jsonl"
+HLOG=$T/held.log
+hat() { date -u -d "@$((HNOW - $1))" +%FT%T; }
+held_line() { echo "$(hat "$1") restart: HELD: cp=$2 session=${2%.md} cwd=/main: $3" >> "$HLOG"; }
+held_json() { python3 "$REAL/scripts/dashboard_limit.py" main-events "$HNOW" "$HPD" "$HLOG"; }
+held_alerts() { jq -nc -f "$REAL/scripts/dashboard_alerts.jq" --argjson now "$HNOW" --arg s7 "$(date -u -d "@$((HNOW - 604800))" +%FT%TZ)" --argjson hasSe false --argjson se '[]' \
+  --argjson preva '[{}]' --argjson srcs '[{}]' --argjson parts "$(jq -c '[{projects:{demo:{mainEvents:.}}}]' <<<"$(held_json)")" \
+  | jq -c '[.alerts[].text | select(startswith("demo: main restart held: ")) | sub("^demo: main restart held: "; "") | sub("\\. Action:.*$"; "")]'; }
+held_line 600 ha.md "checkpoint has unfilled fields (Goal)"
+check "held restart raises alert until new pane" '["checkpoint has unfilled fields (Goal)"] []' \
+  "$(held_alerts) $(echo "$(hat 300) restart: new pane h1 resumed from $CP/ha.md" >> "$HLOG"; held_alerts)"
+# hb is another session's (no transcript here): its hold shows nothing, and its restart does not clear ha's hold.
+: > "$HLOG"; held_line 600 ha.md "already restarted"; held_line 500 hb.md "carry-over block"
+echo "$(hat 300) restart: new pane h2 resumed from $CP/hb.md" >> "$HLOG"
+check "held restart of another session stays apart" '["already restarted"]' "$(held_alerts)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

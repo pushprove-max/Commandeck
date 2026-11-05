@@ -10,6 +10,8 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); echo "ok   $1"; else FAIL
 export HOME=$T/home
 PL=$T/plugin PROJ=$T/proj
 mkdir -p "$PL/scripts" "$HOME" && ln -s "$REAL/.claude-plugin" "$PL/"
+# paths.sh loads ../hooks/lib/project.sh (issue 588), as a real plugin folder holds it.
+ln -s "$REAL/hooks" "$PL/"
 # The notes are a fixture with a section for the manifest's version: these cases test setup under the update, not whether
 # this version's release notes are written yet (main's decision d-20261028-plugin-update-test).
 V=$(jq -r .version "$REAL/.claude-plugin/plugin.json")

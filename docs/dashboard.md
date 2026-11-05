@@ -261,6 +261,23 @@ is not in the dashboard snapshot`, `dashboard data is <n> min old` and `merge
 <unit>: log too big (<n> MB)`. A red mark means the Builder pane sits at its
 prompt.
 
+### Views and elements
+
+The pane, band and status line only read; the pane's keys change two in-memory values and write no file. Layout follows the width given: `mini` under 48 columns, `compact` 48-79, `wide` from 80 (the pane draws up to 120). Each element draws from a field the snapshot holds, shows `<element>: not read` when the dashboard tried and failed, and draws nothing when the snapshot lacks the field. Sections with nothing to show take no space. Plan and review seats keep no context collector, so their cards draw no gauge.
+
+| Element | Reads | Placeholder |
+| --- | --- | --- |
+| Context gauge (red at or past the clear line, with `· N compactions`) | `builder.context`, `builder.clearLine`, `builder.compactions` (the session log's `compact_boundary` rows) | `context: not read` |
+| SEATS (main and chief of staff gauges) | `seats.main.context/line`, `seats.relay.context`, `mainEvents.compactions` | `main context: not read` |
+| Round dots (red NO-GO, plan-judge rounds then review passes) | `builder.verdicts`, the plan-judge seat records' `verdict=` lines | none |
+| GATES (red refusal, amber pane at its prompt) | `guardBlocks.items` | `gates: hook fire log not read` |
+| Receipt (last step, running tool, errors; edits, cost and the command are named as not recorded) | `builder.steps`, `builder.tools` (the last 3 `tool-start` rows) | none |
+| TIMELINE (wide only) | `builder.stageHistory`, local midnight to now | none |
+| MERGED TODAY `pushed` / `merged here` | `finishedBuilds`, `mergedSincePush` (no deploy field exists, so `deployed` is not shown) | `push state not read` |
+| UNIT LOG (last 5, not in `mini`) | `unit-events.jsonl` in the scratch folder | `unit log: not read (no unit-events file)` |
+
+Keys: `1`-`9` expand a unit to its last 3 tool calls, `d`, `t` and `l` move decisions, timeline or the log first; a second press undoes it.
+
 ### Tests
 
 Run `claude plugin test .` and `claude plugin validate .` from the plugin folder.

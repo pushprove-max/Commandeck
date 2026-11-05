@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.73.0 -- 2026-11-05
+
+### Scripts
+
+- The unit driver's `start` now carries a unit to merge: it attaches to a live Builder, ends `DONE` on the merge, and prints one `STOP` line (stage, reason, resume command) on an open question, a `REVIEW STOP`, a refused merge, a closed pane or an idle Builder. A second `start` for a driven unit is refused, and a name used by another project's worktree is refused.
+- A plan question section of `- none` no longer stalls the driver. A question main never got is re-sent once, and main's wake shows `NEEDS-MAIN`. A stalled Builder launch is named instead of ending as `driver inactive with no log`, and a clean driver ends `DONE ... stage=launch`.
+- An answer to a Builder counts as delivered only once its turn has it, and the board lists an idle Builder waiting on an open question. An answer for a unit open in two projects goes to the asking project's pane, or one line names both and nothing is sent.
+- A Builder's question reaches main when main runs in another checkout, a missed reply prints by the end of the wait, and a `QUESTION:` reply wakes main at once. A stall now ends in `recovered:` lines on main's next wake, or a question with the log.
+- Verdicts: a Codex judge's GO closes its seat, findings headed `**F2 (P2):` are counted, and a lone surrogate no longer breaks the read. A heading written indented, underlined or with closing hashes reads as a plain heading.
+- Each repository and unit has its own Serena home, a runaway language server is stopped with a logged line, and the suite prints a `SKIPPED (no Serena python)` line.
+- In auto-answer mode a push that meets the gates is answered yes and logged; a clean push no longer opens a question. A new context rank shows what fills the coordinator panes, and applying a helper's diff removes the helper's worktree.
+- The Builder brief is about 15 percent shorter, and the refusals name the allowed forms. No text names a pass cap.
+
+### Hooks
+
+- A message to an idle Fast-lane or Research-lane pane starts a turn on it; a dead lane poller shows as `fast-lane-inbox` in the Chief of Staff check's watchers line. The guard blocks a split agent beside a live lane agent and names `COMMANDECK_REPLACE_PANE=<handle>`.
+- A held restart says why: `restart: HELD: <why>` in the hook log, and `main restart held: <why>` on the board.
+- On the Mac, an agent's direct run of a Commandeck test file is refused, and the message names the shell test runner, which sends the file to the PC.
+- On the Mac, a Commandeck test that a script starts is now refused the same way as one an agent types; tests the shell test runner starts are not affected.
+- The relay sees a wake only for a decision, a crit alert, the limit or held notes due. Orca wakes main when a worker reports, and an answer to a finished worker arrives as an Orca message that starts its turn.
+
+### Units mod
+
+- The pane shows a context gauge, round dots, a gate strip, a receipt line, a day timeline (wide only), merged today and a unit log, in mini, compact and wide layouts up to 120 columns. Keys `1`-`9`, `d`, `t` and `l` expand a unit or move a section first. The band's second row adds the unit's context.
+- A reopened unit being re-judged shows "Planning", and `/units pane on` says when the pane is waiting undrawn.
+
 ## 0.72.0 -- 2026-11-04
 
 ### Scripts

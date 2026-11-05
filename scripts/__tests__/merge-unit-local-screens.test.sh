@@ -45,6 +45,8 @@ X=web/src/pages/X.tsx
 EV=none; cu s1 web/src/pages/A.tsx '<p>hi</p>'; rc=$(merge s1)
 check "with the default, a screen diff under web/src with no evidence is refused" "1 1" \
   "$rc $(refused "screen code changed (web/src/pages/A.tsx) and .claude/briefs/s1-evidence.md has no ## Screenshots")"
+# #653: the template no longer spells out the rows, so the refusal must print the three forms and where shots go.
+check "screens refusal shows the row forms" "1 1 1 1" "$(for f in '- side-by-side: <mockup> | <screenshot>' '- screenshot: <path>' '- none: no visual change: <reason>' 'put screenshots at absolute paths outside the worktree'; do grep 'FAILED step 1 preconditions: screen code changed' "$TMP/out" | grep -cF -- "$f"; done | paste -sd' ' -)"
 back
 
 mkdir -p "$REPO/.claude"; printf '{"version":1,"screenPaths":["app/ui/"]}\n' > "$REPO/.claude/commandeck.json"
@@ -204,6 +206,12 @@ check "a refused task close leaves the merge's exit code and cleanup" "0 1 1" \
   "$rc $(grep -c '^STEP 5 task NOT closed: stub' "$TMP/out") $(grep -c 'terminal close' "$TMP/orca-calls" | awk '{ print ($1 > 0) }')"
 rm -f "$TMP/close-refused"; cp "$TMP/unit-close.real" "$REAL/scripts/unit-close.sh"
 back
+
+# Issue 640: the evidence's Screenshots section is read by fence.sh's heading(), so a closed `## Screenshots ##`
+# heading holds the screenshot row; missed, a screen change with its screenshot is refused as having none.
+back; EV=none; cu s640 web/src/pages/C.tsx '<p>c</p>'
+printf '# e\n\n## Screenshots ##\n- screenshot: %s\n' "$SHOT" > "$WS/s640/.claude/briefs/s640-evidence.md"; merge s640 >/dev/null
+check "Screenshots heading closed is read" 0 "$(refused 'screen code changed')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

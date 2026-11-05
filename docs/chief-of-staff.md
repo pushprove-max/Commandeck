@@ -31,7 +31,7 @@ it found and exits, which wakes the pane:
 | `cos-watch-units.sh` | a unit's worktree has a commit under a day old, its newest review round is not a GO at or after that commit, and nothing in it or its merge log changed for 12 minutes (once per commit; every 60 s). The Stop hook does not hold this one |
 | `cos-check.sh` | 50 minutes pass: it names a watcher that is down, prints held FYI notes, counts messages the inbox watcher missed, and says how long you have been quiet |
 
-A Stop hook keeps the pane from ending a turn unless the decisions, alerts and limit watchers and `cos-check.sh` are alive; a second Stop hook (`cos-inbox-arm-stop.sh`) starts the inbox poller itself and wakes the pane when a message lands.
+A Stop hook keeps the pane from ending a turn unless the decisions, alerts and limit watchers and `cos-check.sh` are alive, and names `cos-supervise.sh` first when it is not running. `cos-supervise.sh` starts the watchers and the inbox poller, restarts one that dies, and types each find into the pane.
 The first Stop hook also holds, once, a reply that is only verdicts, still-running lines or progress counts and asks you nothing; its reason tells the pane to say what it needs from you, or to end the turn as is.
 
 Orca also types "You have N orchestration messages" into main's pane and the relay's. A hook (`cos-own-echo.sh`) drops each one that holds nothing that pane must read now, and marks nothing read. The nudges themselves remain: main is its run's coordinator, and Orca refuses the coordinator's commands from a pane that is not bound to the run, so main cannot leave the run to stop them.

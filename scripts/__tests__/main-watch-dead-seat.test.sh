@@ -62,5 +62,57 @@ check "with COMMANDECK_ORCA_LOG unset the log under the host's default Orca fold
 COMMANDECK_ORCA_LOG=$T/no-such.log tick 4000
 check "a missing Orca daemon log says so in one line" 1 "$(grep -c 'no Orca daemon log at' "$T/stderr")"
 
+# test: issue 663: recover-stalls.sh never posts itself; its `ask:` line is one main-watch question (once, across ticks)
+# and its `recovered:` line goes to the digest, not a question.
+cat > "$T/rs-stub" <<EOF
+#!/usr/bin/env bash
+echo 'the driver died again; log tail here' > "$S/main-watch/recover-R4-ux.txt"
+printf 'ask: R4-ux\trecovery failed once: driver of ux died again\t%s\n' "$S/main-watch/recover-R4-ux.txt"
+echo 'recovered: dispatch uy: task task_y left ready'
+EOF
+export COMMANDECK_RECOVER_STALLS=$T/rs-stub
+tick 5000
+tick 6000
+unset COMMANDECK_RECOVER_STALLS
+RD=$(( $(cat "$S/main-watch/digest" "$T/sends" 2>/dev/null | grep -c 'recovered: dispatch uy: task task_y left ready') > 0 ))
+check "recovery ask line reaches post once" "1:1:0" \
+  "$(posts 'recovery failed once: driver of ux died again'):$RD:$(grep -c 'recovered: dispatch uy' "$T/stderr")"
+
+# test: issue 663 R4b: dead_seats posted a dead seat at once and never relaunched it, so the unit waited on a person for
+# a step one relaunch would carry. A seat that cannot be relaunched is still posted, and the post names why.
+dseat u-nospec reviewer term_n task_n pn;       xrow pn 600 unknown
+tick 7000
+check "dead seat with no spec posts naming why" "1:1" \
+  "$(dead u-nospec reviewer):$(grep -c 'Seat reviewer (term_n) on u-nospec: .*not relaunched: its seat record names no spec file' "$T/sends")"
+# A plan seat whose driver left its args file is the driver's to relaunch (recover-stalls.sh R4b, after the driver's own
+# `no verdict` STOP): a question before that relaunch is the bug. The item file is the mark R4b reads.
+dseat u-wait plan-judge-sol term_w task_w pw;   xrow pw 600 unknown
+printf '%s\n' "$T/a.md" "$T/j.md" "$T/b.md" drive-u-wait-100 > "$S/drive-u-wait.args"
+tick 8000
+check "dead plan seat whose driver can restart it is not posted on its first exit" "0:1" \
+  "$(dead u-wait plan-judge-sol):$([ -e "$S/main-watch/item-dead-u-wait-plan-judge-sol-500" ] && echo 1 || echo 0)"
+rm -f "$S/drive-u-wait.args"
+# A non-plan seat with its spec: the real recover-stalls.sh relaunches it once (seat.sh stubbed: it logs the call and
+# writes the new launch's record, as a real launch does); only the relaunched seat's own exit is a question, and that
+# question starts no second relaunch (a loop of relaunches is the other half of the bug).
+mkdir -p "$T/rstub"; touch "$T/spec-re.md"
+cat > "$T/rstub/seat.sh" <<EOF
+#!/usr/bin/env bash
+echo "seat \$*" >> "$T/rcalls"
+printf 'handle=term_r2\ntask=task_r2\nrole=%s\nunit=%s\nworktree=%s\nlaunched=700\nspec=%s\npty=pr2\n' "\$2" "\$3" "\$3" "\$4" > "$S/seat-\$3-\$2.txt"
+echo "task_r2 running" >> "$F/tasks"
+EOF
+dseat u-re reviewer term_r task_r pr "spec=$T/spec-re.md"$'\n'; xrow pr 600 unknown
+export COMMANDECK_RECOVER_STALLS=$SOURCE/scripts/recover-stalls.sh COMMANDECK_RECOVER_SCRIPTS=$T/rstub
+tick 9000
+tick 10000
+check "dead non-plan seat is relaunched once before any question" "1:0" "$(grep -c "^seat launch reviewer u-re $T/spec-re.md$" "$T/rcalls"):$(dead u-re reviewer)"
+xrow pr2 800 unknown
+tick 11000
+tick 12000
+unset COMMANDECK_RECOVER_STALLS COMMANDECK_RECOVER_SCRIPTS
+check "dead non-plan seat is relaunched once, then posted on its second exit" "1:1:1" \
+  "$(grep -c '^seat launch' "$T/rcalls"):$(dead u-re reviewer):$(grep -c 'Seat reviewer (term_r2) on u-re: .*relaunched once and exited again' "$T/sends")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

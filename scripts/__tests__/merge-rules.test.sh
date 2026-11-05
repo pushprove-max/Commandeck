@@ -106,5 +106,19 @@ check "the merged text still holds both rules from setup's earlier block" 2 \
 check "a tilde fence holding a blank line and a backtick line is one rule" 2 \
   "$(printf '# H\n\n~~~\na\n\nb\n```\n~~~\n\n- rule two\n' | python3 "$REAL/scripts/merge-rules.py" - --units | wc -l | tr -d ' ')"
 
+# Issue 640: merge-rules.py's twin of fence.sh's heading() cuts main-session.md at its Details heading in any form, so a
+# rule below Details is not taken for one the owner already has (and dropped from the merge), and its fence rule matches
+# fence.sh: no fence in an HTML block or on a backtick span line, so the rules after one are still rules of their own.
+TW=$(mktemp -d); MSA=$TW/main-session.md
+twin() { printf '%b' "$1" > "$MSA"; printf -- '- rule one\n\n- rule two\n' | python3 "$REAL/scripts/merge-rules.py" - --against "$MSA" > "$TW/out"
+  echo "$(grep -c '^- rule two$' "$TW/out"):$(grep -c 'rule one' "$TW/out")"; }
+check "Details heading closed form splits template" "1:0" "$(twin '- rule one\n\n##  Details (not injected)  ##\n\n- rule two\n')"
+check "twin: script-prefixed word opens no HTML block" "1:0" "$(twin '- rule one\n\n<scripture\n  ## Details (not injected)\n\n- rule two\n')"
+check "twin: multiline setext title reads the whole paragraph" "1:0" "$(twin '- rule one\n\nDetails\n(not injected)\n-------\n\n- rule two\n')"
+units() { printf '%b' "$1" | python3 "$REAL/scripts/merge-rules.py" - --units | wc -l | tr -d ' '; }
+check "twin: fence line inside an HTML block opens no fence" 3 "$(units '<div>\n~~~\n</div>\n\n- rule one\n\n- rule two\n')"
+check "twin: backtick span line opens no fence" 3 "$(units '```a`b```\n\n- rule one\n\n- rule two\n')"
+rm -rf "$TW"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

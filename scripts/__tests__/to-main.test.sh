@@ -9,6 +9,9 @@
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
+# The cases rewrite Orca's pane list between calls seconds apart: each lookup reads it fresh, not the 20 s stored map.
+# The pane map's own cases (issue 576, at the end) unset this.
+export PP_PANE_MAP_FRESH=1
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/ws"
@@ -350,6 +353,43 @@ check "watch-agents shows gate once, unread" "1:1" "$(wa):$(grep -c 'pick a scop
 { row question dup $((N0 - 300)) term_w1 run:run_x '' 1; row question dup; } > "$T/inbox-run:run_x"
 check "watch-agents skips repeat" 0 "$(wa)"
 rm -f "$T"/inbox-* "$T/scratch/current-run"
+
+# Issue 638: main runs in another checkout (a host project's), with no recorded handle and no pane in this one. It is
+# the coordinator of the run this checkout is bound to, the pane main-watch wakes, so a send reaches it; a recorded live
+# handle still comes first. Issue 576: pane lookups read one stored map (pane-map.json, under 20 s old) instead of
+# asking Orca each time; an older or unreadable map is read again, and a send refused because the pane closed reads fresh.
+mkdir -p "$T/rbin" "$T/host"
+cat > "$T/rbin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "terminal list") echo list >> "$T/lists.log"; exec "$T/bin/orca-ide" "\$@" ;;
+  "orchestration run-list") jq -n '{ok: true, result: {runs: [{id: "run_c", coordinator_handle: "term_c"}]}}' ;;
+  *) exec "$T/bin/orca-ide" "\$@" ;;
+esac
+EOF
+chmod +x "$T/rbin/orca-ide"
+SC=$T/sc638; mkdir -p "$SC/handles"; echo run_c > "$SC/current-run"
+tm() { (cd "$T/p" && env -u CLAUDE_PROJECT_DIR -u PP_PANE_MAP_FRESH COMMANDECK_MAIN="$T/p" COMMANDECK_WORKSPACES="$T/ws" COMMANDECK_SCRATCH="$SC" \
+  PATH="$T/rbin:$T/bin:$PATH" bash "$REAL/scripts/to-main.sh" status "$1" "body of $1" 2>&1); }
+# panes <handle>:<worktree>... -- Orca's live panes, all Claude.
+panes() { printf '%s\n' "$@" | jq -Rn '{result: {terminals: [inputs | capture("^(?<handle>[^:]+):(?<worktreePath>.*)$") + {agentIdentity: "claude"}]}}' > "$T/list.json"; }
+panes "term_c:$T/host"
+check "main pane found as run coordinator" 1 "$(tm c1 | grep -c '^to-main: sent to main (term_c)')"
+rm -f "$SC/pane-map.json"; echo term_m > "$SC/handles/main"; panes "term_c:$T/host" "term_m:$T/p"
+check "recorded handle wins over coordinator" 1 "$(tm c2 | grep -c '^to-main: sent to main (term_m)')"
+rm -f "$SC/pane-map.json"; : > "$T/lists.log"
+tm c3 >/dev/null; tm c4 >/dev/null
+check "pane map read once for two lookups" 1 "$(grep -c . "$T/lists.log")"
+echo term_m2 > "$SC/handles/main"; panes "term_m2:$T/p"; touch -t 202001010000 "$SC/pane-map.json"
+check "stored pane map older than its limit is read again" "1:term_m2" \
+  "$(tm c5 | grep -c '^to-main: sent to main (term_m2)'):$(jq -r '.result.terminals[0].handle' "$SC/pane-map.json" 2>/dev/null)"
+echo 'not a pane list' > "$SC/pane-map.json"
+check "junk pane map is read again" "1:term_m2" \
+  "$(tm c6 | grep -c '^to-main: sent to main (term_m2)'):$(jq -r '.result.terminals[0].handle' "$SC/pane-map.json" 2>/dev/null)"
+# The map (just read) still names term_m2; that pane has closed and term_m3 is main's pane now.
+panes "term_m3:$T/p"; echo '{"ok":false,"error":{"code":"terminal_not_found","message":"no such terminal"}}' > "$T/send-fail-term_m2"
+check "send to a closed mapped pane looks up fresh" 1 "$(tm c7 | grep -c '^to-main: sent to main (term_m3)')"
+rm -f "$T/send-fail-term_m2" "$T"/inbox-*
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -206,6 +206,15 @@ git -C "$P" remote remove origin
 stepunit s4; sed -i.bak '/^mainsha=/d' "$SCR/seat-s4-plan-judge-claude.txt"; fp s4
 check "a judge record with no main sha is refused" "2:1:none:0" \
   "$RC:$(grep -c 'REFUSED: .*seat-s4-plan-judge-claude.txt records no main sha (none)' "$T/out"):$(onmain s4):$(grep -c . "$T/seats")"
+# Issue 664, the owner's ruling: briefs stay out of this public repo, so a plan carries what it cites inside itself.
+# A plan citing a brief its planning worktree holds is refused before the plan reaches main, the brief named.
+citeunit() { fpunit "$1"; P1=${STEPPLAN//@U@/$1}; printf '%s' "${P1/Goal: change x/Goal: change x, per $2}" > "$WS/$1/.claude/plans/$1.md"; }
+citeunit c1 .claude/briefs/c1-triage.md; echo triage > "$WS/c1/.claude/briefs/c1-triage.md"; judged c1 GO 200; fp c1
+check "a plan citing a brief in its planning worktree is refused, the brief named" "2:1:none:0" \
+  "$RC:$(grep -c '^REFUSED: --from-plan: .claude/plans/c1.md cites .claude/briefs/c1-triage.md, a brief in the planning worktree;.*inside the plan' "$T/out"):$(onmain c1):$(grep -c . "$T/seats")"
+# The batch beside the plan is the launch's own input, so citing it still launches.
+citeunit c2 .claude/briefs/c2-batch.md; judged c2 GO 200; fp c2
+check "a plan citing only its batch still launches" "0:1" "$RC:$(grep -cx 'launch builder c2' "$T/seats")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

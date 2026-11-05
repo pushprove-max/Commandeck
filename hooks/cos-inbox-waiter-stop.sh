@@ -2,8 +2,8 @@
 # Stop hook, Chief-of-Staff pane only: that pane wakes only while its
 # watchers run, so a turn may not end without each one alive: the decisions,
 # alerts and limit watchers, and the timer check `scripts/cos-check.sh`. The
-# inbox poller (`scripts/cos-watch-inbox.sh`) is not checked here: cos-inbox-arm-stop.sh
-# starts it, as an asyncRewake hook that never blocks (issue 575).
+# inbox poller (`scripts/cos-watch-inbox.sh`) is not checked here: `scripts/cos-supervise.sh`
+# starts it with the others (issue 584). With any missing and no supervisor running, the block leads with it.
 # The block names each missing watcher with its start command, by setup's
 # stable link when it points here: the path the session instructions name, and
 # the one setup and /commandeck:update keep current. Every other pane passes.
@@ -83,7 +83,11 @@ done
 
 HOOK_FIRE_REASON=watcher-not-running
 R=
-if [ ${#MISSING[@]} -gt 0 ]; then R="Arm each missing watcher in the background (run_in_background) before ending the turn. $(printf '%s. ' "${MISSING[@]}")"; fi
+# Issue 655: one supervisor runs every watcher; with none running (its pid file not a live cos-supervise.sh) it leads.
+if [ ${#MISSING[@]} -gt 0 ] && ! runs "$(ps -o command= -p "$(cat "$COS_KEY.cos-supervise.pid" 2>/dev/null || echo 0)" 2>/dev/null)" cos-supervise.sh; then
+  R="Arm the supervisor once instead of each watcher: bash $S/cos-supervise.sh $H. "
+fi
+if [ ${#MISSING[@]} -gt 0 ]; then R+="Arm each missing watcher in the background (run_in_background) before ending the turn. $(printf '%s. ' "${MISSING[@]}")"; fi
 [ -z "$HOLD" ] || { R+=$HOLD; HOOK_FIRE_REASON=owner-reply-${KINDS//\//-}; [ ${#MISSING[@]} -eq 0 ] || HOOK_FIRE_REASON=watcher-not-running; }
 HOOK_FIRE_BLOCK=1
 jq -n --arg r "$R" '{decision:"block", reason:$r}'

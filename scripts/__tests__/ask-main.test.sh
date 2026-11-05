@@ -5,6 +5,8 @@
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0
+# The cases rewrite Orca's pane list between calls seconds apart: each lookup reads it fresh, not the 20 s stored map.
+export PP_PANE_MAP_FRESH=1
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1 (expected $2, got $3)"; fi }
 T=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/ws"
@@ -159,6 +161,37 @@ reset; batch d1 msg_q1 "Re: q" "the answer only the full view carries"
 OUT=$(cd "$T/p" && "${E[@]}" PATH="$T/cbin:$T/bin:$PATH" bash "$REAL/scripts/ask-main.sh" "q" "b" 2>&1); RC=$?
 check "ask-main prints an answer only Orca's full check view carries (issue 588)" "0:1" \
   "$RC:$(grep -c '^the answer only the full view carries$' <<<"$OUT")"
+
+# Issue 639: another reader on this pane (a stray watcher) took main's reply and Orca marked it read, so the wait's own
+# check never returns it. The wait finds it in the full view by its thread id after a pass with no reply; a read reply
+# to another question is never taken for this one.
+reset; batch d1 - "other" "unrelated"
+jq -cn '{id: "mr", thread_id: "msg_q1", type: "reply", subject: "Re: q", body: "taken by a stray watcher", from_handle: "term_main", read: 1}' > "$T/extra.jsonl"
+OUT=$(ask "q" "b"); RC=$?
+check "reply marked read by another reader still arrives" "0:1:1" \
+  "$RC:$(grep -c '^taken by a stray watcher$' <<<"$OUT"):$(grep -c -- --wait "$T/checks.log")"
+reset
+jq -cn '{id: "mr", thread_id: "msg_other", type: "reply", subject: "Re: other", body: "another question read elsewhere", from_handle: "term_main", read: 1}' > "$T/extra.jsonl"
+OUT=$(at 1000 "q" "b"); RC=$?
+check "another question's read reply is not taken" "3:0:1" \
+  "$RC:$(grep -c 'another question read elsewhere' <<<"$OUT"):$([ -e "$T/scratch/ask-main/msg_q1" ] && echo 1 || echo 0)"
+# Issue 638: main runs in another checkout (a host project's): no recorded handle, no pane in this one. It is the
+# coordinator of the run this checkout is bound to, the pane main-watch wakes: the question reaches it and the call waits.
+mkdir -p "$T/rbin" "$T/host"
+cat > "$T/rbin/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "orchestration run-list") jq -n '{ok: true, result: {runs: [{id: "run_c", coordinator_handle: "term_host"}]}}' ;;
+  *) exec "$T/bin/orca-ide" "\$@" ;;
+esac
+EOF
+chmod +x "$T/rbin/orca-ide"
+reset; rm -rf "$T/scratch/handles" "$T/scratch/pane-map.json"; echo run_c > "$T/scratch/current-run"
+jq -n --arg h "$T/host" '{result: {terminals: [{handle: "term_host", worktreePath: $h, agentIdentity: "claude"}]}}' > "$T/list.json"
+batch d1 msg_q1 "Re: q" "the host main's answer"
+OUT=$(cd "$T/p" && "${E[@]}" PATH="$T/rbin:$T/bin:$PATH" bash "$REAL/scripts/ask-main.sh" "q" "b" 2>&1); RC=$?
+check "main found only as run coordinator gets the question" "0:1:1" \
+  "$RC:$(grep -c -- '--to term_host --type question' "$T/sends.log"):$(grep -c "^the host main's answer$" <<<"$OUT")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

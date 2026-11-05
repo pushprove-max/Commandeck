@@ -25,6 +25,8 @@ RC=$(epass); NAMED=$(grep -c 't/x.test.sh is an existing test and loses 1 line(s
 TRY=$(grep -c 'ask-main.sh "Test edit: t/x.test.sh"' "$TMP/err") ACKS=$(grep -c -- '--ack-rulings' "$TMP/err")
 check "pass_refuses_unapproved_edit (an existing test that lost a check stops the pass, names the file and how to ask main)" "2 1 1 1 0" \
   "$RC $NAMED $TRY $ACKS $(ls "$B"/$U-r1-reports.md 2>/dev/null | wc -l | tr -d ' ')"
+# #653: the template no longer spells out the Test edit line, so the refusal must print it for the test that lost a line.
+check "test edit refusal shows the ruling line form" 1 "$(grep -cE 'Lines main must add: Test edit: t/x\.test\.sh test:[^ ]+ ruling:' "$TMP/err")"
 
 # Catches the Builder approving its own edit: its worktree copy of the rulings file is not main's.
 # Main's file holds the id with no Test edit line, so only reading the worktree's copy could approve the edit.

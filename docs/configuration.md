@@ -129,3 +129,5 @@ If main runs in another project's checkout and drives this repo's units from
 there, install the watcher with `COMMANDECK_MAIN_PANE_DIR` set to that checkout
 (`COMMANDECK_MAIN_PANE_DIR=<path> scripts/main-watch.sh --install`). Without it
 the watcher finds no main pane, and no finished seat ever wakes main.
+A Builder's question and an answer to a Builder also find main as the bound run's
+coordinator pane, when no recorded handle or folder names it.

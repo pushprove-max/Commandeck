@@ -117,6 +117,38 @@ check "with the terminal list failing, a second pane still binds nothing and nam
 rm -f "$T/d3/run-list"; OUT=$(mb)
 check "with the run list failing, board.sh binds nothing and names the coordinator unknown" "0:no:1" \
   "$(used):$([ -e "$S3/main-pane.txt" ] && echo yes || echo no):$(grep -c "^not main: the run's coordinator is unknown" <<<"$OUT")"
+# Issue 647: a reviewer that writes its findings as bold headings (`**F1 (P2):**`) is counted like the bracket form; a
+# (P2) in the middle of a sentence is not a heading and is not counted.
+round 30 review $'**F1 (P2):** meh -- a:1\n- **F2 (P1):** bad -- a:2\nA note on the (P2) above.' NO-GO
+check "board counts bold P2 finding" "      pass r30 review: VERDICT: NO-GO (P1 1, P2 1)" "$(board)"
+# Issue 658: a Builder that asked main and ended its turn reads `working` in Orca, so it was listed nowhere and its
+# answer, left unread, held the unit with no line saying so. Working in Orca, an open question, a session log idle 5 min
+# or more: it is listed under the stopped panes with its idle minutes and the question.
+mkdir -p "$T/bin6" "$T/ws/u6/.claude/briefs"
+cat > "$T/bin6/orca-ide" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  "terminal list") echo '{"result":{"terminals":[{"handle":"h6","tabId":"t6","leafId":"l6","worktreePath":"$T/ws/u6","agentIdentity":"claude"}]}}' ;;
+  "worktree ps") echo '{"result":{"worktrees":[{"agents":[{"paneKey":"t6:l6","state":"working"}]}]}}' ;;
+  "orchestration dispatch-show") echo '{"result":{"dispatch":null}}' ;;
+  "orchestration inbox") cat "$T/inbox6" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/bin6/orca-ide"
+printf 'handle=h6\ntask=task_6\nrole=builder\nunit=u6\nworktree=u6\nlaunched=%s\n' "$(($(date +%s) - 3600))" > "$T/scratch/seat-u6-builder.txt"
+L6=$T/home/.claude/projects/$(printf '%s' "$T/ws/u6" | tr -c 'A-Za-z0-9' '-'); mkdir -p "$L6"
+iso6() { jq -nr --argjson s "$1" 'now - $s | floor | todate'; }
+{ jq -cn --arg t "$(iso6 900)" '{type: "user", message: {role: "user", content: "build u6"}, timestamp: $t, sessionId: "s6", cwd: "'"$T/ws/u6"'"}'
+  jq -cn --arg t "$(iso6 600)" '{type: "assistant", message: {role: "assistant", stop_reason: "end_turn", content: [{type: "text", text: "QUESTION: which store?"}]}, timestamp: $t, sessionId: "s6"}'
+  jq -cn --arg t "$(iso6 600)" '{type: "system", subtype: "turn_duration", timestamp: $t, sessionId: "s6"}'; } > "$L6/s6.jsonl"
+jq -cn --arg t "$(iso6 620)" '{result: {messages: [{id: "msg_q6", type: "question", thread_id: null, from_handle: "h6", subject: "which store?", created_at: $t}]}}' > "$T/inbox6"
+b6() { (cd "$T/proj" && env -u CLAUDE_PROJECT_DIR HOME="$T/home" PATH="$T/bin6:$PATH" COMMANDECK_MAIN="$T/proj" COMMANDECK_WORKSPACES="$T/ws" \
+  COMMANDECK_SCRATCH="$T/scratch" COMMANDECK_AGENTS= COMMANDECK_DRIVERS= bash "$REAL/scripts/board.sh" --full u6 2>&1 | grep '^  u6 builder:'); }
+check "issue 658: idle Builder on an open question is listed as stopped" 1 "$(b6 | grep -cE '^  u6 builder: idle 1[0-1]m on open question msg_q6$')"
+jq -cn --arg t "$(iso6 620)" '{result: {messages: [{id: "msg_q6", type: "question", thread_id: null, from_handle: "h6", subject: "which store?", created_at: $t},
+  {id: "msg_a6", type: "status", thread_id: "msg_q6", from_handle: "main", subject: "answer", created_at: $t}]}}' > "$T/inbox6"
+check "issue 658: an answered question lists nothing" 0 "$(b6 | grep -c 'open question')"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

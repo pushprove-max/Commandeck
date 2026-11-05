@@ -238,6 +238,8 @@ printf '## Break runs\n\n- t/a.test.sh -- the first check -- red: sed -i s/x/y/ 
 OUT=$(gate)
 check "pass 1 refuses when a plan Break line has no recorded break run, naming it and not the ones that have one" "rc=2 1 0 0" \
   "$(tail -1 <<<"$OUT") $(grep -c 't/b.test.sh -- the second check' <<<"$OUT") $(grep -c 't/a.test.sh -- the first check' <<<"$OUT") $(grep -c 'fenced' <<<"$OUT")"
+# #653: the template no longer spells out the break run, so the refusal is the Builder's only source for the command.
+check "break-run refusal names break-run.sh" 1 "$(grep -cF 'break-run.sh <plan> <k> <file> <line> [<replacement>]' <<<"$OUT")"
 printf -- '- t/b.test.sh -- the second check -- red: bash t/b.test.sh with the rule removed\n' >> "$GW/.claude/briefs/g-evidence.md"
 check "pass 1 runs when every Break line has a red break run (the fenced one is no line)" "rc=0" "$(gate)"
 printf '## Break runs\n\n- t/a.test.sh -- the first check -- red: \n- t/b.test.sh -- the second check -- red: bash t/b.test.sh\n' > "$GW/.claude/briefs/g-evidence.md"
@@ -325,6 +327,31 @@ printf '# Plan\n\nBreak: none\nBreak: None -- nothing to break\n' > "$GW/.claude
 printf '# Plan\n\nBreak: none\nBreak: t/z.test.sh -- the zed check -- z.sh the rule\n' > "$GW/.claude/plans/g.md"; REAL1=$(gate)
 check "pass 1 takes a Break: none line as no break (issue 443)" "rc=0 rc=2 1" \
   "$NONE $(tail -1 <<<"$REAL1") $(grep -c 't/z.test.sh -- the zed check' <<<"$REAL1")"
+
+# Issue 640: the evidence and limits sections are read by fence.sh's heading(): a failure table under an indented or
+# closed heading is the table (missed, a good table is refused), and a setext heading ends the limits section (missed,
+# the next section's lines are read as limits).
+brief '- the reply file: lives in a.json; written by the pass'
+printf '   ## Failure table\n\n| Save | Steps | Left behind if it stops after each step | The one recovery |\n|---|---|---|---|\n| reply file | write, rename | a half file | rewritten by the next pass |\n' > "$GW/.claude/briefs/g-evidence.md"
+check "failure table under indented heading" "rc=0" "$(tgate | tail -1)"
+printf '## Failure table ##\n\n| Save | Steps | Left behind if it stops after each step | The one recovery |\n|---|---|---|---|\n| reply file | write, rename | a half file | rewritten by the next pass |\n' > "$GW/.claude/briefs/g-evidence.md"
+check "evidence section closed heading is read" "rc=0" "$(tgate | tail -1)"
+SLFN=$(sed -n '/^section_lines()/,/^}/p' "$PASS_SH")
+printf '## Stated limits\n- one\n\nNext part\n---------\n- not a limit\n' > "$GW/limits.md"
+check "limits section ended by setext heading" "- one" "$(. "$REAL/scripts/fence.sh"; eval "$SLFN"; section_lines "$GW/limits.md" 'Stated limits' exact | paste -sd'|' -)"
+
+# Pass 13 (gate-stamp-race): the pass's EXIT removes its gate stamp while the background hand-off may not have started;
+# a hand-off that checks the stamp itself then refuses, and the Builder never gets its round. Each background hand-off
+# line runs with the stamp removed first; each must still start (the check belongs before the `&`, in the foreground).
+HR=$(. "$REAL/scripts/fence.sh"; HS=$TMP/hrace; mkdir -p "$HS"; PP_SCRATCH=$HS; pp_gate_init
+  printf 'touch "$2.started"\n' > "$HS/builder-fresh-round.sh"
+  while IFS= read -r line; do
+    ( HERE=$HS PANE=h ORCA_TERMINAL_HANDLE=h HAND=$HS/hand UNIT=u N=1 SEAT=$HS/seat; rm -f "$HAND.started"
+      eval "$(declare -f pp_gate_act | sed '1s/pp_gate_act/real_gate_act/')"
+      pp_gate_act() { while [ -e "$PP_GATE_STAMP" ]; do sleep 0.01; done; real_gate_act "$@"; }
+      eval "$line"; c=$!; pp_gate_done; wait "$c"; [ -e "$HAND.started" ] && echo started || echo lost ); pp_gate_init
+  done < <(grep 'builder-fresh-round.sh.*&$' "$PASS_SH"))
+check "a background hand-off starts even when the pass's EXIT removes the gate stamp first" "started started" "$(paste -sd' ' - <<<"$HR")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

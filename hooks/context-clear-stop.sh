@@ -22,6 +22,9 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
 active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false')
 [ -n "$transcript" ] && [ -f "$transcript" ] && [ -n "$sid" ] || exit 0
+# Issue 615: every hold of a past-the-line restart leaves one line saying why, with the checkpoint (none before one
+# exists) and the session; dashboard_limit.py main_events raises it until a new pane resumes from that checkpoint.
+held() { echo "$(date +%FT%T) restart: HELD: cp=${2:-none} session=$sid cwd=$PWD: $1" >> "$HOME/.claude/checkpoints/clear-hook.log"; }
 LINE=$(pp_clear_line 2>/dev/null) || LINE=
 LINE=${LINE:-${COMMANDECK_CLEAR_LINE:-200000}}   # the helper did not load
 # shellcheck source=lib/context-size.sh
@@ -53,6 +56,7 @@ fi
 # owner restarts main by hand, told by the dashboard's crit alert.
 if [ -e "$HOME/.claude/checkpoints/$sid.restart-failed" ]; then
   HOOK_FIRE_ADVISE=1
+  held "the restart helper gave up on this session; the owner restarts main by hand"
   echo "context-clear: the automatic restart failed (log $HOME/.claude/checkpoints/clear-hook.log); the owner restarts main by hand, so no stop retries it" >&2
   exit 0
 fi
@@ -73,6 +77,7 @@ echo "$(date +%FT%T) stop-hook: ctx=$ctx line=$LINE fresh=$fresh cp=$cp cp_bytes
 if [ "$fresh" = 1 ] && [ -f "$cp.restarted" ] && [ "$(cksum < "$cp")" = "$(cat "$cp.restarted")" ]; then
   echo "$(date +%FT%T) stop-hook: already restarted for $cp; this pane must be closed by hand (unpin the tab)" >> "$HOME/.claude/checkpoints/clear-hook.log"
   HOOK_FIRE_ADVISE=1
+  held "already restarted for this checkpoint; the old pane must be closed by hand (unpin the tab)" "${cp##*/}"
   echo "context-clear: main was already restarted for this checkpoint; close this pane by hand (its tab is pinned)" >&2
   exit 0
 fi
@@ -87,6 +92,7 @@ if [ "$fresh" = 1 ]; then
   grep -qE '^\| .*\| TODO \|' "$cp" && unfilled+="${unfilled:+ and }unit stage/next cells"
   if [ -n "$unfilled" ]; then
     echo "$(date +%FT%T) stop-hook: $cp still has unfilled fields ($unfilled); main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    held "checkpoint has unfilled fields ($unfilled)" "${cp##*/}"
     if [ "$active" != true ]; then
       HOOK_FIRE_REASON=checkpoint-unfilled
       HOOK_FIRE_BLOCK=1
@@ -119,6 +125,7 @@ if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
   n=$(grep -c '^- ' <<<"$miss")
   if [ "$rc" != 0 ] && [ "$active" != true ]; then
     echo "$(date +%FT%T) stop-hook: carry-over check failed for $cp against ${base:-<empty $anc>}: $n items" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    held "carry-over block: $n inherited open items to restate or close; the next stop restarts" "${cp##*/}"
     HOOK_FIRE_REASON=carry-over-missing
     HOOK_FIRE_BLOCK=1
     first=$(grep -m1 '^- ' <<<"$miss"); first=${first#- }
@@ -144,6 +151,7 @@ if [ "$fresh" = 1 ] && [ -e "$anc" ]; then
     else
       rm -f "$cp.carry.$$" "$cp.new.$$"
       echo "$(date +%FT%T) stop-hook: could not copy $n missing items into $cp; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+      held "could not copy $n missing items into the checkpoint" "${cp##*/}"
       echo "context-clear: could not copy $n missing items into $cp; main is not restarted" >&2
       exit 0
     fi
@@ -154,11 +162,13 @@ fi
 if [ "$fresh" = 1 ]; then
   if ! aged=$(python3 "$CC" aged "$cp"); then
     echo "$(date +%FT%T) stop-hook: could not list the items $cp carries past ten generations; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    held "could not list the items the checkpoint carries past ten generations" "${cp##*/}"
     echo "context-clear: could not list the items $cp carries past ten generations; main is not restarted" >&2
     exit 0
   fi
   if [ -n "$aged" ] && ! printf '%s\n' "$aged" > "$cp.aged-out.md"; then
     echo "$(date +%FT%T) stop-hook: could not write $cp.aged-out.md; main is not restarted" >> "$HOME/.claude/checkpoints/clear-hook.log"
+    held "could not write the aged-out file beside the checkpoint" "${cp##*/}"
     echo "context-clear: could not write $cp.aged-out.md; main is not restarted" >&2
     exit 0
   fi
@@ -185,6 +195,7 @@ running=$(comm -23 \
 if [ "$fresh" = 1 ] && [ -n "$running" ]; then
   n=$(wc -w <<< "$running" | tr -d ' ')
   echo "$(date +%FT%T) stop-hook: held: $n background agents running ($running)" >> "$HOME/.claude/checkpoints/clear-hook.log"
+  held "$n background agents running ($running)" "${cp##*/}"
   HOOK_FIRE_ADVISE=1
   if [ "${ctx:-0}" -le "$CEILING" ] 2>/dev/null; then
     echo "context-clear: restart waits for $n background agent(s) still running (${running% }): a restart kills them. Main restarts at the first stop after they all finish." >&2
@@ -299,6 +310,7 @@ fi
 [ "$fresh" = 1 ] && { HOOK_FIRE_ADVISE=1; echo "context-clear: checkpoint fresh but no ORCA_TERMINAL_HANDLE; type /clear by hand" >&2; exit 0; }
 [ "$active" = "true" ] && exit 0
 HOOK_FIRE_REASON=no-checkpoint
+held "no checkpoint under 30 minutes old; main must write one first, the next stop restarts"
 HOOK_FIRE_BLOCK=1
 # The template's headings ride in the reason: reading the 4.5 KB template
 # first cost 3.5 turns a block. Builtins only, read from the template itself.

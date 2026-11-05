@@ -71,5 +71,27 @@ check "a missing key keeps the standing worktrees (Fast-lane and Research here)"
 check "no config file keeps the standing worktrees too" "o_done o_quiet" "$(sweep2 '')"
 check "only an explicit empty array keeps nothing" "k_done k_quiet o_done o_quiet r_done" "$(sweep2 '{"keepWorktrees":[]}')"
 
+# test: issue 663 R1: a Builder pane stayed open after its unit merged (its seat record kept protecting it), holding RAM.
+# A merged row at or after the record's launch ends that protection, so the sweep closes the idle pane at once.
+mkdir -p "$T/sc3" "$T/home/.commandeck/builds" "$WS/m"
+PROJ=$(bash -c '. "$1/hooks/lib/project.sh" && pp_project "$2" && echo "$PP_PROJECT"' _ "$REAL" "$P")
+jq -cn --arg m "$P" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{main: $m, unit: "m", how: "merged", at: $at}' > "$T/home/.commandeck/builds/$PROJ.jsonl"
+printf 'handle=h_bld\ntask=task_b\nrole=builder\nunit=m\nlaunched=%s\n' "$(( NOW_MS / 1000 - 600 ))" > "$T/sc3/seat-m-builder.txt"
+mkdir -p "$T/bin3"; rm -f "$T/closed3"
+cat > "$T/bin3/orca-ide" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "worktree list") echo '{"result":{"worktrees":[{"path":"$WS/m","displayName":"m","cliProvenance":{"kind":"created-by-cli"}}]}}' ;;
+  "terminal close") echo "\$4" >> "$T/closed3"; echo '{"ok":true,"result":{}}' ;;
+  *) echo '{"ok":true,"result":{}}' ;;
+esac
+EOF
+chmod +x "$T/bin3/orca-ide"
+(cd "$P" && env -u COMMANDECK_MAIN -u CLAUDE_PROJECT_DIR -u ORCA_TERMINAL_HANDLE HOME="$T/home" COMMANDECK_WORKSPACES="$WS" COMMANDECK_SCRATCH="$T/sc3" COMMANDECK_DRIVERS=none \
+  COMMANDECK_TERMINALS_JSON='{"result":{"terminals":[{"handle":"h_bld","tabId":"t9","leafId":"l9","worktreePath":"'$WS/m'","lastOutputAt":'$NOW_MS'}]}}' \
+  COMMANDECK_PS_JSON='{"result":{"worktrees":[{"agents":[{"paneKey":"t9:l9","state":"idle","updatedAt":'$NOW_MS',"agentType":"claude"}]}]}}' \
+  PATH="$T/bin3:$PATH" bash "$REAL/scripts/close-done-panes.sh" --close >/dev/null 2>&1)
+check "issue 663: merged unit pane closed by sweep" "h_bld" "$(cat "$T/closed3" 2>/dev/null)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

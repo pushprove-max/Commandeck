@@ -16,15 +16,23 @@ now() { echo "${COMMANDECK_ASK_MAIN_NOW:-$(date +%s)}"; }
 D=$PP_SCRATCH/ask-main
 H=${ORCA_TERMINAL_HANDLE:-}
 [ -n "$H" ] || { echo "ask-main: ORCA_TERMINAL_HANDLE is not set: this is not an Orca pane" >&2; exit 2; }
+# from_full [read] -- the reply threaded to $ID in the full inbox view (read or not, no batch), printed, and the call ends
+# answered; nothing there returns 1. With read, only a row Orca marks read: one another reader on this pane took (issue
+# 639). An unread one is the wait's own to print and acknowledge.
+from_full() {
+  local full
+  full=$(orca-ide orchestration check --terminal "$H" --all --full --json 2>/dev/null | jq -er --arg id "$ID" --arg r "${1:-}" \
+    '[.result.messages[]? | select(.thread_id == $id and ($r == "" or ((.read // 0) | . != 0 and . != false))) | .body // ""]
+      | if length > 0 then join("\n") else empty end' 2>/dev/null) || return 1
+  printf '%s\n' "$full"; echo "note: taken from the full inbox view; your next inbox read may show it again"; rm -f "$D/$ID"; exit 0
+}
 if [ "${1:-}" = --resume ]; then
   [ $# = 2 ] && [[ $2 =~ ^[A-Za-z0-9._-]+$ ]] || { echo "usage: ask-main.sh --resume <id>" >&2; exit 2; }
   ID=$2
   [ -f "$D/$ID" ] || { echo "ask-main: no waiting question $ID (answered, or never sent from this pane)" >&2; exit 2; }
   # The full inbox view still holds an answer whose batch an earlier read acknowledged without printing it; take it
   # before waiting again (issue 351). Its batch, if never acknowledged, is shown again by the next inbox read.
-  FULL=$(orca-ide orchestration check --terminal "$H" --all --full --json 2>/dev/null | jq -er --arg id "$ID" \
-    '[.result.messages[]? | select(.thread_id == $id) | .body // ""] | if length > 0 then join("\n") else empty end' 2>/dev/null) \
-    && { printf '%s\n' "$FULL"; echo "note: taken from the full inbox view; your next inbox read may show it again"; rm -f "$D/$ID"; exit 0; }
+  from_full
 else
   [ $# = 2 ] || { echo "usage: ask-main.sh <subject> <body> | --resume <id>" >&2; exit 2; }
   OUT=$("$(dirname "${BASH_SOURCE[0]}")/to-main.sh" question "$1" "$2"); RC=$?
@@ -92,6 +100,10 @@ while :; do
     rm -f "$D/$ID"; exit 0
   fi
   [ -z "$OTHERS" ] || printf 'also in your inbox:\n%s\n' "$OTHERS"
+  # Issue 639: a reply another reader on this pane took and marked read never comes back to this wait; find it by thread.
+  from_full read
 done
+# Once more at the slice's end: the reply may be in the full view only.
+from_full
 echo "no answer yet: resume with ask-main.sh --resume $ID ($(( DEADLINE - $(now) )) s of 540 left)"
 exit 3

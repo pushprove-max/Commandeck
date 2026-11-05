@@ -85,6 +85,12 @@ plan_seat_pane() {
 if [ -d "$PP_WORKSPACES/$H" ] || compgen -G "$PP_SCRATCH/seat-$H-plan-*.txt" >/dev/null; then
   U=$H; H=$(pp_seat_pane "unit-$U" "$PP_WORKSPACES/$U")
   [ -n "$H" ] || H=$(plan_seat_pane "$U")
+  # Issue 646: no pane in this project's <unit>, but a live pane in a same-named worktree elsewhere (another Orca project's
+  # unit). Queued here, the answer may never be read; typed there, it reaches the wrong Builder. One line names both.
+  [ -n "$H" ] || { O=$(pp_pane_map | jq -r --arg u "$U" --arg wt "$PP_WORKSPACES/$U" "$PP_PNORM"'($wt | pnorm) as $wt
+      | [(.result | if type == "array" then . else (.terminals // []) end)[]? | select(.connected != false and .orphaned != true)
+      | wtp | pnorm | select(type == "string" and . != $wt and endswith("/" + $u))] | unique | join(" and ")' 2>/dev/null)
+    [ -z "$O" ] || { echo "answer-worker: unit $U is open in two projects: $PP_WORKSPACES/$U (no live pane) and $O; nothing sent or queued. Send to the right one by handle: bash answer-worker.sh <handle> '<text>'" >&2; exit 1; }; }
   [ -n "$H" ] || { bash "$HERE/to-main.sh" --unit "$U" status "answer from main" "$TEXT" 2>/dev/null
     [ $? = 3 ] && { close_asks; echo "queued: ${Q:-no id} to $U" >&2; echo "answer-worker: the Builder of $U is not running; the answer is queued and shown first when it starts again. Not delivered yet." >&2; } \
       || echo "answer-worker: the Builder of $U is not running, and the answer could not be queued; nothing was sent" >&2; exit 1; }
@@ -130,16 +136,34 @@ ACK=${ANSWER_WORKER_ACK_WAIT:-600}
 # never got it); the inbox route replies first, since that reply is how a worker blocked in `ask` receives the answer.
 REPLIED=
 reply_delivered() {
-  [ -z "$QID" ] || [ -n "$REPLIED" ] || jq -e '.ok == true' <<<"$(orca-ide orchestration reply --id "$QID" --body "$MSG" --json 2>/dev/null)" >/dev/null 2>&1 \
+  # A follow-up by send (issue 585) already carried the text: the thread gets the settle line only.
+  local body=$MSG; [[ $WAY != "sent by orchestration send"* ]] || body="answered: $TAG"
+  [ -z "$QID" ] || [ -n "$REPLIED" ] || jq -e '.ok == true' <<<"$(orca-ide orchestration reply --id "$QID" --body "$body" --json 2>/dev/null)" >/dev/null 2>&1 \
     || echo "answer-worker: delivered, but the reply to $QID failed, so its task will not settle until a reply lands in that thread: orca-ide orchestration reply --id $QID --body \"answered: $TAG\"" >&2
 }
 # The tag is what is looked for in the log: the text itself may be re-wrapped.
 TAG=${ANSWER_WORKER_TAG:-answer-$(date +%s)-$$}
 MSG="[$TAG] $TEXT"
 
-TS=$(timeout 8 orca-ide terminal list --json 2>/dev/null) && PS=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) \
-  || { echo "answer-worker: Orca's pane lists cannot be read; nothing was sent to $H" >&2; exit 1; }
+# Issue 663 R6: one unreadable list lost the answer. The two reads are retried inside a 12 s budget from the first try,
+# 1 s apart, each read's timeout the smaller of 8 s and the seconds left; no try starts with under 1 s left. decision.sh
+# wraps this in `timeout 20`, so the send keeps 8 s.
+LT0=$SECONDS
+while :; do
+  left=$((12 - (SECONDS - LT0)))
+  [ "$left" -ge 1 ] || { echo "answer-worker: Orca's pane lists cannot be read; nothing was sent to $H" >&2; exit 1; }
+  TS=$(timeout $((left < 8 ? left : 8)) orca-ide terminal list --json 2>/dev/null) && left=$((12 - (SECONDS - LT0))) && [ "$left" -ge 1 ] \
+    && PS=$(timeout $((left < 8 ? left : 8)) orca-ide worktree ps --json 2>/dev/null) && break
+  sleep 1
+done
 WT=$(pane_worktree_of "$TS" "$PS" "$H")
+# Issue 585 (DG8): a closed pane is reached by its task's dispatch when this host's closed send passed; Orca reopens it
+# with a new handle, read from here on. Anything else (pp_follow_up 3) keeps the refusal below.
+REOPENED=
+if [ -z "$WT" ] && [ -z "$INTERRUPT" ] && [ -z "${ANSWER_WORKER_FOLLOW:-}" ] && pp_follow_up "$H" "answer from main" "$MSG"; then
+  H=$PP_FOLLOW_UP_HANDLE REOPENED=1
+  TS=$(timeout 8 orca-ide terminal list --json 2>/dev/null) && PS=$(timeout 8 orca-ide worktree ps --json 2>/dev/null) && WT=$(pane_worktree_of "$TS" "$PS" "$H")
+fi
 [ -n "$WT" ] || { echo "answer-worker: no agent pane $H in Orca's worktree list; nothing was sent. A restarted pane has a new handle: pass the unit name instead" >&2; exit 1; }
 # The pane's log is looked up by worktree and kind: a Builder's Codex reviewer writes its own log in the same worktree.
 KIND=$(pane_kind_of "$TS" "$PS" "$H")
@@ -287,6 +311,9 @@ if [ -z "$FOLLOW" ] && [ -z "$INTERRUPT" ] && grep -lqx "handle=$H" "$PP_SCRATCH
 fi
 if [ -n "$FOLLOW" ]; then
   WAY=$ANSWER_WORKER_WAY REPLIED=${ANSWER_WORKER_REPLIED:-}
+elif [ -n "$REOPENED" ]; then
+  WAY="sent by orchestration send to the reopened pane"
+  wake sent
 elif [ -n "$FRESH" ] && bash "$HERE/builder-add-work.sh" "$FRESH_UNIT" --answer "$MSG"; then
   WAY="handed to a fresh session"
   wake sent
@@ -296,6 +323,13 @@ elif [ -n "$INTERRUPT" ]; then
   timeout 8 orca-ide terminal send --terminal "$H" --text "$MSG" --enter --interrupt --json >/dev/null; rc=$?
   rm -f "$CLAIM"; CLAIM=
   [ "$rc" = 0 ] || { wake refused "terminal send --interrupt failed"; echo "answer-worker: terminal send --interrupt to $H failed (exit $rc); the answer may have been typed before it ended, so check the pane first. $(retry)" >&2; exit 1; }
+  wake sent
+# Issue 585: a pane whose agent passed the send trial on this host gets the answer by `orchestration send` in every state:
+# it starts a turn whose prompt row holds the tag. Not a pane parked in `orchestration ask` on its question: the reply
+# below returns as that call's result (DG9). pp_follow_up 3 (no pass) keeps the typed routes below.
+elif ! { [ -n "$QID" ] && pending_state parked; } && { FU=0; pp_follow_up "$H" "answer from main" "$MSG" || FU=$?; [ "$FU" != 3 ]; }; then
+  [ "$FU" = 0 ] || { wake refused "orchestration send failed"; echo "answer-worker: orchestration send to $H failed (exit $FU); the answer was not delivered" >&2; exit 1; }
+  WAY="sent by orchestration send"
   wake sent
 elif [ -z "$BUSY" ] && idle; then
   WAY="typed into the pane"
@@ -323,6 +357,35 @@ fi
 # A fresh session reads the answer file, and takes its time to settle: the wait for it is the acknowledgement limit.
 [[ $WAY != handed* ]] || WAIT=$ACK
 
+# delivered -- 0 when the tag is in a prompt row of the pane's log (issue 658, D7), or in the result of the pane's own
+# waiting call (ask-main.sh, orchestration ask or check), which returned the answer to the model (pass 19). Claude: a
+# user row whose content is text, or a tool_result whose tool_use_id is such a call's; never another call's result, nor
+# the queue-operation row Claude Code writes for a message waiting on the turn. Codex: a user response_item message,
+# which Codex writes only when a turn takes it, or the output of such a call by call_id. One grep keeps a large log cheap.
+# recover-stalls.sh in_prompt holds the same filter.
+delivered() {
+  [ -n "$LOG" ] || return 1
+  grep -F -e "$TAG" -e ask-main.sh -e 'orchestration ask' -e 'orchestration check' -- "$LOG" 2>/dev/null | jq -nRe --arg t "$TAG" --arg k "$KIND" '
+    def waits: tostring | test("ask-main\\.sh|orchestration (ask|check)");
+    def txt: if type == "string" then . else [.[]? | .text? // empty] | join("\n") end;
+    [inputs | fromjson? // empty] as $r
+    | if $k == "codex" then
+        [$r[] | .payload? // {} | select((.type == "function_call" or .type == "custom_tool_call") and .call_id != null
+          and ((.arguments // .input // "") | waits)) | .call_id] as $w
+        | any($r[]; .type == "response_item" and (.payload as $p
+          | ($p.type == "message" and $p.role == "user" and ([$p.content[]? | .text? // empty] | join("\n") | contains($t)))
+          or (($p.type == "function_call_output" or $p.type == "custom_tool_call_output") and ($p.call_id | IN($w[]))
+            and ($p.output | tostring | contains($t)))))
+      else
+        [$r[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .id != null
+          and ((.input.command // "") | waits)) | .id] as $w
+        | any($r[]; .type == "user" and .isCompactSummary != true and (.message.content
+          | if type == "string" then contains($t)
+            else any(.[]?; (.type == "text" and (.text // "" | contains($t)))
+              or (.type == "tool_result" and (.tool_use_id | IN($w[])) and (.content | txt | contains($t)))) end))
+      end' >/dev/null 2>&1
+}
+
 confirm() {
 local LEFT=$WAIT T0=$SECONDS QUEUED=
 while :; do
@@ -334,7 +397,7 @@ while :; do
       REPLIED=1; WAY="sent to the pane's inbox as a reply to $QID"
     else echo "answer-worker: the late reply to $QID failed; the answer stays in the inbox" >&2; fi
   fi
-  [ -n "$LOG" ] && grep -qF -- "$TAG" "$LOG" 2>/dev/null && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
+  delivered && { reply_delivered; close_asks; pp_close_items "$H"; echo "answer-worker: delivered to $H ($WAY), tag $TAG"; return 0; }
   # A pane that was mid-turn and has since ended its turn will never read its
   # inbox: the answer is typed in then, once, and waited for afresh. So is a pane that left its wait and went
   # back to work: it will not read the inbox either (see working).
@@ -365,11 +428,13 @@ return 1
 if [ -z "$FOLLOW" ] && pp_main_foreground; then
   FLOG=$PP_SCRATCH/answer-worker-$TAG.log
   mkdir -p "$PP_SCRATCH"
+  # The decision it answers heads the log: recover-stalls.sh R2 resends that ledger row's text, never a guess (issue 663).
+  if [ -n "$Q" ]; then printf 'decision=%s\n' "$Q" > "$FLOG"; else : > "$FLOG"; fi
   # Its own session, so main's pane closing does not end it. perl's POSIX::setsid on every host: it execs in
   # place, so $! is the follower; Linux setsid(1) can fork, leaving $! a pid that already exited.
   DETACH=(perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"')
   ANSWER_WORKER_FOLLOW=1 ANSWER_WORKER_TAG=$TAG ANSWER_WORKER_WAY=$WAY ANSWER_WORKER_REPLIED=$REPLIED COMMANDECK_FOREGROUND=1 \
-    nohup "${DETACH[@]}" bash -c 'log=$1; shift; "$@" > "$log" 2>&1; rc=$?
+    nohup "${DETACH[@]}" bash -c 'log=$1; shift; "$@" >> "$log" 2>&1; rc=$?
       [ "$rc" != 1 ] || bash "$0" question "answer-worker.sh: not delivered" "$(tail -n 5 "$log")" >/dev/null 2>&1' \
     "$HERE/to-main.sh" "$FLOG" bash "$HERE/answer-worker.sh" "$H" "$TEXT" "$Q" </dev/null >/dev/null 2>&1 &
   echo "answer-worker: sent to $H ($WAY), tag $TAG; whether it arrived is checked in the background (pid $!): $FLOG. Main hears only if it is NOT delivered. Do not send it again."

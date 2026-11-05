@@ -104,5 +104,19 @@ pane '"claude"' done
 check "an idle seat send is refused (issue 485)" "2 1 0" \
   "$(run "$SEND --to term_w") $(grep -c 'seat.sh revise plan-author unit-x' "$BOX/err") $(pane '"claude"' working; run "$SEND --to term_w")"
 
+# Issue 633: a split opens an agent beside the pane it names, so the live-agent check reads the worktree of that
+# pane (--terminal), not the caller's cwd. A replace is allowed only by naming the live pane, and only when it is idle.
+SPLIT='orca-ide terminal split --terminal term_sh --command "claude --model m" --json'
+lane_list() { jq -nc '{ok:true,result:{terminals:[
+  {handle:"term_w",tabId:"t1",leafId:"l1",title:"Fast lane",connected:true,orphaned:false,agentIdentity:"claude",worktreePath:"/ws/Fast-lane"},
+  {handle:"term_sh",tabId:"t2",leafId:"l2",title:"shell",connected:true,orphaned:false,agentIdentity:null,worktreePath:"/ws/Fast-lane"}]}}' > "$BOX/list.json"; }
+pane '"claude"' working; lane_list
+check "split beside a live agent is blocked" "2 1 1" \
+  "$(run "$SPLIT") $(grep -c 'term_w' "$BOX/err") $(grep -c 'COMMANDECK_REPLACE_PANE=<handle>' "$BOX/err")"
+check "replace of a busy pane still blocks" 2 "$(run "COMMANDECK_REPLACE_PANE=term_w $SPLIT")"
+pane '"claude"' done; lane_list
+check "replace naming the live idle pane passes" 0 "$(run "COMMANDECK_REPLACE_PANE=term_w $SPLIT")"
+check "replace naming another pane still blocks" 2 "$(run "COMMANDECK_REPLACE_PANE=term_sh $SPLIT")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -44,7 +44,7 @@ if [ "${1:-}" = --sweep ]; then
   case "${2:-}" in --apply) APPLY=1 ;; "") ;; *) usage ;; esac
   RUN=${COMMANDECK_RUN:-$(tr -d '[:space:]' 2>/dev/null < "$PP_RUN_FILE" || true)}
   LIST=$(orca-ide orchestration task-list --run "${RUN:-none}" --json 2>/dev/null) \
-    && jq -e '.result.tasks | type == "array"' <<<"$LIST" >/dev/null 2>&1 \
+    && jq -e '.result.tasks | type == "array" and all(.[]; has("id") and has("status"))' <<<"$LIST" >/dev/null 2>&1 \
     || { echo "could not read the task list of run ${RUN:-none} ($PP_RUN_FILE)" >&2; exit 1; }
   status_of() { jq -r --arg t "$1" 'first(.result.tasks[] | select(.id == $t) | .status) // empty' <<<"$LIST"; }
   rc=0 n=0 refused=0 orphans=0

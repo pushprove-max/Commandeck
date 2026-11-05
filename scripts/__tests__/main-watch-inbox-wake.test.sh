@@ -80,4 +80,35 @@ msg term_wt-i9 r9 1 term_wt-i9 message 2026-01-01T00:00:00Z; msg term_wt-i9 r10 
 # untagged note only from before that, so a later tick must not move it.
 [ "$(cat "$S/main-watch/tags-relay" 2>/dev/null)" = 5000 ] \
   || failc "watcher writes relay tag once" "tags-relay holds [$(cat "$S/main-watch/tags-relay" 2>/dev/null)], not the first tick's 5000"
+# Issue 585 (CG3, DG7): a message `orchestration send` made (its own thread) starts a turn in a pane whose agent passed
+# the send trial on this host, so typing the INBOX pointer as well would spend a second turn. Every other case keeps the
+# pointer: an agent with no pass on this host (a PC Codex pass proves nothing for a Mac Codex pane), and a reply in
+# another thread, which the trial never proved wakes a pane. The agent kind comes from Orca's ps ($F/kinds here).
+cp "$SOURCE/scripts/codex-helpers.sh" "$REPO/scripts/"; mkdir -p "$REPO/docs"; HOSTK=$(uname -s); : > "$F/kinds"
+mv "$T/bin/orca-ide" "$T/bin/orca-real2"
+cat > "$T/bin/orca-ide" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "worktree ps" ]; then
+  "$T/bin/orca-real2" "\$@" | jq --argjson k "\$(jq -Rn '[inputs | split(" ") | {(.[0] + ":l"): .[1]}] | add // {}' "$F/kinds")" \
+    '.result.worktrees[].agents[] |= (.agentType = (\$k[.paneKey] // null))'; exit
+fi
+exec "$T/bin/orca-real2" "\$@"
+EOF
+chmod +x "$T/bin/orca-ide"
+rec() { jq -n --arg h "$HOSTK" "$1" > "$REPO/docs/orca-native-trial.json"; }
+reply() { jq -nc --arg h "$1" --arg id "$2" '{id: $id, thread_id: "msg_root", to_handle: $h, from_handle: "term_main", type: "message", subject: "answer", read: 0, created_at: "1999-01-01T00:00:00Z"}' >> "$F/inbox-$1.jsonl"
+  jq -sc '{ok: true, result: {messages: .}}' "$F/inbox-$1.jsonl" > "$F/inbox-$1"; }
+rec '{send: {claude: {($h): {result: "pass", form: "handle"}}, codex: {($h): {result: "fail", why: "not bound"}}}}'
+for n in 20 21; do bseat wt-i$n term_wt-i$n task_wt-i$n 9000; state term_wt-i$n working; done
+echo "term_wt-i20 claude" >> "$F/kinds"; echo "term_wt-i21 codex" >> "$F/kinds"; tick 30000
+msg term_wt-i20 c20 0; msg term_wt-i21 c21 0; state term_wt-i20 idle; state term_wt-i21 idle; tick 30060
+[ "$(wakes term_wt-i20):$(wakes term_wt-i21)" = 0:1 ] \
+  || failc "mixed send record keeps the typed wake for the Codex pane" "claude:codex wakes are $(wakes term_wt-i20):$(wakes term_wt-i21), not 0:1"
+bseat wt-i22 term_wt-i22 task_wt-i22 9000; state term_wt-i22 working; echo "term_wt-i22 claude" >> "$F/kinds"; tick 31000
+reply term_wt-i22 rp22; state term_wt-i22 idle; tick 31060
+[ "$(wakes term_wt-i22)" = 1 ] || failc "a reply to a passed pane keeps the typed wake" "wakes $(wakes term_wt-i22), not 1"
+rec '{send: {codex: {"PC-host": {result: "pass", form: "handle"}}}}'
+bseat wt-i23 term_wt-i23 task_wt-i23 9000; state term_wt-i23 working; echo "term_wt-i23 codex" >> "$F/kinds"; tick 32000
+msg term_wt-i23 c23 0; state term_wt-i23 idle; tick 32060
+[ "$(wakes term_wt-i23)" = 1 ] || failc "PC send pass keeps the Mac Codex inbox pointer" "wakes $(wakes term_wt-i23), not 1"
 echo "PASS main-watch-inbox-wake.test.sh"

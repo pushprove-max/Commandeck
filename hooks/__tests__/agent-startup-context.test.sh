@@ -87,7 +87,7 @@ check "the relay reads at most the last 600 characters of a watcher, and hands a
   "$(grep -c 'at most the last 600 characters of a watcher' <<<"$REL"):$(grep -c 'more than about 10 KB.*subagent that answers in at most 40 lines' <<<"$REL")"
 # Issue 319: a timer check that reports nothing for the owner is not worth a reply (each reply replays the context).
 check "the relay ends a wake whose line says nothing for the owner with no text, after it starts the check again" 1 \
-  "$(grep -c 'nothing for the owner.*start cos-check.sh again, then end the turn with no text' <<<"$REL")"
+  "$(grep -c 'scripts/cos-supervise.sh.*: runs every watcher, restarts one that dies, and types each find into this pane itself' <<<"$REL")"
 check "the relay's decision line passes an order with relay-order.sh" 1 "$(grep -c "scripts/relay-order.sh <id> '<the owner's words verbatim>'" <<<"$REL")"
 check "the relay searches the rulings log before a picker, and asks one question per picker" 1 \
   "$(grep -c 'Before a picker, search the rulings log .* for its topic.*One question per picker' <<<"$REL")"
@@ -98,8 +98,8 @@ check "main and the relay hold a build order to the owner's yes naming the unit 
 check "main's launch rule: the Order line quotes that yes with its ruling id, and the scope lists only the issues it names" 1 \
   "$(tr '\n' ' ' < "$REAL/templates/main-session.md" | sed -E 's/ +/ /g' | grep -cF 'The `Order:` line quotes the owner'"'"'s yes, with its ruling id, and the batch'"'"'s scope lists only the issues it names.')"
 # Issue 290: a picker opened to a quiet owner sat for hours, and a dead watcher went unseen until the owner asked.
-check "the relay opens no picker when the owner has been quiet 30 minutes, and runs the timer check as a fifth job" "1:1:1" \
-  "$(grep -c 'owner quiet for 30 minutes or more, open no picker; leave the question on the decision queue and ask when the owner next types' <<<"$REL"):$(grep -c 'scripts/cos-check.sh' <<<"$REL"):$(grep -c 'without all five running' <<<"$REL")"
+check "the relay opens no picker when the owner has been quiet 30 minutes, and runs the timer check as a fifth job" "1:1" \
+  "$(grep -c 'owner quiet for 30 minutes or more, open no picker; leave the question on the decision queue and ask when the owner next types' <<<"$REL"):$(grep -c 'scripts/cos-check.sh' <<<"$REL")"
 # Issue 360: the relay passed its own additions to main as the owner's words; its scope rules name the NOT-ordered
 # section, the order check it runs before sending, the multi-select picker with the decoy first, no bundle approvals,
 # and the owner's answer at a pass-loop alert for pass 4 or more (the owner moved it from pass 5 to pass 4).
@@ -260,6 +260,9 @@ check "under CLAUDE_CONFIG_DIR the index in that profile's projects folder is th
 
 # Issue 461: no watcher reported a unit idling after its closing GO; the relay is told to run one.
 check "the relay is told to run the idle-unit watcher (issue 461)" 1 "$(grep -c 'scripts/cos-watch-units.sh' <<<"$REL")"
+# Issue 655: each watcher's exit was a turn; one supervisor runs them all, so the relay arms it and cos-check alone.
+check "startup arms one supervisor" "1 0 1" \
+  "$(grep -c 'bash [^ ]*/scripts/cos-supervise.sh' <<<"$REL") $(grep -c 'bash [^ ]*/scripts/cos-watch-' <<<"$REL") $(grep -c 'bash [^ ]*/scripts/cos-check.sh' <<<"$REL")"
 
 # The relay's saved state rides its startup context, cut at 5000 bytes. The bugs: a relay reading stale sections before
 # its newest handoff (or losing that handoff past the cut), an oversized state nobody is told to trim, and an empty

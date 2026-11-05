@@ -65,5 +65,11 @@ check "round 2: seats are the Builder (sonnet high) and the round-2 reviewer (gp
   '[[["builder","claude-sonnet-5-5","high"],["codex-reviewer","gpt-6.1-sol","medium"]]]' "$(seats rt)"
 check "a unit that is not a Builder has no roster" '[null]' "$(seats u)"
 
+# Issue 647: a round report whose findings are bold headings (`**F1 (P2):**`) counts them like the bracket form; a
+# (P2) in the middle of a sentence is not a heading and is not counted.
+mkdir -p "$WS/rt/.claude/briefs"; printf 'Pass: review\n\n**F1 (P2):** meh -- a:1\n- **F2 (P2):** meh too -- a:2\nA note on the (P2) above.\n\nVERDICT: NO-GO\n' > "$WS/rt/.claude/briefs/rt-r2-reports.md"
+check "dashboard counts bold P2 finding" '{"P0":0,"P1":0,"P2":2,"P3":0}' \
+  "$(cd "$MAIN" && env -u COMMANDECK_SCRATCH COMMANDECK_MAIN="$MAIN" bash "$SOURCE/scripts/dashboard.sh" --progress "$WS/rt" rt 2>&1 | jq -c .findings 2>&1)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -31,7 +31,9 @@ if [ "${1:-}" = --note ]; then
   [ "$(git rev-parse --show-toplevel 2>/dev/null)" -ef "$PP_MAIN" ] && [[ $2 != "FYI event: "* ]] && pp_owed_clear "$SENT"
   echo "cos-tell: note stored in run:$RUN for the Chief of Staff"; exit 0
 fi
-HANDLE=$(pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")
+# Read fresh, not the 20 s stored map (issue 576): this one lookup decides the relay is live (the ask hook refuses
+# main's picker on it) and where the text is typed, so a pane closed or opened seconds ago must be seen.
+HANDLE=$(PP_PANE_MAP_FRESH=1 pp_pane_of "$PP_WORKSPACES/Chief-of-Staff")
 [ -n "$HANDLE" ] || { echo "Chief of Staff pane not found (no claude pane in $PP_WORKSPACES/Chief-of-Staff)" >&2; exit 1; }
 [ "${1:-}" != --handle ] || { echo "$HANDLE"; exit 0; }
 TEXT=${*:-$(cat)}

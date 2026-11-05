@@ -76,5 +76,10 @@ cutdir gl1 'Remove `assets/*.js` for good.' assets
 check "a deletion matched by a backticked glob in main's copy is accepted" "0 0" "$(merge gl1) $(left assets)"
 cutdir gl2 'Remove `*.js`, `*` and `?/x` and `[ab]/x`.' k1
 check "a glob with no literal folder approves nothing" "1 2" "$(merge gl2) $(left k1)"
+# Issue 640: an evidence file whose Files deleted heading is in setext form (`Files deleted` over `----`) was not read,
+# so the refusal said the brief never names the file instead of saying the evidence list approves nothing on its own.
+mkdir -p "$REPO/m1"; echo old > "$REPO/m1/old.js"; git -C "$REPO" add m1; git -C "$REPO" commit -qm "main: m1"
+cutdir ev3 'Nothing named.' m1/old.js; printf '\nFiles deleted\n-------------\n\n- m1/old.js\n' >> "$COMMANDECK_WORKSPACES/ev3/.claude/briefs/ev3-evidence.md"
+check "Files deleted setext heading is read" "1 1 1" "$(merge ev3) $(grep -c "approves nothing on its own" "$TMP/out") $(left m1)"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

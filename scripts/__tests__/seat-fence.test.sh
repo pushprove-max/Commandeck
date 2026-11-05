@@ -75,5 +75,12 @@ check "a Codex seat's wait binds its own log into the record, not a sibling's" "
 touch "$T/pane-up"; COMMANDECK_SEAT_EVENTS=$T/events.jsonl srun collect plan-judge-sol pu --marker PLAN-DONE >"$T/out" 2>&1
 check "a judge in its own Codex home is collected, and its ledger row names its log" "0:$JL" "$?:$(jq -r '.session' "$T/events.jsonl" 2>&1 | tail -1)"
 
+# Issue 640: the collected report started at the first line beginning `# `, so a pane that quoted `# heading` in a fence
+# above its report handed main the fence's tail and lost nothing it could see. The cut, run as seat.sh runs it, starts
+# at the first level-1 heading outside a fence.
+CUT=$(grep -m1 'BODY=$(printf .%s\\n. "$OUT" | awk "$PP_AWK_FENCE"' "$REAL/scripts/seat.sh")
+BODY=$( (. "$REAL/scripts/fence.sh"; OUT=$'chatter\n```\n# not the report\n```\n# Report\nbody'; eval "$CUT"; printf '%s' "$BODY") )
+check "report body starts at first real heading" "# Report|body" "$(paste -sd'|' - <<<"$BODY")"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

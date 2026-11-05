@@ -38,5 +38,37 @@ unreadable() { # <coordinator>: "<stderr lines> <log lines>" naming an unreadabl
 check "an unreadable context size on main says why in one line" "1 1" "$(unreadable old-pane)"
 check "an unreadable context size in another session of main's checkout says nothing" "0 0" "$(unreadable other-pane)"
 
+# Issue 615: a session past the line, with a fresh filled checkpoint and nothing holding it, must start the restart (the
+# helper is a stub that leaves a marker), and a hold must leave one line saying why: owner and relay see it, not just stderr.
+CPD="$BOX/home/.claude/checkpoints"
+cat > "$BOX/helper.sh" <<STUB
+#!/usr/bin/env bash
+echo "\$2" > "$BOX/restarted"
+STUB
+echo '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":208000,"cache_creation_input_tokens":800,"output_tokens":0}}}' > "$BOX/over.jsonl"
+past_line() { # <stderr file>: one stop of old-pane (main) at 208.8K, past the 200K line, checkpoint fresh
+  echo old-pane > "$BOX/coordinator"; : > "$LOG"; rm -f "$BOX/restarted" "$CPD"/sid.md* "$CPD"/restart-inflight.*
+  printf '# Checkpoint\n\nGoal: ship the cut\n' > "$CPD/sid.md"
+  (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","stop_hook_active":false}' "$BOX/over.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" ORCA_TERMINAL_HANDLE=old-pane COMMANDECK_SCRATCH="$BOX" COMMANDECK_CLEAR_LINE=200000 \
+        COMMANDECK_RESTART_HELPER="$BOX/helper.sh" timeout 20 bash "$HOOK" 2>"$1" >/dev/null)
+}
+past_line "$BOX/err1"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$BOX/restarted" ] && break; sleep 0.5; done
+check "session past the line restarts" "$CPD/sid.md" "$(cat "$BOX/restarted" 2>/dev/null)"
+
+# Held: this checkpoint was already restarted for (a pinned tab), so no new pane opens. One HELD line, naming the
+# checkpoint, the session and the reason, lands in the log; the same reason goes to stderr.
+held_run() {
+  past_line "$BOX/err2" # starts the stub helper once; the marker below then makes the next stop a hold
+  sleep 1; rm -f "$BOX/restarted"; rmdir "$CPD"/restart-inflight.* 2>/dev/null; : > "$LOG"
+  cksum < "$CPD/sid.md" > "$CPD/sid.md.restarted"
+  (cd "$BOX/repo" && printf '{"session_id":"sid","transcript_path":"%s","stop_hook_active":false}' "$BOX/over.jsonl" \
+    | env -i PATH="$BOX/bin" HOME="$BOX/home" ORCA_TERMINAL_HANDLE=old-pane COMMANDECK_SCRATCH="$BOX" COMMANDECK_CLEAR_LINE=200000 \
+        COMMANDECK_RESTART_HELPER="$BOX/helper.sh" timeout 20 bash "$HOOK" 2>"$BOX/err3" >/dev/null)
+  echo "$(grep -c ' restart: HELD: cp=sid.md session=sid cwd=.*: ' "$LOG") $(grep -c 'already restarted' "$BOX/err3")"
+}
+check "held restart logs one why line" "1 1" "$(held_run)"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

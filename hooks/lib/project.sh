@@ -92,16 +92,40 @@ pp_run_file() {
   . "$(dirname "${BASH_SOURCE[0]}")/../../scripts/project-main.sh" && pp_main_resolve || return 1
   printf '%s' "${COMMANDECK_SCRATCH:-$HOME/.commandeck/scratch/${PP_MAIN//[^A-Za-z0-9]/-}}/current-run"
 }
+# pp_run_id_of -- the run id from `orchestration run-current` JSON on stdin (issue 588). An allowlist (class-miss): the
+# --full form's `result.run` null (unbound: prints nothing, 0) or an object whose `id` is a non-empty string (the id,
+# 0); Orca 1.4.246's concise form, `result.runId` and no `run`, says so on stderr and returns 4; any other `run` value
+# says its shape on stderr and returns 5; no output, or no `result` object, returns 1. pp_orca_run_id asks Orca with
+# --full; every run-current reader goes through it.
+pp_run_id_of() {
+  local j
+  j=$(jq -c '.result | if type == "object" then . else error end' 2>/dev/null) || return 1
+  if jq -e 'has("run")' <<<"$j" >/dev/null 2>&1; then
+    jq -er '.run | if . == null then "" elif type == "object" and (.id | type) == "string" and .id != "" then .id else error end' <<<"$j" 2>/dev/null \
+      && return 0
+    echo "pp_run_id_of: run-current \`run\` is neither null nor an object with a string id: $(jq -c '.run' <<<"$j" | head -c 200)" >&2; return 5
+  fi
+  if jq -e 'has("runId")' <<<"$j" >/dev/null 2>&1; then
+    echo "pp_run_id_of: concise run-current output; the call needs --full" >&2; return 4
+  fi
+  return 1
+}
+pp_orca_run_id() { orca-ide orchestration run-current --full --json 2>/dev/null | pp_run_id_of; }
 # pp_is_main_pane -- is this pane main? The main checkout also holds an Orca automation or a second session, so only the
 # run's coordinator pane is. The run is COMMANDECK_RUN, else the run file (pp_run_file), else Orca's run-current.
-# 0 main (also: no Orca handle, or no run from all three: nothing to tell main from); 1 not main; 2 unknown (run-list
-# failed or does not list the run); 3 the run is listed with no coordinator. Sets PP_MAIN_RUN and PP_MAIN_COORD.
+# 0 main (also: no Orca handle, or no run from all three: nothing to tell main from; Orca giving no output at all is
+# this case too, a known gap by main's ruling, pass 7); 1 not main; 2 unknown (run-list failed or does not list the
+# run, or run-current answered in a shape pp_run_id_of does not read: 4 or 5); 3 the run is listed with no coordinator.
+# Sets PP_MAIN_RUN and PP_MAIN_COORD.
 pp_is_main_pane() {
-  local f
+  local f rc=0
   PP_MAIN_RUN=${COMMANDECK_RUN:-} PP_MAIN_COORD=
   [ -n "${ORCA_TERMINAL_HANDLE:-}" ] || return 0
   [ -n "$PP_MAIN_RUN" ] || { f=$(pp_run_file 2>/dev/null) && PP_MAIN_RUN=$(tr -d '[:space:]' < "$f" 2>/dev/null); } || true
-  [ -n "$PP_MAIN_RUN" ] || PP_MAIN_RUN=$(orca-ide orchestration run-current --json 2>/dev/null | jq -r '.result.run.id // empty' 2>/dev/null)
+  if [ -z "$PP_MAIN_RUN" ]; then
+    PP_MAIN_RUN=$(pp_orca_run_id) || rc=$?
+    case $rc in 4|5) PP_MAIN_RUN=; return 2 ;; esac
+  fi
   [ -n "$PP_MAIN_RUN" ] || return 0
   PP_MAIN_COORD=$(orca-ide orchestration run-list --full --json 2>/dev/null | jq -er --arg r "$PP_MAIN_RUN" \
     '.result.runs | if type == "array" then first(.[] | select(.id == $r)) | (.coordinator_handle // "") else error end' 2>/dev/null) || { PP_MAIN_COORD=; return 2; }

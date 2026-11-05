@@ -1,6 +1,6 @@
 // The drawn elements of the units views: theme colours, widths, the card frame and each section's lines.
 // Only types come from units-sources.ts (`import type`), so the two modules have no runtime cycle.
-import type { Line, Merged, Row, Seg, State } from './units-sources'
+import type { Ctx, Dot, Line, Merged, Row, Seg, Snap, State } from './units-sources'
 
 // Claude Code theme keys, never raw colours, so a light or colour-blind theme recolours every view.
 export const C = { plan: 'planMode', build: 'suggestion', review: 'autoAccept', max: 'warning', ok: 'success', bad: 'error', cost: 'claude', head: 'permission', dim: 'inactive', name: 'text' } as const
@@ -145,7 +145,7 @@ export const waitingModel = (s: State, w: number): Line[] => s.snap.asks.flatMap
   return card([spread([{ t: `◆ ${a.id}`, c: C.max, b: true }], age ? { t: age, c: C.max } : null, iw), [{ t: '  ' }, ...q, ...(holds ? [{ t: holds, d: true }] : [])]], C.max, w)
 })
 
-export const cardModel = (r: Row, s: State, w: number, merging: boolean, frame: number): Line[] => {
+export const cardModel = (r: Row, s: State, w: number, merging: boolean, frame: number, expanded = false): Line[] => {
   const iw = w - 4
   const col = stageColor(merging ? 'merging' : r.stage)
   const time = since(r.stageSince ?? r.startedAt, s.now)
@@ -153,6 +153,7 @@ export const cardModel = (r: Row, s: State, w: number, merging: boolean, frame: 
   const who: Seg = r.model ? { t: ` · ${modelName(r.model)}${r.effort ? ` · ${r.effort}` : ''}`, d: true } : { t: ' · model unknown', c: C.dim, d: true }
   const out: Line[] = [spread([{ t: r.working ? workMark(frame) : '○', c: col }, { t: ' ' }, { t: shortName(r.unit), c: C.name, b: true }, who], { t: `${stageOf(r)}${time ? ` · ${time}` : ''}`, c: col }, iw)]
   out.push([{ t: '  ' }, ...stepRow(r, merging), ...(blocked(r, s) ? [{ t: '   ⏸ waits on owner', c: C.max }] : [])])
+  out.push(...ctxGauge(r, iw), ...roundDots(r))
   const built = builtOf(r, merging)
   if (r.issues) out.push([{ t: '  ' }, { t: bar(built, r.issues), c: C.ok }, { t: `  ${built} of ${r.issues} issues built` }])
   else if (r.closes.length) out.push([{ t: `  ${r.closes.join(' ')}`, d: true }])
@@ -161,9 +162,97 @@ export const cardModel = (r: Row, s: State, w: number, merging: boolean, frame: 
     : [{ t: '' }]
   if (r.verdict || r.costs.total > 0) out.push(spread(verdict, r.costs.total > 0 ? { t: usd(r.costs.total), c: C.cost, b: true } : null, iw))
   const parts = (['plan', 'build', 'review', 'fix'] as const).filter(k => r.costs[k] > 0).map(k => `${k} ${usd(r.costs[k])}`)
-  if (parts.length > 1) out.push([{ t: `  ${parts.join(' · ')}`, d: true }])
+  if (parts.length > 1 && layoutOf(w) === 'wide') out.push([{ t: `  ${parts.join(' · ')}`, d: true }])
+  out.push(...receiptLine(r))
+  if (expanded) out.push(...toolLines(r))
   if (r.red) out.push([{ t: '  ⚠ at its prompt', c: C.bad, b: true }])
   return card(out, col, w)
+}
+
+// mini under 48 columns, compact 48-79, wide from 80 (DH6): the width the view is given, not an option.
+export const layoutOf = (w: number): 'mini' | 'compact' | 'wide' => (w < 48 ? 'mini' : w < 80 ? 'compact' : 'wide')
+
+// Each element below returns its lines, and [] when its data is absent (undefined: no read was tried, DH9); null is a read
+// that failed and gives a placeholder naming the element.
+const pct = (c: Ctx) => (c.line ? Math.round((c.tokens / c.line) * 100) : null)
+const past = (c: Ctx) => c.line !== null && c.tokens >= c.line
+export const ctxLine = (label: string, ctx: Ctx | null | undefined, compactions: number | null | undefined, w: number): Line[] => {
+  if (ctx === undefined) return []
+  if (ctx === null) return [fitWidth([{ t: `${label}: not read`, c: C.dim }], w)]
+  const k = ctx.line ? Math.min(10, Math.round((ctx.tokens / ctx.line) * 10)) : 0
+  const col = past(ctx) ? C.bad : C.ok
+  const level: Seg[] = ctx.line ? [{ t: '▰'.repeat(k), c: col }, { t: '▱'.repeat(10 - k), c: C.dim }, { t: ` ${pct(ctx)}%`, c: past(ctx) ? C.bad : undefined }] : [{ t: `${Math.round(ctx.tokens / 1000)}k tokens` }]
+  return [fitWidth([{ t: `${label} `, d: true }, ...level, ...(compactions ? [{ t: ` · ${compactions} compaction${compactions > 1 ? 's' : ''}`, d: true }] : [])], w)]
+}
+export const ctxGauge = (r: Row, w: number): Line[] => ctxLine('context', r.context, r.compactions, w)
+// The band's short form, red past the line.
+export const ctxShort = (c: Ctx | null | undefined): Seg[] => (c && c.line ? [{ t: ` · ctx ${pct(c)}%`, c: past(c) ? C.bad : undefined }] : [])
+
+const dot = (d: Dot): Seg => (d === 'GO' ? { t: '●', c: C.ok } : d === 'NO-GO' ? { t: '●', c: C.bad } : { t: '○', c: C.dim })
+// Plan-judge rounds then review passes, from their own lists; the card's verdict is not a round.
+export const roundDots = (r: Row): Line[] => {
+  const j = r.judgeRounds ?? []
+  const v = r.rounds ?? []
+  if (!j.length && !v.length) return []
+  return [[...(j.length ? [{ t: 'judge ', d: true }, ...j.map(dot)] : []), ...(j.length && v.length ? [{ t: '  ' }] : []), ...(v.length ? [{ t: 'review ', d: true }, ...v.map(dot)] : [])]]
+}
+
+// One cell per newest guard refusal (red), one per pane at its prompt (amber, DH4).
+export const gateStrip = (snap: Snap, rows: Row[]): Line[] => {
+  if (snap.gates === null) return [[{ t: 'gates: hook fire log not read', c: C.dim }]]
+  const cells: Seg[] = [...(snap.gates?.items ?? []).map(i => ({ t: `▌${i.hook}`, c: C.bad })), ...rows.filter(r => r.red).map(r => ({ t: `▌${shortName(r.unit)} at its prompt`, c: C.max }))]
+  return cells.length ? [cells.flatMap((c, i) => (i ? [{ t: '  ' }, c] : [c]))] : []
+}
+
+// The event log keeps a checksum of a call, never its text, and no edit or cost count: those are named, not guessed.
+export const receiptLine = (r: Row): Line[] => {
+  if (!r.step && !r.tools) return []
+  const run = [...(r.tools ?? [])].reverse().find(t => t.running)
+  const parts = [
+    ...(r.step ? [`last ${r.step.kind} step ${r.step.end ? fmtSec((r.step.end - r.step.start) / 1000) : 'open'}`] : []),
+    'edits not recorded', ...(r.step ? [`errors ${r.step.errors}`] : []), 'cost added not recorded',
+    ...(run ? [`running ${run.tool} · command not recorded`] : []),
+  ]
+  return [[{ t: parts.join(' · '), d: true }]]
+}
+export const toolLines = (r: Row): Line[] => (r.tools ?? []).slice(-3).map((t): Line => [{ t: `▸ ${t.tool}`, c: t.running ? C.build : undefined }, { t: ` ${clockOf(t.ts)}${t.running ? ' running' : ''}`, d: true }])
+
+// A lane per unit across local midnight to now, a cell per slot coloured by the history stage covering it.
+export const timelineLanes = (s: State, w: number): Line[] => {
+  const rows = s.snap.rows.filter(r => r.history?.length)
+  if (!rows.length) return []
+  const mid = new Date(s.now).setHours(0, 0, 0, 0)
+  const n = Math.max(1, w - 24)
+  const lane = (r: Row): Line => {
+    const label = fitWidth([{ t: shortName(r.unit), c: C.name, b: true }], 22)
+    const cells: Seg[] = []
+    for (let i = 0; i < n; i++) {
+      const t = mid + ((i + 0.5) * (s.now - mid)) / n
+      const h = r.history!.find(x => x.from <= t && t < (x.to ?? s.now + 1))
+      const seg: Seg = h ? { t: '█', c: stageColor(h.stage) } : { t: '·', d: true }
+      const last = cells[cells.length - 1]
+      if (last && last.c === seg.c && last.d === seg.d) last.t += seg.t
+      else cells.push(seg)
+    }
+    return [...label, { t: ' '.repeat(24 - cols(plain(label))) }, ...cells]
+  }
+  return [spread([{ t: ' '.repeat(24) + clockOf(mid), d: true }], { t: clockOf(s.now), d: true }, w), ...rows.map(lane)]
+}
+
+// DH3: pushed when the unit has left mergedSincePush, merged here while it is in it; no deploy field exists to name deployed.
+export const whereLine = (merged: Merged[], snap: Snap): Line[] => {
+  if (!merged.length || snap.unpushed === undefined) return []
+  if (snap.unpushed === null) return [[{ t: 'push state not read', c: C.dim }]]
+  const names = (a: Merged[]) => a.map(m => shortName(m.unit)).join(' ')
+  const here = merged.filter(m => snap.unpushed!.includes(m.unit))
+  const pushed = merged.filter(m => !snap.unpushed!.includes(m.unit))
+  return [[{ t: [...(pushed.length ? [`pushed ${names(pushed)}`] : []), ...(here.length ? [`merged here ${names(here)}`] : [])].join(' · '), d: true }]]
+}
+
+export const eventLog = (s: State, w: number): Line[] => {
+  if (s.events === undefined) return []
+  if (s.events === null) return [[{ t: 'unit log: not read (no unit-events file)', c: C.dim }]]
+  return s.events.slice(-5).map(e => fitWidth([{ t: clockOf(e.at).padEnd(9), d: true }, { t: shortName(e.unit), c: C.name, b: true }, { t: ` ${e.event}` }], w))
 }
 
 // A merged unit's row; `cost` is its finished cost (the snapshot's finishedUsd), when it has one.

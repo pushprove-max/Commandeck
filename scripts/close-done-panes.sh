@@ -76,13 +76,31 @@ PROTECT=$(
 CLAIMED=$(awk 'FNR == 1 { if (!v) printf "%s", h; h = ""; v = 0 }
   /^verdict=/ { v = 1 } /^handle=/ { h = h substr($0, 8) "\n" }
   END { if (!v) printf "%s", h }' "$SCRATCH"/seat-*.txt 2>/dev/null || true)
+# Issue 663 R1: both protections above end for one proven generation of a seat record (launched= L), and its pane
+# closes: (a) merged, the unit's `merged` row in the builds log has `at` at or after L; (b) stopped, the unit's done
+# file holds a STOP or DONE line written after L and Orca lists no agent in the pane. A stopped unit whose agent is
+# alive and idle is kept: its STOP line asks main to act in that pane. An unmerged unit's panes stay protected.
+. "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/project.sh"; pp_project "$MAIN" || true
+MERGED=$(jq -r --arg m "$PP_MAIN_P" 'select(.how == "merged" and .main == $m) | "\(.unit) \((.at | fromdateiso8601?) // 0)"' \
+  "$HOME/.commandeck/builds/${PP_PROJECT:-}.jsonl" 2>/dev/null || true)
+REL_M= REL_S=
+while read -r h u l; do
+  [ -n "$h" ] && [[ $l =~ ^[0-9]+$ ]] || continue
+  d=$SCRATCH/unit-loop-$u.done
+  if awk -v u="$u" -v l="$l" '$1 == u && $2 >= l { f = 1 } END { exit !f }' <<<"$MERGED"; then REL_M+="$h"$'\n'
+  elif grep -qE '^(STOP|DONE)' "$d" 2>/dev/null && [ "$(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d")" -ge "$l" ]; then REL_S+="$h"$'\n'; fi
+done <<<"$(awk 'function out() { if (h != "") print h, u, l } FNR == 1 { out(); h = u = l = "" }
+  /^handle=/ && h == "" { h = substr($0, 8) } /^unit=/ && u == "" { u = substr($0, 6) } /^launched=/ && l == "" { l = substr($0, 10) }
+  END { out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)"
 NOW=$(( $(date +%s) * 1000 ))
 rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$WT_JSON" \
   --arg self "$SELF" --arg main "$MAIN" --arg ws "$PP_WORKSPACES" --rawfile prot <(printf '%s' "$PROTECT") --rawfile claim <(printf '%s' "$CLAIMED") --rawfile keep <(pp_keep_worktrees) \
+  --rawfile relm <(printf '%s' "$REL_M") --rawfile rels <(printf '%s' "$REL_S") \
   --argjson now "$NOW" --argjson cutoff "$(( NOW - QUIET_SECONDS * 1000 ))" \
   --argjson orphan "$(( NOW - ORPHAN_SECONDS * 1000 ))" "$PP_PNORM"'
   ($prot | split("\n")) as $prot | ($ws | pnorm) as $ws | ($main | pnorm) as $main
   | ($claim | split("\n")) as $claim | ($keep | split("\n") | map(select(. != ""))) as $keep
+  | ($relm | split("\n") | map(select(. != ""))) as $relm | ($rels | split("\n") | map(select(. != ""))) as $rels
   | ($ts.result | if type == "array" then . else .terminals end) as $ts
   | [ $wl.result.worktrees[]
       | select(.cliProvenance.kind == "created-by-cli" and .isMainWorktree != true
@@ -93,7 +111,7 @@ rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$
   | [ $ps.result.worktrees[]? | .agents[]? ] as $agents
   | $ts[]
   | select(.handle != $self and (.worktreePath | pnorm) != $main and (.worktreePath | pnorm | IN($owned[]))
-           and (.handle | IN($prot[]) | not))
+           and ((.handle | IN($prot[]) | not) or (.handle | IN($relm[], $rels[]))))
   | "\(.tabId):\(.leafId)" as $k
   | [ $agents[] | select(.paneKey == $k) ] as $a
   | ([ $ts[] | select("\(.tabId):\(.leafId)" == $k) ] | length) as $n
@@ -102,6 +120,8 @@ rows=$(jq -rn --argjson ps "$PS_JSON" --argjson ts "$TERMS_JSON" --argjson wl "$
   | "\(.handle)\t\(.worktreePath | split("/") | last)\t\($a[0].agentType // .agentIdentity // "shell")" as $row
   | if $n != 1 then "skip\t\($k)\t\($n) panes carry this key, need exactly 1"
     elif ($at | type) != "number" then empty
+    elif ((.handle | IN($relm[])) and all($a[]; .state != "working")) or ((.handle | IN($rels[])) and ($a | length) == 0)
+    then "\($row)\t\(($now - $oat) / 60000 | floor)"
     elif ($a | length) > 0 and all($a[]; .state == "done") and $at < $cutoff and (.handle | IN($claim[]) | not)
     then "\($row)\t\(($now - $at) / 60000 | floor)"
     elif (.handle | IN($claim[]) | not) and all($a[]; .state != "working") and $oat < $orphan
@@ -135,7 +155,9 @@ if [ -n "$closed" ] && [ -n "$RUN" ]; then
         "$SCRATCH"/scratchpad/*-loop-*.log "$SCRATCH"/scratchpad/*-drive-*.log 2>/dev/null \
       | sed 's/^implementer=\([^ ]*\) task=\(.*\)$/\2 \1/' || true
   )
-  for t in $(orca-ide orchestration task-list --run "$RUN" --json | jq -r '.result.tasks[] | select(.status == "dispatched") | .id'); do
+  for t in $(orca-ide orchestration task-list --run "$RUN" --json | jq -r '.result.tasks
+      | if type == "array" and all(.[]; has("id") and has("status")) then .[] | select(.status == "dispatched") | .id
+        else error("close-done-panes: the task list has a row without id or status; no dispatched task checked") end'); do
     for h in $(awk -v t="$t" '$1 == t {print $2}' <<<"$SEATS"); do
       case "$closed " in *" $h "*) echo "task $t is still dispatched to closed pane $h; left open" ;; esac
     done

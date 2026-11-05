@@ -84,6 +84,12 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${BATCH:?$USAGE}"
 [[ $UNIT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad unit name: $UNIT" >&2; exit 2; }
 pp_unit_name "$UNIT" || exit 2
+# Gate refusals (fence.sh): this run's stamp is made before the first gate read. gact runs an act that cannot be taken back
+# through pp_gate_act and exits 2 on a stamped refusal (a 2 of the act's own, with a clean stamp, is returned as it is);
+# gcheck is the same check ahead of a block of plain redirects, with no gate read inside the block.
+pp_gate_init || exit 1
+gact() { local rc; pp_gate_act "$@" || { rc=$?; [ "$rc" != 2 ] || pp_gate_check 2>/dev/null || exit 2; return "$rc"; }; }
+gcheck() { pp_gate_check || exit 2; }
 # A mistyped or unmerged review base would make every pass diff a wrong range: refused before anything is created.
 if [ -n "$RBASE" ]; then
   ASKED=$RBASE
@@ -105,7 +111,9 @@ case $LAUNCH in
   *) echo "REFUSED: $BATCH's Launch line names ${LAUNCH#new unit }, not $UNIT ('$LAUNCH'); nothing was opened" >&2; exit 2 ;;
 esac
 # The plan is read where the worktree is cut from, local main (pp_worktree_new): a nonempty regular file there.
-PLANS=$(pp_plan_section_paths "$BATCH" | paste -sd' ' -) || PLANS=
+# A refused Plan heading (status 2, the stamp's last line) stops the launch; any other failure reads as no plan.
+PLANS=$(pp_plan_section_paths "$BATCH") || { [ "$?" != 2 ] || { echo "REFUSED: $(tail -n 1 "$PP_GATE_STAMP"); nothing was opened" >&2; exit 2; }; PLANS=; }
+PLANS=$(paste -sd' ' - <<<"$PLANS")
 PLAN=${PLANS%% *}
 plan_ok() {
   # A --from-plan dry run checked the plan against the judge above and installs nothing.
@@ -228,7 +236,10 @@ if [ "$FROM" = 1 ]; then
   stale_since() { # <rev> -- the Steps files changed on main since each judge's sha; 2 when a sha cannot be compared
     local m f all=
     for m in $JMS; do
-      f=$(pp_plan_stale "$m" "$1" "$FROZEN" "$PLAN") || { echo "REFUSED: --from-plan: cannot compare main $m with $1: update the plan worktree to main, then judge it again" >&2; return 2; }
+      f=$(pp_plan_stale "$m" "$1" "$FROZEN" "$PLAN") || {
+        if [ "$?" = 2 ]; then echo "REFUSED: --from-plan: $(tail -n 1 "$PP_GATE_STAMP"); fix the heading in the plan, then judge it again" >&2
+        else echo "REFUSED: --from-plan: cannot compare main $m with $1: update the plan worktree to main, then judge it again" >&2; fi
+        return 2; }
       all+=$f$'\n'
     done
     printf '%s' "$all" | sed '/^$/d' | sort -u
@@ -236,6 +247,12 @@ if [ "$FROM" = 1 ]; then
   STALE=$(stale_since "$(git -C "$PP_MAIN" rev-parse refs/heads/main)") || exit 2
   [ -z "$STALE" ] || nope "--from-plan: main changed a file $PLAN's Steps name since the judges read it: $(paste -sd' ' - <<<"$STALE"); update the plan worktree to main, then judge it again"
   plan_checks "$(cat "$FROZEN")"
+  # Issue 664, the owner's ruling: briefs stay out of this public repo, so a plan carries what it cites inside itself.
+  # A brief the planning worktree holds, other than the batch the launch reads, is refused before the plan reaches main.
+  for b in $(grep -oE '\.claude/briefs/[A-Za-z0-9._-]+' "$FROZEN" | sort -u); do
+    [ "$b" != ".claude/briefs/$UNIT-batch.md" ] && [ -f "$WT/$b" ] || continue
+    nope "--from-plan: $PLAN cites $b, a brief in the planning worktree; briefs stay out of the repo, so put what the plan needs from it inside the plan, then judge it again"
+  done
   if [ "$DRY" = 0 ]; then
     pp_sync_main "$PP_MAIN" || exit 1
     # A retry after a later failure finds the plan on main byte for byte and goes on.
@@ -244,8 +261,8 @@ if [ "$FROM" = 1 ]; then
       # mkdir -p and cp go through a link, so one here would overwrite a file outside the plan, even a clean tracked one.
       for x in .claude .claude/plans "$PLAN"; do [ ! -L "$PP_MAIN/$x" ] || nope "$PP_MAIN/$x is a symbolic link; the plan is written on main only as a plain file"; done
       [ -z "$(git -C "$PP_MAIN" status --porcelain -- "$PLAN")" ] || cmp -s "$PP_MAIN/$PLAN" "$FROZEN" || nope "$PP_MAIN/$PLAN has changes of its own"
-      mkdir -p "$PP_MAIN/.claude/plans" && cp "$FROZEN" "$PP_MAIN/$PLAN" && git -C "$PP_MAIN" add -- "$PLAN" \
-        && git -C "$PP_MAIN" commit -q -m "plan($UNIT): plan" -- "$PLAN" >&2 || { echo "could not commit $PLAN on main; no Builder was launched" >&2; exit 1; }
+      gact mkdir -p "$PP_MAIN/.claude/plans" && gact cp "$FROZEN" "$PP_MAIN/$PLAN" && gact git -C "$PP_MAIN" add -- "$PLAN" \
+        && gact git -C "$PP_MAIN" commit -q -m "plan($UNIT): plan" -- "$PLAN" >&2 || { echo "could not commit $PLAN on main; no Builder was launched" >&2; exit 1; }
     fi
   fi
 fi
@@ -300,12 +317,13 @@ open_builder() {
   # clears the mark, so a hand launch posts every report as before.
   mkdir -p "$PP_SCRATCH"
   if [ "${COMMANDECK_DRIVER:-0}" = 1 ]; then date +%s > "$PP_SCRATCH/drive-$UNIT.launched"; else rm -f "$PP_SCRATCH/drive-$UNIT.launched"; fi
-  bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} \
+  gact bash "$HERE/seat.sh" launch builder "$UNIT" "$WT/.claude/briefs/$UNIT.md" ${OPTS[@]+"${OPTS[@]}"} \
     || { rc=$?; pp_relay_event "$UNIT" launch fail "seat.sh launch exit $rc"; exit "$rc"; }
   pp_relay_event "$UNIT" launch ok "Builder opened in $WT"
   # The plan is on main and the Builder runs: a unit planned before 0.18.0, in <unit>-plan, has that worktree closed.
   # A refusal is printed and never fails the launch.
-  [ ! -d "$WT-plan" ] || bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
+  [ ! -d "$WT-plan" ] || gact bash "$HERE/plan-worktree-close.sh" "$UNIT" >&2 || true
+  pp_gate_done
   exit 0
 }
 
@@ -379,7 +397,7 @@ if [ "$DRY" = 1 ] && [ "$ISSUES" = '[]' ]; then
 elif [ "$DRY" = 1 ]; then
   echo "issues: $(jq -r 'map(if type == "number" then "#\(.)" else . end) | join(", ")' <<<"$ISSUES"); the merge closes only these, from the list the launch writes to main's checkout; fix the batch's '## The issues' list if one is wrong" >&2
 fi
-if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run ${FROZEN:+--plan "$FROZEN"} >&2 || true; exit 0; fi
+if [ "$DRY" = 1 ]; then printf '%s\n' "$T"; bash "$HERE/plan-worktree-close.sh" "$UNIT" $([ "$ADOPT" = 0 ] || echo --adopt) --dry-run ${FROZEN:+--plan "$FROZEN"} >&2 || true; pp_gate_done; exit 0; fi
 
 pp_sync_main "$PP_MAIN" || exit 1
 # Fast-forwarding main from origin may have removed the plan the worktree is about to be cut without.
@@ -393,7 +411,7 @@ fi
 if [ "$ADOPT" = 1 ]; then
   # After every other check, so a launch refused earlier leaves the planner and its mark as they were. Adoption
   # proved nothing in it differs from local main, so the reset to main, as pp_worktree_new bases a new one, loses nothing.
-  bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt ${FROZEN:+--plan "$FROZEN"} >&2 || { echo "the Builder was not launched: $WT was not taken over (above)" >&2; exit 1; }
+  gact bash "$HERE/plan-worktree-close.sh" "$UNIT" --adopt ${FROZEN:+--plan "$FROZEN"} >&2 || { echo "the Builder was not launched: $WT was not taken over (above)" >&2; exit 1; }
   # Adoption took the mark, and the launch writes the Builder's settings and brief into the planner's worktree: a
   # launch that fails from here on gives the mark back, takes back the briefs it writes and puts the planner's
   # settings back as they were, or every later launch refused the unmarked worktree or the files it found there.
@@ -415,13 +433,13 @@ if [ "$ADOPT" = 1 ]; then
   trap '[ $? = 0 ] && rm -f "$SAVED" || undo; rm -f "$FROZEN"' EXIT
   # A batch kept in the planning worktree is planning scratch adoption moved out; it goes back where it was given, so
   # a retry of a failed launch, the same command, reads it there.
-  [ -e "$BATCH" ] || { mkdir -p "$(dirname "$BATCH")" && printf '%s' "$BT" > "$BATCH"; } \
+  [ -e "$BATCH" ] || { gact mkdir -p "$(dirname "$BATCH")" && printf '%s' "$BT" > "$BATCH"; } \
     || { echo "could not put the batch back at $BATCH after adoption; the Builder was not launched" >&2; exit 1; }
-  git -C "$WT" reset --hard "$HEAD_MAIN" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
+  gact git -C "$WT" reset --hard "$HEAD_MAIN" >/dev/null || { echo "could not base $UNIT on local main; the Builder was not launched" >&2; exit 1; }
 else
-  pp_worktree_new "$UNIT" || exit 1
+  gact pp_worktree_new "$UNIT" || exit 1
 fi
-bash "$HERE/worktree-setup.sh" "$WT" --builder ${KEEP:+--keep "$KEEP"}
+gact bash "$HERE/worktree-setup.sh" "$WT" --builder ${KEEP:+--keep "$KEEP"}
 # Issue 368: a main session that runs in another checkout than $PP_MAIN is found by the Builder only through the pane it
 # launched from. That pane's checkout (Orca's list, by $ORCA_TERMINAL_HANDLE) goes in the Builder's settings as
 # COMMANDECK_MAIN_PANE_DIR, which pp_seat_pane falls back to; a launch from main's own checkout, or one whose pane cannot
@@ -437,20 +455,22 @@ record_main_pane() { # <settings file>
     jq 'del(.env.COMMANDECK_MAIN_PANE_DIR)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   fi
 }
-record_main_pane "$WT/.claude/settings.local.json" || { echo "could not record main's pane folder in $WT/.claude/settings.local.json; the Builder was not launched" >&2; exit 1; }
-mkdir -p "$WT/.claude/briefs"
+gact record_main_pane "$WT/.claude/settings.local.json" || { echo "could not record main's pane folder in $WT/.claude/settings.local.json; the Builder was not launched" >&2; exit 1; }
+gact mkdir -p "$WT/.claude/briefs"
 printf '%s\n' "$T" > "$WT/.claude/briefs/$UNIT.md"
 # Issue 448: where the unit branch tracks the brief, the rewrite above left it modified, and the pass's rebase onto a
 # moved main refused until someone committed it by hand. It is committed here, alone, and only when its text changed,
 # so a relaunch with the same brief adds no commit. An untracked or ignored brief stays out of every commit.
 if git -C "$WT" ls-files --error-unmatch -- ".claude/briefs/$UNIT.md" >/dev/null 2>&1 \
   && ! git -C "$WT" diff --quiet HEAD -- ".claude/briefs/$UNIT.md"; then
-  COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "chore($UNIT): install the Builder brief" -- ".claude/briefs/$UNIT.md" \
+  COMMANDECK_ALLOW_AGENT_GIT=1 gact git -C "$WT" commit -q -m "chore($UNIT): install the Builder brief" -- ".claude/briefs/$UNIT.md" \
     || { echo "could not commit the Builder brief .claude/briefs/$UNIT.md in $WT; the Builder was not launched" >&2; exit 1; }
 fi
+gcheck
 [ -z "$OVERRIDE" ] || printf '%s\n' "$OVERRIDE" > "$WT/.claude/briefs/$UNIT-evidence.md"
 [ -z "$SKIPPED" ] || printf '%s\n' "$SKIPPED" >> "$WT/.claude/briefs/$UNIT-evidence.md"
 # Main's own copy: the pass script reads the stated limits from it, never from the Builder's.
+gcheck
 mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md" \
   && printf '%s\n' "$ISSUES" > "$PP_MAIN/.claude/briefs/$UNIT-issues.json" \
   || { echo "could not keep main's copy of the brief and its work items for $UNIT" >&2; exit 1; }
@@ -458,6 +478,7 @@ mkdir -p "$PP_MAIN/.claude/briefs" && printf '%s\n' "$T" > "$PP_MAIN/.claude/bri
 [ "$(pp_review_workflow "$PP_MAIN/.claude/briefs/$UNIT-builder-brief.md")" = "$WORKFLOW" ] \
   || { echo "REFUSED: main's copy of the brief for $UNIT does not read as the batch's Review workflow line ($WORKFLOW); the Builder was not launched" >&2; exit 2; }
 # Issue 430: written whole (temp file, then mv); a retry of the launch writes the same value again.
+gcheck
 [ -z "$RBASE" ] || { printf '%s\n' "$RBASE" > "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" \
   && mv -f "$PP_MAIN/.claude/briefs/$UNIT-review-base.md.tmp" "$PP_MAIN/.claude/briefs/$UNIT-review-base.md"; } \
   || { echo "could not write main's review base for $UNIT" >&2; exit 1; }

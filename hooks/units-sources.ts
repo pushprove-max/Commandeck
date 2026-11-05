@@ -1,8 +1,8 @@
 // Pure parsers for the units mod. No `$` here: every function takes a whole file's text, so a log cut off mid-line, rewritten
 // by a rerun, or noisy for 17,000 bytes gives the same counts as a clean one. Callers re-parse when size or mtime moves.
 import {
-  C, bar, blocked, builtOf, cardModel, fitWidth, fmtSec, headerModel, legend, limitSegs, mergedModel, plain, resetIn, shortName, since, spread, stageColor,
-  stageCounts, stageOf, stepRow, usd, waitingModel, workMark,
+  C, bar, blocked, builtOf, cardModel, ctxLine, ctxShort, eventLog, fitWidth, fmtSec, gateStrip, headerModel, layoutOf, legend, limitSegs, mergedModel, plain, resetIn,
+  shortName, since, spread, stageColor, stageCounts, stageOf, stepRow, timelineLanes, toolLines, usd, waitingModel, whereLine, workMark,
 } from './units-elements'
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g
@@ -95,7 +95,15 @@ export type Row = {
   ageSec: number | null; red: boolean; issues: number | null; built: number | null; startedAt: number | null
   closes: string[]; costs: Costs; plan: SeatState; judges: SeatState
   model: string | null; effort: string | null; working: boolean; stageSince: number | null
+  // #555. undefined: the snapshot lacks the key (no read tried); null: the collector tried and failed (DH9).
+  context?: Ctx | null; compactions?: number | null; rounds?: Dot[]; judgeRounds?: Dot[]
+  history?: { stage: string; from: number; to: number | null }[]; tools?: { tool: string; ts: number; running: boolean }[]
+  step?: { kind: string; start: number; end: number | null; errors: number }
 }
+export type Ctx = { tokens: number; line: number | null }
+export type Dot = 'GO' | 'NO-GO' | null
+export type UnitEvent = { at: number; unit: string; event: string }
+export const dotOf = (v: string): Dot => (/NO-GO/.test(v) ? 'NO-GO' : /GO/.test(v) ? 'GO' : null)
 export type Costs = { plan: number; build: number; review: number; fix: number; total: number }
 export type SeatState = 'done' | 'running' | null
 // A merged unit; its finished cost is the snapshot's `finishedUsd[unit]`.
@@ -112,6 +120,10 @@ export type Snap = {
   limit: { pct: number; resetsAt: number } | null; asks: Ask[]; unread: string[]
   // main's and the chief of staff's cost today (`seats.main.today`, `seats.relay.today`); null when the snapshot has none.
   seatUsd: { main: SeatUsd | null; chiefOfStaff: SeatUsd | null }
+  // #555: guard refusals, the live seats' context, and the units merged here and not yet pushed.
+  gates?: { blocks: number; lastHour: number; items: { at: number; hook: string }[] } | null
+  seatCtx?: { main: Ctx | null | undefined; chiefOfStaff: Ctx | null | undefined; mainCompactions: number | null }
+  unpushed?: string[] | null
 }
 export type SeatUsd = { usd: number; partial: boolean }
 // `merged` holds the units of finishedBuilds and mergedSincePush, the folders the split counts as merged.
@@ -158,6 +170,19 @@ const costsOf = (stages: any[]): Costs => {
   return c
 }
 const len = (v: unknown) => (Array.isArray(v) ? v.length : null)
+// dashboard.sh writes a Builder's clearLine as a JSON string of digits (`--arg l`, as deployed); a seat's line is a number.
+const lineOf = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : num(v))
+const ctxOf = (tokens: unknown, line: unknown): Ctx | null => (num(tokens) !== null ? { tokens: tokens as number, line: lineOf(line) } : null)
+// What the views read of a Builder beyond its stage: each key stays undefined when the snapshot lacks it.
+const builderExtras = (b: any, junk: boolean, steps: any[]) => ({
+  context: b.context === undefined ? undefined : junk ? null : ctxOf(b.context, b.clearLine),
+  compactions: b.compactions === undefined ? undefined : num(b.compactions),
+  rounds: b.verdicts && typeof b.verdicts === 'object' ? Object.entries(b.verdicts).sort((a, c) => Number(a[0]) - Number(c[0])).map(([, v]) => dotOf(String(v))) : undefined,
+  history: Array.isArray(b.stageHistory) ? b.stageHistory.filter((h: any) => time(h?.from) !== null).map((h: any) => ({ stage: String(h.stage), from: time(h.from) as number, to: time(h.to) })) : undefined,
+  tools: Array.isArray(b.tools) ? b.tools.map((t: any) => ({ tool: String(t?.tool), ts: time(t?.ts) ?? 0, running: t?.running === true })) : undefined,
+  step: steps.length && time(steps[0]?.start) !== null
+    ? { kind: String(steps[0].kind), start: time(steps[0].start) as number, end: time(steps[0].end ?? steps[0].stop), errors: steps.filter(x => x?.kind === 'codex' && num(x.rc) !== null && x.rc !== 0).length } : undefined,
+})
 
 // The dashboard's `data.js` holds `window.DASH = {updatedAt, projects: {<name>: {units: {...}}}}`; this project's units are read.
 export const parseSnapshot = (text: string, now: number, project: string): Snap => {
@@ -170,13 +195,18 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
   if (!Array.isArray(u?.inFlight)) return emptySnap('units: snapshot unreadable')
   const at = Date.parse(j.updatedAt)
   const min = Math.round((now - at) / 60000)
+  const rowNotes: string[] = []
   const rows: Row[] = u.inFlight.filter((x: any) => x && !NOT_UNITS.has(x.stage) && x.stage !== 'seat').map((x: any) => {
     const b = x.builder
     const f = b?.findings?.sol ?? b?.findings
     const started = Date.parse(b?.startedAt ?? '')
     // dashboard.sh writes the cost to builder.cost once a Builder runs (planning first), to plan.cost before that.
     const costs = costsOf((b?.cost ?? x.plan?.cost)?.stages ?? [])
+    const junk = b && b.context !== undefined && b.context !== null && num(b.context) === null
+    if (junk) rowNotes.push(`context ${x.unit}: unreadable`)
+    const steps: any[] = Array.isArray(b?.steps) ? b.steps : []
     return {
+      ...(b ? builderExtras(b, junk, steps) : {}),
       unit: String(x.unit),
       stage: String(x.stage ?? ''),
       round: x.round ?? null,
@@ -216,6 +246,9 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
     return { usd: t.usd, partial: t.partial === true }
   }
   const seatUsd = { main: seatToday('main', 'main cost today'), chiefOfStaff: seatToday('relay', 'chief of staff cost today') }
+  // finishedBuilds cannot tell a pushed merge from one only here; mergedSincePush names the ones not pushed.
+  const msp = u.mergedSincePush
+  const unpushed: string[] | null | undefined = msp === undefined ? undefined : Array.isArray(msp) ? msp.map((m: any) => String(m?.unit)) : null
   // No decisions ledger yet, or no finished-builds record yet, is a project with nothing to show there, not a problem.
   const unread = [
     ...(limit ? [] : [missing('7d limit', lim?.usedPct ?? lim)]),
@@ -223,7 +256,19 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
     ...(Array.isArray(u.finishedBuilds) || u.finishedBuilds === null ? [] : [missing('finished builds', u.finishedBuilds)]),
     ...(Number.isFinite(at) ? [] : [missing('updated at', j.updatedAt)]),
     ...seatNotes,
+    ...rowNotes,
+    ...(unpushed === null ? ['unpushed: unreadable'] : []),
   ]
+  const g = p.guardBlocks
+  const gates: Snap['gates'] = g === undefined ? undefined : g && typeof g === 'object' && Array.isArray(g.items)
+    ? { blocks: num(g.blocks) ?? g.items.length, lastHour: g.items.filter((i: any) => now - (time(i?.timestamp) ?? 0) < 3600_000).length,
+      items: g.items.filter((i: any) => str(i?.hook)).map((i: any) => ({ at: time(i.timestamp) ?? 0, hook: i.hook as string })).sort((a: { at: number }, c: { at: number }) => c.at - a.at).slice(0, 6) }
+    : null
+  const ctxSeat = (key: string) => (p.seats?.[key]?.context === undefined ? undefined : ctxOf(p.seats[key].context, p.seats[key].line))
+  const seatMain = ctxSeat('main')
+  const seatRelay = ctxSeat('relay')
+  const seatCtx: Snap['seatCtx'] = seatMain === undefined && seatRelay === undefined ? undefined
+    : { main: seatMain, chiefOfStaff: seatRelay, mainCompactions: Array.isArray(p.mainEvents?.compactions) ? p.mainEvents.compactions.length : null }
   // Every merge this checkout made is in finishedBuilds; mergedSincePush drops one once it is pushed, so a push would
   // take today's merges, and their spend, off the pane.
   const finished: any[] = Array.isArray(u.finishedBuilds) ? u.finishedBuilds : []
@@ -248,6 +293,9 @@ export const parseSnapshot = (text: string, now: number, project: string): Snap 
     asks,
     unread,
     seatUsd,
+    gates,
+    seatCtx,
+    unpushed,
   }
 }
 
@@ -257,7 +305,8 @@ const counts = (p: Progress, total: number | null) => `${total ? `${p.done}/${to
 export type MergeView = { unit: string; status: 'running' | 'stopped' | 'refused'; m: Merge; elapsedSec: number }
 export type TestView = { owner: string; kind: string; p: Progress; total: number | null; elapsedSec: number }
 export type Notes = { merges: string[]; tests: string[] }
-export type State = { now: number; snap: Snap; merges: MergeView[]; tests: TestView[]; notes: Notes }
+// `events`: the unit-events.jsonl tail; null when the file could not be read, undefined before the mod read it.
+export type State = { now: number; snap: Snap; merges: MergeView[]; tests: TestView[]; notes: Notes; events?: UnitEvent[] | null }
 
 // One run of styled text; a line is a list of them. The plain text of every view is the same runs joined.
 export type Seg = { t: string; c?: string; b?: boolean; d?: boolean }
@@ -305,7 +354,7 @@ export const todaySplit = (s: State): [string, number][] => {
 // The one list of read problems: a work source could hide a unit, an ask, a merge or a test run, so it keeps every view
 // up and is named in each; a figure gap (the 7-day limit, a seat's cost today) shows only under CANNOT READ. Every view reads problems
 // through here, so a new source joins this list and nowhere else.
-const FIGURE = /^(7d limit|main cost today|chief of staff cost today): /
+const FIGURE = /^(7d limit|main cost today|chief of staff cost today|unpushed|context [^:]+): /
 export const readProblems = (s: State) => {
   const all = [s.snap.note, ...s.snap.unread, ...s.notes.merges, ...s.notes.tests].filter((n): n is string => !!n)
   return { all, work: all.filter(n => !FIGURE.test(n)) }
@@ -318,27 +367,43 @@ const runningUnits = (s: State) => new Set(s.merges.filter(v => v.status === 'ru
 const todaySeg = (s: State): Seg | null => (todayUsd(s) > 0 ? { t: todayText(s), c: C.cost, b: true } : null)
 
 // The pane and /units: a header, then sections drawn only when they hold something.
-export const paneModel = (s: State, w: number, frame = 0): Line[] => {
+// `expanded` (a unit name) and `focus` are the pane keys' two in-memory atoms: the unit shows its last tool calls, the focused section goes first.
+export type PaneUi = { expanded: string | null; focus: string | null }
+const FOCUS: Record<string, string> = { decisions: 'decisions', timeline: 'timeline', log: 'log' }
+export const paneModel = (s: State, w: number, frame = 0, ui: PaneUi = { expanded: null, focus: null }): Line[] => {
   const out: Line[] = headerModel(s, w, todaySeg(s))
+  const lay = layoutOf(w)
   const merging = runningUnits(s)
-  const head = (title: string, right: Seg | null) => { out.push([]); out.push(spread([{ t: title, c: C.head, b: true }], right, w)) }
+  // Sections are built apart and joined in order, the focused one first; one with no lines is not drawn.
+  const blocks = new Map<string, Line[]>()
+  const head = (key: string, title: string, right: Seg | null, lines: Line[], color: string = C.head) => { if (lines.length) blocks.set(key, [[], spread([{ t: title, c: color, b: true }], right, w), ...lines]) }
   const split = todaySplit(s)
   if (split.length) out.push(fitWidth([{ t: `  ${split.map(([k, n]) => `${k} ${usd(n)}`).join(' · ')}`, d: true }], w))
   else if (todayUsd(s) > 0 && !s.snap.day) out.push([{ t: '  units only', d: true }])
   // First section under the header: a short pane cuts the lower ones, and an unreadable source must stay in view.
   const shown = [...(!s.snap.note && s.snap.staleMin ? [`dashboard data is ${s.snap.staleMin} min old`] : []), ...readProblems(s).all]
-  if (shown.length) { head('CANNOT READ', null); out.push(...shown.map((n): Line => fitWidth([{ t: `⚠ ${n}`, c: C.bad }], w))) }
+  head('cannot', 'CANNOT READ', null, shown.map((n): Line => fitWidth([{ t: `⚠ ${n}`, c: C.bad }], w)))
   const today = mergedToday(s)
+  const sc = s.snap.seatCtx
+  // WAITING first, then the live seats' gauges (drawn with or without unit rows), the units, gates, merges, tests, day.
+  head('decisions', `WAITING ON OWNER  ${s.snap.asks.length}`, null, waitingModel(s, w), C.max)
+  head('seats', 'SEATS', null, sc ? [...ctxLine('main context', sc.main, sc.mainCompactions, w), ...ctxLine('chief of staff context', sc.chiefOfStaff, null, w)] : [])
+  const unitLines = (r: Row): Line[] => lay === 'mini'
+    ? [spread([{ t: `${r.working ? workMark(frame) : '○'} `, c: stageColor(merging.has(r.unit) ? 'merging' : r.stage) }, { t: shortName(r.unit), c: C.name, b: true }], { t: stageOf(r), d: true }, w), ...(r.unit === ui.expanded ? toolLines(r) : [])]
+    : cardModel(r, s, w, merging.has(r.unit), frame, r.unit === ui.expanded)
+  head('units', `BUILDING  ${s.snap.rows.length}`, null, s.snap.rows.flatMap(unitLines))
+  head('gates', 'GATES', null, gateStrip(s.snap, s.snap.rows))
+  head('merging', `MERGING  ${s.merges.length}`, null, s.merges.map(v => mergeModel(v, w)))
+  head('tests', 'TESTS', null, s.tests.map(v => testModel(v, w)))
+  head('timeline', 'TIMELINE', null, lay === 'wide' || ui.focus === 'timeline' ? timelineLanes(s, w) : [])
+  const sum = today.reduce((n, m) => n + (s.snap.finishedUsd[m.unit] ?? 0), 0)
+  head('merged', `MERGED TODAY  ${today.length}`, sum > 0 ? { t: usd(sum), c: C.cost, b: true } : null, [...today.map(m => mergedModel(m, s.snap.finishedUsd[m.unit], w)), ...whereLine(today, s.snap)])
+  head('log', 'UNIT LOG', null, (lay !== 'mini' || ui.focus === 'log') && s.snap.rows.length ? eventLog(s, w) : [])
+  const order = ['decisions', 'seats', 'units', 'gates', 'merging', 'tests', 'timeline', 'merged', 'log']
+  const first = ui.focus ? FOCUS[ui.focus] : undefined
+  out.push(...(blocks.get('cannot') ?? []))
   if (s.snap.rows.length || s.snap.asks.length || today.length) out.push(legend(w))
-  if (s.snap.asks.length) { head(`WAITING ON OWNER  ${s.snap.asks.length}`, null); out.push(...waitingModel(s, w)) }
-  if (s.snap.rows.length) { head(`BUILDING  ${s.snap.rows.length}`, null); for (const r of s.snap.rows) out.push(...cardModel(r, s, w, merging.has(r.unit), frame)) }
-  if (s.merges.length) { head(`MERGING  ${s.merges.length}`, null); out.push(...s.merges.map(v => mergeModel(v, w))) }
-  if (s.tests.length) { head('TESTS', null); out.push(...s.tests.map(v => testModel(v, w))) }
-  if (today.length) {
-    const sum = today.reduce((n, m) => n + (s.snap.finishedUsd[m.unit] ?? 0), 0)
-    head(`MERGED TODAY  ${today.length}`, sum > 0 ? { t: usd(sum), c: C.cost, b: true } : null)
-    out.push(...today.map(m => mergedModel(m, s.snap.finishedUsd[m.unit], w)))
-  }
+  for (const k of [...(first ? [first] : []), ...order.filter(o => o !== first)]) out.push(...(blocks.get(k) ?? []))
   return out
 }
 
@@ -362,7 +427,7 @@ export const bandModel = (s: State, w: number, frame = 0): Line[] => {
     const time = since(top.stageSince ?? top.startedAt, s.now)
     return [{ t: `${mark(top, frame)} `, c: stageColor(m ? 'merging' : top.stage) }, { t: shortName(top.unit), c: C.name, b: true }, { t: ` ${stageOf(top)}  `, d: true }, ...stepRow(top, m),
       ...(top.issues ? [{ t: `  ${bar(builtOf(top, m), top.issues)}`, c: C.ok }, { t: ` ${builtOf(top, m)}/${top.issues}` }] : []),
-      ...(top.costs.total > 0 ? [{ t: ` · ${usd(top.costs.total)}`, c: C.cost }] : []), ...(time ? [{ t: ` · ${time}`, d: true }] : []),
+      ...(top.costs.total > 0 ? [{ t: ` · ${usd(top.costs.total)}`, c: C.cost }] : []), ...ctxShort(top.context), ...(time ? [{ t: ` · ${time}`, d: true }] : []),
       ...(blocked(top, s) ? [{ t: '  ⏸ owner', c: C.max }] : []), ...(top.red ? [{ t: '  ⚠ at its prompt', c: C.bad, b: true }] : [])]
   })() : []
   const merged = mergedToday(s).length
@@ -380,7 +445,8 @@ export const bandModel = (s: State, w: number, frame = 0): Line[] => {
     ...(s.tests.length ? [[{ t: '▸ ', c: C.build }, { t: `${s.tests.length} test run${s.tests.length > 1 ? 's' : ''}` }]] : []),
   ]
   const row3 = rest.flatMap((p, i) => [...(i ? [{ t: '   ' }] : []), ...p])
-  return [row1, row2, row3].filter(r => r.length).map(r => fitWidth(r, w))
+  // mini keeps row 1 and row 2 only.
+  return (layoutOf(w) === 'mini' ? [row1, row2] : [row1, row2, row3]).filter(r => r.length).map(r => fitWidth(r, w))
 }
 
 // Open asks, today's merges and an unreadable work source keep every view up after the last unit finishes.

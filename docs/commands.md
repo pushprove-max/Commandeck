@@ -96,6 +96,14 @@ unless `COMMANDECK_HAND_LAUNCH=<reason>` is set. Such a launch prints `HAND LAUN
 to `seat-hand-launches.jsonl` in the scratch folder, and shows a dashboard alert for 24 h. If the row cannot be written,
 nothing opens.
 
+`unit-drive.sh start` has one owner per unit: a second `start` for a unit whose driver still runs is refused with
+`REFUSED: <unit> is driven by ...`. The driver copies its steps to `<unit>-drive-<epoch>.log` in the `scratchpad` folder
+of the project's scratch folder. A plan question that main never got is sent again once, and main's wake shows
+`NEEDS-MAIN: <unit> asked main plan-<unit> ...`; record the answer with `decision.sh add plan-<unit>`. A name that
+another project's worktree already uses is refused. `start` also attaches to a live Builder for the unit and watches
+it to merge: it ends `DONE` on the merge and prints one `STOP` line (stage, reason, resume command) on an open
+Builder question, a `REVIEW STOP`, a refused merge, a closed Builder pane or an idle Builder.
+
 ## peek
 
 `bash scripts/peek.sh <file>:<a-b> '<file>#<Heading>' -g <pattern> <file>` prints several reads in one call, each under

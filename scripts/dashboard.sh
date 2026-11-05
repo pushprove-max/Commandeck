@@ -148,7 +148,8 @@ seat_age() {
 # (board.sh's rule). An Orca refusal is a failed read, never "no open tasks".
 open_tasks() {
   timeout 15 orca-ide orchestration task-list --run "$1" --json \
-    | jq -ce '.result.tasks | arrays | map(select(.status != "completed" and .status != "failed") | .id)'
+    | jq -ce '.result.tasks | arrays | select(all(.[]; has("id") and has("status")))
+        | map(select(.status != "completed" and .status != "failed") | .id)'
 }
 
 # seat_role <unit> <worktree> <open task ids json> <orca ps json> -- "<stage>\t<role>"
@@ -198,17 +199,18 @@ plan_seats() {
     | sort_by(.first) | if length == 0 then null else {worktree: "\($ws)/\(max_by(.from) | .wt)", from: (map(.first) | min | todate), seats: map(del(.first, .wt))} end'
 }
 
-# replanning <unit> <epoch> -- issue 621: a plan seat of <unit> first launched after <epoch> (the Builder's first stage)
-# whose record's last verdict=/revised= line is no verdict (seat.sh close's rule): the built unit is being re-planned.
+# replanning <unit> <epoch> -- issue 621: a plan seat of <unit> whose newest launched= is after <epoch> (the Builder's
+# first stage; first= is kept from the seat's first launch, so it is not read) and whose record's last verdict=/revised=
+# line is no verdict (seat.sh close's rule) or a NO-GO not yet revised: the built unit is being re-planned.
 replanning() {
   local f
   [ -n "$2" ] || return 1
   for f in "$PP_SCRATCH/seat-$1-plan-"*.txt; do
     [ -f "$f" ] && awk -v u="$1" -v a="$2" '{ i = index($0, "="); k = substr($0, 1, i - 1); v = substr($0, i + 1) }
       k == "unit" { ok = (v == u) }
-      (k == "launched" || k == "first") && v ~ /^[0-9]+$/ && (m == "" || v + 0 < m) { m = v + 0 }
-      k == "verdict" || k == "revised" { done = (k == "verdict" && v != "") }
-      END { exit !(ok && m != "" && m > a + 0 && !done) }' "$f" && return 0
+      k == "launched" && v ~ /^[0-9]+$/ && (m == "" || v + 0 > m) { m = v + 0 }
+      k == "verdict" || k == "revised" { done = (k == "verdict" && v != ""); nogo = (k == "verdict" && v ~ /NO-GO/) }
+      END { exit !(ok && m != "" && m > a + 0 && (!done || nogo)) }' "$f" && return 0
   done
   return 1
 }
@@ -266,7 +268,7 @@ builder_progress() {
   # Partial: the issues that table marks not built; a merge gives them Refs, not Closes (merge-unit-local.sh).
   [ -z "${tb:-}" ] || pa=$(sed -n 's/^-//p' <<<"$tb" | bash "$HERE/brief-issues.sh" --list)
   f=$(ls -t "$d/$u"-r*-reports.md 2>/dev/null | head -1)
-  [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
+  [ -z "$f" ] || fi_=$(grep -oE '^[[:space:]]*[-*] \[P[0-3]\]|^[[:space:]]*([-*] )?\*\*[A-Za-z0-9.-]+ \(P[0-3]\)' "$f" | grep -oE 'P[0-3]' | jq -Rcn '[inputs] as $p | [range(0; 4) | "P\(.)" as $k | {key: $k, value: ($p | map(select(. == $k)) | length)}] | from_entries')
   # Raised: the effort main raised the Builder to and why, from the line builder-launch.sh writes in its brief.
   t=$(grep -m1 -E '^effort override: builder [a-z]+ -> [a-z]+: ' "$d/$u.md" 2>/dev/null || true)
   # Issue 486: the review workflow main chose in its own brief ("default" or "per-issue #a #b", null when the line cannot be
@@ -409,7 +411,7 @@ units() {
         st=$(jq -c '.stage' <<<"$b"); rd=$(jq -c '.round' <<<"$b")
         age=$(jq -c --argjson now "$NOW" '.lastAt | if . == null then null else [$now - fromdateiso8601, 0] | max end' <<<"$b")
         bj=$(jq -c '{steps, signals, verdict: null, verdictRound: null}' <<<"$b")
-        bj=$(jq -c --argjson b "$b" '. + ($b | {startedAt, reviewSec, waiting, stageHistory})' <<<"$bj")
+        bj=$(jq -c --argjson b "$b" '. + ($b | {startedAt, reviewSec, waiting, stageHistory, tools})' <<<"$bj")
       else : > "$RUN/builder-bad"; fi
       # No working agent leaves the Builder waiting on main; an unread agent list keeps the log's stage, and so
       # does a helper, pass or call of its own still out: an idle pane waits on that, not on main (#41).
@@ -447,8 +449,10 @@ units() {
         cu=$(bash "$HERE/seat-event.sh" --usage claude "$f" $((NOW - 86400)) 2>/dev/null) && jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$cu" || cu='{"tokens":null}'
         [ "$cu" = null ] || bj=$(jq -c --argjson c "$cu" '. + {cache24h: $c.tokens}' <<<"$bj")
         # Its live context, against the clear line past which it hands off (the hook context-line.sh).
-        bj=$(jq -c --arg c "$(context_size "$f")" --arg l "$(pp_builder_clear_line "$PP_MAIN" 2>/dev/null)" \
-          '. + {context: ($c | tonumber? // null), clearLine: (if $l == "" then null else $l end)}' <<<"$bj")
+        # compactions: the session log's compact_boundary rows; null when the log cannot be read.
+        cc=$(grep -c '"subtype":"compact_boundary"' "$f" 2>/dev/null) || :
+        bj=$(jq -c --arg c "$(context_size "$f")" --arg l "$(pp_builder_clear_line "$PP_MAIN" 2>/dev/null)" --arg n "$cc" \
+          '. + {context: ($c | tonumber? // null), clearLine: (if $l == "" then null else $l end), compactions: ($n | tonumber? // null)}' <<<"$bj")
       fi
       # Its planning, launched before its first stage, though the planning worktree is gone.
       pj=$(plan_seats "$u" "$(jq -r '.stageHistory[0].from // empty' <<<"$b" 2>/dev/null)")

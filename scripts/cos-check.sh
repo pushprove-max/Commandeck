@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# cos-check.sh [<handle>] -- the relay pane's timer check (issue 290): sleeps 50 minutes, then prints one line last
-# and exits, which wakes the pane (run it in the background). The line names each watcher that is down, the messages
+# cos-check.sh [<handle>] -- the relay pane's timer check (issue 290): every 50 minutes it checks; when something is
+# down, missed or held it prints one line last and exits, which wakes the pane (run it in the background); a clean
+# check is only logged and the timer runs again (issue 655). The line names each watcher that is down (the supervisor
+# cos-supervise.sh as `supervise`), the messages
 # Orca holds for this pane from the last 2 hours that the inbox watcher never handled (cos-watch-inbox.sh appends each
 # id it handled to <state>.inbox-seen-ids), the held FYI notes, kept in a file, printed above it when they fit the
 # relay's 600-character read, and cleared under the inbox watcher's lock, and the minutes since the owner last typed (the rulings log). The line is appended to <state>.cos-check.log.
@@ -11,13 +13,23 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/cos-lib.sh"
 ME=${1:-${ORCA_TERMINAL_HANDLE:-}}
 echo $$ > "$COS_KEY.cos-check.pid"
+# Issue 655: a clean check is only logged and the timer runs again; a check with something for the relay prints and exits.
+while :; do
 sleep "${COMMANDECK_COS_CHECK_SLEEP:-3000}"
 DOWN=
-for n in cos-watch-inbox cos-watch-decisions cos-watch-alerts cos-watch-limit; do
+# The supervisor (cos-supervise.sh) runs the watchers but not this check, so this check names a dead supervisor.
+for n in cos-watch-inbox cos-watch-decisions cos-watch-alerts cos-watch-limit cos-watch-units cos-supervise; do
   # Up only while the recorded pid still runs that watcher, as the Stop hook decides it.
   read -r run arg _ <<<"$(ps -o command= -p "$(cat "$COS_KEY.$n.pid" 2>/dev/null || echo 0)" 2>/dev/null)"
   case ${run##*/} in bash|sh|zsh) run=$arg ;; esac
-  [[ ${run:-} == */$n.sh ]] || DOWN+=" ${n#cos-watch-}"
+  [[ ${run:-} == */$n.sh ]] || { n=${n#cos-watch-}; DOWN+=" ${n#cos-}"; }
+done
+# Issue 614: a lane's inbox poller is a fault only while the lane has a live pane; a lane with none is the owner's normal state.
+for l in Fast-lane Research-lane; do
+  [ -n "$(pp_pane_of "$PP_WORKSPACES/$l")" ] || continue
+  read -r run arg _ <<<"$(ps -o command= -p "$(cat "$COS_KEY.lane-${l,,}.cos-watch-inbox.pid" 2>/dev/null || echo 0)" 2>/dev/null)"
+  case ${run##*/} in bash|sh|zsh) run=$arg ;; esac
+  [[ ${run:-} == */cos-watch-inbox.sh ]] || DOWN+=" ${l,,}-inbox"
 done
 MISSED=$(orca-ide orchestration inbox --limit 200 --full --json 2>/dev/null | jq -r --arg me "$ME" --argjson since "$(( $(date +%s) - 7200 ))" \
   --rawfile seen <(cat "$COS_KEY.inbox-seen-ids" 2>/dev/null) '($seen | split("\n")) as $s
@@ -47,7 +59,10 @@ DOWN=${DOWN:- none}
 LINE="cos-check: watchers down: ${DOWN# } | missed messages: $MISSED | held FYI notes: $(grep -c '^[0-9]' <<<"$NOTES") (above, now cleared) | owner quiet ${QUIET:-unknown}"
 if [ -n "$NOTES" ] && [ $(( ${#NOTES} + ${#LINE} )) -lt 600 ]; then printf '%s\n' "$NOTES"
 elif [ -n "$NOTES" ]; then LINE=${LINE/(above, now cleared)/(too long to print; whole text: $ARCH)}; fi
-# Issue 319: a clean check has nothing for the owner; the wake says so, and the relay ends its turn without text.
+# Issue 319: a clean check has nothing for the owner; since issue 655 it is logged below and never wakes the relay.
 [ "$DOWN" = " none" ] && [ "$MISSED" = 0 ] && [ -z "$NOTES" ] && LINE="cos-check: nothing for the owner: end silently; re-arm"
 printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LINE" >> "$COS_KEY.cos-check.log"
+case $LINE in "cos-check: nothing for the owner"*) continue ;; esac
 echo "$LINE"
+exit 0
+done

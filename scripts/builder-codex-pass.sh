@@ -84,6 +84,12 @@ stamp() { printf '%s %s pass %s: %s\n' "$(date +%H:%M:%S)" "$UNIT" "$N" "$1"; }
 REFUSALS=()
 refuse() { REFUSALS+=("$*"); }
 refusals_flush() {
+  # The gate refusal stamp (fence.sh): each line a gate reader recorded is a refusal here, so it stops the pass before any commit.
+  local gate_out gate_line
+  gate_out=$(pp_gate_check 2>&1) || while IFS= read -r gate_line; do
+    gate_line=${gate_line#"${gate_line%%[![:space:]]*}"}
+    [ -z "$gate_line" ] || [ "$gate_line" = "REFUSED: a gate read refused this run:" ] || refuse "$gate_line"
+  done <<<"$gate_out"
   [ "${#REFUSALS[@]}" -gt 0 ] || return 0
   [ "${#REFUSALS[@]}" -gt 1 ] || die "${REFUSALS[0]}"
   { echo "REFUSED: ${#REFUSALS[@]} checks failed:"; printf -- '- %s\n' "${REFUSALS[@]}"; } >&2
@@ -1180,6 +1186,10 @@ fi
 if [ "${1:-}" = --preflight ]; then review_gh_check "$PP_MAIN"; printf '%s\t%s\n' "$MODEL" "$COMPANION"; exit 0; fi
 
 # --ack-rulings <unit> runs no pass: the round and kind below are only stand-ins for it.
+# The gate refusal stamp (fence.sh): made here, before any gate read or act, on the normal, --check, --issue and --ack-rulings
+# paths alike; --check writes only this temp file. unlock (the EXIT trap, then pass_end's) removes it at the end.
+pp_gate_init || exit 1
+trap pp_gate_done EXIT
 CHECK=0; [ "${1:-}" != --check ] || { CHECK=1; shift; }
 ACK=0; [ "${1:-}" != --ack-rulings ] || { ACK=1; set -- "${2:-}" 1 review; }
 # --issue picks its own round and step below: the 1 and `issue` are only stand-ins.
@@ -1254,7 +1264,7 @@ release_lock() {
   [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$$" ] || return 0
   rm -f "$LOCK/pid" "$LOCK/index" "$LOCK/plan-at-base"; rmdir "$LOCK" 2>/dev/null || true
 }
-unlock() { guarded release_lock; }
+unlock() { local rc=0; guarded release_lock || rc=$?; pp_gate_done; return "$rc"; }
 TAKE_RC=0; HOLDER=$(guarded take_lock) || TAKE_RC=$?
 case $TAKE_RC in
   0) ;;
@@ -1363,15 +1373,17 @@ fi
 EV=$WT/.claude/briefs/$UNIT-evidence.md
 plan_rel() { grep -ohE '\.claude/plans/[A-Za-z0-9._-]+\.md' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null | head -1 || true; }
 plan_file() { local p; p=$(plan_rel); [ -z "$p" ] || [ ! -f "$WT/$p" ] || echo "$WT/$p"; }
-# section_lines <file> <heading> [exact] -- the non-empty lines of each section that starts at a column-0 `#` heading
-# beginning with <heading> (matched without case; with exact, only the whole line `## <heading>`, the limits gate's fixed
-# list), up to a line outside a ``` or ~~~ fence of 0-3 spaces, `#` or `##`, then a space or the end. Every line in it is
+# section_lines <file> <heading> [exact] -- the non-empty lines of each section that starts at a heading (fence.sh's
+# heading(), any level and form) whose title begins with <heading> (matched without case; with exact, the whole title,
+# the limits gate's fixed list), up to the next heading of level 1 or 2 outside a fence (issue 640). Every line in it is
 # kept, deeper headings and bold lines included: a wrong end or start only adds lines, so a gate refuses more.
 section_lines() {
-  [ ! -f "$1" ] || awk -v h="$(tr '[:upper:]' '[:lower:]' <<<"$2")" -v x="${3:-}" '/^ ? ? ?(```|~~~)/ { fence = !fence }
-    on && !fence && /^ ? ? ?##?([ \t]|$)/ { on = 0 }
-    on && NF { print; next }
-    !on { l = tolower($0); if (x ? (l ~ ("^## " h "[ \t]*$")) : (index(l, "#") == 1 && l ~ ("^#+[ \t]+" h))) on = 1 }' "$1"
+  [ ! -f "$1" ] || awk -v h="$(tr '[:upper:]' '[:lower:]' <<<"$2")" -v x="${3:-}" "$PP_AWK_FENCE"'function out(t,   k, i, a) { k = split(t, a, "\n"); for (i = 1; i < k; i++) if (a[i] ~ /[^ \t]/) print a[i] }
+    fence($0) || flen { if (on) { out(hflush()); if (NF) print } next }
+    { heading($0); o = hold($0) } on && hlvl && hlvl <= 2 { out(o); on = 0 }
+    on { out(o); if (hlvl) print; next }
+    !on && hlvl { l = tolower(htxt); if (x ? (l == h) : (index(l, h) == 1)) on = 1 }
+    END { if (on) out(hflush()) }' "$1"
 }
 # limits_names <file> -- the limits gate's name rule (commandeck-open-2026-11-03 fix round 5): each line, but the two
 # literal heading lines and table rows (never a heading), whose letters (lower case, HTML tags and entities removed, every
@@ -1394,8 +1406,10 @@ plan_only() {
   return 0
 }
 # evidence_section <heading regex> -- the lines under the evidence file's heading of that name, at any level.
+# Read through pp_gate_awk: a failed read is on the refusal stamp, not hidden. No evidence file yet is an empty section.
 evidence_section() {
-  awk -v h="$1" '/^#+[[:space:]]/ { on = ($0 ~ ("^#+[[:space:]]+" h "[[:space:]]*$")); next } on' "$EV" 2>/dev/null || true
+  [ -f "$EV" ] || return 0
+  pp_gate_awk -v h="$1" "$PP_AWK_FENCE"'fence($0) || flen { if (on) print; next } heading($0) { on = (htxt ~ ("^(" h ")$")); next } on' "$EV"
 }
 # new_code_checked <round> <why owed> -- sets NEWCODE from "## New code checked (pass <round>)", or refuses the pass.
 new_code_checked() {
@@ -1562,7 +1576,11 @@ break_gate() {
   local PF BREAKS RUNS NOBREAK= line bt bl
   PF=$(plan_file); [ -n "$PF" ] || return 0
   [ -z "$(round_files "$WT" "$UNIT")" ] || return 0
-  BREAKS=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } tolower($0) ~ /^break:[[:space:]]*none([[:space:]]|[[:punct:]]|$)/ { next } /^Break: / { sub(/^Break: /, ""); print }' "$PF")
+  # A margin line `break:` in any other case than `Break: ` is refused on the stamp, naming the line, not skipped.
+  BREAKS=$(pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen { next } tolower($0) ~ /^break:[[:space:]]*none([[:space:]]|[[:punct:]]|$)/ { next }
+    /^Break: / { sub(/^Break: /, ""); print; next }
+    tolower($0) ~ /^break:/ { w = FILENAME ":" FNR ": the line `" $0 "` is not read as a Break line; write it as `Break: <test file> -- <check label> -- <site>`"
+      print w > "/dev/stderr"; st = ENVIRON["PP_GATE_STAMP"]; if (st != "") { print w >> st; close(st) } }' "$PF")
   RUNS=$(evidence_section "Break runs")
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -1570,16 +1588,18 @@ break_gate() {
     grep -F -- "- $bt -- $bl -- red: " <<<"$RUNS" | grep -qE 'red: .*[^[:space:]]' || NOBREAK+="  $bt -- $bl"$'\n'
   done <<<"$BREAKS"
   [ -z "$NOBREAK" ] || refuse "pass 1 of $UNIT needs a break run for each Break line of the plan, and ${EV#"$WT/"} has none under '## Break runs' for:
-${NOBREAK}Run each test red with the condition removed, and under that heading write '- <test file> -- <check label> -- red: <the command that ran it with the condition removed>'. Then run the pass again."
+${NOBREAK}Run each test red with the condition removed: bash ${HERE:+$HERE/}break-run.sh <plan> <k> <file> <line> [<replacement>] breaks the k-th Break line's site, runs the test and puts the file back. Under that heading write '- <test file> -- <check label> -- red: <the command that ran it with the condition removed>'. Then run the pass again."
 }
 # Issue 341: a unit whose Data design (the brief's first such section, the batch's; the template's own comes after) is not "none" has saves to recover,
 # so pass 1 needs the evidence file's `## Failure table`: one row per save, with at least one row of four cells under
 # the header. A brief with no Data design section, or "none: <why>", owes no table.
 table_gate() {
-  local DD
+  local DD BF=$WT/.claude/briefs/$UNIT.md
   [ -z "$(round_files "$WT" "$UNIT")" ] || return 0
-  DD=$(awk '/^#+[[:space:]]/ { if (on) done = 1; on = (!done && tolower($0) ~ /^#+[[:space:]]+data design([[:space:]:]|$)/); req = 0; next }
-    !on { next } /^Required:/ { req = 1 } /^[[:space:]]*$/ { req = 0; next } !req && first == "" { first = $0 } END { print first }' "$WT/.claude/briefs/$UNIT.md" 2>/dev/null || true)
+  [ -f "$BF" ] || return 0
+  # hgate (fence.sh) refuses a marked-up Data design heading by its letters, on the stamp.
+  DD=$(pp_gate_awk "$PP_AWK_FENCE"'{ f = fence($0) } !f && !flen && heading($0) { if (on) done = 1; g = hgate("^data design([[:space:]:]|$)", "datadesign", "i start"); on = (!done && g == 1); req = 0; next }
+    !on { next } /^Required:/ { req = 1 } /^[[:space:]]*$/ { req = 0; next } !req && first == "" { first = $0 } END { print first }' "$BF")
   [ -n "$DD" ] && ! grep -qiE '^[-*[:space:]]*none([^[:alnum:]]|$)' <<<"$DD" || return 0
   evidence_section "Failure table" | awk '
     /^[[:space:]]*\|/ { n++; if (n == 1) next; line = $0
@@ -1608,12 +1628,13 @@ fi
 stage_and_check() {
   # Staged whole, then the briefs taken back out: an exclude pathspec naming
   # .claude/briefs makes git add fail in a repo that ignores .claude/.
-  git -C "$WT" add -A
-  git -C "$WT" reset -q -- .claude/briefs
+  # The staging is a gate act (fence.sh): a refused gate read stops it.
+  pp_gate_act git -C "$WT" add -A || exit 2
+  pp_gate_act git -C "$WT" reset -q -- .claude/briefs || exit 2
   # A shared template (_*.md) is tracked batch work; -u never adds the unit's own untracked brief, evidence or round files.
   # Only when one is tracked: git fails a pathspec that matches no tracked file.
   TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
-  [ -z "$TEMPLATES" ] || git -C "$WT" add -u -- '.claude/briefs/_*'
+  [ -z "$TEMPLATES" ] || pp_gate_act git -C "$WT" add -u -- '.claude/briefs/_*' || exit 2
   # Issue 496: an edit to an existing test reaches no review without the owner's recorded yes.
   local edit
   while IFS= read -r edit; do
@@ -1890,7 +1911,8 @@ seed_typecheck_cache() {
 PRE=$(git -C "$WT" rev-parse HEAD)
 SUBJECT="feat($UNIT): Builder pass r$N"
 [ "$KIND" != issue ] || SUBJECT="feat($UNIT): Builder issue #$ISSUE round $N"
-git -C "$WT" diff --cached --quiet || COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "$SUBJECT"
+# The commit is a gate act: with a refused gate read on the stamp it does not run.
+git -C "$WT" diff --cached --quiet || { pp_gate_act env COMMANDECK_ALLOW_AGENT_GIT=1 git -C "$WT" commit -q -m "$SUBJECT" || exit 2; }
 # Host change (owner order 2026-10-25): a final whose own commit changes no code is a design-only pass; with no commit
 # of its own it is a closing pass. SHA is set here first: under set -u an unset SHA ends the pass, and one inherited from
 # the caller would judge another commit.
@@ -1988,14 +2010,14 @@ fi
 # main's checkout only (the launcher's copy of the brief, main's rulings file):
 # a limit or a cleared finding takes a finding off the list, and the Builder can write the worktree's copies.
 LIMITS=$(for f in "$MAIN_OF_WT/.claude/briefs/$UNIT-builder-brief.md" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md"; do
-  [ ! -f "$f" ] || awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ (Stated limits|Cleared findings)/ { on = 1 }' "$f"
+  [ ! -f "$f" ] || awk "$PP_AWK_FENCE"'fence($0) || flen { if (on && NF) print; next } heading($0) { on = (htxt ~ /^(Stated limits|Cleared findings)/); next } on && NF { print }' "$f"
 done)
 CASES=$(plan_section 'what can go wrong')
 # Issue 359 (5c): the plan's claims and decisions go after the diff, so the reviewer reads the trace instruction and the diff first.
 CLAIMS=$({ plan_section 'claims to falsify'; plan_section decisions; })
 AUTHOR=$(grep -E "^(Different fix|Other cases checked) r$N: " "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 # Main-only items the Builder lists in its evidence file: without them every pass raised the same one again.
-DEFERRED=$(awk 'on && /^#/ { on = 0 } on && NF { print } /^#+ Main-only \(deferred\)/ { on = 1 }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
+DEFERRED=$(awk "$PP_AWK_FENCE"'fence($0) || flen { if (on && NF) print; next } heading($0) { on = (htxt ~ /^Main-only \(deferred\)/); next } on && NF { print }' "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
 SUITE_TEXT=""
 [ -z "$SUITE" ] || SUITE_TEXT="$SUITE"$'\n'"The project's full test command ran on this tip before this pass; the line above is its result. GO only when that run is green for this exact tip."${SUITE_RED:+$'\n'"Failing: $SUITE_RED"}
 # The owner's decisions that name this unit, from main's ledger; the fix hand-off reads them again as it is written.
@@ -2218,8 +2240,10 @@ launch_reviewers() {
   for k in "$@"; do
     for _ in $(seq 1 150); do [ -e "$SOCKS/$k.sock" ] && break; kill -0 "${BROKERS[k - 1]}" 2>/dev/null || break; sleep "$HELPER_STEP"; done
     [ -e "$SOCKS/$k.sock" ] || die "the Codex broker of reviewer $k did not start: $(tail -3 "$SOCKS/$k.log" 2>/dev/null)"
+    # The launch is a gate act; checked here in the foreground too, as the act itself runs in the background.
+    pp_gate_check || exit 2
     CODEX_COMPANION_APP_SERVER_ENDPOINT="unix:$SOCKS/$k.sock" \
-      node "$COMPANION" task --json --model "$MODEL" --effort "$EFFORT" --cwd "$RCWD" --prompt-file "$RUN-prompt-$k.md" > "$RUN-codex-$k.json" &
+      pp_gate_act node "$COMPANION" task --json --model "$MODEL" --effort "$EFFORT" --cwd "$RCWD" --prompt-file "$RUN-prompt-$k.md" > "$RUN-codex-$k.json" &
     pids+=($!)
   done
   ( sleep "$SESSION_WAIT"
@@ -2447,6 +2471,9 @@ if [ "$VERDICT" = "VERDICT: GO" ]; then
     printf -- '- Pass %s ended GO; continue from the evidence file, which says what is built, verified and left: %s\n' "$N" "$WT/.claude/briefs/$UNIT-evidence.md"
   } > "$HAND"
   mkdir -p "$PP_SCRATCH"
+  # The gate is checked here, in the foreground, and not again in the background child: this pass's EXIT removes the
+  # stamp, which may come before the child runs, and a child refusing then would lose the hand-off (pass 13).
+  pp_gate_check || exit 2
   bash "$HERE/builder-fresh-round.sh" "$ORCA_TERMINAL_HANDLE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-after-r$N.log" 2>&1 &
   echo "FRESH SESSION after pass $N: end your turn now and start nothing new in this session. The pass took over $(( ${COMMANDECK_LONG_PASS_SECONDS:-600} / 60 )) minutes, so a fresh session goes on from ${HAND##*/} once this pane is idle; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-after-r$N.log says why, main is told, and the work stays here."
   exit 0
@@ -2536,9 +2563,11 @@ WRITING=$HAND
   { git -C "$WT" diff --name-only "$(review_base "$WT")...HEAD" | grep -E '\.test\.' || true; } | sed 's/^/- /'
 } > "$HAND.tmp"
 [ ! -d "$HAND" ]
-mv -f "$HAND.tmp" "$HAND"
+pp_gate_act mv -f "$HAND.tmp" "$HAND" || exit 2
 WRITING=
 mkdir -p "$PP_SCRATCH"
+# Checked in the foreground, as the GO hand-off above: the background child must not race this pass's EXIT stamp removal.
+pp_gate_check || exit 2
 bash "$HERE/builder-fresh-round.sh" "$PANE" "$HAND" "$SEAT" > "$PP_SCRATCH/$UNIT-fix-r$N.log" 2>&1 &
 if [ -n "$IN_PANE" ]; then
   echo "FIX ROUND $N: end your turn now and start no fix in this session. Once this pane is idle, the fix round from ${HAND##*/} is typed into this session, or into a cleared one when this session is at or past the Builder clear line; keep anything it needs in the evidence file before you stop. If nothing is typed within 15 minutes, $PP_SCRATCH/$UNIT-fix-r$N.log says why, main is told, and the fix round stays here."

@@ -724,7 +724,7 @@ if [ -n "$DASHBOARD" ]; then echo "dashboard: http://${BIND:-127.0.0.1}:$PORT/";
 run_id() { jq -r "$1"' // empty' 2>/dev/null | grep -xE '[A-Za-z0-9_-]+' || true; }
 keep_run() { mkdir -p "$PP_SCRATCH" && printf '%s\n' "$RUN" > "$PP_RUN_FILE"; }
 RUN=$( { tr -d '[:space:]' < "$PP_RUN_FILE"; } 2>/dev/null || true)
-[ -n "$RUN" ] || { RUN=$(orca-ide orchestration run-current --json 2>/dev/null | run_id .result.run.id || true); [ -z "$RUN" ] || keep_run; }
+[ -n "$RUN" ] || { RUN=$(pp_orca_run_id | grep -xE '[A-Za-z0-9_-]+' || true); [ -z "$RUN" ] || keep_run; }
 if [ -n "$RUN" ]; then echo "Orca run: $RUN (already there; none was created)"
 elif RUN=$(orca-ide orchestration run-create --objective "${PP_MAIN##*/}" --json 2>/dev/null | run_id '.result.run.id // .result.id') && [ -n "$RUN" ]; then
   keep_run

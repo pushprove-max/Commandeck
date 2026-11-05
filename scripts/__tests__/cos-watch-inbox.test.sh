@@ -55,5 +55,55 @@ rowat 2026-11-04T10:02:00Z term_main run:run_1 status "Answer A"; OUT=$(watch)
 check "a dropped repeat of main's reply keeps a newer owed question" "0:kept" \
   "$(grep -c '"Answer A"' <<<"$OUT"):$([ -e "$T/scratch/cos-owed" ] && echo kept || echo gone)"
 
+# Issue 614: a lane (Fast-lane, Research-lane) is not the relay. Mail to its own handle wakes it, but a routine FYI note
+# is held (each wake replays the pane's whole context) and prints with the next wake. The relay's rule that one sent to
+# the pane's own handle is never held stays the relay's.
+KEY=$(cd "$T/p" && "${E[@]}" bash -c '. "$1/hooks/lib/project.sh"; pp_cos_key; printf %s "$COS_KEY"' _ "$REAL")
+mkdir -p "${KEY%/*}"; printf '0 enc\n' > "$KEY.lane-fast-lane.inbox-seq"
+markread() { jq -c --arg s "$1" 'if .subject == $s then . + {read: 1} else . end' "$T/store.jsonl" > "$T/s.new" && mv "$T/s.new" "$T/store.jsonl"; }
+lane() { (cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-inbox.sh" term_lane --lane fast-lane 2>&1); }
+row term_main term_lane status "FYI lane note"
+OUT=$(lane); RC=$?
+check "lane FYI note stays held" "1:0" "$RC:$(grep -c 'FYI lane note' <<<"$OUT")"
+row term_main term_lane question "lane order"
+# pass 3: an order Orca already marks read is not replayed on any poll, also behind an unread one (it ran twice).
+row term_main term_lane question "handled order"; markread "handled order"
+OUT=$(lane); RC=$?
+check "and prints under the held header with the next wake" "0:1:1:0" "$RC:$(grep -c 'lane order' <<<"$OUT"):$(grep -c 'HELD FYI NOTES' <<<"$OUT"):$(grep -c 'handled order' <<<"$OUT")"
+
+# a lane's first poll delivers its unread order (pass 1): with no place saved yet, the first poll saved the newest
+# row and printed nothing, so an order sent before the lane's first Stop was passed over for good. A row already read,
+# or one to another pane, is not replayed.
+rm -f "$KEY.lane-research.inbox-seq"
+row term_main term_other question "not this lane's"
+row term_main term_lane2 question "old read order"; markread "old read order"
+row term_main term_lane2 question "first lane order"
+row term_main term_lane2 question "later read order"; markread "later read order"
+OUT=$( (cd "$T/p" && "${E[@]}" COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-inbox.sh" term_lane2 --lane research 2>&1) ); RC=$?
+check "a lane's first poll delivers its unread order" "0:1:0:0:0" \
+  "$RC:$(grep -c 'first lane order' <<<"$OUT"):$(grep -c 'old read order' <<<"$OUT"):$(grep -c "not this lane's" <<<"$OUT"):$(grep -c 'later read order' <<<"$OUT")"
+
+# The lane's fence is Orca's read flag on every poll, not its place (pass 2 design, pass 3 red: a read order behind an
+# unread one ran again). Tick 1 cannot show its batch, then one piece of state is lost before tick 2, each
+# in its own lane: tick 2 shows both unread orders, and no read one or another pane's, whichever piece went.
+row term_main term_fence question "fence read A"; markread "fence read A"
+row term_main term_fence question "fence order A"
+row term_main term_fence question "fence read B"; markread "fence read B"
+row term_main term_fence question "fence order B"
+row term_main term_other question "fence other pane"
+# The shim fails the show inside the poller: its batch goes to the wake file, so only Python's own stdout can fail.
+PY=$(command -v python3); printf '#!/usr/bin/env bash\n[ -z "${FAIL_SHOW-}" ] || exec "%s" "$@" >/dev/full\nexec "%s" "$@"\n' "$PY" "$PY" > "$T/bin/python3"
+chmod +x "$T/bin/python3"
+GOT=
+for lost in inbox-seq inbox-seq.lock inbox-seen-ids stray.new; do
+  fl() { (cd "$T/p" && "${E[@]}" ${FAIL_SHOW:+FAIL_SHOW=1} COMMANDECK_WATCH_ONCE=1 bash "$REAL/scripts/cos-watch-inbox.sh" term_fence --lane "f-$lost" 2>/dev/null); }
+  FAIL_SHOW=1 fl >/dev/null
+  case $lost in stray.new) echo junk > "$KEY.lane-f-$lost.inbox-seq.new" ;; *) rm -f "$KEY.lane-f-$lost.$lost" ;; esac
+  OUT=$(fl)
+  GOT+="$lost:$(grep -c 'fence order' <<<"$OUT"):$(grep -c 'fence read' <<<"$OUT"):$(grep -c 'fence other' <<<"$OUT") "
+done
+check "a lane delivers every unread order and no read one, whatever state is lost" \
+  "inbox-seq:2:0:0 inbox-seq.lock:2:0:0 inbox-seen-ids:2:0:0 stray.new:2:0:0 " "$GOT"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

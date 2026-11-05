@@ -51,8 +51,14 @@ fail() {
 # send <text> -- type <text> and Enter into the pane; Orca's answer is kept for the reason when it fails. Orca may take
 # the request and type nothing (accepted:false: a paired phone can hold the pane's keyboard, issue 342): nothing was
 # typed, so it is retried in place, 3 tries SETTLE apart, each refusal said; only a pane that refuses all 3 fails.
+# Issue 585: an order (not a slash command, which is a keystroke for the TUI) goes by `orchestration send` when the
+# pane's agent passed the send trial on this host; pp_follow_up 3 (no pass) keeps the typed route below.
 send() {
-  local try
+  local try rc
+  if [[ $1 != /* ]]; then
+    rc=0; pp_follow_up "$H" "fresh round" "$1" || rc=$?
+    [ "$rc" = 3 ] || { [ "$rc" = 0 ] || SENT="orchestration send failed (exit $rc)"; return "$rc"; }
+  fi
   for try in 1 2 3; do
     SENT=$(orca-ide terminal send --terminal "$H" --text "$1" --enter --json 2>&1) || { SENT=$(printf '%s' "$SENT" | tr -s '\n' ' ' | cut -c1-300); return 1; }
     jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$SENT" || return 0

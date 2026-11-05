@@ -305,7 +305,10 @@ stopped_nudge() {
 # directory). The ids are recorded only once Orca took the typing: nothing else wakes a stopped Builder, so a send that
 # fails or answers accepted:false is typed again on the next tick. A mid-turn Builder reads at its next check.
 inbox_wake() {
-  local r u h state hist out id new sent
+  local r u h state hist out id new sent form passed=
+  # Issue 585 (DG7): a message `orchestration send` made (its own thread) starts a turn in a pane whose agent passed the
+  # send trial on this host, so it needs no INBOX line; a reply, or a pane of an agent with no pass here, keeps it.
+  if pp_send_form claude >/dev/null || pp_send_form codex >/dev/null; then . "$HERE/codex-helpers.sh"; passed=1; fi
   for r in "$SCRATCH"/seat-*-builder.txt; do
     [ -f "$r" ] && ! grep -q '^origin=' "$r" || continue
     u=$(sed -n 's/^unit=//p' "$r" | head -1); h=$(sed -n 's/^handle=//p' "$r" | head -1)
@@ -317,12 +320,13 @@ inbox_wake() {
     # Its unread messages not yet woken for (a reply that is not an inbox lists none): one line for all of them.
     # Issue 642: only those the one wake rule wakes a seat for (wake_class seat: no heartbeat, no 10-minute repeat
     # against this same page); a repeat stays unread for the Builder's next check.
-    new=()
+    new=() form=
+    [ -z "$passed" ] || form=$(pp_send_form "$(pane_kind_of "$terms" "$ps" "$h")") || form=
     while IFS= read -r id; do
       [ -n "$id" ] || continue
       grep -qxF -- "$id" "$hist" 2>/dev/null || new+=("$id")
-    done < <(jq -r --arg h "$h" "$PP_JQ_WAKES"'(.result.messages // []) as $all | $all[]? | select(.to_handle == $h and (.read // 0) == 0)
-      | select(wake_class([]; []; $all; "seat") == "now") | .id // empty' <<<"$out" 2>/dev/null)
+    done < <(jq -r --arg h "$h" --arg sent "$form" "$PP_JQ_WAKES"'(.result.messages // []) as $all | $all[]? | select(.to_handle == $h and (.read // 0) == 0)
+      | select(wake_class([]; []; $all; "seat") == "now") | select($sent == "" or (.thread_id // .id) != .id) | .id // empty' <<<"$out" 2>/dev/null)
     [ "${#new[@]}" -gt 0 ] || continue
     if sent=$(orca-ide terminal send --terminal "$h" --text "Signal INBOX: a message for you is waiting in your Orca inbox. Read it with \`orca orchestration check --wait --timeout-ms 5000\`, act on it, and end your turn." --enter 2>/dev/null) \
       && ! jq -e 'any(.. | objects | select(has("accepted")) | .accepted; . == false)' >/dev/null 2>&1 <<<"$sent"; then
@@ -1664,7 +1668,8 @@ worktree_sweep() {
   timeout 60 bash "$HERE/worktree-sweep.sh" > "$ST/sweep.log" 2>&1
   touch "$ST/sweep-stamp"
 }
-# dead_seats -- issue 590: a non-Builder seat whose pane exited before its finish gets one item naming it and its unit.
+# dead_seats -- issue 590: a non-Builder seat whose pane exited before its finish gets one item naming it and its unit
+# (issue 663: after one relaunch, below).
 # The exit rows are Orca's daemon log (COMMANDECK_ORCA_LOG, else the host's default), one JSON object per line. A seat
 # owns a row only by its record's exact pty= (Orca's sessionId) and only since its launch; its latest row decides, so
 # an operator_close there is a close, never a death. A finish is the record's last verdict=/revised= line being a
@@ -1672,7 +1677,7 @@ worktree_sweep() {
 # answer (the seat-bound reader, which reads a gone pane's log), which counts for a revised seat only once its revised
 # prompt landed. A record with no pty (an older launch, or a terminal list seat.sh could not read) is never reported.
 dead_seats() {
-  local log rows h task u role launched pty wt revised last agent cause w
+  local log rows h task u role launched pty wt revised last agent spec vd cause w note rl
   [ "$LISTED" = 1 ] || return 0
   log=${COMMANDECK_ORCA_LOG:-$HOME/.config/orca/logs/daemon.log}
   [ -n "${COMMANDECK_ORCA_LOG:-}" ] || [ "$(hs_os)" != Darwin ] || log="$HOME/Library/Application Support/orca/logs/daemon.log"
@@ -1683,7 +1688,7 @@ dead_seats() {
   rows=$(tail -n 20000 "$log" | jq -cR 'fromjson? | objects | select(.event == "session-exited" and (.sessionId | type) == "string" and .sessionId != "")
     | {s: .sessionId, t: (.ts | strings | sub("\\.[0-9]+"; "") | fromdateiso8601? // empty), c: (.cause // "")}' 2>/dev/null)
   [ -n "$rows" ] || return 0
-  while IFS=$'\x1f' read -r h task u role launched pty wt revised last agent; do
+  while IFS=$'\x1f' read -r h task u role launched pty wt revised last agent spec vd; do
     [ -n "$pty" ] && [ -n "$h" ] && [ -n "$u" ] && [ "$role" != builder ] || continue
     # Its pane is still listed: alive.
     ! awk -F'\t' -v h="$h" '$1 == h { f = 1 } END { exit !f }' <<<"$STATES" || continue
@@ -1696,17 +1701,50 @@ dead_seats() {
       [ "$revised" = "$task" ] || continue
       ! revised_ran "$w" "$task" "${launched:-0}" || continue
     fi
+    # Issue 663 R4b: a seat's first exit is relaunched once before any question. This item file is the mark
+    # recover-stalls.sh's R4b reads: a plan seat through its driver's start once that driver stopped, any other by
+    # seat.sh launch with the record's spec. Its row `R4b <unit> <role>-<launched>` says it ran; the question is for
+    # the relaunched seat's own exit, or for a seat that cannot be relaunched, naming why.
+    note=" It was relaunched once and exited again." rl=$(awk -v u="$u" -v r="$role-" '$1 == "R4b" && $2 == u && index($3, r) == 1 \
+      && substr($3, length(r) + 1) ~ /^[0-9]+$/ { print substr($3, length(r) + 1) }' "$ST/recovered" 2>/dev/null)
+    if grep -qxF -- "$launched" <<<"$rl"; then continue
+    elif [ -z "$rl" ]; then
+      if [ "$vd" = 1 ]; then note=" It is not relaunched: its record already holds a verdict (a revised seat)."
+      elif [[ $role == plan-* ]]; then
+        [ -n "$(sed -n 4p "$SCRATCH/drive-$u.args" 2>/dev/null)" ] && note= || note=" It is not relaunched: its driver left no $SCRATCH/drive-$u.args to restart it from."
+      else [ -f "$spec" ] && note= || note=" It is not relaunched: its seat record names no spec file${spec:+ ($spec is gone)}."; fi
+      [ -n "$note" ] || { [ -e "$ST/item-dead-$u-$role-$launched" ] || echo "relaunch=$NOW" > "$ST/item-dead-$u-$role-$launched"; continue; }
+    fi
     # The task argument is empty: post mints the item's own task, so a seat task already failed or closed hides nothing.
     post "dead-$u-$role-$launched" "" "main-watch: seat $role on $u exited before its verdict ($h)" \
-      "Seat $role ($h) on $u: Orca reports its pane exited ($cause) with no verdict or finish. Relaunch it (seat.sh launch $role $u <spec>) or carry its step by hand." once
+      "Seat $role ($h) on $u: Orca reports its pane exited ($cause) with no verdict or finish.$note Relaunch it (seat.sh launch $role $u <spec>) or carry its step by hand." once
   done < <(awk -v OFS=$'\x1f' '
-    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["pty"], v["worktree"], rv, last, (v["cmd"] ~ /(^|[ ;])codex( |$)/ ? "codex" : "claude") }
-    FNR == 1 { if (NR > 1) out(); split("", v); rv = ""; last = "" }
+    function out() { if (FILENAME != "" && !("origin" in v)) print v["handle"], v["task"], v["unit"], v["role"], v["launched"], v["pty"], v["worktree"], rv, last, (v["cmd"] ~ /(^|[ ;])codex( |$)/ ? "codex" : "claude"), v["spec"], vd }
+    FNR == 1 { if (NR > 1) out(); split("", v); rv = ""; last = ""; vd = 0 }
     /^(verdict|revised)=/ { last = $0 }
+    /^verdict=/ { vd = 1 }
     /^revised=/ { rv = substr($0, 9) }
     { i = index($0, "="); k = substr($0, 1, i - 1) }
-    i && k ~ /^(handle|task|unit|role|launched|pty|worktree|cmd|origin)$/ && !(k in v) { v[k] = substr($0, i + 1) }
+    i && k ~ /^(handle|task|unit|role|launched|pty|worktree|cmd|origin|spec)$/ && !(k in v) { v[k] = substr($0, i + 1) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
+}
+# recover_tick -- issue 663: recover-stalls.sh recovers a stalled unit once per condition. Its `recovered:` lines reach
+# main with the next wake (digest, never a question); an `ask: <key><TAB><subject><TAB><body file>` line is one post;
+# anything else goes to stderr. A nonzero exit is said, and the lines printed before it are still read.
+recover_tick() {
+  local rs=${COMMANDECK_RECOVER_STALLS:-$HERE/recover-stalls.sh} out rc=0 line key subj body
+  [ "$LISTED" = 1 ] && [ -e "$rs" ] || return 0
+  out=$(COMMANDECK_PS_JSON="$ps" COMMANDECK_TERMINALS_JSON="$terms" COMMANDECK_TASKS_JSON="$TASKS" bash "$rs" 2>&1) || rc=$?
+  [ "$rc" = 0 ] || echo "main-watch: recover-stalls.sh exited $rc" >&2
+  while IFS= read -r line; do
+    case $line in
+      "") ;;
+      "recovered: "*) digest "$line" ;;
+      "ask: "*) IFS=$'\t' read -r key subj body <<<"${line#ask: }"
+        post "recover-$key" "" "$subj" "$(cat "$body" 2>/dev/null)" once ;;
+      *) printf '%s\n' "$line" >&2 ;;
+    esac
+  done <<<"$out"
 }
 tick() {
   trim_log
@@ -1734,7 +1772,8 @@ tick() {
   fi
   # A failed task list cannot tell handled from open; skip rather than guess.
   # A fenced one would silence every item, so main hears it (rebind was tried).
-  if ! orca_op '.result.tasks' orca-ide orchestration task-list --run "$RUN" --json; then
+  # Issue 588: a row without id or status is a failed read, never a task that is not open.
+  if ! orca_op '.result.tasks | type == "array" and all(.[]; has("id") and has("status"))' orca-ide orchestration task-list --run "$RUN" --json; then
     echo "main-watch: task-list failed; skipping this tick: $OP_ERR" >&2
     [ -z "$REBOUND" ] || { note "task list: $OP_ERR" task-list; arm_diag; wake; }
     return 0
@@ -1776,6 +1815,7 @@ tick() {
     /^session=/ { v["session"] = substr($0, 9) }
     END { if (NR) out() }' "$SCRATCH"/seat-*.txt 2>/dev/null)
   dead_seats
+  recover_tick
   merge_collect
   report_send
   merge_start
