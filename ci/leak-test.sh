@@ -64,7 +64,7 @@ NAMED=()
 [ -n "$ONE" ] || for f in LICENSE NOTICE .claude-plugin/plugin.json .claude-plugin/marketplace.json; do [ -L "$f" ] || NAMED+=("$f"); done
 # Made-up spend figures are allowed in the dashboard's test fixtures, as real files only, and nothing else there is.
 FIXTURES=
-[ -n "$ONE" ] || for f in hooks/units.test.tsx hooks/units-panes.test.tsx scripts/__tests__/dashboard-view.test.mjs \
+[ -n "$ONE" ] || for f in hooks/units.test.tsx hooks/units-panes.test.tsx hooks/units-elements.test.tsx scripts/__tests__/dashboard-view.test.mjs \
   scripts/__tests__/transcript-requests.test.sh scripts/__tests__/dashboard-built-seat-figures.test.sh \
   scripts/__tests__/dashboard-built-seats.test.sh scripts/__tests__/dashboard-built-planning.test.sh; do [ -L "$f" ] || FIXTURES+="$f"$'\n'; done
 HITS=$(rg --json --text -f "$PAT" -- "${FILES[@]}"); rc=$?   # --text: a NUL byte ends no search
