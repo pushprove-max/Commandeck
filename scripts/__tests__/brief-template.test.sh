@@ -98,9 +98,17 @@ KG='A review finding blocks the merge only when normal use would hit the bug'
 GAP='A finding that needs an agent deliberately bypassing a guard, or an odd setup, is a one-line known gap in the evidence file and does not block.'
 check "only a bug normal use would hit blocks the merge, and only a GO naming no blocking finding closes" "$KG"
 check "a bypass or odd-setup finding is a known gap that does not block" "$GAP"
-# Issue 366: a P0 or P1 is never left open at merge; the loop ends only on one of the three stop lines.
-check "no narrowed-pass exit, and only the three stop lines end the loop" 'There is no narrowed-pass exit. Three lines end the loop with no fix round: `STOP (threshold)`'
-check "a P0 or P1 is never capped: it stops the build for main" '`REVIEW STOP` (a P0 or P1 open two passes past the cap)'
+# Issue 366: a P0 or P1 is never left open at merge; passes run until clean and only the two stop lines end the loop.
+check "no narrowed-pass exit, and only the two stop lines end the loop" 'There is no narrowed-pass exit. Passes run until clean. Two lines end the loop with no fix round: `STOP (threshold)`'
+check "a P0 or P1 is never capped: it stops the build for main" '`REVIEW STOP` (a P0 or P1 still open at pass 7 or later by default)'
+# rule text carries no pass cap. The bug: a rule or doc still telling a Builder or main that a NO-GO at the cap merges,
+# or that passes stop at a cap, after the scripts dropped the cap stop.
+ROOT=${T%/templates/*}
+CAPS=$(cd "$ROOT" && grep -n -i -E 'cap stop|STOP \(cap\)|past the cap|at the cap|the review cap|review pass cap|pass cap' \
+  templates/_builder-brief-template.md templates/main-rulings.md templates/global-rules.md scripts/merge-unit-local.sh \
+  scripts/setup.sh README.md docs/review-loop.md docs/configuration.md docs/setup-questions.md skills/setup/SKILL.md \
+  .claude-plugin/plugin.json scripts/builder-codex-pass.sh scripts/main-watch.sh scripts/builder-launch.sh)
+if [ -z "$CAPS" ]; then PASS=$((PASS+1)); echo "ok   rule text carries no pass cap"; else FAIL=$((FAIL+1)); echo "FAIL rule text carries no pass cap: $CAPS"; fi
 SAVED=$BODY BODY=$(awk 'NF { printf "%s ", $0; next } { print "" } END { print "" }' "${T%/*}/global-rules.md" | sed -E 's/ +/ /g')
 check "the global rules carry the same two sentences" "$KG"
 check "the global rules: a bypass or odd-setup finding is a known gap" "$GAP"

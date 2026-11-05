@@ -18,14 +18,14 @@ f7c75c86 8361fb71 8ade2fb3 f6e2fbb0 2848b779 48b02596 a4d1bca5 6743a4ac 5f6ba6aa
 # The rules kept are new since 0.7.1, so no owner has a wording of them to keep: plan before every build, its full
 # text below Details a second unit, the worker-memory note below Details a third, and 0.18.0's denied
 # self-modification rule a fourth, 0.20.0's NO-GO-merges-on-the-owner's-word rule a fifth, and 0.21.0's do-not list,
-# status line, two-NO-GOs and picker rules four more, and 0.23.0's merge gate and no-redundant-steps rules two more,
+# two-NO-GOs and picker rules three more (its status-line rule removed in 0.72.0), and 0.23.0's merge gate and no-redundant-steps rules two more,
 # and 0.44.0's rule that a reply the duplicate-agent guard blocks is never dropped and 0.45.0's archive-a-memory rule two more,
 # and 0.46.0's large-read rule, the class stop split into two rules (second NO-GO, third return) and the
 # hand-merge cleanup rule three more, and 0.47.0's newest-report rule one more, and 0.48.0's owner's-words scope rule one more,
 # and the clear-line rule reworded for the one snapshot call one more: its new id has no MADE_FROM pair (owner,
 # 2026-10-27: a saved choice for a reworded rule is not migrated), so a kept 0.7.1 wording no longer holds it out.
 check "an owner who kept their own wording for every 0.7.1 main rule gets only the rule added since" \
-  "19 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
+  "18 plugin rules kept:2" "$(MS $(drops $V071) --report | head -1 | cut -d, -f1):$(MS $(drops $V071) | grep -c 'Plan before every build')"
 check "the relay rule an owner kept their own wording for in 0.7.1 stays out" 0 \
   "$(MS --drop 34ec1023 | grep -c 'goes to the relay pane')"
 check "a rule reworded alone stays out under its 0.7.1 id" 0 \
@@ -43,7 +43,7 @@ check "keep both for a rule made from two loads it, though keep mine was saved f
 # Main writes each planner's spec from the planning rule, so that rule is where a planner hears to name a fitting
 # mattpocock-skills skill (the owner's, 2026-10-17); it stays one rule. An owner who kept their own wording of the
 # planning rule before (871dfc54) does not get the reworded one too.
-check "the planning rule names the skills line, inside the same rule" "1:42" \
+check "the planning rule names the skills line, inside the same rule" "1:41" \
   "$(MS | awk '/^- \*\*/ { p = /Plan before every build/ } p' | grep -c 'If the mattpocock-skills plugin'):$(MS --units | wc -l | tr -d ' ')"
 check "an owner who kept their own planning rule does not get the reworded one" 0 \
   "$(MS --drop 871dfc54 | grep -c 'If the mattpocock-skills plugin')"
@@ -55,7 +55,7 @@ check "an owner who kept their own AGENT_STARTUP planning step does not get the 
 # out only for an owner who kept their own wording of the rule it came from, and --keep of its new id loads it.
 # Not an exemption: the owner's own wording stays loaded from their file, and the owner ruled it so.
 ids() { python3 "$REAL/scripts/merge-rules.py" - --units | cut -f1; }
-for pair in d2e4dc5b:3e156378 401e8893:71c7e94b c34eb141:b1471fa8 80518d00:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e 2f94caff:48b02596 4439c5bf:487d3e9e; do
+for pair in d2e4dc5b:3e156378 bce76243:71c7e94b c34eb141:b1471fa8 b3b54a7c:b2577b20 7c87d0bb:42145c44 e6963680:2bb3342e 399b22b8:45c2952e 45cd53bc:45c2952e 2f94caff:48b02596 4439c5bf:487d3e9e; do
   new=${pair%:*} old=${pair#*:}
   check "reworded $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(MS | ids | grep -c "^$new") $(MS --drop "$old" | ids | grep -c "^$new") $(MS --drop "$old" --keep "$new" | ids | grep -c "^$new")"
@@ -63,12 +63,12 @@ done
 # Issue 325: the global rules' review-finding rule was reworded; an owner who kept their own wording of the old one stays
 # out of it, through each later rewording too (0.48.0: issue 366's review threshold, 26b6b2b9 made from 13e9906d).
 GR() { local id=$1; shift; python3 "$REAL/scripts/merge-rules.py" "$REAL/templates/global-rules.md" "$@" | ids | grep -c "^$id"; }
-check "reworded 26b6b2b9: in by default, out under keep mine of c8e23316, in again with --keep 26b6b2b9" "1 0 1" \
-  "$(GR 26b6b2b9) $(GR 26b6b2b9 --drop c8e23316) $(GR 26b6b2b9 --drop c8e23316 --keep 26b6b2b9)"
+check "reworded a565c8bd: in by default, out under keep mine of c8e23316, in again with --keep a565c8bd" "1 0 1" \
+  "$(GR a565c8bd) $(GR a565c8bd --drop c8e23316) $(GR a565c8bd --drop c8e23316 --keep a565c8bd)"
 # 0.48.0 global-rules.md rewordings: the review threshold (issue 366), the reviewers' scope, the ponytail add-on removed
 # (issue 365), units and duplicate agents, planning by size. 0.51.0: a plan's `file ~line`, the sibling dry run, the
 # flexibility finding's severity. 0.56.0: the closing pass, the fixer's passing test, a zero diff reported done.
-for pair in 26b6b2b9:13e9906d 0daaf070:cb6056f9 41d1d566:e38a2639 0d7babbc:e7926841 b1915c88:ecd4b33d 3b129248:516a9bd8 2424eeef:56860db4 eff13cd5:64f32653 faea5cd0:71b6b9ca a935667e:2fe4fdf9; do
+for pair in a565c8bd:13e9906d 0daaf070:cb6056f9 41d1d566:e38a2639 0d7babbc:e7926841 b1915c88:ecd4b33d 3b129248:516a9bd8 2424eeef:56860db4 eff13cd5:64f32653 faea5cd0:71b6b9ca 2a5e9350:2fe4fdf9; do
   new=${pair%:*} old=${pair#*:}
   check "reworded global $new: in by default, out under keep mine of $old, in again with --keep $new" "1 0 1" \
     "$(GR "$new") $(GR "$new" --drop "$old") $(GR "$new" --drop "$old" --keep "$new")"

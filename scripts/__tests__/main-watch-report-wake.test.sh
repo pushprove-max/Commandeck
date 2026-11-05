@@ -102,6 +102,11 @@ echo "REFUSED: REVIEW STOP: ag-r1-reports.md holds a P0 or P1 two passes past th
 more; more
 [ "$(posts 'REVIEW STOP, decision review-stop-ag-r1')" = 1 ] || fail "adversarial_go_review_stop_wins: the first-pass GO was not stamped with the REVIEW STOP"
 [ "$(posts 'Next: a first-pass GO')" = 0 ] || fail "adversarial_go_review_stop_wins: the first-pass GO was stamped as a plain GO"
+# watcher REVIEW STOP names no pass number: main-watch reads no passCap, so a number or "the cap" in its note would be
+# wrong for a project whose saved setting is not the default.
+[ "$(posts 'a P0 or P1 is still open two passes after the Closing pass from setting (reviewPassCap)')" = 1 ] \
+  && [ "$(grep -o 'REVIEW STOP, decision review-stop-ag-r1.*ANSWERED' "$T/sends" | grep -cE 'cap\.|pass [0-9]')" = 0 ] \
+  || fail "watcher_review_stop_names_no_pass_number: the REVIEW STOP note names a pass number or the cap"
 gone ag
 
 # stamped_round_overtaken_before_send: r2 is stamped "fix round 2" and its send fails; r3 finishes before the next

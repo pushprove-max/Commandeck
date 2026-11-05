@@ -25,15 +25,15 @@
 #     (build_size).
 #     The review threshold (issue 366): a pass that names no open finding at the blocking severity
 #     (reviewBlockSeverity, P2 by default: P0 to P2) ends GO, so a lower one never holds
-#     the merge; from the REVIEW_CAP-th pass (reviewPassCap, 5 by default) on the reviewer's record, a closing NO-GO that names no P0 or P1
-#     merges too (a cap stop); a P0 or P1 is never capped, and one still held two passes past the cap stops
-#     the unit for the owner (REVIEW STOP). What is open at the merge is printed, one Open finding line
+#     the merge; a NO-GO never merges, at any pass count: passes run until clean. From the REVIEW_CAP-th pass
+#     (reviewPassCap, 5 by default) on the reviewer's record every pass is a closing pass, and a P0 or P1 still held
+#     two passes later stops the unit for the owner (REVIEW STOP). What is open at the merge is printed, one Open finding line
 #     each, for main to file. A finding blocks only when normal use would hit the bug (issue 325): a
 #     bypass or odd-setup finding is a known gap, a plain line with
 #     no level and no class tag, which the gate below does not count. With no closing pass (reviewLoop.closingPass no), a
 #     narrowed pass's GO merges when narrowed passes read every commit after
 #     the last first pass. The proof's first line ends with the rule: closing
-#     GO, threshold stop, cap stop, first-pass GO or no closing pass.
+#     GO, threshold stop, first-pass GO or no closing pass.
 #     Each pass but the closing one lists, in its prompt, every earlier pass the reviewer's session
 #     files held for the worktree at its launch (session, end time, findings);
 #     the merge takes such a pass's GO only while that list is still exactly the record. The closing
@@ -123,9 +123,9 @@ pass_waits() {
 BLOCK_AT=$(pp_review_loop blockAt P2 '^P[123]$') || exit 2
 BLK=${BLOCK_AT#P}
 case $BLK in
-  1) BLOCK_LEVELS='P0 or P1' BLOCK_NONE='P2 and P3 findings and known gaps' BELOW='P2 and P3' CAP_LEVELS=P2 ;;
-  2) BLOCK_LEVELS='P0, P1 or P2' BLOCK_NONE='P3 findings and known gaps' BELOW=P3 CAP_LEVELS=P2 ;;
-  3) BLOCK_LEVELS='P0, P1, P2 or P3' BLOCK_NONE='known gaps' BELOW=no CAP_LEVELS='P2 or P3' ;;
+  1) BLOCK_LEVELS='P0 or P1' BLOCK_NONE='P2 and P3 findings and known gaps' BELOW='P2 and P3' ;;
+  2) BLOCK_LEVELS='P0, P1 or P2' BLOCK_NONE='P3 findings and known gaps' BELOW=P3 ;;
+  3) BLOCK_LEVELS='P0, P1, P2 or P3' BLOCK_NONE='known gaps' BELOW=no ;;
 esac
 # What this script puts into the template. The Codex plugin's one output block
 # asks for JSON against a schema only that plugin's own review command
@@ -433,18 +433,15 @@ round_files() {
   done
   return 0
 }
-# Issue 366: the review cap. From this many passes on the reviewer's record, a closing NO-GO that names no P0 or P1
-# ends the loop (a cap stop: main files what is open, then merges). A P0 or P1 is never capped; one still held at
-# REVIEW_CAP + 2 passes stops the unit for the owner (REVIEW STOP). The owner's reviewPassCap (5 by default).
+# Issue 366: the closing pass from. From this many passes on the reviewer's record every pass is a closing pass; it
+# never ends the loop, which runs until clean. A P0 or P1 still held at REVIEW_CAP + 2 passes stops the unit for the
+# owner (REVIEW STOP). The owner's reviewPassCap (5 by default).
 REVIEW_CAP=$(pp_review_loop passCap 5 '^[1-9][0-9]*$') || exit 2
 # passes_on_record <earlier_passes text> <round> -- the passes on the reviewer's record: its distinct rounds, <round>
 # (the pass launched or verified) among them. Never the round number N, which the Builder chooses.
 passes_on_record() { { awk '$1 == "@" { print $6 }' <<<"$1"; echo "$2"; } | sort -u | grep -c .; }
 # p01_count -- how many lines on stdin name a P0 or P1 (a line's level is the lowest it names).
 p01_count() { grep -cE '(^|[^A-Za-z0-9])P[01]([^0-9]|$)' || true; }
-# cappable_count -- how many lines on stdin are findings the cap merges: P2 up to the blocking severity (none when only
-# P0 and P1 block). A line that starts with the tag, as session_proof writes it.
-cappable_count() { if [ "$BLK" -ge 2 ]; then grep -cE "^[[:space:]]*(- )?\[P[2-$BLK]\]" || true; else cat >/dev/null; echo 0; fi; }
 # review_stop_id <earlier_passes text> -- "review-stop-<unit>-r<N>" when the passes on record reach REVIEW_CAP + 2 and
 # the latest, N (the one that ended last, never the highest N), still holds a P0 or P1; nothing otherwise. The launch
 # gate, the pass's own stop and --verify all ask this one function. A code pass's finding list is the open list, so
@@ -938,11 +935,11 @@ if [ "${1:-}" = --verify ]; then
   BASE_RANGE=$(review_base "$WT") || exit 2
   [ "$BASE_RANGE" = main ] && BASE_RANGE=whole || BASE_RANGE=base:$BASE_RANGE
   ROUND=${LAST##*/}; ROUND=${ROUND#"$UNIT-r"}; ROUND=${ROUND%-reports.md}
-  # Issue 366 (O4): a P0 or P1 held two passes past the cap waits for the owner, whatever the pass's kind. Asked first,
-  # so the one line orca-wait.sh and main-watch read says so, and not that the pass was design-only or NO-GO.
+  # Issue 366 (O4): a P0 or P1 held at pass REVIEW_CAP + 2 or later waits for the owner, whatever the pass's kind. Asked
+  # first, so the one line orca-wait.sh and main-watch read says so, and not that the pass was design-only or NO-GO.
   ALLP=$(earlier_passes "$WT") || exit 2
-  COUNT=$(passes_on_record "$ALLP" "$ROUND") STOP_ID=$(review_stop_id "$ALLP") CAPPED="" NOW_LINES=""
-  [ -z "$STOP_ID" ] || die "REVIEW STOP: ${LAST##*/} holds a P0 or P1 two passes past the cap (pass $COUNT on record); decision $STOP_ID; it waits for the owner's answer, no fix round runs"
+  COUNT=$(passes_on_record "$ALLP" "$ROUND") STOP_ID=$(review_stop_id "$ALLP") NOW_LINES=""
+  [ -z "$STOP_ID" ] || die "REVIEW STOP: ${LAST##*/} holds a P0 or P1 at pass $((REVIEW_CAP + 2)) or later (pass $COUNT on record); decision $STOP_ID; it waits for the owner's answer, no fix round runs"
   for TID in $TIDS; do
     PROOF=$(session_proof "$TID" "$WT" "$WANT") || exit 2
     read -r READ K OF_THIS OF_ROUND BEGAN _ WAS_READ SINCE _ <<<"$(sed -n 2p <<<"$PROOF")"
@@ -952,16 +949,13 @@ if [ "${1:-}" = --verify ]; then
       || die "$NAME $TID (${LAST##*/}) read the range ${SINCE/#whole/main...HEAD}, not the unit's review base ($BASE_RANGE). Run the closing pass again: builder-codex-pass.sh $UNIT <N> final" ;; esac
     # The reviewer's record, never the round file, says what this pass found: the Builder can edit a round file.
     NOW_LINES+=$({ tail -n +3 <<<"$PROOF" | grep -E "$FINDING" || true; })$'\n'
-    # Issue 366: a finding at or above the blocking severity holds the merge (session_proof reads a GO beside one as NO-GO), until the cap; a P0 or
-    # P1 is never capped. A finding main cleared is handed to the next reviewer as out of scope; it never turns a
-    # NO-GO into a merge.
+    # Issue 366: a finding at or above the blocking severity holds the merge (session_proof reads a GO beside one as
+    # NO-GO), at any pass count: a NO-GO never merges. A finding main cleared is handed to the next reviewer as out of
+    # scope; it never turns a NO-GO into a merge.
     if [ "${PROOF%%$'\n'*}" != "VERDICT: GO" ]; then
       [ "$(tail -n +3 <<<"$PROOF" | p01_count)" = 0 ] || die "$NAME $TID (${LAST##*/}) ended NO-GO with a P0 or P1: a P0 or P1 is never capped (pass $COUNT on record). Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
-      [ "$READ" = final ] && [ "$COUNT" -ge "$REVIEW_CAP" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: a $BLOCK_LEVELS holds the merge below the cap (pass $COUNT on record, cap $REVIEW_CAP), and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
-      # The cap merges an open P2 for main to file. A NO-GO that names none (only P3s, an untagged level, a refusal
-      # line, no finding) is no cap stop: it would merge with nothing to file.
-      [ "$(tail -n +3 <<<"$PROOF" | cappable_count)" -gt 0 ] || die "$NAME $TID (${LAST##*/}) ended NO-GO but names no open $CAP_LEVELS, so it is no cap stop (pass $COUNT on record): only an open $CAP_LEVELS is merged at the cap, for main to file. Run the closing pass again: builder-codex-pass.sh $UNIT <N> final"
-      CAPPED=1
+      [ "$COUNT" -ge "$REVIEW_CAP" ] || die "$NAME $TID (${LAST##*/}) ended NO-GO: a $BLOCK_LEVELS holds the merge below the cap (pass $COUNT on record, cap $REVIEW_CAP), and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
+      die "$NAME $TID (${LAST##*/}) ended NO-GO: a $BLOCK_LEVELS holds the merge (pass $COUNT on record): passes run until clean, and a finding main cleared does not turn a NO-GO into a merge. Fix it, then run the next pass: builder-codex-pass.sh $UNIT <N> review"
     fi
     case $READ in
       # session_proof has just bound this pass to the tip, so nothing was committed after it.
@@ -1038,9 +1032,7 @@ if [ "${1:-}" = --verify ]; then
   fi
   # Issue 366: what is open is printed before the proof line (main-watch reads the last line), and names the rule.
   OPEN_LINES=$(CLEARED=$(builder_fixed "$WT" "$WANT") open_findings "$NOW_LINES" "$PASSES")
-  if [ "$RULE" = "closing GO" ]; then
-    if [ -n "$CAPPED" ]; then RULE="cap stop"; elif [ -n "$OPEN_LINES" ]; then RULE="threshold stop"; fi
-  fi
+  [ "$RULE" != "closing GO" ] || [ -z "$OPEN_LINES" ] || RULE="threshold stop"
   [ -z "$OPEN_LINES" ] || printf '%s\n' "$OPEN_LINES"
   # Issue 465: a class stop nobody counted cannot be measured; the merge carries this line into the squash message.
   MARKS=$(sed -nE 's/^- Class (redesign|ask-main): //p' "$WT/.claude/briefs/$UNIT"-fix-r*.md 2>/dev/null || true)
@@ -1085,8 +1077,7 @@ if [ "${1:-}" = --verify ]; then
     echo "Builder proof: ${LAST##*/}: no closing pass (chosen at setup); narrowed passes read every commit after the first pass ($NAME $C_TID), and the last ($NAME(s) $(paste -sd' ' - <<<"$TIDS")) ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: no closing pass"
     exit 0
   fi
-  ENDED_AS=GO; [ -z "$CAPPED" ] || ENDED_AS="NO-GO with no P0 or P1 at pass $COUNT on record"
-  echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended $ENDED_AS in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
+  echo "Builder proof: ${LAST##*/}: $NAME(s) $(paste -sd' ' - <<<"$TIDS") ended GO in $WT on $WANT or the commit it is a clean rebase of; rule: $RULE"
   [ -z "$SUITE_PROOF" ] || echo "Suite proof: $SUITE_PROOF"
   exit 0
 fi
@@ -1216,7 +1207,7 @@ WT=$PP_WORKSPACES/$UNIT
 MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} \
   || die "$WT is not a git worktree"
 # The owner's limit on the rounds of this unit (review-cap.sh), read from main's checkout only. A unit with none has
-# no limit on its round number; the review pass cap (reviewPassCap) is a different limit, on the passes on record.
+# no limit on its round number; the Closing pass from setting (reviewPassCap) never refuses a pass.
 CAP=$MAIN_OF_WT/.claude/briefs/$UNIT-review-cap.md MAX_ROUNDS=
 if [ -e "$CAP" ]; then
   MAX_ROUNDS=$(tr -d '[:space:]' < "$CAP") && [[ $MAX_ROUNDS =~ ^[1-9][0-9]*$ ]] || die "$CAP must hold a whole number of rounds; set it with review-cap.sh $UNIT <rounds>"
@@ -1320,7 +1311,7 @@ issue_setup() {
 if [ "$KIND" = issue ]; then issue_setup; else issue_gate "$WT"; fi
 [ "$KIND" = adversarial ] || [ "$KIND" = issue ] || [ -n "$PREV" ] || die "no earlier pass for $UNIT: a narrowed pass reviews the changes since the last one, and the closing pass closes the review the first one opened. Start with: builder-codex-pass.sh $UNIT $N adversarial"
 # Issue 366 (O4): no pass of any kind launches, and nothing is committed, while the latest pass on record holds a P0 or
-# P1 two passes past the cap and the owner has not answered its decision in main's ledger. Each stop has its own id,
+# P1 at pass REVIEW_CAP + 2 or later and the owner has not answered its decision in main's ledger. Each stop has its own id,
 # so an answer to one does not cover the next. A ledger that cannot be read refuses: no answer is never read as one.
 # The answer is the row of that id, or the row the printed route leaves: orca-wait.sh records ask-main.sh's question
 # as <unit>-msg_<id> with its subject, "<stop id>: ...", first, and answer-worker.sh answers that row.
@@ -1329,50 +1320,11 @@ GATE_ROWS=$(awk -v n="$N" '!($1 == "@" && $3 == "cut" && $6 == n)' <<<"$PASSES")
 STOP_ID=$(review_stop_id "$GATE_ROWS")
 if [ -n "$STOP_ID" ]; then
   LEDGER=$(COMMANDECK_MAIN=$MAIN_OF_WT bash "$HERE/decision.sh" list 2>&1) \
-    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 two passes past the cap (decision $STOP_ID), and the owner's decisions ledger cannot be read ($(tail -n 1 <<<"$LEDGER")), so no answer to it can be found. No commit was made"
+    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 at pass $((REVIEW_CAP + 2)) or later (decision $STOP_ID), and the owner's decisions ledger cannot be read ($(tail -n 1 <<<"$LEDGER")), so no answer to it can be found. No commit was made"
   jq -e --arg id "$STOP_ID" --arg s "$UNIT asks" \
     'any(.[]; .answeredAt != null and (.id == $id or (.source == $s and (.question | startswith($id + ":")))))' <<<"$LEDGER" >/dev/null \
-    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 two passes past the cap; decision $STOP_ID waits for the owner's answer, and no pass runs until that row is ANSWERED. Send main one question if you have not: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". No commit was made"
+    || die "REVIEW STOP: the latest pass of $UNIT holds a P0 or P1 at pass $((REVIEW_CAP + 2)) or later; decision $STOP_ID waits for the owner's answer, and no pass runs until that row is ANSWERED. Send main one question if you have not: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". No commit was made"
 fi
-# Issue 377: past the cap with no P0 or P1 open, nothing is left for a pass to review. cap_gate_reason <rows> <plan-only
-# 0|1> prints `code` when the latest round is a closing pass that is a cap stop by the pass's own rule (NO-GO, no P0 or
-# P1, a finding the cap merges), `plan` when the change to review is plan-only, and nothing otherwise: below the cap, a
-# P0 or P1 still open (a round with a reviewer missing, or a design-only one, holds the round before it, as
-# review_stop_id's walk does), or a latest round that is a closing GO (commits after it still get their narrowed pass).
-# A row is `@ tid kind reviewer of round began end ... said`; the lines after it are that round's findings. A `cut` row
-# (a launch with no answer) holds its round only while no reviewer of it has answered: a round run again is judged by
-# its rerun's rows, in either order, as review_stop_id reads it.
-cap_gate_reason() {
-  awk -v cap="$REVIEW_CAP" -v blk="$BLK" -v planonly="$2" '
-    function note(r) { if (!(r in seen)) { seen[r] = 1; n++ } if ($8 > end[r]) end[r] = $8 }
-    $1 == "@" && $3 == "cut" { cur = $6; note(cur); cut[cur] = 1; next }
-    $1 == "@" { cur = $6; note(cur); real[cur] = 1; kind[cur] = $3; if ($11 == "none") mute[cur] = 1; if ($11 != "GO") nogo[cur] = 1
-      if (!((cur, $4) in got)) { got[cur, $4] = 1; cnt[cur]++ } want[cur] = $5; next }
-    cur == "" { next }
-    /(^|[^A-Za-z0-9])P[01]([^0-9]|$)/ { hold[cur] = 1 }
-    match($0, /^[[:space:]]*(- )?\[P[0-9]\]/) { d = substr($0, RSTART + RLENGTH - 2, 1) + 0; if (d >= 2 && d <= blk) cap_find[cur] = 1 }
-    END {
-      if (n < cap) exit
-      for (r in seen) if (l == "" || end[r] > end[l]) l = r
-      if (kind[l] == "final" && !nogo[l] && !mute[l]) exit
-      for (r = l; r != ""; r = p) {
-        walked[r] = 1
-        if (hold[r] || (cut[r] && !real[r]) || mute[r] || cnt[r] < want[r]) exit
-        if (kind[r] != "design") break
-        p = ""
-        for (q in seen) if (!(q in walked) && end[q] <= end[r] && (p == "" || end[q] > end[p])) p = q
-      }
-      if (kind[l] == "final" && nogo[l] && cap_find[l]) print "code"; else if (planonly == 1) print "plan"
-    }' <<<"$1"
-}
-CHANGED=$(git -C "$WT" status --porcelain --untracked-files=all | sed -E 's/^.{3}//; s/.* -> //') || die "could not list the uncommitted changes in $WT"
-PLANONLY=0
-{ [ -z "$CHANGED" ] || grep -qvE '^"?\.claude/(plans|briefs|metrics)/' <<<"$CHANGED"; } || PLANONLY=1
-CAP_WHY=$(cap_gate_reason "$GATE_ROWS" "$PLANONLY")
-case $CAP_WHY in
-  code) refuse "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the latest pass was a closing pass that ended NO-GO with only a finding the cap merges, so the review loop has stopped. File the open findings and run merge-unit-local.sh $UNIT --filed '<class>=#<n>'. No pass starts, nothing was committed" ;;
-  plan) refuse "this would be pass $(passes_on_record "$GATE_ROWS" "$N"), past the cap of $REVIEW_CAP, and no P0 or P1 is open: the change to review is plan-only, so there is no code for a pass to read. The merge takes only a closing pass on the tip: write the code, then run builder-codex-pass.sh $UNIT $N final. No pass starts, nothing was committed" ;;
-esac
 # Main adds scope in a fix round by changing the brief or its rulings. A narrowed
 # pass would read only the fix and leave the new part unread until the closing
 # pass, so the first pass after such a change reads the whole branch as a closing
@@ -1400,10 +1352,10 @@ if [ "$KIND" = review ]; then
     KIND=final; echo "final in place of review: $WHY; this is the closing pass, its GO merges and no separate final follows"
   fi
 fi
-# Issue 366: from the cap only a closing pass can end the loop, so a narrowed pass runs as one.
+# Issue 366: from the Closing pass from setting every pass is a closing pass, so a narrowed pass runs as one.
 COUNT=$(passes_on_record "$PASSES" "$N")
 if [ "$KIND" = review ] && [ "$COUNT" -ge "$REVIEW_CAP" ]; then
-  KIND=final; echo "final in place of review: this is pass $COUNT on record, at or past the cap of $REVIEW_CAP, where only the closing pass ends the loop"
+  KIND=final; echo "final in place of review: this is pass $COUNT on record, pass $REVIEW_CAP or later, where every pass is a closing pass"
 fi
 # Issue 362 (host issue 3168): a fix that mends the named site while the same pattern sits at other call sites costs a
 # round per site. After a NO-GO the next pass needs the Builder's search for the pattern's other sites, in the evidence
@@ -2441,7 +2393,7 @@ echo "${OUT##*/}: $VERDICT ($KIND pass on $SHA, $NAME(s) ${TIDS[*]})"
 # stop ends the pass here: no NARROWED or DESIGN GO line, no class searches, no fix hand-off.
 STOP_ID=$(review_stop_id "$PASSES"$'\n'"$THIS")
 if [ -n "$STOP_ID" ]; then
-  echo "REVIEW STOP: ${OUT##*/} holds a P0 or P1 two passes past the cap (pass $COUNT on record); decision $STOP_ID. Write no fix and run no pass: send main one question, which waits for its answer: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". The next pass launches only once the owner has answered $STOP_ID."
+  echo "REVIEW STOP: ${OUT##*/} holds a P0 or P1 at pass $((REVIEW_CAP + 2)) or later (pass $COUNT on record); decision $STOP_ID. Write no fix and run no pass: send main one question, which waits for its answer: bash $HERE/ask-main.sh \"$STOP_ID: <the finding's class>\" \"<the redesign you propose>\". The next pass launches only once the owner has answered $STOP_ID."
   exit 0
 fi
 FILE_THEN_MERGE="Print your DONE line and run no fix round: main files one issue per open finding class (builder-codex-pass.sh --verify $WT $UNIT HEAD lists them), then merges: merge-unit-local.sh $UNIT --filed '<class>=#<n>' ..."
@@ -2450,10 +2402,6 @@ if [ "$KIND" = final ] && [ -z "$DESIGN" ] && [ -z "$SUITE_RED" ]; then
   NOW_FOUND=$(grep -v '^@ ' <<<"$THIS")
   if [ "$VERDICT" = "VERDICT: GO" ] && [ -n "$(CLEARED=$(builder_fixed "$WT" HEAD) open_findings "$NOW_FOUND" "$PASSES")" ]; then
     echo "STOP (threshold): ${OUT##*/} names no $BLOCK_LEVELS, so the review loop ends with only $BELOW findings open. $FILE_THEN_MERGE"
-    exit 0
-  elif [ "$VERDICT" = "VERDICT: NO-GO" ] && [ "$COUNT" -ge "$REVIEW_CAP" ] && [ "$(p01_count <<<"$NOW_FOUND")" = 0 ] \
-    && [ "$(cappable_count <<<"$NOW_FOUND")" -gt 0 ]; then
-    echo "STOP (cap): ${OUT##*/} is pass $COUNT on record, at or past the cap of $REVIEW_CAP, and names an open $CAP_LEVELS but no P0 or P1, so the review loop ends with its findings open. $FILE_THEN_MERGE"
     exit 0
   fi
 fi

@@ -269,14 +269,14 @@ Ask them in this order, up to four questions per call.
     All sends nothing; the other chosen ones are sent as `--addons <a>,<b>`, None as `--addons none`.
     Setup runs them for this main checkout and reports each as installed or failed, with the command.
 13. The review workflow. Asked when the owner chose the Review workflow group in step 6. The recommended set answers the
-    first four questions already (`--recommended`: P2 and above hold a merge, a pass cap of 5, a fresh closing reviewer, a
+    first four questions already (`--recommended`: P2 and above hold a merge, a closing pass from pass 5, a fresh closing reviewer, a
     closing pass; the small-build line and the review flags stay at their defaults). When Keep saved was chosen and
     `--questions begin` printed `review workflow: not answered`, ask the first three questions even so.
     One call, then the rest:
     Ask "Blocking severity": P2 and above (recommended) | P1 and above | P3 and above
     - The lowest severity of finding that holds a merge. `--block-at P2`, `P1` or `P3`
-    Ask "Review pass cap": 5 (recommended) | 3 | 8
-    - From this many passes, a closing NO-GO with no P0 or P1 ends the loop with its findings open. `--pass-cap <n>`
+    Ask "Closing pass from": 5 (recommended) | 3 | 8
+    - From this many passes every pass is a closing pass; a P0 or P1 still open two passes later stops for the owner. `--pass-cap <n>`
     Ask "Fresh closing reviewer": Yes (recommended) | No
     - Yes: the closing pass reads the whole branch handed no earlier finding. `--fresh-closing yes`; No: `--fresh-closing no`
     Ask "Closing pass": Runs (recommended) | None

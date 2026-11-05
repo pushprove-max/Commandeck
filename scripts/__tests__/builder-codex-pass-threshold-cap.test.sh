@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Issue 366, the review threshold. A closing pass that names no open P0, P1 or P2 ends the loop: a P3 never holds it.
-# From the fifth pass on record a closing NO-GO with no P0 or P1 ends it too (the cap). A P0 or P1 is never capped, and
-# one still open two passes past the cap stops the unit for one question to main. The closing reviewer is handed no
+# From the fifth pass on record every pass is a closing pass, and passes run until clean: a NO-GO never merges. A P0 or
+# P1 still open two passes later stops the unit for one question to main. The closing reviewer is handed no
 # earlier finding. What is still open at a stop is filed, one issue per class, before the merge takes it.
 # The count is the passes on the reviewer's record, never the round number. Each unit below is a worktree of its own,
 # so each count starts at its own first pass (three reviewers: this fixture has no launcher's brief).
@@ -40,13 +40,17 @@ verify() { (cd "$REPO" && PATH=$TMP/cli:$PATH COMMANDECK_MAIN=$REPO bash "$PASS_
 prompt() { cat "$WS/$1/.claude/briefs/$1-r$2-prompt-1.md"; } # <unit> <N>: what reviewer 1 of round N was sent
 last() { tail -n 1 "$WS/$1/.claude/briefs/$1-r$2-reports.md"; } # <unit> <N>: the round file's verdict line
 
-# 5. The cap, and file then merge (O5): pass 5 with only P2 and P3 open stops; the merge refuses until each open class
-# names an OPEN issue, one issue per class (the first file a finding cites; no-file when none).
+# 5. Passes run until clean, and file then merge (O5): pass 5 with only a P2 open is no stop, so pass 6 runs; pass 6
+# ends GO with P3s open (a threshold stop), and the merge refuses until each open class names an OPEN issue, one issue
+# per class (the first file a finding cites; no-file when none).
 mk cp; go cp
 for n in 2 3 4; do tpass cp "$n" final $'- [P2] (class: lost-reply) CP-P2 -- cp.txt:1 -- drops a reply -- cat cp.txt\nVERDICT: NO-GO' >/dev/null; done
-CAP=$'- [P2] (class: lost-reply) CAP-A -- cp.txt:1 -- drops a reply -- cat cp.txt\n- [P2] (class: lost-reply) CAP-B -- cp.txt:2 -- drops another -- cat cp.txt\n- [P3] (class: wording) CAP-C -- a nit with no place -- none\nVERDICT: NO-GO'
-check "pass 5 with an open P2 files it and merges: STOP (cap), and --verify takes the NO-GO as a cap stop with one Open finding line per finding" "0 1 0 1 3" \
-  "$(tpass cp 5 final "$CAP") $(grep -c '^STOP (cap): ' "$TMP/pout") $(verify cp) $(grep -c 'rule: cap stop$' "$TMP/vout") $(grep -c '^Open finding: ' "$TMP/vout")"
+# The bug: a closing NO-GO with only a P2 open at the fifth pass printed STOP (cap) and merged with the P2 open.
+check "P2-only pass 6 launches: pass 5's lone P2 prints no stop, --verify refuses its NO-GO, and pass 6 runs, a threshold stop with one Open finding line per finding" "0 0 2 1 0 1 0 1 3" \
+  "$(tpass cp 5 final $'- [P2] (class: lost-reply) CP-P2 -- cp.txt:1 -- drops a reply -- cat cp.txt\nVERDICT: NO-GO') $(grep -c 'STOP' "$TMP/pout") $(verify cp) \
+$(grep -c 'ended NO-GO: a P0, P1 or P2 holds the merge (pass 5 on record): passes run until clean' "$TMP/verr") \
+$(tpass cp 6 final $'- [P3] (class: lost-reply) CAP-A -- cp.txt:1 -- drops a reply -- cat cp.txt\n- [P3] (class: lost-reply) CAP-B -- cp.txt:2 -- drops another -- cat cp.txt\n- [P3] (class: wording) CAP-C -- a nit with no place -- none\nVERDICT: GO') \
+$(grep -c '^STOP (threshold): ' "$TMP/pout") $(verify cp) $(grep -c 'rule: threshold stop$' "$TMP/vout") $(grep -c '^Open finding: ' "$TMP/vout")"
 check "two findings of one class file one issue: the open classes are cp.txt and no-file" "cp.txt no-file" \
   "$(sed -n 's/^Open finding: \([^ ]*\) .*/\1/p' "$TMP/vout" | awk '!s[$0]++' | paste -sd' ' -)"
 H0=$(git -C "$REPO" rev-parse HEAD)
@@ -86,14 +90,9 @@ check "with the default, a GO beside a P2 stays NO-GO and the prompt is the one 
   "$(tpass bk2 2 final "$BK1") $(last bk2 2 | grep -cx 'VERDICT: NO-GO') \
 $(prompt bk2 2 | grep -c 'VERDICT: GO when you list no P0, P1 or P2 finding (P3 findings and known gaps alone are GO)')"
 
-# 10. Issue 373: the cap is the owner's number (reviewPassCap), and the fresh closing reviewer is the owner's choice.
-# A cap of 3 stops the third pass on record, where the default 5 lets it run on.
-mk pc; go pc
+# 10. Issue 373: the closing pass from setting is the owner's number (reviewPassCap), and the fresh closing reviewer is
+# the owner's choice.
 PC=$'- [P2] (class: lost-reply) PC-P2 -- pc.txt:1 -- drops a reply -- cat pc.txt\nVERDICT: NO-GO'
-tpass pc 2 final "$PC" >/dev/null
-check "a cap of 3 makes the third pass on record a cap stop, and --verify takes it as one" "0 1 0 1" \
-  "$(loop '{"passCap":"3"}' tpass pc 3 final "$PC") $(grep -c '^STOP (cap): .*at or past the cap of 3, and names an open P2' "$TMP/pout") \
-$(loop '{"passCap":"3"}' verify pc) $(grep -c 'rule: cap stop$' "$TMP/vout")"
 mk pd; go pd
 tpass pd 2 final "$PC" >/dev/null
 check "and the default cap of 5 lets the same third pass run on: no stop, and --verify refuses a P2 below the cap" "0 0 2" \

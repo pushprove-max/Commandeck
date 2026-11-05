@@ -42,8 +42,8 @@ check "a refused ledger writer prints its line, and the merge of v still ends 0"
 rmdir "$UL"; mv "$TMP/ul.kept" "$UL"
 check "a Builder's ledger row sums the tokens of every session its record names" "300:20" \
   "$(jq -r 'select(.unit == "v" and .role == "builder") | "\(.tokens.input):\(.tokens.output)"' "$REPO/.claude/metrics/seat-events.jsonl" 2>/dev/null)"
-# Below the review cap (each of these is pass 2 on record), a closing NO-GO of any severity never merges with its
-# findings open (issue 366: only the cap stop merges a NO-GO, and never one with a P0 or P1).
+# Each of these is pass 2 on record: a closing NO-GO of any severity never merges with its findings open (issue 366: a
+# NO-GO never merges, at any pass count).
 H0=$(git -C "$REPO" rev-parse HEAD)
 mk t; go t; STUB_REPLY=$'- [P2] (class: probe) A small thing -- t.txt:1 -- say it plainly -- cat t.txt\nVERDICT: NO-GO' pass t 2 final
 check "a closing NO-GO with P2s only does not merge, and main is unchanged" "1 1 0 $H0" \

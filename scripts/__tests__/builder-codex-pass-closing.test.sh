@@ -11,9 +11,9 @@ set -uo pipefail
 printf 'echo built\n' > "$W/a.sh"
 pass 1 adversarial
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 20 >/dev/null)
-# Issue 366: the review cap counts the passes on record, so 25 passes in one worktree would reach the cap stop and the
-# REVIEW STOP. These cases test one pass's gate each: before each pass, every reviewer session but the first pass's and
-# the last pass's is aged out of the 14-day window, so each pass is at most the third on record, below the cap.
+# Issue 366: the Closing pass from setting counts the passes on record, so 25 passes in one worktree would reach it and
+# the REVIEW STOP. These cases test one pass's gate each: before each pass, every reviewer session but the first pass's
+# and the last pass's is aged out of the 14-day window, so each pass is at most the third on record, below the setting.
 eval "one_$(declare -f pass)"
 pass() { find "$CODEX_HOME/sessions" -name 'rollout-*.jsonl' ! -name '*-thr-1-*' ! -name "*-thr-$(($1 - 1))-*" -exec touch -t 200001010000 {} +; one_pass "$@"; }
 

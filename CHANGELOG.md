@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.72.0 -- 2026-11-04
+
+### Scripts
+
+- The review loop no longer stops at a pass cap. A closing NO-GO never merges, at any pass count: a fix round runs and the next pass launches. Only a closing GO, or a GO with P3 findings left open, ends the loop.
+- `STOP (cap)` is gone, and so is the refusal of a pass after it. main-watch no longer posts a cap stop note.
+- REVIEW STOP now says "at pass 7 or later" (two passes after the setting below). main-watch's REVIEW STOP note names no pass number.
+- The `reviewPassCap` setting keeps its key and saved values and is now titled "Closing pass from": from this many passes every pass is a closing pass, and a P0 or P1 still open two passes later stops for the owner.
+
+### Templates
+
+- The Builder brief, main's rulings and the global rules say passes run until clean, with two stop lines: `STOP (threshold)` and `REVIEW STOP`.
+- Main's card no longer asks for one status line per turn, may report how often main restarts, announces a worker once at dispatch, and uses `rg` for symbols. serena is for Builder seats only.
+- The global rules: no old-data support by default (ask the owner only when a live old record is known to exist, with the count); tag only a claim you did not verify; the alternatives rule no longer names a new file.
+- Setup's rule merge carries a kept wording of each reworded rule forward.
+
+### Hooks
+
+- The relay's saved state prints its newest handoff section first. A state over 5000 bytes prints one warning line to trim it. An empty state prints nothing.
+
+### Config
+
+- Setup's Recommended set and Auto Setup now run later fix rounds at medium effort, not high.
+
 ## 0.71.0 -- 2026-11-04
 
 ### Scripts

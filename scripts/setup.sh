@@ -155,7 +155,7 @@ INT='^[1-9][0-9]*$' NUM='^[0-9]+([.][0-9]+)?$' OFFNUM='^(off|[0-9]+([.][0-9]+)?)
 # given <key> <true|false> -- this run's answer to a /config boolean: it replaces /config's value (il_plugin_options'
 # third argument), as an --option answer does, so an earlier saved `false` cannot beat a later On (issue 374).
 given() { GIVEN=$(jq -c --arg k "$1" --argjson v "$2" '.[$k] = $v' <<<"$GIVEN"); }
-# rw_unanswered -- succeeds when the review workflow (blocking severity, pass cap, fresh closing reviewer) has no answer
+# rw_unanswered -- succeeds when the review workflow (blocking severity, closing pass from, fresh closing reviewer) has no answer
 # yet: none in the project's review loop, and none of its three keys in /config (this run's answers counted).
 rw_unanswered() {
   [ "$(jq -r '[.blockAt, .passCap, .freshClosing] | map(select(. != null)) | length' <<<"$RL")" = 0 ] || return 1
@@ -304,7 +304,7 @@ if [ "$QUESTIONS" = begin ]; then
   # The recommended profile, with every value each key takes: the skill shows these, never its own text.
   while IFS=$'\t' read -r k v; do echo "  recommended $k: $v (takes: $(rec_takes "$k"))"; done \
     < <(jq -r '.options | to_entries[] | [.key, (.value | tostring)] | @tsv' "$REC_FILE")
-  ! rw_unanswered || echo "  review workflow: not answered (blocking severity, pass cap, fresh closing reviewer): ask them, even on Keep saved"
+  ! rw_unanswered || echo "  review workflow: not answered (blocking severity, closing pass from, fresh closing reviewer): ask them, even on Keep saved"
   date +%s > "$ASKING"
   echo "setup: questions show without their extra safety option until setup ends (or: setup.sh --questions end)"
   exit 0
@@ -378,7 +378,7 @@ while [ $# -gt 0 ]; do
     --plan|--install-missing) shift ;;
     --worker-skills-off|--worker-plugins-off|--keep-word) CUTS=$(il_cuts "$CUTS" "$1" "$2") || exit 1; shift 2 ;;
     # The review loop (reviewLoop): each left out keeps the saved answer, and '' takes today's default back.
-    # The review workflow (issue 373): the lowest severity that holds a merge, the pass cap, and a fresh closing reviewer.
+    # The review workflow (issue 373): the lowest severity that holds a merge, the closing pass from, and a fresh closing reviewer.
     # '' takes the default back, in the project's file and in /config alike.
     --block-at) rl blockAt "$2" '^P[123]$' "$1" "P1, P2 or P3"; given reviewBlockSeverity "\"${2:-P2}\""; shift 2 ;;
     --pass-cap) rl passCap "$2" "$INT" "$1" "a whole number of passes, 1 or more"; given reviewPassCap "${2:-5}"; shift 2 ;;

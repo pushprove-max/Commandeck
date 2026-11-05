@@ -345,7 +345,7 @@ SMALL=$(pp_review_loop smallBuild 200 '^(off|[1-9][0-9]*)$') && PASSCAP=$(pp_rev
   && BLOCKAT=$(pp_review_loop blockAt P2 '^P[123]$') && FRESHC=$(pp_review_loop freshClosing yes '^(yes|no)$') \
   && CLOSING=$(pp_review_loop closingPass yes '^(yes|no)$') || exit 2
 LOOP=
-[ "$PASSCAP" = 5 ] || LOOP+="This project's review pass cap is $PASSCAP: from the ${PASSCAP}th pass on the reviewer's record, only the closing pass ends the loop, and a closing NO-GO with no P0 or P1 merges with its findings open."$'\n'
+[ "$PASSCAP" = 5 ] || LOOP+="This project's closing pass from is $PASSCAP: from the ${PASSCAP}th pass on the reviewer's record every pass is a closing pass, and a P0 or P1 still open two passes later stops for the owner."$'\n'
 [ "$BLOCKAT" = P2 ] || LOOP+="This project's blocking severity is $BLOCKAT: a finding at $BLOCKAT or above holds the merge, a lower one never does."$'\n'
 [ "$FRESHC" = yes ] || LOOP+="This project's closing pass is handed the review history like any pass."$'\n'
 [ "$CLOSING" != no ] || LOOP+="This project runs no closing pass: skip step 3. The narrowed pass that ends \`VERDICT: GO\` is the one the merge takes, once narrowed passes have read every commit after the first pass; change nothing after it."$'\n'

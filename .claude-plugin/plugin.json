@@ -1,6 +1,6 @@
 {
   "name": "commandeck",
-  "version": "0.71.0",
+  "version": "0.72.0",
   "description": "An orchestrated build workflow for Claude Code on Orca: one orchestrator session, one Builder per batch in its own worktree, review passes until GO, and a local squash merge.",
   "author": { "name": "Max Goldfarb" },
   "homepage": "https://github.com/pushprove-max/Commandeck",
@@ -188,8 +188,8 @@
     },
     "reviewPassCap": {
       "type": "number",
-      "title": "Review pass cap",
-      "description": "From this many passes on the reviewer's record, a closing NO-GO that names no P0 or P1 ends the review loop with its findings open, and one still held two passes past it stops the build for the owner.",
+      "title": "Closing pass from",
+      "description": "From this many passes every pass is a closing pass; a P0 or P1 still open two passes later stops for the owner.",
       "min": 1,
       "default": 5
     },

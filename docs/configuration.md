@@ -98,12 +98,13 @@ seat's band and status line within 5 seconds.
 
 Review-loop keys are `blockAt`, `passCap`, `freshClosing`, `closingPass`, `smallBuild`, `newTestCap`, `maxReviewMinutes`,
 `maxTestPercent` and `maxUsd`. Setup saves tuned numeric answers as strings.
-Defaults are P2 as the lowest severity that holds a merge, a pass cap of 5, a
+Defaults are P2 as the lowest severity that holds a merge, a closing pass from pass 5, a
 fresh closing reviewer, a closing pass, one reviewer below 200 changed lines,
 a new-test cap of 40 (a pass refuses a change that adds more new tests, and
 names the count; `off` or `setup.sh --new-test-cap <n>|off`), and report flags at 30 review minutes, a third of the clock on tests/idle
 with over 10 minutes, and 30 US dollars. Those report flags do not block a merge.
-From the pass cap on the record, `review` runs as the closing pass
+From that pass on the record (`passCap`), `review` runs as the closing pass, and a P0 or P1
+still open two passes later stops for the owner; passes run until clean
 ([Review passes](review-loop.md)). `maxRounds` is no longer read.
 The per-issue review workflow reads one more limit, `review-limits.perIssueRegular` in
 `config/routing.json`: the regular reviews of one issue in a row with no GO before main is

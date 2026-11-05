@@ -12,7 +12,7 @@ id must be logged and listed in this file, or the next pass refuses it. A review
 main rules out goes under "Cleared findings" as its own first two parts,
 "<title> -- <file>:<line>": the next reviewer is handed it as a limit, not to
 list again. Clearing never merges a NO-GO: the merge still needs a closing
-pass that ends GO, or a cap stop. An edit to an existing test file is approved
+pass that ends GO. An edit to an existing test file is approved
 by one line per test in this file, `Test edit: <path> test:<label> ruling:<id>` (write it with `decision.sh test-edit <unit> <path> <label> <ruling id>`), with a logged id
 (`(file)` as the label for a data file's line; any other code line needs `Test edit: <path> line:<exact old text> ruling:<id>`, one per line; a path-only line approves nothing);
 the pass and the merge refuse the edit without it and print the lines to add, and the Builder runs

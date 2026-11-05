@@ -16,7 +16,7 @@ pass 1 adversarial
 printf 'handle=term_frs\ntask=task_frs\nunit=%s\nrole=builder\nsession=old-sid\n' "$U" > "$SC/seat-$U-builder.txt"
 mkdir -p "$PROJ"; echo "$B/$U-fix-r7.md" > "$PROJ/old-sid.jsonl"; touch -t 209901010000 "$PROJ/old-sid.jsonl"
 (cd "$REPO" && bash "$REAL/scripts/review-cap.sh" "$U" 40 >/dev/null)
-# P1s: a P1 is never capped (issue 366), so the loop runs past the fifth pass on record with a hand-off each NO-GO.
+# P1s: a NO-GO never merges (issue 366), so the loop runs past the fifth pass on record with a hand-off each NO-GO.
 CLS=$'- [P1] (class: lost-reply) CLASS-PROBE -- a.sh:1 -- it drops a reply -- bash a.sh\nVERDICT: NO-GO'
 printf 'echo two\n' > "$W/a.sh"; fpass "$W" 2 review "$CLS" >/dev/null
 check "the first NO-GO of a class asks for no class fix" 0 "$(hand 2 | grep -c 'The same class again')"

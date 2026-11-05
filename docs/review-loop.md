@@ -124,7 +124,8 @@ A P0, P1 or P2 holds the loop (the blocking severity, P2 by default; set
 finding does; the setting is part of every prompt, so change it between builds, not during one): the Builder fixes it and the next `review`
 runs as the closing pass. The pass count is the passes on record for the
 build, not the number the Builder gives a pass. From the fifth pass on record
-(the cap, `reviewPassCap`), `review` runs as the closing pass. The closing pass is handed the
+(Closing pass from, `reviewPassCap`), `review` runs as the closing pass. Passes run until clean:
+a NO-GO never merges, at any pass count. The closing pass is handed the
 plan's decisions and accepted failure modes, but no earlier finding (turn
 `freshClosingReviewer` off and it is handed the review history like any pass). A fresh
 closing pass reviews a detached copy of the pass commit with the unit's round reports,
@@ -133,20 +134,13 @@ stops at the first of these:
 
 - A closing pass ends GO. Each P3 still open, its own or an earlier GO
   round's, is printed as an `Open finding` line (threshold stop).
-- A closing pass at or past the cap ends NO-GO naming an open P2 and no P0
-  or P1. Its P2 and P3 findings are printed as `Open finding` lines (cap
-  stop). A NO-GO that names no P2 is no cap stop. After a cap stop no later
-  pass launches, and past the cap none launches on a change that is only the
-  plan, brief or metrics folders, while no P0 or P1 is open: the launch is
-  refused before it commits anything. That refusal says what the merge gate
-  says: the merge takes only a closing pass on the tip, so write the code,
-  then run one `final` pass.
 - A pass refuses a stated limit added to the brief's `## Stated limits`, or
   to the plan's `Stated limits` or `Accepted failure modes`, after the plan
   judge's GO, unless the line ends with `ruling:<id>`: a logged, standing
   ruling id that main's rulings for the unit also carry. Lines already there
   and removed lines pass.
-- A P0 or P1 is still open two passes past the cap. The pass prints
+- A P0 or P1 is still open two passes after Closing pass from (pass 7 by
+  default). The pass prints
   `REVIEW STOP` with a decision id, no fix round runs, and the next launch
   refuses until the owner answers that decision: the question the pass
   prints opens with the decision id, and its answered ledger row releases

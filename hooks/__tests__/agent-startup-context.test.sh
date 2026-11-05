@@ -116,8 +116,11 @@ check "main never merges a NO-GO build: it gets a fix round" "1 0" \
 # Issue 237: main offered merges the merge's own gate then refused. Issues 254 and 306 (R11): main-watch runs that gate
 # on every DONE and merges what passes, so main offers a merge only for a unit it held or refused.
 check "main offers a merge only for a unit the gate held or refused" 1 "$(grep -c 'offer a merge only for one it held or refused' "$T/ctx")"
-# Issue 235: long end-of-turn reports cost the owner a read every turn.
-check "main ends each turn with one status line" 1 "$(grep -c 'End each turn with one status line' "$T/ctx")"
+# The owner removed the one-status-line rule and asked that a worker be announced once, at dispatch: the injected card
+# carries no status-line rule, and main's Details (read on demand) announce a worker once, not every time.
+check "announce worker once, no status-line rule" "0 1 0" \
+  "$(grep -c 'End each turn with one status line' "$T/ctx") $(grep -c 'Announce a worker once, at dispatch' "$REAL/templates/main-session.md") \
+$(grep -c 'Announce every worker' "$REAL/templates/main-session.md")"
 # Issue 230: main met the same guards turn after turn; its rules open with what to do instead, each with its command.
 check "main's rules open with the do-not list, seven lines, each with a command" "1 7" \
   "$(grep -c 'Do not -> instead' "$T/ctx") $(awk '/Do not -> instead/ {p = 1; next} p && /^  - .* -> .*`/ {n++} p && !/^  - / {exit} END {print n + 0}' "$T/ctx")"
@@ -257,6 +260,32 @@ check "under CLAUDE_CONFIG_DIR the index in that profile's projects folder is th
 
 # Issue 461: no watcher reported a unit idling after its closing GO; the relay is told to run one.
 check "the relay is told to run the idle-unit watcher (issue 461)" 1 "$(grep -c 'scripts/cos-watch-units.sh' <<<"$REL")"
+
+# The relay's saved state rides its startup context, cut at 5000 bytes. The bugs: a relay reading stale sections before
+# its newest handoff (or losing that handoff past the cut), an oversized state nobody is told to trim, and an empty
+# file printing an empty banner.
+STATEF=$(cd "$T/wt/Chief-of-Staff" && env -u CLAUDE_PROJECT_DIR -u COMMANDECK_MAIN -u COMMANDECK_SCRATCH -u COMMANDECK_BUILDER \
+  bash -c '. "$0/hooks/lib/project.sh" && pp_cos_key && printf %s "$COS_KEY.md"' "$REAL")
+mkdir -p "${STATEF%/*}"
+state() { printf '%s\n' "$@" > "$STATEF"; } # <line>...: the relay's saved state, one line per argument
+fill() { printf "%0${1}d" 0; }              # <n>: one line of n filler characters
+# relay_state: the state block of the relay's context, the fixture's own lines only, joined by |
+relay_state() { ctx "$T/wt/Chief-of-Staff" | awk '/\(your saved state; keep it current\)$/ { on = 1; next } on' \
+  | grep -E '^## |^STATE-|^# WARNING|^\[cut to fit' | sed 's/^# WARNING.*/# WARNING/' | paste -sd'|' -; }
+state STATE-head '## Decided today' STATE-dec "$(fill 6000)" '## Handoff 11-03 (newest)' STATE-new
+check "newest handoff first, one over-cap warning: it prints before the cut, and one warning follows the banner" \
+  "# WARNING|## Handoff 11-03 (newest)|STATE-new|STATE-head|## Decided today|STATE-dec|[cut to fit 5000 bytes; Read the rest from $STATEF] 1" \
+  "$(relay_state) $(ctx "$T/wt/Chief-of-Staff" | awk '/\(your saved state; keep it current\)$/ { getline; print; exit }' \
+  | grep -cxF "# WARNING: $STATEF is $(wc -c < "$STATEF" | tr -d ' ') bytes, over its 5000-byte cap: trim it.")"
+state '## Handoff 11-02' STATE-old '## Handoff 11-03' STATE-new
+check "last handoff first when none newest" "## Handoff 11-03|STATE-new|## Handoff 11-02|STATE-old" "$(relay_state)"
+state STATE-head '## Decided today' STATE-dec
+check "no handoff starts at header: the file prints in its own order" "STATE-head|## Decided today|STATE-dec" "$(relay_state)"
+state STATE-head "$(fill 4977)" STATE-tail
+check "state at 5000 bytes no warning: printed whole, no cut line" "5000 STATE-head|STATE-tail" "$(wc -c < "$STATEF" | tr -d ' ') $(relay_state)"
+: > "$STATEF"
+check "empty state no banner: the hook prints no state banner and exits 0" "0 0" \
+  "$(ctx "$T/wt/Chief-of-Staff" | grep -c 'your saved state') $(ctx "$T/wt/Chief-of-Staff" >/dev/null; echo $?)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

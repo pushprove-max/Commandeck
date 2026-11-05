@@ -960,9 +960,9 @@ delivered() {
 }
 
 # stop_next <worktree> <unit> <round> -- sets SN_TEXT for the newest round when the merge's own check (builder-codex-pass.sh
-# --verify) says the review loop stopped, and leaves it empty otherwise (#380). Two stops: a REVIEW STOP (a P0 or P1 two
-# passes past the cap) waits for the owner's answer and runs no fix round; a cap stop (rule `cap stop`) is filed one issue
-# per class, then merged by hand. Neither is a fix round. One --verify call; the stamp guard runs the arm once per round.
+# --verify) says the review loop stopped, and leaves it empty otherwise (#380). The one stop: a REVIEW STOP (a P0 or P1
+# still open two passes after the Closing pass from setting) waits for the owner's answer and runs no fix round. This
+# script reads no passCap, so its note names no pass number. One --verify call; the stamp guard runs the arm once per round.
 # Fails (1) when the check gave no answer: it timed out, or its output does not name <unit>-r<round>-reports.md in one of
 # the four forms --verify ends in (a proof, a REVIEW STOP, ended NO-GO, a design-only pass). The caller must not stamp a
 # next step from that; the next tick asks again, as builder_ready does after a timeout.
@@ -973,11 +973,7 @@ stop_next() {
   [ "$rc" != 124 ] || return 1
   grep -qF -- "$2-r$3-reports.md" <<<"$proof" && grep -qE 'Builder proof:|REVIEW STOP:|ended NO-GO|is a design-only pass' <<<"$proof" || return 1
   id=$(sed -n 's/.*REVIEW STOP:.*decision \(review-stop-[A-Za-z0-9._-]*\);.*/\1/p' <<<"$proof" | head -n 1)
-  if [ -n "$id" ]; then
-    SN_TEXT="REVIEW STOP, decision $id: a P0 or P1 is open two passes past the cap. The Builder waits for the owner's answer; no fix round runs and no later pass launches until that row is ANSWERED"
-  elif grep -q '; rule: cap stop$' <<<"$proof"; then
-    SN_TEXT="cap stop: file one issue per Open finding class, then hand merge: $HERE/merge-unit-local.sh $2 --filed '<class>=#<n>' ... (builder-codex-pass.sh --verify lists the Open finding lines)"
-  fi
+  [ -z "$id" ] || SN_TEXT="REVIEW STOP, decision $id: a P0 or P1 is still open two passes after the Closing pass from setting (reviewPassCap). The Builder waits for the owner's answer; no fix round runs and no later pass launches until that row is ANSWERED"
 }
 
 # report_wake <worktree> <unit> -- every finished round file gets one stamp, due-<key>: unit, round, subject, body.

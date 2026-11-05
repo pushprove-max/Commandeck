@@ -72,7 +72,7 @@ check "the closing pass has no earlier-passes block, so no keep-the-class line" 
 mkdir -p "$W/hooks/__tests__"; printf 'exit 0\n' > "$W/hooks/bash-guardrails.sh"; echo f > "$W/x/__tests__/fixture.txt"
 printf '#!/usr/bin/env bash\n# BASH_GUARDRAILS_TEST_CASE=<label part> runs one case.\n' > "$W/hooks/__tests__/bash-guardrails.test.sh"
 # r4: a finding's place is the first one on its line, not a place its text quotes; a numbered finding is one too.
-# Pass 21 is the fifth on record (the cap): a P1 is never capped, so the NO-GO still hands over (issue 366).
+# Pass 21 is the fifth on record (the Closing pass from setting): a NO-GO never merges, so it still hands over (issue 366).
 P2B=$'- [P1] (class: other-class) GUARD-PROBE -- hooks/bash-guardrails.sh:1 -- it lets one through, as `x -- q.sh:9 -- y` -- bash x\n2. [P2] (class: other-class) BARE-PROBE -- a.sh:1 -- no test -- bash a.sh\nVERDICT: NO-GO'
 check "a NO-GO of two other classes runs" 0 "$(fpass "$W" 21 review "$P2B")"
 TPF=$(hand 21 | sed -n '/^## Tests per finding/,/^## /p')

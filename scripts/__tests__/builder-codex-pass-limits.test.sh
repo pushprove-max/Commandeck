@@ -4,7 +4,7 @@
 # one having approved it. A pass refuses an added limit unless the line carries a `ruling:<id>` that the ruling log holds as
 # a standing row and main's rulings for the unit carry. Added lines only: a line already in the baseline, or removed, passes.
 # The ids use the r-1999... shape of orca-wait.test.sh: the leak test bans r-20....
-# The fixture is the one the cap-gate test uses.
+# The fixture is the one merge-unit-local.test.sh uses.
 set -uo pipefail
 REAL=$(cd "$(dirname "$0")/../.." && pwd)
 PASS=0 FAIL=0

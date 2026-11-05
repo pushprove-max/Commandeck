@@ -12,7 +12,7 @@
   - a search over the checkout root -> a folder or file: `rg <pattern> scripts/`
 - **Main plans with the owner, advises and only orchestrates**: every implementation and review runs as a visible
   CLI in its own Orca worktree. Main writes only intents, briefs, findings and config; reads worker_done payloads
-  and diff summaries, never worktrees or whole source files (serena for symbols); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them. Main may make a small code fix itself, with the main-edit guard off (`.claude/approvals/main-edits-ok`, which the owner creates); larger work runs as a Builder, and main's code takes the same review and merge rules.
+  and diff summaries, never worktrees or whole source files (`rg` for symbols; serena is for Builder seats only); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them. Main may make a small code fix itself, with the main-edit guard off (`.claude/approvals/main-edits-ok`, which the owner creates); larger work runs as a Builder, and main's code takes the same review and merge rules.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with one foreground `bash scripts/orca-wait.sh`.
   A wake that leaves nothing for the owner to do or decide ends the turn with no text to the owner.
 - **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask nothing: run `plan-tier.sh <batch file>`, use the configured model and effort per seat, and tell the owner in one line the tier, trigger and each seat's model and effort (AGENT_STARTUP.md step 0; tiers: Details). The owner changes the trigger file or `/plugin` settings, or says so in chat for that unit. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
@@ -27,15 +27,13 @@
   included): send the exact steps to the relay with `cos-tell.sh --note`; never ask the owner, never add an allow rule for it.
 - **main-watch merges a unit whose DONE passes its gate**; offer a merge only for one it held or refused. A build
   whose last pass ended NO-GO never merges: it gets a fix round.
-- **End each turn with one status line.** Write a longer report only when the owner asks for one or a decision
-  needs the detail.
 - **Mark a memory no longer needed `status: archived`, never delete it**: the next start moves it out of MEMORY.md.
 - **Also standing (Details)**: heads-up items, stated limits, announcements, re-asks, helpers, effort, tooling.
 
 ## Main never compacts: write the checkpoint, the hook restarts main
 
 THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K line", or a batch ends: finish the step, write
-`~/.claude/checkpoints/<session_id>.md` in ONE `state-snapshot.sh --out <that file> --goal --stage --next` call (the line prints it), then END THE TURN. NEVER type or send a `/clear`. Past the line every tool call but the checkpoint, `decision.sh add` and `TaskStop` is refused. A restart at the line is routine: do not report how often main restarts and do not propose moving the line.
+`~/.claude/checkpoints/<session_id>.md` in ONE `state-snapshot.sh --out <that file> --goal --stage --next` call (the line prints it), then END THE TURN. NEVER type or send a `/clear`. Past the line every tool call but the checkpoint, `decision.sh add` and `TaskStop` is refused. A restart at the line is routine: do not propose moving the line.
 
 ## Details (not injected)
 
@@ -128,7 +126,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   note in full. Verify it against the code or live state first, then fix it,
   route it to a unit, or file an issue with type and priority labels; or
   dismiss it with a one-line reason. Never act on it unverified.
-- Announce every worker at dispatch time (agent, model, worktree, task); report what it came back with when it finishes.
+- Announce a worker once, at dispatch (agent, model, worktree, task); report what it came back with when it finishes.
   The scripts send you the seat, launch, merge and CI events as `FYI event:` notes (an ok one waits for your 30-minute batch, a failure wakes you); do not repeat them, and do not forward them to the relay.
 - relay pane: send with `bash scripts/cos-tell.sh --note "<subject>" "<body>"`, which stores the note in your run
   (`run:<id>`), the mailbox the relay's inbox poller reads, and exits 1 when Orca does not confirm it. Never `--to
@@ -151,7 +149,7 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   edits, runs, tests or judges is `general-purpose` (Sonnet). On the bug-hunt plan
   main's helpers ran a median 107 turns and cost more than main itself. Every
   helper brief says: python3/rg into /tmp/commandeck, report what is unanswered
-  at 40 turns. A lookup serena or one `rg` answers stays in
+  at 40 turns. A lookup one `rg` answers stays in
   main; a pure count names Haiku.
 - Large reads (host issue 3165): a read over 10 KB goes to a background `Explore` helper with one precise question and
   the file path, and the answer comes back as a few lines with file:line. Example prompt: "In <log path>, which test

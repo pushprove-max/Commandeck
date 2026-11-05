@@ -2,8 +2,10 @@
 
 ## Working and review
 
-- Ask before building backward compatibility, and say how many old records
-  need it. Often the count is zero and a one-time migration is cheaper.
+- No old-data support by default: write no migration, compatibility branch,
+  legacy fallback, dual read or write, or old-shape case. Ask the owner only
+  when a live old-shape row, token or record is known to exist, and give the
+  count.
 - No AI co-author trailer and no "Generated with" line in a commit message.
 - No new feature flag without the owner's OK.
 - Talk to the owner in plain English: the result first, no jargon they did
@@ -39,8 +41,7 @@
   and goes back to a fix round. A finding that needs an agent deliberately
   bypassing a guard, or an odd setup, is a one-line known gap in the evidence
   file and does not block. Done is one of the pass's stop lines: a closing
-  pass that ends GO (P3 findings alone are GO), or a closing NO-GO at or past
-  the review cap that names an open P2 and no P0 or P1. Main files each finding still open at the
+  pass that ends GO (P3 findings alone are GO); passes run until clean. Main files each finding still open at the
   merge as an issue first. A P0 or P1 is never left open at merge.
 - No redundant steps: before adding a step to the build, merge, review or push
   flow (a check, a test run, a review pass, a record, a wait, a confirmation),
@@ -64,8 +65,9 @@
   from avoiding repetition, never from looking less carefully. (The re-read is
   for a file another writer touched or one you are unsure of, never to confirm
   your own edit.)
-- Tag each claim [verified] (you ran or read it), [likely] (inferred, not run)
-  or [uncertain]; "I did not check X" is useful.
+- Tag only a claim you did not verify: [likely] (inferred, not run) or
+  [uncertain]; a claim you ran or read needs no tag. "I did not check X" is
+  useful.
 - With strict hooks on: when the owner says to work through all phases, write
   .claude/phase-queue.md first, one "- [ ]" box per item, and tick each "[x]"
   as it lands green; Stop is refused while a box is open.
@@ -163,14 +165,14 @@
 - One map per unit, explored once. Before dispatch, a map lists for every
   symbol the unit will change its inbound callers (a symbol tool's
   find-references), its sibling implementations, and the tables and routes it
-  reaches. The unit, review and design briefs point at that map, and main
+  reaches; main finds them with rg; a symbol tool is for Builder seats only. The unit, review and design briefs point at that map, and main
   updates it when a review adds a caller.
 - A script that changes many records pastes its dry-run output into the first
   review prompt and keeps its decision logic in pure functions a test can call,
   with `main()` limited to I/O.
 - Pick the smallest change that FULLY solves the problem: no half-built
   features, no extra design.
-- A plan step that adds an abstraction, a config surface, a dependency or a
-  file names the simplest alternative it considered and why that loses. A step
+- A plan step that adds an abstraction, a config surface or a dependency
+  names the simplest alternative it considered and why that loses. A step
   that adds flexibility the request did not ask for is a review finding: P1
   when it adds a dependency or a config surface, P2 otherwise.

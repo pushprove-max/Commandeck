@@ -276,14 +276,11 @@ listed issue is done.
    runs the shell tests that cover what you or main changed (not the full suite); a conflict stops the pass,
    aborted and named, for main to resolve, and a red test stops it before the reviewer. Its GO is the one the
    merge takes. Any P0, P1 or P2 there goes back to step 2 as a fix round, whose next `review` runs as the
-   closing pass. There is no narrowed-pass exit. Three lines end the loop with no fix round: `STOP (threshold)`
-   (a closing GO while P3 findings are open), `STOP (cap)` (a closing NO-GO at or past the cap naming an open P2 and
-   no P0 or P1) and
-   `REVIEW STOP` (a P0 or P1 open two passes past the cap). After a STOP line, report the `Open finding` lines to
-   main, which files them before the merge. After `REVIEW STOP`, ask main the one question the pass names and wait.
-   No later pass launches after `STOP (cap)`, or on a change that is only the plan, brief or metrics, once the cap is
-   reached with no P0 or P1 open: the launch is refused before it commits anything. Catches: a pass spent on a loop
-   that already stopped.
+   closing pass. There is no narrowed-pass exit. Passes run until clean. Two lines end the loop with no fix round:
+   `STOP (threshold)` (a closing GO while P3 findings are open) and
+   `REVIEW STOP` (a P0 or P1 still open at pass 7 or later by default). After a STOP line, report the `Open finding`
+   lines to main, which files them before the merge. After `REVIEW STOP`, ask main the one question the pass names and
+   wait.
 
 Before every launch run `bash {scripts}/{pass-script} --check {unit} <N> <kind>`:
 it runs the launch's own checks (the round cap, main's rulings acknowledged, an
@@ -357,7 +354,7 @@ above call for.
 ## Done
 
 Every batch item built with its tests green, and the last round file a closing pass that ends `VERDICT: GO`
-with no P0, P1 or P2 named, or a pass that printed `STOP (threshold)` or `STOP (cap)`. A STOP line means run no fix
+with no P0, P1 or P2 named, or a pass that printed `STOP (threshold)`. A STOP line means run no fix
 round: main files what is open and merges. On `REVIEW STOP`, wait for main.
 Print `{UNIT}-DONE` as your last line and stop, but only after a GO the script did not mark `NARROWED GO` (that GO merges nothing: run the `final` pass it names first). An answer from main that
 arrives after it is still yours: read it and act on it. A question or a refusal

@@ -310,7 +310,7 @@ Break: none -- the unit adds no security check and no conditional write; it remo
 ## Plan change log
 
 - 2026-11-04 first version.
-- 2026-11-04 owner answer Q1 (A) recorded as D8; D2, C2, Steps, Accepted failure modes and User-visible changes now cite D8 in place of Q1.
+- 2026-11-04 owner answer Q1 (A) recorded as D8; D2, C2, Steps, the failure-modes section and User-visible changes now cite D8 in place of Q1.
 - 2026-11-04 owner answer Q2 (yes to all) recorded as D9; C1, C2, C3 Tests and Steps now cite D9 in place of Q2.
 - 2026-11-04 owner answer Q3 (yes) recorded as D10.
 - 2026-11-04 the Builder check before C1 is removed: Q1 and Q2 are answered (D8, D9), so it had nothing left to check.
@@ -320,12 +320,12 @@ Break: none -- the unit adds no security check and no conditional write; it remo
 - 2026-11-04 judge P1 (W35 not wholly host-only): accepted; the host diff drops "new file" from the alternatives rule, so C3 drops "or a file" at global-rules.md:173-174; W35 row, D5, Issue case Body 4 and a claim updated.
 - 2026-11-04 judge P1 (leak): accepted; owner names, the delegate's nickname and ruling ids removed from D8-D10 and this log.
 - 2026-11-04 judge P2 (watcher number has no producer): accepted; main-watch's REVIEW STOP text names no pass number (it has no REVIEW_CAP), the pass script interpolates its own REVIEW_CAP; new test "watcher REVIEW STOP names no pass number" (New tests 11); D11 keeps the :101 fixture.
-- 2026-11-04 judge P3 (claim rg matches bash-guardrails CAPPED): accepted; the C1 claim's rg is scoped to the three loop scripts; Stated limits recounted with the scoped commands (51 and 23 lines).
+- 2026-11-04 judge P3 (claim rg matches bash-guardrails CAPPED): accepted; the C1 claim's rg is scoped to the three loop scripts; the limits section recounted with the scoped commands (51 and 23 lines).
 - 2026-11-04 owner answer Q4 (A, keep review-cap.sh as the owner's per-unit brake) recorded as D12.
 - 2026-11-04 the W3 row and C1's Keeps line cite D12 in place of "pending Q4" / "Q4 pick A".
 - 2026-11-04 the Builder check before C1 on Q4 is removed: Q4 is answered (D12), so it had nothing left to check.
 - 2026-11-04 the Question for the owner section now reads "None: answered as D8 (Q1), D9 (Q2), D10 (Q3) and D12 (Q4)".
-- 2026-11-04 judge P1 (merge-rules.test.sh fails): accepted; confirmed on a scratch copy (8 of 40 fail). C3 adds merge-rules.py lineage and the test's id and count edits, every check kept (40 pass); Q5 asks for them; a Builder check before C3; Steps, Test edits, Stated limits, Claims, Facts and Planned size (31 files, 482 lines) updated.
+- 2026-11-04 judge P1 (merge-rules.test.sh fails): accepted; confirmed on a scratch copy (8 of 40 fail). C3 adds merge-rules.py lineage and the test's id and count edits, every check kept (40 pass); Q5 asks for them; a Builder check before C3; Steps, Test edits, the limits section, Claims, Facts and Planned size (31 files, 482 lines) updated.
 - 2026-11-04 judge P3 (watcher claims): accepted; the watcher claim says no numeric pass threshold, and the parse claim covers only the `--verify` text (:945) main-watch consumes.
 - 2026-11-04 judge P3 (empty passCap): accepted; the Bad input line says an empty passCap reads as the default 5 (paths.sh:1155) and cites plugin-option.test.sh:57-59.
 - 2026-11-04 owner addition (relayed by main): the recommended fixer effort goes high -> medium; C5 added (recommended.json:12, a plugin.test.sh check), the owner's saved value checked (none saved, nothing to write); Build order, New tests 12, Acceptance test, User-visible changes, Assumptions, Facts and Planned size (33 files, 488 lines) updated.
@@ -334,6 +334,7 @@ Break: none -- the unit adds no security check and no conditional write; it remo
 - 2026-11-04 the Builder check before C3 on Q5 is removed: Q5 is answered (D13), so it had nothing left to check.
 - 2026-11-04 the Question for the owner section now reads "None: answered as D8 (Q1), D9 (Q2), D10 (Q3), D12 (Q4) and D13 (Q5)".
 - 2026-11-04 judge P1 (README version badge left at 0.71.0): accepted; Release adds README.md:4's image URL and alt text to 0.72.0, its consumer line names plugin.test.sh:33-35 (assertion unchanged); Steps, Claims to falsify, Facts and Planned size (33 files, 490 lines; README already counted) updated.
+- 2026-11-04 Builder: three log lines above name the limits and failure-modes sections in prose, not by their heading text, as the pass's heading check asks; no limit or rule changed.
 
 ## Follow-ups
 

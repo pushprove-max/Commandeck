@@ -196,6 +196,13 @@ MADE_FROM = {
     # word for word, a pointer in their place (issue 611)
     "c34eb141": ("702b08c7",), "75e93e14": ("4f20e61c",), "5ea27f33": ("0dde062f", "702b08c7"),
     "6a374fff": ("8265905f", "4f20e61c"), "2291a3b7": ("8887ffeb", "702b08c7"),
+    # 0.72.0 main-session.md: main uses rg for symbols, a restart count may be reported, a worker is announced once,
+    # the helper rule's lookup names rg only
+    "bce76243": ("401e8893",), "7438dcb8": ("5ea4eaeb",), "48bcb4c0": ("4f772079",), "b3b54a7c": ("80518d00",),
+    # 0.72.0 global-rules.md: no old-data support by default, passes run until clean, tag only an unverified claim, main
+    # maps with rg, the alternatives rule no longer names a file
+    "d501f34e": ("419f6ca9",), "a565c8bd": ("26b6b2b9",), "49596746": ("671886ae",), "716280f1": ("6ba05b23",),
+    "2a5e9350": ("a935667e",),
 }
 
 

@@ -56,7 +56,7 @@ check "a closing pass's report carries one timing line per pre-review step" "1 1
 $(grep -c '^Pre-review: ' "$B/$U-r5-reports.md") $(grep -cE '^Pre-review: rebase not run, tests [0-9]+ s, suite [0-9]+ s$' "$B/$U-r5-reports.md")"
 
 # Issue 385: a closing pass needs a green typecheck when the project sets one up (typecheckCommand), checked before any
-# reviewer; a project with none is told so and goes on. These passes are past the default cap of five.
+# reviewer; a project with none is told so and goes on. These passes are past the default Closing pass from setting of five.
 cfg '.reviewLoop.passCap = "20"'
 # Issue 526: with main unmoved the closing pass rebased nothing and so ran no test, and a red changed test was found
 # only after its GO. The unit breaks the file its own test covers; main stays where it is.

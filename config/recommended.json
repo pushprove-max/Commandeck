@@ -9,7 +9,7 @@
     "fixerFirstModel": "builder",
     "fixerFirstEffort": "builder",
     "fixerModel": "opus",
-    "fixerEffort": "high",
+    "fixerEffort": "medium",
     "codexReviewerModel": "sol",
     "codexReviewerEffort": "medium",
     "codexReviewerFast": false,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Issue 366, the review threshold. A closing pass that names no open P0, P1 or P2 ends the loop: a P3 never holds it.
-# From the fifth pass on record a closing NO-GO with no P0 or P1 ends it too (the cap). A P0 or P1 is never capped, and
-# one still open two passes past the cap stops the unit for one question to main. The closing reviewer is handed no
+# From the fifth pass on record every pass is a closing pass, and passes run until clean: a NO-GO never merges. A P0 or
+# P1 still open two passes later stops the unit for one question to main. The closing reviewer is handed no
 # earlier finding. What is still open at a stop is filed, one issue per class, before the merge takes it.
 # The count is the passes on the reviewer's record, never the round number. Each unit below is a worktree of its own,
 # so each count starts at its own first pass (three reviewers: this fixture has no launcher's brief).
@@ -131,13 +131,13 @@ find "$CODEX_HOME/sessions" -name 'rollout-*-thr-p1-9-[23].jsonl' -exec rm -f {}
 check "a partial pass whose one reviewer said GO does not clear an earlier P1: the next launch refuses, naming review-stop-p1-r9" "2 1" \
   "$(tpass --check p1 10 final) $(grep -c 'review-stop-p1-r9' "$TMP/perr")"
 
-# 6. The cap ends the loop only on an open P2 (the host's rule): a closing NO-GO at the cap that names no P2 (only a
-# P3 here) is no cap stop, so it cannot merge with nothing to file.
+# 6. Passes run until clean: a closing NO-GO from the fifth pass on record that names no P2 (only a P3 here) prints no
+# stop, and --verify refuses it, as it refuses every NO-GO.
 mk c3; go c3
 for n in 2 3 4; do tpass c3 "$n" final $'- [P2] (class: lost-reply) C3-P2 -- c3.txt:1 -- drops a reply -- cat c3.txt\nVERDICT: NO-GO' >/dev/null; done
 check "a NO-GO at the cap that names no P2 is no cap stop: no stop line, and --verify refuses it" "0 0 2 1" \
   "$(tpass c3 5 final $'- [P3] (class: wording) C3-P3 -- c3.txt:1 -- a nit -- cat c3.txt\nVERDICT: NO-GO') $(grep -c 'STOP' "$TMP/pout") $(verify c3) \
-$(grep -c 'names no open P2' "$TMP/verr")"
+$(grep -c 'ended NO-GO: .*passes run until clean' "$TMP/verr")"
 
 # 7. The threshold stop reads what is open over the whole record: a clean closing GO after a GO round's P3 still stops,
 # so the Builder is told to leave the P3 to main's filing.

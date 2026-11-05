@@ -64,6 +64,10 @@ check "a profile value equals the key's manifest default wherever the default is
     | select($c.default != null and $c.default != "project" and $c.default != .value) | $k' "$REAL/config/recommended.json" | paste -sd' ' -)"
 check "the profile recommends an Opus Builder at medium effort (Opus at medium builds as well as Sonnet at high, for less)" "opus medium" \
   "$(jq -r '.options | "\(.builderModel) \(.builderEffort)"' "$REAL/config/recommended.json")"
+# recommended fixer at medium: the owner ordered later fix rounds down from high to medium effort (2026-11-04); a
+# Recommended set or Auto Setup that still sent high would spend more on every fix round than the owner chose.
+check "recommended fixer at medium" "opus medium" \
+  "$(jq -r '.options | "\(.fixerModel) \(.fixerEffort)"' "$REAL/config/recommended.json")"
 check "the set is the 26 role keys (issue 312; the Opus judge has four and no agent key) and the 18 options that are no role's: the Builder cap (issue 256), the two wake options (issue 318), the auto-decide seats option (issue 333), the units mod's three views (issue 349) and its motion switch (issue 555), the three prompt-cache options, one for each role (issue 367), and the review workflow's three (blocking severity, pass cap, fresh closing reviewer; issue 373), among them" 44 "$(jq '.userConfig | length' "$M")"
 # The recommended profile (config/recommended.json) is the one place setup's recommended values live. Every option is in it
 # or asked by name, so none is left for an owner who takes the recommended set to find in /config; every value is one its

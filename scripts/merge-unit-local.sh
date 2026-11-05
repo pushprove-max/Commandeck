@@ -372,8 +372,8 @@ echo "STEP 1 preconditions: main=$ROOT worktree=$WT branch=$BRANCH"
 
 # Builder proof: a Builder runs its own review passes, so its last round file
 # must be the pass script's, for this tip or a clean rebase of it, from a
-# real reviewer session: a GO that names no open P0, P1 or P2, or a closing NO-GO
-# with no P0 or P1 at the review cap (issue 366). What it leaves open is filed
+# real reviewer session: a GO that names no open P0, P1 or P2; a NO-GO never
+# merges (issue 366). What it leaves open is filed
 # first (check_filed). The proof says which rule let the tip through. Every unit owes the proof: the
 # worktree's own settings file is the Builder's to edit, so it cannot switch it off.
 # A tail of commits after the reviewed one that only rebuild the files the project
@@ -405,7 +405,7 @@ prove() { # <step> [<what the refusal adds>]: sets PROVED, TAIL and BUILDER_PROO
   done
   rm -f "$verr"
 }
-# Issue 366: a review that stops with findings open (P3s at the threshold, P2s and P3s at the cap) merges only once each
+# Issue 366: a review that stops with findings open (findings below the blocking severity, at the threshold) merges only once each
 # open class (the proof's "Open finding: <class> <line>" lines) names an issue GitHub reports OPEN, one per class: a new
 # one, or an OPEN duplicate main commented the finding on. A filing for a class that is not open refuses too. Run after
 # the proof at step 1, before the rebase touches the branch, and at step 3 on the rebased tip's proof. Sets FILED_MSG.
@@ -541,7 +541,7 @@ cut_scan() {
   built=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next } /^C[0-9]+: built[ \t]*$/ { sub(/^C/, ""); sub(/:.*/, ""); printf "%s ", $0 }' \
     "$WT/.claude/briefs/$UNIT-evidence.md" 2>/dev/null || true)
   # Issue 623: a brief that names exactly one cut (`Cut <n>`, outside fences; D4) is that cut's, so the closing GO step 1
-  # proved builds it though the evidence has no `C<n>: built` line. A proof that ended NO-GO at the cap adds nothing.
+  # proved builds it though the evidence has no `C<n>: built` line. A proof that did not end GO adds nothing.
   if [[ ${BUILDER_PROOF:-} == *" ended GO in "* ]]; then
     built+=$(awk "$PP_AWK_FENCE"'fence($0) || flen { next }
       { s = $0; while (match(s, /(^|[^0-9A-Za-z])Cut [0-9]+/)) { t = substr(s, RSTART, RLENGTH); sub(/^[^C]*Cut /, "", t)

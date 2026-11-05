@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.71.0-111111?style=flat-square" alt="Version 0.71.0">
+  <img src="https://img.shields.io/badge/version-0.72.0-111111?style=flat-square" alt="Version 0.72.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -109,11 +109,11 @@ flowchart TD
   evidence["Evidence file must list<br/>## Sites checked (every call site, incl. class-search hits)<br/>## New code checked (against the plan)"]:::seat
   classq{"Same class<br/>came back?"}:::gate
   redesign["🧩 Class stop → redesign<br/>data design + failure table<br/>reviewed alone to GO, then code"]:::review
-  cap{"Pass cap reached?<br/>(reviewPassCap, default 5)"}:::gate
+  cap{"Closing pass from reached?<br/>(reviewPassCap, default 5)"}:::gate
   narrowed["Narrowed pass<br/>reads only changes since last pass<br/>clean → NARROWED GO"]:::seat
   closing["🏁 Closing pass<br/>rebases on local main · reads whole branch<br/>typecheck · full suite once when on<br/>handed no old findings"]:::merge
   filed["Main files leftover findings as issues<br/>the merge names each one"]:::muted
-  owner["⛔ P0/P1 still open two passes past cap<br/>REVIEW STOP · waits for owner"]:::stop
+  owner["⛔ P0/P1 still open two passes later<br/>REVIEW STOP · waits for owner"]:::stop
   go(["✅ GO on exact commit → merge"]):::merge
   perissue["Optional per-issue workflow<br/>each issue reviewed alone first<br/>(main's brief line)"]:::muted
 
@@ -128,9 +128,9 @@ flowchart TD
   cap -- "no" --> narrowed --> verdict
   cap -- "yes" --> closing
   closing -- "GO" --> go
-  closing -- "GO with P3 left, or<br/>NO-GO at cap with P2, no P0/P1" --> filed --> go
-  closing -- "other NO-GO" --> classq
-  closing -- "P0/P1 two passes past cap" --> owner
+  closing -- "GO with P3 left" --> filed --> go
+  closing -- "NO-GO" --> classq
+  closing -- "P0/P1 two passes later" --> owner
 
   classDef build fill:#5a1e02,stroke:#f0883e,color:#fff,stroke-width:2px
   classDef gate fill:#3d2e00,stroke:#d29922,color:#fff
@@ -243,7 +243,7 @@ answer first on a rerun) and is asked only when it applies.
 | Auto mode | Add two lines about the plugin's scripts to the auto-mode classifier's list, leave it, or take setup's lines out |
 | Worker cuts, Keep words | Extra skills and plugins to turn off in worker panes, and words that bring a set back for one unit |
 | Add-ons | All, serena, agent-browser or none |
-| Review loop | Defaults, keep saved, or tune: the blocking severity, the pass cap, a fresh closing reviewer, the closing pass, the small-build line and when a finished build is flagged for a written review |
+| Review loop | Defaults, keep saved, or tune: the blocking severity, the closing pass from, a fresh closing reviewer, the closing pass, the small-build line and when a finished build is flagged for a written review |
 
 After Apply, setup prints what it did, what needs you and what is optional,
 and offers a small demo build. Every question in detail:
@@ -313,10 +313,10 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   a level (P0 to P3) and a class tag. A finding blocks the merge when normal
   use would hit it. One that needs an odd setup or a deliberate bypass is a
   known gap and does not block. A P3 alone never holds the loop.
-- **Threshold and cap.** A P0, P1 or P2 runs a fix round. From the fifth pass
-  on record, `review` runs as the closing pass, and main files a P2 or P3 left
-  there as an issue before the merge. A P0 or P1 is never capped: one still
-  open two passes past the cap stops the build and waits for the owner.
+- **Threshold and closing pass.** A P0, P1 or P2 runs a fix round, and passes
+  run until clean. From the fifth pass on record, `review` runs as the closing
+  pass, and main files a P3 left there as an issue before the merge. A P0 or P1
+  still open two passes later stops the build and waits for the owner.
 - **Per-issue workflow (optional).** Main can ask for each issue to be reviewed
   alone before the whole-branch passes (`builder-codex-pass.sh --issue <n> <unit>`).
   An issue that runs out of regular reviews with no GO waits for main's answer;
@@ -345,7 +345,7 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
   test command once. It is handed no earlier finding. Its GO is the one that
   merges.
 
-`reviewPassCap` sets the pass at which the loop ends, and `reviewBlockSeverity` the lowest finding that holds a merge. More: [docs/review-loop.md](docs/review-loop.md).
+`reviewPassCap` sets the pass from which every pass is a closing pass, and `reviewBlockSeverity` the lowest finding that holds a merge. More: [docs/review-loop.md](docs/review-loop.md).
 
 ## Configuration
 
@@ -383,7 +383,7 @@ default for each role is in [docs/configuration.md](docs/configuration.md).
 | `codexReviewerEffort` | `project`, `low`, `medium`, `high`, `xhigh`, `max` | The reviewer's effort (project: medium, or high on Claude) |
 | `codexReviewerFast` | `true`, `false` (default) | The fast tier, which costs more |
 | `reviewBlockSeverity` | `P1`, `P2` (default), `P3` | The lowest severity of finding that holds a merge |
-| `reviewPassCap` | a number, 1 or more (default 5) | From this many passes, a closing NO-GO with no P0 or P1 ends the loop with its findings open |
+| `reviewPassCap` | a number, 1 or more (default 5) | From this many passes every pass is a closing pass; a P0 or P1 still open two passes later stops for the owner |
 | `freshClosingReviewer` | `true` (default), `false` | The closing pass is handed no earlier finding or fix note |
 | `closingPass` | `true` (default), `false` | One more pass over the whole branch after the narrowed passes end GO |
 | `fullSuiteBeforeFinal` | `true` (default), `false` | The closing pass runs the test command once on the build's tip |
@@ -471,7 +471,7 @@ Uninstall takes out only what setup added. Details:
 - Red proofs: `scripts/red-proof.sh` and the `Mutation-verified:` line
   (0.28.0).
 - The P2 tail: findings left open at a merge, and `file-open-findings.sh`
-  (0.29.0). Today only a closing pass at the cap can leave a P2 or P3 open,
+  (0.29.0). Today only a closing GO can leave a finding below the blocking severity open,
   and main files each one as an issue before the merge.
 - Setup's `--builder-model`, `--builder-effort`, `--codex-model`,
   `--plan-models`, `--plan-fast` and `--codex-fast` flags, and the plugin's
