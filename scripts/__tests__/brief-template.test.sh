@@ -198,7 +198,6 @@ while IFS='|' read -r ptr script refusal; do
 done <<'ROWS'
 - Screenshots: `merge-unit-local.sh` refuses a screen change without its rows and prints the forms.|scripts/merge-unit-local.sh|put screenshots at absolute paths outside the worktree
 - Placeholder copy: `edit-content-tripwires.sh` blocks it and prints the `Placeholder:` line form.|hooks/edit-content-tripwires.sh|name the complete line: Placeholder: $_rel | <complete source line> | <why>
-- Editing an existing test: `builder-codex-pass.sh` refuses the pass and prints the `Test edit:` lines main must add.|scripts/builder-codex-pass.sh|Lines main must add:
 - A long closing reply: `long-reply-stop.sh` sends it back to go in a file.|hooks/long-reply-stop.sh|Write the full reply to a file
 - Find a line first: `read-range-guard.sh` blocks a whole read of a long file and prints the range form.|hooks/read-range-guard.sh|Find the line first with \`grep -n <pattern>
 - A hand commit: `git-safety.sh` refuses it; the pass script commits.|hooks/git-safety.sh|a Builder never commits by hand

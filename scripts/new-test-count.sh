@@ -15,6 +15,17 @@ case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3
 BASE=${1:?usage: new-test-count.sh <base>}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/../hooks/lib/test-path.sh" || { echo "new-test-count: cannot load hooks/lib/test-path.sh" >&2; exit 2; }
+if [ "$BASE" = --changed ]; then
+  # --changed <base> <head> (issue 676): each test file that exists at <base> and differs by <head>, an added line
+  # included, for the merge's loosened-check report: a check loosened by adding lines is still an edit. A git failure exits 2.
+  CB=${2:?usage: new-test-count.sh --changed <base> <head>} CH=${3:?usage: new-test-count.sh --changed <base> <head>}
+  NAMES=$(git --literal-pathspecs diff --no-renames --name-only -z "$CB" "$CH" | tr '\0' '\n') \
+    || { echo "new-test-count: git diff failed for $CB" >&2; exit 2; }
+  while IFS= read -r f; do
+    [ -n "$f" ] && is_test_path "$f" && git cat-file -e "$CB:$f" 2>/dev/null && printf '%s\n' "$f"
+  done <<<"$NAMES"
+  exit 0
+fi
 if [ "$BASE" = --edited ]; then
   # --edited <base> [<head>] (issue 496): `<path><TAB><lost lines><TAB><lost check lines>` per test file that exists at <base>
   # and loses a non-blank line by <head> (default: the index). An added line is no edit, so a new case stays free. A rename
@@ -120,7 +131,7 @@ function parse(path, src) {
   return out;
 
   // The first argument's literal text, a backslash before a quote, a backtick or a backslash dropped (the runner's name;
-  // test-edit-labels.sh and js_regex read by the same rule, any other escape kept as written), else its source text.
+  // js_regex reads by the same rule, any other escape kept as written), else its source text.
   function name(n) {
     const a = n.arguments[0];
     const lit = a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a));

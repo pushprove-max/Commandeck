@@ -110,7 +110,9 @@ the first pass refuses without a row and prints the row form. A fix that touches
   short timeout (a few seconds), so it fails fast instead of running to the
   command's time limit. Before you write, change or delete a test, read
   ~/.commandeck/plugin/templates/test-rules.md.
-- On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name.
+- On a refusal at the new-test or tooling cap, stop and ask main. An edit to an existing test is your call: never ask
+  first. List each check an edit or deletion loosened under `## Loosened checks` in the evidence file with the bug
+  it still catches (the form is in the test rules), or write `none`.
 - The evidence file opens with an `Issue | Status` table, one `| #<n> | not built |`
   row per issue of the batch, each set to `built` in the same edit that adds the
   section of the cut that finishes it. The dashboard counts an issue built from a
@@ -127,7 +129,6 @@ the first pass refuses without a row and prints the row form. A fix that touches
   next line.
 - Each new test names the bug it catches.
 - The new-test cap: `builder-codex-pass.sh` refuses a change over it.
-- Editing an existing test: `builder-codex-pass.sh` refuses the pass and prints the `Test edit:` lines main must add.
 - Arrange test data with one shared builder per domain object (a fixture
   function in shell tests), one or two lines per test. When a test needs a new
   field, extend the builder; never hand-build the object in the test:

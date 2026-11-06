@@ -128,9 +128,10 @@
 
 - A test verifies intent and fails on a regression. Write it red first: see it
   fail for the reason you expect, then make it pass.
-- Never edit, weaken, skip or delete an existing test to make it pass. A test
-  that looks wrong is reported, not changed; tests are deleted only in a pruning
-  job the owner ordered.
+- Never weaken, skip or delete a test just to make it pass. A Builder may edit,
+  loosen or delete an existing test when the change calls for it, without
+  asking; it lists each loosened check in the evidence file, and the review
+  pass judges that each edited test still catches its bug.
 - **Before any test run, name what it will prove.** Run the smallest set of
   tests that would fail if your change were wrong. Do not re-run a test whose
   inputs have not changed since it passed. Run the full suite only when product

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.75.0 -- 2026-11-06
+
+### Rules
+
+- A Builder now edits, loosens or deletes an existing test when the change calls for it, without stopping to ask. You no longer approve test edits one by one, and no `Test edit:` line is needed. Old `Test edit:` lines are left in place and ignored.
+- Every review pass checks that each edited or deleted test still catches the bug it was written for. A loosened check that lost its purpose is a P1 and holds the merge.
+- The rule against weakening tests now reads "never weaken a test just to make it pass".
+
+### Scripts
+
+- The merge report lists every check the unit loosened, from the `## Loosened checks` list in its evidence file, for you to read. If the unit edited tests and the list is missing, the report says so.
+- The separate approval step for editing an existing test is gone; review now decides.
+
 ## 0.74.2 -- 2026-11-06
 
 ### Scripts

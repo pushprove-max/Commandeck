@@ -205,6 +205,8 @@ MADE_FROM = {
     "2a5e9350": ("a935667e",),
     # 0.74.1 main-session.md: small or clear tasks skip planning, folded into the planning rule and its Details text
     "d6875392": ("1b63993c",), "87803fcc": ("2659eb01",),
+    # 0.75.0 global-rules.md: test edits are the Builder's call; never weaken a test just to make it pass (issue 676)
+    "ce8eeadb": ("4da94f85",),
 }
 
 

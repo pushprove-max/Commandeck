@@ -2,7 +2,6 @@
 # decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>']
 #           | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct]
 #           | reopen <id> | list | holds <unit> | push-ask | rulings <term>... | deliver <id> <text>
-#           | test-edit <unit> <path> <test label> <ruling id>
 # answer (issue 569) also sends the answer to the asking pane after the row closes, on stderr: `delivered: <id> to <target>`,
 # `queued: <id> to <unit>` (the Builder is not running; the answer waits for its next start), `unknown: <id> to <target> timed
 # out; check the unit's pane before resending` (the send was cut at 20 s and may have gone) or `not delivered: <id> ...`; exit
@@ -11,8 +10,6 @@
 # message (issue 624), and AskUserQuestion
 # or another decision.sh source sends nothing. COMMANDECK_NO_DELIVER=1 sends nothing (the
 # dashboard, ruling-log.sh and answer-worker.sh close rows that way); `deliver <id> <text>` is the send alone. --correct sends nothing.
-# test-edit (issue 574): appends `Test edit: <path> test:<label> ruling:<id>` to main's .claude/briefs/<unit>-main-rulings.md once,
-# only for a ruling id the ruling log holds unvoided; the line builder-codex-pass.sh's test_edit_refusals accepts.
 # rulings <term>... (issue 477): the owner's earlier picker answers from the ruling log, for a plan author to read before it
 # writes a question. Void and decoy rows are left out; a term is plain text matched in any case on the question or the
 # answer; newest first, one line each, `<id> <et>: <question> -> <answer>`. Exit 0 with nothing printed when no row matches.
@@ -44,7 +41,7 @@ L=$PP_MAIN/.claude/metrics/decisions.jsonl
 . "$(dirname "$0")/../hooks/lib/project.sh" && pp_project "$PP_MAIN"
 RULINGS=${COMMANDECK_RULING_LOG:-$HOME/.claude/rulings/$PP_PROJECT.jsonl}
 die() { echo "decision: $*" >&2; exit 1; }
-usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask | rulings <term>... | deliver <id> <text> | test-edit <unit> <path> <test label> <ruling id>"; }
+usage() { die "usage: decision.sh add <id> <question> <proposedDefault> <source> [--reask <what is new> | --waits-on main] [--options '<a>|<b>[|<c>[|<d>]]' | '<JSON array>'] | check <id> <question> [<other question>...] | answer <id> <answer> [--asked-at <askedAt> | --correct] | reopen <id> | list | holds <unit> | push-ask | rulings <term>... | deliver <id> <text>"; }
 
 # lock <-s|-x> -- held on the ledger itself until the script exits.
 lock() { [ -r "$L" ] && exec 9<"$L" || die "no ledger at $L"; flock "$1" 9 || die "could not lock $L"; }
@@ -324,38 +321,6 @@ case "${1:-}" in
     [ -n "$prev" ] || die "unknown decision $2"
     exec 9<&-
     deliver_answer "$2" "$3" "$(jq -r .source <<<"$prev")" ;;
-  test-edit)
-    # test-edit <unit> <path> <label> <ruling id>: the owner's yes to one edited test, in the shape test_edit_refusals reads.
-    [ $# -eq 5 ] || usage
-    u=$2 path=$3 label=$4 rid=$5
-    [[ $u =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $u != *..* ]] || die "bad unit: $u"
-    [ -n "$path" ] && [ -n "$label" ] || die "a path and a test label are required"
-    case "$path$label" in *$'\n'*|*$'\r'*) die "a path or label holds a newline" ;; esac
-    [[ $label != *" ruling:"* ]] || die "a label may not hold ' ruling:'"
-    . "$(dirname "$0")/../hooks/lib/ruling-id.sh" || exit 1
-    ruling_id_state "$rid" "$RULINGS" || die "ruling $rid is not a logged, unvoided ruling in $RULINGS"
-    # Issue 607: the label must be one the pass's lister prints for this path, read as the closing pass reads it: from
-    # where the unit left main to its change staged (in a copy of the index). With no worktree it is recorded unchecked.
-    wt=${PP_WORKSPACES:-/nonexistent}/$u
-    if [ -d "$wt" ]; then
-      lister=$(cd "$(dirname "$0")" && pwd)/test-edit-labels.sh
-      fork=$(git -C "$wt" merge-base main HEAD) || die "cannot find where $u left main in $wt, so the label cannot be checked"
-      idx=$(mktemp) || die "mktemp failed"
-      cp "$(git -C "$wt" rev-parse --absolute-git-dir)/index" "$idx" 2>/dev/null || : > "$idx"
-      rc=0; names=$(cd "$wt" && GIT_INDEX_FILE=$idx git add -A && GIT_INDEX_FILE=$idx bash "$lister" "$path" "$fork" 2>/dev/null) || rc=$?
-      rm -f "$idx"
-      # The lister exits 2 when some lost line is no named test; its label rows still print.
-      [ "$rc" = 0 ] || [ "$rc" = 2 ] || die "the test lister failed on $path in $wt (exit $rc), so the label cannot be checked"
-      names=$(grep -v $'^(line)\t' <<<"$names" | cut -f1)
-      grep -qxF -- "$label" <<<"$names" || die "test:$label names no test that loses a line in $path in $wt; the exact names:"$'\n'"${names:-(none: no named test of $path loses a line)}"
-    else
-      echo "decision: warning: no worktree for $u at $wt; test:$label is recorded unchecked (the review pass still checks it)" >&2
-    fi
-    f=$PP_MAIN/.claude/briefs/$u-main-rulings.md
-    line="Test edit: $path test:$label ruling:$rid"
-    ! grep -qxF -- "$line" "$f" 2>/dev/null || { echo "$line"; exit 0; }
-    mkdir -p "${f%/*}" && printf '%s\n' "$line" >> "$f" || die "could not write $f"
-    echo "$line" ;;
   reopen)
     # reopen <id>: The owner's answer was not theirs (an Orca banner closed a
     # chat ask). The fresh askedAt keeps a prompt that arrived before the

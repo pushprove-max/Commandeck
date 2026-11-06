@@ -174,40 +174,6 @@ DW env COMMANDECK_ANSWER_WORKER="$T/aw2" bash "$REAL/scripts/decision.sh" answer
 check "an answer the unit has not acknowledged reads unknown, check the pane before resending, never not delivered" \
   "0 unknown: u1-msg_s7 to u1 not acknowledged; check the unit's pane before resending" "$RC $(cat "$T/err")"
 
-# Issue 574: test-edit writes main's approval line once, for a logged ruling id.
-RID=r-19991017-111111-p-d4e5f6
-printf '%s\n' '{"id":"'$RID'","source":"prompt","answer":"yes"}' '{"id":"r-19991017-121212-p-0a0b0c","void":true,"source":"prompt"}' > "$T/rulings.jsonl"
-F=$T/p/.claude/briefs/u1-main-rulings.md
-D test-edit u1 scripts/__tests__/x.test.sh 'a case' $RID >/dev/null; RC=$?
-check "a recorded approval writes the Test edit line the pass accepts" "0 Test edit: scripts/__tests__/x.test.sh test:a case ruling:$RID" "$RC $(cat "$F")"
-check "an approved edit finds its ruling in the ruling log and in main's rulings" "0 0" \
-  "$(. "$REAL/hooks/lib/ruling-id.sh"; ruling_id_state $RID "$T/rulings.jsonl"; echo $?) $(grep -qF -- "$RID" "$F"; echo $?)"
-D test-edit u1 scripts/__tests__/x.test.sh 'a case' $RID >/dev/null
-check "a second record of the same approval writes no second line" 1 "$(grep -c . "$F")"
-D test-edit u1 scripts/__tests__/x.test.sh 'other' r-19991017-121212-p-0a0b0c >/dev/null 2>&1; R1=$?
-D test-edit u1 scripts/__tests__/x.test.sh 'other' r-19991017-999999-p-ffffff >/dev/null 2>&1; R2=$?
-check "an id the ruling log lacks or voids writes nothing" "1 1 1" "$R1 $R2 $(grep -c . "$F")"
-D test-edit ../u scripts/a.sh lbl $RID >/dev/null 2>&1; B1=$?
-D test-edit u1 '' lbl $RID >/dev/null 2>&1; B2=$?
-D test-edit u1 scripts/a.sh '' $RID >/dev/null 2>&1; B3=$?
-D test-edit u1 scripts/a.sh $'a\nb' $RID >/dev/null 2>&1; B4=$?
-D test-edit u1 scripts/a.sh 'a ruling:b' $RID >/dev/null 2>&1; B5=$?
-check "a bad unit, an empty path or name, or a name holding a newline or ruling: writes nothing" "1 1 1 1 1 1" "$B1 $B2 $B3 $B4 $B5 $(grep -c . "$F")"
-
-# Issue 607: a near-miss name was recorded and failed only at the next pass. test-edit asks the pass's own lister, in the
-# unit's worktree from where it left main, with the edit not yet staged; with no worktree it records and says so.
-mkdir -p "$T/p/scripts/__tests__"; printf '%s\n' 'check "a case" 1 1' 'check "another" 2 2' > "$T/p/scripts/__tests__/y.test.sh"
-git -C "$T/p" add scripts/__tests__/y.test.sh && git -C "$T/p" -c user.name=t -c user.email=t@t commit -qm y
-git -C "$T/p" worktree add -q -b u7 "$T/ws/u7"; printf '%s\n' 'check "another" 2 2' > "$T/ws/u7/scripts/__tests__/y.test.sh"
-F7=$T/p/.claude/briefs/u7-main-rulings.md
-DA test-edit u7 scripts/__tests__/y.test.sh 'a cases' $RID >/dev/null; RC=$?
-check "a near-miss test-edit label is refused and the exact names are printed" "1 1 0" "$RC $(grep -cx 'a case' "$T/err") $(grep -c . "$F7" 2>/dev/null || echo 0)"
-DA test-edit u7 scripts/__tests__/y.test.sh 'a case' $RID >/dev/null; RC=$?
-check "the exact test-edit label is recorded" "0 Test edit: scripts/__tests__/y.test.sh test:a case ruling:$RID" "$RC $(cat "$F7")"
-DA test-edit u8 scripts/__tests__/y.test.sh 'any name' $RID >/dev/null; RC=$?
-check "a test-edit for a unit with no worktree records with a warning" "0 1 1" \
-  "$RC $(grep -c 'warning: no worktree for u8' "$T/err") $(grep -c 'test:any name' "$T/p/.claude/briefs/u8-main-rulings.md")"
-
 # Issue 616: two push asks at different tips ask different things though only their shas differ; the same tip twice is
 # still a repeat.
 PQ='Push main to origin? 1 commit(s) since origin/main:'

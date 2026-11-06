@@ -3,19 +3,21 @@
 For anyone who writes, changes, deletes or reviews a test. The Builder brief
 and every review prompt point here.
 
-## Never weaken
+## Never weaken a test just to make it pass
 
 - No test is deleted or merged unless a named other test catches the same
   failure.
 - List every deleted or merged test with the test that replaces it, in the
   evidence file or the change's description.
-- On a refusal at the new-test or tooling cap, stop and ask main. No existing test is edited, merged or deleted without the owner's yes by name.
-- No existing test loses a line without main's `Test edit: <path> test:<label>
-  ruling:<id>` line in the unit's rulings, one per test that loses a line.
-  `<label>` is the test's name; `(file)` covers a line of a `.json`, `.txt`, `.md`,
-  `.yml` or `.yaml` file. Any other code line (a helper, a case's setup, a comment)
-  needs its own `Test edit: <path> line:<exact old text> ruling:<id>`. A line with
-  the path only approves nothing. Adding a new case is free.
+- On a refusal at the new-test or tooling cap, stop and ask main.
+- An edit to an existing test is the Builder's call, a loosened check included: it never stops to ask, and
+  needs no named yes and no `Test edit:` line. Each edited or deleted test must still catch the bug it was
+  written for.
+- List each check an edit or deletion loosened under `## Loosened checks` in the evidence file, one line each:
+  `- <path>: <test>: <what got looser>; still catches: <the bug>`, or one `none` line. The merge report
+  lists them for the owner to read.
+- A reviewer checks that each edited or deleted test still catches its bug, and rates P1 a loosened
+  check that lost its purpose.
 - A bug fix starts with a failing test. Run it and see it fail for the bug's reason. Then add its path to
   `.claude/bugfix-lock`, one repo-relative path per line, no glob and no `..`. While the line is there the file
   tools refuse any edit of that test: fix the code, not the test. The lock is run state and is never committed.

@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.74.2-111111?style=flat-square" alt="Version 0.74.2">
+  <img src="https://img.shields.io/badge/version-0.75.0-111111?style=flat-square" alt="Version 0.75.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -325,7 +325,9 @@ Walk-through of a first build: [docs/first-build.md](docs/first-build.md).
 - **Placeholder UI and tests.** A disabled control or "coming soon" copy that
   no plan or ruling asked for is a P1. Every reviewer judges each new, changed
   or deleted test by the shipped test rules: a test is never weakened, skipped
-  or deleted to make it pass.
+  or deleted just to make it pass. A Builder edits tests without asking; each
+  edited test must still catch its bug, a loosened check that lost its purpose
+  is a P1, and the merge report lists every loosened check.
 - **Fix rounds.** After a NO-GO the fix round goes to the Builder's own
   session while its context is under the Builder clear line and it already
   runs the round's model and effort; otherwise to a fresh session.

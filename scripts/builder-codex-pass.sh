@@ -168,7 +168,7 @@ FOCUS_REVIEW="Correctness bugs, security problems and missing tests in the chang
 # Asked in every pass and by every reviewer, after its focus. The test rules go in whole: the Claude reviewer runs
 # --restricted, so it cannot open a file outside the review worktree, and a Codex sandbox may not either.
 TEST_RULES=$(<"$HERE/../templates/test-rules.md") && [ -n "$TEST_RULES" ] || die "the plugin has no test rules file $HERE/../templates/test-rules.md; every reviewer is asked to judge tests by it"
-LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path. Gate readers: a fix to a reader that guards a gate must be an allowlist that accepts only the shapes it fully understands and refuses every other one with an error naming the line; a fix that adds support for one more input shape instead is a class-miss finding. Smaller change: Is there a smaller change that fully solves the problem? A yes is a finding that names the smaller change and why it fully solves the problem; it is never a reason to cut scope the problem needs.
+LENS="Paved road: does this change hand-build something .claude/paved-road.md or a published standard already covers, or break its area's standard? Such a finding cites the registry row (its area). Tests: judge each new, changed or deleted test by ~/.commandeck/plugin/templates/test-rules.md, whose text follows in full; do not open that path. Edited tests: check that each existing test the diff edits or deletes still catches the bug it was written for; rate P1 (class: loosened-test) a loosened check that lost its purpose. Gate readers: a fix to a reader that guards a gate must be an allowlist that accepts only the shapes it fully understands and refuses every other one with an error naming the line; a fix that adds support for one more input shape instead is a class-miss finding. Smaller change: Is there a smaller change that fully solves the problem? A yes is a finding that names the smaller change and why it fully solves the problem; it is never a reason to cut scope the problem needs.
 
 $TEST_RULES"
 # The Claude reviewer's template: the same slots and the same two lines this
@@ -760,61 +760,6 @@ ruling_id_ok() {
   ruling_id_state "$1" "$log" \
     && grep -qF -- "$1" "$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md" 2>/dev/null
 }
-# test_edit_refusals <base> <head, empty for the index> -- issue 496: one line per test file that exists at <base> and loses a
-# line with no approval. An approval is a line in main's rulings for this unit with an id ruling_id_ok passes:
-# `Test edit: <path> test:<label> ruling:<id>` for each label test-edit-labels.sh maps a lost line to (`(file)` for a data
-# file's line), and `Test edit: <path> line:<exact old text> ruling:<id>` for each refused line, one approval spent on one line
-# per run. A worktree copy never counts, and any other shape approves nothing. A path-only line, the form before issue 504,
-# approves nothing either: the refusal prints the lines to add with its id, so main moves it by one copy.
-# A listing failure is one line too, so a git failure never reads as no edits.
-test_edit_refusals() {
-  local rows path lost checks l rest label n labels add id old ok rc err text i note= f=$MAIN_OF_WT/.claude/briefs/$UNIT-main-rulings.md
-  local spare
-  rows=$(cd "$WT" && bash "$HERE/new-test-count.sh" --edited "$1" ${2:+"$2"} 2>&1) \
-    || { echo "cannot list the existing tests this branch edits: $rows"; return 0; }
-  [ -n "$rows" ] || return 0
-  [ -r "$f" ] || note=" ($f cannot be read, so nothing is approved)"
-  while IFS=$'\t' read -r path lost checks; do
-    # Exit 2 carries its refused rows; any other failure, or 2 with no such row, says nothing of which tests.
-    err=$(mktemp) || { echo "$path is an existing test and loses $lost line(s); cannot tell which tests: mktemp failed"; continue; }
-    rc=0; labels=$(cd "$WT" && bash "$HERE/test-edit-labels.sh" "$path" "$1" ${2:+"$2"} 2>"$err") || rc=$?
-    if [ "$rc" != 0 ] && { [ "$rc" != 2 ] || [[ $'\n'$labels != *$'\n(line)\t'* ]]; }; then
-      echo "$path is an existing test and loses $lost line(s), $checks of them check lines; cannot tell which tests: $(cat "$err")"
-      rm -f -- "$err"; continue
-    fi
-    rm -f -- "$err"
-    add= old='<id>' spare=()
-    while IFS= read -r l; do
-      id=${l#"Test edit: $path ruling:"}
-      if [ "$id" != "$l" ] && [ "$old" = '<id>' ] && ruling_id_ok "$id"; then old=$id; fi
-      rest=${l#"Test edit: $path line:"}
-      [ "$rest" != "$l" ] && [[ $rest == *" ruling:"* ]] && ruling_id_ok "${rest##* ruling:}" && spare+=("${rest% ruling:*}")
-    done < <(grep '^Test edit: ' "$f" 2>/dev/null)
-    while IFS= read -r l; do
-      [ -n "$l" ] || continue
-      if [[ $l == $'(line)\t'* ]]; then
-        # By parameter expansion, never `read`: a tab or an end space in the old text stays.
-        text=${l#*$'\t'}; text=${text#*$'\t'}; ok=
-        for ((i = 0; i < ${#spare[@]}; i++)); do
-          [ "${spare[i]}" = "$text" ] || continue
-          spare[i]=$'\n'; ok=1; break # spent: no line holds a newline, so it matches nothing again
-        done
-        [ -n "$ok" ] || add+=" Test edit: $path line:$text ruling:$old (1 line);"
-        continue
-      fi
-      label=${l%$'\t'*} n=${l##*$'\t'} ok=
-      while IFS= read -r l; do
-        rest=${l#"Test edit: $path test:"}
-        [ "$rest" != "$l" ] && [[ $rest == *" ruling:"* ]] || continue
-        [ "${rest% ruling:*}" = "$label" ] || continue
-        id=${rest##* ruling:}
-        if ruling_id_ok "$id"; then ok=1; break; fi
-      done < <(grep '^Test edit: ' "$f" 2>/dev/null)
-      [ -n "$ok" ] || add+=" Test edit: $path test:$label ruling:$old ($n line(s));"
-    done <<<"$labels"
-    [ -z "$add" ] || echo "$path is an existing test and loses $lost line(s), $checks of them check lines, with no Test edit: line in main's rulings for $UNIT$note. No existing test changes without the owner's yes by name; a line names one test, so a path-only line approves nothing. Lines main must add:$add when main adds them, run builder-codex-pass.sh --ack-rulings $UNIT and the pass again. Try: bash $HERE/ask-main.sh \"Test edit: $path\" \"<the test, the change, whether a check gets looser>\""
-  done <<<"$rows"
-}
 
 # The per-issue workflow (issue 486). Everything an issue's state rests on is read from the reviewer's records and main's own
 # files, never from a round file or the worktree's rulings copy, which are the Builder's to edit.
@@ -933,10 +878,6 @@ if [ "${1:-}" = --verify ]; then
   MAIN_OF_WT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && MAIN_OF_WT=${MAIN_OF_WT%/.git} || die "$WT is not a git worktree"
   # Issue 486: an issue left unfinished keeps the unit from the merge.
   issue_gate "$WT"
-  # Issue 496: the launch's gate again, from main's script, so a tip no launch saw cannot merge an unapproved test edit.
-  FORK=$(git -C "$WT" merge-base main "$WANT") || die "main and $WANT share no merge base in $WT"
-  EDITS=$(test_edit_refusals "$FORK" "$WANT")
-  [ -z "$EDITS" ] || die "$EDITS"
   # The range field a whole-branch pass of this unit records (session_proof): "whole" from main, "base:<sha>" from a review base.
   BASE_RANGE=$(review_base "$WT") || exit 2
   [ "$BASE_RANGE" = main ] && BASE_RANGE=whole || BASE_RANGE=base:$BASE_RANGE
@@ -1635,11 +1576,6 @@ stage_and_check() {
   # Only when one is tracked: git fails a pathspec that matches no tracked file.
   TEMPLATES=$(git -C "$WT" ls-files -- '.claude/briefs/_*') || die "could not list the tracked brief templates in $WT"
   [ -z "$TEMPLATES" ] || pp_gate_act git -C "$WT" add -u -- '.claude/briefs/_*' || exit 2
-  # Issue 496: an edit to an existing test reaches no review without the owner's recorded yes.
-  local edit
-  while IFS= read -r edit; do
-    [ -z "$edit" ] || refuse "$edit"
-  done <<<"$(test_edit_refusals "$(git -C "$WT" merge-base main HEAD)" "")"
   limits_check
 }
 # limits_added <file> <baseline file> <heading> -- the lines under <heading> in <file> beyond each line's count in the

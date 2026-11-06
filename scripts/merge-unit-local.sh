@@ -708,6 +708,26 @@ while IFS= read -r deleted; do
   else fail "step 4 merge" "the squash deletes $deleted, which the brief never names: main's copy ($LAUNCHED) did not name it; the rebase probably replayed stale content"
   fi
 done <<<"$DELETED"
+# Issue 676: a Builder edits existing tests without asking, so the report lists each check it loosened, every line of the
+# evidence's `## Loosened checks` list, for the owner to read; nothing waits on it. A unit that edits no existing test says
+# nothing; an evidence file with no such list is reported missing, never read as none. An edit is any changed line,
+# an added one included: a check loosened by adding an accepted result or a known-failure marker loses no line.
+loosened_report() { # <base> <branch> <evidence file>
+  local edited list rc=0
+  edited=$(bash "$HERE/new-test-count.sh" --changed "$1" "$2" 2>&1) \
+    || { echo "step 4 loosened checks: cannot list the existing tests the unit edits: $edited"; return 0; }
+  [ -n "$edited" ] || return 0
+  echo "step 4 edited tests: $(paste -sd' ' - <<<"$edited")"
+  # Unreadable is missing; never a gate read that fails, which would refuse the merge over a report.
+  [ -r "$3" ] && list=$(pp_gate_awk "$PP_AWK_FENCE"'fence($0) || flen { if (on && NF) print; next }
+    heading($0) { on = (htxt == "Loosened checks"); if (on) found = 1; next } on && NF
+    END { exit !found }' "$3" 2>/dev/null) || rc=$?
+  if [ "$rc" != 0 ]; then echo "step 4 loosened checks: MISSING: ${3##*/} has no '## Loosened checks' list, so what got looser is not known"
+  elif [ -z "$list" ]; then echo "step 4 loosened checks: MISSING: the '## Loosened checks' list in ${3##*/} is empty (write none when nothing got looser)"
+  else sed 's/^/step 4 loosened check: /' <<<"$list"
+  fi
+}
+loosened_report "$BASE" "$BRANCH" "$WT/.claude/briefs/$UNIT-evidence.md"
 # The message is the one text of the unit no file check reads (issue 221): a home path, this machine's name or a
 # word of the project's own leak list refuses the merge before anything is merged.
 MSG=$(mktemp) || fail "step 4 message" "could not write the message to a file"
