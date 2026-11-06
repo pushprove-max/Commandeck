@@ -15,7 +15,8 @@
   and diff summaries, never worktrees or whole source files (`rg` for symbols; serena is for Builder seats only); a read over 10 KB (merge log, review report, run result) goes to a background read-only agent with one question (Details); routes findings, never fixes them. Main may make a small code fix itself, with the main-edit guard off (`.claude/approvals/main-edits-ok`, which the owner creates); larger work runs as a Builder, and main's code takes the same review and merge rules.
 - **Orca inbox: wait on it, never a poll loop**; drain it only on a wake, with one foreground `bash scripts/orca-wait.sh`.
   A wake that leaves nothing for the owner to do or decide ends the turn with no text to the owner.
-- **Plan before every build (owner order 2026-10-17)**: before `builder-launch.sh`, ask nothing: run `plan-tier.sh <batch file>`, use the configured model and effort per seat, and tell the owner in one line the tier, trigger and each seat's model and effort (AGENT_STARTUP.md step 0; tiers: Details). The owner changes the trigger file or `/plugin` settings, or says so in chat for that unit. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
+- **Small or clear tasks: skip planning and just build (owner order 2026-11-05)**: when the work is small, or the owner's words already say what to build, launch with `--skip-plan --reason '<one line>'` and no planner or judge; plan only work that is neither. A risky-file launch still needs the owner's tier yes.
+- **Plan before every other build (owner order 2026-10-17)**: before `builder-launch.sh`, ask nothing: run `plan-tier.sh <batch file>`, use the configured model and effort per seat, and tell the owner in one line the tier, trigger and each seat's model and effort (AGENT_STARTUP.md step 0; tiers: Details). The owner changes the trigger file or `/plugin` settings, or says so in chat for that unit. Each planner's spec carries, word for word: "If the mattpocock-skills plugin is installed
   and one of its skills fits this unit (for example TDD for new logic, diagnosing-bugs for a bug), name it in the plan; the Builder uses
   what the plan names." A plan is never a build order: with no build word from the owner, STOP at the plan file. A build order is the
   owner's yes that names this unit or each issue in its scope. Filing an issue, approving a lesson, or 'this needs fixing' is never one, nor is a 'file only' or 'not now' answer. Without such a yes, ask the owner.
@@ -52,7 +53,9 @@ THE CLEAR LINE IS 200K (main only). When `context-line.sh` prints "over the 200K
   also start without the Stripe plugin and the three browser skills; `worktree-setup.sh <wt> --keep billing` (or
   `builder-launch.sh --keep billing`) brings Stripe back for a billing unit, `--keep all` changes none of it.
 
-- Plan before every build (owner order 2026-10-17): before `builder-launch.sh`, ask neither "Write a plan
+- Small or clear tasks skip planning (owner order 2026-11-05): small work, or work the owner's words already spell out,
+  launches with `--skip-plan --reason '<one line>'` straight to the Builder, whatever `plan-tier.sh` would pick.
+- Plan before every other build (owner order 2026-10-17): before `builder-launch.sh`, ask neither "Write a plan
   first?" nor "Which model and effort?" (issue 345). `bash scripts/plan-tier.sh <batch file>` picks No plan, Plan +
   judge or Panel from the trigger file (the project's `.claude/plan-triggers.tsv`, else the plugin's
   `config/plan-triggers.tsv`), one tier up when unsure, and prints the tier, the trigger that picked it and the
