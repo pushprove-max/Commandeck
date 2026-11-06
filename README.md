@@ -1,7 +1,7 @@
 <h1 align="center">Commandeck</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.73.0-111111?style=flat-square" alt="Version 0.73.0">
+  <img src="https://img.shields.io/badge/version-0.74.0-111111?style=flat-square" alt="Version 0.74.0">
   <img src="https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square" alt="Apache-2.0 license">
   <img src="https://img.shields.io/badge/runs%20on-Claude%20Code%20%2B%20Orca-111111?style=flat-square" alt="Runs on Claude Code and Orca">
 </p>
@@ -493,11 +493,12 @@ The plugin's own tests are shell tests:
 ```bash
 bash scripts/run-shell-tests.sh            # the whole suite
 bash scripts/run-shell-tests.sh --changed  # the merge check: tests the change touches
-bash scripts/run-shell-tests.sh --skip-passed  # a retry: skips files that passed at this same tree
+bash scripts/run-shell-tests.sh --skip-passed  # skips files that passed with these same inputs
 ```
 
-Files run on the peer machine are never skipped, and a run with a test-case selector set
-records and reuses nothing.
+Never a full retest. After a failure, rerun only the failed files: the run's last line is that command. Pre-push
+runs with `--skip-passed`, so a push reruns only the files whose inputs changed since they passed. The peer machine
+skips from its own record, and a run with a test-case selector set records and reuses nothing.
 
 **Test hand-off to a second machine.** In a Mac linked worktree, the shell
 tests can run on another machine. Write `pc` in

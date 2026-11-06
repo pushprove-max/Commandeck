@@ -35,11 +35,15 @@
 # A test named after no script it tests carries `# covers: <path>...` in the
 # same first five lines, and --changed runs it when any of those paths changed.
 #
-# `--skip-passed` (issue 422) does not run a local file whose last result in <git dir>/commandeck-test-runs.tsv is ok
-# at exactly this tree (HEAD plus every uncommitted and untracked file); it prints that file's result line with 0s and
-# counts it as passed. A pass is recorded or reused only if no file of the tree changed since the run hashed it, an
-# edit made and undone included. Files run on the PC are never skipped. A run with any *_TEST_CASE selector set records and
-# reuses nothing.
+# `--skip-passed` (issue 422) does not run a local file whose last result in <common git dir>/commandeck-test-runs.tsv
+# is ok for exactly its inputs now; it prints that file's result line with 0s and counts it as passed. Never a full
+# retest (issue 667): a file's key is the hash of its inputs (scripts/test-inputs.sh --list: the file, what it names,
+# what they source) as they are in this run's tree, or the whole tree when the map is uncertain, so a pass outlives
+# changes to other files, and the ledger is shared by every worktree of the repository (pre-push's included). A pass is
+# recorded or reused only if no file of the tree changed since the run hashed it, an edit made and undone included. A
+# run handed to the PC passes --skip-passed on, and the PC reads its own ledger. A run with any *_TEST_CASE selector
+# set records and reuses nothing. CI starts with no ledger, so its run is whole: the backstop for an input the map
+# does not see (it reads hooks/ and scripts/ only).
 case ${1-} in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "$0" | head -3; exit 0 ;; esac
 set -uo pipefail
 # On a Mac: Homebrew's tools ahead of the system's, and out of its Bash 3.2 (requirements.sh).
@@ -175,7 +179,7 @@ if [ -n "$STAMP" ] && tick "$STAMP"; then
     && T=$(GIT_INDEX_FILE=$IDX git write-tree 2>/dev/null) && GIT_INDEX_FILE=$IDX git ls-files -z > "$STAMP.files" \
     && git ls-files --others --exclude-standard -z > "$STAMP.others" && keep_paths < "$STAMP.files" > "$STAMP.paths"; then TREE=$T; fi
 fi
-LEDGER=$(git rev-parse --absolute-git-dir 2>/dev/null)/commandeck-test-runs.tsv || LEDGER=
+LEDGER=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/commandeck-test-runs.tsv || LEDGER=
 # last_pass <rel> -- `<result>\t<tree>` of the ledger's last row for the file. A line that is not a whole row (not 4
 # fields, or a first field that is not an ISO time: cut off mid-append, or glued to the next) clears every earlier
 # pass, since the cut can fall inside a file name and name no file.
@@ -240,7 +244,7 @@ for t in "${TESTS[@]}"; do
   if [[ $phys == "$ROOTP"/* ]] && ! sed -n '1,5p' "$t" | grep -q '^# host: *mac *$'; then RESTF+=("${phys#"$ROOTP"/}"); else MACF+=("$t"); fi
 done
 if [ "${#RESTF[@]}" -gt 0 ]; then
-  OFFARGS=(bash scripts/run-shell-tests.sh); [ "$ONLY_OWN_LANE" = 0 ] || OFFARGS+=(--own-lane)
+  OFFARGS=(bash scripts/run-shell-tests.sh); [ "$ONLY_OWN_LANE" = 0 ] || OFFARGS+=(--own-lane); [ "$SKIP_PASSED" = 0 ] || OFFARGS+=(--skip-passed)
   # A whole run with no file kept here sends the bare command, so the PC's run is whole-scope too.
   [ "$SCOPE" = whole ] && [ "${#MACF[@]}" = 0 ] && RESTF=()
   # A subshell: host-services.sh, which peer-offload.sh loads, exports what the tests must not inherit.
@@ -260,8 +264,24 @@ if [ "${#RESTF[@]}" -gt 0 ]; then
   esac
 fi
 
-# --skip-passed reads TESTS as the hand-off left it, so a file the PC took is never skipped: the PC returns one exit
-# code, no per-file result, so its files have no ledger row (Decision 4). Only a file this run would launch is skipped.
+# KEY: each local file's ledger key (issue 667), the hash of its inputs' `git ls-files -s` lines in this run's index
+# copy, or TREE where the map is uncertain or the file is outside the checkout. Read under the same fence as TREE.
+declare -A KEY=()
+if [ -z "$PARTIAL" ] && [ -n "$LEDGER" ] && [ "$TREE" != - ] && [ "${#TESTS[@]}" -gt 0 ]; then
+  KRELS=()
+  for t in "${TESTS[@]}"; do
+    phys=$(cd "$(dirname "$t")" 2>/dev/null && pwd -P)/$(basename "$t"); [[ $phys == "$ROOTP"/* ]] && KRELS+=("${phys#"$ROOTP"/}")
+  done
+  while IFS=$'\t' read -r f rest; do
+    # No newline after the last path (it would name no file); an empty listing (no input in the index) keys on TREE.
+    k=; [ "$rest" = '?' ] || k=$(printf '%s' "$rest" | tr '\t' '\0' | GIT_INDEX_FILE=$IDX xargs -0 git ls-files -s --)
+    [ -n "$k" ] && k=$(git hash-object --stdin <<<"$k") && [ -n "$k" ] || k=$TREE
+    KEY[$f]=$k
+  done < <([ "${#KRELS[@]}" = 0 ] || bash "$HERE/test-inputs.sh" --list "${KRELS[@]}")
+fi
+# --skip-passed reads TESTS as the hand-off left it: a file the PC took is the PC's to skip, from the PC's own ledger
+# (the PC returns one exit code, no per-file result, so the Mac records no row for it). Only a file this run would
+# launch is skipped here.
 SAMEPASS=0 SAME=()
 if [ "$SKIP_PASSED" = 1 ] && [ -n "$PARTIAL" ]; then
   echo "run-shell-tests: a test-case selector is set ($PARTIAL); --skip-passed reuses and records nothing"
@@ -273,7 +293,7 @@ elif [ "$SKIP_PASSED" = 1 ] && [ "$TREE" != - ] && [ -n "$LEDGER" ]; then
     else [ "$ONLY_OWN_LANE" = 0 ] || continue; fi
     phys=$(cd "$(dirname "$t")" && pwd -P)/$(basename "$t")
     IFS=$'\t' read -r res tree < <(last_pass "${phys#"$ROOTP"/}")
-    [ "$res" = ok ] && [ "${tree:-}" = "$TREE" ] || continue
+    [ "$res" = ok ] && [ "${tree:-}" = "${KEY[${phys#"$ROOTP"/}]:-$TREE}" ] || continue
     SAME+=("$i")
   done
   # Any change to the tree since the stamp, undone or not, makes every candidate stale: reuse none, and record nothing.
@@ -344,10 +364,11 @@ run_one() {
   line=$(status_line "$1")
   live end "${REL[$1]}" "${line%% *}" "$secs"
   # The ledger --skip-passed reads: one row per local file, one printf each (an append under 4 KB is atomic).
-  # A row at a tree the test did not run on would let --skip-passed reuse a result of another tree; `-` is no tree.
+  # A row at a tree the test did not run on would let --skip-passed reuse a result of other inputs; `-` is no tree. The
+  # row's last field is the file's KEY (its inputs' hash, or TREE).
   # The fence holding after the file ended proves it read exactly TREE.
   if [ -z "$PARTIAL" ] && [ -n "$LEDGER" ] && [ "$TREE" != - ]; then
-    if fence "$1"; then printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REL[$1]}" "${line%% *}" "$TREE" >> "$LEDGER" 2>/dev/null
+    if fence "$1"; then printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REL[$1]}" "${line%% *}" "${KEY[${REL[$1]}]:-$TREE}" >> "$LEDGER" 2>/dev/null
     else printf 'run-shell-tests: the tree changed while %s ran; its result is not recorded\n' "${REL[$1]}"
       [ -z "$FENCED" ] || printf 'run-shell-tests: newer: %s\n' "${FENCED//$'\n'/ }"; fi
   fi
@@ -484,5 +505,12 @@ echo
 }
 echo "$PASS passed, $FAIL failed, $SKIP parked"
 [ "$FAIL" -eq 0 ] || { echo "failed:"; printf '  %s\n' "${FAILED[@]}"; }
+# Issue 667: never a full retest. The retry is this one command, the failed files only, by their repository paths.
+if [ "$FAIL" -gt 0 ]; then
+  # An ordinary run skips an own-lane file, so the lane flag goes with the retry.
+  RERUN="rerun only the failed files: bash scripts/run-shell-tests.sh"; [ "$ONLY_OWN_LANE" = 0 ] || RERUN+=" --own-lane"
+  for t in "${FAILED[@]}"; do p=$(cd "$(dirname "$t")" 2>/dev/null && pwd -P)/$(basename "$t"); RERUN+=" $(printf '%q' "${p#"$ROOTP"/}")"; done
+  echo "$RERUN"
+fi
 [ "$OFF_RC" = 0 ] || echo "the files run on the PC ended $OFF_RC (above)"
 [ "$FAIL" -eq 0 ] && [ "$OFF_RC" = 0 ]

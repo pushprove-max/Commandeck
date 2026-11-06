@@ -185,10 +185,10 @@ stub_run() { local c=$1; shift; : > "$RAN"; OUT=$(cd "$R" && PO_STUB=$c bash "$T
 stub_run 0; WHOLE=$(cat "$RAN"); stub_run 0 scripts/__tests__/touched.test.sh; NAMED=$(cut -d' ' -f1-2 "$RAN")
 check "a whole-suite run with no host: mac file hands the PC the bare command, so the PC reads and saves its own seconds" \
   "0 off whole=1 bash scripts/run-shell-tests.sh|off whole=" "$RC $WHOLE|$NAMED"
-# Catches: --skip-passed with no files kept local, or sent to the PC, where files are never skipped.
+# Catches: --skip-passed dropped on the way to the PC, so a whole run there reruns every file (issue 667).
 stub_run 0 --skip-passed
-check "a --skip-passed run with no files is a whole run: it hands off with PO_WHOLE and without --skip-passed" \
-  "0 off whole=1 bash scripts/run-shell-tests.sh" "$RC $(cat "$RAN")"
+check "a --skip-passed run with no files is a whole run: the whole-run hand-off passes --skip-passed" \
+  "0 off whole=1 bash scripts/run-shell-tests.sh --skip-passed" "$RC $(cat "$RAN")"
 # Catches: a whole run with its PC down falling back to the Mac it was meant to spare.
 stub_run 4
 check "a whole-suite run whose PC cannot be reached refuses: exit 2, nothing runs here, one line says why" \
@@ -236,8 +236,10 @@ check "--skip-passed reruns the failed and the missing file and skips the green 
   "$RC $GOT $(grep -cE "$REUSED" <<<"$OUT") $(grep -c '^3 passed, 0 failed' <<<"$OUT")"
 printf '2026-10-27T00:00:00Z\tscripts/__tests__/a.te\n' >> "$LEDGER"; skip
 check "a cut or glued ledger line brings back no older pass" "a b c" "$GOT"
-skip; GONE=$GOT; echo x > "$S/new-untracked"; skip; rm -f "$S/new-untracked"
-check "--skip-passed skips nothing after any tree change" "| a b c" "$GONE| $GOT"
+# Issue 667: a pass is keyed on the file's own inputs, so a change elsewhere reruns nothing and a change to c reruns c.
+skip; GONE=$GOT; echo x > "$S/new-untracked"; skip; OTHER=$GOT; rm -f "$S/new-untracked"
+echo '# edited' >> "$S/scripts/__tests__/c.test.sh"; skip; git -C "$S" checkout -q -- scripts/__tests__/c.test.sh
+check "a change to a test input reruns it: none after a change to no input, only c after c changes" "| | c" "$GONE| $OTHER| $GOT"
 ARGS=(); skip
 check "without --skip-passed every file runs" "a b c" "$GOT"
 rm -f "$LEDGER"; ARGS=(scripts/__tests__/a.test.sh); skip A_TEST_CASE=x; ROWS=$(cat "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')
@@ -421,6 +423,27 @@ check "an idle machine keeps the wall cap" 1 "$(cpu_run 8 'load averages: 0.10 0
 check "a slow test under load passes within its CPU cap" 1 "$(cpu_run 2 "$BUSY" 'sleep 2' | grep -cE '^ok +t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, 0\.[0-9]+ s CPU$')"
 # Catches: a CPU hog passing on a busy machine because the wall limit grew with the load.
 check "a test past its CPU cap fails" 1 "$(cpu_run 2 "$BUSY" 'until ((SECONDS >= 2)); do :; done' | grep -cE '^FAIL t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, [1-9][0-9.]* s CPU$')"
+# Issue 667: never a full retest. A failed run ends with the one command that reruns only its failed files, by their
+# repository paths, so the retry is that command and not the whole suite again.
+F=$TMP/rerun; mkdir -p "$F/scripts/__tests__" "$F/hooks/__tests__"
+for t in scripts/__tests__/ok1 scripts/__tests__/bad1 hooks/__tests__/bad2; do
+  printf '#!/usr/bin/env bash\n%s\n' "$([[ $t == *bad* ]] && echo 'exit 1' || echo 'exit 0')" > "$F/$t.test.sh"
+done
+git -C "$F" init -q && git -C "$F" add -A && git -C "$F" -c user.name=t -c user.email=t@t commit -qm base
+OUT=$(cd "$F" && env -u COMMANDECK_RUNNING_TEST timeout 30 bash "$RUNNER" 2>&1)
+check "rerun_after_failure_names_only_failed_files (#667): the run ends with a rerun of the two failed files only" \
+  "rerun only the failed files: bash scripts/run-shell-tests.sh hooks/__tests__/bad2.test.sh scripts/__tests__/bad1.test.sh" \
+  "$(grep '^rerun only the failed files:' <<<"$OUT")"
+# An own-lane file is skipped by an ordinary run, so a retry without --own-lane would skip the failed file and pass.
+F=$TMP/rerun-lane; mkdir -p "$F/scripts/__tests__"
+printf '#!/usr/bin/env bash\n# own-lane: slow\nexit 1\n' > "$F/scripts/__tests__/lane.test.sh"
+git -C "$F" init -q && git -C "$F" add -A && git -C "$F" -c user.name=t -c user.email=t@t commit -qm base
+RETRY=$(cd "$F" && env -u COMMANDECK_RUNNING_TEST timeout 30 bash "$RUNNER" --own-lane 2>&1 | grep '^rerun only the failed files:')
+read -ra RARGS <<<"${RETRY#rerun only the failed files: bash scripts/run-shell-tests.sh}"
+RC=0; ROUT=$(cd "$F" && env -u COMMANDECK_RUNNING_TEST timeout 30 bash "$RUNNER" "${RARGS[@]}" 2>&1) || RC=$?
+check "rerun_after_own_lane_failure_reruns_the_file (#667): the retry keeps --own-lane, runs the failed file and fails again" \
+  "rerun only the failed files: bash scripts/run-shell-tests.sh --own-lane scripts/__tests__/lane.test.sh|1|1" \
+  "$RETRY|$RC|$(grep -c '^FAIL lane\.test\.sh' <<<"$ROUT")"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

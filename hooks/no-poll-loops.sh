@@ -390,7 +390,7 @@ def walk(tokens, raw, only, d):
             cmd = [w] if w in ("for", "select") else []  # its name word (`for done in`) is never a keyword
         elif w == "done":
             depth = max(depth - 1, 0)
-        elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p"):
+        elif w not in ("do", "if", "then", "else", "elif", "!", "time", "-p", "coproc"):  # issue 670: `coproc while` is a loop
             cmd = [w]
     return total, kind, unread, oth
 total, kind, unread, _ = walk(TOK.findall(sys.stdin.read()), False, False, 0)
@@ -410,6 +410,18 @@ print("loop" if kind == 2 else "unread" if unread else "sleeploop:%d" % total if
   # so it gets the whole LIMIT - 10 (the room is only the eligibility test): the call stays inside LIMIT and the loop
   # always has its 30 s after the earlier waits.
   case $WAITED in sleeploop:*)
+    # Issues 670, 671: the cap ends only the foreground call. A loop started without waiting (coproc, setsid, a lone &, a
+    # process substitution) outlives it and polls on, and a backtick, a backslash or eval can rebuild one the words above
+    # never saw, so such a call is refused, never capped. It reads JOINED, the words bash passes: quoted data is the one
+    # word QUOTED (`grep 'a&b'` starts nothing), a quoted part joins its word, and the join mark and any quote left are
+    # dropped, so `set''sid` and `e'va'l` read as setsid and eval. With no strip_quoted, JOINED is the command itself.
+    A=${JOINED//[\'\"$'\x01']/}
+    ASYNC_RE='(^|[^A-Za-z0-9_.-])(eval|setsid|coproc)([^A-Za-z0-9_.-]|$)|(^|[^&<>|])&([^&>]|$)|[<>]\('
+    if [[ $CMD_CODE == *[\`\\]* || $A =~ $ASYNC_RE ]]; then
+      printf 'BLOCKED: this sleep loop shares the call with a background start (coproc, setsid, a lone &, a process substitution) or a spelling this hook cannot read (a backtick, a backslash, eval), which the worker cap of a foreground loop cannot end (issues 670, 671). Start the wait with Bash run_in_background and end the turn; its exit wakes you.\n' >&2
+      HOOK_FIRE_REASON=wait-in-loop
+      exit 2
+    fi
     L=$((LIMIT - 10 - ${WAITED#sleeploop:}))
     if [ "$L" -ge 30 ]; then
       W=$((LIMIT - 10))

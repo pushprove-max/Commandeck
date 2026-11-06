@@ -34,7 +34,9 @@ while read -r _ lsha rref rsha; do
     rc=$?
     [ "$rc" -eq 0 ] || { echo "pre-push: ci/version-check.sh failed (exit $rc) on $lsha; push to main refused" >&2; exit 1; }
   fi
-  ( unset $(git rev-parse --local-env-vars); cd "$WT/w" && bash scripts/run-shell-tests.sh ) < /dev/null >&2
+  # Never a full retest (issue 667): --skip-passed reuses each file's pass for the same inputs from the repository's
+  # shared ledger, which outlives this temporary worktree; only files whose inputs changed, or that never passed, run.
+  ( unset $(git rev-parse --local-env-vars); cd "$WT/w" && bash scripts/run-shell-tests.sh --skip-passed ) < /dev/null >&2
   rc=$?
   cleanup
   [ "$rc" -eq 0 ] || { echo "pre-push: the shell tests failed (exit $rc) on $lsha; push to main refused" >&2; exit 1; }

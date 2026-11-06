@@ -446,7 +446,7 @@ wait_hint
 case "$CMD" in *tail*|*watch*|*npm*|*long-job*) main_checkout && { WAIT_MAIN=1; wait_scan; } ;; esac
 [ -z "$WAIT_NOTE$WAIT_HINT" ] || HOOK_FIRE_REASON=${HOOK_FIRE_REASON:-wait-note}
 # Issue 665 (owner's order 2026-11-05), every tier: Commandeck tests never run on the Mac. A segment naming a test file
-# of a Commandeck checkout (its __tests__ beside scripts/run-shell-tests.sh) is refused there, wherever the name sits (a
+# of a Commandeck checkout (its __tests__ beside scripts/run-shell-tests.sh, Commandeck's plugin.json at its root) is refused there, wherever the name sits (a
 # wrapper such as timeout, nohup or env, a `bash -c` string, a short path after an earlier `cd`), unless the segment is
 # one of the two shapes read as not running it: the runner (run-shell-tests.sh, after the same wrappers), which hands it
 # to the PC, or a command in MT_READERS, which reads or moves the file without running it. Any other shape is refused.
@@ -486,7 +486,10 @@ if [ "${COMMANDECK_HOST_OS:-$(uname -s)}" = Darwin ] && [[ $CMD == *.test.sh* ]]
         MN=$MT; [[ $MT == /* ]] || MT=$MT_CWD/$MT
         while [[ $MT == */./* || $MT == *//* ]]; do MT=${MT//\/.\//\/}; MT=${MT//\/\//\/}; done  # `./x`, `a//b`
         MT_D=${MT%/*}
-        [ "${MT_D##*/}" = __tests__ ] && [ -f "${MT_D%/*/*}/scripts/run-shell-tests.sh" ] || continue
+        # Issue 668: a checkout holds the runner and Commandeck's marker (.claude-plugin/plugin.json naming commandeck); a
+        # host project's own runner, at its root or under .claude, is none.
+        [ "${MT_D##*/}" = __tests__ ] && [ -f "${MT_D%/*/*}/scripts/run-shell-tests.sh" ] \
+          && grep -qE '"name"[[:space:]]*:[[:space:]]*"commandeck"' "${MT_D%/*/*}/.claude-plugin/plugin.json" 2>/dev/null || continue
         echo "BLOCKED: Commandeck tests never run on the Mac (issue 665). Run it as \`bash scripts/run-shell-tests.sh $MN\` from its checkout, which hands it to the PC." >&2
         HOOK_FIRE_REASON=mac-direct-test; exit 2
       done

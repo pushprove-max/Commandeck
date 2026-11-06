@@ -16,6 +16,7 @@ BOX=$(mktemp -d); trap 'rm -rf "$BOX"' EXIT
 CD=$BOX/cd OTHER=$BOX/other HOSTCL=$BOX/host/.claude
 mkdir -p "$CD/scripts/__tests__" "$OTHER/scripts/__tests__" "$HOSTCL/scripts/__tests__"
 : > "$CD/scripts/run-shell-tests.sh"; : > "$HOSTCL/scripts/run-shell-tests.sh"
+mkdir -p "$CD/.claude-plugin"; printf '{\n  "name": "commandeck",\n  "version": "0"\n}\n' > "$CD/.claude-plugin/plugin.json"
 for f in "$CD/scripts/__tests__/inner.test.sh" "$OTHER/scripts/__tests__/health.test.sh" \
   "$HOSTCL/scripts/__tests__/own.test.sh" "$BOX/helper.sh"; do
   printf '#!/usr/bin/env bash\nset -u\necho RAN\n' > "$f"
@@ -47,6 +48,25 @@ GOT+=" | $(run Darwin "" "$HOSTCL/scripts/__tests__/own.test.sh")"
 GOT+=" | $(grep -c 'COMMANDECK_TEST_RUNNER=1 .*timeout "\$lim" bash "\$2"' "$ROOT/scripts/run-shell-tests.sh")"
 check "a test file a script starts on the Mac is refused unless the runner started it" \
   "2 0 named | 0 1 | 0 1 | 0 1 | rc=2 | rc=2 | 0 1 | 0 1 | 1" "$GOT"
+
+# Issue 668: a checkout is told by Commandeck's own marker (.claude-plugin/plugin.json naming commandeck), never by a
+# scripts/run-shell-tests.sh alone: a host project with its own runner, at its root or under .claude, runs its tests;
+# another plugin's checkout (a plugin.json with another name) does too.
+HOST=$BOX/hostroot PLUG=$BOX/otherplugin
+mkdir -p "$HOST/scripts/__tests__" "$PLUG/scripts/__tests__" "$PLUG/.claude-plugin"
+: > "$HOST/scripts/run-shell-tests.sh"; : > "$PLUG/scripts/run-shell-tests.sh"
+printf '{ "name": "notcommandeck" }\n' > "$PLUG/.claude-plugin/plugin.json"
+for f in "$HOST/scripts/__tests__/h.test.sh" "$PLUG/scripts/__tests__/p.test.sh"; do printf '#!/usr/bin/env bash\necho RAN\n' > "$f"; done
+check "host_project_claude_folder_is_not_a_commandeck_checkout (#668): a host runner at the root or under .claude, or another plugin, runs" \
+  "0 1 | 0 1 | 0 1 | 2 0 named" "$(run Darwin "" "$HOST/scripts/__tests__/h.test.sh") | $(run Darwin "" "$HOSTCL/scripts/__tests__/own.test.sh") | $(run Darwin "" "$PLUG/scripts/__tests__/p.test.sh") | $(run Darwin "" "$IN")"
+# Issue 668: BASH_ENV comes from Commandeck's tracked project settings, never the user-wide ones, so it loads only in
+# a Commandeck session; its value finds the guard from any folder of the checkout (bash expands BASH_ENV, and skips
+# a file that is not there, so a folder outside any repository, or another repository, starts no guard).
+BE=$(jq -r '.env.BASH_ENV // empty' "$ROOT/.claude/settings.json" 2>/dev/null)
+git -C "$CD" init -q; cp "$GUARD" "$CD/scripts/test-host-guard.sh"; mkdir -p "$CD/docs" "$OTHER/sub"; git -C "$OTHER" init -q
+bev() { (cd "$1" && env -u COMMANDECK_TEST_RUNNER COMMANDECK_HOST_OS=Darwin BASH_ENV="$BE" bash "$2" >/dev/null 2>&1; echo "rc=$?"); }
+check "guard_bash_env_comes_from_tracked_project_settings (#668): set in .claude/settings.json, it refuses from a checkout's subfolder and runs elsewhere" \
+  "set rc=2 rc=0 rc=0" "${BE:+set} $(bev "$CD/docs" "$IN") $(bev "$OTHER/sub" "$OTHER/scripts/__tests__/health.test.sh") $(bev "$BOX" "$BOX/helper.sh")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

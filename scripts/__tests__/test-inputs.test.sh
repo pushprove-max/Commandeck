@@ -33,6 +33,12 @@ check "a change to paths.sh alone makes read-verdict.test.sh changed (it names r
 git reset -q --hard "$BASE"
 check "a source line with no literal basename makes the file changed even with nothing edited" "changed $DY" "$(status $DY)"
 check "a file missing from the tree reads changed" "changed scripts/__tests__/gone.test.sh" "$(status scripts/__tests__/gone.test.sh)"
+# Issue 667: --list gives the runner each file's inputs to key its pass on; `?` where the map is uncertain. A jq line
+# `. as $x` inside a script is not a source line: read as one, it made almost every real test uncertain.
+printf '%s\n' '. "$(dirname "$0")/paths.sh"' "jq -n '1 |" '  . as $x | $x'"'" > scripts/read-verdict.sh
+check "list_names_each_files_inputs: the file, what it names, what that sources; ? when uncertain or missing" \
+  "$RV $RV scripts/paths.sh scripts/read-verdict.sh|$DY ?|scripts/__tests__/gone.test.sh ?" \
+  "$(bash "$SEL" --list $RV $DY scripts/__tests__/gone.test.sh | tr '\t' ' ' | paste -sd'|' -)"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

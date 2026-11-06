@@ -134,3 +134,20 @@ test('prune mode keeps a validator proposal with a V id (issue 435)', async () =
   assert.match(result.report, /Kept: 1 of 1 proposals/);
   assert.equal(result.validatorFindings, 1);
 });
+
+// Issue 669: two scope folders (`.claude scripts`) made the run folder `test-audit-<date>-.claude scripts`, with a
+// space; the set-up check takes only a plain name, so set-up stopped. The workflow now hands set-up a slug of the scope.
+test('two_scope_folders_make_a_space_free_output_folder (issue 669)', async () => {
+  const seen = {};
+  const agent = async (prompt, { label }) => {
+    seen[label] = prompt;
+    if (label === 'phase 0') return { out: '/tmp/commandeck/test-audit-20261105-.claude-scripts', mode: 'basic', stop: '' };
+    return null;
+  };
+  const src = readFileSync(SCRIPT, 'utf8').replace('export const meta', 'const meta');
+  const result = await new AsyncFunction('agent', 'parallel', 'log', 'args', src)(agent, () => [], () => {}, '.claude scripts');
+  assert.equal(seen['phase 0'].match(/OUT is \/tmp\/commandeck\/test-audit-<YYYYMMDD>-([^,\n]*),/)?.[1], '.claude-scripts');
+  assert.match(result, /^test-audit stopped at the file list/); // set-up passed; the fake file list stopped it
+  // A scope over the 200-file cap is audited in several runs; the stop says so.
+  assert.match(seen['phase 1'], /SCOPE too large[^\n]*several runs/);
+});

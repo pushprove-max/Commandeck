@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.74.0 -- 2026-11-05
+
+### Scripts
+
+- The shell test runner no longer reruns a test that already passed on the same inputs. A pass is kept per test file, keyed on the files that test reads, and every worktree of the repository shares it. Change one of those files and the test runs again.
+- Pre-push and the closing review pass reuse those passes, and a whole run sent to the PC asks it to do the same. CI still runs every test.
+- A failed run ends with one line that reruns only the failed files, with the lane flag kept.
+- The test audit names its output folder without spaces, so a scope of two folders no longer stops set-up.
+- A host project's own `.claude` folder or test runner is no longer mistaken for a Commandeck checkout. The test guard is now set in the project's tracked settings, so it works from any folder of the checkout.
+
+### Hooks
+
+- The sleep-loop guard refuses a loop that also starts something in the background (`coproc`, `setsid`, a lone `&`) or hides a word behind quotes, backticks or line breaks. Quoted search text no longer counts as a background start.
+- On the Mac, a Commandeck test file started with `sh` or `zsh` is refused like one started with `bash`. The shell test runner still sends tests to the PC.
+
 ## 0.73.0 -- 2026-11-05
 
 ### Scripts

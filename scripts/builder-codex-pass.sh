@@ -1793,12 +1793,13 @@ refusals_flush
 T_REBASE='not run' T_TESTS='not run' T_SUITE='not run'
 # test_call <label> <run-shell-tests.sh args...> -- one runner call, into rebase_and_test's $log, between two stamps; then the
 # runner's own per-file result lines of this call, so each test file's seconds show. Those lines are printed, never prefixed.
+# Never a full retest (issue 667): --skip-passed reuses each file's pass for the same inputs from the shared ledger.
 test_call() {
   local label=$1 from rc=0
   shift
   from=$(($(wc -l < "$log") + 1))
   stamp "$label start"
-  (cd "$WT" && bash "$HERE/run-shell-tests.sh" "$@") >>"$log" 2>&1 || rc=$?
+  (cd "$WT" && bash "$HERE/run-shell-tests.sh" --skip-passed "$@") >>"$log" 2>&1 || rc=$?
   stamp "$label end"
   tail -n +"$from" "$log" | grep -E '^(ok|FAIL) +[^ ]+ +[0-9]+s' | sort -u || true
   return "$rc"

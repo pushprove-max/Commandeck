@@ -111,6 +111,27 @@ LANE_PUSH_RC=$(cd "$SANDBOX/ws/Fast-lane" && env -i PATH="$PATH" COMMANDECK_WORK
 check "a push from the Fast lane worktree is still refused" "1 0" \
   "$LANE_PUSH_RC $(grep -q 'agent-guard: BLOCKED' "$SANDBOX/role.err" && echo 0 || echo 1)"
 
+# Issue 667, never a full retest: unlike the cases above, these pushes run the shell tests, through the real runner
+# copied into the repo. Each push tests in its own temporary worktree, so a pass is reused only if the ledger outlives
+# it. p3 reads target3.sh and fails while $PPRED exists; p1 and p2 read nothing that changes.
+PP=$SANDBOX/pp; mkdir -p "$PP/scripts/__tests__" "$PP/docs"; cp "$ROOT"/scripts/*.sh "$PP/scripts/"
+for n in 1 2; do printf '#!/usr/bin/env bash\necho p%s >> "$PPRAN"\n' "$n" > "$PP/scripts/__tests__/p$n.test.sh"; done
+printf '#!/usr/bin/env bash\n# reads target3.sh\necho p3 >> "$PPRAN"\n[ ! -e "$PPRED" ]\n' > "$PP/scripts/__tests__/p3.test.sh"
+echo v1 > "$PP/scripts/target3.sh"; echo n1 > "$PP/docs/notes.md"
+git -C "$PP" init -q -b main && git -C "$PP" add -A && git -C "$PP" -c user.name=t -c user.email=t@t commit -qm c1
+export PPRAN=$SANDBOX/ppran PPRED=$SANDBOX/ppred
+# pp_push <file> <text>: commit the change (none for the first push), push HEAD to main, log `<rc>:<files run>`.
+pp_push() {
+  [ -z "${1-}" ] || { echo "$2" > "$PP/$1"; git -C "$PP" -c user.name=t -c user.email=t@t commit -qam "$1"; }
+  : > "$PPRAN"
+  (cd "$PP" && printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$ZERO" | bash "$PREPUSH" origin x) > /dev/null 2>&1
+  PPLOG+="$?:$(sort "$PPRAN" | paste -sd, -) "
+}
+PPLOG=; touch "$PPRED"; pp_push; rm -f "$PPRED"
+pp_push scripts/target3.sh v2; pp_push docs/notes.md n2; pp_push scripts/target3.sh v3
+check "pre_push_reuses_passed_files_for_same_inputs: after p3 fails, a push changing its input runs p3 alone, a push changing no input runs nothing, a later change to it runs p3 again" \
+  "1:p1,p2,p3 0:p3 0: 0:p3 " "$PPLOG"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

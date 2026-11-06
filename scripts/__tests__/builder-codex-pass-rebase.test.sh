@@ -45,6 +45,12 @@ echo 'echo broken' > "$REPO/scripts/lane-lib.sh"; G commit -qam 'lane-lib broken
 check "a red own-lane test stops the final pass before Codex" "2 no" "$(fin 4 "$NOGO2") $(round 4)"
 echo 'echo ok' > "$W/scripts/lane-lib.sh"
 check "and once it is green the retry goes on to Codex" "0 yes" "$(fin 4 "$NOGO2") $(round 4)"
+# Issue 667: a closing pass never reruns a file that already passed on the same inputs. The retry above changed only
+# lane-lib.sh, so dep.test.sh's pass from the red try is reused; the fixed lane test runs again.
+# Catches: the pre-review runner calls without --skip-passed, so every closing pass reruns every covered file.
+LOG4=$(find "$TMP" -name "$U-rebase-r4.log" | head -1)
+check "a closing pass reuses an earlier pass on the same inputs and reruns the changed test" "1 1" \
+  "$(grep -c 'dep\.test\.sh .*passed at this tree in an earlier run' "$LOG4") $(grep -cE '^ok +lane\.test\.sh ' "$LOG4")"
 
 # Issue 356: the round file says how long each pre-review step took, so a slow closing pass can be told from a slow
 # reviewer. r2 rebased and ran tests with no suite on; r5 is on top of main, so it rebases nothing but runs the unit's tests and the suite (issue 526).

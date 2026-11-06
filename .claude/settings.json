@@ -1,0 +1,5 @@
+{
+  "env": {
+    "BASH_ENV": "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/test-host-guard.sh"
+  }
+}

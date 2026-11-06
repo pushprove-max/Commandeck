@@ -42,7 +42,7 @@ This file ships with a plugin and knows nothing about the project. What you need
 
 ## Phase 0: set up (done when `00-setup.md` exists)
 
-1. OUT is `test-audit-<YYYYMMDD>-<SCOPE with / replaced by ->` in the scratch folder the workflow names. If OUT already holds `batches.md`, you are resuming: skip to Phase 3 at the first batch not marked `done`. Otherwise create OUT.
+1. OUT is the folder the workflow names in its scratch folder: `test-audit-<YYYYMMDD>-<SCOPE slug>`, the slug being SCOPE with each run of characters other than letters, digits, dot, underscore and hyphen (a space, a slash) replaced by one hyphen. If OUT already holds `batches.md`, you are resuming: skip to Phase 3 at the first batch not marked `done`. Otherwise create OUT.
 2. Run `git rev-parse HEAD` and `git status --short > <OUT>/git-status-before.txt`.
 3. Before any test, look for the project's written test rules: `ls` the repository root, then read, 150 lines at most each, whichever of `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` exist, and any file they name as the test standard. If there is none, write "no written test standard found" and continue without inventing rules.
 4. Write `00-setup.md`: SCOPE, MODE, TIMING RUN, HEAD, and every line of those files that states a rule about tests, quoted as `path:line: text`. If there is none, write "not found".

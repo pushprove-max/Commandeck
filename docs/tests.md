@@ -15,19 +15,23 @@ own-lane are skipped by the ordinary run and have a separate mode:
 bash scripts/run-shell-tests.sh --own-lane
 ```
 
-A retry on the same tree can rerun only what did not pass:
+Never a full retest (issue 667). A failed run ends with the one command that reruns only its failed files. A run
+can rerun only what did not pass with the same inputs:
 
 ```bash
 bash scripts/run-shell-tests.sh --skip-passed
 ```
 
-It skips a file whose last result in this checkout was a pass at the same tree
-only (HEAD plus every uncommitted and untracked file), and prints that file's
-result as passed. A result is recorded only if no file of the tree changed
+It skips a file whose last result in this repository (any of its worktrees) was a pass with the same inputs, and
+prints that file's result as passed. A file's inputs are the ones `scripts/test-inputs.sh --list` names (the file,
+what it names under hooks/ and scripts/, what those source); where that map is uncertain, the whole tree (HEAD plus
+every uncommitted and untracked file) is the key. Pre-push runs with `--skip-passed`; CI starts with no record, so its
+run is whole and catches an input the map does not see. A result is recorded only if no file of the tree changed
 while that file ran, even an edit undone before it ended. Each file is judged on
 its own run: a change made before it started does not stop its record, and a
 folder made and removed during it does. A result left unrecorded prints
-`run-shell-tests: newer:` and the paths that changed. Files run on the PC are never skipped. A run with a
+`run-shell-tests: newer:` and the paths that changed. A run handed to the PC passes `--skip-passed` on, and the PC
+skips from its own record. A run with a
 test-case selector set (any `*_TEST_CASE` variable) records and reuses nothing.
 
 A run handed to the PC keeps going there when its connection drops. The

@@ -192,8 +192,10 @@ const ask = async (label, phase, prompt, schema, model = MODEL) => {
 const text = { type: 'string' }
 const count = { type: 'integer', minimum: 0 }
 
+// Issue 669: the folder name is a slug of the scope, so two folders (`.claude scripts`) give no space in it.
+const slug = scope.join('-').replace(/[^A-Za-z0-9._-]+/g, '-')
 const setup = await ask('phase 0', 'Setup', brief('set-up', ['Parameters', 'Hard rules', 'Reading files in this repository', 'Phase 0'], [
-  `OUT is one new folder directly under ${OUT_ROOT}. Run \`mkdir -p ${OUT_ROOT}\`, then create OUT with a plain \`mkdir\` (no -p), which fails when the folder exists.`,
+  `OUT is ${OUT_ROOT}/test-audit-<YYYYMMDD>-${slug}, <YYYYMMDD> being today's date: one new folder directly under ${OUT_ROOT}. Run \`mkdir -p ${OUT_ROOT}\`, then create OUT with a plain \`mkdir\` (no -p), which fails when the folder exists.`,
   'Never resume an earlier run: when that mkdir fails because OUT exists, add -2, -3 and so on to its name until it succeeds.',
   `Return: out, the path of OUT as you created it; mode, the MODE in force (${prune ? 'basic, full or prune' : 'basic or full'}); stop, the reply those sections tell you to stop with, or an empty string.`,
 ]), { type: 'object', required: ['out', 'mode', 'stop'], properties: { out: text, mode: { enum: ['basic', 'full', 'prune'] }, stop: text } })
@@ -206,7 +208,7 @@ mode ??= setup.mode
 
 const listed = await ask('phase 1', 'Setup', brief('file-list', ['Hard rules', 'Reading files in this repository', 'Facts about this repository', 'Phase 1'], [
   `OUT is ${out}.`,
-  `After step 1: if files.txt has more than ${MAX_LISTED} lines, stop with "SCOPE too large: <count> test files, the limit is ${MAX_LISTED}; name a narrower directory".`,
+  `After step 1: if files.txt has more than ${MAX_LISTED} lines, stop with "SCOPE too large: <count> test files, the limit is ${MAX_LISTED}; name a narrower directory, and audit a larger scope in several runs, one directory each".`,
   'Skip step 3: the workflow packs the batches by size. In step 5 write batches.md with the counts only and no batch lines.',
   `Then run \`wc -lc $(cat ${out}/files.txt) > ${out}/sizes.txt\` and read sizes.txt.`,
   `For every file with more than ${longFile(mode).lines} lines or more than ${longFile(mode).bytes} bytes, also run \`grep -n -b -E '${BLOCK}' <file> | cut -d: -f1,2\`: for each line where a test block starts, its line number and its byte offset.`,
