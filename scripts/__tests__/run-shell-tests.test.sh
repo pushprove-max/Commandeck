@@ -422,7 +422,9 @@ check "an idle machine keeps the wall cap" 1 "$(cpu_run 8 'load averages: 0.10 0
 # Catches: a starved file failing on wall time with CPU to spare (load 8 on 2 cores: four times the cap of wall time).
 check "a slow test under load passes within its CPU cap" 1 "$(cpu_run 2 "$BUSY" 'sleep 2' | grep -cE '^ok +t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, 0\.[0-9]+ s CPU$')"
 # Catches: a CPU hog passing on a busy machine because the wall limit grew with the load.
-check "a test past its CPU cap fails" 1 "$(cpu_run 2 "$BUSY" 'until ((SECONDS >= 2)); do :; done' | grep -cE '^FAIL t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, [1-9][0-9.]* s CPU$')"
+# #674: the hog spins on its own CPU clock, as one on bash's whole-second SECONDS could stop after 1.0 s wall and pass.
+HOG=$'python3 -c \'import time\nwhile time.process_time() < 2: pass\''
+check "a test past its CPU cap fails" 1 "$(cpu_run 2 "$BUSY" "$HOG" | grep -cE '^FAIL t\.test\.sh +[0-9]+s past its 1 s cap: [0-9]+ s wall, [1-9][0-9.]* s CPU$')"
 # Issue 667: never a full retest. A failed run ends with the one command that reruns only its failed files, by their
 # repository paths, so the retry is that command and not the whole suite again.
 F=$TMP/rerun; mkdir -p "$F/scripts/__tests__" "$F/hooks/__tests__"

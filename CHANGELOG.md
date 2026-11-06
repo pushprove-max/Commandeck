@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.74.2 -- 2026-11-06
+
+### Scripts
+
+- The rules audit now reads a file reference written with escaped backticks, as a hook writes one inside a shell string. A reference to a file that exists is no longer reported as dead; one to a missing file still is.
+- The shell test runner's CPU-cap test no longer passes or fails by chance on how fast the machine is.
+
 ## 0.74.1 -- 2026-11-06
 
 ### Rules

@@ -157,6 +157,10 @@ def dead_refs(repo, path, line, tracked):
     names = {t.rsplit("/", 1)[-1] for t in tracked}
     gone = []
     for span in BACKTICK.findall(line):
+        # Inside a shell string a backtick is escaped (\`), and the escape closes the span like a plain backtick; an
+        # even run of backslashes before it is literal backslashes, not an escape (#674).
+        if (len(span) - len(span.rstrip("\\"))) % 2:
+            span = span[:-1]
         token = span.split()[0] if span.split() else ""
         target = re.sub(r"(?::\d+)?(?:#.*)?$", "", token.rstrip(".,;:)"))
         if not target or NOT_A_PATH.search(target) or "://" in target:

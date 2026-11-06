@@ -159,5 +159,17 @@ printf 'a `.test.sh` command and the project'"'"'s `.claude/settings.json` are n
 check "an extension fragment and a project .claude/ runtime file are not flagged; a gone .claude/rules/ path is" \
   "templates/a.md:1 dead-ref .claude/rules/gone.md $RULE" "$(audit)"
 
+# #674: a hook writes its references inside a shell string, so the backticks are escaped (\`scripts/x.sh\`). The escape
+# closes a reference like a plain backtick; a doubled backslash before a backtick is a literal backslash.
+# esc <line> -- the audit of a template holding that one line.
+esc() { printf '%s\n' "$1" > "$R/templates/a.md"; audit; }
+check "an empty escaped reference reports nothing" "" "$(esc 'a \`\` b')"
+# Catches: the backslash kept in the path, so files that exist read as dead (CI red on hooks/agent-startup-context.sh).
+check "several escaped references on one line resolve" "" "$(esc '\`src/keep.ts\`, \`scripts/real.sh\` and \`docs/real.md\`')"
+check "an unclosed escaped reference is ignored" "" "$(esc 'see \`src/gone.ts')"
+check "an escaped reference to a missing file is still dead" "templates/a.md:1 dead-ref src/gone.ts $RULE" "$(esc 'see \`src/gone.ts\`')"
+check "mixed plain and escaped backticks resolve" "" "$(esc '`src/keep.ts\` and \`docs/real.md`')"
+check "a doubled backslash before a backtick is literal" "templates/a.md:1 dead-ref src/keep.ts\\\\ $RULE" "$(esc '`src/keep.ts\\` x')"
+
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
