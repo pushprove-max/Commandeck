@@ -203,6 +203,8 @@ MADE_FROM = {
     # maps with rg, the alternatives rule no longer names a file
     "d501f34e": ("419f6ca9",), "a565c8bd": ("26b6b2b9",), "49596746": ("671886ae",), "716280f1": ("6ba05b23",),
     "2a5e9350": ("a935667e",),
+    # 0.74.1 main-session.md: small or clear tasks skip planning, folded into the planning rule and its Details text
+    "d6875392": ("1b63993c",), "87803fcc": ("2659eb01",),
 }
 
 

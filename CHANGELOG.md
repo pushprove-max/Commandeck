@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.74.1 -- 2026-11-06
+
+### Rules
+
+- Small work, or work your own words already spell out, now goes straight to a Builder without a planning step. A change to a risky file still asks you first.
+
 ## 0.74.0 -- 2026-11-05
 
 ### Scripts
